@@ -2,5 +2,8 @@
   <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Packages.props', '$(MSBuildThisFileDirectory)../'))" />
 
   <ItemGroup>
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="16.7.1" />
+    <PackageVersion Include="xunit" Version="2.4.1" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="2.4.3" />
   </ItemGroup>
 </Project>
