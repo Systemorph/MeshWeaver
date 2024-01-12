@@ -3,7 +3,19 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.7.34221.43
 MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Systemorph.Messaging.Contract", "src\Systemorph.Messaging.Contract\Systemorph.Messaging.Contract.csproj", "{7FECB12C-8182-4F27-9FD0-42E9C0F8699B}"
+EndProject
 Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{7FECB12C-8182-4F27-9FD0-42E9C0F8699B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7FECB12C-8182-4F27-9FD0-42E9C0F8699B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7FECB12C-8182-4F27-9FD0-42E9C0F8699B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7FECB12C-8182-4F27-9FD0-42E9C0F8699B}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
