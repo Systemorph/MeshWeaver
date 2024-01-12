@@ -32,6 +32,4 @@ public record PostOptions(object Sender)
     {
         return this with { Properties = Properties.AddRange(properties) };
     }
-
-
 }
