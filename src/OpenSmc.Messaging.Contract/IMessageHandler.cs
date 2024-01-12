@@ -13,3 +13,5 @@ public delegate Task<IMessageDelivery> AsyncDelivery<in TMessage>(IMessageDelive
 public delegate IMessageDelivery SyncDelivery<in TMessage>(IMessageDelivery<TMessage> request);
 public delegate Task<IMessageDelivery> AsyncDelivery(IMessageDelivery request);
 public delegate IMessageDelivery SyncDelivery(IMessageDelivery request);
+public delegate bool DeliveryFilter<in TMessage>(IMessageDelivery<TMessage> request);
+public delegate bool DeliveryFilter(IMessageDelivery request);
