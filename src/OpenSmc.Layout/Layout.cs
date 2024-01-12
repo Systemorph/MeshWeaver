@@ -1,9 +1,10 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using OpenSmc.Messaging;
 
-namespace OpenSmc.Application;
+namespace OpenSmc.Layout;
+
+// TODO consider whether we should subsctructure the namespace, e.g. separate out layout etc. ==> should probably be in its own DLL OpenSmc.Application.Layout.Contract
 
 public record SetContextMenuEvent(object View, object Header);
 
@@ -103,3 +104,30 @@ public record RefreshRequest : IRequest<AreaChangedEvent>
     public string Area { get; init; }
 
 }
+public record SetAreaOptions(string Area)
+{
+    public object AreaViewOptions { get; init; }
+
+    internal ImmutableList<Action<AreaChangedEvent>> Callbacks { get; init; } = ImmutableList<Action<AreaChangedEvent>>.Empty;
+
+    public SetAreaOptions WithCallback(Action<AreaChangedEvent> callback) => this with { Callbacks = Callbacks.Add(callback) };
+
+    public SetAreaOptions WithArea(string area) => this with { Area = area };
+}
+
+public record UiControlAddress(string Id, object Host) : IHostedAddress;
+
+public delegate Task<ViewElementWithView> ViewDefinition(SetAreaOptions options);
+public delegate object SyncViewDefinition();
+
+public abstract record ViewElement(SetAreaOptions Options)
+{
+    public string Area => Options.Area;
+}
+
+public record ViewElementWithViewDefinition(ViewDefinition ViewDefinition, SetAreaOptions Options) : ViewElement(Options);
+public record ViewElementWithView(object View, SetAreaOptions Options) : ViewElement(Options);
+public record ViewElementWithPath(string Path, SetAreaOptions Options) : ViewElement(Options);
+
+
+

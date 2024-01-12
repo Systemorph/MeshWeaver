@@ -1,4 +1,6 @@
 ﻿
+using OpenSmc.Messaging;
+
 namespace OpenSmc.Application
 {
     public record ApplicationAddress(string Id, string Project);

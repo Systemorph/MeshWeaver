@@ -1,7 +1,7 @@
 <Project>
  <PropertyGroup>
-    <TargetFramework>net6.0</TargetFramework>
-    <LangVersion>10.0</LangVersion>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>12.0</LangVersion>
     <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
     <WarnOnPackingNonPackableProject>false</WarnOnPackingNonPackableProject>
   </PropertyGroup>
@@ -17,7 +17,8 @@
   </Target>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.SourceLink.AzureRepos.Git" PrivateAssets="All"/>
+      <!--TODO: Find out how to enable this on github-->
+	  <PackageReference Include="Microsoft.SourceLink.AzureRepos.Git" PrivateAssets="All"/>
     <SourceLinkAzureDevOpsServerGitHost  Include="systemorph-eu.visualstudio.com" />
   </ItemGroup>
 </Project>

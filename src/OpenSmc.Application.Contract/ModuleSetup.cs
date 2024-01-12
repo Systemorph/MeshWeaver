@@ -1,4 +1,4 @@
 ﻿using System.Runtime.CompilerServices;
 
-[assembly:InternalsVisibleTo("Systemorph.Application.Layout")]
-[assembly: InternalsVisibleTo("Systemorph.Application")]
+[assembly:InternalsVisibleTo("OpenSmc.Application.Layout")]
+[assembly: InternalsVisibleTo("OpenSmc.Application")]

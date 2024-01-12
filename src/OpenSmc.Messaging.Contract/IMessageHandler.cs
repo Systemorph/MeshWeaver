@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 
 namespace OpenSmc.Messaging;
 
+// TODO: Delete ==> make it part of plugin framework
 public interface IMessageHandler : IAsyncDisposable
 {
     Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery request);
