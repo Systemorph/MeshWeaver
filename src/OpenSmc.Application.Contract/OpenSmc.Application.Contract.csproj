@@ -4,4 +4,8 @@
     <RootNamespace>OpenSmc.Application</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\OpenSmc.Messaging.Contract\OpenSmc.Messaging.Contract.csproj" />
+  </ItemGroup>
+
 </Project>
