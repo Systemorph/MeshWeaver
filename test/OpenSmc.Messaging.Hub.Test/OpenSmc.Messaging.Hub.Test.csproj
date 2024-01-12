@@ -2,5 +2,6 @@
   <ItemGroup>
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\OpenSmc.Messaging.Hub\OpenSmc.Messaging.Hub.csproj" />
   </ItemGroup>
 </Project>
