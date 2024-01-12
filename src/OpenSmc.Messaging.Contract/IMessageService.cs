@@ -1,6 +1,5 @@
 ﻿using System.Collections.Generic;
 using System.Collections.Immutable;
-using Systemorph.Messaging;
 
 namespace OpenSmc.Messaging;
 

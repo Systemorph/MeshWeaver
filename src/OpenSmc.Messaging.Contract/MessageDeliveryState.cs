@@ -1,4 +1,4 @@
-﻿namespace Systemorph.Messaging;
+﻿namespace OpenSmc.Messaging;
 
 public static class MessageDeliveryState
 {
