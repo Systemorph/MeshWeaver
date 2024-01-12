@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-	<PropertyGroup>
-		<RootNamespace>OpenSmc.Portal</RootNamespace>
-	</PropertyGroup>
+  <PropertyGroup>
+    <RootNamespace>OpenSmc.Portal</RootNamespace>
+  </PropertyGroup>
 
 </Project>

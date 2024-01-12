@@ -2,8 +2,4 @@
   <PropertyGroup>
     <RootNamespace>OpenSmc.Messaging</RootNamespace>
   </PropertyGroup>
-  <ItemGroup>
-  </ItemGroup>
-  <ItemGroup>
-  </ItemGroup>
 </Project>

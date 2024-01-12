@@ -2,6 +2,7 @@
  <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <LangVersion>12.0</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
     <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
     <WarnOnPackingNonPackableProject>false</WarnOnPackingNonPackableProject>
   </PropertyGroup>
@@ -10,7 +11,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <filesToDelete Include="bin\**\*.*" Exclude="bin\**\*.mdf;bin\**\*.ldf"/> 
+    <filesToDelete Include="bin\**\*.*" /> 
   </ItemGroup>
   <Target Name="CleanAllBins" AfterTargets="Clean">
     <Delete Files="@(filesToDelete)" />
