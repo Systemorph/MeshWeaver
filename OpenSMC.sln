@@ -3,9 +3,9 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.7.34221.43
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Messaging.Contract", "src\Systemorph.Messaging.Contract\OpenSmc.Messaging.Contract.csproj", "{7FECB12C-8182-4F27-9FD0-42E9C0F8699B}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Messaging.Contract", "src\OpenSmc.Messaging.Contract\OpenSmc.Messaging.Contract.csproj", "{7FECB12C-8182-4F27-9FD0-42E9C0F8699B}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenSmc.Messaging.Hub", "src\OpenSmc.Messaging.Hub\OpenSmc.Messaging.Hub.csproj", "{9CFF2863-52C6-4BE5-8605-99E32944CA05}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Messaging.Hub", "src\OpenSmc.Messaging.Hub\OpenSmc.Messaging.Hub.csproj", "{9CFF2863-52C6-4BE5-8605-99E32944CA05}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
