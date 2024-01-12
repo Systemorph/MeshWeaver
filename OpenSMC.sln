@@ -11,6 +11,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "test", "test", "{CE943C7E-6
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Messaging.Hub.Test", "test\OpenSmc.Messaging.Hub.Test\OpenSmc.Messaging.Hub.Test.csproj", "{A27C8140-8A38-4BAB-AC7D-BA2A987FF39B}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenSmc.Application.Contract", "src\OpenSmc.Application.Contract\OpenSmc.Application.Contract.csproj", "{F4DB9118-0BAD-4941-A756-E38CD3300AA2}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -29,6 +31,10 @@ Global
 		{A27C8140-8A38-4BAB-AC7D-BA2A987FF39B}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A27C8140-8A38-4BAB-AC7D-BA2A987FF39B}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A27C8140-8A38-4BAB-AC7D-BA2A987FF39B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F4DB9118-0BAD-4941-A756-E38CD3300AA2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F4DB9118-0BAD-4941-A756-E38CD3300AA2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F4DB9118-0BAD-4941-A756-E38CD3300AA2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F4DB9118-0BAD-4941-A756-E38CD3300AA2}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
