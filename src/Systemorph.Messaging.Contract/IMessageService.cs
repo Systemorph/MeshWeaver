@@ -1,7 +1,8 @@
 ﻿using System.Collections.Generic;
 using System.Collections.Immutable;
+using Systemorph.Messaging;
 
-namespace Systemorph.Messaging;
+namespace OpenSmc.Messaging;
 
 public record PostOptions(object Sender)
 {
@@ -34,6 +35,4 @@ public record PostOptions(object Sender)
     }
 
 
-    //public PostOptions WithSubQueue(string name) => this with { SubQueueName = name };
-    internal string SubQueueName { get; init; }
 }
