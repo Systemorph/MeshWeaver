@@ -9,18 +9,6 @@
     <NoWarn>649;CA2255;$(NoWarn)</NoWarn>
   </PropertyGroup>
 
-  <PropertyGroup>
-    <Product>Systemorph Cloud</Product>
-    <Company>Systemorph AG</Company>
-    <Authors>Systemorph AG</Authors>
-    <Copyright>Copyright © 2022</Copyright>
-    <Description/>
-    <AssemblyTitle/>
-    <PackageLicenseUrl/>
-    <PackageProjectUrl/>
-    <PackageIconUrl/>
-  </PropertyGroup>
-
   <ItemGroup>
     <filesToDelete Include="bin\**\*.*" Exclude="bin\**\*.mdf;bin\**\*.ldf"/> 
   </ItemGroup>
