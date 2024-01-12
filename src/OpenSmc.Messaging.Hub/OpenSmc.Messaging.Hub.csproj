@@ -3,4 +3,8 @@
   <PropertyGroup>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\OpenSmc.Messaging.Contract\OpenSmc.Messaging.Contract.csproj" />
+  </ItemGroup>
+
 </Project>
