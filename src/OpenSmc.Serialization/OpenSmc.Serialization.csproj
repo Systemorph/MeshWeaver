@@ -3,6 +3,6 @@
     <PackageReference Include="Newtonsoft.Json" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\OpenSmc.Serialization.Api\OpenSmc.Serialization.Api.csproj" />
+    <ProjectReference Include="..\OpenSmc.Serialization.Abstractions\OpenSmc.Serialization.Abstractions.csproj" />
   </ItemGroup>
 </Project>

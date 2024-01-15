@@ -24,16 +24,16 @@ public class CustomContractResolver : CamelCasePropertyNamesContractResolver
 public class SerializationService : ISerializationService
 {
     private readonly IServiceProvider serviceProvider;
-    private readonly DataBindingRegistry dataBindingRegistry;
+    private readonly CustomSerializationRegistry customSerializationRegistry;
     private readonly JsonSerializer serializer;
     public JsonSerializer Serializer => serializer;
 
     public SerializationService(IServiceProvider serviceProvider, 
                                 IEventsRegistry eventRegistry, 
-                                DataBindingRegistry dataBindingRegistry)
+                                CustomSerializationRegistry customSerializationRegistry)
     {
         this.serviceProvider = serviceProvider;
-        this.dataBindingRegistry = dataBindingRegistry;
+        this.customSerializationRegistry = customSerializationRegistry;
         var contractResolver = new CustomContractResolver();
         serializer = JsonSerializer.Create(new()
                                            {
@@ -48,25 +48,25 @@ public class SerializationService : ISerializationService
                                            });
     }
 
-    public async Task<string> SerializeToStringAsync(object obj)
+    public string SerializeToString(object obj)
     {
         var context = CreateSerializationContext(obj, null, null, null, 0);
-        await SerializeTraverseAsync(context);
+        SerializeTraverse(context);
 
         var sb = new StringBuilder();
-        await context.ResultToken.WriteToAsync(new JsonTextWriter(new StringWriter(sb)));
+        context.ResultToken.WriteTo(new JsonTextWriter(new StringWriter(sb)));
         return sb.ToString();
     }
 
-    public async Task<string> SerializePropertyToStringAsync(object value, object obj, PropertyInfo property)
+    public string SerializePropertyToString(object value, object obj, PropertyInfo property)
     {
         var context = CreateSerializationContext(value, null, property, obj, 0);
-        await SerializeTraverseAsync(context);
+        SerializeTraverse(context);
 
         var sb = new StringBuilder();
         if (context.ResultToken == null)
             return null;
-        await context.ResultToken.WriteToAsync(new JsonTextWriter(new StringWriter(sb)));
+        context.ResultToken.WriteTo(new JsonTextWriter(new StringWriter(sb)));
         return sb.ToString();
     }
 
@@ -76,25 +76,25 @@ public class SerializationService : ISerializationService
         return deserialized;
     }
 
-    internal async Task SerializeTraverseAsync(SerializationContext context)
+    internal void SerializeTraverse(SerializationContext context)
     {
         var originalValue = context.OriginalValue;
 
         if (originalValue != null)
         {
             var type = originalValue.GetType();
-            var transformation = dataBindingRegistry.Transformations.Get(type);
+            var transformation = customSerializationRegistry.Transformations.Get(type);
             if (transformation != null)
             {
-                var transformedValue = await transformation(originalValue, context);
+                var transformedValue = transformation(originalValue, context);
                 context.SetResult(transformedValue);
                 return;
             }
 
-            var mutation = dataBindingRegistry.Mutations.Get(type);
+            var mutation = customSerializationRegistry.Mutations.Get(type);
             if (mutation != null)
             {
-                await mutation(originalValue, context);
+                mutation(originalValue, context);
             }
         }
 
@@ -113,7 +113,7 @@ public class SerializationService : ISerializationService
                     {
                         var propertyValue = p.GetValue(originalValue);
                         var childContext = CreateSerializationContext(propertyValue, jProperty.Value, p, originalValue, context.Depth);
-                        await SerializeTraverseAsync(childContext);
+                        SerializeTraverse(childContext);
                         if (childContext.ResultToken != null && childContext.ResultToken.Type != JTokenType.Null)
                             jObject[propertyName] = childContext.ResultToken;
                         else
@@ -132,7 +132,7 @@ public class SerializationService : ISerializationService
                 foreach (var item in enumerable)
                 {
                     var childContext = CreateSerializationContext(item, jArray[index], null, enumerable, context.Depth);
-                    await SerializeTraverseAsync(childContext);
+                    SerializeTraverse(childContext);
                     jArray[index] = childContext.ResultToken;
                     index++;
                 }
