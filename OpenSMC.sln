@@ -27,9 +27,9 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Layout", "src\OpenSmc.Layout\OpenSmc.Layout.csproj", "{38BFFE57-7A3B-49DD-9E55-14EA53BE8A9A}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenSmc.Serialization", "src\OpenSmc.Serialization\OpenSmc.Serialization.csproj", "{A0CCD48E-0B13-4A3B-98A6-FB98A93D9105}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Serialization", "src\OpenSmc.Serialization\OpenSmc.Serialization.csproj", "{A0CCD48E-0B13-4A3B-98A6-FB98A93D9105}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenSmc.Serialization.Api", "src\OpenSmc.Serialization.Api\OpenSmc.Serialization.Api.csproj", "{D454BB2C-2B71-453C-94F4-78D550BE7156}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Serialization.Api", "src\OpenSmc.Serialization.Api\OpenSmc.Serialization.Api.csproj", "{D454BB2C-2B71-453C-94F4-78D550BE7156}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.ShortGuid", "src\OpenSmc.ShortGuid\OpenSmc.ShortGuid.csproj", "{1D93AF74-6741-44BA-8370-45706F83946F}"
 EndProject
