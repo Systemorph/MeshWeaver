@@ -2,6 +2,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\OpenSmc.Messaging.Contract\OpenSmc.Messaging.Contract.csproj" />
+    <ProjectReference Include="..\OpenSmc.Reflection\OpenSmc.Reflection.csproj" />
+    <ProjectReference Include="..\OpenSmc.Serialization.Api\OpenSmc.Serialization.Api.csproj" />
     <ProjectReference Include="..\OpenSmc.ShortGuid\OpenSmc.ShortGuid.csproj" />
   </ItemGroup>
 
