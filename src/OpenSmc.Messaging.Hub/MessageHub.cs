@@ -1,66 +1,47 @@
-﻿using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using System.Collections.Concurrent;
+using System.Reactive.Subjects;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using OpenSmc.Serialization;
 
 namespace OpenSmc.Messaging.Hub;
 
-public class MessageHub : IMessageHub
+public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>, IMessageHandler
 {
-    public MessageHub(IServiceProvider serviceProvider)
-        : base(serviceProvider)
-    {
-    }
-}
+    public MessageHubConfiguration Configuration { get; private set; }
 
-
-public class MessageHub<THub, TAddress> : MessageHubHandler,
-                                                  IMessageHub<TAddress>,
-                                                  IMessageHandler<DeleteHubRequest>,
-                                                  IMessageHandler<ConnectToHubRequest>,
-                                                  IMessageHandler<HeartbeatEvent>
-    where THub : MessageHub<THub, TAddress>
-{
-    public TAddress Address => (TAddress)Me;
+    public TAddress Address => (TAddress)MessageService.Address;
     void IMessageHub.Schedule(Func<Task> action) => MessageService.Schedule(action);
 
     public IServiceProvider ServiceProvider { get; }
 
-    protected HostedHubsCollection HostedHubsCollection;
     protected readonly ILogger Logger;
 
-    protected MessageHub(IServiceProvider serviceProvider)
-        : base(serviceProvider.GetRequiredService<IEventsRegistry>())
+    protected MessageHub(IServiceProvider serviceProvider) : base(serviceProvider.GetRequiredService<IEventsRegistry>())
     {
         ServiceProvider = serviceProvider;
-        Logger = serviceProvider.GetRequiredService<ILogger<THub>>();
+        Logger = serviceProvider.GetRequiredService<ILogger<MessageHub<TAddress>>>();
     }
 
-    public override void Initialize(IMessageHub hub, MessageHubConfiguration configuration)
+
+    public virtual void Initialize(IMessageHub hub, MessageHubConfiguration configuration)
     {
-        base.Initialize(hub, configuration);
+        Configuration = configuration;
 
         var deferredTypes = GetDeferredRequestTypes().ToHashSet();
-        DeliveryFilter defaultDeferralsLambda = d => deferredTypes.Contains(d.Message.GetType()) || configuration.Deferrals.Select(f => f(d)).DefaultIfEmpty().Aggregate((x, y) => x || y);
+        DeliveryFilter defaultDeferralsLambda = d =>
+            deferredTypes.Contains(d.Message.GetType()) || configuration.Deferrals.Select(f => f(d)).DefaultIfEmpty()
+                .Aggregate((x, y) => x || y);
         defaultDeferrals = MessageService.Defer(x => defaultDeferralsLambda(x));
 
-        HostedHubsCollection = new(Configuration, this);
 
         foreach (var messageHandler in configuration.MessageHandlers)
             Register(messageHandler.MessageType, messageHandler.Action, messageHandler.Filter);
 
-        foreach (var startConf in configuration.StartConfigurations)
-        {
-            var messageHub = GetHub(startConf.Address);
-            foreach (object creationObject in startConf.CreationObjects)
-            {
-                messageHub.Post(creationObject);
-            }
-        }
+
         MessageService.Schedule(StartAsync);
     }
+
 
     protected virtual async Task StartAsync()
     {
@@ -86,33 +67,21 @@ public class MessageHub<THub, TAddress> : MessageHubHandler,
         {
             Logger.LogError(ex, "Could not initialize state of message hub {address}", Address);
         }
+
         return Task.CompletedTask;
     }
 
 
-    public IMessageHub GetHub(object address, HostedHubOptions options)
-    {
-        return HostedHubsCollection.GetHub(address, options);
-    }
-
-    public IMessageHub GetHub(object address, Func<HostedHubOptions, HostedHubOptions> configuration = null)
-    {
-        return HostedHubsCollection.GetHub(address, configuration);
-    }
-
-    public THub2 GetHub<THub2>(object address, Func<HostedHubOptions, HostedHubOptions> configuration = null)
-        where THub2 : class
-    {
-        return HostedHubsCollection.GetHub<THub2>(address, configuration);
-    }
-
     public Task<TResponse> AwaitResponse<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken)
         => AwaitResponse(request, x => x, x => x.Message, cancellationToken);
 
-    public Task<TResponse> AwaitResponse<TResponse>(IRequest<TResponse> request, Func<PostOptions, PostOptions> options, CancellationToken cancellationToken = default)
+    public Task<TResponse> AwaitResponse<TResponse>(IRequest<TResponse> request, Func<PostOptions, PostOptions> options,
+        CancellationToken cancellationToken = default)
         => AwaitResponse(request, options, x => x.Message, cancellationToken);
 
-    public Task<TResult> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request, Func<PostOptions, PostOptions> options, Func<IMessageDelivery<TResponse>, TResult> selector, CancellationToken cancellationToken = default)
+    public Task<TResult> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request,
+        Func<PostOptions, PostOptions> options, Func<IMessageDelivery<TResponse>, TResult> selector,
+        CancellationToken cancellationToken = default)
     {
         var tcs = new TaskCompletionSource<TResult>(cancellationToken);
         MessageService.Schedule(() =>
@@ -129,17 +98,9 @@ public class MessageHub<THub, TAddress> : MessageHubHandler,
 
     public virtual Task<bool> FlushAsync() => MessageService.FlushAsync();
 
-    void IMessageHub.SetParent(IMessageHub hub)
-    {
-        HostedHubsCollection.SetParent(hub);
-    }
 
 
 
-    IMessageDelivery IMessageHandler<ConnectToHubRequest>.HandleMessage(IMessageDelivery<ConnectToHubRequest> delivery)
-    {
-        return delivery.Processed();
-    }
 
     IMessageDelivery IMessageHub.WriteToObservable(IMessageDelivery message)
     {
@@ -150,26 +111,8 @@ public class MessageHub<THub, TAddress> : MessageHubHandler,
 
     object IMessageHub.Address => Address;
 
-    IMessageDelivery IMessageHandler<DeleteHubRequest>.HandleMessage(IMessageDelivery<DeleteHubRequest> delivery)
-    {
-        return DeleteHub(delivery);
-    }
 
-    protected virtual IMessageDelivery DeleteHub(IMessageDelivery<DeleteHubRequest> delivery)
-    {
-        var deletedAddress = delivery.Message.Address;
-        if (Address.Equals(deletedAddress))
-            return DeleteMyself(delivery);
-        return delivery.Processed();
-    }
 
-    private IMessageDelivery DeleteMyself(IMessageDelivery<DeleteHubRequest> delivery)
-    {
-        foreach (var messageHub in HostedHubsCollection.Hubs)
-            messageHub.Post(delivery.Message);
-
-        return delivery.Processed();
-    }
 
 
     public void ConnectTo(IMessageHub hub)
@@ -207,10 +150,6 @@ public class MessageHub<THub, TAddress> : MessageHubHandler,
 
     private readonly TaskCompletionSource disposing = new();
 
-    public bool HasHub(object address)
-    {
-        return HostedHubsCollection.HasHub(address);
-    }
 
     public void Log(Action<ILogger> log)
     {
@@ -245,7 +184,6 @@ public class MessageHub<THub, TAddress> : MessageHubHandler,
             isAsyncDisposing = true;
         }
 
-        await HostedHubsCollection.DisposeAsync();
 
         MessageService.Post(new DisconnectHubRequest(Address));
 
@@ -253,16 +191,6 @@ public class MessageHub<THub, TAddress> : MessageHubHandler,
         await MessageService.DisposeAsync();
         Out.OnCompleted();
         disposing.SetResult();
-    }
-
-    void IMessageHub.DeleteChild(object address)
-    {
-        DeleteHub(address);
-    }
-
-    public virtual void DeleteHub(object address)
-    {
-        HostedHubsCollection.Delete(address);
     }
 
     private bool isSyncDisposed;
@@ -285,13 +213,10 @@ public class MessageHub<THub, TAddress> : MessageHubHandler,
             action(this);
     }
 
-    protected virtual void HandleHeartbeat() { }
-
-    IMessageDelivery IMessageHandler<HeartbeatEvent>.HandleMessage(IMessageDelivery<HeartbeatEvent> delivery)
+    protected virtual void HandleHeartbeat()
     {
-        HandleHeartbeat();
-        return delivery.Processed();
     }
+
 
     private readonly List<object> deferrals = new();
     private IDisposable defaultDeferrals;
@@ -326,6 +251,7 @@ public class MessageHub<THub, TAddress> : MessageHubHandler,
 
 
     private readonly ConcurrentDictionary<(string Conext, Type Type), object> properties = new();
+
     public void Set<T>(T obj, string context = "")
     {
         properties[(context, typeof(T))] = obj;
@@ -338,6 +264,7 @@ public class MessageHub<THub, TAddress> : MessageHubHandler,
     }
 
     private readonly object releaseLock = new();
+
     private void ReleaseAllTypes()
     {
         if (deferrals.Count > 0)
@@ -356,20 +283,23 @@ public class MessageHub<THub, TAddress> : MessageHubHandler,
     protected virtual IEnumerable<Type> GetDeferredRequestTypes()
     {
         return GetType().GetInterfaces()
-                        .Where(t => t.IsGenericType &&
-                                    (t.GetGenericTypeDefinition() == typeof(IMessageHandler<>) || t.GetGenericTypeDefinition() == typeof(IMessageHandlerAsync<>)))
-                        .Select(t => t.GetGenericArguments()[0])
-                        .Where(t => t.Assembly != typeof(IMessageHub).Assembly)
-                        .Where(t => !t.IsGenericType || t.GetGenericTypeDefinition() != typeof(CreateRequest<>))
+                .Where(t => t.IsGenericType &&
+                            (t.GetGenericTypeDefinition() == typeof(IMessageHandler<>) ||
+                             t.GetGenericTypeDefinition() == typeof(IMessageHandlerAsync<>)))
+                .Select(t => t.GetGenericArguments()[0])
+                .Where(t => t.Assembly != typeof(IMessageHub).Assembly)
+                .Where(t => !t.IsGenericType || t.GetGenericTypeDefinition() != typeof(CreateRequest<>))
             ;
     }
 
 
-    IMessageDelivery IMessageHub.RegisterCallback<TResponse>(IMessageDelivery<IRequest<TResponse>> request, Func<IMessageDelivery<TResponse>, IMessageDelivery> callback, CancellationToken cancellationToken)
+    IMessageDelivery IMessageHub.RegisterCallback<TResponse>(IMessageDelivery<IRequest<TResponse>> request,
+        Func<IMessageDelivery<TResponse>, IMessageDelivery> callback, CancellationToken cancellationToken)
     {
         RegisterCallback(request, d => callback((IMessageDelivery<TResponse>)d), cancellationToken);
         return request.Forwarded();
     }
+}
 
 
 

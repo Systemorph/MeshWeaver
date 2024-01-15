@@ -4,7 +4,7 @@
 namespace OpenSmc.Messaging;
 
 
-public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDisposable
+public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDisposable, IMessageHandler
 {
     IMessageDelivery<TMessage> Post<TMessage>(TMessage message, Func<PostOptions, PostOptions> options = null);
     IMessageDelivery DeliverMessage(IMessageDelivery delivery);
@@ -33,11 +33,8 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
     // ReSharper disable once UnusedMethodReturnValue.Local
     Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, AsyncDelivery callback, CancellationToken cancellationToken = default);
     Task<bool> FlushAsync();
-    internal void SetParent(IMessageHub hub);
-    public void DeleteChild(object address);
     public void Schedule(Func<Task> action);
 
-    bool HasHub(object address);
 
     void Log(Action<ILogger> log);
     IDisposable Defer();

@@ -5,6 +5,7 @@ namespace OpenSmc.Messaging;
 
 public interface IMessageService : IAsyncDisposable
 {
+    object Address { get; }
     internal void AddHandler(IMessageHandler messageHandler);
     internal void RemoveHandler(IMessageHandler messageHandler);
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter);
