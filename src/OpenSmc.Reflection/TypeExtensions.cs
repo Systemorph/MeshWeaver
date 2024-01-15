@@ -16,4 +16,14 @@ public static class TypeExtensions
 
         return type.IsAbstract && type.IsSealed;
     }
+
+    /// <summary>
+    /// Gets all hierarchically inherited interfaces of <paramref name="type"/>
+    /// </summary>
+    /// <param name="type"></param>
+    /// <returns></returns>
+    public static IEnumerable<Type> GetAllInterfaces(this Type type)
+    {
+        return type.GetInterfaces().SelectMany(i => EnumerableEx.Return(i).Concat(i.GetAllInterfaces())).Distinct();
+    }
 }
