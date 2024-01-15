@@ -24,16 +24,16 @@ public class CustomContractResolver : CamelCasePropertyNamesContractResolver
 public class SerializationService : ISerializationService
 {
     private readonly IServiceProvider serviceProvider;
-    private readonly DataBindingRegistry dataBindingRegistry;
+    private readonly CustomSerializationRegistry customSerializationRegistry;
     private readonly JsonSerializer serializer;
     public JsonSerializer Serializer => serializer;
 
     public SerializationService(IServiceProvider serviceProvider, 
                                 IEventsRegistry eventRegistry, 
-                                DataBindingRegistry dataBindingRegistry)
+                                CustomSerializationRegistry customSerializationRegistry)
     {
         this.serviceProvider = serviceProvider;
-        this.dataBindingRegistry = dataBindingRegistry;
+        this.customSerializationRegistry = customSerializationRegistry;
         var contractResolver = new CustomContractResolver();
         serializer = JsonSerializer.Create(new()
                                            {
@@ -83,7 +83,7 @@ public class SerializationService : ISerializationService
         if (originalValue != null)
         {
             var type = originalValue.GetType();
-            var transformation = dataBindingRegistry.Transformations.Get(type);
+            var transformation = customSerializationRegistry.Transformations.Get(type);
             if (transformation != null)
             {
                 var transformedValue = transformation(originalValue, context);
@@ -91,7 +91,7 @@ public class SerializationService : ISerializationService
                 return;
             }
 
-            var mutation = dataBindingRegistry.Mutations.Get(type);
+            var mutation = customSerializationRegistry.Mutations.Get(type);
             if (mutation != null)
             {
                 mutation(originalValue, context);
