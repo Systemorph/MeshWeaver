@@ -48,17 +48,17 @@ public class SerializationContext : IDataBindingMutationContext, IDataBindingTra
         resultToken = value != null ? JToken.FromObject(value, serializer) : null;
     }
 
-    async Task<object> IDataBindingTransformationContext.TraversePropertyAsync(object propertyValue, object parent, PropertyInfo propertyInfo)
+    object IDataBindingTransformationContext.TraverseProperty(object propertyValue, object parent, PropertyInfo propertyInfo)
     {
         var context = serializationService.CreateSerializationContext(propertyValue, null, propertyInfo, parent, Depth);
-        await serializationService.SerializeTraverseAsync(context);
+        serializationService.SerializeTraverse(context);
         return context.ResultToken;
     }
 
-    async Task<object> IDataBindingTransformationContext.TraverseValueAsync(object value)
+    object IDataBindingTransformationContext.TraverseValue(object value)
     {
         var context = serializationService.CreateSerializationContext(value, null, ParentProperty, Parent, Depth);
-        await serializationService.SerializeTraverseAsync(context);
+        serializationService.SerializeTraverse(context);
         return context.ResultToken;
     }
 
