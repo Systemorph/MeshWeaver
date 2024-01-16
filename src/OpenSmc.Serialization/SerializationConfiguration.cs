@@ -6,36 +6,45 @@ public record SerializationConfiguration
 {
     internal ImmutableList<SerializationTypeRule> Rules = ImmutableList<SerializationTypeRule>.Empty;
 
-    public SerializationConfiguration ForType<T>(Func<SerializationTypeRule, SerializationTypeRule> configure)
+    public SerializationConfiguration ForType<T>(Func<SerializationTypeRule<T>, SerializationTypeRule<T>> configure)
     {
-        SerializationTypeRule rule = new SerializationTypeRule<T>();
+        var rule = new SerializationTypeRule<T>();
         rule = configure(rule);
         return this with { Rules = Rules.Add(rule) };
     }
+
+    internal void Apply(ICustomSerializationRegistry registry)
+    {
+        foreach (var rule in Rules)
+        {
+            rule.Apply(registry);
+        }
+    }
+
 }
 
 public abstract record SerializationTypeRule
 {
-    internal SerializationTransform Transformation { get; init; }
-    internal SerializationMutate Mutation { get; init; }
-
-    public SerializationTypeRule WithTransformation(SerializationTransform transform) =>
-        this with { Transformation = transform };
-
-    public SerializationTypeRule WithMutation(SerializationMutate mutation) =>
-        this with { Mutation = mutation };
-
-    public abstract void Apply(ICustomSerializationRegistry registry);
+    internal abstract void Apply(ICustomSerializationRegistry registry);
 }
 
-internal record SerializationTypeRule<T> : SerializationTypeRule
+public record SerializationTypeRule<T> : SerializationTypeRule
 {
-    public override void Apply(ICustomSerializationRegistry registry)
+    internal SerializationTransform<T> Transformation { get; init; }
+    internal SerializationMutate<T> Mutation { get; init; }
+
+    public SerializationTypeRule<T> WithTransformation(SerializationTransform<T> transform) =>
+        this with { Transformation = transform };
+
+    public SerializationTypeRule<T> WithMutation(SerializationMutate<T> mutation) =>
+        this with { Mutation = mutation };
+
+    internal override void Apply(ICustomSerializationRegistry registry)
     {
         if (Transformation != null)
-            registry.RegisterTransformation<T>(Transformation);
+            registry.RegisterTransformation(Transformation);
         
         if (Mutation != null)
-            registry.RegisterMutation<T>(Mutation);
+            registry.RegisterMutation(Mutation);
     }
 }

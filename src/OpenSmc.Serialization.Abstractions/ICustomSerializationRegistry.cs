@@ -2,13 +2,13 @@
 
 namespace OpenSmc.Serialization;
 
-public delegate object SerializationTransform(object value, IDataBindingTransformationContext context);
-public delegate void SerializationMutate(object value, IDataBindingTransformationContext context);
+public delegate object SerializationTransform<T>(T value, IDataBindingTransformationContext context);
+public delegate void SerializationMutate<T>(T value, IDataBindingMutationContext context);
 
 public interface ICustomSerializationRegistry
 {
-    ICustomSerializationRegistry RegisterTransformation<T>(SerializationTransform transform);
-    ICustomSerializationRegistry RegisterMutation<T>(SerializationMutate mutate);
+    ICustomSerializationRegistry RegisterTransformation<T>(SerializationTransform<T> transform);
+    ICustomSerializationRegistry RegisterMutation<T>(SerializationMutate<T> mutate);
 }
 
 public interface IDataBindingTransformationContext
