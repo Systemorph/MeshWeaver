@@ -17,7 +17,7 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>, IMess
 
     protected readonly ILogger Logger;
 
-    public MessageHub(IServiceProvider serviceProvider) : base(serviceProvider.GetRequiredService<IEventsRegistry>())
+    public MessageHub(IServiceProvider serviceProvider) : base(serviceProvider.GetService<IEventsRegistry>()) // HACK: GetRequiredService replaced by GetService (16.01.2024, Alexander Yolokhov)
     {
         ServiceProvider = serviceProvider;
         Logger = serviceProvider.GetRequiredService<ILogger<MessageHub<TAddress>>>();

@@ -103,6 +103,9 @@ public class MessageHubBase :  IMessageHandlerRegistry, IMessageHandler
 
     private void InitializeTypes(object instance)
     {
+        if (EventsRegistry == null)
+            return;
+
         foreach (var registry in instance.GetType().GetAllInterfaces().Select(i => GetTypeAndHandler(i, instance)).Where(x => x != null))
         {
             if (registry.Action != null)
