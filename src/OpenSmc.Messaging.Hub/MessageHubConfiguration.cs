@@ -17,8 +17,7 @@ public static class MessageHubFactory
     public static IMessageHub<TAddress> CreateMessageHub<THub, TAddress>(this IServiceProvider serviceProvider, TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
         where THub : class, IMessageHub<TAddress>
     {
-        var hubSetup = new MessageHubConfiguration(serviceProvider, address)
-            .WithServices(s => s.Replace(ServiceDescriptor.Singleton<IMessageHub, MessageHub<TAddress>>()));
+        var hubSetup = new MessageHubConfiguration(serviceProvider, address);
         return (IMessageHub<TAddress>)configuration(hubSetup).Build<THub>(serviceProvider, address);
     }
 
@@ -126,6 +125,11 @@ public record MessageHubConfiguration
 
         var services = new ServiceCollection();
         services.TryAddTransient<THub>();
+        services.AddSingleton<IMessageService>(sp => new MessageService(Address,
+                sp.GetService<ISerializationService>(), // HACK: GetRequiredService replaced by GetService (16.01.2024, Alexander Yolokhov)
+                sp.GetRequiredService<ILogger<MessageService>>()
+            )
+        );
         Services.Invoke(services);
         return services;
     }
@@ -171,8 +175,7 @@ public record MessageHubConfiguration
     {
         ForwardConfigurationRouteBuilder = routedDelivery => (ForwardConfigurationBuilder ?? (x => x)).Invoke(new ForwardConfiguration(routedDelivery, instance, address));
 
-        var hub = ServiceProvider.GetRequiredService<IMessageHub>();
-        MessageService.AddHandler(hub);
+        MessageService.AddHandler(instance);
 
 
         MessageService.Start();
@@ -182,10 +185,7 @@ public record MessageHubConfiguration
     protected IMessageHub Instantiate<THub>(IServiceProvider serviceProvider)
         where THub : IMessageHub
     {
-        MessageService = new MessageService(Address, 
-                                            serviceProvider.GetRequiredService<ISerializationService>(),
-                                            serviceProvider.GetRequiredService<ILogger<MessageService>>()
-                                           );
+        MessageService = serviceProvider.GetRequiredService<IMessageService>();
         HubInstance = serviceProvider.GetRequiredService<THub>();
         return HubInstance;
     }
