@@ -37,11 +37,11 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Serialization.Abstr
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Serialization.Test", "test\OpenSmc.Serialization.Test\OpenSmc.Serialization.Test.csproj", "{6AB262EB-D721-46B6-9987-BF93EDA0FA24}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenSmc.Disposables", "src\OpenSmc.Disposables\OpenSmc.Disposables.csproj", "{724898BF-A43E-438A-8AAA-FD8235771CA4}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Disposables", "src\OpenSmc.Disposables\OpenSmc.Disposables.csproj", "{724898BF-A43E-438A-8AAA-FD8235771CA4}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenSmc.Activities.Contract", "OpenSmc.Activities.Contract\OpenSmc.Activities.Contract.csproj", "{7BC75B64-47C0-40DE-9EF7-8CD17FB84C28}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Activities.Contract", "OpenSmc.Activities.Contract\OpenSmc.Activities.Contract.csproj", "{7BC75B64-47C0-40DE-9EF7-8CD17FB84C28}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenSmc.ServiceProvider", "src\OpenSmc.ServiceProvider\OpenSmc.ServiceProvider.csproj", "{D8A83A3A-3A07-4D5C-AE9F-D2A0380BD31A}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.ServiceProvider", "src\OpenSmc.ServiceProvider\OpenSmc.ServiceProvider.csproj", "{D8A83A3A-3A07-4D5C-AE9F-D2A0380BD31A}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
