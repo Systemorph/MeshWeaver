@@ -124,12 +124,13 @@ public record MessageHubConfiguration
     {
 
         var services = new ServiceCollection();
-        services.TryAddTransient<THub>();
-        services.AddSingleton<IMessageService>(sp => new MessageService(Address,
-                sp.GetService<ISerializationService>(), // HACK: GetRequiredService replaced by GetService (16.01.2024, Alexander Yolokhov)
-                sp.GetRequiredService<ILogger<MessageService>>()
-            )
-        );
+        var hubInterface = typeof(IMessageHub<>).MakeGenericType(Address?.GetType() ?? typeof(object));
+        services.Replace(ServiceDescriptor.Singleton<THub, THub>());
+        services.Replace(ServiceDescriptor.Singleton(hubInterface, sp => sp.GetRequiredService<THub>()));
+        services.Replace(ServiceDescriptor.Singleton<IMessageService>(sp => new MessageService(Address,
+            sp.GetService<ISerializationService>(), // HACK: GetRequiredService replaced by GetService (16.01.2024, Alexander Yolokhov)
+            sp.GetRequiredService<ILogger<MessageService>>()
+        )));
         Services.Invoke(services);
         return services;
     }
@@ -157,7 +158,7 @@ public record MessageHubConfiguration
     protected void CreateServiceProvider<THub>()
         where THub : class, IMessageHub
     {
-        string Tag() => (typeof(THub).IsGenericType ? typeof(THub).FullName : typeof(THub).Name) + Address.GetHashCode();
+        string Tag() => (typeof(THub).IsGenericType ? typeof(THub).FullName : typeof(THub).Name) + Address?.GetHashCode();
 
         ServiceProvider = ConfigureServices<THub>()
             .SetupModules(ParentServiceProvider, new ModulesBuilder().Add(GetType().Assembly), Tag());
@@ -175,7 +176,8 @@ public record MessageHubConfiguration
     {
         ForwardConfigurationRouteBuilder = routedDelivery => (ForwardConfigurationBuilder ?? (x => x)).Invoke(new ForwardConfiguration(routedDelivery, instance, address));
 
-        MessageService.AddHandler(instance);
+        var hub = address != null ? ServiceProvider.GetRequiredService<IMessageHub>() : instance;
+        MessageService.AddHandler(hub);
 
 
         MessageService.Start();
