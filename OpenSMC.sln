@@ -37,6 +37,12 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Serialization.Abstr
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Serialization.Test", "test\OpenSmc.Serialization.Test\OpenSmc.Serialization.Test.csproj", "{6AB262EB-D721-46B6-9987-BF93EDA0FA24}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Disposables", "src\OpenSmc.Disposables\OpenSmc.Disposables.csproj", "{724898BF-A43E-438A-8AAA-FD8235771CA4}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Activities.Contract", "OpenSmc.Activities.Contract\OpenSmc.Activities.Contract.csproj", "{7BC75B64-47C0-40DE-9EF7-8CD17FB84C28}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.ServiceProvider", "src\OpenSmc.ServiceProvider\OpenSmc.ServiceProvider.csproj", "{D8A83A3A-3A07-4D5C-AE9F-D2A0380BD31A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -87,6 +93,18 @@ Global
 		{6AB262EB-D721-46B6-9987-BF93EDA0FA24}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{6AB262EB-D721-46B6-9987-BF93EDA0FA24}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{6AB262EB-D721-46B6-9987-BF93EDA0FA24}.Release|Any CPU.Build.0 = Release|Any CPU
+		{724898BF-A43E-438A-8AAA-FD8235771CA4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{724898BF-A43E-438A-8AAA-FD8235771CA4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{724898BF-A43E-438A-8AAA-FD8235771CA4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{724898BF-A43E-438A-8AAA-FD8235771CA4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7BC75B64-47C0-40DE-9EF7-8CD17FB84C28}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7BC75B64-47C0-40DE-9EF7-8CD17FB84C28}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7BC75B64-47C0-40DE-9EF7-8CD17FB84C28}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7BC75B64-47C0-40DE-9EF7-8CD17FB84C28}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D8A83A3A-3A07-4D5C-AE9F-D2A0380BD31A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D8A83A3A-3A07-4D5C-AE9F-D2A0380BD31A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D8A83A3A-3A07-4D5C-AE9F-D2A0380BD31A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D8A83A3A-3A07-4D5C-AE9F-D2A0380BD31A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

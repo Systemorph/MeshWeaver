@@ -1,13 +1,13 @@
-﻿using System.Collections.Concurrent;
+﻿using OpenSmc.Reflection;
+using OpenSmc.Serialization;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Linq.Expressions;
 using System.Reflection;
-using OpenSmc.Reflection;
-using OpenSmc.Serialization;
 
 namespace OpenSmc.Messaging.Hub;
 
-public abstract class MessageHandlerBase : IMessageHandler, IMessageHandlerRegistry
+public class MessageHubBase :  IMessageHandlerRegistry, IMessageHandler
 {
     protected object Me { get; private set; }
     protected readonly IEventsRegistry EventsRegistry;
@@ -81,7 +81,7 @@ public abstract class MessageHandlerBase : IMessageHandler, IMessageHandlerRegis
     protected IMessageService MessageService { get; private set; }
     protected readonly LinkedList<RegistryRule> Rules;
 
-    protected MessageHandlerBase(IEventsRegistry eventsRegistry)
+    protected MessageHubBase(IEventsRegistry eventsRegistry)
     {
         EventsRegistry = eventsRegistry;
         InitializeTypes(this);
@@ -276,3 +276,4 @@ public abstract class MessageHandlerBase : IMessageHandler, IMessageHandlerRegis
     }
 }
 
+public record RegistryRule(AsyncDelivery Rule);
