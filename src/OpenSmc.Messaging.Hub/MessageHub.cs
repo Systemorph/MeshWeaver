@@ -17,7 +17,7 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>, IMess
 
     protected readonly ILogger Logger;
 
-    protected MessageHub(IServiceProvider serviceProvider) : base(serviceProvider.GetRequiredService<IEventsRegistry>())
+    public MessageHub(IServiceProvider serviceProvider) : base(serviceProvider.GetRequiredService<IEventsRegistry>())
     {
         ServiceProvider = serviceProvider;
         Logger = serviceProvider.GetRequiredService<ILogger<MessageHub<TAddress>>>();

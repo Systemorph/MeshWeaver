@@ -17,7 +17,8 @@ public static class MessageHubFactory
     public static IMessageHub<TAddress> CreateMessageHub<THub, TAddress>(this IServiceProvider serviceProvider, TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
         where THub : class, IMessageHub<TAddress>
     {
-        var hubSetup = new MessageHubConfiguration(serviceProvider, address);
+        var hubSetup = new MessageHubConfiguration(serviceProvider, address)
+            .WithServices(s => s.Replace(ServiceDescriptor.Singleton<IMessageHub, MessageHub<TAddress>>()));
         return (IMessageHub<TAddress>)configuration(hubSetup).Build<THub>(serviceProvider, address);
     }
 
