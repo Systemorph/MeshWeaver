@@ -4,23 +4,10 @@ using System.Text;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
 using Newtonsoft.Json.Linq;
-using Newtonsoft.Json.Serialization;
 using OpenSmc.StringHelpers;
 
 namespace OpenSmc.Serialization;
 
-public class CustomContractResolver : CamelCasePropertyNamesContractResolver
-{
-    protected override JsonProperty CreateProperty(MemberInfo member, MemberSerialization memberSerialization)
-    {
-        var property = base.CreateProperty(member, memberSerialization);
-        if (property.DefaultValueHandling == null)
-            if (property.PropertyType is { IsEnum: false })
-                property.DefaultValueHandling = DefaultValueHandling.Ignore;
-
-        return property;
-    }
-}
 public class SerializationService : ISerializationService
 {
     private readonly IServiceProvider serviceProvider;

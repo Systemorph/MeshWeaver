@@ -4,7 +4,7 @@ namespace OpenSmc.Serialization;
 
 public record SerializationConfiguration
 {
-    public ImmutableList<SerializationTypeRule> Rules = ImmutableList<SerializationTypeRule>.Empty;
+    internal ImmutableList<SerializationTypeRule> Rules = ImmutableList<SerializationTypeRule>.Empty;
 
     public SerializationConfiguration ForType<T>(Func<SerializationTypeRule, SerializationTypeRule> configure)
     {
@@ -28,7 +28,7 @@ public abstract record SerializationTypeRule
     public abstract void Apply(ICustomSerializationRegistry registry);
 }
 
-record SerializationTypeRule<T> : SerializationTypeRule
+internal record SerializationTypeRule<T> : SerializationTypeRule
 {
     public override void Apply(ICustomSerializationRegistry registry)
     {
