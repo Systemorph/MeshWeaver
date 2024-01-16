@@ -4,11 +4,14 @@ namespace OpenSmc.Serialization;
 
 public class EventsRegistry : IEventsRegistry
 {
+    private readonly IEventsRegistry parent;
     private readonly ConcurrentDictionary<string, Type> typeByName = new();
     private readonly ConcurrentDictionary<Type, string> nameByType = new();
 
-    public EventsRegistry()
+    public EventsRegistry(IEventsRegistry parent)
     {
+        // TODO V10: Delegate to parent events provider when nothing is defined on this level (16.01.2024, Roland Buergi)
+        this.parent = parent;
     }
 
     public IEventsRegistry WithEvent(Type type)

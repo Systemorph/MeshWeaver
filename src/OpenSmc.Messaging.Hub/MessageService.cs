@@ -7,7 +7,6 @@ namespace OpenSmc.Messaging.Hub;
 
 public class MessageService : IMessageService
 {
-    private readonly List<IMessageHandler> registeredHandlers = new();
     private readonly ISerializationService serializationService;
     private readonly ILogger<MessageService> logger;
     private ActionBlock<IMessageDelivery> executionQueueAction;
@@ -15,6 +14,14 @@ public class MessageService : IMessageService
     private readonly BufferBlock<IMessageDelivery> buffer = new();
     private ActionBlock<IMessageDelivery> deliveryAction;
 
+
+    private AsyncDelivery MessageHandler { get; set; }
+
+    public void Initialize(AsyncDelivery messageHandler)
+    {
+        MessageHandler = messageHandler;
+        Start();
+    }
 
     public void Schedule(Func<Task> action) => topQueue.Schedule(action);
     public Task<bool> FlushAsync() => topQueue.Flush();
@@ -46,7 +53,7 @@ public class MessageService : IMessageService
     }
 
     private bool IsStarted;
-    void IMessageService.Start()
+    void Start()
     {
         if (IsStarted)
             return;
@@ -69,16 +76,6 @@ public class MessageService : IMessageService
 
     public object Address { get; }
 
-    void IMessageService.AddHandler(IMessageHandler handler)
-    {
-        registeredHandlers.Add(handler);
-        handler.Connect(this, Address);
-
-    }
-    void IMessageService.RemoveHandler(IMessageHandler handler)
-    {
-        registeredHandlers.Remove(handler);
-    }
 
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter)
     {
@@ -119,8 +116,7 @@ public class MessageService : IMessageService
 
     private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery)
     {
-        foreach (var handler in registeredHandlers.ToArray()) // we run into collection modified exception
-            delivery = await handler.HandleMessageAsync(delivery);
+        delivery = await MessageHandler.Invoke(delivery);
         return delivery;
     }
 
@@ -166,9 +162,6 @@ public class MessageService : IMessageService
 
         executionQueueAction.Complete();
         await executionQueueAction.Completion;
-
-        foreach (var handler in registeredHandlers.Where(x => x is not IMessageHub).ToArray())
-            await handler.DisposeAsync();
 
         await topQueue.DisposeAsync();
 

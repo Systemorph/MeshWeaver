@@ -2,31 +2,32 @@
 using System.Reactive.Subjects;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using OpenSmc.Serialization;
 
 namespace OpenSmc.Messaging.Hub;
 
-public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>, IMessageHandler
+
+public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
 {
-    public MessageHubConfiguration Configuration { get; private set; }
-
-    public TAddress Address => (TAddress)MessageService.Address;
+    private Dictionary<string, List<AsyncDelivery>> callbacks = new();
+    public new TAddress Address => (TAddress)MessageService.Address;
     void IMessageHub.Schedule(Func<Task> action) => MessageService.Schedule(action);
-
     public IServiceProvider ServiceProvider { get; }
 
     protected readonly ILogger Logger;
+    protected override IMessageHub Hub => this;
 
-    public MessageHub(IServiceProvider serviceProvider) : base(serviceProvider.GetService<IEventsRegistry>()) // HACK: GetRequiredService replaced by GetService (16.01.2024, Alexander Yolokhov)
+    public MessageHub(IServiceProvider serviceProvider) : base(serviceProvider) 
     {
         ServiceProvider = serviceProvider;
         Logger = serviceProvider.GetRequiredService<ILogger<MessageHub<TAddress>>>();
     }
 
 
-    public virtual void Initialize(IMessageHub hub, MessageHubConfiguration configuration)
+    internal override void Initialize(MessageHubConfiguration configuration, IMessageHub parentHub)
     {
-        Configuration = configuration;
+        base.Initialize(configuration, parentHub);
+        if(parentHub != null && parentHub != this)
+            RegisterAfter(Rules.Last, d => Task.FromResult(parentHub.DeliverMessage(d)));
 
         var deferredTypes = GetDeferredRequestTypes().ToHashSet();
         DeliveryFilter defaultDeferralsLambda = d =>
@@ -158,7 +159,7 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>, IMess
 
     private readonly object locker = new();
 
-    public override Task DisposeAsync()
+    public Task DisposeAsync()
     {
         lock (locker)
         {
@@ -263,6 +264,13 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>, IMess
         return (T)ret;
     }
 
+    public async Task AddPluginAsync(IMessageHubPlugin plugin)
+    {
+        await plugin.InitializeAsync(this);
+        Register(plugin.HandleMessageAsync);
+    }
+
+ 
     private readonly object releaseLock = new();
 
     private void ReleaseAllTypes()

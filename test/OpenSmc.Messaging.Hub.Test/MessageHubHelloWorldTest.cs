@@ -23,8 +23,9 @@ public class MessageHubHelloWorldTest : TestBase
     public MessageHubHelloWorldTest(ITestOutputHelper output) : base(output)
     {
         // HACK: need to distinguish root hub by address type "object" to not have stack overflow when resolving IMessageHub in MessageHubConfiguration.Initialize (16.01.2024, Alexander Yolokhov)
-        var routerAddress = (object)null;
-        Services.AddSingleton<IMessageHub>(sp => sp.CreateMessageHub(routerAddress, hubConf => hubConf
+        var routerAddress = new RouterAddress();
+        Services.AddSingleton<IMessageHub>(sp => sp.GetRequiredService<IMessageHub<RouterAddress>>());
+        Services.AddSingleton(sp => sp.CreateMessageHub(routerAddress, hubConf => hubConf
             .WithMessageForwarding(f => f
                 .RouteAddress<HostAddress>(delivery => sp.GetRequiredService<IMessageHub<HostAddress>>().DeliverMessage(delivery))
                 .RouteAddress<ClientAddress>(delivery => sp.GetRequiredService<IMessageHub<ClientAddress>>().DeliverMessage(delivery))

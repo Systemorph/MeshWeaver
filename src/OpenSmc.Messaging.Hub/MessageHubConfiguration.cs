@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Runtime.InteropServices.ComTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -39,8 +40,6 @@ public record MessageHubConfiguration
 
     internal Func<IServiceCollection, IServiceCollection> Services { get; init; } = x => x;
 
-
-    internal IMessageService MessageService;
 
 
 
@@ -127,6 +126,8 @@ public record MessageHubConfiguration
         var hubInterface = typeof(IMessageHub<>).MakeGenericType(Address?.GetType() ?? typeof(object));
         services.Replace(ServiceDescriptor.Singleton<THub, THub>());
         services.Replace(ServiceDescriptor.Singleton(hubInterface, sp => sp.GetRequiredService<THub>()));
+        services.Replace(ServiceDescriptor.Singleton(typeof(IEventsRegistry),
+            sp => new EventsRegistry(ParentServiceProvider.GetService<IEventsRegistry>())));
         services.Replace(ServiceDescriptor.Singleton<IMessageService>(sp => new MessageService(Address,
             sp.GetService<ISerializationService>(), // HACK: GetRequiredService replaced by GetService (16.01.2024, Alexander Yolokhov)
             sp.GetRequiredService<ILogger<MessageService>>()
@@ -168,27 +169,10 @@ public record MessageHubConfiguration
         where THub : class, IMessageHub
     {
         CreateServiceProvider<THub>();
-        var instance = Instantiate<THub>(ServiceProvider);
-        return Initialize(instance, address);
-    }
-
-    protected IMessageHub Initialize(IMessageHub instance, object address)
-    {
-        ForwardConfigurationRouteBuilder = routedDelivery => (ForwardConfigurationBuilder ?? (x => x)).Invoke(new ForwardConfiguration(routedDelivery, instance, address));
-
-        var hub = address != null ? ServiceProvider.GetRequiredService<IMessageHub>() : instance;
-        MessageService.AddHandler(hub);
-
-
-        MessageService.Start();
-        return instance;
-    }
-
-    protected IMessageHub Instantiate<THub>(IServiceProvider serviceProvider)
-        where THub : IMessageHub
-    {
-        MessageService = serviceProvider.GetRequiredService<IMessageService>();
-        HubInstance = serviceProvider.GetRequiredService<THub>();
+        HubInstance = ServiceProvider.GetRequiredService<THub>();
+        ForwardConfigurationRouteBuilder = routedDelivery => (ForwardConfigurationBuilder ?? (x => x)).Invoke(new ForwardConfiguration(routedDelivery, HubInstance, address));
+        //var parentHub = ParentServiceProvider.GetService<IMessageHub>();
+        ((MessageHubBase)HubInstance).Initialize(this, /*parentHub*/ null);
         return HubInstance;
     }
 

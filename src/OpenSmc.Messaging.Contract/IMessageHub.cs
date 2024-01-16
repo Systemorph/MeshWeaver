@@ -4,7 +4,7 @@
 namespace OpenSmc.Messaging;
 
 
-public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDisposable, IMessageHandler
+public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDisposable
 {
     IMessageDelivery<TMessage> Post<TMessage>(TMessage message, Func<PostOptions, PostOptions> options = null);
     IMessageDelivery DeliverMessage(IMessageDelivery delivery);
@@ -43,6 +43,7 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
 
     void Set<T>(T obj, string context = "");
     T Get<T>(string context = "");
+    Task AddPluginAsync(IMessageHubPlugin plugin);
 }
 
 
