@@ -17,8 +17,8 @@ public class MessageHubHelloWorldTest : TestBase
     record SayHelloRequest : IRequest<HelloEvent>;
     record HelloEvent;
 
-    [Inject] private IMessageHub<HostAddress> Host;
-    [Inject] private IMessageHub<ClientAddress> Client;
+    [Inject] private IMessageHub<HostAddress> Host { get; set; }
+    [Inject] private IMessageHub<ClientAddress> Client { get; set; }
 
     public MessageHubHelloWorldTest(ITestOutputHelper output) : base(output)
     {
@@ -31,11 +31,16 @@ public class MessageHubHelloWorldTest : TestBase
                 .RouteAddress<ClientAddress>(delivery => sp.GetRequiredService<IMessageHub<ClientAddress>>().DeliverMessage(delivery))
             )));
 
-        Services.AddSingleton(sp => sp.CreateMessageHub(new HostAddress(), hubConf => hubConf.WithHandler<SayHelloRequest>((hub, request) =>
-        {
-            hub.Post(new HelloEvent(), options => options.ResponseFor(request));
-            return request.Processed();
-        })));
+        Services.AddSingleton(sp =>
+            sp
+                .CreateMessageHub
+                (
+                    new HostAddress(),
+                    hubConf => hubConf.WithHandler<SayHelloRequest>((hub, request) =>
+                    {
+                        hub.Post(new HelloEvent(), options => options.ResponseFor(request));
+                        return request.Processed();
+                    })));
         Services.AddSingleton(sp => sp.CreateMessageHub(new ClientAddress(), hubConf => hubConf));
     }
 
