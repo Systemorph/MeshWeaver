@@ -6,6 +6,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\OpenSmc.Messaging.Hub\OpenSmc.Messaging.Hub.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Serialization\OpenSmc.Serialization.csproj" />
+    <ProjectReference Include="..\OpenSmc.Fixture\OpenSmc.Fixture.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Folder Include="External\" />

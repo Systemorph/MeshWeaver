@@ -6,31 +6,31 @@ using OpenSmc.Messaging;
 using OpenSmc.Messaging.Hub;
 using OpenSmc.ServiceProvider;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace OpenSmc.Serialization.Test;
 
-public class SerializationTest
+public class SerializationTest : TestBase
 {
-    private readonly IServiceCollection serviceCollection;
+    record HostAddress;
 
-    public SerializationTest()
+    [Inject] private IMessageHub<HostAddress> Host { get; set; }
+
+    public SerializationTest(ITestOutputHelper output) : base(output)
     {
-        serviceCollection = new ServiceCollection()
-            .AddLogging(l => l.AddXUnitLogger());
+        Services.AddSingleton(sp =>
+            sp.CreateMessageHub(new HostAddress(),
+                hubConf => hubConf
+                    .AddSerialization(conf =>
+                        conf.ForType<MyEvent>(s =>
+                            s.WithMutation((value, context) => context.SetProperty("NewProp", "New"))))));
     }
 
     [Fact]
     public async Task SimpleTest()
     {
-        var serviceProvider = serviceCollection
-            .AddSingleton(sp => sp.CreateMessageHub(new HostAddress(),
-                hubConf => hubConf.AddSerialization(conf =>
-                    conf.ForType<MyEvent>(s => s.WithMutation((value, context) => context.SetProperty("NewProp", "New"))))))
-            .SetupModules(new ModulesBuilder());
-
-        var hub = serviceProvider.GetRequiredService<IMessageHub<HostAddress>>();
-        hub.Post(new MyEvent("Hello"));
-        var events = await hub.Out.Timeout(TimeSpan.FromMicroseconds(500)).ToArray();
+        Host.Post(new MyEvent("Hello"));
+        var events = await Host.Out.Timeout(TimeSpan.FromMicroseconds(500)).ToArray();
         events.Should().HaveCount(1);
     }
 }
