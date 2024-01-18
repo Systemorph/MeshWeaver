@@ -1,5 +1,4 @@
 ﻿using System.Collections.Immutable;
-using System.Runtime.InteropServices.ComTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -12,7 +11,6 @@ public static class MessageHubFactory
 {
     public const string Initialize = nameof(Initialize);
 
-
     public static IMessageHub<TAddress> CreateMessageHub<TAddress>(this IServiceProvider serviceProvider, TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
         => CreateMessageHub<MessageHub<TAddress>, TAddress>(serviceProvider, address, configuration);
     public static IMessageHub<TAddress> CreateMessageHub<THub, TAddress>(this IServiceProvider serviceProvider, TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
@@ -21,8 +19,6 @@ public static class MessageHubFactory
         var hubSetup = new MessageHubConfiguration(serviceProvider, address);
         return (IMessageHub<TAddress>)configuration(hubSetup).Build<THub>(serviceProvider, address);
     }
-
-
 }
 
 public record MessageHubConfiguration
@@ -34,18 +30,11 @@ public record MessageHubConfiguration
     {
         Address = address;
         ParentServiceProvider = parentServiceProvider;
-
-
     }
 
     internal Func<IServiceCollection, IServiceCollection> Services { get; init; } = x => x;
 
-
-
-
     public IServiceProvider ServiceProvider { get; set; }
-
-
 
     internal ImmutableList<Action<IMessageHub>> DisposeActions { get; init; } = ImmutableList<Action<IMessageHub>>.Empty;
 
@@ -60,27 +49,7 @@ public record MessageHubConfiguration
 
     internal ImmutableList<DeliveryFilter> Deferrals { get; init; } = ImmutableList<DeliveryFilter>.Empty;
 
-
-
-
-
-
-
-
-
-
     internal IMessageHub HubInstance { get; set; }
-
-
-
-
-
-
-
-
-
-
-
 
     public MessageHubConfiguration WithDisposeAction(Action<IMessageHub> disposeAction) => this with { DisposeActions = DisposeActions.Add(disposeAction) };
     public MessageHubConfiguration WithDisposeActions(IEnumerable<Action<IMessageHub>> disposeActions) => this with { DisposeActions = DisposeActions.AddRange(disposeActions) };
@@ -91,7 +60,6 @@ public record MessageHubConfiguration
     }
 
 
-
     internal Func<ForwardConfiguration, ForwardConfiguration> ForwardConfigurationBuilder { get; init; }
 
 
@@ -100,7 +68,6 @@ public record MessageHubConfiguration
         return this with { Services = x => configuration(Services(x)) };
     }
     public MessageHubConfiguration SynchronizeFrom(object address) => this with { SynchronizationAddress = address };
-
 
 
     public MessageHubConfiguration WithForwards(Func<ForwardConfiguration, ForwardConfiguration> configuration) => this with { ForwardConfigurationBuilder = x => configuration(ForwardConfigurationBuilder?.Invoke(x) ?? x) };
@@ -121,7 +88,6 @@ public record MessageHubConfiguration
     protected virtual ServiceCollection ConfigureServices<THub>()
         where THub : class, IMessageHub
     {
-
         var services = new ServiceCollection();
         var hubInterface = typeof(IMessageHub<>).MakeGenericType(Address?.GetType() ?? typeof(object));
         services.Replace(ServiceDescriptor.Singleton<THub, THub>());
@@ -137,16 +103,10 @@ public record MessageHubConfiguration
     }
 
 
-
-
     public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery) => WithBuildupAction(hub => hub.Register<TMessage>(request => delivery(hub, request)));
     public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, Task<IMessageDelivery>> delivery) => WithBuildupAction(hub => hub.Register<TMessage>(request => delivery(hub, request)));
     public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery, DeliveryFilter<TMessage> filter) => WithBuildupAction(hub => hub.Register(request => delivery(hub, request), filter));
     public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, Task<IMessageDelivery>> delivery, DeliveryFilter<TMessage> filter) => WithBuildupAction(hub => hub.Register(request => delivery(hub, request), filter));
-
-
-
-
 
 
     public MessageHubConfiguration WithBuildupAction(Action<IMessageHub> action) => this with { BuildupActions = BuildupActions.Add(hub => { action(hub); return Task.CompletedTask; }) };
@@ -175,8 +135,6 @@ public record MessageHubConfiguration
         ((MessageHubBase)HubInstance).Initialize(this, /*parentHub*/ null);
         return HubInstance;
     }
-
-
 }
 
 public record StartConfiguration(object Address)
@@ -203,7 +161,6 @@ public record RoutedHubConfiguration
                 return ret;
             })
         };
-
 
     public RoutedHubConfiguration RouteAddress<TAddress>(Func<IMessageDelivery, object> addressMap, Func<AddressRouteConfiguration<TAddress>, AddressRouteConfiguration<TAddress>> config = null)
         => this with
@@ -233,11 +190,8 @@ public record RoutedHubConfiguration
 
     public RoutedHubConfiguration Buildup(IMessageHub host) => this with
     {
-        MessageRoutes = MessageRouteConfigurationFunctions
-                                                                                   .Select(c => c.Invoke(host)).ToImmutableList(),
-        ForwardConfigurationItems = ForwardConfigurationFunctions
-                                                                                               .Select(c => c.Invoke(host)).ToImmutableList(),
-
+        MessageRoutes = MessageRouteConfigurationFunctions.Select(c => c.Invoke(host)).ToImmutableList(),
+        ForwardConfigurationItems = ForwardConfigurationFunctions.Select(c => c.Invoke(host)).ToImmutableList(),
     };
 }
 
@@ -245,7 +199,6 @@ public abstract record MessageRouteConfiguration(Func<IMessageDelivery, object> 
 {
     internal const string MaskedRequest = nameof(MaskedRequest);
     AsyncDelivery IForwardConfigurationItem.Route => d => Task.FromResult(Route(d));
-
 
     bool IForwardConfigurationItem.Filter(IMessageDelivery delivery) => Applies(delivery);
     protected abstract bool Applies(IMessageDelivery delivery);
@@ -260,15 +213,12 @@ public abstract record MessageRouteConfiguration(Func<IMessageDelivery, object> 
         return delivery.Forwarded();
     }
 
-
     private IMessageDelivery HandleWayBack(IMessageDelivery request, IMessageDelivery response)
     {
         Host.Post(response.Message, o => o.WithTarget(request.Sender).WithProperties(response.Properties).WithRequestIdFrom(request));
         return request.Processed();
     }
-
 }
-
 
 public record AddressRouteConfiguration<TAddress>(Func<IMessageDelivery, object> AddressMap, IMessageHub Host) : MessageRouteConfiguration(AddressMap, Host)
 {
@@ -277,8 +227,6 @@ public record AddressRouteConfiguration<TAddress>(Func<IMessageDelivery, object>
     protected bool AddressFilter(IMessageDelivery delivery) => delivery.Target.IsAddress<TAddress>();
 
     protected override bool Applies(IMessageDelivery delivery) => AddressFilter(delivery) && Filter(delivery);
-
-
 }
 
 public record MessageRouteConfiguration<TMessage>(Func<IMessageDelivery, object> AddressMap, IMessageHub Host) : MessageRouteConfiguration(AddressMap, Host)
@@ -291,6 +239,3 @@ public record MessageRouteConfiguration<TMessage>(Func<IMessageDelivery, object>
 }
 
 internal record MessageHandlerItem(Type MessageType, AsyncDelivery Action, DeliveryFilter Filter);
-
-
-

@@ -50,7 +50,6 @@ public class ModulesBuilder
 
     private static IEnumerable<Assembly> ExpandedModuleAssemblies(IEnumerable<Assembly> assemblies, HashSet<Assembly> expandedSet)
     {
-
         foreach (var assembly in assemblies.Where(a => IsSystemorphModule(a.FullName)))
         {
             if (expandedSet.Contains(assembly))
@@ -100,7 +99,6 @@ public class ModulesBuilder
                     initializations.Add(mi);
             }
         }
-
 
         return new Modules(registries, initializations);
     }
