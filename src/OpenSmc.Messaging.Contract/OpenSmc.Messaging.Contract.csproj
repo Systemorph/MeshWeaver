@@ -6,6 +6,6 @@
     <PackageReference Include="Microsoft.Extensions.Logging" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\OpenSmc.Activities.Contract\OpenSmc.Activities.Contract.csproj" />
+    <ProjectReference Include="..\OpenSmc.Activities.Contract\OpenSmc.Activities.Contract.csproj" />
   </ItemGroup>
 </Project>
