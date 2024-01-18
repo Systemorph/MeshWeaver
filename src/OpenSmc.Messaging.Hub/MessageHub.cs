@@ -13,13 +13,14 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
     void IMessageHub.Schedule(Func<Task> action) => MessageService.Schedule(action);
     public IServiceProvider ServiceProvider { get; }
 
-    private HostedHubsCollection HostedHubsCollection;
+    private readonly HostedHubsCollection HostedHubsCollection;
     protected readonly ILogger Logger;
     protected override IMessageHub Hub => this;
 
-    public MessageHub(IServiceProvider serviceProvider) : base(serviceProvider) 
+    public MessageHub(IServiceProvider serviceProvider, HostedHubsCollection hostedHubsCollection) : base(serviceProvider) 
     {
         ServiceProvider = serviceProvider;
+        HostedHubsCollection = hostedHubsCollection;
         Logger = serviceProvider.GetRequiredService<ILogger<MessageHub<TAddress>>>();
     }
 
@@ -35,8 +36,6 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
             deferredTypes.Contains(d.Message.GetType()) || configuration.Deferrals.Select(f => f(d)).DefaultIfEmpty()
                 .Aggregate((x, y) => x || y);
         defaultDeferrals = MessageService.Defer(x => defaultDeferralsLambda(x));
-
-        HostedHubsCollection = new();
 
         foreach (var messageHandler in configuration.MessageHandlers)
             Register(messageHandler.MessageType, messageHandler.Action, messageHandler.Filter);

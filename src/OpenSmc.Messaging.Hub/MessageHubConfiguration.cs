@@ -7,10 +7,8 @@ using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Messaging.Hub;
 
-public static class MessageHubFactory
+public static class MessageHubExtensions
 {
-    public const string Initialize = nameof(Initialize);
-
     public static IMessageHub<TAddress> CreateMessageHub<TAddress>(this IServiceProvider serviceProvider, TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
         => CreateMessageHub<MessageHub<TAddress>, TAddress>(serviceProvider, address, configuration);
     public static IMessageHub<TAddress> CreateMessageHub<THub, TAddress>(this IServiceProvider serviceProvider, TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
@@ -18,15 +16,6 @@ public static class MessageHubFactory
     {
         var hubSetup = new MessageHubConfiguration(serviceProvider, address);
         return (IMessageHub<TAddress>)configuration(hubSetup).Build<THub>(serviceProvider, address);
-    }
-}
-
-// TODO V10: See whether to tgake from SMC (18.01.2024, Roland Buergi)
-public class HostedHubCollection : IAsyncDisposable
-{
-    public ValueTask DisposeAsync()
-    {
-        throw new NotImplementedException();
     }
 }
 
@@ -98,10 +87,8 @@ public record MessageHubConfiguration
         where THub : class, IMessageHub
     {
         var services = new ServiceCollection();
-        var hubInterface = typeof(IMessageHub<>).MakeGenericType(Address?.GetType() ?? typeof(object));
-        services.Replace(ServiceDescriptor.Singleton<THub, THub>());
-        // TODO V10: Inject HostedHubsCollection in DI on every level(18.01.2024, Roland Buergi)
-        services.Replace(ServiceDescriptor.Singleton(hubInterface, sp => sp.GetRequiredService<THub>()));
+        services.Replace(ServiceDescriptor.Transient<THub, THub>());
+        services.Replace(ServiceDescriptor.Singleton<HostedHubsCollection, HostedHubsCollection>());
         services.Replace(ServiceDescriptor.Singleton(typeof(IEventsRegistry),
             sp => new EventsRegistry(ParentServiceProvider.GetService<IEventsRegistry>())));
         services.Replace(ServiceDescriptor.Singleton<IMessageService>(sp => new MessageService(Address,
