@@ -17,18 +17,15 @@ public class MessageHubHelloWorldTest : TestBase
     record SayHelloRequest : IRequest<HelloEvent>;
     record HelloEvent;
 
-    [Inject] private IMessageHub<HostAddress> Host { get; set; }
-    [Inject] private IMessageHub<ClientAddress> Client { get; set; }
+    // TODO V10: We need a setup in which router is resolved from top level DI, then host and client are resolved from the DI of the router hub. (18.01.2024, Roland Buergi)
+    [Inject] private IMessageHub Router { get; set; }
 
     public MessageHubHelloWorldTest(ITestOutputHelper output) : base(output)
     {
-        // HACK: need to distinguish root hub by address type "object" to not have stack overflow when resolving IMessageHub in MessageHubConfiguration.Initialize (16.01.2024, Alexander Yolokhov)
-        var routerAddress = new RouterAddress();
-        Services.AddSingleton<IMessageHub>(sp => sp.GetRequiredService<IMessageHub<RouterAddress>>());
-        Services.AddSingleton(sp => sp.CreateMessageHub(routerAddress, hubConf => hubConf
+        Services.AddSingleton<IMessageHub>(sp => sp.CreateMessageHub(new RouterAddress(), hubConf => hubConf
             .WithMessageForwarding(f => f
-                .RouteAddress<HostAddress>(delivery => sp.GetRequiredService<IMessageHub<HostAddress>>().DeliverMessage(delivery))
-                .RouteAddress<ClientAddress>(delivery => sp.GetRequiredService<IMessageHub<ClientAddress>>().DeliverMessage(delivery))
+                .RouteAddress<HostAddress>(delivery => f.Hub.ServiceProvider.GetRequiredService<IMessageHub<HostAddress>>().DeliverMessage(delivery))
+                //.RouteAddress<ClientAddress>(delivery => f.Hub.ServiceProvider.GetRequiredService<IMessageHub<ClientAddress>>().DeliverMessage(delivery))
             )));
 
         Services.AddSingleton(sp =>
@@ -47,19 +44,22 @@ public class MessageHubHelloWorldTest : TestBase
     [Fact]
     public async Task HelloWorld()
     {
-        var response = await Host.AwaitResponse(new SayHelloRequest());
+        var host = Router.ServiceProvider.GetRequiredService<IMessageHub<HostAddress>>();
+        var response = await host.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
         response.Should().BeOfType<HelloEvent>();
     }
 
     [Fact]
     public async Task HelloWorldFromClient()
     {
-        var response = await Client.AwaitResponse(new SayHelloRequest());
+        var client = Router.ServiceProvider.GetRequiredService<IMessageHub<ClientAddress>>();
+        var response = await client.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
         response.Should().BeOfType<HelloEvent>();
     }
 
-    public override Task DisposeAsync()
+    public override async Task DisposeAsync()
     {
-        return base.DisposeAsync();
+        // TODO V10: This should dispose the other two. (18.01.2024, Roland Buergi)
+        await Router.DisposeAsync();
     }
 }

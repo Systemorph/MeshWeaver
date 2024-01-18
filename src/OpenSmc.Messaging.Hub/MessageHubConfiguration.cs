@@ -21,6 +21,15 @@ public static class MessageHubFactory
     }
 }
 
+// TODO V10: See whether to tgake from SMC (18.01.2024, Roland Buergi)
+public class HostedHubCollection : IAsyncDisposable
+{
+    public ValueTask DisposeAsync()
+    {
+        throw new NotImplementedException();
+    }
+}
+
 public record MessageHubConfiguration
 {
     public object Address { get; }
@@ -91,6 +100,7 @@ public record MessageHubConfiguration
         var services = new ServiceCollection();
         var hubInterface = typeof(IMessageHub<>).MakeGenericType(Address?.GetType() ?? typeof(object));
         services.Replace(ServiceDescriptor.Singleton<THub, THub>());
+        // TODO V10: Inject HostedHubsCollection in DI on every level(18.01.2024, Roland Buergi)
         services.Replace(ServiceDescriptor.Singleton(hubInterface, sp => sp.GetRequiredService<THub>()));
         services.Replace(ServiceDescriptor.Singleton(typeof(IEventsRegistry),
             sp => new EventsRegistry(ParentServiceProvider.GetService<IEventsRegistry>())));
@@ -128,6 +138,7 @@ public record MessageHubConfiguration
     public virtual IMessageHub Build<THub>(IServiceProvider serviceProvider, object address)
         where THub : class, IMessageHub
     {
+        // TODO V10: Check whether this address is already built in hosted hubs collection, if not build. (18.01.2024, Roland Buergi)
         CreateServiceProvider<THub>();
         HubInstance = ServiceProvider.GetRequiredService<THub>();
         ForwardConfigurationRouteBuilder = routedDelivery => (ForwardConfigurationBuilder ?? (x => x)).Invoke(new ForwardConfiguration(routedDelivery, HubInstance, address));
@@ -145,6 +156,7 @@ public record StartConfiguration(object Address)
 
 public record RoutedHubConfiguration
 {
+    public IMessageHub Hub { get; init; }
     internal ImmutableList<MessageRouteConfiguration> MessageRoutes { get; init; }
     internal ImmutableList<Func<IMessageHub, MessageRouteConfiguration>> MessageRouteConfigurationFunctions = ImmutableList<Func<IMessageHub, MessageRouteConfiguration>>.Empty;
     internal ImmutableList<IForwardConfigurationItem> ForwardConfigurationItems { get; init; }
