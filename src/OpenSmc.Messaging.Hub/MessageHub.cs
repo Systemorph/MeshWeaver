@@ -13,6 +13,7 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
     void IMessageHub.Schedule(Func<Task> action) => MessageService.Schedule(action);
     public IServiceProvider ServiceProvider { get; }
 
+    private HostedHubsCollection HostedHubsCollection;
     protected readonly ILogger Logger;
     protected override IMessageHub Hub => this;
 
@@ -35,6 +36,7 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
                 .Aggregate((x, y) => x || y);
         defaultDeferrals = MessageService.Defer(x => defaultDeferralsLambda(x));
 
+        HostedHubsCollection = new();
 
         foreach (var messageHandler in configuration.MessageHandlers)
             Register(messageHandler.MessageType, messageHandler.Action, messageHandler.Filter);
@@ -159,7 +161,7 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
 
     private readonly object locker = new();
 
-    public Task DisposeAsync()
+    public new Task DisposeAsync()
     {
         lock (locker)
         {
@@ -185,6 +187,7 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
             isAsyncDisposing = true;
         }
 
+        await HostedHubsCollection.DisposeAsync();
 
         MessageService.Post(new DisconnectHubRequest(Address));
 

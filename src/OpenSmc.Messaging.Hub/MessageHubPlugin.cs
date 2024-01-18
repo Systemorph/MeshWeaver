@@ -195,7 +195,7 @@ public class MessageHubPlugin<TPlugin> : IMessageHubPlugin, IMessageHandlerRegis
         filter);
 
 
-    public virtual  ValueTask DisposeAsync()
+    public virtual ValueTask DisposeAsync()
     {
         return ValueTask.CompletedTask;
     }
