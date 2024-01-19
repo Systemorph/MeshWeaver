@@ -148,6 +148,13 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
     protected Subject<IMessageDelivery> Out { get; } = new();
     IObservable<IMessageDelivery> IMessageHub.Out => Out;
 
+
+    public IMessageHub GetHub<TAddress1>(TAddress1 address)
+    {
+        var messageHub = HostedHubsCollection.GetHub(address);
+        return messageHub;
+    }
+
     protected bool IsDisposing { get; private set; }
 
     private readonly TaskCompletionSource disposing = new();

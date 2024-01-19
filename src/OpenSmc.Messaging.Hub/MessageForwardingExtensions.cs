@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using System.Collections.Immutable;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace OpenSmc.Messaging.Hub;
 
@@ -20,6 +21,15 @@ public static class MessageForwardingExtensions
         hub.Post(new UpdateRequest<RoutedHubConfiguration>(routedHubConfiguration));
     }
 
+    public static MessageHubConfiguration WithHostedHub<TAddress>(this MessageHubConfiguration configuration,
+        Func<MessageHubConfiguration, MessageHubConfiguration> configureHostedHub)
+    {
+        return configuration.WithServices(s => s
+            .Replace(ServiceDescriptor.Singleton(new HostedHubConfigurationSettings<TAddress>
+            {
+                 Configure = configureHostedHub
+            })));
+    }
 
     public static bool IsAddress<TAddress>(this object address)
     {

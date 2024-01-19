@@ -23,10 +23,17 @@ public class MessageHubHelloWorldTest : TestBase
     public MessageHubHelloWorldTest(ITestOutputHelper output) : base(output)
     {
         Services.AddSingleton<IMessageHub>(sp => sp.CreateMessageHub(new RouterAddress(), hubConf => hubConf
-            .WithMessageForwarding(f => f
-                .RouteAddress<HostAddress>(delivery => f.Hub.ServiceProvider.GetRequiredService<IMessageHub<HostAddress>>().DeliverMessage(delivery))
-                //.RouteAddress<ClientAddress>(delivery => f.Hub.ServiceProvider.GetRequiredService<IMessageHub<ClientAddress>>().DeliverMessage(delivery))
-            )));
+            .WithHostedHub<HostAddress>(host => host.WithHandler<SayHelloRequest>((hub, request) =>
+            {
+                hub.Post(new HelloEvent(), options => options.ResponseFor(request));
+                return request.Processed();
+            }))
+            .WithHostedHub<ClientAddress>(client => client)
+            // .WithMessageForwarding(f => f
+            //     .RouteAddress<HostAddress>(delivery => f.Hub.ServiceProvider.GetRequiredService<IMessageHub<HostAddress>>().DeliverMessage(delivery))
+            //     // .RouteAddress<ClientAddress>(delivery => f.Hub.ServiceProvider.GetRequiredService<IMessageHub<ClientAddress>>().DeliverMessage(delivery))
+            // )
+            ));
 
         Services.AddSingleton(sp =>
             sp
@@ -44,7 +51,7 @@ public class MessageHubHelloWorldTest : TestBase
     [Fact]
     public async Task HelloWorld()
     {
-        var host = Router.ServiceProvider.GetRequiredService<IMessageHub<HostAddress>>();
+        var host = Router.GetHostedHub(new HostAddress());
         var response = await host.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
         response.Should().BeOfType<HelloEvent>();
     }
@@ -52,7 +59,7 @@ public class MessageHubHelloWorldTest : TestBase
     [Fact]
     public async Task HelloWorldFromClient()
     {
-        var client = Router.ServiceProvider.GetRequiredService<IMessageHub<ClientAddress>>();
+        var client = Router.GetHostedHub(new ClientAddress());
         var response = await client.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
         response.Should().BeOfType<HelloEvent>();
     }
