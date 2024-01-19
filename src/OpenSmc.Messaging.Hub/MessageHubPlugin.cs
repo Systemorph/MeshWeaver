@@ -207,7 +207,7 @@ public class MessageHubPlugin<TPlugin> : IMessageHubPlugin, IMessageHandlerRegis
         hub.RegisterHandlersFromInstance(this);
         return Task.CompletedTask;
     }
- }
+}
 
 
 public class MessageHubPlugin<TPlugin, TState> : MessageHubPlugin<TPlugin>, IAsyncDisposable

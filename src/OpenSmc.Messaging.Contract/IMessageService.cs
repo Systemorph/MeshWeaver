@@ -11,7 +11,7 @@ public interface IMessageService : IAsyncDisposable
     IMessageDelivery Forward(IMessageDelivery delivery, object address) => IncomingMessage(delivery.ForwardTo(address));
     IMessageDelivery Post<TMessage>(TMessage message, Func<PostOptions, PostOptions> configure = null);
 
-    void Initialize(AsyncDelivery  messageHandler);
+    void Initialize(AsyncDelivery messageHandler);
 
     void Schedule(Func<Task> action);
 
