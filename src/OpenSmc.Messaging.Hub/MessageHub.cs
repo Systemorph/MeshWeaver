@@ -149,7 +149,7 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
     IObservable<IMessageDelivery> IMessageHub.Out => Out;
 
 
-    public IMessageHub GetHub<TAddress1>(TAddress1 address)
+    public IMessageHub GetHostedHub<TAddress1>(TAddress1 address)
     {
         var messageHub = HostedHubsCollection.GetHub(address);
         return messageHub;
