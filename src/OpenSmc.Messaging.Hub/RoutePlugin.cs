@@ -16,6 +16,8 @@ public class RoutePlugin : MessageHubPlugin<RoutePlugin>
         Register(ForwardMessageAsync);
     }
 
+    protected override bool Filter(IMessageDelivery d) => d.State == MessageDeliveryState.Submitted;
+
     private async Task<IMessageDelivery> ForwardMessageAsync(IMessageDelivery delivery)
     {
         foreach (var item in GetForwards(delivery))
