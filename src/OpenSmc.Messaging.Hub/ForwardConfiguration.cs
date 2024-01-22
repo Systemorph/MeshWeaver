@@ -2,7 +2,7 @@
 
 namespace OpenSmc.Messaging.Hub;
 
-public record ForwardConfiguration(AsyncDelivery Route, IMessageHub Hub, object Address)
+public record ForwardConfiguration()
 {
 
 
