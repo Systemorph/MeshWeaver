@@ -7,6 +7,7 @@ public record ForwardConfiguration()
 
 
     internal ImmutableList<IForwardConfigurationItem> Items { get; init; } = ImmutableList<IForwardConfigurationItem>.Empty;
+    internal ImmutableList<AsyncDelivery> Handlers { get; init; } = ImmutableList<AsyncDelivery>.Empty;
 
     // TODO V10: is this Api redundant? (2024/01/22, Dmitry Kalabin)
     //public ForwardConfiguration WithForwardToTarget<TMessage>(object address, Func<ForwardConfigurationItem<TMessage>, ForwardConfigurationItem<TMessage>> config = null)
@@ -35,7 +36,26 @@ public record ForwardConfiguration()
             }))
         };
 
-
+    public ForwardConfiguration RouteAddress<TAddress>(Action<IMessageDelivery> handler) =>
+        RouteAddress<TAddress>(d =>
+        {
+            handler(d);
+            return Task.CompletedTask;
+        });
+        
+    public ForwardConfiguration RouteAddress<TAddress>(Func<IMessageDelivery, Task> handler)
+        => this with
+        {
+            Handlers = Handlers.Add(async delivery =>
+            {
+                if (delivery.Target is not TAddress address)
+                    return delivery;
+                await handler(delivery);
+                // TODO: should we take care of result from handler somehow?
+                return delivery.Forwarded();
+            }
+            ),
+        };
 }
 
 

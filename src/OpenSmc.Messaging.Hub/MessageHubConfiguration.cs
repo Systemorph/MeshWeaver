@@ -23,7 +23,6 @@ public record MessageHubConfiguration
 {
     public object Address { get; }
     protected readonly IServiceProvider ParentServiceProvider;
-    internal Func<AsyncDelivery, ForwardConfiguration> ForwardConfigurationRouteBuilder { get; set; }
     public MessageHubConfiguration(IServiceProvider parentServiceProvider, object address)
     {
         Address = address;
@@ -129,9 +128,8 @@ public record MessageHubConfiguration
         // TODO V10: Check whether this address is already built in hosted hubs collection, if not build. (18.01.2024, Roland Buergi)
         CreateServiceProvider<THub>();
         HubInstance = ServiceProvider.GetRequiredService<IMessageHub>();
-        ForwardConfigurationRouteBuilder = routedDelivery => (ForwardConfigurationBuilder ?? (x => x)).Invoke(new ForwardConfiguration());
         //var parentHub = ParentServiceProvider.GetService<IMessageHub>();
-        var forwardConfig = new ForwardConfiguration();
+        var forwardConfig = (ForwardConfigurationBuilder ?? (x => x)).Invoke(new ForwardConfiguration());
         ((MessageHubBase)HubInstance).Initialize(this, forwardConfig);
         return HubInstance;
     }
