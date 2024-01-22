@@ -4,6 +4,7 @@ namespace OpenSmc.Messaging.Hub;
 
 public record ForwardConfiguration()
 {
+    public IMessageHub Hub { get; init; }
 
 
     internal ImmutableList<IForwardConfigurationItem> Items { get; init; } = ImmutableList<IForwardConfigurationItem>.Empty;
@@ -48,7 +49,7 @@ public record ForwardConfiguration()
         {
             Handlers = Handlers.Add(async delivery =>
             {
-                if (delivery.Target is not TAddress address)
+                if (delivery.State != MessageDeliveryState.Submitted || delivery.Target is not TAddress address)
                     return delivery;
                 await handler(delivery);
                 // TODO: should we take care of result from handler somehow?

@@ -31,8 +31,6 @@ public class RoutePlugin : MessageHubPlugin<RoutePlugin>
         foreach (var handler in forwardConfiguration.Handlers)
         {
             delivery = await handler(delivery);
-            if (delivery.State != MessageDeliveryState.Submitted)
-                break;
         }
 
         return delivery;
