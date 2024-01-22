@@ -98,7 +98,7 @@ public class MessageHubPlugin<TPlugin> : IMessageHubPlugin, IMessageHandlerRegis
 
     protected virtual bool DefaultFilter(IMessageDelivery d) => true;
 
-    protected virtual bool Filter(IMessageDelivery d)
+    public virtual bool Filter(IMessageDelivery d)
     {
         return d.State == MessageDeliveryState.Submitted && (d.Target == null || d.Target.Equals(Hub.Address));
     }
@@ -106,18 +106,19 @@ public class MessageHubPlugin<TPlugin> : IMessageHubPlugin, IMessageHandlerRegis
 
     public async Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery)
     {
-        var node = Rules.First;
-        if (node != null)
-            return await DeliverMessage(delivery.Submitted(), node);
-        return delivery;
+        if (!Rules.Any())
+            return delivery;
+
+        return await DeliverMessage(delivery.Submitted(), Rules.First);
     }
 
     public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery, LinkedListNode<RegistryRule> node)
     {
-        if (node == null || !Filter(delivery))
+        delivery = await node.Value.Rule(delivery);
+
+        if (node.Next == null)
             return delivery;
 
-        delivery = await node.Value.Rule(delivery);
         return await DeliverMessage(delivery, node.Next);
     }
 
@@ -145,7 +146,7 @@ public class MessageHubPlugin<TPlugin> : IMessageHubPlugin, IMessageHandlerRegis
         return this;
     }
 
-    public IMessageHandlerRegistry RegisterAfter(LinkedListNode<RegistryRule> node, AsyncDelivery delivery)
+    internal IMessageHandlerRegistry RegisterAfter(LinkedListNode<RegistryRule> node, AsyncDelivery delivery)
     {
         Rules.AddAfter(node, new LinkedListNode<RegistryRule>(new RegistryRule(delivery)));
         return this;

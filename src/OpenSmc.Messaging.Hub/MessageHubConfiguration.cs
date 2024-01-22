@@ -130,7 +130,7 @@ public record MessageHubConfiguration
         // TODO V10: Check whether this address is already built in hosted hubs collection, if not build. (18.01.2024, Roland Buergi)
         CreateServiceProvider<THub>();
         HubInstance = ServiceProvider.GetRequiredService<IMessageHub>();
-        var forwardConfig = (ForwardConfigurationBuilder ?? (x => x)).Invoke(new ForwardConfiguration());
+        var forwardConfig = (ForwardConfigurationBuilder ?? (x => x)).Invoke(new ForwardConfiguration(HubInstance));
 
         var parentHub = ParentServiceProvider.GetService<ParentMessageHub>();
         if (parentHub != null)

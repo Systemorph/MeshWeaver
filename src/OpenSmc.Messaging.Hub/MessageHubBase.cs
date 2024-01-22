@@ -91,4 +91,7 @@ public abstract class MessageHubBase :  MessageHubPlugin<MessageHubBase>, IMessa
 
 }
 
-public record RegistryRule(AsyncDelivery Rule);
+public record RegistryRule(AsyncDelivery Rule)
+{
+    private DeliveryFilter Filter { get; init; }
+}

@@ -29,11 +29,7 @@ public class MessageHubHelloWorldTest : TestBase
                 return request.Processed();
             }))
             .WithHostedHub<ClientAddress>(client => client)
-            // .WithMessageForwarding(f => f
-            //     .RouteAddress<HostAddress>(delivery => f.Hub.ServiceProvider.GetRequiredService<IMessageHub<HostAddress>>().DeliverMessage(delivery))
-            //     // .RouteAddress<ClientAddress>(delivery => f.Hub.ServiceProvider.GetRequiredService<IMessageHub<ClientAddress>>().DeliverMessage(delivery))
-            // )
-            ));
+        ));
 
         Services.AddSingleton(sp =>
             sp

@@ -2,10 +2,8 @@
 
 namespace OpenSmc.Messaging.Hub;
 
-public record ForwardConfiguration()
+public record ForwardConfiguration(IMessageHub Hub)
 {
-    public IMessageHub Hub { get; init; }
-
 
     internal ImmutableList<IForwardConfigurationItem> Items { get; init; } = ImmutableList<IForwardConfigurationItem>.Empty;
     internal ImmutableList<AsyncDelivery> Handlers { get; init; } = ImmutableList<AsyncDelivery>.Empty;

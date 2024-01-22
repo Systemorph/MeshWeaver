@@ -48,7 +48,7 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
     protected virtual async Task StartAsync()
     {
         await InitializeAsync();
-        Post(new HubInfo(Address));
+        //Post(new HubInfo(Address));
 
         foreach (var buildup in Configuration.BuildupActions)
             await buildup(this);
@@ -276,7 +276,12 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
     public async Task AddPluginAsync(IMessageHubPlugin plugin)
     {
         await plugin.InitializeAsync(this);
-        Register(plugin.DeliverMessageAsync);
+        Register(async d =>
+        {
+            if (plugin.Filter(d))
+                d = await plugin.DeliverMessageAsync(d);
+            return d;
+        });
     }
 
  
