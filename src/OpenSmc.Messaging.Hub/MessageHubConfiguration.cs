@@ -87,7 +87,7 @@ public record MessageHubConfiguration
         where THub : class, IMessageHub
     {
         var services = new ServiceCollection();
-        services.Replace(ServiceDescriptor.Transient<THub, THub>());
+        services.Replace(ServiceDescriptor.Singleton<IMessageHub, THub>());
         services.Replace(ServiceDescriptor.Singleton<HostedHubsCollection, HostedHubsCollection>());
         services.Replace(ServiceDescriptor.Singleton(typeof(IEventsRegistry),
             sp => new EventsRegistry(ParentServiceProvider.GetService<IEventsRegistry>())));
@@ -127,7 +127,7 @@ public record MessageHubConfiguration
     {
         // TODO V10: Check whether this address is already built in hosted hubs collection, if not build. (18.01.2024, Roland Buergi)
         CreateServiceProvider<THub>();
-        HubInstance = ServiceProvider.GetRequiredService<THub>();
+        HubInstance = ServiceProvider.GetRequiredService<IMessageHub>();
         ForwardConfigurationRouteBuilder = routedDelivery => (ForwardConfigurationBuilder ?? (x => x)).Invoke(new ForwardConfiguration(routedDelivery, HubInstance, address));
         //var parentHub = ParentServiceProvider.GetService<IMessageHub>();
         ((MessageHubBase)HubInstance).Initialize(this, /*parentHub*/ null);
