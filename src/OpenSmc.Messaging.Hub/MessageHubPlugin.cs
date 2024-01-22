@@ -104,7 +104,7 @@ public class MessageHubPlugin<TPlugin> : IMessageHubPlugin, IMessageHandlerRegis
     }
 
 
-    public async Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery delivery)
+    public async Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery)
     {
         var node = Rules.First;
         if (node != null)

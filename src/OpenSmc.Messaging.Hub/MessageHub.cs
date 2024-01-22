@@ -276,7 +276,7 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
     public async Task AddPluginAsync(IMessageHubPlugin plugin)
     {
         await plugin.InitializeAsync(this);
-        Register(plugin.HandleMessageAsync);
+        Register(plugin.DeliverMessageAsync);
     }
 
  

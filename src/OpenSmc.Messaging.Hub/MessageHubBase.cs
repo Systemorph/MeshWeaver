@@ -9,7 +9,7 @@ public abstract class MessageHubBase :  MessageHubPlugin<MessageHubBase>, IMessa
     protected MessageHubBase(IServiceProvider serviceProvider) : base(serviceProvider)
     {
         MessageService = serviceProvider.GetRequiredService<IMessageService>();
-        MessageService.Initialize(HandleMessageAsync);
+        MessageService.Initialize(DeliverMessageAsync);
         Register(HandleCallbacks);
     }
     public MessageHubConfiguration Configuration { get; private set; }

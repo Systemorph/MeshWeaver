@@ -3,5 +3,5 @@
 public interface IMessageHubPlugin
 {
     Task InitializeAsync(IMessageHub hub);
-    Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery delivery);
+    Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery);
 }
