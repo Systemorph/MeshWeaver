@@ -18,6 +18,11 @@ public class RoutePlugin : MessageHubPlugin<RoutePlugin>
 
     protected override bool Filter(IMessageDelivery d) => d.State == MessageDeliveryState.Submitted;
 
+    /// <summary>
+    /// Loops through forward rules in a sequence. Each forward rule either applies and returns delivery.Forwarded() or doesn't apply and returns delivery.
+    /// </summary>
+    /// <param name="delivery"></param>
+    /// <returns></returns>
     private async Task<IMessageDelivery> ForwardMessageAsync(IMessageDelivery delivery)
     {
         foreach (var item in GetForwards(delivery))
