@@ -95,10 +95,12 @@ public record MessageHubConfiguration
             sp.GetService<ISerializationService>(), // HACK: GetRequiredService replaced by GetService (16.01.2024, Alexander Yolokhov)
             sp.GetRequiredService<ILogger<MessageService>>()
         )));
+        services.Replace(ServiceDescriptor.Singleton(sp => new ParentMessageHub(sp.GetRequiredService<IMessageHub>())));
         Services.Invoke(services);
         return services;
     }
 
+    private record ParentMessageHub(IMessageHub Value);
 
     public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery) => WithBuildupAction(hub => hub.Register<TMessage>(request => delivery(hub, request)));
     public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, Task<IMessageDelivery>> delivery) => WithBuildupAction(hub => hub.Register<TMessage>(request => delivery(hub, request)));
@@ -128,8 +130,11 @@ public record MessageHubConfiguration
         // TODO V10: Check whether this address is already built in hosted hubs collection, if not build. (18.01.2024, Roland Buergi)
         CreateServiceProvider<THub>();
         HubInstance = ServiceProvider.GetRequiredService<IMessageHub>();
-        //var parentHub = ParentServiceProvider.GetService<IMessageHub>();
         var forwardConfig = (ForwardConfigurationBuilder ?? (x => x)).Invoke(new ForwardConfiguration());
+
+        var parentHub = ParentServiceProvider.GetService<ParentMessageHub>();
+        if (parentHub != null)
+            forwardConfig = forwardConfig with { Handlers = forwardConfig.Handlers.Add(d => Task.FromResult(parentHub.Value.DeliverMessage(d))) };
         ((MessageHubBase)HubInstance).Initialize(this, forwardConfig);
         return HubInstance;
     }
