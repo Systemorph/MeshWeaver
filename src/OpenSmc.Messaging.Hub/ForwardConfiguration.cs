@@ -7,10 +7,12 @@ public record ForwardConfiguration(AsyncDelivery Route, IMessageHub Hub, object 
 
 
     internal ImmutableList<IForwardConfigurationItem> Items { get; init; } = ImmutableList<IForwardConfigurationItem>.Empty;
-    public ForwardConfiguration WithForwardToTarget<TMessage>(object address, Func<ForwardConfigurationItem<TMessage>, ForwardConfigurationItem<TMessage>> config = null)
-        => WithForward(d => Route(d.ForwardTo(address)), config);
-    public ForwardConfiguration WithForwardToTarget<TMessage>(Func<IMessageDelivery<TMessage>, object> addressMap, Func<ForwardConfigurationItem<TMessage>, ForwardConfigurationItem<TMessage>> config = null)
-        => WithForward(d => Route(d.ForwardTo(addressMap(d))), config);
+
+    // TODO V10: is this Api redundant? (2024/01/22, Dmitry Kalabin)
+    //public ForwardConfiguration WithForwardToTarget<TMessage>(object address, Func<ForwardConfigurationItem<TMessage>, ForwardConfigurationItem<TMessage>> config = null)
+    //    => WithForward(d => Route(d.ForwardTo(address)), config);
+    //public ForwardConfiguration WithForwardToTarget<TMessage>(Func<IMessageDelivery<TMessage>, object> addressMap, Func<ForwardConfigurationItem<TMessage>, ForwardConfigurationItem<TMessage>> config = null)
+    //    => WithForward(d => Route(d.ForwardTo(addressMap(d))), config);
 
     public ForwardConfiguration WithForward<TMessage>(SyncDelivery<TMessage> route, Func<ForwardConfigurationItem<TMessage>, ForwardConfigurationItem<TMessage>> setup = null)
     {
