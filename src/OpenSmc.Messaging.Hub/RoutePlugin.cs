@@ -8,12 +8,11 @@ namespace OpenSmc.Messaging.Hub;
 
 public class RoutePlugin : MessageHubPlugin<RoutePlugin>
 {
-    private readonly IMessageHub parentHub;
     private readonly ForwardConfiguration forwardConfiguration;
 
-    public RoutePlugin(IServiceProvider serviceProvider, IMessageHub parentHub) : base(serviceProvider)
+    public RoutePlugin(IServiceProvider serviceProvider, ForwardConfiguration forwardConfiguration) : base(serviceProvider)
     {
-        this.parentHub = parentHub;
+        this.forwardConfiguration = forwardConfiguration;
         Register(ForwardMessageAsync);
     }
 
@@ -21,8 +20,6 @@ public class RoutePlugin : MessageHubPlugin<RoutePlugin>
     {
         foreach (var item in GetForwards(delivery))
             delivery = await item.Route(delivery);
-        if(parentHub != null)
-            return parentHub.DeliverMessage(delivery);
         return delivery;
     }
 
@@ -30,5 +27,4 @@ public class RoutePlugin : MessageHubPlugin<RoutePlugin>
     {
         return forwardConfiguration.Items.Where(f => f.Filter(delivery));
     }
-
 }

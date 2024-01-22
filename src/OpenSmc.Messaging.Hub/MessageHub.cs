@@ -25,11 +25,11 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
     }
 
 
-    internal override void Initialize(MessageHubConfiguration configuration, IMessageHub parentHub)
+    internal override void Initialize(MessageHubConfiguration configuration, ForwardConfiguration forwardConfiguration)
     {
-        base.Initialize(configuration, parentHub);
-        if(parentHub != null && parentHub != this)
-            RegisterAfter(Rules.Last, d => Task.FromResult(parentHub.DeliverMessage(d)));
+        base.Initialize(configuration, forwardConfiguration);
+        var routePlugin = new RoutePlugin(configuration.ServiceProvider, forwardConfiguration);
+        RegisterAfter(Rules.Last, d => routePlugin.DeliverMessageAsync(d));
 
         var deferredTypes = GetDeferredRequestTypes().ToHashSet();
         DeliveryFilter defaultDeferralsLambda = d =>

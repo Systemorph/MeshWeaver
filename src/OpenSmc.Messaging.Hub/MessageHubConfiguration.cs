@@ -131,7 +131,8 @@ public record MessageHubConfiguration
         HubInstance = ServiceProvider.GetRequiredService<IMessageHub>();
         ForwardConfigurationRouteBuilder = routedDelivery => (ForwardConfigurationBuilder ?? (x => x)).Invoke(new ForwardConfiguration());
         //var parentHub = ParentServiceProvider.GetService<IMessageHub>();
-        ((MessageHubBase)HubInstance).Initialize(this, /*parentHub*/ null);
+        var forwardConfig = new ForwardConfiguration();
+        ((MessageHubBase)HubInstance).Initialize(this, forwardConfig);
         return HubInstance;
     }
 }

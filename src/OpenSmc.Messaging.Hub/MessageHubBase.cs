@@ -14,7 +14,7 @@ public abstract class MessageHubBase :  MessageHubPlugin<MessageHubBase>, IMessa
     }
     public MessageHubConfiguration Configuration { get; private set; }
 
-    internal virtual void Initialize(MessageHubConfiguration configuration, IMessageHub parent)
+    internal virtual void Initialize(MessageHubConfiguration configuration, ForwardConfiguration forwardConfiguration)
     {
         Configuration = configuration;
     }
