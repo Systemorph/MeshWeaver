@@ -24,12 +24,19 @@ public static class MessageForwardingExtensions
     public static MessageHubConfiguration WithHostedHub<TAddress>(this MessageHubConfiguration configuration,
         Func<MessageHubConfiguration, MessageHubConfiguration> configureHostedHub)
     {
-        return configuration.WithServices(s => s
-            .Replace(ServiceDescriptor.Singleton(new HostedHubConfigurationSettings<TAddress>
-            {
-                 Configure = configureHostedHub
-            })));
+        return configuration
+            .WithServices(s => s
+                .Replace(ServiceDescriptor.Singleton(new HostedHubConfigurationSettings<TAddress>
+                {
+                    Configure = configureHostedHub
+                })))
+            .WithForwards(f => f.RouteAddress<TAddress>(d => f.Hub.GetHostedHub((TAddress)d.Target).DeliverMessage(d)));
+            //.WithMessageForwarding(f => f.RouteAddress<TAddress>(a => a, c => c.WithHost(f.Hub.GetHostedHub((TAddress)d.Target))  d => f.Hub.GetHostedHub((TAddress)d.Target))); // TODO: change this to support object as input
+            //.WithRoutedAddress()
+        // TODO: add test for object-oriented addresses implementations. i.e. (a is TAddress)
+        // NonDeserializedAddress : IHostedAddress
     }
+
 
     public static bool IsAddress<TAddress>(this object address)
     {
