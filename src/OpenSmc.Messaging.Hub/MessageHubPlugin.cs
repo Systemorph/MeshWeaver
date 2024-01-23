@@ -146,6 +146,11 @@ public class MessageHubPlugin<TPlugin> : IMessageHubPlugin, IMessageHandlerRegis
         return this;
     }
 
+    internal IMessageHandlerRegistry RegisterBefore(LinkedListNode<RegistryRule> node, AsyncDelivery delivery)
+    {
+        Rules.AddBefore(node, new LinkedListNode<RegistryRule>(new RegistryRule(delivery)));
+        return this;
+    }
     internal IMessageHandlerRegistry RegisterAfter(LinkedListNode<RegistryRule> node, AsyncDelivery delivery)
     {
         Rules.AddAfter(node, new LinkedListNode<RegistryRule>(new RegistryRule(delivery)));

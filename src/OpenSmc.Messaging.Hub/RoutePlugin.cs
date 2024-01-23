@@ -1,14 +1,9 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace OpenSmc.Messaging.Hub;
+﻿namespace OpenSmc.Messaging.Hub;
 
 public class RoutePlugin : MessageHubPlugin<RoutePlugin>
 {
     private readonly ForwardConfiguration forwardConfiguration;
+
 
     public RoutePlugin(IServiceProvider serviceProvider, ForwardConfiguration forwardConfiguration) : base(serviceProvider)
     {
