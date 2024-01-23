@@ -13,15 +13,15 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
     void IMessageHub.Schedule(Func<Task> action) => MessageService.Schedule(action);
     public IServiceProvider ServiceProvider { get; }
 
-    private readonly HostedHubsCollection HostedHubsCollection;
+    private readonly HostedHubsCollection hostedHubs;
     protected readonly ILogger Logger;
     protected override IMessageHub Hub => this;
     private RoutePlugin routePlugin;
 
-    public MessageHub(IServiceProvider serviceProvider, HostedHubsCollection hostedHubsCollection) : base(serviceProvider) 
+    public MessageHub(IServiceProvider serviceProvider, HostedHubsCollection hostedHubs) : base(serviceProvider) 
     {
         ServiceProvider = serviceProvider;
-        HostedHubsCollection = hostedHubsCollection;
+        this.hostedHubs = hostedHubs;
         Logger = serviceProvider.GetRequiredService<ILogger<MessageHub<TAddress>>>();
     }
 
@@ -151,7 +151,7 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
 
     public IMessageHub GetHostedHub<TAddress1>(TAddress1 address)
     {
-        var messageHub = HostedHubsCollection.GetHub(address);
+        var messageHub = hostedHubs.GetHub(address);
         return messageHub;
     }
 
@@ -193,7 +193,7 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
             isAsyncDisposing = true;
         }
 
-        await HostedHubsCollection.DisposeAsync();
+        await hostedHubs.DisposeAsync();
 
         MessageService.Post(new DisconnectHubRequest(Address));
 
