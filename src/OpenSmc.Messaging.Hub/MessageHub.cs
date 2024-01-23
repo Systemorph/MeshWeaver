@@ -16,6 +16,7 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
     private readonly HostedHubsCollection HostedHubsCollection;
     protected readonly ILogger Logger;
     protected override IMessageHub Hub => this;
+    private RoutePlugin routePlugin;
 
     public MessageHub(IServiceProvider serviceProvider, HostedHubsCollection hostedHubsCollection) : base(serviceProvider) 
     {
@@ -28,7 +29,7 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
     internal override void Initialize(MessageHubConfiguration configuration, ForwardConfiguration forwardConfiguration)
     {
         base.Initialize(configuration, forwardConfiguration);
-        var routePlugin = new RoutePlugin(configuration.ServiceProvider, forwardConfiguration);
+        routePlugin = new RoutePlugin(configuration.ServiceProvider, forwardConfiguration);
         RegisterAfter(Rules.Last, d => routePlugin.DeliverMessageAsync(d));
 
         var deferredTypes = GetDeferredRequestTypes().ToHashSet();
@@ -58,19 +59,18 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
 
 
 
-    public virtual Task InitializeAsync()
+    public virtual async Task InitializeAsync()
     {
         try
         {
+            await routePlugin.InitializeAsync(this);
+
             Logger.LogInformation("Message hub {address} initialized", Address);
         }
-
         catch (Exception ex)
         {
             Logger.LogError(ex, "Could not initialize state of message hub {address}", Address);
         }
-
-        return Task.CompletedTask;
     }
 
 
