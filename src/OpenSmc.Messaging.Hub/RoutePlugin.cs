@@ -20,19 +20,10 @@ public class RoutePlugin : MessageHubPlugin<RoutePlugin>
     /// <returns></returns>
     private async Task<IMessageDelivery> ForwardMessageAsync(IMessageDelivery delivery)
     {
-        foreach (var item in GetForwards(delivery))
-            delivery = await item.Route(delivery);
-
         foreach (var handler in forwardConfiguration.Handlers)
-        {
             delivery = await handler(delivery);
-        }
 
         return delivery;
     }
 
-    private IEnumerable<IForwardConfigurationItem> GetForwards(IMessageDelivery delivery)
-    {
-        return forwardConfiguration.Items.Where(f => f.Filter(delivery));
-    }
 }

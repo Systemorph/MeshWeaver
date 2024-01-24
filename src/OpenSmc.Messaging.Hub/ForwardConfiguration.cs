@@ -5,29 +5,8 @@ namespace OpenSmc.Messaging.Hub;
 public record ForwardConfiguration(IMessageHub Hub)
 {
 
-    internal ImmutableList<IForwardConfigurationItem> Items { get; init; } = ImmutableList<IForwardConfigurationItem>.Empty;
     internal ImmutableList<AsyncDelivery> Handlers { get; init; } = ImmutableList<AsyncDelivery>.Empty;
 
-    public ForwardConfiguration WithForward<TMessage>(SyncDelivery<TMessage> route, Func<ForwardConfigurationItem<TMessage>, ForwardConfigurationItem<TMessage>> setup = null)
-    {
-        var item = (setup ?? (y => y))(new()
-        {
-            Route = d => Task.FromResult(route((IMessageDelivery<TMessage>)d)),
-        });
-        return this with
-        {
-            Items = Items.Add(item)
-        };
-
-    }
-    public ForwardConfiguration WithForward<TMessage>(AsyncDelivery<TMessage> route, Func<ForwardConfigurationItem<TMessage>, ForwardConfigurationItem<TMessage>> setup = null)
-        => this with
-        {
-            Items = Items.Add((setup ?? (y => y))(new()
-            {
-                Route = d => route((IMessageDelivery<TMessage>)d)
-            }))
-        };
 
     public ForwardConfiguration RouteAddressToHub<TAddress>(Func<IMessageDelivery, IMessageHub> hubFactory) =>
         RouteAddress<TAddress>(d => hubFactory(d).DeliverMessage(d));

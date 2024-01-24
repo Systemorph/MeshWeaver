@@ -69,10 +69,6 @@ public record MessageHubConfiguration
 
     public MessageHubConfiguration WithForwards(Func<ForwardConfiguration, ForwardConfiguration> configuration) => this with { ForwardConfigurationBuilder = x => configuration(ForwardConfigurationBuilder?.Invoke(x) ?? x) };
 
-    public MessageHubConfiguration WithForward<TMessage>(SyncDelivery<TMessage> route, Func<ForwardConfigurationItem<TMessage>, ForwardConfigurationItem<TMessage>> setup = null)
-        => WithForwards(f => f.WithForward(route, setup));
-    public MessageHubConfiguration WithForward<TMessage>(AsyncDelivery<TMessage> route, Func<ForwardConfigurationItem<TMessage>, ForwardConfigurationItem<TMessage>> setup = null)
-        => WithForwards(f => f.WithForward(route, setup));
 
     public MessageHubConfiguration WithAccessObject(Func<string> getAccessObject)
     {
@@ -129,11 +125,20 @@ public record MessageHubConfiguration
         HubInstance = ServiceProvider.GetRequiredService<IMessageHub>();
         var forwardConfig = (ForwardConfigurationBuilder ?? (x => x)).Invoke(new ForwardConfiguration(HubInstance));
 
-        var parentHub = ParentServiceProvider.GetService<ParentMessageHub>();
+        var parentHub = ParentServiceProvider.GetService<ParentMessageHub>()?.Value;
         if (parentHub != null)
-            forwardConfig = forwardConfig with { Handlers = forwardConfig.Handlers.Add(d => Task.FromResult(parentHub.Value.DeliverMessage(d))) };
+            forwardConfig = forwardConfig with { Handlers = forwardConfig.Handlers.Add(d => Task.FromResult(ForwardToParent(HubInstance, parentHub, d))) };
         ((MessageHubBase)HubInstance).Initialize(this, forwardConfig);
         return HubInstance;
+    }
+
+    private static IMessageDelivery ForwardToParent(IMessageHub hub, IMessageHub parentHub, IMessageDelivery delivery)
+    {
+        if (delivery.Target == null || delivery.Target.Equals(hub.Address))
+            return delivery;
+
+        parentHub.DeliverMessage(delivery);
+        return delivery.Forwarded();
     }
 }
 
