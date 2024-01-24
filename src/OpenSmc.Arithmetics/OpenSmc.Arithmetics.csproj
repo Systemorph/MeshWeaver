@@ -1,0 +1,11 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="System.Linq.Async" /> 
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenSmc.Arithmetics.Abstractions\OpenSmc.Arithmetics.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>
