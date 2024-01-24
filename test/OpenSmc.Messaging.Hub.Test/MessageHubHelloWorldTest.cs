@@ -1,5 +1,7 @@
-﻿using System.Reactive.Linq;
+﻿using System;
+using System.Reactive.Linq;
 using FluentAssertions;
+using FluentAssertions.Execution;
 using FluentAssertions.Extensions;
 using OpenSmc.Fixture;
 using OpenSmc.ServiceProvider;
@@ -49,20 +51,43 @@ public class MessageHubHelloWorldTest : TestBase
     }
 
     [Fact]
+    public async Task ClientToServerWithMessageTraffic()
+    {
+        var client = Router.GetHostedHub(new ClientAddress());
+        var clientOut = (await client.AddObservable());
+        var messageTask = clientOut.Where(d => d.Message is HelloEvent).ToArray().GetAwaiter();
+        var overallMessageTask = clientOut.ToArray().GetAwaiter();
+
+        var response = await client.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
+        response.Should().BeOfType<HelloEvent>();
+
+        await Task.Delay(200.Milliseconds());
+
+        clientOut.OnCompleted();
+        var helloEvents = await messageTask;
+        var overallMessages = await overallMessageTask;
+        using (new AssertionScope())
+        {
+            helloEvents.Should().ContainSingle();
+            overallMessages.Should().HaveCountLessThan(20);
+        }
+    }
+
+    [Fact]
     public async Task Subscribers()
     {
         // arrange: initiate subscription from client to host
         var client = Router.GetHostedHub(new ClientAddress());
         await client.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
-        var clientOut = client.Out.Timeout(500.Milliseconds());
+        var clientOut = (await client.AddObservable()).Timeout(500.Milliseconds());
 
         // act
         var host = Router.GetHostedHub(new HostAddress());
         host.Post(new HelloEvent(), o => o.WithTarget(MessageTargets.Subscribers));
         
         // assert
-        var clientMessages = await clientOut.OfType<HelloEvent>().ToArray();
-        clientMessages.Should().ContainSingle();
+        var clientMessages = await clientOut.Select(d => d.Message).OfType<HelloEvent>().FirstAsync();
+        clientMessages.Should().BeAssignableTo<HelloEvent>();
     }
 
     public override async Task DisposeAsync()

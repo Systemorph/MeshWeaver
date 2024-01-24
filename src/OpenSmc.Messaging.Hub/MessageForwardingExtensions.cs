@@ -30,7 +30,7 @@ public static class MessageForwardingExtensions
                 {
                     Configure = configureHostedHub
                 })))
-            .WithForwards(f => f.RouteAddress<TAddress>(d => f.Hub.GetHostedHub((TAddress)d.Target).DeliverMessage(d)));
+            .WithForwards(f => f.RouteAddressToHub<TAddress>(d => f.Hub.GetHostedHub((TAddress)d.Target)));
             //.WithMessageForwarding(f => f.RouteAddress<TAddress>(a => a, c => c.WithHost(f.Hub.GetHostedHub((TAddress)d.Target))  d => f.Hub.GetHostedHub((TAddress)d.Target))); // TODO: change this to support object as input
             //.WithRoutedAddress()
         // TODO: add test for object-oriented addresses implementations. i.e. (a is TAddress)
