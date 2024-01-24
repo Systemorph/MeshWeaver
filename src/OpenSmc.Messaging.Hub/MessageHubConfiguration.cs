@@ -68,9 +68,6 @@ public record MessageHubConfiguration
 
 
     public MessageHubConfiguration WithForwards(Func<ForwardConfiguration, ForwardConfiguration> configuration) => this with { ForwardConfigurationBuilder = x => configuration(ForwardConfigurationBuilder?.Invoke(x) ?? x) };
-    // TODO V10: is this Api redundant? (2024/01/22, Dmitry Kalabin)
-    //public MessageHubConfiguration WithForwardToTarget<TMessage>(object address, Func<ForwardConfigurationItem<TMessage>, ForwardConfigurationItem<TMessage>> config = null)
-    //    => WithForwards(f => f.WithForwardToTarget(address, config));
 
     public MessageHubConfiguration WithForward<TMessage>(SyncDelivery<TMessage> route, Func<ForwardConfigurationItem<TMessage>, ForwardConfigurationItem<TMessage>> setup = null)
         => WithForwards(f => f.WithForward(route, setup));
