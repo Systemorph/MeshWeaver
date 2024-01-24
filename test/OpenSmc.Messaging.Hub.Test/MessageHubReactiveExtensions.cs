@@ -4,7 +4,7 @@ namespace OpenSmc.Messaging.Hub.Test;
 
 public static class MessageHubReactiveExtensions
 {
-    public static async Task<IObservable<IMessageDelivery>> AddObservable(this IMessageHub hub)
+    public static async Task<Subject<IMessageDelivery>> AddObservable(this IMessageHub hub)
     {
         var plugin = new ObservablePlugin(hub.ServiceProvider);
         await hub.AddPluginAsync(plugin);

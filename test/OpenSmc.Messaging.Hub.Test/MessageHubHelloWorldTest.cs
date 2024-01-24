@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Reactive.Linq;
 using FluentAssertions;
+using FluentAssertions.Execution;
 using FluentAssertions.Extensions;
 using OpenSmc.Fixture;
 using OpenSmc.ServiceProvider;
@@ -47,6 +48,29 @@ public class MessageHubHelloWorldTest : TestBase
         var client = Router.GetHostedHub(new ClientAddress());
         var response = await client.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
         response.Should().BeOfType<HelloEvent>();
+    }
+
+    [Fact]
+    public async Task ClientToServerWithMessageTraffic()
+    {
+        var client = Router.GetHostedHub(new ClientAddress());
+        var clientOut = (await client.AddObservable());
+        var messageTask = clientOut.Where(d => d.Message is HelloEvent).ToArray().GetAwaiter();
+        var overallMessageTask = clientOut.ToArray().GetAwaiter();
+
+        var response = await client.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
+        response.Should().BeOfType<HelloEvent>();
+
+        await Task.Delay(200.Milliseconds());
+
+        clientOut.OnCompleted();
+        var helloEvents = await messageTask;
+        var overallMessages = await overallMessageTask;
+        using (new AssertionScope())
+        {
+            helloEvents.Should().ContainSingle();
+            overallMessages.Should().HaveCountLessThan(20);
+        }
     }
 
     [Fact]
