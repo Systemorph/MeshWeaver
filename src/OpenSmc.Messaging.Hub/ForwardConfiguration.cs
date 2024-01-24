@@ -35,6 +35,9 @@ public record ForwardConfiguration(IMessageHub Hub)
             }))
         };
 
+    public ForwardConfiguration RouteAddressToHub<TAddress>(Func<IMessageDelivery, IMessageHub> hubFactory) =>
+        RouteAddress<TAddress>(d => hubFactory(d).DeliverMessage(d));
+
     public ForwardConfiguration RouteAddress<TAddress>(Action<IMessageDelivery> handler) =>
         RouteAddress<TAddress>(d =>
         {
