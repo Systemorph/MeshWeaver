@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using OpenSmc.Fixture;
@@ -54,7 +55,7 @@ public class MessageHubHelloWorldTest : TestBase
         // arrange: initiate subscription from client to host
         var client = Router.GetHostedHub(new ClientAddress());
         await client.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
-        var clientOut = client.Out.Timeout(500.Milliseconds());
+        var clientOut = (await client.AddObservable()).Timeout(500.Milliseconds());
 
         // act
         var host = Router.GetHostedHub(new HostAddress());
