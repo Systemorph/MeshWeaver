@@ -55,6 +55,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Domain.Abstractions
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DataCubes.Abstractions", "src\OpenSmc.DataCubes.Abstractions\OpenSmc.DataCubes.Abstractions.csproj", "{73452FD0-E16B-49D2-B070-23ECF4930437}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Collections", "src\OpenSmc.Collections\OpenSmc.Collections.csproj", "{224D7712-F6AA-465A-B68A-EE68A7B88D2E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -141,6 +143,10 @@ Global
 		{73452FD0-E16B-49D2-B070-23ECF4930437}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{73452FD0-E16B-49D2-B070-23ECF4930437}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{73452FD0-E16B-49D2-B070-23ECF4930437}.Release|Any CPU.Build.0 = Release|Any CPU
+		{224D7712-F6AA-465A-B68A-EE68A7B88D2E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{224D7712-F6AA-465A-B68A-EE68A7B88D2E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{224D7712-F6AA-465A-B68A-EE68A7B88D2E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{224D7712-F6AA-465A-B68A-EE68A7B88D2E}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
