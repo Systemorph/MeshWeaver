@@ -11,7 +11,7 @@ public static class MessageHubReactiveExtensions
         return plugin.Out;
     }
 }
-public class ObservablePlugin : MessageHubPlugin<RoutePlugin>
+public class ObservablePlugin : MessageHubPlugin<ObservablePlugin>
 {
     public Subject<IMessageDelivery> Out { get; } = new();
 

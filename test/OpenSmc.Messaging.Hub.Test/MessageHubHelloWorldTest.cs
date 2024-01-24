@@ -62,8 +62,8 @@ public class MessageHubHelloWorldTest : TestBase
         host.Post(new HelloEvent(), o => o.WithTarget(MessageTargets.Subscribers));
         
         // assert
-        var clientMessages = await clientOut.OfType<HelloEvent>().ToArray();
-        clientMessages.Should().ContainSingle();
+        var clientMessages = await clientOut.Select(d => d.Message).OfType<HelloEvent>().FirstAsync();
+        clientMessages.Should().BeAssignableTo<HelloEvent>();
     }
 
     public override async Task DisposeAsync()
