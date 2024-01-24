@@ -17,6 +17,7 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
     protected readonly ILogger Logger;
     protected override IMessageHub Hub => this;
     private RoutePlugin routePlugin;
+    private SubscribersPlugin subscribersPlugin;
 
     public MessageHub(IServiceProvider serviceProvider, HostedHubsCollection hostedHubs) : base(serviceProvider) 
     {
@@ -29,8 +30,9 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
     internal override void Initialize(MessageHubConfiguration configuration, ForwardConfiguration forwardConfiguration)
     {
         base.Initialize(configuration, forwardConfiguration);
+        
+        subscribersPlugin = new SubscribersPlugin(configuration.ServiceProvider);
         routePlugin = new RoutePlugin(configuration.ServiceProvider, forwardConfiguration);
-        RegisterAfter(Rules.Last, d => routePlugin.DeliverMessageAsync(d));
 
         var deferredTypes = GetDeferredRequestTypes().ToHashSet();
         DeliveryFilter defaultDeferralsLambda = d =>
@@ -63,7 +65,15 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
     {
         try
         {
+            await AddPluginAsync(subscribersPlugin);
+
             await routePlugin.InitializeAsync(this);
+            RegisterAfter(Rules.Last, d =>
+            {
+                if (!routePlugin.Filter(d))
+                    return Task.FromResult(d);
+                return routePlugin.DeliverMessageAsync(d);
+            });
 
             Logger.LogInformation("Message hub {address} initialized", Address);
         }
