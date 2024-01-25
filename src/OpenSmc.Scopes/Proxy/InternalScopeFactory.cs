@@ -2,6 +2,8 @@
 using System.Reflection;
 using Castle.DynamicProxy;
 using Microsoft.Extensions.Logging;
+using OpenSmc.Collections;
+using OpenSmc.Reflection;
 
 namespace OpenSmc.Scopes.Proxy
 {

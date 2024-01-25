@@ -4,6 +4,8 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using Castle.DynamicProxy;
 using Microsoft.Extensions.Logging;
+using OpenSmc.Collections;
+using OpenSmc.Reflection;
 using OpenSmc.Scopes.Synchronization;
 
 namespace OpenSmc.Scopes.Proxy

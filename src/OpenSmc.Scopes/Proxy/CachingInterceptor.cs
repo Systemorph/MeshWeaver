@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Reflection;
 using Castle.DynamicProxy;
+using OpenSmc.Reflection;
 
 namespace OpenSmc.Scopes.Proxy
 {

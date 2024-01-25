@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
+using OpenSmc.Collections;
 using OpenSmc.Scopes.Proxy;
 
 namespace OpenSmc.Scopes
