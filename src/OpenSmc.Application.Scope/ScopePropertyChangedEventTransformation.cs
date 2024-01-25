@@ -1,4 +1,8 @@
-﻿using OpenSmc.Serialization;
+﻿using OpenSmc.Scopes;
+using OpenSmc.Scopes.Proxy;
+using OpenSmc.Serialization;
+using OpenSmc.ShortGuid;
+using OpenSmc.Utils;
 
 namespace OpenSmc.Application.Scope;
 
@@ -19,7 +23,7 @@ public class ScopePropertyChangedEventTransformation
         if (s == null)
             return null;
         var property = s.GetScopeType().GetScopeProperties().SelectMany(x => x.Properties).First(x => x.Name == @event.Property);
-        var serialized = await serializationService.SerializePropertyAsync(@event.Value, s, property);
+        var serialized = serializationService.SerializePropertyAsync(@event.Value, s, property);
         return new ScopePropertyChanged(@event.ScopeId.AsString(), @event.Property.ToCamelCase(), serialized, ConvertEnum(@event.Status));
     }
 

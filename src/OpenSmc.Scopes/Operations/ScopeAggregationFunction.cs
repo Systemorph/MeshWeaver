@@ -1,5 +1,6 @@
 ﻿using System.Reflection;
 using Castle.DynamicProxy;
+using OpenSmc.Arithmetics.Aggregation;
 using OpenSmc.Arithmetics.Aggregation.Implementation;
 using OpenSmc.Collections;
 using OpenSmc.DataCubes;

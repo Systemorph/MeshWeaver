@@ -1,5 +1,7 @@
 ﻿using System.Reflection;
 using OpenSmc.Messaging;
+using OpenSmc.Scopes;
+using OpenSmc.Scopes.Synchronization;
 
 namespace OpenSmc.Application.Scope;
 
