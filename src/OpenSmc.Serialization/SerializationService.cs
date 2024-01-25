@@ -4,7 +4,7 @@ using System.Text;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
 using Newtonsoft.Json.Linq;
-using OpenSmc.StringHelpers;
+using OpenSmc.Utils;
 
 namespace OpenSmc.Serialization;
 

@@ -2,7 +2,7 @@
 using System.Runtime.Serialization;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using OpenSmc.StringHelpers;
+using OpenSmc.Utils;
 
 namespace OpenSmc.Serialization;
 
