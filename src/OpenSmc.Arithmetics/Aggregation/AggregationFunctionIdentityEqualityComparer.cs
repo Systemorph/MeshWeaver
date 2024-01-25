@@ -1,5 +1,6 @@
 ﻿using System.Reflection;
 using OpenSmc.Collections;
+using OpenSmc.Equality;
 
 namespace OpenSmc.Arithmetics.Aggregation
 {
