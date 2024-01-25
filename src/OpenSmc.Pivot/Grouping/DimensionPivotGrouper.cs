@@ -1,5 +1,8 @@
 ﻿using System.Collections.Immutable;
 using System.Data;
+using OpenSmc.Collections;
+using OpenSmc.DataCubes;
+using OpenSmc.Domain.Abstractions;
 using OpenSmc.Pivot.Models.Interfaces;
 
 namespace OpenSmc.Pivot.Grouping
