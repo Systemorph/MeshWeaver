@@ -1,4 +1,6 @@
-﻿namespace OpenSmc.Arithmetics.Aggregation.Implementation
+﻿using OpenSmc.Conventions;
+
+namespace OpenSmc.Arithmetics.Aggregation.Implementation
 {
     public class AggregationFunctionConventionService : ConventionService<Type, Type, AggregationFunctionConventionService>
     {

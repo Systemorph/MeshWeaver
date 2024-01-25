@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using OpenSmc.Arithmetics.Aggregation.Implementation;
+using OpenSmc.Conventions;
 
 namespace OpenSmc.Arithmetics.Aggregation
 {
