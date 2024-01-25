@@ -1,10 +1,9 @@
-﻿using System.Runtime.CompilerServices;
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Hub;
-
-[assembly: InternalsVisibleTo("Systemorph.ViewModel.Hub")]
-[assembly: InternalsVisibleTo("Systemorph.Application.Layout")]
+using OpenSmc.Scopes;
+using OpenSmc.Scopes.Proxy;
+using OpenSmc.Serialization;
 
 namespace OpenSmc.Application.Scope;
 
@@ -35,8 +34,7 @@ public static class ApplicationScopeRegistryExtensions
 
     public static MessageHubConfiguration AddExpressionSynchronization(this MessageHubConfiguration conf)
     {
-        return conf
-                   .AddPlugin<ExpressionSynchronizationPlugin>();
+        return conf.AddPlugin<ExpressionSynchronizationPlugin>();
     }
 
 

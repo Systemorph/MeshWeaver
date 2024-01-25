@@ -3,6 +3,10 @@ using System.Diagnostics;
 using System.Reflection;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Hub;
+using OpenSmc.Queues;
+using OpenSmc.Scopes;
+using OpenSmc.Scopes.Proxy;
+using OpenSmc.Scopes.Synchronization;
 using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Application.Scope;
@@ -12,13 +16,12 @@ public record ExpressionSynchronizationHubState(IInternalMutableScope Applicatio
     public ImmutableDictionary<string, ExpressionRegistryItem> RegisteredExpressions { get; init; } = ImmutableDictionary<string, ExpressionRegistryItem>.Empty;
 }
 
-public class ExpressionSynchronizationPlugin : MessageHubPlugin<ExpressionSynchronizationPlugin, ExpressionSynchronizationHubState>, 
+public class ExpressionSynchronizationPlugin(IServiceProvider serviceProvider) : MessageHubPlugin<ExpressionSynchronizationPlugin, ExpressionSynchronizationHubState>(serviceProvider), 
                                                IMessageHandler<SubscribeToEvaluationRequest>,
                                                IMessageHandler<UnsubscribeFromEvaluationRequest>,
                                                IMessageHandler<ScopePropertyChangedEvent>
 {
     [Inject] private IApplicationScope applicationScope;
-
 
     public override async Task InitializeAsync(IMessageHub hub)
     {
