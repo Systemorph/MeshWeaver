@@ -2,11 +2,11 @@
 using System.Runtime.Serialization;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using OpenSmc.StringHelpers;
+using OpenSmc.Utils;
 
 namespace OpenSmc.Serialization;
 
-public class SerializationContext : IDataBindingMutationContext, IDataBindingTransformationContext
+public class SerializationContext : IDataBindingMutateContext, ISerializationTransformContext
 {
     private readonly SerializationService serializationService;
     private readonly JsonSerializer serializer;
@@ -48,21 +48,21 @@ public class SerializationContext : IDataBindingMutationContext, IDataBindingTra
         resultToken = value != null ? JToken.FromObject(value, serializer) : null;
     }
 
-    object IDataBindingTransformationContext.TraverseProperty(object propertyValue, object parent, PropertyInfo propertyInfo)
+    object ISerializationTransformContext.TraverseProperty(object propertyValue, object parent, PropertyInfo propertyInfo)
     {
         var context = serializationService.CreateSerializationContext(propertyValue, null, propertyInfo, parent, Depth);
         serializationService.SerializeTraverse(context);
         return context.ResultToken;
     }
 
-    object IDataBindingTransformationContext.TraverseValue(object value)
+    object ISerializationTransformContext.TraverseValue(object value)
     {
         var context = serializationService.CreateSerializationContext(value, null, ParentProperty, Parent, Depth);
         serializationService.SerializeTraverse(context);
         return context.ResultToken;
     }
 
-    void IDataBindingMutationContext.SetProperty(string propName, object propValue)
+    void IDataBindingMutateContext.SetProperty(string propName, object propValue)
     {
         if (ResultToken is not JObject jObject)
             throw new InvalidOperationException("Result is not an object");
@@ -70,7 +70,7 @@ public class SerializationContext : IDataBindingMutationContext, IDataBindingTra
         jObject[propName.ToCamelCase()] = JToken.FromObject(propValue, serializer);
     }
 
-    void IDataBindingMutationContext.DeleteProperty(string propName)
+    void IDataBindingMutateContext.DeleteProperty(string propName)
     {
         if (ResultToken is JObject jObject)
             jObject.Property(propName.ToCamelCase())?.Remove();

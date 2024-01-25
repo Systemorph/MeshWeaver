@@ -1,6 +1,8 @@
 ﻿using System.Reactive.Subjects;
+using OpenSmc.Messaging;
+using OpenSmc.Messaging.Hub;
 
-namespace OpenSmc.Messaging.Hub.Test;
+namespace OpenSmc.Hub.Fixture;
 
 public static class MessageHubReactiveExtensions
 {

@@ -1,5 +1,4 @@
-﻿// ReSharper disable once CheckNamespace
-namespace OpenSmc.StringHelpers;
+﻿namespace OpenSmc.Utils;
 
 public static class CamelCaseExtensions
 {
