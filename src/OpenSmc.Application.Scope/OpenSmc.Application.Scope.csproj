@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\OpenSmc.Application.Contract\OpenSmc.Application.Contract.csproj" />
+    <ProjectReference Include="..\OpenSmc.Layout\OpenSmc.Layout.csproj" />
     <ProjectReference Include="..\OpenSmc.Messaging\OpenSmc.Messaging.csproj" />
     <ProjectReference Include="..\OpenSmc.DataBinding\OpenSmc.DataBinding.csproj" />
     <ProjectReference Include="..\OpenSmc.Serialization\OpenSmc.Serialization.csproj" />
