@@ -69,7 +69,7 @@ public class MessageHubHelloWorldTest : TestBase
         using (new AssertionScope())
         {
             helloEvents.Should().ContainSingle();
-            overallMessages.Should().HaveCountLessThan(20);
+            overallMessages.Should().HaveCountLessThan(10);
         }
     }
 
