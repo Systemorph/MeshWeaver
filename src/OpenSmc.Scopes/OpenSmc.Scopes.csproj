@@ -10,6 +10,7 @@
     <ProjectReference Include="..\OpenSmc.Arithmetics\OpenSmc.Arithmetics.csproj" />
     <ProjectReference Include="..\OpenSmc.DataCubes.Abstractions\OpenSmc.DataCubes.Abstractions.csproj" />
     <ProjectReference Include="..\OpenSmc.Reflection\OpenSmc.Reflection.csproj" />
+    <ProjectReference Include="..\OpenSmc.Utils\OpenSmc.Utils.csproj" />
   </ItemGroup>
 
 </Project>

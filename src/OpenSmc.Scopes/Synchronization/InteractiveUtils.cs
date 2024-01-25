@@ -1,5 +1,6 @@
 ﻿using System.Reflection;
 using OpenSmc.Scopes.Proxy;
+using OpenSmc.Utils;
 
 namespace OpenSmc.Scopes.Synchronization;
 
