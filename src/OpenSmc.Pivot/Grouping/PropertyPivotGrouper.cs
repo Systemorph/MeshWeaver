@@ -2,6 +2,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Reflection;
 using OpenSmc.Pivot.Models.Interfaces;
+using OpenSmc.Utils;
 
 namespace OpenSmc.Pivot.Grouping
 {

@@ -1,5 +1,8 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Reflection;
+using OpenSmc.Domain.Abstractions.Attributes;
+using OpenSmc.Reflection;
+using OpenSmc.Utils;
 
 namespace OpenSmc.Pivot.Processors
 {

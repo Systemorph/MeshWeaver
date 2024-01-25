@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using OpenSmc.Collections;
 using OpenSmc.Pivot.Aggregations;
 using OpenSmc.Pivot.Models;
 using OpenSmc.Pivot.Models.Interfaces;
