@@ -1,4 +1,5 @@
 ﻿using System.Reflection;
+using OpenSmc.Conventions;
 
 namespace OpenSmc.Scopes.Proxy
 {

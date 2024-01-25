@@ -1,4 +1,6 @@
-﻿namespace OpenSmc.Scopes.Proxy
+﻿using OpenSmc.Reflection;
+
+namespace OpenSmc.Scopes.Proxy
 {
     public class ScopeRegistryInterceptorFactory : IScopeInterceptorFactory
     {

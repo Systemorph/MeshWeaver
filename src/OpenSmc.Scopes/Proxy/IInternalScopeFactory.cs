@@ -1,4 +1,6 @@
-﻿namespace OpenSmc.Scopes.Proxy
+﻿using Microsoft.Extensions.Logging;
+
+namespace OpenSmc.Scopes.Proxy
 {
     public interface IInternalScopeFactory
     {
