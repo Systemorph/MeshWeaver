@@ -1,4 +1,5 @@
-﻿using OpenSmc.Pivot.Builder;
+﻿using OpenSmc.DataCubes;
+using OpenSmc.Pivot.Builder;
 using OpenSmc.Pivot.Grouping;
 using OpenSmc.Pivot.Models;
 

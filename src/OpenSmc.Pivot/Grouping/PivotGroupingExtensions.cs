@@ -1,7 +1,11 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
+using OpenSmc.DataCubes;
+using OpenSmc.Domain.Abstractions;
+using OpenSmc.Domain.Abstractions.Attributes;
 using OpenSmc.Pivot.Models.Interfaces;
+using OpenSmc.Reflection;
 
 // ReSharper disable StaticMemberInGenericType
 

@@ -1,4 +1,6 @@
-﻿using OpenSmc.Pivot.Aggregations;
+﻿using OpenSmc.Collections;
+using OpenSmc.DataCubes;
+using OpenSmc.Pivot.Aggregations;
 
 namespace OpenSmc.Pivot.Builder;
 

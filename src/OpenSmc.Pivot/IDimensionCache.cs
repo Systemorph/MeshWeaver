@@ -1,4 +1,9 @@
-﻿namespace OpenSmc.Pivot
+﻿using OpenSmc.DataCubes;
+using OpenSmc.DataSource.Abstractions;
+using OpenSmc.Domain.Abstractions;
+using OpenSmc.Reflection;
+
+namespace OpenSmc.Pivot
 {
     public interface IDimensionCache
     {

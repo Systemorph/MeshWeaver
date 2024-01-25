@@ -1,4 +1,5 @@
-﻿using OpenSmc.Pivot.Aggregations;
+﻿using OpenSmc.DataSource.Abstractions;
+using OpenSmc.Pivot.Aggregations;
 using OpenSmc.Pivot.Builder.Interfaces;
 using OpenSmc.Pivot.Models;
 using OpenSmc.Pivot.Processors;
