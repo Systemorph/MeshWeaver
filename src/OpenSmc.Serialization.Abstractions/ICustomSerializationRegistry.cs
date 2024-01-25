@@ -2,8 +2,8 @@
 
 namespace OpenSmc.Serialization;
 
-public delegate object SerializationTransform<T>(T value, IDataBindingTransformationContext context);
-public delegate void SerializationMutate<T>(T value, IDataBindingMutationContext context);
+public delegate object SerializationTransform<T>(T value, ISerializationTransformContext context);
+public delegate void SerializationMutate<T>(T value, IDataBindingMutateContext context);
 
 public interface ICustomSerializationRegistry
 {
@@ -11,13 +11,13 @@ public interface ICustomSerializationRegistry
     ICustomSerializationRegistry RegisterMutation<T>(SerializationMutate<T> mutate);
 }
 
-public interface IDataBindingTransformationContext
+public interface ISerializationTransformContext
 {
     object TraverseValue(object value);
     object TraverseProperty(object propertyValue, object parent, PropertyInfo propertyInfo);
 }
 
-public interface IDataBindingMutationContext
+public interface IDataBindingMutateContext
 {
     void SetProperty(string propName, object propValue);
     void DeleteProperty(string propName);
