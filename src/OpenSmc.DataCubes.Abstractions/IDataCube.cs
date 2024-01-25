@@ -1,4 +1,5 @@
 ﻿using System.Collections;
+using static OpenSmc.Arithmetics.ArithmeticOperations;
 
 namespace OpenSmc.DataCubes
 {

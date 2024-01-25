@@ -2,4 +2,7 @@
   <PropertyGroup>
     <RootNamespace>OpenSmc.DataCubes</RootNamespace>
   </PropertyGroup>
+	<ItemGroup>
+		<ProjectReference Include="..\OpenSmc.Arithmetics\OpenSmc.Arithmetics.csproj" />
+	</ItemGroup>
 </Project>
