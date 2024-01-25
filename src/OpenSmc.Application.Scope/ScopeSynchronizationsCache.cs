@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using OpenSmc.Messaging;
+using OpenSmc.Scopes.Synchronization;
 
 namespace OpenSmc.Application.Scope;
 

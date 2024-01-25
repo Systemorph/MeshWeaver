@@ -7,11 +7,15 @@ using OpenSmc.Collections;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Hub;
 using OpenSmc.Reflection;
+using OpenSmc.Scopes;
+using OpenSmc.Scopes.Proxy;
+using OpenSmc.Scopes.Synchronization;
 using OpenSmc.Serialization;
+using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Application.Scope;
 
-public class ApplicationScopePlugin : MessageHubPlugin<ApplicationScopePlugin, ApplicationScopeState>,
+public class ApplicationScopePlugin(IServiceProvider serviceProvider) : MessageHubPlugin<ApplicationScopePlugin, ApplicationScopeState>(serviceProvider),
                                         IMessageHandler<SubscribeScopeRequest>,
                                         IMessageHandler<UnsubscribeScopeRequest>,
                                         IMessageHandler<DisposeScopeRequest>,
@@ -65,13 +69,13 @@ public class ApplicationScopePlugin : MessageHubPlugin<ApplicationScopePlugin, A
         return SubscribeScope(request, scope);
     }
 
-    private async Task<IMessageDelivery> SubscribeSynchronizedScope(IMessageDelivery<SubscribeScopeRequest> request, object scope)
+    private IMessageDelivery SubscribeSynchronizedScope(IMessageDelivery<SubscribeScopeRequest> request, object scope)
     {
         if (scope == null)
             return request.NotFound();
         var address = request.Sender;
         SubscribeScope(request, scope);
-        var serialized = await serializationService.SerializeAsync(scope);
+        var serialized = serializationService.SerializeAsync(scope);
         var dictionary = JsonConvert.DeserializeObject<ImmutableDictionary<string, object>>(serialized.Content);
         if (dictionary.TryGetValue("$scopeId", out var scopeId))
             UpdateState(s => s with { SynchronizedById = s.SynchronizedById.SetItem((address, scopeId.ToString()), dictionary) });
