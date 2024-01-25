@@ -61,6 +61,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Application.Scope.C
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Application.Scope", "src\OpenSmc.Application.Scope\OpenSmc.Application.Scope.csproj", "{0767636F-41AB-4569-AA05-77BDB6318FDF}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Scopes", "src\OpenSmc.Scopes\OpenSmc.Scopes.csproj", "{EDDAB77B-7095-42E6-88BC-C33CB005FE40}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -159,6 +161,10 @@ Global
 		{0767636F-41AB-4569-AA05-77BDB6318FDF}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{0767636F-41AB-4569-AA05-77BDB6318FDF}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{0767636F-41AB-4569-AA05-77BDB6318FDF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EDDAB77B-7095-42E6-88BC-C33CB005FE40}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EDDAB77B-7095-42E6-88BC-C33CB005FE40}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EDDAB77B-7095-42E6-88BC-C33CB005FE40}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EDDAB77B-7095-42E6-88BC-C33CB005FE40}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
