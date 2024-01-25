@@ -1,6 +1,7 @@
 <Project>
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <AspectCoreReflectionVersion>2.2.0</AspectCoreReflectionVersion>
   </PropertyGroup>
   <PropertyGroup>
     <MicrosoftExtensionsVersion>8.0.0</MicrosoftExtensionsVersion>
@@ -8,6 +9,7 @@
   <ItemGroup>
     <PackageVersion Include="Autofac" Version="8.0.0" />
     <PackageVersion Include="Autofac.Extensions.DependencyInjection" Version="9.0.0" />
+    <PackageVersion Include="AspectCore.Extensions.Reflection" Version="2.2.0" />
     <PackageVersion Include="Castle.Core" Version="5.1.1" />
     <PackageVersion Include="CSharpVitamins.ShortGuid" Version="2.0.0" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="$(MicrosoftExtensionsVersion)" />
