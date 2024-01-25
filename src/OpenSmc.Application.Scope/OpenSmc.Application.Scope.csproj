@@ -1,0 +1,13 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenSmc.Application.Contract\OpenSmc.Application.Contract.csproj" />
+    <ProjectReference Include="..\OpenSmc.Messaging\OpenSmc.Messaging.csproj" />
+    <ProjectReference Include="..\OpenSmc.DataBinding\OpenSmc.DataBinding.csproj" />
+    <ProjectReference Include="..\OpenSmc.Serialization\OpenSmc.Serialization.csproj" />
+    <ProjectReference Include="..\OpenSmc.ServiceProvider\OpenSmc.ServiceProvider.csproj" />
+    <ProjectReference Include="..\OpenSmc.Application.Scope.Contract\OpenSmc.Application.Scope.Contract.csproj" />
+    <ProjectReference Include="..\OpenSmc.Scopes\OpenSmc.Scopes.csproj" />
+  </ItemGroup>
+
+</Project>
