@@ -1,9 +1,13 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using AspectCore.Extensions.Reflection;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Hub;
 using OpenSmc.Scopes;
 using OpenSmc.Scopes.Proxy;
 using OpenSmc.Serialization;
+using OpenSmc.ShortGuid;
+using static System.Formats.Asn1.AsnWriter;
+using System.Dynamic;
 
 namespace OpenSmc.Application.Scope;
 
@@ -42,16 +46,30 @@ public static class ApplicationScopeRegistryExtensions
     {
         return conf.AddPlugin<ApplicationScopePlugin>()
                    .WithServices(s => s.AddSingleton(serviceProvider => serviceProvider.GetRequiredService<IScopeFactory>().ForSingleton().ToScope<IApplicationScope>()))
-                   .RegisterSerializationRule(rule => rule.ForType<IScope>(typeBuilder => typeBuilder.WithSerialization(SerializeScope)));
+                   .AddSerialization(rule => rule.ForType<IScope>(typeBuilder => typeBuilder.WithTransformation(TransformScope)));
     }
 
 
-    public static string SerializeScope()
+    public const string ScopeId = "$scopeId";
+    public const string TypeDiscriminator = "$type";
+
+    private static object TransformScope(IScope scope, ISerializationTransformContext context)
     {
+        var scopeType = scope.GetScopeType();
+        var properties = scopeType.GetScopeProperties().SelectMany(x => x.Properties);
 
+        IDictionary<string, object> ret = new ExpandoObject();
+
+        ret[ScopeId] = scope.GetGuid().AsString();
+        ret[TypeDiscriminator] = scopeType.Name;
+
+
+        foreach (var property in properties)
+        {
+            ret[property.Name] = context.TraverseProperty(property.GetReflector().GetValue(scope), scope, property);
+        }
+
+        return ret;
     }
-
-
-
 
 }
