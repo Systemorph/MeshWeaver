@@ -1,5 +1,6 @@
 ﻿using System.Linq.Expressions;
 using System.Reflection;
+using OpenSmc.Collections;
 
 namespace OpenSmc.Scopes.Proxy
 {

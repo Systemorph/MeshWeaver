@@ -1,4 +1,5 @@
 ﻿using System.Reflection;
+using OpenSmc.Collections;
 using OpenSmc.Scopes.Proxy;
 
 namespace OpenSmc.Scopes.Operations

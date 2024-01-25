@@ -1,5 +1,8 @@
 ﻿using System.Linq.Expressions;
 using System.Reflection;
+using OpenSmc.Arithmetics;
+using OpenSmc.Collections;
+using OpenSmc.Reflection;
 using OpenSmc.Scopes.Proxy;
 
 namespace OpenSmc.Scopes.Operations
