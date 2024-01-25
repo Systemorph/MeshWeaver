@@ -80,13 +80,14 @@ public class MessageHubHelloWorldTest : TestBase
         var client = Router.GetHostedHub(new ClientAddress());
         await client.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
         var clientOut = (await client.AddObservable()).Timeout(500.Milliseconds());
+        var clientMessagesTask = clientOut.Select(d => d.Message).OfType<HelloEvent>().FirstAsync().GetAwaiter();
 
         // act
         var host = Router.GetHostedHub(new HostAddress());
         host.Post(new HelloEvent(), o => o.WithTarget(MessageTargets.Subscribers));
         
         // assert
-        var clientMessages = await clientOut.Select(d => d.Message).OfType<HelloEvent>().FirstAsync();
+        var clientMessages = await clientMessagesTask;
         clientMessages.Should().BeAssignableTo<HelloEvent>();
     }
 
