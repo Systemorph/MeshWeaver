@@ -1,4 +1,5 @@
 ﻿using OpenSmc.Messaging;
+using OpenSmc.Serialization;
 
 namespace OpenSmc.Application.Scope;
 
