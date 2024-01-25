@@ -1,4 +1,6 @@
-﻿namespace OpenSmc.Scopes.Proxy
+﻿using Microsoft.Extensions.DependencyInjection;
+
+namespace OpenSmc.Scopes.Proxy
 {
     //Scopes.ForIdentities() ==> scopeFactory.ForIdentities()
 

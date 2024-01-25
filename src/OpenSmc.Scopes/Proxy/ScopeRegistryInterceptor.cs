@@ -1,4 +1,5 @@
 ﻿using Castle.DynamicProxy;
+using OpenSmc.Collections;
 using OpenSmc.Reflection;
 
 namespace OpenSmc.Scopes.Proxy

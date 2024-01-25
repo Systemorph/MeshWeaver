@@ -2,6 +2,7 @@
 using System.ComponentModel;
 using System.Reflection;
 using Castle.DynamicProxy;
+using OpenSmc.Reflection;
 
 namespace OpenSmc.Scopes.Proxy
 {

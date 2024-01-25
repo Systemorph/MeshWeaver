@@ -1,4 +1,7 @@
 ﻿using System.Reflection;
+using OpenSmc.Collections;
+using OpenSmc.DataCubes;
+using OpenSmc.Reflection;
 
 namespace OpenSmc.Scopes.Proxy
 {

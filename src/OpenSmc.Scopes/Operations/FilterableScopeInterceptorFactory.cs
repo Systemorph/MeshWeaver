@@ -1,6 +1,7 @@
 ﻿using System.Reflection;
 using Castle.DynamicProxy;
 using OpenSmc.Collections;
+using OpenSmc.DataCubes;
 using OpenSmc.Scopes.Proxy;
 
 namespace OpenSmc.Scopes.Operations
