@@ -8,6 +8,7 @@ using OpenSmc.Pivot.Builder.Interfaces;
 using OpenSmc.Pivot.Grouping;
 using OpenSmc.Pivot.Models;
 using OpenSmc.Pivot.Processors;
+using OpenSmc.Reflection;
 
 namespace OpenSmc.Pivot.Builder
 {
@@ -72,7 +73,7 @@ namespace OpenSmc.Pivot.Builder
         private static IEnumerable<DimensionDescriptor> GetAggregationPropertiesDescriptors()
         {
             return typeof(TElement).GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                                   .Where(x => HasAttribute<AggregateByAttribute>(x))
+                                   .Where(x => x.HasAttribute<AggregateByAttribute>())
                                    .Select(x =>
                                            {
                                                var dimensionAttribute = ((MemberInfo)x).GetCustomAttribute<DimensionAttribute>();

@@ -1,4 +1,5 @@
 ﻿using OpenSmc.DataCubes;
+using OpenSmc.Hierarchies;
 using OpenSmc.Pivot.Aggregations;
 using OpenSmc.Pivot.Grouping;
 using OpenSmc.Pivot.Models.Interfaces;

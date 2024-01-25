@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using OpenSmc.Hierarchies;
 using OpenSmc.Pivot.Builder;
 using OpenSmc.Pivot.Grouping;
 using OpenSmc.Pivot.Models;
