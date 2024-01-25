@@ -4,6 +4,7 @@ using FluentAssertions;
 using FluentAssertions.Execution;
 using FluentAssertions.Extensions;
 using OpenSmc.Fixture;
+using OpenSmc.Hub.Fixture;
 using OpenSmc.ServiceProvider;
 using Xunit;
 using Xunit.Abstractions;

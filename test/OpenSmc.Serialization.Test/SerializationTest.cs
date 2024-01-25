@@ -1,7 +1,9 @@
 ﻿using System.Reactive.Linq;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Fixture;
+using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Hub;
 using OpenSmc.ServiceProvider;
@@ -29,9 +31,16 @@ public class SerializationTest : TestBase
     [Fact]
     public async Task SimpleTest()
     {
+        var hostOut = await Host.AddObservable();
+        var messageTask = hostOut.ToArray().GetAwaiter();
+        
         Host.Post(new MyEvent("Hello"));
-        var events = await Host.Out.Timeout(TimeSpan.FromMicroseconds(500)).ToArray();
+        await Task.Delay(200.Milliseconds());
+        hostOut.OnCompleted();
+
+        var events = await messageTask;
         events.Should().HaveCount(1);
+        // TODO V10: check event is serialized (25.01.2024, Alexander Yolokhov)
     }
 }
 
