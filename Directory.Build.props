@@ -16,10 +16,4 @@
   <Target Name="CleanAllBins" AfterTargets="Clean">
     <Delete Files="@(filesToDelete)" />
   </Target>
-
-  <ItemGroup>
-      <!--TODO: Find out how to enable this on github-->
-	  <PackageReference Include="Microsoft.SourceLink.AzureRepos.Git" PrivateAssets="All"/>
-    <SourceLinkAzureDevOpsServerGitHost  Include="systemorph-eu.visualstudio.com" />
-  </ItemGroup>
 </Project>
