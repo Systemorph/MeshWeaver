@@ -1,6 +1,8 @@
 ﻿using System.Linq.Expressions;
 using System.Reflection;
 using Castle.DynamicProxy;
+using OpenSmc.Arithmetics;
+using OpenSmc.Arithmetics.Aggregation;
 using OpenSmc.Collections;
 using OpenSmc.DataCubes;
 using OpenSmc.Reflection;
