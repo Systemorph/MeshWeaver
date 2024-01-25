@@ -23,6 +23,13 @@ jobs:
     - name: Restore dependencies
       run: dotnet restore
     - name: Build
-      run: dotnet build --no-restore
+      run: dotnet build --no-restore -p:CIRun=true
     - name: Test
-      run: dotnet test --no-build --verbosity normal
+      run: dotnet test --no-build --verbosity normal -l:trx
+    - name: Publish Test Results
+      uses: EnricoMi/publish-unit-test-result-action@v2.12.0
+      if: always()
+      with:
+        # File patterns of test result files. Relative paths are known to work best, while the composite action also works with absolute paths. Supports "*", "**", "?", and "[]" character ranges. Use multiline string for multiple patterns. Patterns starting with "!" exclude the matching files. There have to be at least one pattern starting without a "!".
+        files: |
+          test/**/*.trx
