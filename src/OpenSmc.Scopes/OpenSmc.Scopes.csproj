@@ -1,8 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
-    <PackageReference Include="AspectCore.Extensions.Reflection" />
     <PackageReference Include="Castle.Core" />
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Newtonsoft.Json" />
   </ItemGroup>
@@ -13,5 +11,4 @@
     <ProjectReference Include="..\OpenSmc.Reflection\OpenSmc.Reflection.csproj" />
     <ProjectReference Include="..\OpenSmc.Utils\OpenSmc.Utils.csproj" />
   </ItemGroup>
-
 </Project>
