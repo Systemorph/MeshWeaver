@@ -2,6 +2,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using Castle.DynamicProxy;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Scopes.Synchronization;
 

@@ -1,5 +1,6 @@
 ﻿using System.Linq.Expressions;
 using System.Reflection;
+using Castle.DynamicProxy;
 using OpenSmc.Collections;
 using OpenSmc.Reflection;
 using OpenSmc.Scopes.Proxy;

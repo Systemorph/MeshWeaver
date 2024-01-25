@@ -1,5 +1,6 @@
 ﻿using System.Linq.Expressions;
 using System.Reflection;
+using Castle.DynamicProxy;
 using Microsoft.Extensions.Logging;
 
 namespace OpenSmc.Scopes.Proxy
