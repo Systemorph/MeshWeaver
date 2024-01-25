@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<RootNamespace>OpenSmc.Application.Scope</RootNamespace>
+	</PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenSmc.Messaging.Contract\OpenSmc.Messaging.Contract.csproj" />
+    <ProjectReference Include="..\OpenSmc.Scopes\OpenSmc.Scopes.csproj" />
+  </ItemGroup>
+
+</Project>
