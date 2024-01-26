@@ -3,7 +3,7 @@ using System.Collections.Immutable;
 
 namespace OpenSmc.Messaging;
 
-public record PostOptions(object Sender)
+public record PostOptions(object Sender, object Context)
 {
     public const string RequestId = nameof(RequestId);
     internal object Target { get; init; }

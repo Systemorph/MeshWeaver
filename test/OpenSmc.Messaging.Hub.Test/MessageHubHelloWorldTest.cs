@@ -41,6 +41,7 @@ public class MessageHubHelloWorldTest : TestBase
     [Fact]
     public async Task HelloWorld()
     {
+        // TODO V10: Since we killed WithHostedHub functionality real configuration of hub with HostAddress (above in ctor) will never be used (26.01.2024, Alexander Yolokhov)
         var host = Router.GetHostedHub(new HostAddress());
         var response = await host.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
         response.Should().BeOfType<HelloEvent>();
