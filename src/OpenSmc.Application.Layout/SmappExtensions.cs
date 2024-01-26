@@ -32,20 +32,18 @@ public static class SmappExtensions
         if (layoutDefinition != null)
             ld = layoutDefinition(ld);
         var mainLayoutAddress = MainLayoutAddress(hub.Address);
-        var layoutHub = hub.GetHub(mainLayoutAddress, o => o
-                                                          .WithFactory((sp, a, o) => CreateLayoutHub(sp, (UiControlAddress)a, o)));
+        var layoutHub = hub.GetHostedHub(mainLayoutAddress, config => config
+            .WithBuildupAction(h => new LayoutStackPlugin()));
         layoutHub.Post(new CreateRequest<LayoutDefinition>(ld));
         hub.ConnectTo(layoutHub);
 
-        hub.ConfigureSmappQueues();
     }
 
-    private static IMessageHub CreateLayoutHub(IServiceProvider serviceProvider, UiControlAddress address, HostedHubOptions options)
+    private static IMessageHub CreateLayoutHub(IServiceProvider serviceProvider, UiControlAddress address)
     {
         return serviceProvider.CreateMessageHub
             (address,
              config => config
-                 .WithHostedOptions(options)
                  .WithBuildupAction(h => new LayoutStackPlugin())
             );
     }
