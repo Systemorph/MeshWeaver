@@ -120,25 +120,21 @@ public class MessageService : IMessageService
         return delivery;
     }
 
-    public IMessageDelivery Post<TMessage>(TMessage message, Func<PostOptions, PostOptions> configure)
+    public IMessageDelivery Post<TMessage>(TMessage message, PostOptions opt)
     {
-        return PostImplGeneric<TMessage>(message, configure);
+        return PostImplGeneric<TMessage>(message, opt);
     }
 
-    private IMessageDelivery PostImpl(object message, Func<PostOptions, PostOptions> configure)
-    => (IMessageDelivery)PostImplMethod.MakeGenericMethod(message.GetType()).Invoke(this, new[] { message, configure });
+    private IMessageDelivery PostImpl(object message, PostOptions opt)
+    => (IMessageDelivery)PostImplMethod.MakeGenericMethod(message.GetType()).Invoke(this, new[] { message, opt });
 
 
     private static readonly MethodInfo PostImplMethod = typeof(MessageService).GetMethod(nameof(PostImplGeneric), BindingFlags.Instance | BindingFlags.NonPublic);
 
-    private IMessageDelivery<TMessage> PostImplGeneric<TMessage>(TMessage message, Func<PostOptions, PostOptions> configure)
+    private IMessageDelivery<TMessage> PostImplGeneric<TMessage>(TMessage message, PostOptions opt)
     {
         if (typeof(TMessage) != message.GetType())
-            return (IMessageDelivery<TMessage>)PostImplMethod.MakeGenericMethod(message.GetType()).Invoke(this, new object[] { message, configure });
-
-        var opt = new PostOptions(Address);
-        if (configure != null)
-            opt = configure(opt);
+            return (IMessageDelivery<TMessage>)PostImplMethod.MakeGenericMethod(message.GetType()).Invoke(this, new object[] { message, opt });
 
         var delivery = new MessageDelivery<TMessage>(message, opt);
         ScheduleNotify(delivery);

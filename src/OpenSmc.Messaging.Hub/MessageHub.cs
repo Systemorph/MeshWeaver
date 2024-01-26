@@ -142,8 +142,12 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
         Post(new DisconnectHubRequest(Address), o => o.WithTarget(hub.Address));
     }
 
-    public IMessageDelivery<TMessage> Post<TMessage>(TMessage message, Func<PostOptions, PostOptions> options = null)
+    public IMessageDelivery<TMessage> Post<TMessage>(TMessage message, Func<PostOptions, PostOptions> configure = null)
     {
+        var options = new PostOptions(Address, this);
+        if (configure != null)
+            options = configure(options);
+
         return (IMessageDelivery<TMessage>)MessageService.Post(message, options);
     }
 
@@ -211,7 +215,7 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
 
         await hostedHubs.DisposeAsync();
 
-        MessageService.Post(new DisconnectHubRequest(Address));
+        Post(new DisconnectHubRequest(Address));
 
         await base.DisposeAsync();
         await MessageService.DisposeAsync();
