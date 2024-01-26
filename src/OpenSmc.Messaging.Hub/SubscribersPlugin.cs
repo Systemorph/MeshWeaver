@@ -16,7 +16,11 @@ public class SubscribersPlugin : MessageHubPlugin<SubscribersPlugin>
     {
         var weSending = delivery.Sender == null || Hub.Address.Equals(delivery.Sender);
         var sentToUs = delivery.Target == null || Hub.Address.Equals(delivery.Target);
-        if (weSending && !MessageTargets.Subscribers.Equals(delivery.Target) && !sentToUs)
+
+        if (weSending && sentToUs)
+            return delivery;
+
+        if (weSending && !MessageTargets.Subscribers.Equals(delivery.Target))
         {
             subscribedTo.Add(delivery.Target.GetType());
         }
