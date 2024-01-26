@@ -25,14 +25,17 @@ public class MessageHubHelloWorldTest : TestBase
     public MessageHubHelloWorldTest(ITestOutputHelper output) : base(output)
     {
         Services.AddMessageHubs(new RouterAddress(), hubConf => hubConf
-            .WithHostedHub<HostAddress>(host => host
-                .WithHandler<SayHelloRequest>((hub, request) =>
-                {
-                    hub.Post(new HelloEvent(), options => options.ResponseFor(request));
-                    return request.Processed();
-                }))
-            .WithHostedHub<ClientAddress>(client => client)
-        );
+            .WithForwards(f => f
+                .RouteAddressToHub<HostAddress>(d => f.Hub
+                    .GetHostedHub((HostAddress)d.Target, c => c
+                        .WithHandler<SayHelloRequest>((hub, request) =>
+                        {
+                            hub.Post(new HelloEvent(), options => options.ResponseFor(request));
+                            return request.Processed();
+                        })))
+                .RouteAddressToHub<ClientAddress>(d => f.Hub
+                    .GetHostedHub((ClientAddress)d.Target, c => c))
+            ));
     }
 
     [Fact]

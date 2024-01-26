@@ -1,5 +1,4 @@
 ﻿using System.Collections.Concurrent;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace OpenSmc.Messaging.Hub;
 
@@ -24,8 +23,7 @@ public class HostedHubsCollection : IAsyncDisposable
 
     private IMessageHub CreateHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
     {
-        var settings = serviceProvider.GetRequiredService<HostedHubConfigurationSettings<TAddress>>();
-        return serviceProvider.CreateMessageHub(address, config ?? settings.Configure);
+        return serviceProvider.CreateMessageHub(address, config);
     }
 
     private bool isDisposing;
@@ -55,11 +53,4 @@ public class HostedHubsCollection : IAsyncDisposable
                 if (messageHubs.TryRemove(address, out var hub) && hub != null)
                     await hub.DisposeAsync();
     }
-}
-
-
-// ReSharper disable once UnusedTypeParameter
-public class HostedHubConfigurationSettings<TAddress>
-{
-    public Func<MessageHubConfiguration, MessageHubConfiguration> Configure { get; set; }
 }
