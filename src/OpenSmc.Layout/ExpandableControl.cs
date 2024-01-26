@@ -1,10 +1,10 @@
 ﻿using OpenSmc.Application.Styles;
 
-namespace OpenSmc.Layout.Composition;
+namespace OpenSmc.Layout;
 
 public record TextBoxControl(object Data) : UiControl<TextBoxControl, GenericUiControlPlugin<TextBoxControl>>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);
 public record NumberControl(object Data) : UiControl<NumberControl, GenericUiControlPlugin<NumberControl>>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data); // TODO V10: Add formatter somehow (2023.09.07, Armen Sirotenko)
-public record DateControl(object Data) :   UiControl<DateControl, GenericUiControlPlugin<DateControl>>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data)  ; // TODO V10: Add date formatter (2023.09.07, Armen Sirotenko)
+public record DateControl(object Data) : UiControl<DateControl, GenericUiControlPlugin<DateControl>>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data); // TODO V10: Add date formatter (2023.09.07, Armen Sirotenko)
 
 public record ExceptionControl(string Message, string Type) : UiControl<ExceptionControl, GenericUiControlPlugin<ExceptionControl>>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
 {
@@ -12,8 +12,8 @@ public record ExceptionControl(string Message, string Type) : UiControl<Exceptio
 }
 
 //not in scope of MVP
-public record CodeSampleControl(object Data) :   UiControl<CodeSampleControl, GenericUiControlPlugin<CodeSampleControl>>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);
-public record HtmlControl(object Data) :   UiControl<HtmlControl, GenericUiControlPlugin<HtmlControl>>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);
+public record CodeSampleControl(object Data) : UiControl<CodeSampleControl, GenericUiControlPlugin<CodeSampleControl>>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);
+public record HtmlControl(object Data) : UiControl<HtmlControl, GenericUiControlPlugin<HtmlControl>>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);
 public record TitleControl(object Data) : UiControl<TitleControl, GenericUiControlPlugin<TitleControl>>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);
 public record CheckBoxControl(object Data) : UiControl<CheckBoxControl, GenericUiControlPlugin<CheckBoxControl>>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);
 
