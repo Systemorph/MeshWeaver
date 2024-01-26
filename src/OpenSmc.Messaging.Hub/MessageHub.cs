@@ -161,7 +161,7 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
 
     public IMessageHub GetHostedHub<TAddress1>(TAddress1 address)
     {
-        var messageHub = hostedHubs.GetHub(address, null);
+        var messageHub = hostedHubs.GetHub(address, c => c);
         return messageHub;
     }
 
