@@ -5,9 +5,9 @@ name: .NET
 
 on:
   push:
-    branches: [ "MessageHub" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "MessageHub" ]
+    branches: [ "main" ]
 
 jobs:
   build:
