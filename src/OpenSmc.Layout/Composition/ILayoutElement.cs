@@ -1,6 +1,4 @@
-﻿using OpenSmc.Layout;
-
-namespace OpenSmc.Layout.Composition;
+﻿namespace OpenSmc.Layout.Composition;
 
 public interface IUiControlWithSubAreas : IUiControl
 {
