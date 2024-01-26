@@ -131,7 +131,7 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
     {
         hub.DeliverMessage(new MessageDelivery<ConnectToHubRequest>()
         {
-            Message = new ConnectToHubRequest(Address, hub.Address, this, hub.DeliverMessage),
+            Message = new ConnectToHubRequest(Address, hub.Address),
             Sender = Address,
             Target = hub.Address
         });
@@ -161,7 +161,13 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
 
     public IMessageHub GetHostedHub<TAddress1>(TAddress1 address)
     {
-        var messageHub = hostedHubs.GetHub(address);
+        var messageHub = hostedHubs.GetHub(address, null);
+        return messageHub;
+    }
+
+    public IMessageHub GetHostedHub<TAddress1>(TAddress1 address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
+    {
+        var messageHub = hostedHubs.GetHub(address, config);
         return messageHub;
     }
 

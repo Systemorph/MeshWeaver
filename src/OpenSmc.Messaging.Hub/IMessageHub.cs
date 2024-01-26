@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
+using OpenSmc.Messaging.Hub;
 
 
 namespace OpenSmc.Messaging;
@@ -45,6 +46,7 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
     T Get<T>(string context = "");
     Task AddPluginAsync(IMessageHubPlugin plugin);
     IMessageHub GetHostedHub<TAddress1>(TAddress1 address);
+    IMessageHub GetHostedHub<TAddress1>(TAddress1 address, Func<MessageHubConfiguration, MessageHubConfiguration> config);
 }
 
 

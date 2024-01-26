@@ -15,17 +15,17 @@ public class HostedHubsCollection : IAsyncDisposable
         this.serviceProvider = serviceProvider;
     }
 
-    public IMessageHub GetHub<TAddress>(TAddress address)
+    public IMessageHub GetHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
     {
         if (messageHubs.TryGetValue(address, out var hub))
             return hub;
-        return messageHubs[address] = CreateHub(address);
+        return messageHubs[address] = CreateHub(address, config);
     }
 
-    private IMessageHub CreateHub<TAddress>(TAddress address)
+    private IMessageHub CreateHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
     {
         var settings = serviceProvider.GetRequiredService<HostedHubConfigurationSettings<TAddress>>();
-        return serviceProvider.CreateMessageHub(address, settings.Configure);
+        return serviceProvider.CreateMessageHub(address, config ?? settings.Configure);
     }
 
     private bool isDisposing;
