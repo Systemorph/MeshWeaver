@@ -1,0 +1,9 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\OpenSmc.Messaging.Hub\OpenSmc.Messaging.Hub.csproj" />
+    <ProjectReference Include="..\OpenSmc.Serialization.Abstractions\OpenSmc.Serialization.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

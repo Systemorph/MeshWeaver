@@ -1,7 +1,8 @@
 <Project>
  <PropertyGroup>
-    <TargetFramework>net6.0</TargetFramework>
-    <LangVersion>10.0</LangVersion>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>12.0</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
     <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
     <WarnOnPackingNonPackableProject>false</WarnOnPackingNonPackableProject>
   </PropertyGroup>
@@ -10,14 +11,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <filesToDelete Include="bin\**\*.*" Exclude="bin\**\*.mdf;bin\**\*.ldf"/> 
+    <filesToDelete Include="bin\**\*.*" /> 
   </ItemGroup>
   <Target Name="CleanAllBins" AfterTargets="Clean">
     <Delete Files="@(filesToDelete)" />
   </Target>
-
-  <ItemGroup>
-    <PackageReference Include="Microsoft.SourceLink.AzureRepos.Git" PrivateAssets="All"/>
-    <SourceLinkAzureDevOpsServerGitHost  Include="systemorph-eu.visualstudio.com" />
-  </ItemGroup>
 </Project>
