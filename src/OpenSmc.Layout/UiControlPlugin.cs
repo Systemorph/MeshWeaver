@@ -1,54 +1,20 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using OpenSmc.Application.Scope;
-using OpenSmc.Layout.Composition;
-using OpenSmc.Layout.Views;
+﻿using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
-using OpenSmc.Scopes.Synchronization;
-using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Layout;
 
 
 
-public class UiControlPlugin<TControl> : IMessageHandler<GetRequest<TControl>>,
+public class UiControlPlugin<TControl> : MessageHubPlugin<UiControlPlugin<TControl>, TControl>,
+    IMessageHandler<GetRequest<TControl>>,
                                                   IMessageHandler<RefreshRequest>,
                                                   IMessageHandlerAsync<ClickedEvent>
     where TControl : UiControl
 {
     private Action scopeDispose;
-    protected TControl State { get; private set; }
-    protected void UpdateState(Func<TControl, TControl> changes) => State = changes.Invoke(State);
     protected TControl Control => State;
-    protected ApplicationVariable Application { get; set; }
 
 
-    protected IMessageHub Hub { get; set; }
-    public virtual Task InitializeAsync(IMessageHub hub, TControl control)
-    {
-        Hub = hub;
-        hub.ServiceProvider.Buildup(this);
-        hub.RegisterHandlersFromInstance(this);
-        Application = Hub.ServiceProvider.GetRequiredService<ApplicationVariable>();
-        State = control;
-        var address = new ApplicationScopeAddress(Application.Host.Address);
-        var internalMutableScopes = TypeScanner.ScanFor<IInternalMutableScope>(control.DataContext).ToArray();
-
-        if (internalMutableScopes.Any())
-        {
-            foreach (var internalMutableScope in internalMutableScopes)
-                Post(new SubscribeScopeRequest(internalMutableScope), o => o.WithTarget(address));
-
-
-            scopeDispose = () =>
-            {
-                foreach (var internalMutableScope in internalMutableScopes)
-                    Post(new UnsubscribeScopeRequest(internalMutableScope), o => o.WithTarget(address));
-            };
-
-        }
-
-        return Task.FromResult(this);
-    }
 
     public IMessageDelivery HandleMessage(IMessageDelivery<GetRequest<TControl>> request)
     {
@@ -75,8 +41,8 @@ public class UiControlPlugin<TControl> : IMessageHandler<GetRequest<TControl>>,
 
 
 
-    public async Task<(TControl2 Control, IMessageHub Hub)> CreateUiControlHub<TControl2>(TControl2 control, string area)
-    where TControl2 : UiControl
+    public  TControl2  CreateUiControlHub<TControl2>(TControl2 control, string area)
+        where TControl2 : UiControl
     {
         if (control == null)
             return default;
@@ -84,10 +50,9 @@ public class UiControlPlugin<TControl> : IMessageHandler<GetRequest<TControl>>,
         control = control with { Address = address };
 
 
-        var hub = control.GetHub(Hub.ServiceProvider);
+        var hub = control.CreateHub(Hub.ServiceProvider);
 
-        var dataChanged = await hub.AwaitResponse<DataChanged>(new CreateRequest<UiControl>(control) { Options = area });
-        return ((TControl2)dataChanged.Changes, hub);
+        return control with   {Hub = hub};
     }
 
 
@@ -111,4 +76,7 @@ public class UiControlPlugin<TControl> : IMessageHandler<GetRequest<TControl>>,
         return Hub.Post(message, options);
     }
 
+    protected UiControlPlugin(IServiceProvider serviceProvider) : base(serviceProvider)
+    {
+    }
 }

@@ -2,7 +2,7 @@
 
 public interface IMessageHubPlugin : IAsyncDisposable
 {
-    Task InitializeAsync(IMessageHub hub);
+    void Initialize(IMessageHub hub);
     bool Filter(IMessageDelivery delivery);
     Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery);
 }

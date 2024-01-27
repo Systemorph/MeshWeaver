@@ -2,7 +2,6 @@
 using System.Diagnostics;
 using System.Reflection;
 using OpenSmc.Messaging;
-using OpenSmc.Messaging.Hub;
 using OpenSmc.Queues;
 using OpenSmc.Scopes;
 using OpenSmc.Scopes.Proxy;
@@ -23,9 +22,9 @@ public class ExpressionSynchronizationPlugin(IServiceProvider serviceProvider) :
 {
     [Inject] private IApplicationScope applicationScope;
 
-    public override async Task InitializeAsync(IMessageHub hub)
+    public override void Initialize(IMessageHub hub)
     {
-        await base.InitializeAsync(hub);
+        base.Initialize(hub);
 
         // ReSharper disable once SuspiciousTypeConversion.Global
         InitializeState(new((IInternalMutableScope)applicationScope, new(hub)));

@@ -26,4 +26,7 @@ public class ExpandableUiPlugin<TControl> : GenericUiControlPlugin<TControl>, IM
         return delivery.Processed();
     }
 
+    protected ExpandableUiPlugin(IServiceProvider serviceProvider) : base(serviceProvider)
+    {
+    }
 }

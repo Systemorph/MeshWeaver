@@ -28,9 +28,9 @@ public class ApplicationScopePlugin(IServiceProvider serviceProvider) : MessageH
     private IScopeRegistry scopeRegistry;
     private ISerializationService serializationService;
 
-    public override async Task InitializeAsync(IMessageHub hub)
+    public override void Initialize(IMessageHub hub)
     {
-        await base.InitializeAsync(hub);
+        base.Initialize(hub);
         applicationScope = hub.ServiceProvider.GetRequiredService<IApplicationScope>();
         serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
         // ReSharper disable once SuspiciousTypeConversion.Global

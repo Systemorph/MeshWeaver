@@ -44,7 +44,7 @@ public class MessageHub<TAddress>(IServiceProvider serviceProvider, HostedHubsCo
 
     protected virtual async Task StartAsync()
     {
-        await InitializeAsync();
+        Initialize();
         //Post(new HubInfo(Address));
 
         foreach (var buildup in Configuration.BuildupActions)
@@ -55,13 +55,13 @@ public class MessageHub<TAddress>(IServiceProvider serviceProvider, HostedHubsCo
 
 
 
-    public virtual async Task InitializeAsync()
+    public virtual void Initialize()
     {
         try
         {
-            await AddPluginAsync(subscribersPlugin);
+            AddPlugin(subscribersPlugin);
 
-            await routePlugin.InitializeAsync(this);
+            routePlugin.Initialize(this);
             RegisterAfter(Rules.Last, d =>
             {
                 if (!routePlugin.Filter(d))
@@ -292,9 +292,9 @@ public class MessageHub<TAddress>(IServiceProvider serviceProvider, HostedHubsCo
         return (T)ret;
     }
 
-    public async Task AddPluginAsync(IMessageHubPlugin plugin)
+    public void AddPlugin(IMessageHubPlugin plugin)
     {
-        await plugin.InitializeAsync(this);
+        plugin.Initialize(this);
         Register(async d =>
         {
             if (plugin.Filter(d))

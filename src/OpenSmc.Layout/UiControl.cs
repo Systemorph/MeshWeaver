@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
@@ -40,7 +41,7 @@ public abstract record UiControl : IUiControl
 {
     public string Id { get; init; }
 
-    public abstract IMessageHub GetHub(IServiceProvider serviceProvider);
+    public abstract IMessageHub CreateHub(IServiceProvider serviceProvider);
 
     protected UiControl(object Data)
     {
@@ -110,21 +111,29 @@ public abstract record UiControl : IUiControl
 public class GenericUiControlPlugin<TControl> : UiControlPlugin<TControl>
     where TControl : UiControl
 {
+    protected GenericUiControlPlugin(IServiceProvider serviceProvider) : base(serviceProvider)
+    {
+    }
+
 }
 
 public abstract record UiControl<TControl, TPlugin>(string ModuleName, string ApiVersion, object Data) : UiControl(Data), IUiControl<TControl>
     where TControl : UiControl<TControl, TPlugin>, IUiControl<TControl>
-    where TPlugin : UiControlPlugin<TControl>, new()
+    where TPlugin : UiControlPlugin<TControl>
 {
-    public override IMessageHub GetHub(IServiceProvider serviceProvider) => serviceProvider.CreateMessageHub(Address, ConfigureHub);
+    public override IMessageHub CreateHub(IServiceProvider serviceProvider) => serviceProvider.CreateMessageHub(Address, ConfigureHub);
 
     protected virtual MessageHubConfiguration ConfigureHub(MessageHubConfiguration configuration)
     {
         return configuration.AddPlugin(CreatePlugin);
     }
 
-    protected virtual Task CreatePlugin(IMessageHub hub)
-        => new TPlugin().InitializeAsync(hub, (TControl)this);
+    protected virtual TPlugin CreatePlugin(IMessageHub hub)
+    {
+        var ret = Hub.ServiceProvider.GetRequiredService<TPlugin>();
+        ret.InitializeState((TControl)this);
+        return ret;
+    }
 
     protected TControl This => (TControl)this;
 
@@ -234,7 +243,7 @@ public interface IExpandableUiControl<out TControl> : IUiControl<TControl>
 
 public abstract record ExpandableUiControl<TControl, TPlugin>(string ModuleName, string ApiVersion) : UiControl<TControl, TPlugin>(ModuleName, ApiVersion, null), IExpandableUiControl
     where TControl : ExpandableUiControl<TControl, TPlugin>
-    where TPlugin : UiControlPlugin<TControl>, new()
+    where TPlugin : UiControlPlugin<TControl>
 {
     public const string Expand = nameof(Expand);
     public bool IsExpandable => ExpandFunc != null;

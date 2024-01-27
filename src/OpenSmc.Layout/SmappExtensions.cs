@@ -29,8 +29,7 @@ public static class SmappExtensions
             ld = layoutDefinition(ld);
         var mainLayoutAddress = MainLayoutAddress(hub.Address);
         var layoutHub = hub.GetHostedHub(mainLayoutAddress, config => config
-            .WithBuildupAction(h => new LayoutStackPlugin()));
-        layoutHub.Post(new CreateRequest<LayoutDefinition>(ld));
+            .AddPlugin<LayoutStackPlugin>(h => new LayoutStackPlugin(hub.ServiceProvider)));
         hub.ConnectTo(layoutHub);
 
     }
@@ -40,7 +39,7 @@ public static class SmappExtensions
         return serviceProvider.CreateMessageHub
             (address,
              config => config
-                 .WithBuildupAction(h => new LayoutStackPlugin())
+                 .AddPlugin(h => new LayoutStackPlugin(serviceProvider))
             );
     }
 

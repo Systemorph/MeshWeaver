@@ -79,9 +79,6 @@ namespace OpenSmc.Layout.Test
             stack = await Client.GetArea(state => state.GetAreasByControlId(MainStackId).FirstOrDefault());
             stack.View.Should().BeOfType<LayoutStackControl>().Which.Areas.Should().HaveCount(1);
 
-
-            //Add Client and Host, LayoutClient LayoutHost
-            // use static extension with static
         }
 
         public override async Task DisposeAsync()
