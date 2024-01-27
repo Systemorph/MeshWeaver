@@ -11,7 +11,7 @@ public static class MessageHubPluginExtensions
     internal static readonly HashSet<Type> HandlerTypes = new() { typeof(IMessageHandler<>), typeof(IMessageHandlerAsync<>) };
     internal static readonly MethodInfo TaskFromResultMethod = ReflectionHelper.GetStaticMethod(() => Task.FromResult<IMessageDelivery>(null));
 
-    public static MessageHubConfiguration AddPlugin<TPlugin>(this MessageHubConfiguration configuration)
+    public static MessageHubConfiguration AddPlugin<TPlugin>(this MessageHubConfiguration configuration, Func<IMessageHub, Task<TPlugin>> factory)
         where TPlugin : class, IMessageHubPlugin
         => configuration
         .WithServices(s => 
@@ -21,14 +21,16 @@ public static class MessageHubPluginExtensions
         })
         .WithBuildupAction(async hub =>
         {
-            var plugin = hub.ServiceProvider.GetRequiredService<TPlugin>();
-            await plugin.InitializeAsync(hub);
-            hub.Set(plugin);
-        })
-        .WithDisposeAction(hub => hub.Get<TPlugin>().DisposeAsync());
-    public static MessageHubConfiguration AddPlugin<TPlugin>(this MessageHubConfiguration configuration, Func<IMessageHub, Task<TPlugin>> factory)
-        => configuration.WithBuildupAction(factory);
-    public static MessageHubConfiguration AddPlugin<TPlugin>(this MessageHubConfiguration configuration, Func<IMessageHub, TPlugin> factory)
-        => configuration.WithBuildupAction(hub => Task.FromResult(factory(hub)));
+            var plugin = await factory(hub);
+            await hub.AddPluginAsync(plugin);
+        });
+
+    public static MessageHubConfiguration AddPlugin<TPlugin>(this MessageHubConfiguration configuration) 
+        where TPlugin : class, IMessageHubPlugin 
+        => configuration.AddPlugin(hub => Task.FromResult(hub.ServiceProvider.GetRequiredService<TPlugin>()));
+
+    public static MessageHubConfiguration AddPlugin<TPlugin>(this MessageHubConfiguration configuration, Func<IMessageHub, TPlugin> factory) 
+        where TPlugin : class, IMessageHubPlugin
+        => configuration.AddPlugin(hub => Task.FromResult(factory.Invoke(hub)));
 
 }
