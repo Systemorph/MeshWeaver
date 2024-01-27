@@ -9,7 +9,7 @@ public class TestBase : ServiceSetup, IAsyncLifetime
 
     protected TestBase(ITestOutputHelper output)
     {
-        this.Output = output;
+        Output = output;
     }
 
     public virtual Task InitializeAsync()

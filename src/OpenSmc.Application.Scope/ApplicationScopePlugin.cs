@@ -287,7 +287,7 @@ public class ApplicationScopePlugin(IServiceProvider serviceProvider) : MessageH
         }
     }
 
-    public override ValueTask DisposeAsync()
+    public override Task DisposeAsync()
     {
         UnsubscribeTracking();
         return base.DisposeAsync();

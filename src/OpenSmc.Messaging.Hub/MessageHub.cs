@@ -1,30 +1,21 @@
 ﻿using System.Collections.Concurrent;
-using System.Reactive.Subjects;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using OpenSmc.Messaging.Hub;
 
-namespace OpenSmc.Messaging.Hub;
+namespace OpenSmc.Messaging;
 
 
-public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
+public class MessageHub<TAddress>(IServiceProvider serviceProvider, HostedHubsCollection hostedHubs) : MessageHubBase(serviceProvider), IMessageHub<TAddress>
 {
-    private Dictionary<string, List<AsyncDelivery>> callbacks = new();
-    public new TAddress Address => (TAddress)MessageService.Address;
+    public TAddress Address => (TAddress)MessageService.Address;
     void IMessageHub.Schedule(Func<Task> action) => MessageService.Schedule(action);
-    public IServiceProvider ServiceProvider { get; }
+    public IServiceProvider ServiceProvider { get; } = serviceProvider;
 
-    private readonly HostedHubsCollection hostedHubs;
-    protected readonly ILogger Logger;
+    protected readonly ILogger Logger = serviceProvider.GetRequiredService<ILogger<MessageHub<TAddress>>>();
     protected override IMessageHub Hub => this;
     private RoutePlugin routePlugin;
     private SubscribersPlugin subscribersPlugin;
-
-    public MessageHub(IServiceProvider serviceProvider, HostedHubsCollection hostedHubs) : base(serviceProvider) 
-    {
-        ServiceProvider = serviceProvider;
-        this.hostedHubs = hostedHubs;
-        Logger = serviceProvider.GetRequiredService<ILogger<MessageHub<TAddress>>>();
-    }
 
 
     internal override void Initialize(MessageHubConfiguration configuration, ForwardConfiguration forwardConfiguration)
@@ -35,10 +26,13 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
         routePlugin = new RoutePlugin(configuration.ServiceProvider, forwardConfiguration);
 
         var deferredTypes = GetDeferredRequestTypes().ToHashSet();
-        DeliveryFilter defaultDeferralsLambda = d =>
-            deferredTypes.Contains(d.Message.GetType()) || configuration.Deferrals.Select(f => f(d)).DefaultIfEmpty()
+
+        bool DefaultDeferralsLambda(IMessageDelivery d) =>
+            deferredTypes.Contains(d.Message.GetType()) || configuration.Deferrals.Select(f => f(d))
+                .DefaultIfEmpty()
                 .Aggregate((x, y) => x || y);
-        defaultDeferrals = MessageService.Defer(x => defaultDeferralsLambda(x));
+
+        defaultDeferrals = MessageService.Defer(DefaultDeferralsLambda);
 
         foreach (var messageHandler in configuration.MessageHandlers)
             Register(messageHandler.MessageType, messageHandler.Action, messageHandler.Filter);
@@ -114,11 +108,6 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
 
 
 
-    IMessageDelivery IMessageHub.WriteToObservable(IMessageDelivery message)
-    {
-        Out.OnNext(message);
-        return message;
-    }
 
 
     object IMessageHub.Address => Address;
@@ -159,15 +148,8 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
         return ret;
     }
 
-    protected Subject<IMessageDelivery> Out { get; } = new();
-    IObservable<IMessageDelivery> IMessageHub.Out => Out;
 
 
-    public IMessageHub GetHostedHub<TAddress1>(TAddress1 address)
-    {
-        var messageHub = hostedHubs.GetHub(address, c => c);
-        return messageHub;
-    }
 
     public IMessageHub GetHostedHub<TAddress1>(TAddress1 address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
     {
@@ -187,7 +169,7 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
 
     private readonly object locker = new();
 
-    public new Task DisposeAsync()
+    public override Task DisposeAsync()
     {
         lock (locker)
         {
@@ -216,10 +198,12 @@ public class MessageHub<TAddress> : MessageHubBase, IMessageHub<TAddress>
         await hostedHubs.DisposeAsync();
 
         Post(new DisconnectHubRequest(Address));
+        await MessageService.DisposeAsync();
+
+        foreach (var configurationDisposeAction in Configuration.DisposeActions)
+            await configurationDisposeAction.Invoke(this);
 
         await base.DisposeAsync();
-        await MessageService.DisposeAsync();
-        Out.OnCompleted();
         disposing.SetResult();
     }
 

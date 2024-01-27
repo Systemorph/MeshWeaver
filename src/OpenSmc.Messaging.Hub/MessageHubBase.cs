@@ -1,9 +1,10 @@
 ﻿using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Messaging.Hub;
 
-namespace OpenSmc.Messaging.Hub;
+namespace OpenSmc.Messaging;
 
-public abstract class MessageHubBase :  MessageHubPlugin<MessageHubBase>, IMessageHandlerRegistry, IAsyncDisposable
+public abstract class MessageHubBase :  MessageHubPlugin<MessageHubBase>
 {
 
     protected MessageHubBase(IServiceProvider serviceProvider) : base(serviceProvider)
@@ -41,9 +42,6 @@ public abstract class MessageHubBase :  MessageHubPlugin<MessageHubBase>, IMessa
     public Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, AsyncDelivery callback, CancellationToken cancellationToken = default)
 
     {
-        // TODO V10: this should react to IMessageDelivery of IRequest<TMessage> in order to find missing routes etc (2023-08-23, Andrei Sirotenko)
-        // if message status is not processed => set TaskCompletionSource to Exception state.
-        bool DeliveryFilter(IMessageDelivery d) => d.Properties.TryGetValue(PostOptions.RequestId, out var request) && request.Equals(delivery.Id);
 
 
         var tcs = new TaskCompletionSource<IMessageDelivery>(cancellationToken);
@@ -86,7 +84,6 @@ public abstract class MessageHubBase :  MessageHubPlugin<MessageHubBase>, IMessa
     }
 
     protected IMessageService MessageService { get; private set; }
-
 
 
 }
