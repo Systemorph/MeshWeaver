@@ -17,14 +17,14 @@ public class ScopePropertyChangedEventTransformation
         this.serializationService = serializationService;
     }
 
-    public async Task<object> GetAsync(ScopePropertyChangedEvent @event)
+    public Task<object> GetAsync(ScopePropertyChangedEvent @event)
     {
         var s = scopeRegistry.GetScope(@event.ScopeId) as IScope;
         if (s == null)
-            return null;
+            return Task.FromResult<object>(null);
         var property = s.GetScopeType().GetScopeProperties().SelectMany(x => x.Properties).First(x => x.Name == @event.Property);
         var serialized = serializationService.SerializePropertyAsync(@event.Value, s, property);
-        return new ScopePropertyChanged(@event.ScopeId.AsString(), @event.Property.ToCamelCase(), serialized, ConvertEnum(@event.Status));
+        return Task.FromResult<object>(new ScopePropertyChanged(@event.ScopeId.AsString(), @event.Property.ToCamelCase(), serialized, ConvertEnum(@event.Status)));
     }
 
     private static PropertyChangeStatus ConvertEnum(ScopeChangedStatus status)

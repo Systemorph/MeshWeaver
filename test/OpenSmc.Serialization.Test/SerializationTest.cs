@@ -41,14 +41,13 @@ public class SerializationTest : TestBase
     [Fact]
     public async Task SimpleTest()
     {
-        var client = Router.GetHostedHub(new ClientAddress());
-        var host = Router.GetHostedHub(new HostAddress());
-        var hostOut = await host.AddObservable();
-        var messageTask = hostOut.ToArray().GetAwaiter();
+        var client = Router.GetHostedHub(new ClientAddress(), c => c);
+        var clientOut = await client.AddObservable();
+        var messageTask = clientOut.ToArray().GetAwaiter();
         
         client.Post(new MyEvent("Hello"), o => o.WithTarget(new HostAddress()));
         await Task.Delay(2000.Milliseconds());
-        hostOut.OnCompleted();
+        clientOut.OnCompleted();
 
         var events = await messageTask;
         events.Should().HaveCount(1);

@@ -27,4 +27,10 @@ public class ObservablePlugin : MessageHubPlugin<ObservablePlugin>
         Out.OnNext(delivery);
         return delivery;
     }
+
+    public override Task DisposeAsync()
+    {
+        Out.OnCompleted();
+        return base.DisposeAsync();
+    }
 }

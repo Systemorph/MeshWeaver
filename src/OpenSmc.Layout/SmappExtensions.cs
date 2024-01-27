@@ -18,9 +18,6 @@ public static class SmappExtensions
                {
                    AddLayout(hub, layoutDefinition);
                })
-               .WithMessageForwarding(forward => forward
-                                                 .RouteMessage<RefreshRequest>(_ => mainLayoutAddress)
-                                                 .RouteMessage<SetAreaRequest>(_ => mainLayoutAddress))
                .AddExpressionSynchronization()
             ;
     }

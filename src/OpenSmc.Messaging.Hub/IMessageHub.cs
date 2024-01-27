@@ -9,8 +9,6 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
 {
     IMessageDelivery<TMessage> Post<TMessage>(TMessage message, Func<PostOptions, PostOptions> options = null);
     IMessageDelivery DeliverMessage(IMessageDelivery delivery);
-    IObservable<IMessageDelivery> Out { get; }
-    internal IMessageDelivery WriteToObservable(IMessageDelivery delivery);
     object Address { get; }
     IServiceProvider ServiceProvider { get; }
     void ConnectTo(IMessageHub hub);
@@ -45,7 +43,6 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
     void Set<T>(T obj, string context = "");
     T Get<T>(string context = "");
     Task AddPluginAsync(IMessageHubPlugin plugin);
-    IMessageHub GetHostedHub<TAddress1>(TAddress1 address);
     IMessageHub GetHostedHub<TAddress1>(TAddress1 address, Func<MessageHubConfiguration, MessageHubConfiguration> config);
 }
 
