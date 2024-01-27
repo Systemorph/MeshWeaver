@@ -21,7 +21,7 @@ public class MessageHub<TAddress>(IServiceProvider serviceProvider, HostedHubsCo
     internal override void Initialize(MessageHubConfiguration configuration, ForwardConfiguration forwardConfiguration)
     {
         base.Initialize(configuration, forwardConfiguration);
-        
+        disposeActions.AddRange(configuration.DisposeActions);
         subscribersPlugin = new SubscribersPlugin(configuration.ServiceProvider);
         routePlugin = new RoutePlugin(configuration.ServiceProvider, forwardConfiguration);
 
@@ -157,6 +157,19 @@ public class MessageHub<TAddress>(IServiceProvider serviceProvider, HostedHubsCo
         return messageHub;
     }
 
+    public IMessageHub WithDisposeAction(Action<IMessageHub> disposeAction)
+        => WithDisposeAction(hub =>
+        {
+            disposeAction.Invoke(hub);
+            return Task.CompletedTask;
+        });
+
+    public IMessageHub WithDisposeAction(Func<IMessageHub, Task> disposeAction)
+    {
+        disposeActions.Add(disposeAction);
+        return this;
+    }
+
     protected bool IsDisposing { get; private set; }
 
     private readonly TaskCompletionSource disposing = new();
@@ -200,12 +213,14 @@ public class MessageHub<TAddress>(IServiceProvider serviceProvider, HostedHubsCo
         Post(new DisconnectHubRequest(Address));
         await MessageService.DisposeAsync();
 
-        foreach (var configurationDisposeAction in Configuration.DisposeActions)
+        foreach (var configurationDisposeAction in disposeActions)
             await configurationDisposeAction.Invoke(this);
 
         await base.DisposeAsync();
         disposing.SetResult();
     }
+
+    private readonly List<Func<IMessageHub, Task>> disposeActions = new();
 
     private bool isSyncDisposed;
 
@@ -286,6 +301,7 @@ public class MessageHub<TAddress>(IServiceProvider serviceProvider, HostedHubsCo
                 d = await plugin.DeliverMessageAsync(d);
             return d;
         });
+        WithDisposeAction(_ => plugin.DisposeAsync());
     }
 
  
