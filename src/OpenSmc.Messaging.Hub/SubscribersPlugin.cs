@@ -1,4 +1,4 @@
-﻿namespace OpenSmc.Messaging.Hub;
+﻿namespace OpenSmc.Messaging;
 
 public class SubscribersPlugin : MessageHubPlugin<SubscribersPlugin>
 {

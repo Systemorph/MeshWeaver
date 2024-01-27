@@ -9,7 +9,7 @@ public static class MessageHubReactiveExtensions
     public static async Task<Subject<IMessageDelivery>> AddObservable(this IMessageHub hub)
     {
         var plugin = new ObservablePlugin(hub.ServiceProvider);
-        await hub.AddPluginAsync(plugin);
+        hub.AddPlugin(plugin);
         return plugin.Out;
     }
 }

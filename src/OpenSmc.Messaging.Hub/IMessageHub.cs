@@ -42,7 +42,7 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
 
     void Set<T>(T obj, string context = "");
     T Get<T>(string context = "");
-    Task AddPluginAsync(IMessageHubPlugin plugin);
+    void AddPlugin(IMessageHubPlugin plugin);
     IMessageHub GetHostedHub<TAddress1>(TAddress1 address, Func<MessageHubConfiguration, MessageHubConfiguration> config);
     IMessageHub WithDisposeAction(Action<IMessageHub> disposeAction);
     IMessageHub WithDisposeAction(Func<IMessageHub, Task> disposeAction);

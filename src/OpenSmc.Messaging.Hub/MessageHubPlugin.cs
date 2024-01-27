@@ -201,12 +201,11 @@ public class MessageHubPlugin<TPlugin> : IMessageHubPlugin, IMessageHandlerRegis
         return Task.CompletedTask;
     }
 
-    public virtual Task InitializeAsync(IMessageHub hub)
+    public virtual void Initialize(IMessageHub hub)
     {
         Hub = hub;
         hub.ServiceProvider.Buildup(this);
         hub.RegisterHandlersFromInstance(this);
-        return Task.CompletedTask;
     }
 }
 
@@ -223,15 +222,15 @@ public class MessageHubPlugin<TPlugin, TState> : MessageHubPlugin<TPlugin>
         return This;
     }
 
-    public override async Task InitializeAsync(IMessageHub hub)
+    public virtual void Initialize(TState state)
     {
-        await base.InitializeAsync(hub);
-        if (State == null)
-        {
-            var constructor = typeof(TState).GetConstructor(Array.Empty<Type>());
-            if (constructor != null)
-                InitializeState(Activator.CreateInstance<TState>());
-        }
+        State = state;
+        //if (State == null)
+        //{
+        //    var constructor = typeof(TState).GetConstructor(Array.Empty<Type>());
+        //    if (constructor != null)
+        //        InitializeState(Activator.CreateInstance<TState>());
+        //}
     }
 
     public virtual TPlugin InitializeState(TState state)

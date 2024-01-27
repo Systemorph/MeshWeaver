@@ -7,18 +7,20 @@ using OpenSmc.ServiceProvider;
 namespace OpenSmc.Layout.Composition;
 
 public class LayoutStackPlugin : UiControlPlugin<LayoutStackControl>,
-                         IMessageHandlerAsync<SetAreaRequest>,
+                         IMessageHandler<SetAreaRequest>,
                          IMessageHandler<LayoutStackUpdateRequest>
 
 {
     [Inject] private IUiControlService uiControlService;
     private readonly LayoutDefinition layoutDefinition;
 
-    public LayoutStackPlugin()
+
+    public LayoutStackPlugin(IServiceProvider serviceProvider) : base(serviceProvider)
     {
     }
 
-    public LayoutStackPlugin(LayoutDefinition layoutDefinition)
+
+    public LayoutStackPlugin(LayoutDefinition layoutDefinition, IServiceProvider serviceProvider) : base(serviceProvider)
     {
         this.layoutDefinition = layoutDefinition;
         UpdateState(_ => layoutDefinition.InitialState);
@@ -41,7 +43,7 @@ public class LayoutStackPlugin : UiControlPlugin<LayoutStackControl>,
     }
 
 
-    protected async Task<AreaChangedEvent> SetAreaImplAsync(object view, ViewDefinition viewDefinition, string path, SetAreaOptions options)
+    protected AreaChangedEvent SetAreaImpl(object view, ViewDefinition viewDefinition, string path, SetAreaOptions options)
     {
         var area = options.Area;
         var deleteView = view == null && viewDefinition == null && path == null;
@@ -63,8 +65,8 @@ public class LayoutStackPlugin : UiControlPlugin<LayoutStackControl>,
                           : view as UiControl ?? uiControlService.GetUiControl(view);
 
 
-        (control, var hub) = await CreateUiControlHub(control, area);
-        Hub.ConnectTo(hub);
+        control = CreateUiControlHub(control, area);
+        Hub.ConnectTo(control.Hub);
         var ret = new AreaChangedEvent(area, control, options.AreaViewOptions);
         UpdateState(state => state.SetAreaToState(ret));
         Post(ret, x => x.WithTarget(MessageTargets.Subscribers));
@@ -80,32 +82,33 @@ public class LayoutStackPlugin : UiControlPlugin<LayoutStackControl>,
         return generator?.ViewGenerator(path, options);
     }
 
-    public override async Task InitializeAsync(IMessageHub hub, LayoutStackControl control)
+
+    public override void Initialize(LayoutStackControl control)
     {
-        await base.InitializeAsync(hub, control);
-        var areas = await Control.ViewElements.ToAsyncEnumerable()
-                                 .SelectAwait
+        base.Initialize(control);
+        var areas = Control.ViewElements
+                                 .Select
                                      (
-                                      async a => a is ViewElementWithView { View: not null } vv
-                                                     ? await SetAreaImplAsync(vv.View, null, null, vv.Options)
+                                      a => a is ViewElementWithView { View: not null } vv
+                                                     ? SetAreaImpl(vv.View, null, null, vv.Options)
                                                      : a is ViewElementWithViewDefinition { ViewDefinition: not null } vd
-                                                         ? await SetAreaImplAsync(null, vd.ViewDefinition, null, vd.Options)
+                                                         ? SetAreaImpl(null, vd.ViewDefinition, null, vd.Options)
                                                          :
                                                          a is ViewElementWithPath vp
-                                                             ? await SetAreaImplAsync(null, null, vp.Path, vp.Options)
+                                                             ? SetAreaImpl(null, null, vp.Path, vp.Options)
                                                              : new AreaChangedEvent(a.Area, null)
 
                                      )
-                                 .ToArrayAsync();
+                                 .ToArray();
 
 
         UpdateState(s => s with { Areas = areas });
     }
 
 
-    async Task<IMessageDelivery> IMessageHandlerAsync<SetAreaRequest>.HandleMessageAsync(IMessageDelivery<SetAreaRequest> request)
+    IMessageDelivery IMessageHandler<SetAreaRequest>.HandleMessage(IMessageDelivery<SetAreaRequest> request)
     {
-        var areaChanged = await SetAreaImplAsync(request.Message.View, request.Message.ViewDefinition, request.Message.Path, request.Message.Options);
+        var areaChanged = SetAreaImpl(request.Message.View, request.Message.ViewDefinition, request.Message.Path, request.Message.Options);
         Post(areaChanged ?? new AreaChangedEvent(request.Message.Area, null), o => o.ResponseFor(request.Message.ForwardedRequest ?? request).WithTarget(MessageTargets.Subscribers));
         return request.Processed();
     }

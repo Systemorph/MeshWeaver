@@ -7,17 +7,18 @@ namespace OpenSmc.Layout;
 
 public class RemoteViewPlugin : GenericUiControlPlugin<RemoteViewControl>, 
                              IMessageHandler<DataChanged>,
-                             IMessageHandlerAsync<AreaChangedEvent>, 
-                             IMessageHandlerAsync<ScopeExpressionChangedEvent>,
-                             IMessageHandlerAsync<UpdateRequest<AreaChangedEvent>>
+                             IMessageHandler<AreaChangedEvent>, 
+                             IMessageHandler<UpdateRequest<AreaChangedEvent>>, 
+                             IMessageHandler<ScopeExpressionChangedEvent>
 {
     [Inject] private IUiControlService uiControlService; // TODO V10: call BuildUp(this) in some base? (2023/12/20, Alexander Yolokhov)
 
 
-    public override async Task InitializeAsync(IMessageHub hub, RemoteViewControl control)
+    public override UiControlPlugin<RemoteViewControl> InitializeState(RemoteViewControl control)
     {
-        await base.InitializeAsync(hub, control);
+        base.InitializeState(control);
         FullRefreshFromModelHubAsync();
+        return this;
     }
 
     private void FullRefreshFromModelHubAsync()
@@ -36,7 +37,7 @@ public class RemoteViewPlugin : GenericUiControlPlugin<RemoteViewControl>,
 
 
 
-    private async Task UpdateViewAsync(AreaChangedEvent areaChanged)
+    private void UpdateView(AreaChangedEvent areaChanged)
     {
         var oldView = State.View;
 
@@ -56,8 +57,8 @@ public class RemoteViewPlugin : GenericUiControlPlugin<RemoteViewControl>,
             areaChanged = areaChanged with { Area = Data };
         else
         {
-            (uiControl, var hub) = await CreateUiControlHub(uiControl, Data);
-            Hub.ConnectTo(hub);
+            uiControl = CreateUiControlHub(uiControl, Data);
+            Hub.ConnectTo(uiControl.Hub);
             areaChanged = areaChanged with { Area = Data, View = uiControl };
 
             if (areaChanged.Options is SetAreaOptions options)
@@ -100,10 +101,10 @@ public class RemoteViewPlugin : GenericUiControlPlugin<RemoteViewControl>,
         return request.Processed();
     }
 
-    public async Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery<AreaChangedEvent> request)
+    public IMessageDelivery HandleMessage(IMessageDelivery<AreaChangedEvent> request)
     {
         if (request.Sender.Equals(State.RedirectAddress) && request.Message.Area == State.RedirectArea)
-            await UpdateViewAsync(request.Message);
+            UpdateView(request.Message);
         var address = (State.View.View as UiControl)?.Address;
         if (address != null && request.Sender.Equals(address))
         {
@@ -120,7 +121,7 @@ public class RemoteViewPlugin : GenericUiControlPlugin<RemoteViewControl>,
         return request.Processed();
     }
 
-    async Task<IMessageDelivery> IMessageHandlerAsync<ScopeExpressionChangedEvent>.HandleMessageAsync(IMessageDelivery<ScopeExpressionChangedEvent> request)
+    IMessageDelivery IMessageHandler<ScopeExpressionChangedEvent>.HandleMessage(IMessageDelivery<ScopeExpressionChangedEvent> request)
     {
         var areaChanged = request.Message.Value is AreaChangedEvent ae
                               ? ae with { Area = Data }
@@ -129,18 +130,18 @@ public class RemoteViewPlugin : GenericUiControlPlugin<RemoteViewControl>,
         if (areaChanged.View != null && areaChanged.View is not IUiControl)
             areaChanged = areaChanged with { View = uiControlService.GetUiControl(areaChanged.View) };
         
-        await UpdateViewAsync(areaChanged);
+        UpdateView(areaChanged);
         return request.Processed();
 
     }
 
-    async Task<IMessageDelivery> IMessageHandlerAsync<UpdateRequest<AreaChangedEvent>>.HandleMessageAsync(IMessageDelivery<UpdateRequest<AreaChangedEvent>> request)
+    IMessageDelivery IMessageHandler<UpdateRequest<AreaChangedEvent>>.HandleMessage(IMessageDelivery<UpdateRequest<AreaChangedEvent>> request)
     {
         var oldView = State.View;
         var newView = State.UpdateView(oldView, request.Message.Element);
         if (newView != oldView)
         {
-            await UpdateViewAsync(newView);
+            UpdateView(newView);
         }
 
         Post(new DataChanged(null), o => o.ResponseFor(request));
@@ -154,4 +155,7 @@ public class RemoteViewPlugin : GenericUiControlPlugin<RemoteViewControl>,
         base.Dispose();
     }
 
+    protected RemoteViewPlugin(IServiceProvider serviceProvider) : base(serviceProvider)
+    {
+    }
 }
