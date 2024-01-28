@@ -3,33 +3,7 @@ using OpenSmc.Activities;
 
 namespace OpenSmc.Messaging;
 
-public record ConnectToHubRequest : IRequest<HubInfo>
-{
-    public ConnectToHubRequest(object From, object To, IMessageHub Hub, SyncDelivery Route)
-    {
-        this.From = From;
-        this.To = To;
-        this.Hub = Hub;
-        this.Route = Route;
-    }
-
-    public object From { get; init; }
-    public object To { get; init; }
-
-    [JsonIgnore]
-    public IMessageHub Hub { get; init; }
-
-    [JsonIgnore]
-    public SyncDelivery Route { get; init; }
-
-    public void Deconstruct(out object From, out object To, out IMessageHub Hub, out SyncDelivery Route)
-    {
-        From = this.From;
-        To = this.To;
-        Hub = this.Hub;
-        Route = this.Route;
-    }
-}
+public record ConnectToHubRequest(object From, object To) : IRequest<HubInfo>;
 
 // TODO SMCv2: which one to use? DeleteHubRequest OR DeleteRequest<TState> ? (2023/09/24, Maxim Meshkov)
 public record DeleteHubRequest(object Address) : IRequest<HubDeleted>;
@@ -40,9 +14,6 @@ public record HubInfo(object Address)
 {
     public ConnectionState State { get; init; }
     public string Message { get; init; }
-
-    [JsonIgnore]
-    public IMessageHub Hub { get; set; }
 }
 
 public record DisconnectHubRequest(object Address) : IRequest<HubDisconnected>;

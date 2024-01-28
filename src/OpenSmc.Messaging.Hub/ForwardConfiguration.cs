@@ -1,11 +1,12 @@
 ﻿using System.Collections.Immutable;
 
-namespace OpenSmc.Messaging.Hub;
+namespace OpenSmc.Messaging;
 
 public record ForwardConfiguration(IMessageHub Hub)
 {
 
     internal ImmutableList<AsyncDelivery> Handlers { get; init; } = ImmutableList<AsyncDelivery>.Empty;
+
 
 
     public ForwardConfiguration RouteAddressToHub<TAddress>(Func<IMessageDelivery, IMessageHub> hubFactory) =>
@@ -23,7 +24,7 @@ public record ForwardConfiguration(IMessageHub Hub)
         {
             Handlers = Handlers.Add(async delivery =>
             {
-                if (delivery.State != MessageDeliveryState.Submitted || delivery.Target is not TAddress address)
+                if (delivery.State != MessageDeliveryState.Submitted || delivery.Target is not TAddress)
                     return delivery;
                 await handler(delivery);
                 // TODO: should we take care of result from handler somehow?
@@ -31,6 +32,9 @@ public record ForwardConfiguration(IMessageHub Hub)
             }
             ),
         };
+
+    public ForwardConfiguration RouteAddressToHostedHub<TAddress>(Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
+        => RouteAddress<TAddress>(d => Hub.GetHostedHub((TAddress)d.Target, configuration));
 }
 
 

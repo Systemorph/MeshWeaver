@@ -1,9 +1,20 @@
-﻿using OpenSmc.Serialization;
+﻿using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Serialization;
 
-namespace OpenSmc.Messaging.Hub;
+namespace OpenSmc.Messaging;
 
 public static class MessageDeliverySerializationExtension
 {
+    public static IMessageDelivery Package(this IMessageDelivery delivery)
+    {
+        var senderHub = (IMessageHub)delivery.Context;
+        var serializationService = senderHub.ServiceProvider.GetService<ISerializationService>();
+        if (serializationService == null) 
+            return delivery;
+
+        return SerializeDelivery(serializationService, delivery);
+    }
+
     public static IMessageDelivery SerializeDelivery(this ISerializationService serializationService, IMessageDelivery delivery)
     {
         try
