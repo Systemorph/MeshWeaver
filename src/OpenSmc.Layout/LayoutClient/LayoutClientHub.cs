@@ -20,31 +20,20 @@ public record LayoutClientState(LayoutClientConfiguration Configuration)
     public AreaChangedEvent GetAreasByName(string controlId, string areaName) => GetAreasByControlId(controlId).FirstOrDefault(area => area.Area == areaName);
 }
 
-public record LayoutClientAddress(string Id, object Host) : IHostedAddress;
 
 public record LayoutClientConfiguration(object RefreshMessage, object LayoutHostAddress, string MainArea = "");
 
-public class LayoutClientPlugin : 
+public class LayoutClientPlugin(LayoutClientConfiguration Configuration, IServiceProvider serviceProvider) : MessageHubPlugin<LayoutClientPlugin, LayoutClientState>(serviceProvider),
                                IMessageHandler<AreaChangedEvent>,
                                IMessageHandler<GetRequest<AreaChangedEvent>>
 {
-
-    public LayoutClientPlugin(IMessageHub hub, LayoutClientConfiguration config)
+    public override void Initialize(LayoutClientState state)
     {
-        Hub = hub;
-        hub.RegisterHandlersFromInstance(this);
-        Create(config);
+        base.Initialize(state);
+        InitializeState(new(Configuration));
+        Hub.Post(Configuration.RefreshMessage, o => o.WithTarget(State.Configuration.LayoutHostAddress));
     }
 
-    public IMessageHub Hub { get;  }
-
-
-    private LayoutClientState State { get; set; }
-    private void Create(LayoutClientConfiguration config)
-    {
-        State = new(config);
-        Hub.Post(config.RefreshMessage, o => o.WithTarget(State.Configuration.LayoutHostAddress));
-    }
 
     IMessageDelivery IMessageHandler<AreaChangedEvent>.HandleMessage(IMessageDelivery<AreaChangedEvent> request)
     {
@@ -119,7 +108,6 @@ public class LayoutClientPlugin :
         return request.Processed();
     }
 
-    void UpdateState(Func<LayoutClientState, LayoutClientState> changes) => State = changes.Invoke(State);
     private bool IsUpToDate(AreaChangedEvent areaChanged, AreaChangedEvent existing)
     {
         if (areaChanged.View == null)

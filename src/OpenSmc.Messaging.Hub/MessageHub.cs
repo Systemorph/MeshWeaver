@@ -15,10 +15,11 @@ public class MessageHub<TAddress>(IServiceProvider serviceProvider, HostedHubsCo
     protected override IMessageHub Hub => this;
     private RoutePlugin routePlugin;
     private SubscribersPlugin subscribersPlugin;
-
+    private IDisposable deferral;
 
     internal override void Initialize(MessageHubConfiguration configuration, ForwardConfiguration forwardConfiguration)
     {
+        deferral = MessageService.Defer(x => true);
         base.Initialize(configuration, forwardConfiguration);
         disposeActions.AddRange(configuration.DisposeActions);
         subscribersPlugin = new SubscribersPlugin(configuration.ServiceProvider);
@@ -50,6 +51,7 @@ public class MessageHub<TAddress>(IServiceProvider serviceProvider, HostedHubsCo
             await buildup(this);
 
         ReleaseAllTypes();
+        deferral.Dispose();
     }
 
 

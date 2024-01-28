@@ -1,63 +1,34 @@
-﻿using System.Threading.Tasks.Dataflow;
-using OpenSmc.Disposables;
+﻿using OpenSmc.Disposables;
 
 namespace OpenSmc.Messaging;
 
-public class DeferralContainer : IDisposable
+public class DeferralContainer : IAsyncDisposable
 {
-    private readonly ActionBlock<IMessageDelivery> executionQueueAction;
-    private readonly LinkedList<SyncDelivery> deferralChain = new();
-    private readonly List<IDisposable> deferralItems = new();
+    private readonly LinkedList<DeferralItem> deferralChain = new();
 
-    public DeferralContainer(ActionBlock<IMessageDelivery> executionQueueAction)
+    public DeferralContainer(AsyncDelivery asyncDelivery)
     {
-        this.executionQueueAction = executionQueueAction;
-
-        deferralChain.AddLast(d =>
-        {
-            if (d == null)
-                return null;
-            executionQueueAction.Post(d);
-            return null;
-        });
+        deferralChain.AddLast(new DeferralItem(_ => false, asyncDelivery));
     }
 
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter)
     {
-        var deliveryLink = new DeferralItem(deferredFilter, executionQueueAction);
-        deferralItems.Add(deliveryLink);
-        deferralChain.AddFirst(deliveryLink.DeliverMessage);
+        var deferralItem = deferralChain.First;
+
+        var deliveryLink = new DeferralItem(deferredFilter, deferralItem!.Value.DeliverMessage);
+        deferralChain.AddFirst(deliveryLink);
         return new AnonymousDisposable(() =>
         {
             deliveryLink.Release();
         });
     }
 
-    public void DeferMessage(IMessageDelivery delivery)
+    public Task<IMessageDelivery> DeliverAsync(IMessageDelivery delivery) =>
+        deferralChain.First!.Value.DeliverMessage(delivery);
+
+    public async ValueTask DisposeAsync()
     {
-        ExecuteBuffer(delivery, deferralChain.First);
-    }
-
-    private void ExecuteBuffer(IMessageDelivery delivery, LinkedListNode<SyncDelivery> node)
-    {
-        delivery = node.Value(delivery);
-        if (delivery == null)
-            return;
-
-        if (node.Next == null)
-        {
-            // TODO V10: Figure out how to do report found (2023/10/07, Roland Buergi)
-            return;
-        }
-
-        ExecuteBuffer(delivery, node.Next);
-    }
-
-    public void Dispose()
-    {
-        foreach (var deferralItem in deferralItems)
-        {
-            deferralItem.Dispose();
-        }
+        foreach (var deferralItem in deferralChain)
+            await deferralItem.DisposeAsync();
     }
 }

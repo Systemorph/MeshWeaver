@@ -16,7 +16,7 @@ public static class SmappExtensions
                .WithServices(services => services.AddSingleton<IUiControlService, UiControlService>())
                .WithBuildupAction(hub =>
                {
-                   AddLayout(hub, layoutDefinition);
+                   hub.AddLayout(layoutDefinition);
                })
                .AddApplicationScope()
                .AddExpressionSynchronization()

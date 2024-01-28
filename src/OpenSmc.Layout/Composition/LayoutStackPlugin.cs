@@ -6,7 +6,8 @@ using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Layout.Composition;
 
-public class LayoutStackPlugin : UiControlPlugin<LayoutStackControl>,
+public class LayoutStackPlugin : 
+                         UiControlPlugin<LayoutStackControl>,
                          IMessageHandler<SetAreaRequest>,
                          IMessageHandler<LayoutStackUpdateRequest>
 
@@ -30,18 +31,6 @@ public class LayoutStackPlugin : UiControlPlugin<LayoutStackControl>,
     {
         return Control.Areas.FirstOrDefault(x => x.Area == area);
     }
-
-    protected IMessageDelivery SetArea(IMessageDelivery request, object view, ViewDefinition viewDefinition, SetAreaOptions o)
-    {
-
-        Post(new SetAreaRequest(o, view)
-        {
-            ViewDefinition = viewDefinition,
-            ForwardedRequest = request
-        });
-        return request.Processed();
-    }
-
 
     protected AreaChangedEvent SetAreaImpl(object view, ViewDefinition viewDefinition, string path, SetAreaOptions options)
     {
