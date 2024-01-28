@@ -155,7 +155,7 @@ public class RemoteViewPlugin : GenericUiControlPlugin<RemoteViewControl>,
         base.Dispose();
     }
 
-    protected RemoteViewPlugin(IServiceProvider serviceProvider) : base(serviceProvider)
+    protected RemoteViewPlugin(IMessageHub hub) : base(hub)
     {
     }
 }

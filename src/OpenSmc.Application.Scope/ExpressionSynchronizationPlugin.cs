@@ -15,21 +15,19 @@ public record ExpressionSynchronizationHubState(IInternalMutableScope Applicatio
     public ImmutableDictionary<string, ExpressionRegistryItem> RegisteredExpressions { get; init; } = ImmutableDictionary<string, ExpressionRegistryItem>.Empty;
 }
 
-public class ExpressionSynchronizationPlugin(IServiceProvider serviceProvider) : MessageHubPlugin<ExpressionSynchronizationPlugin, ExpressionSynchronizationHubState>(serviceProvider), 
+public class ExpressionSynchronizationPlugin : MessageHubPlugin<ExpressionSynchronizationPlugin, ExpressionSynchronizationHubState>, 
                                                IMessageHandler<SubscribeToEvaluationRequest>,
                                                IMessageHandler<UnsubscribeFromEvaluationRequest>,
                                                IMessageHandler<ScopePropertyChangedEvent>
 {
     [Inject] private IApplicationScope applicationScope;
 
-    public override void Initialize(IMessageHub hub)
+    public ExpressionSynchronizationPlugin(IServiceProvider serviceProvider, IMessageHub hub) : base(hub)
     {
-        base.Initialize(hub);
-
         // ReSharper disable once SuspiciousTypeConversion.Global
         InitializeState(new((IInternalMutableScope)applicationScope, new(hub)));
-
     }
+
 
     IMessageDelivery IMessageHandler<ScopePropertyChangedEvent>.HandleMessage(IMessageDelivery<ScopePropertyChangedEvent> delivery)
     {

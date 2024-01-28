@@ -5,7 +5,7 @@ public class SubscribersPlugin : MessageHubPlugin<SubscribersPlugin>
     private readonly HashSet<object> subscribers = new();
     private readonly HashSet<Type> subscribedTo = new();
 
-    public SubscribersPlugin(IServiceProvider serviceProvider) : base(serviceProvider)
+    public SubscribersPlugin(IServiceProvider serviceProvider, IMessageHub hub) : base(hub)
     {
         Register(ForwardMessageAsync);
     }

@@ -110,7 +110,7 @@ public abstract record UiControl : IUiControl
 public class GenericUiControlPlugin<TControl> : UiControlPlugin<TControl>
     where TControl : UiControl
 {
-    protected GenericUiControlPlugin(IServiceProvider serviceProvider) : base(serviceProvider)
+    protected GenericUiControlPlugin(IMessageHub hub) : base(hub)
     {
     }
 

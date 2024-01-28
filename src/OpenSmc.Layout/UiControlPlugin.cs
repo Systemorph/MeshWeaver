@@ -76,7 +76,7 @@ public class UiControlPlugin<TControl> : MessageHubPlugin<UiControlPlugin<TContr
         return Hub.Post(message, options);
     }
 
-    protected UiControlPlugin(IServiceProvider serviceProvider) : base(serviceProvider)
+    protected UiControlPlugin(IMessageHub hub) : base(hub)
     {
     }
 }

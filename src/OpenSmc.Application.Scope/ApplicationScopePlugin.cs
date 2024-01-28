@@ -14,7 +14,7 @@ using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Application.Scope;
 
-public class ApplicationScopePlugin(IServiceProvider serviceProvider) : MessageHubPlugin<ApplicationScopePlugin, ApplicationScopeState>(serviceProvider),
+public class ApplicationScopePlugin : MessageHubPlugin<ApplicationScopePlugin, ApplicationScopeState>,
                                         IMessageHandler<SubscribeScopeRequest>,
                                         IMessageHandler<UnsubscribeScopeRequest>,
                                         IMessageHandler<DisposeScopeRequest>,
@@ -26,10 +26,8 @@ public class ApplicationScopePlugin(IServiceProvider serviceProvider) : MessageH
     private IApplicationScope applicationScope;
     private IScopeRegistry scopeRegistry;
     private ISerializationService serializationService;
-
-    public override void Initialize(IMessageHub hub)
+    public ApplicationScopePlugin(IServiceProvider serviceProvider, IMessageHub hub) : base(hub)
     {
-        base.Initialize(hub);
         InitializeState(new());
         applicationScope = hub.ServiceProvider.GetRequiredService<IApplicationScope>();
         serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
@@ -39,8 +37,8 @@ public class ApplicationScopePlugin(IServiceProvider serviceProvider) : MessageH
         scopeRegistry.InstanceRegistered += (_, scope) => TrackPropertyChanged(scope);
         foreach (var scope in scopeRegistry.Scopes)
             TrackPropertyChanged(scope);
-
     }
+
 
     IMessageDelivery IMessageHandler<SubscribeScopeRequest>.HandleMessage(IMessageDelivery<SubscribeScopeRequest> request)
     {
@@ -93,6 +91,7 @@ public class ApplicationScopePlugin(IServiceProvider serviceProvider) : MessageH
     }
 
     private static readonly MethodInfo GetScopeMethod = ReflectionHelper.GetMethodGeneric<ApplicationScopePlugin>(x => x.GetScope<object>(null));
+
 
     // ReSharper disable once UnusedMethodReturnValue.Local
     private object GetScope<TScope>(IMessageDelivery<SubscribeScopeRequest> request)

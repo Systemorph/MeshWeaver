@@ -5,79 +5,62 @@ using Microsoft.Extensions.Logging;
 namespace OpenSmc.Messaging;
 
 
-public class MessageHub<TAddress>(IServiceProvider serviceProvider, HostedHubsCollection hostedHubs) : MessageHubBase(serviceProvider), IMessageHub<TAddress>
+public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub<TAddress>
 {
-    public TAddress Address => (TAddress)MessageService.Address;
+    public override TAddress Address => (TAddress)MessageService.Address;
     void IMessageHub.Schedule(Func<Task> action) => MessageService.Schedule(action);
-    public IServiceProvider ServiceProvider { get; } = serviceProvider;
+    public IServiceProvider ServiceProvider { get; }
+    private readonly ConcurrentDictionary<string, List<AsyncDelivery>> callbacks = new();
 
-    protected readonly ILogger Logger = serviceProvider.GetRequiredService<ILogger<MessageHub<TAddress>>>();
-    protected override IMessageHub Hub => this;
-    private RoutePlugin routePlugin;
-    private SubscribersPlugin subscribersPlugin;
-    private IDisposable deferral;
+    private readonly ILogger logger;
+    public MessageHubConfiguration Configuration { get; }
 
-    internal override void Initialize(MessageHubConfiguration configuration, ForwardConfiguration forwardConfiguration)
+    public MessageHub(IServiceProvider serviceProvider, HostedHubsCollection hostedHubs,
+        MessageHubConfiguration configuration, IMessageHub parentHub) : base(serviceProvider)
     {
-        deferral = MessageService.Defer(x => true);
-        base.Initialize(configuration, forwardConfiguration);
+        MessageService.Initialize(DeliverMessageAsync);
+
+        hostedHubs1 = hostedHubs;
+        ServiceProvider = serviceProvider;
+        logger = serviceProvider.GetRequiredService<ILogger<MessageHub<TAddress>>>();
+
+        Configuration = configuration;
+
+
         disposeActions.AddRange(configuration.DisposeActions);
-        subscribersPlugin = new SubscribersPlugin(configuration.ServiceProvider);
-        routePlugin = new RoutePlugin(configuration.ServiceProvider, forwardConfiguration);
 
-        var deferredTypes = GetDeferredRequestTypes().ToHashSet();
+        var forwardConfig =
+            (configuration.ForwardConfigurationBuilder ?? (x => x)).Invoke(new ForwardConfiguration(this));
 
-        bool DefaultDeferralsLambda(IMessageDelivery d) =>
-            deferredTypes.Contains(d.Message.GetType()) || configuration.Deferrals.Select(f => f(d))
-                .DefaultIfEmpty()
-                .Aggregate((x, y) => x || y);
 
-        defaultDeferrals = MessageService.Defer(DefaultDeferralsLambda);
+        var routePlugin = new RoutePlugin(this, forwardConfig, parentHub);
+
+        Register(HandleCallbacks);
+
+        AddPlugin(routePlugin);
+        AddPlugin(new SubscribersPlugin(configuration.ServiceProvider, this));
+
 
         foreach (var messageHandler in configuration.MessageHandlers)
-            Register(messageHandler.MessageType, messageHandler.Action, messageHandler.Filter);
+            Register(messageHandler.MessageType, d => messageHandler.AsyncDelivery.Invoke(this, d));
 
 
-        MessageService.Schedule(StartAsync);
+        logger.LogInformation("Message hub {address} initialized", Address);
+
     }
 
 
-    protected virtual async Task StartAsync()
+    protected override async Task StartAsync()
     {
-        Initialize();
-        //Post(new HubInfo(Address));
-
-        foreach (var buildup in Configuration.BuildupActions)
+        var actions = Configuration.BuildupActions;
+        foreach (var buildup in actions)
             await buildup(this);
 
-        ReleaseAllTypes();
-        deferral.Dispose();
+        await base.StartAsync();
     }
 
 
-
-    public virtual void Initialize()
-    {
-        try
-        {
-            AddPlugin(subscribersPlugin);
-
-            routePlugin.Initialize(this);
-            RegisterAfter(Rules.Last, d =>
-            {
-                if (!routePlugin.Filter(d))
-                    return Task.FromResult(d);
-                return routePlugin.DeliverMessageAsync(d);
-            });
-
-            Logger.LogInformation("Message hub {address} initialized", Address);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Could not initialize state of message hub {address}", Address);
-        }
-    }
-
+    public override bool Filter(IMessageDelivery d) => true;
 
     public Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken)
         => AwaitResponse(request, x => x, x => x, cancellationToken);
@@ -102,8 +85,54 @@ public class MessageHub<TAddress>(IServiceProvider serviceProvider, HostedHubsCo
     }
 
 
+    protected IMessageDelivery RegisterCallback<TMessage, TResponse>(IMessageDelivery<TMessage> request, SyncDelivery<TResponse> callback, CancellationToken cancellationToken)
+        where TMessage : IRequest<TResponse>
+        => RegisterCallback<TMessage, TResponse>(request, d => Task.FromResult(callback(d)), cancellationToken);
 
-    public virtual Task<bool> FlushAsync() => MessageService.FlushAsync();
+    protected IMessageDelivery RegisterCallback<TMessage, TResponse>(IMessageDelivery<TMessage> request, AsyncDelivery<TResponse> callback, CancellationToken cancellationToken)
+        where TMessage : IRequest<TResponse>
+    {
+        RegisterCallback(request, d => callback((IMessageDelivery<TResponse>)d), cancellationToken);
+        return request.Forwarded();
+    }
+
+    protected Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, SyncDelivery callback, CancellationToken cancellationToken)
+        => RegisterCallback(delivery, d => Task.FromResult(callback(d)), cancellationToken);
+
+
+    // ReSharper disable once UnusedMethodReturnValue.Local
+    public Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, AsyncDelivery callback)
+        => RegisterCallback(delivery, callback, new CancellationTokenSource(999).Token);
+    public Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, AsyncDelivery callback, CancellationToken cancellationToken)
+
+    {
+        var tcs = new TaskCompletionSource<IMessageDelivery>(cancellationToken);
+
+        async Task<IMessageDelivery> ResolveCallback(IMessageDelivery d)
+        {
+            var ret = await callback(d);
+            tcs.SetResult(ret);
+            return ret;
+        }
+
+        callbacks.GetOrAdd(delivery.Id, _ => new()).Add(ResolveCallback);
+
+
+        return tcs.Task;
+    }
+    private async Task<IMessageDelivery> HandleCallbacks(IMessageDelivery delivery)
+    {
+        if (!delivery.Properties.TryGetValue(PostOptions.RequestId, out var requestId) ||
+            !callbacks.TryRemove(requestId.ToString(), out var myCallbacks))
+            return delivery;
+
+        foreach (var callback in myCallbacks)
+            delivery = await callback(delivery);
+
+        return delivery;
+    }
+
+    public Task<bool> FlushAsync() => MessageService.FlushAsync();
 
 
 
@@ -154,7 +183,7 @@ public class MessageHub<TAddress>(IServiceProvider serviceProvider, HostedHubsCo
 
     public IMessageHub GetHostedHub<TAddress1>(TAddress1 address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
     {
-        var messageHub = hostedHubs.GetHub(address, config);
+        var messageHub = hostedHubs1.GetHub(address, config);
         return messageHub;
     }
 
@@ -171,14 +200,14 @@ public class MessageHub<TAddress>(IServiceProvider serviceProvider, HostedHubsCo
         return this;
     }
 
-    protected bool IsDisposing { get; private set; }
+    private bool IsDisposing { get;  set; }
 
-    private readonly TaskCompletionSource disposing = new();
+    private Task disposing;
 
 
     public void Log(Action<ILogger> log)
     {
-        log(Logger);
+        log(logger);
     }
 
     private readonly object locker = new();
@@ -187,29 +216,19 @@ public class MessageHub<TAddress>(IServiceProvider serviceProvider, HostedHubsCo
     {
         lock (locker)
         {
-            if (!IsDisposing)
-            {
-                IsDisposing = true;
-                SyncDispose();
-                return DoDisposeAsync();
-            }
+            IsDisposing = true;
+            if (disposing != null)
+                return disposing;
 
-            return disposing.Task;
+            return disposing = DoDisposeAsync();
         }
     }
 
-    private bool isAsyncDisposing;
 
     private async Task DoDisposeAsync()
     {
-        lock (locker)
-        {
-            if (isAsyncDisposing)
-                return;
-            isAsyncDisposing = true;
-        }
 
-        await hostedHubs.DisposeAsync();
+        await hostedHubs1.DisposeAsync();
 
         Post(new DisconnectHubRequest(Address));
         await MessageService.DisposeAsync();
@@ -218,34 +237,16 @@ public class MessageHub<TAddress>(IServiceProvider serviceProvider, HostedHubsCo
             await configurationDisposeAction.Invoke(this);
 
         await base.DisposeAsync();
-        disposing.SetResult();
     }
 
     private readonly List<Func<IMessageHub, Task>> disposeActions = new();
 
-    private bool isSyncDisposed;
 
     public void Dispose()
     {
-        SyncDispose();
+        MessageService.Schedule(DisposeAsync);
     }
 
-    private void SyncDispose()
-    {
-        lock (locker)
-        {
-            if (isSyncDisposed)
-                return;
-            isSyncDisposed = true;
-        }
-
-        foreach (var action in Configuration.DisposeActions)
-            action(this);
-    }
-
-    protected virtual void HandleHeartbeat()
-    {
-    }
 
 
     private readonly List<object> deferrals = new();
@@ -295,11 +296,9 @@ public class MessageHub<TAddress>(IServiceProvider serviceProvider, HostedHubsCo
 
     public void AddPlugin(IMessageHubPlugin plugin)
     {
-        plugin.Initialize(this);
         Register(async d =>
-        {
-            if (plugin.Filter(d))
-                d = await plugin.DeliverMessageAsync(d);
+        { 
+            d = await plugin.DeliverMessageAsync(d);
             return d;
         });
         WithDisposeAction(_ => plugin.DisposeAsync());
@@ -307,6 +306,8 @@ public class MessageHub<TAddress>(IServiceProvider serviceProvider, HostedHubsCo
 
  
     private readonly object releaseLock = new();
+    private readonly HostedHubsCollection hostedHubs1;
+
 
     private void ReleaseAllTypes()
     {
@@ -323,17 +324,6 @@ public class MessageHub<TAddress>(IServiceProvider serviceProvider, HostedHubsCo
         }
     }
 
-    protected virtual IEnumerable<Type> GetDeferredRequestTypes()
-    {
-        return GetType().GetInterfaces()
-                .Where(t => t.IsGenericType &&
-                            (t.GetGenericTypeDefinition() == typeof(IMessageHandler<>) ||
-                             t.GetGenericTypeDefinition() == typeof(IMessageHandlerAsync<>)))
-                .Select(t => t.GetGenericArguments()[0])
-                .Where(t => t.Assembly != typeof(IMessageHub).Assembly)
-                .Where(t => !t.IsGenericType || t.GetGenericTypeDefinition() != typeof(CreateRequest<>))
-            ;
-    }
 
 
     IMessageDelivery IMessageHub.RegisterCallback<TResponse>(IMessageDelivery<IRequest<TResponse>> request,
