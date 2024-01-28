@@ -6,7 +6,7 @@ namespace OpenSmc.Messaging;
 
 public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDisposable
 {
-    internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(10);
+    internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(3);
     IMessageDelivery<TMessage> Post<TMessage>(TMessage message, Func<PostOptions, PostOptions> options = null);
     IMessageDelivery DeliverMessage(IMessageDelivery delivery);
     object Address { get; }

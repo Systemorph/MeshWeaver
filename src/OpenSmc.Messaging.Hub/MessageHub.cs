@@ -86,17 +86,17 @@ public class MessageHub<TAddress>(IServiceProvider serviceProvider, HostedHubsCo
         CancellationToken cancellationToken)
         => AwaitResponse(request, options, x => x, cancellationToken);
 
-    public async Task<TResult> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request,
+    public Task<TResult> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request,
         Func<PostOptions, PostOptions> options, Func<IMessageDelivery<TResponse>, TResult> selector,
         CancellationToken cancellationToken)
     {
         var tcs = new TaskCompletionSource<TResult>(cancellationToken);
-        await RegisterCallback(Post(request, options), d =>
+        var callbackTask = RegisterCallback(Post(request, options), d =>
         {
             tcs.SetResult(selector((IMessageDelivery<TResponse>)d));
             return d.Processed();
         }, cancellationToken);
-        return await tcs.Task;
+        return callbackTask.ContinueWith(_ => tcs.Task.Result, cancellationToken);
     }
 
 
