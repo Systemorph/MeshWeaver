@@ -6,17 +6,10 @@ using OpenSmc.Utils;
 
 namespace OpenSmc.Layout;
 
-public class UiControlService : IUiControlService
+public class UiControlService(IServiceProvider serviceProvider) : IUiControlService
 {
-    private readonly IServiceProvider serviceProvider;
-
     private readonly SortByTypeRelevanceRegistry<Func<object, UiControl>> rules = new ();
     private Func<object, UiControl> fallbackRule;
-
-    public UiControlService(IServiceProvider serviceProvider)
-    {
-        this.serviceProvider = serviceProvider;
-    }
 
     public void Register<T>(Func<T, UiControl> factory)
     {

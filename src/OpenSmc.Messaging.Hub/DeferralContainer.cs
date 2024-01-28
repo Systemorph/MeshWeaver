@@ -1,7 +1,7 @@
 ﻿using System.Threading.Tasks.Dataflow;
 using OpenSmc.Disposables;
 
-namespace OpenSmc.Messaging.Hub;
+namespace OpenSmc.Messaging;
 
 public class DeferralContainer : IDisposable
 {

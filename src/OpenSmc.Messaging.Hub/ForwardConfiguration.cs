@@ -1,6 +1,6 @@
 ﻿using System.Collections.Immutable;
 
-namespace OpenSmc.Messaging.Hub;
+namespace OpenSmc.Messaging;
 
 public record ForwardConfiguration(IMessageHub Hub)
 {

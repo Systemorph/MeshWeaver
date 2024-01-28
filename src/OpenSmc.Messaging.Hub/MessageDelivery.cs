@@ -3,7 +3,7 @@ using System.Reflection;
 using System.Text.Json.Serialization;
 using OpenSmc.ShortGuid;
 
-namespace OpenSmc.Messaging.Hub;
+namespace OpenSmc.Messaging;
 
 public record MaskedRequest(IMessageDelivery Request, object HostAddress);
 public abstract record MessageDelivery(object Sender, object Target) : IMessageDelivery

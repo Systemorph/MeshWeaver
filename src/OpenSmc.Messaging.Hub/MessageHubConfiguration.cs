@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 using OpenSmc.Serialization;
 using OpenSmc.ServiceProvider;
 
-namespace OpenSmc.Messaging.Hub;
+namespace OpenSmc.Messaging;
 
 public static class MessageHubExtensions
 {

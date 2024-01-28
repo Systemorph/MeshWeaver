@@ -1,7 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using OpenSmc.Messaging.Hub;
 
 namespace OpenSmc.Messaging;
 
@@ -78,28 +77,28 @@ public class MessageHub<TAddress>(IServiceProvider serviceProvider, HostedHubsCo
     }
 
 
-    public Task<TResponse> AwaitResponse<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken)
-        => AwaitResponse(request, x => x, x => x.Message, cancellationToken);
+    public Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken)
+        => AwaitResponse(request, x => x, x => x, cancellationToken);
 
-    public Task<TResponse> AwaitResponse<TResponse>(IRequest<TResponse> request, Func<PostOptions, PostOptions> options,
-        CancellationToken cancellationToken = default)
-        => AwaitResponse(request, options, x => x.Message, cancellationToken);
+    public Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request, Func<PostOptions, PostOptions> options)
+        => AwaitResponse(request, options, new CancellationTokenSource(IMessageHub.DefaultTimeout).Token);
+    public Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request, Func<PostOptions, PostOptions> options,
+        CancellationToken cancellationToken)
+        => AwaitResponse(request, options, x => x, cancellationToken);
 
-    public Task<TResult> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request,
+    public async Task<TResult> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request,
         Func<PostOptions, PostOptions> options, Func<IMessageDelivery<TResponse>, TResult> selector,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken)
     {
         var tcs = new TaskCompletionSource<TResult>(cancellationToken);
-        MessageService.Schedule(() =>
+        await RegisterCallback(Post(request, options), d =>
         {
-            RegisterCallback(Post(request, options), d =>
-            {
-                tcs.SetResult(selector((IMessageDelivery<TResponse>)d));
-                return d.Processed();
-            }, cancellationToken);
-        });
-        return tcs.Task;
+            tcs.SetResult(selector((IMessageDelivery<TResponse>)d));
+            return d.Processed();
+        }, cancellationToken);
+        return await tcs.Task;
     }
+
 
 
     public virtual Task<bool> FlushAsync() => MessageService.FlushAsync();

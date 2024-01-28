@@ -4,7 +4,6 @@ using FluentAssertions.Extensions;
 using OpenSmc.Fixture;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
-using OpenSmc.Messaging.Hub;
 using OpenSmc.ServiceProvider;
 using Xunit;
 using Xunit.Abstractions;
@@ -42,7 +41,7 @@ public class SerializationTest : TestBase
     public async Task SimpleTest()
     {
         var client = Router.GetHostedHub(new ClientAddress(), c => c);
-        var clientOut = await client.AddObservable();
+        var clientOut = client.AddObservable();
         var messageTask = clientOut.ToArray().GetAwaiter();
         
         client.Post(new MyEvent("Hello"), o => o.WithTarget(new HostAddress()));

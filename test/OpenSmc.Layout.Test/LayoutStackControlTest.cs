@@ -6,7 +6,6 @@ using OpenSmc.Fixture;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.LayoutClient;
 using OpenSmc.Messaging;
-using OpenSmc.Messaging.Hub;
 using OpenSmc.Portal;
 using OpenSmc.ServiceProvider;
 using Xunit;
@@ -20,12 +19,10 @@ namespace OpenSmc.Layout.Test
             : base(output)
         {
             LayoutAddress = new LayoutAddress("app");
-            ApplicationAddress = new("Environment", "Project");
             ControlAddress = new UiControlAddress(TestAreas.Main, LayoutAddress);
             Services.AddSingleton<IMessageHub>(serviceProvider =>
                                                    serviceProvider.CreateMessageHub(LayoutAddress,
                                                                                     conf => conf
-                                                                                            .ConfigureApplication(ApplicationAddress)
                                                                                             .AddLayout(def =>
                                                                                                            def.WithInitialState(Controls.Stack()
                                                                                                                                         .WithId(MainStackId)
@@ -70,13 +67,13 @@ namespace OpenSmc.Layout.Test
         [Fact]
         public async Task LayoutStackUpdateTest()
         {
-            var stack = await Client.GetArea(state => state.GetAreasByControlId(MainStackId).FirstOrDefault());
+            var stack = await Client.GetAreaAsync(state => state.GetAreasByControlId(MainStackId).FirstOrDefault());
             stack.View.Should().BeOfType<LayoutStackControl>().Which.Areas.Should().BeEmpty();
             MessageOnClick = new SetAreaRequest(new SetAreaOptions(TestAreas.NewArea), Controls.TextBox("Hello").WithId("HelloId"));
             await Client.ClickAsync(state => stack);
 
-            await Client.GetArea(state => state.GetAreasByControlId("HelloId").FirstOrDefault());
-            stack = await Client.GetArea(state => state.GetAreasByControlId(MainStackId).FirstOrDefault());
+            await Client.GetAreaAsync(state => state.GetAreasByControlId("HelloId").FirstOrDefault());
+            stack = await Client.GetAreaAsync(state => state.GetAreasByControlId(MainStackId).FirstOrDefault());
             stack.View.Should().BeOfType<LayoutStackControl>().Which.Areas.Should().HaveCount(1);
 
         }

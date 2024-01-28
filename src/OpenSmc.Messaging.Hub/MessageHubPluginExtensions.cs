@@ -1,6 +1,5 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using OpenSmc.Messaging.Hub;
 using OpenSmc.Reflection;
 using System.Reflection;
 

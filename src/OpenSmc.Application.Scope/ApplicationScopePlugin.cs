@@ -5,7 +5,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json;
 using OpenSmc.Collections;
 using OpenSmc.Messaging;
-using OpenSmc.Messaging.Hub;
 using OpenSmc.Reflection;
 using OpenSmc.Scopes;
 using OpenSmc.Scopes.Proxy;
@@ -31,6 +30,7 @@ public class ApplicationScopePlugin(IServiceProvider serviceProvider) : MessageH
     public override void Initialize(IMessageHub hub)
     {
         base.Initialize(hub);
+        InitializeState(new());
         applicationScope = hub.ServiceProvider.GetRequiredService<IApplicationScope>();
         serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
         // ReSharper disable once SuspiciousTypeConversion.Global
