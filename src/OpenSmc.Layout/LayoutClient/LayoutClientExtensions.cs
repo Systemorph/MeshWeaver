@@ -1,5 +1,4 @@
 ﻿using OpenSmc.Messaging;
-using OpenSmc.Messaging.Hub;
 
 namespace OpenSmc.Layout.LayoutClient;
 
@@ -16,14 +15,15 @@ public static class LayoutClientExtensions
                                                  });
     }
 
-    public static Task<AreaChangedEvent> GetArea(this IMessageHub layoutClient, Func<LayoutClientState, AreaChangedEvent> selector)
+    public static async Task<AreaChangedEvent> GetAreaAsync(this IMessageHub layoutClient, Func<LayoutClientState, AreaChangedEvent> selector)
     {
-        return layoutClient.AwaitResponse<AreaChangedEvent>(new GetRequest<AreaChangedEvent> { Options = selector });
+        var response = await layoutClient.AwaitResponse(new GetRequest<AreaChangedEvent> { Options = selector });
+        return response.Message;
     }
 
     public static async Task ClickAsync(this IMessageHub layoutClient, Func<LayoutClientState, AreaChangedEvent> selector)
     {
-        var areaChanged = await layoutClient.GetArea(selector);
+        var areaChanged = await layoutClient.GetAreaAsync(selector);
         layoutClient.Click(areaChanged);
     }
 

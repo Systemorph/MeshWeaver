@@ -1,7 +1,7 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
+using Microsoft.Extensions.DependencyInjection;
 
-namespace OpenSmc.Messaging.Hub;
+namespace OpenSmc.Messaging;
 
 public static class MessageForwardingExtensions
 {

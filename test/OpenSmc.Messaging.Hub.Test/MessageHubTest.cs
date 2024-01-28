@@ -38,7 +38,7 @@ public class MessageHubTest : HubTestBase
     {
         var host = GetHost();
         var response = await host.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
-        response.Should().BeOfType<HelloEvent>();
+        response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
     }
 
 
@@ -47,19 +47,19 @@ public class MessageHubTest : HubTestBase
     {
         var client = Router.GetHostedHub(new ClientAddress(), c => c);
         var response = await client.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
-        response.Should().BeOfType<HelloEvent>();
+        response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
     }
 
     [Fact]
     public async Task ClientToServerWithMessageTraffic()
     {
         var client = GetClient();
-        var clientOut = (await client.AddObservable());
+        var clientOut = client.AddObservable();
         var messageTask = clientOut.Where(d => d.Message is HelloEvent).ToArray().GetAwaiter();
         var overallMessageTask = clientOut.ToArray().GetAwaiter();
 
         var response = await client.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
-        response.Should().BeOfType<HelloEvent>();
+        response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
 
         await DisposeAsync();
         
@@ -78,7 +78,7 @@ public class MessageHubTest : HubTestBase
         // arrange: initiate subscription from client to host
         var client = GetClient();
         await client.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
-        var clientOut = (await client.AddObservable()).Timeout(500.Milliseconds());
+        var clientOut = client.AddObservable().Timeout(500.Milliseconds());
         var clientMessagesTask = clientOut.Select(d => d.Message).OfType<HelloEvent>().FirstAsync().GetAwaiter();
 
         // act 

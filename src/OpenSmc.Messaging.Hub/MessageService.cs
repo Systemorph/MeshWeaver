@@ -1,9 +1,9 @@
-﻿using Microsoft.Extensions.Logging;
-using OpenSmc.Serialization;
-using System.Reflection;
+﻿using System.Reflection;
 using System.Threading.Tasks.Dataflow;
+using Microsoft.Extensions.Logging;
+using OpenSmc.Serialization;
 
-namespace OpenSmc.Messaging.Hub;
+namespace OpenSmc.Messaging;
 
 public class MessageService : IMessageService
 {

@@ -2,7 +2,6 @@
 using System.Linq.Expressions;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
-using OpenSmc.Messaging.Hub;
 using OpenSmc.Reflection;
 using OpenSmc.Serialization;
 using OpenSmc.ServiceProvider;

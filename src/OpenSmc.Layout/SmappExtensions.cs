@@ -1,7 +1,7 @@
-﻿using OpenSmc.Application.Scope;
+﻿using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Application.Scope;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
-using OpenSmc.Messaging.Hub;
 
 namespace OpenSmc.Layout;
 
@@ -11,13 +11,14 @@ public static class SmappExtensions
     public static MessageHubConfiguration AddLayout(this MessageHubConfiguration conf,
                                                      Func<LayoutDefinition, LayoutDefinition> layoutDefinition = null)
     {
-        var mainLayoutAddress = MainLayoutAddress(conf.Address);
         return conf
                .WithDeferral(d => d.Message is RefreshRequest or SetAreaRequest)
+               .WithServices(services => services.AddSingleton<IUiControlService, UiControlService>())
                .WithBuildupAction(hub =>
                {
                    AddLayout(hub, layoutDefinition);
                })
+               .AddApplicationScope()
                .AddExpressionSynchronization()
             ;
     }
@@ -29,7 +30,7 @@ public static class SmappExtensions
             ld = layoutDefinition(ld);
         var mainLayoutAddress = MainLayoutAddress(hub.Address);
         var layoutHub = hub.GetHostedHub(mainLayoutAddress, config => config
-            .AddPlugin<LayoutStackPlugin>(h => new LayoutStackPlugin(hub.ServiceProvider)));
+            .AddPlugin(h => new LayoutStackPlugin(hub.ServiceProvider)));
         hub.ConnectTo(layoutHub);
 
     }

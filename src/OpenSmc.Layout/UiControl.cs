@@ -4,7 +4,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
-using OpenSmc.Messaging.Hub;
 #if DEBUG
 #endif
 #if !DEBUG

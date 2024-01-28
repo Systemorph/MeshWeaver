@@ -26,15 +26,6 @@ namespace OpenSmc.Arithmetics.MapOver
         private static readonly ConcurrentDictionary<Type, IMapOverFunctionProvider> MapOverDelegateProviders = new();
 
 
-
-        //private static readonly IDictionary<ArithmeticOperation, Func<double, double, double>> Methods = new Dictionary<ArithmeticOperation, Func<double, double, double>>
-        //                                                                                        {
-        //                                                                                            { ArithmeticOperation.Plus, (factor, x) => factor + x },
-        //                                                                                            { ArithmeticOperation.Power, (factor, x) => Math.Pow(x, factor) },
-        //                                                                                            { ArithmeticOperation.Scale, (factor, x) => factor * x }
-        //                                                                                        };
-
-
         private static readonly ConcurrentDictionary<ArithmeticOperation, ConcurrentDictionary<Type, Delegate>> MapOverDelegateStore = new();
 
         private static readonly MethodInfo MapOverEnumerableMethod = typeof(MapOverFields).GetMethod(nameof(MapOverEnumerable), BindingFlags.Static | BindingFlags.NonPublic);

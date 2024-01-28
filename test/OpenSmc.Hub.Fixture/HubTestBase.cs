@@ -1,7 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Fixture;
 using OpenSmc.Messaging;
-using OpenSmc.Messaging.Hub;
 using OpenSmc.ServiceProvider;
 using Xunit.Abstractions;
 

@@ -1,5 +1,4 @@
 ﻿using Microsoft.Extensions.Logging;
-using OpenSmc.Messaging.Hub;
 
 
 namespace OpenSmc.Messaging;
@@ -7,20 +6,24 @@ namespace OpenSmc.Messaging;
 
 public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDisposable
 {
+    internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(10);
     IMessageDelivery<TMessage> Post<TMessage>(TMessage message, Func<PostOptions, PostOptions> options = null);
     IMessageDelivery DeliverMessage(IMessageDelivery delivery);
     object Address { get; }
     IServiceProvider ServiceProvider { get; }
     void ConnectTo(IMessageHub hub);
 
-    Task<TResponse> AwaitResponse<TResponse>(IRequest<TResponse> request) =>
-        AwaitResponse(request, default);
+    Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request) =>
+        AwaitResponse(request, new CancellationTokenSource(DefaultTimeout).Token);
 
-    Task<TResponse> AwaitResponse<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken);
+    Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken);
 
-    Task<TResponse> AwaitResponse<TResponse>(IRequest<TResponse> request, Func<PostOptions, PostOptions> options, CancellationToken cancellationToken = default);
+    Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request, Func<PostOptions, PostOptions> options);
+    Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request, Func<PostOptions, PostOptions> options, CancellationToken cancellationToken);
+    Task<TResult> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request, Func<IMessageDelivery<TResponse>, TResult> selector)
+        => AwaitResponse(request, x => x, selector);
 
-    Task<TResult> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request, Func<IMessageDelivery<TResponse>, TResult> selector, CancellationToken cancellationToken = default)
+    Task<TResult> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request, Func<IMessageDelivery<TResponse>, TResult> selector, CancellationToken cancellationToken)
         => AwaitResponse(request, x => x, selector, cancellationToken);
 
     Task<TResult> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request, Func<PostOptions, PostOptions> options, Func<IMessageDelivery<TResponse>, TResult> selector, CancellationToken cancellationToken = default);
