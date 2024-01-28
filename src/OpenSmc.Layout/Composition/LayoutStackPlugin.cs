@@ -16,12 +16,12 @@ public class LayoutStackPlugin :
     private readonly LayoutDefinition layoutDefinition;
 
 
-    public LayoutStackPlugin(IServiceProvider serviceProvider) : base(serviceProvider)
+    public LayoutStackPlugin(IMessageHub hub) : base(hub)
     {
     }
 
 
-    public LayoutStackPlugin(LayoutDefinition layoutDefinition, IServiceProvider serviceProvider) : base(serviceProvider)
+    public LayoutStackPlugin(LayoutDefinition layoutDefinition, IMessageHub hub) : base(hub)
     {
         this.layoutDefinition = layoutDefinition;
         UpdateState(_ => layoutDefinition.InitialState);

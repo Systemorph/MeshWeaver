@@ -19,7 +19,6 @@ public class MessageService : IMessageService
     public void Initialize(AsyncDelivery messageHandler)
     {
         MessageHandler = messageHandler;
-        Start();
     }
 
     public void Schedule(Func<Task> action) => topQueue.Schedule(action);
@@ -40,7 +39,7 @@ public class MessageService : IMessageService
     }
 
     private bool isStarted;
-    void Start()
+    public void Start()
     {
         if (isStarted)
             return;

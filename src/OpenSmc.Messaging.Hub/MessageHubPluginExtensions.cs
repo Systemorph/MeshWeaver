@@ -29,7 +29,6 @@ public static class MessageHubPluginExtensions
         => configuration.AddPlugin(hub =>
         {
             var ret = hub.ServiceProvider.GetRequiredService<TPlugin>();
-            ret.Initialize(hub);
             return ret;
         });
 

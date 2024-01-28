@@ -4,18 +4,16 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Serialization;
 using OpenSmc.ServiceProvider;
+using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Messaging;
 
 public static class MessageHubExtensions
 {
     public static IMessageHub<TAddress> CreateMessageHub<TAddress>(this IServiceProvider serviceProvider, TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
-        => CreateMessageHub<MessageHub<TAddress>, TAddress>(serviceProvider, address, configuration);
-    public static IMessageHub<TAddress> CreateMessageHub<THub, TAddress>(this IServiceProvider serviceProvider, TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
-        where THub : class, IMessageHub<TAddress>
     {
         var hubSetup = new MessageHubConfiguration(serviceProvider, address);
-        return (IMessageHub<TAddress>)configuration(hubSetup).Build<THub>(serviceProvider, address);
+        return (IMessageHub<TAddress>)configuration(hubSetup).Build(serviceProvider, address);
     }
 }
 
@@ -81,11 +79,10 @@ public record MessageHubConfiguration
     }
 
 
-    protected virtual ServiceCollection ConfigureServices<THub>()
-        where THub : class, IMessageHub
+    protected virtual ServiceCollection ConfigureServices<TAddress>(IMessageHub parent)
     {
         var services = new ServiceCollection();
-        services.Replace(ServiceDescriptor.Singleton<IMessageHub, THub>());
+        services.Replace(ServiceDescriptor.Singleton<IMessageHub>(sp => new MessageHub<TAddress>(sp, sp.GetRequiredService<HostedHubsCollection>(), this, parent)));
         services.Replace(ServiceDescriptor.Singleton<HostedHubsCollection, HostedHubsCollection>());
         services.Replace(ServiceDescriptor.Singleton(typeof(IEventsRegistry),
             sp => new EventsRegistry(ParentServiceProvider.GetService<IEventsRegistry>())));
@@ -100,10 +97,8 @@ public record MessageHubConfiguration
 
     private record ParentMessageHub(IMessageHub Value);
 
-    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery) => WithBuildupAction(hub => hub.Register<TMessage>(request => delivery(hub, request)));
-    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, Task<IMessageDelivery>> delivery) => WithBuildupAction(hub => hub.Register<TMessage>(request => delivery(hub, request)));
-    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery, DeliveryFilter<TMessage> filter) => WithBuildupAction(hub => hub.Register(request => delivery(hub, request), filter));
-    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, Task<IMessageDelivery>> delivery, DeliveryFilter<TMessage> filter) => WithBuildupAction(hub => hub.Register(request => delivery(hub, request), filter));
+    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery) => WithHandler<TMessage>((h,d) => Task.FromResult(delivery.Invoke(h, d)));
+    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, Task<IMessageDelivery>> delivery) => this with {MessageHandlers = MessageHandlers.Add(new(typeof(TMessage), (h,m) => delivery.Invoke(h,(IMessageDelivery<TMessage>)m)))};
 
 
     public MessageHubConfiguration WithBuildupAction(Action<IMessageHub> action) => this with { BuildupActions = BuildupActions.Add(hub => { action(hub); return Task.CompletedTask; }) };
@@ -113,38 +108,26 @@ public record MessageHubConfiguration
     public MessageHubConfiguration WithDeferral(DeliveryFilter deferral)
         => this with { Deferrals = Deferrals.Add(deferral) };
 
-    protected void CreateServiceProvider<THub>()
-        where THub : class, IMessageHub
+    protected void CreateServiceProvider<TAddress>(IMessageHub parent)
     {
-        string Tag() => (typeof(THub).IsGenericType ? typeof(THub).FullName : typeof(THub).Name) + Address?.GetHashCode();
 
-        ServiceProvider = ConfigureServices<THub>()
-            .SetupModules(ParentServiceProvider, new ModulesBuilder().Add(GetType().Assembly), Tag());
+        ServiceProvider = ConfigureServices<TAddress>(parent)
+            .SetupModules(ParentServiceProvider, new ModulesBuilder().Add(GetType().Assembly), Guid.NewGuid().AsString());
     }
 
-    public virtual IMessageHub Build<THub>(IServiceProvider serviceProvider, object address)
-        where THub : class, IMessageHub
+    public virtual IMessageHub Build<TAddress>(IServiceProvider serviceProvider, TAddress address)
     {
         // TODO V10: Check whether this address is already built in hosted hubs collection, if not build. (18.01.2024, Roland Buergi)
-        CreateServiceProvider<THub>();
-        HubInstance = ServiceProvider.GetRequiredService<IMessageHub>();
-        var forwardConfig = (ForwardConfigurationBuilder ?? (x => x)).Invoke(new ForwardConfiguration(HubInstance));
-
         var parentHub = ParentServiceProvider.GetService<ParentMessageHub>()?.Value;
-        if (parentHub != null)
-            forwardConfig = forwardConfig with { Handlers = forwardConfig.Handlers.Add(d => Task.FromResult(ForwardToParent(HubInstance, parentHub, d))) };
-        ((MessageHubBase)HubInstance).Initialize(this, forwardConfig);
+        CreateServiceProvider<TAddress>(parentHub);
+        
+
+        HubInstance = ServiceProvider.GetRequiredService<IMessageHub>();
+
+        ServiceProvider.GetService<IMessageService>().Start();
         return HubInstance;
     }
 
-    private static IMessageDelivery ForwardToParent(IMessageHub hub, IMessageHub parentHub, IMessageDelivery delivery)
-    {
-        if (delivery.Target == null || delivery.Target.Equals(hub.Address))
-            return delivery;
-
-        parentHub.DeliverMessage(delivery);
-        return delivery.Forwarded();
-    }
 }
 
 public record StartConfiguration(object Address)
@@ -216,4 +199,4 @@ public record MessageRouteConfiguration<TMessage>(Func<IMessageDelivery, object>
     protected override bool Applies(IMessageDelivery delivery) => AddressFilter(delivery) && delivery is IMessageDelivery<TMessage> typedDelivery && Filter(typedDelivery);
 }
 
-internal record MessageHandlerItem(Type MessageType, AsyncDelivery Action, DeliveryFilter Filter);
+internal record MessageHandlerItem(Type MessageType, Func<IMessageHub, IMessageDelivery, Task<IMessageDelivery>> AsyncDelivery);

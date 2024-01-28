@@ -30,18 +30,9 @@ public static class SmappExtensions
             ld = layoutDefinition(ld);
         var mainLayoutAddress = MainLayoutAddress(hub.Address);
         var layoutHub = hub.GetHostedHub(mainLayoutAddress, config => config
-            .AddPlugin(h => new LayoutStackPlugin(hub.ServiceProvider)));
+            .AddPlugin(h => new LayoutStackPlugin(hub)));
         hub.ConnectTo(layoutHub);
 
-    }
-
-    private static IMessageHub CreateLayoutHub(IServiceProvider serviceProvider, UiControlAddress address)
-    {
-        return serviceProvider.CreateMessageHub
-            (address,
-             config => config
-                 .AddPlugin(h => new LayoutStackPlugin(serviceProvider))
-            );
     }
 
     public static UiControlAddress MainLayoutAddress(object address) => new("Main", address);
