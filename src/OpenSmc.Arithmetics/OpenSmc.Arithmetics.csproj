@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="System.Linq.Async" /> 
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenSmc.Arithmetics.Abstractions\OpenSmc.Arithmetics.Abstractions.csproj" />
+    <ProjectReference Include="..\OpenSmc.Collections\OpenSmc.Collections.csproj" />
+    <ProjectReference Include="..\OpenSmc.Conventions\OpenSmc.Conventions.csproj" />
+    <ProjectReference Include="..\OpenSmc.Domain.Abstractions\OpenSmc.Domain.Abstractions.csproj" />
+    <ProjectReference Include="..\OpenSmc.Equality\OpenSmc.Equality.csproj" />
+    <ProjectReference Include="..\OpenSmc.Reflection\OpenSmc.Reflection.csproj" />
+  </ItemGroup>
+
+</Project>

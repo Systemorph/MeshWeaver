@@ -1,8 +1,7 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using System.Collections.Immutable;
-using Microsoft.Extensions.DependencyInjection.Extensions;
+﻿using System.Collections.Immutable;
+using Microsoft.Extensions.DependencyInjection;
 
-namespace OpenSmc.Messaging.Hub;
+namespace OpenSmc.Messaging;
 
 public static class MessageForwardingExtensions
 {
@@ -20,23 +19,6 @@ public static class MessageForwardingExtensions
         routedHubConfiguration = routedHubConfiguration.Buildup(hub);
         hub.Post(new UpdateRequest<RoutedHubConfiguration>(routedHubConfiguration));
     }
-
-    public static MessageHubConfiguration WithHostedHub<TAddress>(this MessageHubConfiguration configuration,
-        Func<MessageHubConfiguration, MessageHubConfiguration> configureHostedHub)
-    {
-        return configuration
-            .WithServices(s => s
-                .Replace(ServiceDescriptor.Singleton(new HostedHubConfigurationSettings<TAddress>
-                {
-                    Configure = configureHostedHub
-                })))
-            .WithForwards(f => f.RouteAddressToHub<TAddress>(d => f.Hub.GetHostedHub((TAddress)d.Target)));
-            //.WithMessageForwarding(f => f.RouteAddress<TAddress>(a => a, c => c.WithHost(f.Hub.GetHostedHub((TAddress)d.Target))  d => f.Hub.GetHostedHub((TAddress)d.Target))); // TODO: change this to support object as input
-            //.WithRoutedAddress()
-        // TODO: add test for object-oriented addresses implementations. i.e. (a is TAddress)
-        // NonDeserializedAddress : IHostedAddress
-    }
-
 
     public static bool IsAddress<TAddress>(this object address)
     {

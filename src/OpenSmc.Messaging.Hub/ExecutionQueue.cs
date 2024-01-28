@@ -1,7 +1,7 @@
-﻿using Microsoft.Extensions.Logging;
-using System.Threading.Tasks.Dataflow;
+﻿using System.Threading.Tasks.Dataflow;
+using Microsoft.Extensions.Logging;
 
-namespace OpenSmc.Messaging.Hub;
+namespace OpenSmc.Messaging;
 
 public class ExecutionQueue(ILogger logger) : IAsyncDisposable
 {

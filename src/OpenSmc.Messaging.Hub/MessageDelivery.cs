@@ -1,8 +1,9 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
+using System.Text.Json.Serialization;
 using OpenSmc.ShortGuid;
 
-namespace OpenSmc.Messaging.Hub;
+namespace OpenSmc.Messaging;
 
 public record MaskedRequest(IMessageDelivery Request, object HostAddress);
 public abstract record MessageDelivery(object Sender, object Target) : IMessageDelivery
@@ -21,6 +22,8 @@ public abstract record MessageDelivery(object Sender, object Target) : IMessageD
 
     public object AccessProvidedBy { get; init; }
     public string AccessObject { get; init; } // TODO SMCv2: later on we might think about accessibility for this property (2023/10/04, Dmitry Kalabin)
+    [JsonIgnore]
+    public object Context { get; set; }
 
     IMessageDelivery IMessageDelivery.SetAccessObject(string accessObject, object address) => this with { AccessObject = accessObject, AccessProvidedBy = address, };
 
@@ -43,10 +46,6 @@ public abstract record MessageDelivery(object Sender, object Target) : IMessageD
     internal const string MaskedRequest = nameof(MaskedRequest);
     public IMessageDelivery Mask(object hostAddress) => this with { Properties = Properties.SetItem(MaskedRequest, new MaskedRequest(this, hostAddress)) };
 
-    public IMessageDelivery Copy<TMessage>(TMessage message, Func<PostOptions, PostOptions> postOptions)
-    {
-        return new MessageDelivery<TMessage>(message, postOptions.Invoke(new(Sender)));
-    }
 
     IMessageDelivery IMessageDelivery.WithRoutedSender(object address)
     {
@@ -90,6 +89,7 @@ public record MessageDelivery<TMessage>(object Sender, object Target, TMessage M
         : this(options.Sender, options.Target, message)
     {
         Properties = options.Properties;
+        Context = options.Context;
     }
 
     protected override object GetMessage()

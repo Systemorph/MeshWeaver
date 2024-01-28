@@ -1,12 +1,12 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using System.Collections.Concurrent;
+using System.Linq.Expressions;
+using System.Reflection;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Reflection;
 using OpenSmc.Serialization;
 using OpenSmc.ServiceProvider;
-using System.Collections.Concurrent;
-using System.Linq.Expressions;
-using System.Reflection;
 
-namespace OpenSmc.Messaging.Hub;
+namespace OpenSmc.Messaging;
 
 public class MessageHubPlugin<TPlugin> : IMessageHubPlugin, IMessageHandlerRegistry
     where TPlugin : MessageHubPlugin<TPlugin>
@@ -18,7 +18,7 @@ public class MessageHubPlugin<TPlugin> : IMessageHubPlugin, IMessageHandlerRegis
 
     protected MessageHubPlugin(IServiceProvider serviceProvider)
     {
-        EventsRegistry = serviceProvider.GetRequiredService<IEventsRegistry>(); ;
+        EventsRegistry = serviceProvider.GetRequiredService<IEventsRegistry>();
         InitializeTypes(this);
 
         Rules = new LinkedList<RegistryRule>(new RegistryRule[]
@@ -61,18 +61,16 @@ public class MessageHubPlugin<TPlugin> : IMessageHubPlugin, IMessageHandlerRegis
         }
     }
 
-    private static readonly HashSet<Type> HandlerTypes = new() { typeof(IMessageHandler<>), typeof(IMessageHandlerAsync<>) };
 
     private TypeAndHandler GetTypeAndHandler(Type type, object instance)
     {
-        if (!type.IsGenericType || !HandlerTypes.Contains(type.GetGenericTypeDefinition()))
+        if (!type.IsGenericType || !MessageHubPluginExtensions.HandlerTypes.Contains(type.GetGenericTypeDefinition()))
             return null;
         var genericArgs = type.GetGenericArguments();
         var messageType = genericArgs.First();
         return new(messageType, CreateAsyncDelivery(messageType, type, instance));
     }
 
-    private static readonly MethodInfo TaskFromResultMethod = ReflectionHelper.GetStaticMethod(() => Task.FromResult<IMessageDelivery>(null));
 
     private AsyncDelivery CreateAsyncDelivery(Type messageType, Type interfaceType, object instance)
     {
@@ -85,7 +83,7 @@ public class MessageHubPlugin<TPlugin> : IMessageHubPlugin, IMessageHandlerRegis
         );
 
         if (interfaceType.GetGenericTypeDefinition() == typeof(IMessageHandler<>))
-            handlerCall = Expression.Call(null, TaskFromResultMethod, handlerCall);
+            handlerCall = Expression.Call(null, MessageHubPluginExtensions.TaskFromResultMethod, handlerCall);
 
         var lambda = Expression.Lambda<Func<IMessageDelivery, Task<IMessageDelivery>>>(
             handlerCall, prm
@@ -196,22 +194,22 @@ public class MessageHubPlugin<TPlugin> : IMessageHubPlugin, IMessageHandlerRegis
         filter);
 
 
-    public virtual ValueTask DisposeAsync()
+    async ValueTask IAsyncDisposable.DisposeAsync() => await DisposeAsync();
+    public virtual Task DisposeAsync()
     {
-        return ValueTask.CompletedTask;
+        return Task.CompletedTask;
     }
 
-    public virtual Task InitializeAsync(IMessageHub hub)
+    public virtual void Initialize(IMessageHub hub)
     {
         Hub = hub;
         hub.ServiceProvider.Buildup(this);
         hub.RegisterHandlersFromInstance(this);
-        return Task.CompletedTask;
     }
 }
 
 
-public class MessageHubPlugin<TPlugin, TState> : MessageHubPlugin<TPlugin>, IAsyncDisposable
+public class MessageHubPlugin<TPlugin, TState> : MessageHubPlugin<TPlugin>
     where TPlugin : MessageHubPlugin<TPlugin, TState>
 {
     public TState State { get; private set; }
@@ -223,15 +221,15 @@ public class MessageHubPlugin<TPlugin, TState> : MessageHubPlugin<TPlugin>, IAsy
         return This;
     }
 
-    public override async Task InitializeAsync(IMessageHub hub)
+    public virtual void Initialize(TState state)
     {
-        await base.InitializeAsync(hub);
-        if (State == null)
-        {
-            var constructor = typeof(TState).GetConstructor(Array.Empty<Type>());
-            if (constructor != null)
-                InitializeState(Activator.CreateInstance<TState>());
-        }
+        State = state;
+        //if (State == null)
+        //{
+        //    var constructor = typeof(TState).GetConstructor(Array.Empty<Type>());
+        //    if (constructor != null)
+        //        InitializeState(Activator.CreateInstance<TState>());
+        //}
     }
 
     public virtual TPlugin InitializeState(TState state)
@@ -240,10 +238,6 @@ public class MessageHubPlugin<TPlugin, TState> : MessageHubPlugin<TPlugin>, IAsy
         return This;
     }
 
-    public virtual ValueTask DisposeAsync()
-    {
-        return default;
-    }
 
     protected MessageHubPlugin(IServiceProvider serviceProvider) : base(serviceProvider)
     {

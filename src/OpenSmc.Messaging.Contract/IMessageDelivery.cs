@@ -1,6 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("OpenSmc.Messaging.Hub")]
@@ -18,6 +16,7 @@ public interface IMessageDelivery
     object Message { get; }
 
     string AccessObject { get; }
+    object Context { get; set; }
 
     internal IMessageDelivery SetAccessObject(string accessObject, object address);
     internal IMessageDelivery ChangeState(string state);
@@ -32,7 +31,6 @@ public interface IMessageDelivery
     IMessageDelivery Rejected() => ChangeState(MessageDeliveryState.Rejected);
     IMessageDelivery Ignored() => ChangeState(MessageDeliveryState.Ignored);
 
-    IMessageDelivery Copy<TMessage>( TMessage message, Func<PostOptions, PostOptions> postOptions);
     IMessageDelivery WithMessage(object message);
     internal IMessageDelivery WithRoutedSender(object address);
     internal IMessageDelivery WithRoutedTarget(object address);
