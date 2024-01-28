@@ -11,7 +11,7 @@ public static class LayoutClientExtensions
             conf = options(conf);
         return mhConfiguration.WithBuildupAction(hub =>
                                                  {
-                                                     var _ = new LayoutClientPlugin(hub, conf);
+                                                     hub.AddPlugin(new LayoutClientPlugin(conf, hub.ServiceProvider));
                                                  });
     }
 

@@ -9,7 +9,6 @@ public class MessageService : IMessageService
 {
     private readonly ISerializationService serializationService;
     private readonly ILogger<MessageService> logger;
-    private ActionBlock<IMessageDelivery> executionQueueAction;
     private bool isDisposing;
     private readonly BufferBlock<IMessageDelivery> buffer = new();
     private ActionBlock<IMessageDelivery> deliveryAction;
@@ -28,7 +27,7 @@ public class MessageService : IMessageService
     private readonly DeferralContainer deferralContainer;
 
 
-    private ExecutionQueue topQueue;
+    private readonly ExecutionQueue topQueue;
 
     public MessageService(object address, ISerializationService serializationService, ILogger<MessageService> logger)
     {
@@ -36,38 +35,27 @@ public class MessageService : IMessageService
         this.serializationService = serializationService;
         this.logger = logger;
         topQueue = new(logger);
-        executionQueueAction = new(d => topQueue.Schedule(() =>
-        {
-            try
-            {
-                return NotifyAsync(d);
-            }
-            catch (Exception e)
-            {
-                logger.LogError(e, "Error when calling NotifyAsync");
-                return Task.CompletedTask;
-            }
-        }));
 
-        deferralContainer = new DeferralContainer(executionQueueAction);
+        deferralContainer = new DeferralContainer(NotifyAsync);
     }
 
-    private bool IsStarted;
+    private bool isStarted;
     void Start()
     {
-        if (IsStarted)
+        if (isStarted)
             return;
-        IsStarted = true;
+        isStarted = true;
         topQueue.InstantiateActionBlock();
         deliveryAction = new(d =>
         {
             try
             {
-                deferralContainer.DeferMessage(d);
+                return deferralContainer.DeliverAsync(d);
             }
             catch (Exception e)
             {
                 logger.LogError(e, "Error when calling DeferMessage");
+                return Task.CompletedTask;
             }
         });
         buffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = true });
@@ -122,7 +110,7 @@ public class MessageService : IMessageService
 
     public IMessageDelivery Post<TMessage>(TMessage message, PostOptions opt)
     {
-        return PostImplGeneric<TMessage>(message, opt);
+        return PostImpl(message, opt);
     }
 
     private IMessageDelivery PostImpl(object message, PostOptions opt)
@@ -156,11 +144,9 @@ public class MessageService : IMessageService
         buffer.Complete();
         await deliveryAction.Completion;
 
-        executionQueueAction.Complete();
-        await executionQueueAction.Completion;
 
         await topQueue.DisposeAsync();
 
-        deferralContainer.Dispose();
+        await deferralContainer.DisposeAsync();
     }
 }

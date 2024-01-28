@@ -2,19 +2,21 @@
 
 namespace OpenSmc.Messaging;
 
-public record DeferralItem : IDisposable
+public record DeferralItem : IAsyncDisposable, IDisposable
 {
-    private readonly ITargetBlock<IMessageDelivery> executionBuffer;
+    private readonly AsyncDelivery asyncDelivery;
+    private readonly ActionBlock<IMessageDelivery> executionBuffer;
     private readonly BufferBlock<IMessageDelivery> deferral = new();
     private bool isReleased;
 
-    public DeferralItem(Predicate<IMessageDelivery> Filter, ITargetBlock<IMessageDelivery> executionBuffer)
+    public DeferralItem(Predicate<IMessageDelivery> Filter, AsyncDelivery asyncDelivery)
     {
-        this.executionBuffer = executionBuffer;
+        this.asyncDelivery = asyncDelivery;
+        executionBuffer = new ActionBlock<IMessageDelivery>(d => asyncDelivery(d));
         this.Filter = Filter;
     }
 
-    public IMessageDelivery DeliverMessage(IMessageDelivery delivery)
+    public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
     {
         if (Filter(delivery))
         {
@@ -22,12 +24,16 @@ public record DeferralItem : IDisposable
             return null;
         }
 
-        return delivery;
+        return await asyncDelivery.Invoke(delivery);
     }
 
+    private bool isLinked;
     public void Dispose()
     {
-        deferral.Complete();
+        if (isLinked)
+            return;
+        isLinked = true;
+        deferral.LinkTo(executionBuffer, new DataflowLinkOptions{PropagateCompletion = true});
     }
 
     public void Release()
@@ -41,6 +47,12 @@ public record DeferralItem : IDisposable
         deferral.LinkTo(executionBuffer);
     }
 
+    public async ValueTask DisposeAsync()
+    {
+        Dispose();
+        deferral.Complete();
+        await executionBuffer.Completion;
+    }
     public Predicate<IMessageDelivery> Filter { get; init; }
 
 }
