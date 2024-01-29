@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\OpenSmc.Collections\OpenSmc.Collections.csproj" />
+    <ProjectReference Include="..\OpenSmc.Conventions\OpenSmc.Conventions.csproj" />
+    <ProjectReference Include="..\OpenSmc.FileStorage.Abstractions\OpenSmc.FileStorage.Abstractions.csproj" />
+    <ProjectReference Include="..\OpenSmc.Layout\OpenSmc.Layout.csproj" />
+  </ItemGroup>
+</Project>

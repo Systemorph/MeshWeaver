@@ -1,0 +1,12 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <ItemGroup>
+        <PackageReference Include="DocumentFormat.OpenXml" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\OpenSmc.DataSetReader.Excel.Utils\OpenSmc.DataSetReader.Excel.Utils.csproj" />
+      <ProjectReference Include="..\OpenSmc.DomainDesigner.Abstractions\OpenSmc.DomainDesigner.Abstractions.csproj" />
+    </ItemGroup>
+    
+</Project>

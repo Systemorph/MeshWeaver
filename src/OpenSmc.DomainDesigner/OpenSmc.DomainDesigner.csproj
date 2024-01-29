@@ -1,0 +1,6 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\OpenSmc.DomainDesigner.Abstractions\OpenSmc.DomainDesigner.Abstractions.csproj" />
+    <ProjectReference Include="..\OpenSmc.DomainDesigner.ExcelParser\OpenSmc.DomainDesigner.ExcelParser.csproj" />
+  </ItemGroup>
+</Project>
