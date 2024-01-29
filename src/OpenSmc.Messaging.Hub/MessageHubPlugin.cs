@@ -30,12 +30,18 @@ public class MessageHubPlugin<TPlugin, TState> : MessageHubPlugin<TPlugin>
     }
 
 
-    public virtual TPlugin InitializeState(TState state)
+    public virtual void InitializeState(TState state)
     {
         State = state;
-        return This;
     }
 
+    protected override Task StartAsync()
+    {
+        InitializeState(StartupState());
+        return base.StartAsync();
+    }
+
+    public virtual TState StartupState() => default;
 
     protected MessageHubPlugin(IMessageHub hub) : base(hub)
     {

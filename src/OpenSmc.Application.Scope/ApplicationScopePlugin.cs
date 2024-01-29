@@ -23,12 +23,11 @@ public class ApplicationScopePlugin : MessageHubPlugin<ApplicationScopePlugin, A
                                         IMessageHandler<GetRequest<IApplicationScope>>
 
 {
-    private IApplicationScope applicationScope;
-    private IScopeRegistry scopeRegistry;
-    private ISerializationService serializationService;
+    private readonly IApplicationScope applicationScope;
+    private readonly IScopeRegistry scopeRegistry;
+    private readonly ISerializationService serializationService;
     public ApplicationScopePlugin(IServiceProvider serviceProvider, IMessageHub hub) : base(hub)
     {
-        InitializeState(new());
         applicationScope = hub.ServiceProvider.GetRequiredService<IApplicationScope>();
         serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
         // ReSharper disable once SuspiciousTypeConversion.Global
@@ -39,6 +38,7 @@ public class ApplicationScopePlugin : MessageHubPlugin<ApplicationScopePlugin, A
             TrackPropertyChanged(scope);
     }
 
+    public override ApplicationScopeState StartupState() => new();
 
     IMessageDelivery IMessageHandler<SubscribeScopeRequest>.HandleMessage(IMessageDelivery<SubscribeScopeRequest> request)
     {
