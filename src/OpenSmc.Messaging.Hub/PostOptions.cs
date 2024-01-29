@@ -1,9 +1,8 @@
-﻿using System.Collections.Generic;
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 
 namespace OpenSmc.Messaging;
 
-public record PostOptions(object Sender, object Context)
+public record PostOptions(object Sender, IMessageHub SenderHub)
 {
     public const string RequestId = nameof(RequestId);
     internal object Target { get; init; }

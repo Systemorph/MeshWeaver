@@ -23,30 +23,39 @@ public class SerializationTest : TestBase
         Services.AddMessageHubs(new RouterAddress(), hubConf => hubConf
             .WithForwards(f => f
                 .RouteAddress<HostAddress>(d =>
-                {
-                    var hostHub = f.Hub.GetHostedHub((HostAddress)d.Target, c => c);
-                    var packagedDelivery = d.Package();
-                    hostHub.DeliverMessage(packagedDelivery);
-                })
-                .RouteAddressToHub<ClientAddress>(d => f.Hub.GetHostedHub((ClientAddress)d.Target,
-                    c => c
-                        .AddSerialization(conf =>
-                            conf.ForType<MyEvent>(s =>
-                                s.WithMutation((value, context) => context.SetProperty("NewProp", "New"))))
-                ))
+                    {
+                        var hostHub = f.Hub.GetHostedHub((HostAddress)d.Target, ConfigureHost);
+                        var packagedDelivery = d.Package();
+                        hostHub.DeliverMessage(packagedDelivery);
+                    })
+                .RouteAddressToHub<ClientAddress>(d => f.Hub.GetHostedHub((ClientAddress)d.Target, ConfigureClient))
             ));
+    }
+
+    private static MessageHubConfiguration ConfigureHost(MessageHubConfiguration c)
+    {
+        return c;
+    }
+
+    private static MessageHubConfiguration ConfigureClient(MessageHubConfiguration c)
+    {
+        return c
+            .AddSerialization(conf =>
+                conf.ForType<MyEvent>(s =>
+                    s.WithMutation((value, context) => context.SetProperty("NewProp", "New"))));
     }
 
     [Fact]
     public async Task SimpleTest()
     {
-        var client = Router.GetHostedHub(new ClientAddress(), c => c);
-        var clientOut = client.AddObservable();
-        var messageTask = clientOut.ToArray().GetAwaiter();
+        var host = Router.GetHostedHub(new HostAddress(), ConfigureHost);
+        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
+        var hostOut = host.AddObservable();
+        var messageTask = hostOut.ToArray().GetAwaiter();
         
         client.Post(new MyEvent("Hello"), o => o.WithTarget(new HostAddress()));
-        await Task.Delay(2000.Milliseconds());
-        clientOut.OnCompleted();
+        await Task.Delay(200.Milliseconds());
+        hostOut.OnCompleted();
 
         var events = await messageTask;
         events.Should().HaveCount(1);
