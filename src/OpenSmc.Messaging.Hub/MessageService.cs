@@ -13,7 +13,6 @@ public class MessageService : IMessageService
     private readonly BufferBlock<IMessageDelivery> buffer = new();
     private ActionBlock<IMessageDelivery> deliveryAction;
 
-
     private AsyncDelivery MessageHandler { get; set; }
 
     public void Initialize(AsyncDelivery messageHandler)
@@ -34,6 +33,7 @@ public class MessageService : IMessageService
         this.serializationService = serializationService;
         this.logger = logger;
         topQueue = new(logger);
+        topQueue.InstantiateActionBlock();
 
         deferralContainer = new DeferralContainer(NotifyAsync);
     }
@@ -44,7 +44,6 @@ public class MessageService : IMessageService
         if (isStarted)
             return;
         isStarted = true;
-        topQueue.InstantiateActionBlock();
         deliveryAction = new(d =>
         {
             try

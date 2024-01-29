@@ -13,7 +13,7 @@ public class MessageHubPlugin<TPlugin> :
     }
 
 
-
+    public virtual Task StartAsync() => Task.CompletedTask;
 }
 
 
@@ -35,15 +35,21 @@ public class MessageHubPlugin<TPlugin, TState> : MessageHubPlugin<TPlugin>
         State = state;
     }
 
-    protected override Task StartAsync()
-    {
-        InitializeState(StartupState());
-        return base.StartAsync();
-    }
 
     public virtual TState StartupState() => default;
 
     protected MessageHubPlugin(IMessageHub hub) : base(hub)
     {
+    }
+
+    public override Task StartAsync()
+    {
+        SetInitialState();
+        return base.StartAsync();
+    }
+
+    private void SetInitialState()
+    {
+        InitializeState(StartupState());
     }
 }

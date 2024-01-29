@@ -5,11 +5,11 @@ using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Layout;
 
-public class RemoteViewPlugin : GenericUiControlPlugin<RemoteViewControl>, 
-                             IMessageHandler<DataChanged>,
-                             IMessageHandler<AreaChangedEvent>, 
-                             IMessageHandler<UpdateRequest<AreaChangedEvent>>, 
-                             IMessageHandler<ScopeExpressionChangedEvent>
+public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteViewControl>(hub),
+    IMessageHandler<DataChanged>,
+    IMessageHandler<AreaChangedEvent>,
+    IMessageHandler<UpdateRequest<AreaChangedEvent>>,
+    IMessageHandler<ScopeExpressionChangedEvent>
 {
     [Inject] private IUiControlService uiControlService; // TODO V10: call BuildUp(this) in some base? (2023/12/20, Alexander Yolokhov)
 
@@ -152,9 +152,5 @@ public class RemoteViewPlugin : GenericUiControlPlugin<RemoteViewControl>,
         if (State.ViewDefinition != null)
             Post(new UnsubscribeFromEvaluationRequest(Data), o => o.WithTarget(State.RedirectAddress));
         base.Dispose();
-    }
-
-    protected RemoteViewPlugin(IMessageHub hub) : base(hub)
-    {
     }
 }

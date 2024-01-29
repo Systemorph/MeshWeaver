@@ -19,7 +19,7 @@ namespace OpenSmc.Layout.Test
         protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         {
             return base.ConfigureHost(configuration)
-                .AddLayout(def =>
+                .LayoutExtensions(def =>
                     def.WithInitialState(Controls.Stack()
                         .WithId(MainStackId)
                         .WithClickAction(context =>

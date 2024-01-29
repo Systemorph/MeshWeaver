@@ -33,12 +33,18 @@ public class ApplicationScopePlugin : MessageHubPlugin<ApplicationScopePlugin, A
         // ReSharper disable once SuspiciousTypeConversion.Global
         scopeRegistry = ((IInternalMutableScope)applicationScope).GetScopeRegistry();
 
-        scopeRegistry.InstanceRegistered += (_, scope) => TrackPropertyChanged(scope);
-        foreach (var scope in scopeRegistry.Scopes)
-            TrackPropertyChanged(scope);
     }
 
     public override ApplicationScopeState StartupState() => new();
+
+    public override async Task StartAsync()
+    {
+        await base.StartAsync();
+        scopeRegistry.InstanceRegistered += (_, scope) => TrackPropertyChanged(scope);
+        foreach (var scope in scopeRegistry.Scopes)
+            TrackPropertyChanged(scope);
+
+    }
 
     IMessageDelivery IMessageHandler<SubscribeScopeRequest>.HandleMessage(IMessageDelivery<SubscribeScopeRequest> request)
     {

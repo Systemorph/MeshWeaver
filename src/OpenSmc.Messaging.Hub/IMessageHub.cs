@@ -6,7 +6,7 @@ namespace OpenSmc.Messaging;
 
 public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDisposable
 {
-    internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(3000);
+    internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(10);
     IMessageDelivery<TMessage> Post<TMessage>(TMessage message, Func<PostOptions, PostOptions> options = null);
     IMessageDelivery DeliverMessage(IMessageDelivery delivery);
     object Address { get; }
@@ -39,9 +39,6 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
 
 
     void Log(Action<ILogger> log);
-    IDisposable Defer();
-    IDisposable Defer(Predicate<IMessageDelivery> deferredFilter);
-
 
     void Set<T>(T obj, string context = "");
     T Get<T>(string context = "");

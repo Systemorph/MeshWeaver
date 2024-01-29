@@ -8,32 +8,30 @@ namespace OpenSmc.Layout;
 
 public static class SmappExtensions
 {
-    public static MessageHubConfiguration AddLayout(this MessageHubConfiguration conf,
+    public static MessageHubConfiguration LayoutExtensions(this MessageHubConfiguration conf,
                                                      Func<LayoutDefinition, LayoutDefinition> layoutDefinition = null)
     {
         return conf
-               .WithDeferral(d => d.Message is RefreshRequest or SetAreaRequest)
-               .WithServices(services => services.AddSingleton<IUiControlService, UiControlService>())
-               .WithBuildupAction(hub =>
-               {
-                   hub.AddLayout(layoutDefinition);
-               })
-               .AddApplicationScope()
-               .AddExpressionSynchronization()
+            .WithDeferral(d => d.Message is RefreshRequest or SetAreaRequest)
+            .WithServices(services => services.AddSingleton<IUiControlService, UiControlService>()
+                .AddAllControlHubs())
+            .AddApplicationScope()
+            .AddExpressionSynchronization()
+            .AddPlugin(hub => CreateLayoutPlugin(hub, layoutDefinition))
             ;
     }
 
-    internal static void AddLayout(this IMessageHub hub, Func<LayoutDefinition, LayoutDefinition> layoutDefinition)
+    internal static IServiceCollection AddAllControlHubs(this IServiceCollection services)
+        => typeof(LayoutStackPlugin).Assembly.GetTypes().Where(t => typeof(IMessageHubPlugin).IsAssignableFrom(t))
+            .Aggregate(services, (s, t) => s.AddTransient(t));
+
+    internal static LayoutStackPlugin CreateLayoutPlugin(this IMessageHub hub, Func<LayoutDefinition, LayoutDefinition> layoutDefinition)
     {
         var ld = new LayoutDefinition(hub);
         if (layoutDefinition != null)
             ld = layoutDefinition(ld);
-        var mainLayoutAddress = MainLayoutAddress(hub.Address);
-        var layoutHub = hub.GetHostedHub(mainLayoutAddress, config => config
-            .AddPlugin(h => new LayoutStackPlugin(ld)));
-        hub.ConnectTo(layoutHub);
 
+        return new LayoutStackPlugin(ld);
     }
 
-    public static UiControlAddress MainLayoutAddress(object address) => new("Main", address);
 }
