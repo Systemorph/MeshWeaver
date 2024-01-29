@@ -72,6 +72,9 @@ public class JsonEquivalency : IEquivalencyStep
         if (jToken is not JObject jObject)
             return;
 
+        if (options.ExcludedTypeDiscriminator)
+            jObject.Remove("$type");
+
         foreach (var node in jObject.DescendantsAndSelf().OfType<JObject>())
         {
             var typeId = node.Value<string>("$type");
