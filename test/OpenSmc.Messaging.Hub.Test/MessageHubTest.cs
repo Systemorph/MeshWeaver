@@ -32,7 +32,7 @@ public class MessageHubTest : HubTestBase
     {
         var host = GetHost();
         var response = await host.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
-        response.Should().BeOfType<HelloEvent>();
+        response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
     }
 
 
@@ -41,7 +41,7 @@ public class MessageHubTest : HubTestBase
     {
         var client = Router.GetHostedHub(new ClientAddress(), c => c);
         var response = await client.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
-        response.Should().BeOfType<HelloEvent>();
+        response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
     }
 
     [Fact]
@@ -53,7 +53,7 @@ public class MessageHubTest : HubTestBase
         var overallMessageTask = clientOut.ToArray().GetAwaiter();
 
         var response = await client.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
-        response.Should().BeOfType<HelloEvent>();
+        response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
 
         await DisposeAsync();
         
