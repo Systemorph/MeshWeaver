@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <RootNamespace>Systemorph.Queues</RootNamespace>
+    <RootNamespace>OpenSmc.Queues</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\OpenSmc.Messaging.Contract\OpenSmc.Messaging.Contract.csproj" />

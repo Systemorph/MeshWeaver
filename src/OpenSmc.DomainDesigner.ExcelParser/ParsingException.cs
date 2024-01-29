@@ -16,8 +16,5 @@ namespace OpenSmc.DomainDesigner.ExcelParser
         {
         }
 
-        public ParsingException(SerializationInfo info, StreamingContext context) : base(info, context)
-        {
-        }
     }
 }

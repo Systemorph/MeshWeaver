@@ -42,20 +42,20 @@ public class ModulesBuilder
         return this;
     }
 
-    private static bool IsSystemorphModule(string fullName)
+    private static bool IsOpenSmcModule(string fullName)
     {
         // TODO V10: How to unhardcode? (2023/05/21, Roland Buergi)
-        return fullName.StartsWith("Systemorph");
+        return fullName.StartsWith("OpenSmc");
     }
 
     private static IEnumerable<Assembly> ExpandedModuleAssemblies(IEnumerable<Assembly> assemblies, HashSet<Assembly> expandedSet)
     {
-        foreach (var assembly in assemblies.Where(a => IsSystemorphModule(a.FullName)))
+        foreach (var assembly in assemblies.Where(a => IsOpenSmcModule(a.FullName)))
         {
             if (expandedSet.Contains(assembly))
                 continue;
             expandedSet.Add(assembly);
-            var references = new HashSet<string>(assembly.GetReferencedAssemblies().Select(n => n.FullName).Where(IsSystemorphModule));
+            var references = new HashSet<string>(assembly.GetReferencedAssemblies().Select(n => n.FullName).Where(IsOpenSmcModule));
             var referencedAssemblies = AppDomain.CurrentDomain.GetAssemblies().Where(a => references.Contains(a.FullName)).ToList();
             references.ExceptWith(referencedAssemblies.Select(a => a.FullName));
             foreach (var reference in references)

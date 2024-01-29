@@ -29,23 +29,19 @@ public class MessageHubPlugin<TPlugin, TState> : MessageHubPlugin<TPlugin>
         return This;
     }
 
-    public virtual void Initialize(TState state)
+
+    public virtual void InitializeState(TState state)
     {
         State = state;
-        //if (State == null)
-        //{
-        //    var constructor = typeof(TState).GetConstructor(Array.Empty<Type>());
-        //    if (constructor != null)
-        //        InitializeState(Activator.CreateInstance<TState>());
-        //}
     }
 
-    public virtual TPlugin InitializeState(TState state)
+    protected override Task StartAsync()
     {
-        State = state;
-        return This;
+        InitializeState(StartupState());
+        return base.StartAsync();
     }
 
+    public virtual TState StartupState() => default;
 
     protected MessageHubPlugin(IMessageHub hub) : base(hub)
     {
