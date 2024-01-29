@@ -1,0 +1,152 @@
+{
+  "$type": "Systemorph.Pivot.Models.PivotModel, Systemorph.Pivot",
+  "columns": [
+    {
+      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+      "children": [
+        {
+          "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+          "coordinates": [
+            "1",
+            "Value"
+          ],
+          "systemName": "1.Value",
+          "displayName": "Value",
+          "grouperName": "ColumnName"
+        }
+      ],
+      "coordinates": [
+        "1"
+      ],
+      "systemName": "1",
+      "displayName": "1",
+      "grouperName": "AutomaticNumber"
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+      "children": [
+        {
+          "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+          "coordinates": [
+            "2",
+            "Value"
+          ],
+          "systemName": "2.Value",
+          "displayName": "Value",
+          "grouperName": "ColumnName"
+        }
+      ],
+      "coordinates": [
+        "2"
+      ],
+      "systemName": "2",
+      "displayName": "2",
+      "grouperName": "AutomaticNumber"
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+      "children": [
+        {
+          "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+          "coordinates": [
+            "3",
+            "Value"
+          ],
+          "systemName": "3.Value",
+          "displayName": "Value",
+          "grouperName": "ColumnName"
+        }
+      ],
+      "coordinates": [
+        "3"
+      ],
+      "systemName": "3",
+      "displayName": "3",
+      "grouperName": "AutomaticNumber"
+    }
+  ],
+  "rows": [
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "BoP"
+        ],
+        "systemName": "BoP",
+        "displayName": "Beginning of Period",
+        "grouperName": "PropertyName"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "1": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 0.0
+        },
+        "2": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 0.0
+        },
+        "3": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "Delta"
+        ],
+        "systemName": "Delta",
+        "displayName": "Delta",
+        "grouperName": "PropertyName"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "1": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 0.0
+        },
+        "2": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 1.0
+        },
+        "3": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 2.0
+        }
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "EoP"
+        ],
+        "systemName": "EoP",
+        "displayName": "End of Period",
+        "grouperName": "PropertyName"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "1": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 0.0
+        },
+        "2": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 1.0
+        },
+        "3": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 2.0
+        }
+      }
+    }
+  ],
+  "hasRowGrouping": true
+}

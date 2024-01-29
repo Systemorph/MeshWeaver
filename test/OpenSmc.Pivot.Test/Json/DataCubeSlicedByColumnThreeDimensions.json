@@ -1,0 +1,3980 @@
+{
+  "$type": "Systemorph.Pivot.Models.PivotModel, Systemorph.Pivot",
+  "columns": [
+    {
+      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+      "children": [
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "D",
+                    "C",
+                    "E",
+                    "Value"
+                  ],
+                  "systemName": "D.C.E.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "D",
+                "C",
+                "E"
+              ],
+              "systemName": "D.C.E",
+              "displayName": "Expenses",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "D",
+                    "C",
+                    "P",
+                    "Value"
+                  ],
+                  "systemName": "D.C.P.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "D",
+                "C",
+                "P"
+              ],
+              "systemName": "D.C.P",
+              "displayName": "Premium",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "D",
+                    "C",
+                    "C",
+                    "Value"
+                  ],
+                  "systemName": "D.C.C.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "D",
+                "C",
+                "C"
+              ],
+              "systemName": "D.C.C",
+              "displayName": "Cost",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "D",
+                    "C",
+                    "B",
+                    "Value"
+                  ],
+                  "systemName": "D.C.B.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "D",
+                "C",
+                "B"
+              ],
+              "systemName": "D.C.B",
+              "displayName": "Benefit",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "D",
+                    "C",
+                    "TotalGroup",
+                    "Value"
+                  ],
+                  "systemName": "D.C.TotalGroup.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "D",
+                "C",
+                "TotalGroup"
+              ],
+              "systemName": "D.C.TotalGroup",
+              "displayName": " ",
+              "grouperName": "LineOfBusiness"
+            }
+          ],
+          "coordinates": [
+            "D",
+            "C"
+          ],
+          "systemName": "D.C",
+          "displayName": "Casualty",
+          "grouperName": "LineOfBusiness"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "D",
+                    "H",
+                    "E",
+                    "Value"
+                  ],
+                  "systemName": "D.H.E.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "D",
+                "H",
+                "E"
+              ],
+              "systemName": "D.H.E",
+              "displayName": "Expenses",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "D",
+                    "H",
+                    "P",
+                    "Value"
+                  ],
+                  "systemName": "D.H.P.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "D",
+                "H",
+                "P"
+              ],
+              "systemName": "D.H.P",
+              "displayName": "Premium",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "D",
+                    "H",
+                    "C",
+                    "Value"
+                  ],
+                  "systemName": "D.H.C.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "D",
+                "H",
+                "C"
+              ],
+              "systemName": "D.H.C",
+              "displayName": "Cost",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "D",
+                    "H",
+                    "B",
+                    "Value"
+                  ],
+                  "systemName": "D.H.B.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "D",
+                "H",
+                "B"
+              ],
+              "systemName": "D.H.B",
+              "displayName": "Benefit",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "D",
+                    "H",
+                    "TotalGroup",
+                    "Value"
+                  ],
+                  "systemName": "D.H.TotalGroup.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "D",
+                "H",
+                "TotalGroup"
+              ],
+              "systemName": "D.H.TotalGroup",
+              "displayName": " ",
+              "grouperName": "LineOfBusiness"
+            }
+          ],
+          "coordinates": [
+            "D",
+            "H"
+          ],
+          "systemName": "D.H",
+          "displayName": "Health",
+          "grouperName": "LineOfBusiness"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "D",
+                    "L",
+                    "E",
+                    "Value"
+                  ],
+                  "systemName": "D.L.E.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "D",
+                "L",
+                "E"
+              ],
+              "systemName": "D.L.E",
+              "displayName": "Expenses",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "D",
+                    "L",
+                    "P",
+                    "Value"
+                  ],
+                  "systemName": "D.L.P.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "D",
+                "L",
+                "P"
+              ],
+              "systemName": "D.L.P",
+              "displayName": "Premium",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "D",
+                    "L",
+                    "C",
+                    "Value"
+                  ],
+                  "systemName": "D.L.C.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "D",
+                "L",
+                "C"
+              ],
+              "systemName": "D.L.C",
+              "displayName": "Cost",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "D",
+                    "L",
+                    "B",
+                    "Value"
+                  ],
+                  "systemName": "D.L.B.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "D",
+                "L",
+                "B"
+              ],
+              "systemName": "D.L.B",
+              "displayName": "Benefit",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "D",
+                    "L",
+                    "TotalGroup",
+                    "Value"
+                  ],
+                  "systemName": "D.L.TotalGroup.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "D",
+                "L",
+                "TotalGroup"
+              ],
+              "systemName": "D.L.TotalGroup",
+              "displayName": " ",
+              "grouperName": "LineOfBusiness"
+            }
+          ],
+          "coordinates": [
+            "D",
+            "L"
+          ],
+          "systemName": "D.L",
+          "displayName": "Life",
+          "grouperName": "LineOfBusiness"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "D",
+                    "P",
+                    "E",
+                    "Value"
+                  ],
+                  "systemName": "D.P.E.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "D",
+                "P",
+                "E"
+              ],
+              "systemName": "D.P.E",
+              "displayName": "Expenses",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "D",
+                    "P",
+                    "P",
+                    "Value"
+                  ],
+                  "systemName": "D.P.P.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "D",
+                "P",
+                "P"
+              ],
+              "systemName": "D.P.P",
+              "displayName": "Premium",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "D",
+                    "P",
+                    "C",
+                    "Value"
+                  ],
+                  "systemName": "D.P.C.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "D",
+                "P",
+                "C"
+              ],
+              "systemName": "D.P.C",
+              "displayName": "Cost",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "D",
+                    "P",
+                    "B",
+                    "Value"
+                  ],
+                  "systemName": "D.P.B.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "D",
+                "P",
+                "B"
+              ],
+              "systemName": "D.P.B",
+              "displayName": "Benefit",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "D",
+                    "P",
+                    "TotalGroup",
+                    "Value"
+                  ],
+                  "systemName": "D.P.TotalGroup.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "D",
+                "P",
+                "TotalGroup"
+              ],
+              "systemName": "D.P.TotalGroup",
+              "displayName": " ",
+              "grouperName": "LineOfBusiness"
+            }
+          ],
+          "coordinates": [
+            "D",
+            "P"
+          ],
+          "systemName": "D.P",
+          "displayName": "Property",
+          "grouperName": "LineOfBusiness"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "D",
+                "TotalGroup",
+                "Value"
+              ],
+              "systemName": "D.TotalGroup.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "D",
+            "TotalGroup"
+          ],
+          "systemName": "D.TotalGroup",
+          "displayName": " ",
+          "grouperName": "Country"
+        }
+      ],
+      "coordinates": [
+        "D"
+      ],
+      "systemName": "D",
+      "displayName": "Germany",
+      "grouperName": "Country"
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+      "children": [
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "PT",
+                    "C",
+                    "E",
+                    "Value"
+                  ],
+                  "systemName": "PT.C.E.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "PT",
+                "C",
+                "E"
+              ],
+              "systemName": "PT.C.E",
+              "displayName": "Expenses",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "PT",
+                    "C",
+                    "P",
+                    "Value"
+                  ],
+                  "systemName": "PT.C.P.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "PT",
+                "C",
+                "P"
+              ],
+              "systemName": "PT.C.P",
+              "displayName": "Premium",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "PT",
+                    "C",
+                    "C",
+                    "Value"
+                  ],
+                  "systemName": "PT.C.C.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "PT",
+                "C",
+                "C"
+              ],
+              "systemName": "PT.C.C",
+              "displayName": "Cost",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "PT",
+                    "C",
+                    "B",
+                    "Value"
+                  ],
+                  "systemName": "PT.C.B.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "PT",
+                "C",
+                "B"
+              ],
+              "systemName": "PT.C.B",
+              "displayName": "Benefit",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "PT",
+                    "C",
+                    "TotalGroup",
+                    "Value"
+                  ],
+                  "systemName": "PT.C.TotalGroup.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "PT",
+                "C",
+                "TotalGroup"
+              ],
+              "systemName": "PT.C.TotalGroup",
+              "displayName": " ",
+              "grouperName": "LineOfBusiness"
+            }
+          ],
+          "coordinates": [
+            "PT",
+            "C"
+          ],
+          "systemName": "PT.C",
+          "displayName": "Casualty",
+          "grouperName": "LineOfBusiness"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "PT",
+                    "H",
+                    "E",
+                    "Value"
+                  ],
+                  "systemName": "PT.H.E.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "PT",
+                "H",
+                "E"
+              ],
+              "systemName": "PT.H.E",
+              "displayName": "Expenses",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "PT",
+                    "H",
+                    "P",
+                    "Value"
+                  ],
+                  "systemName": "PT.H.P.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "PT",
+                "H",
+                "P"
+              ],
+              "systemName": "PT.H.P",
+              "displayName": "Premium",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "PT",
+                    "H",
+                    "C",
+                    "Value"
+                  ],
+                  "systemName": "PT.H.C.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "PT",
+                "H",
+                "C"
+              ],
+              "systemName": "PT.H.C",
+              "displayName": "Cost",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "PT",
+                    "H",
+                    "B",
+                    "Value"
+                  ],
+                  "systemName": "PT.H.B.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "PT",
+                "H",
+                "B"
+              ],
+              "systemName": "PT.H.B",
+              "displayName": "Benefit",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "PT",
+                    "H",
+                    "TotalGroup",
+                    "Value"
+                  ],
+                  "systemName": "PT.H.TotalGroup.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "PT",
+                "H",
+                "TotalGroup"
+              ],
+              "systemName": "PT.H.TotalGroup",
+              "displayName": " ",
+              "grouperName": "LineOfBusiness"
+            }
+          ],
+          "coordinates": [
+            "PT",
+            "H"
+          ],
+          "systemName": "PT.H",
+          "displayName": "Health",
+          "grouperName": "LineOfBusiness"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "PT",
+                    "L",
+                    "E",
+                    "Value"
+                  ],
+                  "systemName": "PT.L.E.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "PT",
+                "L",
+                "E"
+              ],
+              "systemName": "PT.L.E",
+              "displayName": "Expenses",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "PT",
+                    "L",
+                    "P",
+                    "Value"
+                  ],
+                  "systemName": "PT.L.P.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "PT",
+                "L",
+                "P"
+              ],
+              "systemName": "PT.L.P",
+              "displayName": "Premium",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "PT",
+                    "L",
+                    "C",
+                    "Value"
+                  ],
+                  "systemName": "PT.L.C.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "PT",
+                "L",
+                "C"
+              ],
+              "systemName": "PT.L.C",
+              "displayName": "Cost",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "PT",
+                    "L",
+                    "B",
+                    "Value"
+                  ],
+                  "systemName": "PT.L.B.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "PT",
+                "L",
+                "B"
+              ],
+              "systemName": "PT.L.B",
+              "displayName": "Benefit",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "PT",
+                    "L",
+                    "TotalGroup",
+                    "Value"
+                  ],
+                  "systemName": "PT.L.TotalGroup.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "PT",
+                "L",
+                "TotalGroup"
+              ],
+              "systemName": "PT.L.TotalGroup",
+              "displayName": " ",
+              "grouperName": "LineOfBusiness"
+            }
+          ],
+          "coordinates": [
+            "PT",
+            "L"
+          ],
+          "systemName": "PT.L",
+          "displayName": "Life",
+          "grouperName": "LineOfBusiness"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "PT",
+                    "P",
+                    "E",
+                    "Value"
+                  ],
+                  "systemName": "PT.P.E.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "PT",
+                "P",
+                "E"
+              ],
+              "systemName": "PT.P.E",
+              "displayName": "Expenses",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "PT",
+                    "P",
+                    "P",
+                    "Value"
+                  ],
+                  "systemName": "PT.P.P.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "PT",
+                "P",
+                "P"
+              ],
+              "systemName": "PT.P.P",
+              "displayName": "Premium",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "PT",
+                    "P",
+                    "C",
+                    "Value"
+                  ],
+                  "systemName": "PT.P.C.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "PT",
+                "P",
+                "C"
+              ],
+              "systemName": "PT.P.C",
+              "displayName": "Cost",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "PT",
+                    "P",
+                    "B",
+                    "Value"
+                  ],
+                  "systemName": "PT.P.B.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "PT",
+                "P",
+                "B"
+              ],
+              "systemName": "PT.P.B",
+              "displayName": "Benefit",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "PT",
+                    "P",
+                    "TotalGroup",
+                    "Value"
+                  ],
+                  "systemName": "PT.P.TotalGroup.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "PT",
+                "P",
+                "TotalGroup"
+              ],
+              "systemName": "PT.P.TotalGroup",
+              "displayName": " ",
+              "grouperName": "LineOfBusiness"
+            }
+          ],
+          "coordinates": [
+            "PT",
+            "P"
+          ],
+          "systemName": "PT.P",
+          "displayName": "Property",
+          "grouperName": "LineOfBusiness"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "PT",
+                "TotalGroup",
+                "Value"
+              ],
+              "systemName": "PT.TotalGroup.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "PT",
+            "TotalGroup"
+          ],
+          "systemName": "PT.TotalGroup",
+          "displayName": " ",
+          "grouperName": "Country"
+        }
+      ],
+      "coordinates": [
+        "PT"
+      ],
+      "systemName": "PT",
+      "displayName": "Portugal",
+      "grouperName": "Country"
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+      "children": [
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "RU",
+                    "C",
+                    "E",
+                    "Value"
+                  ],
+                  "systemName": "RU.C.E.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "RU",
+                "C",
+                "E"
+              ],
+              "systemName": "RU.C.E",
+              "displayName": "Expenses",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "RU",
+                    "C",
+                    "P",
+                    "Value"
+                  ],
+                  "systemName": "RU.C.P.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "RU",
+                "C",
+                "P"
+              ],
+              "systemName": "RU.C.P",
+              "displayName": "Premium",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "RU",
+                    "C",
+                    "C",
+                    "Value"
+                  ],
+                  "systemName": "RU.C.C.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "RU",
+                "C",
+                "C"
+              ],
+              "systemName": "RU.C.C",
+              "displayName": "Cost",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "RU",
+                    "C",
+                    "B",
+                    "Value"
+                  ],
+                  "systemName": "RU.C.B.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "RU",
+                "C",
+                "B"
+              ],
+              "systemName": "RU.C.B",
+              "displayName": "Benefit",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "RU",
+                    "C",
+                    "TotalGroup",
+                    "Value"
+                  ],
+                  "systemName": "RU.C.TotalGroup.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "RU",
+                "C",
+                "TotalGroup"
+              ],
+              "systemName": "RU.C.TotalGroup",
+              "displayName": " ",
+              "grouperName": "LineOfBusiness"
+            }
+          ],
+          "coordinates": [
+            "RU",
+            "C"
+          ],
+          "systemName": "RU.C",
+          "displayName": "Casualty",
+          "grouperName": "LineOfBusiness"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "RU",
+                    "H",
+                    "E",
+                    "Value"
+                  ],
+                  "systemName": "RU.H.E.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "RU",
+                "H",
+                "E"
+              ],
+              "systemName": "RU.H.E",
+              "displayName": "Expenses",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "RU",
+                    "H",
+                    "P",
+                    "Value"
+                  ],
+                  "systemName": "RU.H.P.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "RU",
+                "H",
+                "P"
+              ],
+              "systemName": "RU.H.P",
+              "displayName": "Premium",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "RU",
+                    "H",
+                    "C",
+                    "Value"
+                  ],
+                  "systemName": "RU.H.C.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "RU",
+                "H",
+                "C"
+              ],
+              "systemName": "RU.H.C",
+              "displayName": "Cost",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "RU",
+                    "H",
+                    "B",
+                    "Value"
+                  ],
+                  "systemName": "RU.H.B.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "RU",
+                "H",
+                "B"
+              ],
+              "systemName": "RU.H.B",
+              "displayName": "Benefit",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "RU",
+                    "H",
+                    "TotalGroup",
+                    "Value"
+                  ],
+                  "systemName": "RU.H.TotalGroup.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "RU",
+                "H",
+                "TotalGroup"
+              ],
+              "systemName": "RU.H.TotalGroup",
+              "displayName": " ",
+              "grouperName": "LineOfBusiness"
+            }
+          ],
+          "coordinates": [
+            "RU",
+            "H"
+          ],
+          "systemName": "RU.H",
+          "displayName": "Health",
+          "grouperName": "LineOfBusiness"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "RU",
+                    "L",
+                    "E",
+                    "Value"
+                  ],
+                  "systemName": "RU.L.E.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "RU",
+                "L",
+                "E"
+              ],
+              "systemName": "RU.L.E",
+              "displayName": "Expenses",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "RU",
+                    "L",
+                    "P",
+                    "Value"
+                  ],
+                  "systemName": "RU.L.P.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "RU",
+                "L",
+                "P"
+              ],
+              "systemName": "RU.L.P",
+              "displayName": "Premium",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "RU",
+                    "L",
+                    "C",
+                    "Value"
+                  ],
+                  "systemName": "RU.L.C.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "RU",
+                "L",
+                "C"
+              ],
+              "systemName": "RU.L.C",
+              "displayName": "Cost",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "RU",
+                    "L",
+                    "B",
+                    "Value"
+                  ],
+                  "systemName": "RU.L.B.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "RU",
+                "L",
+                "B"
+              ],
+              "systemName": "RU.L.B",
+              "displayName": "Benefit",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "RU",
+                    "L",
+                    "TotalGroup",
+                    "Value"
+                  ],
+                  "systemName": "RU.L.TotalGroup.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "RU",
+                "L",
+                "TotalGroup"
+              ],
+              "systemName": "RU.L.TotalGroup",
+              "displayName": " ",
+              "grouperName": "LineOfBusiness"
+            }
+          ],
+          "coordinates": [
+            "RU",
+            "L"
+          ],
+          "systemName": "RU.L",
+          "displayName": "Life",
+          "grouperName": "LineOfBusiness"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "RU",
+                    "P",
+                    "E",
+                    "Value"
+                  ],
+                  "systemName": "RU.P.E.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "RU",
+                "P",
+                "E"
+              ],
+              "systemName": "RU.P.E",
+              "displayName": "Expenses",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "RU",
+                    "P",
+                    "P",
+                    "Value"
+                  ],
+                  "systemName": "RU.P.P.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "RU",
+                "P",
+                "P"
+              ],
+              "systemName": "RU.P.P",
+              "displayName": "Premium",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "RU",
+                    "P",
+                    "C",
+                    "Value"
+                  ],
+                  "systemName": "RU.P.C.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "RU",
+                "P",
+                "C"
+              ],
+              "systemName": "RU.P.C",
+              "displayName": "Cost",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "RU",
+                    "P",
+                    "B",
+                    "Value"
+                  ],
+                  "systemName": "RU.P.B.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "RU",
+                "P",
+                "B"
+              ],
+              "systemName": "RU.P.B",
+              "displayName": "Benefit",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "RU",
+                    "P",
+                    "TotalGroup",
+                    "Value"
+                  ],
+                  "systemName": "RU.P.TotalGroup.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "RU",
+                "P",
+                "TotalGroup"
+              ],
+              "systemName": "RU.P.TotalGroup",
+              "displayName": " ",
+              "grouperName": "LineOfBusiness"
+            }
+          ],
+          "coordinates": [
+            "RU",
+            "P"
+          ],
+          "systemName": "RU.P",
+          "displayName": "Property",
+          "grouperName": "LineOfBusiness"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "RU",
+                "TotalGroup",
+                "Value"
+              ],
+              "systemName": "RU.TotalGroup.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "RU",
+            "TotalGroup"
+          ],
+          "systemName": "RU.TotalGroup",
+          "displayName": " ",
+          "grouperName": "Country"
+        }
+      ],
+      "coordinates": [
+        "RU"
+      ],
+      "systemName": "RU",
+      "displayName": "Russia",
+      "grouperName": "Country"
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+      "children": [
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "CH",
+                    "C",
+                    "E",
+                    "Value"
+                  ],
+                  "systemName": "CH.C.E.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "CH",
+                "C",
+                "E"
+              ],
+              "systemName": "CH.C.E",
+              "displayName": "Expenses",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "CH",
+                    "C",
+                    "P",
+                    "Value"
+                  ],
+                  "systemName": "CH.C.P.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "CH",
+                "C",
+                "P"
+              ],
+              "systemName": "CH.C.P",
+              "displayName": "Premium",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "CH",
+                    "C",
+                    "C",
+                    "Value"
+                  ],
+                  "systemName": "CH.C.C.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "CH",
+                "C",
+                "C"
+              ],
+              "systemName": "CH.C.C",
+              "displayName": "Cost",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "CH",
+                    "C",
+                    "B",
+                    "Value"
+                  ],
+                  "systemName": "CH.C.B.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "CH",
+                "C",
+                "B"
+              ],
+              "systemName": "CH.C.B",
+              "displayName": "Benefit",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "CH",
+                    "C",
+                    "TotalGroup",
+                    "Value"
+                  ],
+                  "systemName": "CH.C.TotalGroup.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "CH",
+                "C",
+                "TotalGroup"
+              ],
+              "systemName": "CH.C.TotalGroup",
+              "displayName": " ",
+              "grouperName": "LineOfBusiness"
+            }
+          ],
+          "coordinates": [
+            "CH",
+            "C"
+          ],
+          "systemName": "CH.C",
+          "displayName": "Casualty",
+          "grouperName": "LineOfBusiness"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "CH",
+                    "H",
+                    "E",
+                    "Value"
+                  ],
+                  "systemName": "CH.H.E.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "CH",
+                "H",
+                "E"
+              ],
+              "systemName": "CH.H.E",
+              "displayName": "Expenses",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "CH",
+                    "H",
+                    "P",
+                    "Value"
+                  ],
+                  "systemName": "CH.H.P.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "CH",
+                "H",
+                "P"
+              ],
+              "systemName": "CH.H.P",
+              "displayName": "Premium",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "CH",
+                    "H",
+                    "C",
+                    "Value"
+                  ],
+                  "systemName": "CH.H.C.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "CH",
+                "H",
+                "C"
+              ],
+              "systemName": "CH.H.C",
+              "displayName": "Cost",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "CH",
+                    "H",
+                    "B",
+                    "Value"
+                  ],
+                  "systemName": "CH.H.B.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "CH",
+                "H",
+                "B"
+              ],
+              "systemName": "CH.H.B",
+              "displayName": "Benefit",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "CH",
+                    "H",
+                    "TotalGroup",
+                    "Value"
+                  ],
+                  "systemName": "CH.H.TotalGroup.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "CH",
+                "H",
+                "TotalGroup"
+              ],
+              "systemName": "CH.H.TotalGroup",
+              "displayName": " ",
+              "grouperName": "LineOfBusiness"
+            }
+          ],
+          "coordinates": [
+            "CH",
+            "H"
+          ],
+          "systemName": "CH.H",
+          "displayName": "Health",
+          "grouperName": "LineOfBusiness"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "CH",
+                    "L",
+                    "E",
+                    "Value"
+                  ],
+                  "systemName": "CH.L.E.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "CH",
+                "L",
+                "E"
+              ],
+              "systemName": "CH.L.E",
+              "displayName": "Expenses",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "CH",
+                    "L",
+                    "P",
+                    "Value"
+                  ],
+                  "systemName": "CH.L.P.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "CH",
+                "L",
+                "P"
+              ],
+              "systemName": "CH.L.P",
+              "displayName": "Premium",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "CH",
+                    "L",
+                    "C",
+                    "Value"
+                  ],
+                  "systemName": "CH.L.C.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "CH",
+                "L",
+                "C"
+              ],
+              "systemName": "CH.L.C",
+              "displayName": "Cost",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "CH",
+                    "L",
+                    "B",
+                    "Value"
+                  ],
+                  "systemName": "CH.L.B.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "CH",
+                "L",
+                "B"
+              ],
+              "systemName": "CH.L.B",
+              "displayName": "Benefit",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "CH",
+                    "L",
+                    "TotalGroup",
+                    "Value"
+                  ],
+                  "systemName": "CH.L.TotalGroup.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "CH",
+                "L",
+                "TotalGroup"
+              ],
+              "systemName": "CH.L.TotalGroup",
+              "displayName": " ",
+              "grouperName": "LineOfBusiness"
+            }
+          ],
+          "coordinates": [
+            "CH",
+            "L"
+          ],
+          "systemName": "CH.L",
+          "displayName": "Life",
+          "grouperName": "LineOfBusiness"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "CH",
+                    "P",
+                    "E",
+                    "Value"
+                  ],
+                  "systemName": "CH.P.E.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "CH",
+                "P",
+                "E"
+              ],
+              "systemName": "CH.P.E",
+              "displayName": "Expenses",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "CH",
+                    "P",
+                    "P",
+                    "Value"
+                  ],
+                  "systemName": "CH.P.P.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "CH",
+                "P",
+                "P"
+              ],
+              "systemName": "CH.P.P",
+              "displayName": "Premium",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "CH",
+                    "P",
+                    "C",
+                    "Value"
+                  ],
+                  "systemName": "CH.P.C.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "CH",
+                "P",
+                "C"
+              ],
+              "systemName": "CH.P.C",
+              "displayName": "Cost",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "CH",
+                    "P",
+                    "B",
+                    "Value"
+                  ],
+                  "systemName": "CH.P.B.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "CH",
+                "P",
+                "B"
+              ],
+              "systemName": "CH.P.B",
+              "displayName": "Benefit",
+              "grouperName": "AmountType"
+            },
+            {
+              "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+              "children": [
+                {
+                  "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+                  "coordinates": [
+                    "CH",
+                    "P",
+                    "TotalGroup",
+                    "Value"
+                  ],
+                  "systemName": "CH.P.TotalGroup.Value",
+                  "displayName": "Value",
+                  "grouperName": "ColumnName"
+                }
+              ],
+              "coordinates": [
+                "CH",
+                "P",
+                "TotalGroup"
+              ],
+              "systemName": "CH.P.TotalGroup",
+              "displayName": " ",
+              "grouperName": "LineOfBusiness"
+            }
+          ],
+          "coordinates": [
+            "CH",
+            "P"
+          ],
+          "systemName": "CH.P",
+          "displayName": "Property",
+          "grouperName": "LineOfBusiness"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "CH",
+                "TotalGroup",
+                "Value"
+              ],
+              "systemName": "CH.TotalGroup.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "CH",
+            "TotalGroup"
+          ],
+          "systemName": "CH.TotalGroup",
+          "displayName": " ",
+          "grouperName": "Country"
+        }
+      ],
+      "coordinates": [
+        "CH"
+      ],
+      "systemName": "CH",
+      "displayName": "Switzerland",
+      "grouperName": "Country"
+    }
+  ],
+  "rows": [
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "EUR"
+        ],
+        "systemName": "EUR",
+        "displayName": "Euro",
+        "grouperName": "Currency"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "d": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "c": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "h": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "l": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "p": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "totalGroup": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 96.0
+          }
+        },
+        "pt": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "c": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "h": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "l": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "p": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "totalGroup": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 96.0
+          }
+        },
+        "ru": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "c": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "h": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "l": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "p": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "totalGroup": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 96.0
+          }
+        },
+        "ch": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "c": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "h": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "l": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "p": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "totalGroup": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 96.0
+          }
+        }
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "RUB"
+        ],
+        "systemName": "RUB",
+        "displayName": "Russian rouble",
+        "grouperName": "Currency"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "d": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "c": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "h": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "l": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "p": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "totalGroup": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 96.0
+          }
+        },
+        "pt": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "c": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "h": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "l": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "p": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "totalGroup": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 96.0
+          }
+        },
+        "ru": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "c": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "h": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "l": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "p": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "totalGroup": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 96.0
+          }
+        },
+        "ch": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "c": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "h": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "l": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "p": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "totalGroup": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 96.0
+          }
+        }
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "CHF"
+        ],
+        "systemName": "CHF",
+        "displayName": "Swiss Franc",
+        "grouperName": "Currency"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "d": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "c": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "h": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "l": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "p": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "totalGroup": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 96.0
+          }
+        },
+        "pt": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "c": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "h": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "l": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "p": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "totalGroup": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 96.0
+          }
+        },
+        "ru": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "c": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "h": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "l": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "p": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "totalGroup": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 96.0
+          }
+        },
+        "ch": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "c": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "h": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "l": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "p": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "totalGroup": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 96.0
+          }
+        }
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "USD"
+        ],
+        "systemName": "USD",
+        "displayName": "US Dollar",
+        "grouperName": "Currency"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "d": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "c": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "h": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "l": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "p": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "totalGroup": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 96.0
+          }
+        },
+        "pt": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "c": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "h": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "l": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "p": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "totalGroup": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 96.0
+          }
+        },
+        "ru": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "c": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "h": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "l": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "p": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "totalGroup": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 96.0
+          }
+        },
+        "ch": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "c": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "h": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "l": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "p": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "e": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "p": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "c": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "b": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 6.0
+            },
+            "totalGroup": {
+              "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+              "value": 24.0
+            }
+          },
+          "totalGroup": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 96.0
+          }
+        }
+      }
+    }
+  ],
+  "hasRowGrouping": true
+}

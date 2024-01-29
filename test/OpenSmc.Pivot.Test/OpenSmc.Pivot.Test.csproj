@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<ItemGroup>
+		<PackageReference Include="Newtonsoft.Json" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <ProjectReference Include="..\..\src\OpenSmc.Pivot\OpenSmc.Pivot.csproj" />
+	  <ProjectReference Include="..\..\src\OpenSmc.Scopes\OpenSmc.Scopes.csproj" />
+	  <ProjectReference Include="..\..\src\OpenSmc.Serialization.Abstractions\OpenSmc.Serialization.Abstractions.csproj" />
+	  <ProjectReference Include="..\OpenSmc.Fixture\OpenSmc.Fixture.csproj" />
+	  <ProjectReference Include="..\OpenSmc.TestDomain\OpenSmc.TestDomain.csproj" />
+	</ItemGroup>
+  <ItemGroup>
+    <None Update="**\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,223 @@
+{
+  "$type": "Systemorph.Pivot.Models.PivotModel, Systemorph.Pivot",
+  "columns": [
+    {
+      "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+      "coordinates": [
+        "Value"
+      ],
+      "systemName": "Value",
+      "displayName": "Value",
+      "grouperName": "ColumnName"
+    }
+  ],
+  "rows": [
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "A1"
+        ],
+        "systemName": "A1",
+        "displayName": "A 1",
+        "grouperName": "DimA0"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "value": 10.0
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "A1",
+          "A11"
+        ],
+        "systemName": "A1.A11",
+        "displayName": "A 11",
+        "grouperName": "DimA1"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "value": 10.0
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "A1",
+          "A11",
+          "A111"
+        ],
+        "systemName": "A1.A11.A111",
+        "displayName": "A 111",
+        "grouperName": "DimA2"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "value": 4.0
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "A1",
+          "A11",
+          "A111",
+          "B1"
+        ],
+        "systemName": "A1.A11.A111.B1",
+        "displayName": "B 1",
+        "grouperName": "DimB0"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "value": 3.0
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "A1",
+          "A11",
+          "A111",
+          "B1",
+          "B12"
+        ],
+        "systemName": "A1.A11.A111.B1.B12",
+        "displayName": "B 12",
+        "grouperName": "DimB1"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "value": 3.0
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "A1",
+          "A11",
+          "A111",
+          "B2"
+        ],
+        "systemName": "A1.A11.A111.B2",
+        "displayName": "B 2",
+        "grouperName": "DimB0"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "value": 1.0
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "A1",
+          "A11",
+          "A111",
+          "B2",
+          "NullGroup"
+        ],
+        "systemName": "A1.A11.A111.B2.NullGroup",
+        "displayName": " ",
+        "grouperName": "DimB1"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "value": 1.0
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "A1",
+          "A11",
+          "A112"
+        ],
+        "systemName": "A1.A11.A112",
+        "displayName": "A 112",
+        "grouperName": "DimA2"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "value": 6.0
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "A1",
+          "A11",
+          "A112",
+          "B1"
+        ],
+        "systemName": "A1.A11.A112.B1",
+        "displayName": "B 1",
+        "grouperName": "DimB0"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "value": 6.0
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "A1",
+          "A11",
+          "A112",
+          "B1",
+          "B11"
+        ],
+        "systemName": "A1.A11.A112.B1.B11",
+        "displayName": "B 11",
+        "grouperName": "DimB1"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "value": 2.0
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "A1",
+          "A11",
+          "A112",
+          "B1",
+          "NullGroup"
+        ],
+        "systemName": "A1.A11.A112.B1.NullGroup",
+        "displayName": " ",
+        "grouperName": "DimB1"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "value": 4.0
+      }
+    }
+  ],
+  "hasRowGrouping": true
+}

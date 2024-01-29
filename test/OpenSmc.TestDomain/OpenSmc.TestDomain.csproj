@@ -1,0 +1,9 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OpenSmc.DataCubes.Abstractions\OpenSmc.DataCubes.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.DataCubes\OpenSmc.DataCubes.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.DataSource.Abstractions\OpenSmc.DataSource.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.Domain.Abstractions\OpenSmc.Domain.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.Scopes\OpenSmc.Scopes.csproj" />
+  </ItemGroup>
+</Project>

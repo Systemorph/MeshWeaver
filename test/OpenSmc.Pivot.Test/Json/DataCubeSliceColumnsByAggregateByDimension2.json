@@ -1,0 +1,216 @@
+{
+  "$type": "Systemorph.Pivot.Models.PivotModel, Systemorph.Pivot",
+  "columns": [
+    {
+      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+      "children": [
+        {
+          "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+          "coordinates": [
+            "EUR",
+            "Value"
+          ],
+          "systemName": "EUR.Value",
+          "displayName": "Value",
+          "grouperName": "ColumnName"
+        }
+      ],
+      "coordinates": [
+        "EUR"
+      ],
+      "systemName": "EUR",
+      "displayName": "Euro",
+      "grouperName": "Currency"
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+      "children": [
+        {
+          "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+          "coordinates": [
+            "RUB",
+            "Value"
+          ],
+          "systemName": "RUB.Value",
+          "displayName": "Value",
+          "grouperName": "ColumnName"
+        }
+      ],
+      "coordinates": [
+        "RUB"
+      ],
+      "systemName": "RUB",
+      "displayName": "Russian rouble",
+      "grouperName": "Currency"
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+      "children": [
+        {
+          "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+          "coordinates": [
+            "CHF",
+            "Value"
+          ],
+          "systemName": "CHF.Value",
+          "displayName": "Value",
+          "grouperName": "ColumnName"
+        }
+      ],
+      "coordinates": [
+        "CHF"
+      ],
+      "systemName": "CHF",
+      "displayName": "Swiss Franc",
+      "grouperName": "Currency"
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+      "children": [
+        {
+          "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+          "coordinates": [
+            "USD",
+            "Value"
+          ],
+          "systemName": "USD.Value",
+          "displayName": "Value",
+          "grouperName": "ColumnName"
+        }
+      ],
+      "coordinates": [
+        "USD"
+      ],
+      "systemName": "USD",
+      "displayName": "US Dollar",
+      "grouperName": "Currency"
+    }
+  ],
+  "rows": [
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "D"
+        ],
+        "systemName": "D",
+        "displayName": "Germany",
+        "grouperName": "Country"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "eur": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 96.0
+        },
+        "rub": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 96.0
+        },
+        "chf": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 96.0
+        },
+        "usd": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 96.0
+        }
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "PT"
+        ],
+        "systemName": "PT",
+        "displayName": "Portugal",
+        "grouperName": "Country"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "eur": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 96.0
+        },
+        "rub": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 96.0
+        },
+        "chf": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 96.0
+        },
+        "usd": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 96.0
+        }
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "RU"
+        ],
+        "systemName": "RU",
+        "displayName": "Russia",
+        "grouperName": "Country"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "eur": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 96.0
+        },
+        "rub": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 96.0
+        },
+        "chf": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 96.0
+        },
+        "usd": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 96.0
+        }
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "CH"
+        ],
+        "systemName": "CH",
+        "displayName": "Switzerland",
+        "grouperName": "Country"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "eur": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 96.0
+        },
+        "rub": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 96.0
+        },
+        "chf": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 96.0
+        },
+        "usd": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "value": 96.0
+        }
+      }
+    }
+  ],
+  "hasRowGrouping": true
+}

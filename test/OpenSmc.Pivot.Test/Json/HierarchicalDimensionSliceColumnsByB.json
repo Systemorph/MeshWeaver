@@ -1,0 +1,190 @@
+{
+  "$type": "Systemorph.Pivot.Models.PivotModel, Systemorph.Pivot",
+  "columns": [
+    {
+      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+      "children": [
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "B1",
+                "B11",
+                "Value"
+              ],
+              "systemName": "B1.B11.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "B1",
+            "B11"
+          ],
+          "systemName": "B1.B11",
+          "displayName": "B 11",
+          "grouperName": "DimB1"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "B1",
+                "B12",
+                "Value"
+              ],
+              "systemName": "B1.B12.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "B1",
+            "B12"
+          ],
+          "systemName": "B1.B12",
+          "displayName": "B 12",
+          "grouperName": "DimB1"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "B1",
+                "NullGroup",
+                "Value"
+              ],
+              "systemName": "B1.NullGroup.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "B1",
+            "NullGroup"
+          ],
+          "systemName": "B1.NullGroup",
+          "displayName": " ",
+          "grouperName": "DimB1"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "B1",
+                "TotalGroup",
+                "Value"
+              ],
+              "systemName": "B1.TotalGroup.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "B1",
+            "TotalGroup"
+          ],
+          "systemName": "B1.TotalGroup",
+          "displayName": " ",
+          "grouperName": "DimB0"
+        }
+      ],
+      "coordinates": [
+        "B1"
+      ],
+      "systemName": "B1",
+      "displayName": "B 1",
+      "grouperName": "DimB0"
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+      "children": [
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "B2",
+                "NullGroup",
+                "Value"
+              ],
+              "systemName": "B2.NullGroup.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "B2",
+            "NullGroup"
+          ],
+          "systemName": "B2.NullGroup",
+          "displayName": " ",
+          "grouperName": "DimB1"
+        }
+      ],
+      "coordinates": [
+        "B2"
+      ],
+      "systemName": "B2",
+      "displayName": "B 2",
+      "grouperName": "DimB0"
+    }
+  ],
+  "rows": [
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "TopGroup"
+        ],
+        "systemName": "TopGroup",
+        "displayName": "Total",
+        "grouperName": "Total"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "b1": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "b11": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 2.0
+          },
+          "b12": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 3.0
+          },
+          "nullGroup": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 4.0
+          },
+          "totalGroup": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 9.0
+          }
+        },
+        "b2": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "nullGroup": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 1.0
+          },
+          "totalGroup": {
+            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+            "value": 1.0
+          }
+        }
+      }
+    }
+  ],
+  "hasRowGrouping": true
+}

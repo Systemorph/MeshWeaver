@@ -1,0 +1,80 @@
+{
+  "$type": "Systemorph.Pivot.Models.PivotModel, Systemorph.Pivot",
+  "columns": [
+    {
+      "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+      "coordinates": [
+        "Value"
+      ],
+      "systemName": "Value",
+      "displayName": "Value",
+      "grouperName": "ColumnName"
+    }
+  ],
+  "rows": [
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "2021"
+        ],
+        "systemName": "2021",
+        "displayName": "2021",
+        "grouperName": "Year"
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "2021",
+          "BoP"
+        ],
+        "systemName": "2021.BoP",
+        "displayName": "Beginning of Period",
+        "grouperName": "PropertyName"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "value": 4.0
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "2021",
+          "Delta"
+        ],
+        "systemName": "2021.Delta",
+        "displayName": "Delta",
+        "grouperName": "PropertyName"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "value": 4.0
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "2021",
+          "EoP"
+        ],
+        "systemName": "2021.EoP",
+        "displayName": "End of Period",
+        "grouperName": "PropertyName"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "value": 4.0
+      }
+    }
+  ],
+  "hasRowGrouping": true
+}
