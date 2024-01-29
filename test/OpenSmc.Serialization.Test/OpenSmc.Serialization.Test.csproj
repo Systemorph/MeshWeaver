@@ -6,5 +6,6 @@
     <ProjectReference Include="..\..\src\OpenSmc.Serialization\OpenSmc.Serialization.csproj" />
     <ProjectReference Include="..\OpenSmc.Fixture\OpenSmc.Fixture.csproj" />
     <ProjectReference Include="..\OpenSmc.Hub.Fixture\OpenSmc.Hub.Fixture.csproj" />
+    <ProjectReference Include="..\OpenSmc.Json.Assertions\OpenSmc.Json.Assertions.csproj" />
   </ItemGroup>
 </Project>
