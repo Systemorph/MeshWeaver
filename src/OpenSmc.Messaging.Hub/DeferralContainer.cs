@@ -8,7 +8,7 @@ public class DeferralContainer : IAsyncDisposable
 
     public DeferralContainer(AsyncDelivery asyncDelivery)
     {
-        deferralChain.AddLast(new DeferralItem(_ => false, asyncDelivery));
+        deferralChain.AddFirst(new DeferralItem(_ => false, asyncDelivery));
     }
 
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter)

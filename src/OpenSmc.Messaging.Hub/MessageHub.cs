@@ -14,13 +14,17 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
 
     private readonly ILogger logger;
     public MessageHubConfiguration Configuration { get; }
+    private readonly HostedHubsCollection hostedHubs;
+    private readonly IDisposable deferral;
 
     public MessageHub(IServiceProvider serviceProvider, HostedHubsCollection hostedHubs,
         MessageHubConfiguration configuration, IMessageHub parentHub) : base(serviceProvider)
     {
+
+        deferral = MessageService.Defer(_ => true);
         MessageService.Initialize(DeliverMessageAsync);
 
-        hostedHubs1 = hostedHubs;
+        this.hostedHubs = hostedHubs;
         ServiceProvider = serviceProvider;
         logger = serviceProvider.GetRequiredService<ILogger<MessageHub<TAddress>>>();
 
@@ -45,18 +49,23 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
             Register(messageHandler.MessageType, d => messageHandler.AsyncDelivery.Invoke(this, d));
 
 
+        MessageService.Schedule(StartAsync);
         logger.LogInformation("Message hub {address} initialized", Address);
 
     }
 
 
-    protected override async Task StartAsync()
+    private async Task StartAsync()
     {
+        foreach (var factory in Configuration.PluginFactories)
+            AddPlugin(await factory.Invoke(this));
+
         var actions = Configuration.BuildupActions;
         foreach (var buildup in actions)
             await buildup(this);
 
-        await base.StartAsync();
+        deferral.Dispose();
+        MessageService.Start();
     }
 
 
@@ -102,7 +111,7 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
 
     // ReSharper disable once UnusedMethodReturnValue.Local
     public Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, AsyncDelivery callback)
-        => RegisterCallback(delivery, callback, new CancellationTokenSource(999).Token);
+        => RegisterCallback(delivery, callback, default);
     public Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, AsyncDelivery callback, CancellationToken cancellationToken)
 
     {
@@ -183,7 +192,7 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
 
     public IMessageHub GetHostedHub<TAddress1>(TAddress1 address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
     {
-        var messageHub = hostedHubs1.GetHub(address, config);
+        var messageHub = hostedHubs.GetHub(address, config);
         return messageHub;
     }
 
@@ -228,7 +237,7 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
     private async Task DoDisposeAsync()
     {
 
-        await hostedHubs1.DisposeAsync();
+        await hostedHubs.DisposeAsync();
 
         Post(new DisconnectHubRequest(Address));
         await MessageService.DisposeAsync();
@@ -249,33 +258,7 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
 
 
 
-    private readonly List<object> deferrals = new();
-    private IDisposable defaultDeferrals;
 
-    class SelfDisposable : IDisposable
-    {
-        private readonly ICollection<object> collection;
-        private readonly Action callback;
-
-        public SelfDisposable(ICollection<object> collection, Action callback)
-        {
-            this.collection = collection;
-            this.callback = callback;
-            collection.Add(this);
-        }
-
-        public void Dispose()
-        {
-            collection.Remove(this);
-            callback();
-        }
-    }
-
-    public IDisposable Defer()
-    {
-        var deferral = new SelfDisposable(deferrals, ReleaseAllTypes);
-        return deferral;
-    }
 
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter) =>
         MessageService.Defer(deferredFilter);
@@ -296,33 +279,22 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
 
     public void AddPlugin(IMessageHubPlugin plugin)
     {
+        var def = MessageService.Defer(plugin.IsDeferred);
         Register(async d =>
         { 
             d = await plugin.DeliverMessageAsync(d);
             return d;
         });
         WithDisposeAction(_ => plugin.DisposeAsync());
+        MessageService.Schedule(async () =>
+        {
+            await plugin.StartAsync();
+            def.Dispose();
+        });
     }
 
  
-    private readonly object releaseLock = new();
-    private readonly HostedHubsCollection hostedHubs1;
 
-
-    private void ReleaseAllTypes()
-    {
-        if (deferrals.Count > 0)
-            return;
-
-        lock (releaseLock)
-        {
-            if (defaultDeferrals == null)
-                return;
-            defaultDeferrals.Dispose();
-            defaultDeferrals = null;
-
-        }
-    }
 
 
 

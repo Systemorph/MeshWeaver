@@ -107,14 +107,8 @@ public abstract record UiControl : IUiControl
     public Task ClickAsync(IUiActionContext context) => ClickAction?.Invoke(context) ?? Task.CompletedTask;
 }
 
-public class GenericUiControlPlugin<TControl> : UiControlPlugin<TControl>
-    where TControl : UiControl
-{
-    protected GenericUiControlPlugin(IMessageHub hub) : base(hub)
-    {
-    }
-
-}
+public class GenericUiControlPlugin<TControl>(IMessageHub hub) : UiControlPlugin<TControl>(hub)
+    where TControl : UiControl;
 
 public abstract record UiControl<TControl, TPlugin>(string ModuleName, string ApiVersion, object Data) : UiControl(Data), IUiControl<TControl>
     where TControl : UiControl<TControl, TPlugin>, IUiControl<TControl>
@@ -129,7 +123,7 @@ public abstract record UiControl<TControl, TPlugin>(string ModuleName, string Ap
 
     protected virtual TPlugin CreatePlugin(IMessageHub hub)
     {
-        var ret = Hub.ServiceProvider.GetRequiredService<TPlugin>();
+        var ret = hub.ServiceProvider.GetRequiredService<TPlugin>();
         ret.InitializeState((TControl)this);
         return ret;
     }

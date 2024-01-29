@@ -45,14 +45,14 @@ public class UiControlPlugin<TControl> : MessageHubPlugin<UiControlPlugin<TContr
         where TControl2 : UiControl
     {
         if (control == null)
-            return default;
+            return null;
         var address = new UiControlAddress(control.Id, Hub.Address);
         control = control with { Address = address };
 
 
         var hub = control.CreateHub(Hub.ServiceProvider);
 
-        return control with   {Hub = hub};
+        return control with { Hub = hub, Address = address };
     }
 
 

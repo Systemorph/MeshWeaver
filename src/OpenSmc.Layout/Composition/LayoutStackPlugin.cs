@@ -6,17 +6,26 @@ using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Layout.Composition;
 
-public class LayoutStackPlugin(LayoutDefinition layoutDefinition) : 
-                         UiControlPlugin<LayoutStackControl>(layoutDefinition.Hub),
-                         IMessageHandler<SetAreaRequest>,
-                         IMessageHandler<LayoutStackUpdateRequest>
+public class LayoutStackPlugin(IMessageHub hub) :
+    UiControlPlugin<LayoutStackControl>(hub),
+    IMessageHandler<SetAreaRequest>,
+    IMessageHandler<LayoutStackUpdateRequest>
 
 {
     [Inject] private IUiControlService uiControlService;
+    private readonly LayoutDefinition layoutDefinition;
 
+    public LayoutStackPlugin(LayoutDefinition layoutDefinition) : this(layoutDefinition.Hub)
+    {
+        this.layoutDefinition = layoutDefinition;
+    }
 
     public override LayoutStackControl StartupState()
-        => layoutDefinition.InitialState;
+    {
+        if (layoutDefinition?.InitialState == null)
+            return null;
+        return layoutDefinition.InitialState with { Hub = hub1, Address = hub1.Address };
+    }
 
     private AreaChangedEvent GetArea(string area)
     {
@@ -65,6 +74,7 @@ public class LayoutStackPlugin(LayoutDefinition layoutDefinition) :
 
     public override void InitializeState(LayoutStackControl control)
     {
+        if(control == null) return;
         base.InitializeState(control);
         var areas = Control.ViewElements
                                  .Select
@@ -91,6 +101,11 @@ public class LayoutStackPlugin(LayoutDefinition layoutDefinition) :
         var areaChanged = SetAreaImpl(request.Message.View, request.Message.ViewDefinition, request.Message.Path, request.Message.Options);
         Post(areaChanged ?? new AreaChangedEvent(request.Message.Area, null), o => o.ResponseFor(request.Message.ForwardedRequest ?? request).WithTarget(MessageTargets.Subscribers));
         return request.Processed();
+    }
+
+    public override Task StartAsync()
+    {
+        return base.StartAsync();
     }
 
     protected override IMessageDelivery RefreshView(IMessageDelivery<RefreshRequest> request)
@@ -183,7 +198,9 @@ public class LayoutStackPlugin(LayoutDefinition layoutDefinition) :
 
 #pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
     private static readonly MethodInfo AwaitTaskMethod = ReflectionHelper.GetStaticMethodGeneric(() => AwaitTask<object>(null, null));
+    private readonly IMessageHub hub1 = hub;
 #pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
+    // ReSharper disable once UnusedMethodReturnValue.Local
     private static async Task<ViewElementWithView> AwaitTask<T>(SetAreaOptions options, Task<T> task) => new(await task, options);
 
     protected virtual object CreateView(IMessageDelivery<RefreshRequest> request) => layoutDefinition.ViewGenerator(request);
@@ -195,6 +212,11 @@ public class LayoutStackPlugin(LayoutDefinition layoutDefinition) :
         var (updatedView, action) = request.Message;
         action(Hub, State.Areas, updatedView.ViewElements.OfType<ViewElementWithView>());
         return request.Processed();
+    }
+
+    public override bool IsDeferred(IMessageDelivery delivery)
+    {
+        return base.IsDeferred(delivery);
     }
 }
 

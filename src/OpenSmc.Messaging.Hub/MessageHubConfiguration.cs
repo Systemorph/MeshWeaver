@@ -61,6 +61,7 @@ public record MessageHubConfiguration
 
 
     internal Func<ForwardConfiguration, ForwardConfiguration> ForwardConfigurationBuilder { get; init; }
+    public ImmutableList<Func<IMessageHub, Task<IMessageHubPlugin>>> PluginFactories { get; init; } = ImmutableList<Func<IMessageHub, Task<IMessageHubPlugin>>>.Empty;
 
 
     public MessageHubConfiguration WithServices(Func<IServiceCollection, IServiceCollection> configuration)
@@ -124,7 +125,6 @@ public record MessageHubConfiguration
 
         HubInstance = ServiceProvider.GetRequiredService<IMessageHub>();
 
-        ServiceProvider.GetService<IMessageService>().Start();
         return HubInstance;
     }
 

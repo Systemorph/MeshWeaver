@@ -14,5 +14,4 @@ public interface IMessageHandlerRegistry
     IMessageHandlerRegistry RegisterInherited<TMessage>(SyncDelivery<TMessage> action, DeliveryFilter<TMessage> filter = null);
     IMessageHandlerRegistry Register(SyncDelivery delivery);
     IMessageHandlerRegistry Register(AsyncDelivery delivery);
-    IMessageHandlerRegistry RegisterHandlersFromInstance(object instance);
 }

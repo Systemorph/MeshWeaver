@@ -12,21 +12,17 @@ public static class MessageHubPluginExtensions
 
     public static MessageHubConfiguration AddPlugin<TPlugin>(this MessageHubConfiguration configuration, Func<IMessageHub, Task<TPlugin>> factory)
         where TPlugin : class, IMessageHubPlugin
-        => configuration
-        .WithServices(s => 
-        { 
-            s.TryAdd(ServiceDescriptor.Transient<TPlugin, TPlugin>()); 
-            return s; 
-        })
-        .WithBuildupAction(async hub =>
-        {
-            var plugin = await factory(hub);
-            hub.AddPlugin(plugin);
-        });
+        => configuration with {PluginFactories = configuration.PluginFactories.Add(async h => await factory.Invoke(h))};
 
     public static MessageHubConfiguration AddPlugin<TPlugin>(this MessageHubConfiguration configuration) 
         where TPlugin : class, IMessageHubPlugin 
-        => configuration.AddPlugin(hub =>
+        => configuration
+            .WithServices(s =>
+            {
+                s.TryAdd(ServiceDescriptor.Transient<TPlugin, TPlugin>());
+                return s;
+            })
+            .AddPlugin(hub =>
         {
             var ret = hub.ServiceProvider.GetRequiredService<TPlugin>();
             return ret;
