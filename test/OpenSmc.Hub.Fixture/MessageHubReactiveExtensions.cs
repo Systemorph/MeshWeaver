@@ -1,12 +1,11 @@
 ﻿using System.Reactive.Subjects;
 using OpenSmc.Messaging;
-using OpenSmc.Messaging.Hub;
 
 namespace OpenSmc.Hub.Fixture;
 
 public static class MessageHubReactiveExtensions
 {
-    public static async Task<Subject<IMessageDelivery>> AddObservable(this IMessageHub hub)
+    public static Subject<IMessageDelivery> AddObservable(this IMessageHub hub)
     {
         var plugin = new ObservablePlugin(hub.ServiceProvider);
         hub.AddPlugin(plugin);

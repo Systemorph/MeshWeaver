@@ -48,7 +48,7 @@ public class MessageHubTest : HubTestBase
     public async Task ClientToServerWithMessageTraffic()
     {
         var client = GetClient();
-        var clientOut = (await client.AddObservable());
+        var clientOut = client.AddObservable();
         var messageTask = clientOut.Where(d => d.Message is HelloEvent).ToArray().GetAwaiter();
         var overallMessageTask = clientOut.ToArray().GetAwaiter();
 
@@ -72,7 +72,7 @@ public class MessageHubTest : HubTestBase
         // arrange: initiate subscription from client to host
         var client = GetClient();
         await client.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
-        var clientOut = (await client.AddObservable()).Timeout(500.Milliseconds());
+        var clientOut = client.AddObservable().Timeout(500.Milliseconds());
         var clientMessagesTask = clientOut.Select(d => d.Message).OfType<HelloEvent>().FirstAsync().GetAwaiter();
 
         // act 
