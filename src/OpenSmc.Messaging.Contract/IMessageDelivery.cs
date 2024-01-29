@@ -16,7 +16,7 @@ public interface IMessageDelivery
     object Message { get; }
 
     string AccessObject { get; }
-    object Context { get; set; }
+    IMessageDelivery Package();
 
     internal IMessageDelivery SetAccessObject(string accessObject, object address);
     internal IMessageDelivery ChangeState(string state);
