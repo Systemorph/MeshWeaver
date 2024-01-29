@@ -14,11 +14,10 @@ public class RemoteViewPlugin : GenericUiControlPlugin<RemoteViewControl>,
     [Inject] private IUiControlService uiControlService; // TODO V10: call BuildUp(this) in some base? (2023/12/20, Alexander Yolokhov)
 
 
-    public override UiControlPlugin<RemoteViewControl> InitializeState(RemoteViewControl control)
+    public override void InitializeState(RemoteViewControl control)
     {
         base.InitializeState(control);
         FullRefreshFromModelHubAsync();
-        return this;
     }
 
     private void FullRefreshFromModelHubAsync()
