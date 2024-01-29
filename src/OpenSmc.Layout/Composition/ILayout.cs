@@ -1,7 +1,5 @@
-﻿using System.Runtime.CompilerServices;
-using OpenSmc.Messaging;
+﻿using OpenSmc.Messaging;
 
-[assembly:InternalsVisibleTo("Systemorph.ViewModel.Hub")]
 namespace OpenSmc.Layout.Composition;
 
 public interface ILayout : IMessageHub

@@ -6,26 +6,17 @@ using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Layout.Composition;
 
-public class LayoutStackPlugin : 
-                         UiControlPlugin<LayoutStackControl>,
+public class LayoutStackPlugin(LayoutDefinition layoutDefinition) : 
+                         UiControlPlugin<LayoutStackControl>(layoutDefinition.Hub),
                          IMessageHandler<SetAreaRequest>,
                          IMessageHandler<LayoutStackUpdateRequest>
 
 {
     [Inject] private IUiControlService uiControlService;
-    private readonly LayoutDefinition layoutDefinition;
 
 
-    public LayoutStackPlugin(IMessageHub hub) : base(hub)
-    {
-    }
-
-
-    public LayoutStackPlugin(LayoutDefinition layoutDefinition, IMessageHub hub) : base(hub)
-    {
-        this.layoutDefinition = layoutDefinition;
-        UpdateState(_ => layoutDefinition.InitialState);
-    }
+    public override LayoutStackControl StartupState()
+        => layoutDefinition.InitialState;
 
     private AreaChangedEvent GetArea(string area)
     {
@@ -72,9 +63,9 @@ public class LayoutStackPlugin :
     }
 
 
-    public override void Initialize(LayoutStackControl control)
+    public override void InitializeState(LayoutStackControl control)
     {
-        base.Initialize(control);
+        base.InitializeState(control);
         var areas = Control.ViewElements
                                  .Select
                                      (
@@ -172,7 +163,7 @@ public class LayoutStackPlugin :
                 if (returnType == typeof(ViewElementWithView))
                     viewDefinition = del.Method.GetParameters().Length switch
                     {
-                        0 => o => Task.FromResult((ViewElementWithView)del.DynamicInvoke()),
+                        0 => _ => Task.FromResult((ViewElementWithView)del.DynamicInvoke()),
                         1 => o => Task.FromResult((ViewElementWithView)del.DynamicInvoke(o)),
                         _ => throw new NotSupportedException()
                     };
