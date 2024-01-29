@@ -1,0 +1,89 @@
+{
+  "$type": "Systemorph.Pivot.Models.PivotModel, Systemorph.Pivot",
+  "columns": [
+    {
+      "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+      "coordinates": [
+        "BoP"
+      ],
+      "systemName": "BoP",
+      "displayName": "Beginning of Period",
+      "grouperName": "ColumnName"
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+      "coordinates": [
+        "Delta"
+      ],
+      "systemName": "Delta",
+      "displayName": "Delta",
+      "grouperName": "ColumnName"
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+      "coordinates": [
+        "EoP"
+      ],
+      "systemName": "EoP",
+      "displayName": "End of Period",
+      "grouperName": "ColumnName"
+    }
+  ],
+  "rows": [
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "1"
+        ],
+        "systemName": "1",
+        "displayName": "1",
+        "grouperName": "AutomaticNumber"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "boP": 0.0,
+        "delta": 0.0,
+        "eoP": 0.0
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "2"
+        ],
+        "systemName": "2",
+        "displayName": "2",
+        "grouperName": "AutomaticNumber"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "boP": 0.0,
+        "delta": 1.0,
+        "eoP": 1.0
+      }
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "3"
+        ],
+        "systemName": "3",
+        "displayName": "3",
+        "grouperName": "AutomaticNumber"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "boP": 0.0,
+        "delta": 2.0,
+        "eoP": 2.0
+      }
+    }
+  ],
+  "hasRowGrouping": true
+}

@@ -1,0 +1,559 @@
+{
+  "$type": "Systemorph.Pivot.Models.PivotModel, Systemorph.Pivot",
+  "columns": [
+    {
+      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+      "children": [
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "C",
+                "B",
+                "Value"
+              ],
+              "systemName": "C.B.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "C",
+            "B"
+          ],
+          "systemName": "C.B",
+          "displayName": "B",
+          "grouperName": "AmountType"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "C",
+                "C",
+                "Value"
+              ],
+              "systemName": "C.C.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "C",
+            "C"
+          ],
+          "systemName": "C.C",
+          "displayName": "C",
+          "grouperName": "AmountType"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "C",
+                "E",
+                "Value"
+              ],
+              "systemName": "C.E.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "C",
+            "E"
+          ],
+          "systemName": "C.E",
+          "displayName": "E",
+          "grouperName": "AmountType"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "C",
+                "P",
+                "Value"
+              ],
+              "systemName": "C.P.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "C",
+            "P"
+          ],
+          "systemName": "C.P",
+          "displayName": "P",
+          "grouperName": "AmountType"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "C",
+                "TotalGroup",
+                "Value"
+              ],
+              "systemName": "C.TotalGroup.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "C",
+            "TotalGroup"
+          ],
+          "systemName": "C.TotalGroup",
+          "displayName": " ",
+          "grouperName": "LineOfBusiness"
+        }
+      ],
+      "coordinates": [
+        "C"
+      ],
+      "systemName": "C",
+      "displayName": "C",
+      "grouperName": "LineOfBusiness"
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+      "children": [
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "H",
+                "B",
+                "Value"
+              ],
+              "systemName": "H.B.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "H",
+            "B"
+          ],
+          "systemName": "H.B",
+          "displayName": "B",
+          "grouperName": "AmountType"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "H",
+                "C",
+                "Value"
+              ],
+              "systemName": "H.C.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "H",
+            "C"
+          ],
+          "systemName": "H.C",
+          "displayName": "C",
+          "grouperName": "AmountType"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "H",
+                "E",
+                "Value"
+              ],
+              "systemName": "H.E.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "H",
+            "E"
+          ],
+          "systemName": "H.E",
+          "displayName": "E",
+          "grouperName": "AmountType"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "H",
+                "P",
+                "Value"
+              ],
+              "systemName": "H.P.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "H",
+            "P"
+          ],
+          "systemName": "H.P",
+          "displayName": "P",
+          "grouperName": "AmountType"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "H",
+                "TotalGroup",
+                "Value"
+              ],
+              "systemName": "H.TotalGroup.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "H",
+            "TotalGroup"
+          ],
+          "systemName": "H.TotalGroup",
+          "displayName": " ",
+          "grouperName": "LineOfBusiness"
+        }
+      ],
+      "coordinates": [
+        "H"
+      ],
+      "systemName": "H",
+      "displayName": "H",
+      "grouperName": "LineOfBusiness"
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+      "children": [
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "L",
+                "B",
+                "Value"
+              ],
+              "systemName": "L.B.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "L",
+            "B"
+          ],
+          "systemName": "L.B",
+          "displayName": "B",
+          "grouperName": "AmountType"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "L",
+                "C",
+                "Value"
+              ],
+              "systemName": "L.C.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "L",
+            "C"
+          ],
+          "systemName": "L.C",
+          "displayName": "C",
+          "grouperName": "AmountType"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "L",
+                "E",
+                "Value"
+              ],
+              "systemName": "L.E.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "L",
+            "E"
+          ],
+          "systemName": "L.E",
+          "displayName": "E",
+          "grouperName": "AmountType"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "L",
+                "P",
+                "Value"
+              ],
+              "systemName": "L.P.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "L",
+            "P"
+          ],
+          "systemName": "L.P",
+          "displayName": "P",
+          "grouperName": "AmountType"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "L",
+                "TotalGroup",
+                "Value"
+              ],
+              "systemName": "L.TotalGroup.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "L",
+            "TotalGroup"
+          ],
+          "systemName": "L.TotalGroup",
+          "displayName": " ",
+          "grouperName": "LineOfBusiness"
+        }
+      ],
+      "coordinates": [
+        "L"
+      ],
+      "systemName": "L",
+      "displayName": "L",
+      "grouperName": "LineOfBusiness"
+    },
+    {
+      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+      "children": [
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "P",
+                "B",
+                "Value"
+              ],
+              "systemName": "P.B.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "P",
+            "B"
+          ],
+          "systemName": "P.B",
+          "displayName": "B",
+          "grouperName": "AmountType"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "P",
+                "C",
+                "Value"
+              ],
+              "systemName": "P.C.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "P",
+            "C"
+          ],
+          "systemName": "P.C",
+          "displayName": "C",
+          "grouperName": "AmountType"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "P",
+                "E",
+                "Value"
+              ],
+              "systemName": "P.E.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "P",
+            "E"
+          ],
+          "systemName": "P.E",
+          "displayName": "E",
+          "grouperName": "AmountType"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "P",
+                "P",
+                "Value"
+              ],
+              "systemName": "P.P.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "P",
+            "P"
+          ],
+          "systemName": "P.P",
+          "displayName": "P",
+          "grouperName": "AmountType"
+        },
+        {
+          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
+          "children": [
+            {
+              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "coordinates": [
+                "P",
+                "TotalGroup",
+                "Value"
+              ],
+              "systemName": "P.TotalGroup.Value",
+              "displayName": "Value",
+              "grouperName": "ColumnName"
+            }
+          ],
+          "coordinates": [
+            "P",
+            "TotalGroup"
+          ],
+          "systemName": "P.TotalGroup",
+          "displayName": " ",
+          "grouperName": "LineOfBusiness"
+        }
+      ],
+      "coordinates": [
+        "P"
+      ],
+      "systemName": "P",
+      "displayName": "P",
+      "grouperName": "LineOfBusiness"
+    }
+  ],
+  "rows": [
+    {
+      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "rowGroup": {
+        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "coordinates": [
+          "Value"
+        ],
+        "systemName": "Value",
+        "displayName": "Value",
+        "grouperName": "PropertyName"
+      },
+      "data": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+        "c": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "b": null,
+          "c": null,
+          "e": null,
+          "p": null,
+          "totalGroup": null
+        },
+        "h": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "b": null,
+          "c": null,
+          "e": null,
+          "p": null,
+          "totalGroup": null
+        },
+        "l": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "b": null,
+          "c": null,
+          "e": null,
+          "p": null,
+          "totalGroup": null
+        },
+        "p": {
+          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
+          "b": null,
+          "c": null,
+          "e": null,
+          "p": null,
+          "totalGroup": null
+        }
+      }
+    }
+  ],
+  "hasRowGrouping": true
+}
