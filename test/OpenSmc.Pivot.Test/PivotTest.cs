@@ -5,6 +5,7 @@ using OpenSmc.Arithmetics;
 using OpenSmc.Collections;
 using OpenSmc.DataCubes;
 using OpenSmc.Fixture;
+using OpenSmc.Json.Assertions;
 using OpenSmc.Pivot.Aggregations;
 using OpenSmc.Pivot.Builder;
 using OpenSmc.Pivot.Models;
