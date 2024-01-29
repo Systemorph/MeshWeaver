@@ -85,18 +85,18 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
     }
 
 
-    protected IMessageDelivery RegisterCallback<TMessage, TResponse>(IMessageDelivery<TMessage> request, SyncDelivery<TResponse> callback, CancellationToken cancellationToken)
+    public IMessageDelivery RegisterCallback<TMessage, TResponse>(IMessageDelivery<TMessage> request, SyncDelivery<TResponse> callback, CancellationToken cancellationToken)
         where TMessage : IRequest<TResponse>
         => RegisterCallback<TMessage, TResponse>(request, d => Task.FromResult(callback(d)), cancellationToken);
 
-    protected IMessageDelivery RegisterCallback<TMessage, TResponse>(IMessageDelivery<TMessage> request, AsyncDelivery<TResponse> callback, CancellationToken cancellationToken)
+    public IMessageDelivery RegisterCallback<TMessage, TResponse>(IMessageDelivery<TMessage> request, AsyncDelivery<TResponse> callback, CancellationToken cancellationToken)
         where TMessage : IRequest<TResponse>
     {
         RegisterCallback(request, d => callback((IMessageDelivery<TResponse>)d), cancellationToken);
         return request.Forwarded();
     }
 
-    protected Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, SyncDelivery callback, CancellationToken cancellationToken)
+    public Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, SyncDelivery callback, CancellationToken cancellationToken)
         => RegisterCallback(delivery, d => Task.FromResult(callback(d)), cancellationToken);
 
 

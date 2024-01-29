@@ -23,15 +23,14 @@ public record LayoutClientState(LayoutClientConfiguration Configuration)
 
 public record LayoutClientConfiguration(object RefreshMessage, object LayoutHostAddress, string MainArea = "");
 
-public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessageHub hub) : MessageHubPlugin<LayoutClientPlugin, LayoutClientState>(hub),
+public class LayoutClientPlugin : MessageHubPlugin<LayoutClientPlugin, LayoutClientState>,
                                IMessageHandler<AreaChangedEvent>,
                                IMessageHandler<GetRequest<AreaChangedEvent>>
 {
-    public override void Initialize(LayoutClientState state)
+    public LayoutClientPlugin(LayoutClientConfiguration configuration, IMessageHub hub) : base(hub)
     {
-        base.Initialize(state);
         InitializeState(new(configuration));
-        Hub.Post(configuration.RefreshMessage, o => o.WithTarget(State.Configuration.LayoutHostAddress));
+        hub.Post(configuration.RefreshMessage, o => o.WithTarget(State.Configuration.LayoutHostAddress));
     }
 
 

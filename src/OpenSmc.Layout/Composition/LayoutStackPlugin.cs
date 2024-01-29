@@ -72,9 +72,9 @@ public class LayoutStackPlugin :
     }
 
 
-    public override void Initialize(LayoutStackControl control)
+    public override UiControlPlugin<LayoutStackControl> InitializeState(LayoutStackControl control)
     {
-        base.Initialize(control);
+        base.InitializeState(control);
         var areas = Control.ViewElements
                                  .Select
                                      (
@@ -92,6 +92,7 @@ public class LayoutStackPlugin :
 
 
         UpdateState(s => s with { Areas = areas });
+        return This;
     }
 
 
@@ -172,7 +173,7 @@ public class LayoutStackPlugin :
                 if (returnType == typeof(ViewElementWithView))
                     viewDefinition = del.Method.GetParameters().Length switch
                     {
-                        0 => o => Task.FromResult((ViewElementWithView)del.DynamicInvoke()),
+                        0 => _ => Task.FromResult((ViewElementWithView)del.DynamicInvoke()),
                         1 => o => Task.FromResult((ViewElementWithView)del.DynamicInvoke(o)),
                         _ => throw new NotSupportedException()
                     };
