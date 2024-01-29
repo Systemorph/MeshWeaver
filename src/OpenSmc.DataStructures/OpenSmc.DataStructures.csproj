@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="CsvHelper" />
+    <PackageReference Include="Newtonsoft.Json" />
+  </ItemGroup>
+</Project>
