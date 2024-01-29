@@ -6,6 +6,7 @@ namespace OpenSmc.Json.Assertions;
 
 public class JsonEquivalencyOptions
 {
+    public bool ExcludedTypeDiscriminator;
     public Dictionary<Type, List<string>> ExcludedProperties = new();
 
     public JsonEquivalencyOptions ExcludeProperty<T, TProp>(Expression<Func<T, TProp>> property)
@@ -25,4 +26,10 @@ public class JsonEquivalencyOptions
         list.Add(propertyInfo.Name.ToCamelCase());
         return this;
     }
+    public JsonEquivalencyOptions ExcludeTypeDiscriminator(bool flag = true)
+    {
+        ExcludedTypeDiscriminator = flag;
+        return this;
+    }
+
 }

@@ -31,6 +31,30 @@ public class JsonEquivalencyTest
     }
 
     [Fact]
+    public void DifferentTypeDiscriminator()
+    {
+        var actual = new RawJson(
+@"{
+    ""$type"": ""OpenSmc.Json.Assertions.Test.BaseType"",
+    ""prop1"": 1,
+    ""prop2"": ""abc""
+}");
+        actual.Should().NotBeEquivalentTo(new { Prop1 = 1, Prop2 = "abc" }, o => o.UsingJson());
+    }
+
+    [Fact]
+    public void ExcludeTypeDiscriminator()
+    {
+        var actual = new RawJson(
+@"{
+    ""$type"": ""OpenSmc.Unknown"",
+    ""prop1"": 1,
+    ""prop2"": ""abc""
+}");
+        actual.Should().BeEquivalentTo(new BaseType { Prop1 = 1, Prop2 = "abc" }, o => o.UsingJson(j => j.ExcludeTypeDiscriminator()));
+    }
+
+    [Fact]
     public void SimpleExcludeProperty()
     {
         var actual = new RawJson(
