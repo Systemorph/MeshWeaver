@@ -82,6 +82,10 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
                 controlWithSubAreas = controlWithSubAreas.SetArea(areaChanged);
                 UpdateState(s => s with
                                  {
+                                     AreasByControlId = s.AreasByControlId.SetItem(
+                                         controlWithSubAreas.Id, 
+                                         (s.AreasByControlId.TryGetValue(controlWithSubAreas.Id, out var list) ? list : ImmutableHashSet<object>.Empty).Add(areaChanged.View)
+                                         ),
                                      AreasByControlAddress = controlWithSubAreas == null || controlWithSubAreas.Address == null 
                                                                  ? s.AreasByControlAddress : 
                                                                  s.AreasByControlAddress.SetItem(controlWithSubAreas.Address, new AreaChangedEvent("", controlWithSubAreas)),

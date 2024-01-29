@@ -60,10 +60,6 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
             Hub.ConnectTo(uiControl.Hub);
             areaChanged = areaChanged with { Area = Data, View = uiControl };
 
-            if (areaChanged.Options is SetAreaOptions options)
-                foreach (var callback in options.Callbacks)
-                    callback(areaChanged);
-
         }
 
         UpdateState(s => s with { View = areaChanged });
