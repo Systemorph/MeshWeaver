@@ -9,6 +9,7 @@
 	  <ProjectReference Include="..\..\src\OpenSmc.Scopes\OpenSmc.Scopes.csproj" />
 	  <ProjectReference Include="..\..\src\OpenSmc.Serialization.Abstractions\OpenSmc.Serialization.Abstractions.csproj" />
 	  <ProjectReference Include="..\OpenSmc.Fixture\OpenSmc.Fixture.csproj" />
+	  <ProjectReference Include="..\OpenSmc.Json.Assertions\OpenSmc.Json.Assertions.csproj" />
 	  <ProjectReference Include="..\OpenSmc.TestDomain\OpenSmc.TestDomain.csproj" />
 	</ItemGroup>
   <ItemGroup>
