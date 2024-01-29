@@ -6,15 +6,17 @@ using OpenSmc.Messaging;
 namespace OpenSmc.Layout;
 
 
-public static class SmappExtensions
+public static class LayoutExtensions
 {
-    public static MessageHubConfiguration LayoutExtensions(this MessageHubConfiguration conf,
+    public static MessageHubConfiguration AddLayout(this MessageHubConfiguration conf,
                                                      Func<LayoutDefinition, LayoutDefinition> layoutDefinition = null)
     {
         return conf
             .WithDeferral(d => d.Message is RefreshRequest or SetAreaRequest)
-            .WithServices(services => services.AddSingleton<IUiControlService, UiControlService>()
-                .AddAllControlHubs())
+            .WithServices(
+                services => services.AddSingleton<IUiControlService, UiControlService>()
+                .AddAllControlHubs()
+            )
             .AddApplicationScope()
             .AddExpressionSynchronization()
             .AddPlugin(hub => CreateLayoutPlugin(hub, layoutDefinition))

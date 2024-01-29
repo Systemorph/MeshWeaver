@@ -60,15 +60,14 @@ public class LayoutStackPlugin(IMessageHub hub) :
         UpdateState(state => state.SetAreaToState(ret));
         Post(ret, x => x.WithTarget(MessageTargets.Subscribers));
 
-        foreach (var callback in options.Callbacks)
-            callback(ret);
         return ret;
     }
 
     private object GetViewByPath(string path, SetAreaOptions options)
     {
-        var generator = layoutDefinition.ViewGeneratorsByPath.FirstOrDefault(g => g.Filter(path));
-        return generator?.ViewGenerator(path, options);
+        var request = new RefreshRequest { Path = path, Options = options };
+        var generator = layoutDefinition.ViewGenerators.FirstOrDefault(g => g.Filter(request));
+        return generator?.Generator(request);
     }
 
 
@@ -101,11 +100,6 @@ public class LayoutStackPlugin(IMessageHub hub) :
         var areaChanged = SetAreaImpl(request.Message.View, request.Message.ViewDefinition, request.Message.Path, request.Message.Options);
         Post(areaChanged ?? new AreaChangedEvent(request.Message.Area, null), o => o.ResponseFor(request.Message.ForwardedRequest ?? request).WithTarget(MessageTargets.Subscribers));
         return request.Processed();
-    }
-
-    public override Task StartAsync()
-    {
-        return base.StartAsync();
     }
 
     protected override IMessageDelivery RefreshView(IMessageDelivery<RefreshRequest> request)
@@ -203,7 +197,11 @@ public class LayoutStackPlugin(IMessageHub hub) :
     // ReSharper disable once UnusedMethodReturnValue.Local
     private static async Task<ViewElementWithView> AwaitTask<T>(SetAreaOptions options, Task<T> task) => new(await task, options);
 
-    protected virtual object CreateView(IMessageDelivery<RefreshRequest> request) => layoutDefinition.ViewGenerator(request);
+    protected virtual object CreateView(IMessageDelivery<RefreshRequest> request)
+    {
+        var generator = layoutDefinition.ViewGenerators.FirstOrDefault(g => g.Filter(request.Message));
+        return generator?.Generator.Invoke(request.Message);
+    }
 
 
 
@@ -220,14 +218,16 @@ public class LayoutStackPlugin(IMessageHub hub) :
     }
 }
 
-internal record ViewGeneratorByPath(Func<string, bool> Filter, Func<string, SetAreaOptions, object> ViewGenerator);
+internal record ViewGenerator(Func<RefreshRequest, bool> Filter, Func<RefreshRequest, object> Generator);
 
 public record LayoutDefinition(IMessageHub Hub) : MessageHubModuleConfiguration
 {
     internal LayoutStackControl InitialState { get; init; }
-    internal Func<IMessageDelivery<RefreshRequest>, object> ViewGenerator { get; init; }
-    internal ImmutableList<ViewGeneratorByPath> ViewGeneratorsByPath { get; init; } = ImmutableList<ViewGeneratorByPath>.Empty;
+    internal ImmutableList<ViewGenerator> ViewGenerators { get; init; } = ImmutableList<ViewGenerator>.Empty;
     public LayoutDefinition WithInitialState(LayoutStackControl initialState) => this with { InitialState = initialState };
-    public LayoutDefinition WithViewGenerator(Func<IMessageDelivery<RefreshRequest>, object> viewGenerator) => this with { ViewGenerator = viewGenerator };
-    public LayoutDefinition WithView(Func<string, bool> filter, Func<string, SetAreaOptions, object> viewGenerator) => this with { ViewGeneratorsByPath = ViewGeneratorsByPath.Add(new(filter, viewGenerator)) };
+    public LayoutDefinition WithGenerator(Func<RefreshRequest, bool> filter, Func<RefreshRequest, object> viewGenerator) => this with { ViewGenerators = ViewGenerators.Add(new(filter, viewGenerator)) };
+
+    public LayoutDefinition WithView(string area, Func<RefreshRequest, object> generator) =>
+        WithGenerator(r => r.Area == area, generator);
+
 }

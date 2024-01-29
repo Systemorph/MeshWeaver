@@ -102,17 +102,12 @@ public record RefreshRequest : IRequest<AreaChangedEvent>
     // TODO SMCv2: consider making this Dictionary<string, object> (2023-10-18, Andrei Sirotenko)
     public object Options { get; init; }
     public string Area { get; init; }
-
+    public string Path { get; init; }
 }
 public record SetAreaOptions(string Area)
 {
     public object AreaViewOptions { get; init; }
 
-    internal ImmutableList<Action<AreaChangedEvent>> Callbacks { get; init; } = ImmutableList<Action<AreaChangedEvent>>.Empty;
-
-    public SetAreaOptions WithCallback(Action<AreaChangedEvent> callback) => this with { Callbacks = Callbacks.Add(callback) };
-
-    public SetAreaOptions WithArea(string area) => this with { Area = area };
 }
 
 public record UiControlAddress(string Id, object Host) : IHostedAddress;
