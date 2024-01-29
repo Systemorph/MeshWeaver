@@ -2,6 +2,7 @@
   <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Packages.props', '$(MSBuildThisFileDirectory)../'))" />
   <ItemGroup>
     <PackageVersion Include="FluentAssertions" Version="6.12.0" />
+    <PackageVersion Include="FluentAssertions.Json" Version="6.1.0" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="$(MicrosoftExtensionsVersion)" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
     <PackageVersion Include="xunit" Version="2.6.6" />

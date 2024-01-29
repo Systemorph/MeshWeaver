@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<ItemGroup>
+		<PackageReference Include="Newtonsoft.Json" />
+		<PackageReference Include="FluentAssertions" />
+    <PackageReference Include="FluentAssertions.Json" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <ProjectReference Include="..\..\src\OpenSmc.Reflection\OpenSmc.Reflection.csproj" />
+	  <ProjectReference Include="..\..\src\OpenSmc.Serialization.Abstractions\OpenSmc.Serialization.Abstractions.csproj" />
+	  <ProjectReference Include="..\..\src\OpenSmc.Utils\OpenSmc.Utils.csproj" />
+	  <ProjectReference Include="..\..\src\OpenSmc.Serialization\OpenSmc.Serialization.csproj" />
+	</ItemGroup>
+
+</Project>
