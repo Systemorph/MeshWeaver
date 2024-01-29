@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
-using System.Text.Json.Serialization;
+using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Serialization;
 using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Messaging;
@@ -8,6 +9,8 @@ namespace OpenSmc.Messaging;
 public record MaskedRequest(IMessageDelivery Request, object HostAddress);
 public abstract record MessageDelivery(object Sender, object Target) : IMessageDelivery
 {
+    protected IMessageHub SenderHub;
+
     public string Id { get; init; } = Guid.NewGuid().AsString();
     public ImmutableDictionary<string, object> Properties { get; init; } = ImmutableDictionary<string, object>.Empty;
     public string State { get; init; } = MessageDeliveryState.Submitted;
@@ -22,8 +25,6 @@ public abstract record MessageDelivery(object Sender, object Target) : IMessageD
 
     public object AccessProvidedBy { get; init; }
     public string AccessObject { get; init; } // TODO SMCv2: later on we might think about accessibility for this property (2023/10/04, Dmitry Kalabin)
-    [JsonIgnore]
-    public object Context { get; set; }
 
     IMessageDelivery IMessageDelivery.SetAccessObject(string accessObject, object address) => this with { AccessObject = accessObject, AccessProvidedBy = address, };
 
@@ -76,6 +77,16 @@ public abstract record MessageDelivery(object Sender, object Target) : IMessageD
             ForwardedTo = ForwardedTo,
         };
     }
+
+    public IMessageDelivery Package()
+    {
+        var serializationService = SenderHub.ServiceProvider.GetService<ISerializationService>();
+        if (serializationService == null)
+            return this;
+
+        return serializationService.SerializeDelivery(this);
+    }
+
 }
 
 public record MessageDelivery<TMessage>(object Sender, object Target, TMessage Message) : MessageDelivery(Sender, Target), IMessageDelivery<TMessage>
@@ -89,7 +100,7 @@ public record MessageDelivery<TMessage>(object Sender, object Target, TMessage M
         : this(options.Sender, options.Target, message)
     {
         Properties = options.Properties;
-        Context = options.Context;
+        SenderHub = options.SenderHub;
     }
 
     protected override object GetMessage()
