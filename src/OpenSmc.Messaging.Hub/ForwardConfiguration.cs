@@ -34,7 +34,7 @@ public record ForwardConfiguration(IMessageHub Hub)
         };
 
     public ForwardConfiguration RouteAddressToHostedHub<TAddress>(Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
-        => RouteAddress<TAddress>(d => Hub.GetHostedHub((TAddress)d.Target, configuration));
+        => RouteAddressToHub<TAddress>(d => Hub.GetHostedHub((TAddress)d.Target, configuration));
 }
 
 
