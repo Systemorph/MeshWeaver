@@ -16,14 +16,8 @@ public class MessageHubTest : HubTestBase
 
     public MessageHubTest(ITestOutputHelper output) : base(output)
     {
-        Services.AddMessageHubs(new RouterAddress(), hubConf => hubConf
-            .WithForwards(f => f
-                .RouteAddressToHub<HostAddress>(d => f.Hub
-                    .GetHostedHub((HostAddress)d.Target, ConfigureHost))
-                .RouteAddressToHub<ClientAddress>(d => f.Hub
-                    .GetHostedHub((ClientAddress)d.Target, c => c))
-            ));
     }
+
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         => configuration
             .WithHandler<SayHelloRequest>((hub, request) =>
