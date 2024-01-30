@@ -1,9 +1,6 @@
-﻿using System;
+﻿namespace OpenSmc.Partition;
 
-namespace OpenSmc.Partition
+[AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = true)]
+public class PartitionIdAttribute : Attribute
 {
-    [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = true)]
-    public class PartitionIdAttribute : Attribute
-    {
-    }
 }

@@ -1,27 +1,25 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
-using System;
+using OpenSmc.DataSource.Abstractions;
 using OpenSmc.Scheduling;
-using OpenSmc.DataSource.Api;
 
-namespace OpenSmc.Workspace
+namespace OpenSmc.Workspace;
+
+public interface IWorkspaceVariable : IWorkspace
 {
-    public interface IWorkspaceVariable : IWorkspace
+    IWorkspace CreateNew();
+}
+
+public class WorkspaceVariable : Workspace, IWorkspaceVariable 
+{
+    private readonly IServiceProvider serviceProvider;
+
+    public WorkspaceVariable(IWorkspaceStorage workspaceStorage, IDataScheduler dataScheduler, IPartitionVariable partition, IServiceProvider serviceProvider) : base(workspaceStorage, dataScheduler, partition)
     {
-        IWorkspace CreateNew();
+        this.serviceProvider = serviceProvider;
     }
 
-    public class WorkspaceVariable : Workspace, IWorkspaceVariable 
+    public IWorkspace CreateNew()
     {
-        private readonly IServiceProvider serviceProvider;
-
-        public WorkspaceVariable(IWorkspaceStorage workspaceStorage, IDataScheduler dataScheduler, IPartitionVariable partition, IServiceProvider serviceProvider) : base(workspaceStorage, dataScheduler, partition)
-        {
-            this.serviceProvider = serviceProvider;
-        }
-
-        public IWorkspace CreateNew()
-        {
-            return serviceProvider.GetService<IWorkspace>();
-        }
+        return serviceProvider.GetService<IWorkspace>();
     }
 }
