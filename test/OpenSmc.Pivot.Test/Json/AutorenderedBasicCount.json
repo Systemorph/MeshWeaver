@@ -1,8 +1,8 @@
 {
-  "$type": "Systemorph.Pivot.Models.PivotModel, Systemorph.Pivot",
+  "$type": "OpenSmc.Pivot.Models.PivotModel, OpenSmc.Pivot",
   "columns": [
     {
-      "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+      "$type": "OpenSmc.Pivot.Models.Column, OpenSmc.Pivot",
       "coordinates": [
         "Value"
       ],
@@ -13,9 +13,9 @@
   ],
   "rows": [
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "$type": "OpenSmc.Pivot.Models.Row, OpenSmc.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "$type": "OpenSmc.Pivot.Models.RowGroup, OpenSmc.Pivot",
         "coordinates": [
           "1"
         ],
@@ -29,9 +29,9 @@
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "$type": "OpenSmc.Pivot.Models.Row, OpenSmc.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "$type": "OpenSmc.Pivot.Models.RowGroup, OpenSmc.Pivot",
         "coordinates": [
           "2"
         ],
@@ -45,9 +45,9 @@
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
+      "$type": "OpenSmc.Pivot.Models.Row, OpenSmc.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
+        "$type": "OpenSmc.Pivot.Models.RowGroup, OpenSmc.Pivot",
         "coordinates": [
           "3"
         ],
