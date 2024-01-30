@@ -29,7 +29,7 @@ public class SerializationTest : TestBase
                         var packagedDelivery = d.Package();
                         hostHub.DeliverMessage(packagedDelivery);
                     })
-                .RouteAddressToHub<ClientAddress>(d => f.Hub.GetHostedHub((ClientAddress)d.Target, ConfigureClient))
+                .RouteAddressToHostedHub<ClientAddress>(ConfigureClient)
             ));
     }
 
