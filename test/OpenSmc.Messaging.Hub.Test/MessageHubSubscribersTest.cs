@@ -12,7 +12,6 @@ namespace OpenSmc.Messaging.Hub.Test;
 
 public class MessageHubSubscribersTest : TestBase
 {
-
     protected record RouterAddress;
 
     protected record HostAddress;
@@ -58,14 +57,13 @@ public class MessageHubSubscribersTest : TestBase
         var client1 = GetClient("1");
         var client2 = GetClient("2");
         var client3 = GetClient("3");
-        
+
+        var clientOut3 = client3.AddObservable(); // client 3 is not subscriber
         await client1.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
         await client2.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
-        // client 3 is not subscriber
 
         var clientOut1 = client1.AddObservable().Timeout(500.Milliseconds());
         var clientOut2 = client2.AddObservable().Timeout(500.Milliseconds());
-        var clientOut3 = client3.AddObservable();
         var client1Awaiter = clientOut1.Select(d => d.Message).OfType<HelloEvent>().FirstAsync().GetAwaiter();
         var client2Awaiter = clientOut2.Select(d => d.Message).OfType<HelloEvent>().FirstAsync().GetAwaiter();
         var client3Awaiter = clientOut3.Select(d => d.Message).OfType<HelloEvent>().ToArray().GetAwaiter();
