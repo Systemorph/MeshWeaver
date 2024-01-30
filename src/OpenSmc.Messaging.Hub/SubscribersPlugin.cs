@@ -3,7 +3,7 @@
 public class SubscribersPlugin : MessageHubPlugin<SubscribersPlugin>
 {
     private readonly HashSet<object> subscribers = new();
-    private readonly HashSet<Type> subscribedTo = new();
+    private readonly HashSet<object> subscribedTo = new();
 
     public SubscribersPlugin(IServiceProvider serviceProvider, IMessageHub hub) : base(hub)
     {
@@ -22,10 +22,10 @@ public class SubscribersPlugin : MessageHubPlugin<SubscribersPlugin>
 
         if (weSending && !MessageTargets.Subscribers.Equals(delivery.Target))
         {
-            subscribedTo.Add(delivery.Target.GetType());
+            subscribedTo.Add(delivery.Target);
         }
 
-        if (sentToUs && delivery.Sender != null && !subscribedTo.Contains(delivery.Sender.GetType()))
+        if (sentToUs && delivery.Sender != null && !subscribedTo.Contains(delivery.Sender))
         {
             subscribers.Add(delivery.Sender);
         }
