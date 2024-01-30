@@ -1,7 +1,6 @@
-﻿using System;
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.DataSource.Abstractions;
 using OpenSmc.ServiceProvider;
-using OpenSmc.DataSource.Api;
 
 [assembly: OpenSmc.Partition.ModuleSetup]
 

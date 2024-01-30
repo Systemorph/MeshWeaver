@@ -1,13 +1,10 @@
-﻿using System;
-using System.Collections;
+﻿using System.Collections;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Linq;
 using System.Reflection;
-using OpenSmc.Equality;
 using OpenSmc.Collections;
-using OpenSmc.DataSource.Api;
+using OpenSmc.DataSource.Abstractions;
 using OpenSmc.Domain.Abstractions.Attributes;
+using OpenSmc.Equality;
 using OpenSmc.Partition;
 using OpenSmc.Reflection;
 
