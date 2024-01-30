@@ -24,7 +24,8 @@ jobs:
       run: dotnet restore
     - name: Build
       run: dotnet build --no-restore -p:CIRun=true
-    - name: Test
+    - name: Run Tests
+      continue-on-error: true
       run: dotnet test --no-build --verbosity normal -l:trx
     - name: Publish Test Results
       uses: EnricoMi/publish-unit-test-result-action@v2.12.0
