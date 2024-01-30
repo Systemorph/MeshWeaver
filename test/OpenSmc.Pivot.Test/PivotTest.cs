@@ -1,4 +1,5 @@
-﻿using FluentAssertions;
+﻿using Autofac.Core;
+using FluentAssertions;
 using FluentAssertions.Common;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Arithmetics;
@@ -9,6 +10,7 @@ using OpenSmc.Json.Assertions;
 using OpenSmc.Pivot.Aggregations;
 using OpenSmc.Pivot.Builder;
 using OpenSmc.Pivot.Models;
+using OpenSmc.Scopes;
 using OpenSmc.Scopes.Proxy;
 using OpenSmc.Serialization;
 using OpenSmc.ServiceProvider;
@@ -29,8 +31,13 @@ namespace OpenSmc.Pivot.Test
         public PivotTest(ITestOutputHelper toh)
             : base(toh)
         {
-            Modules.Add<OpenSmc.DataCubes.ModuleSetup>();
-            Services.AddSingleton<IEventsRegistry, EventsRegistry>();
+            Modules.Add<DataCubes.ModuleSetup>();
+            Services.RegisterScopes();
+            Services.AddSingleton<IEventsRegistry>(_ => new EventsRegistry(null));
+            Services.AddSingleton<ISerializationService, SerializationService>();
+            var registry = new CustomSerializationRegistry();
+            Services.AddSingleton(registry);
+            Services.AddSingleton<ICustomSerializationRegistry>(registry);
         }
 
         [Theory]
