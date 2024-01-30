@@ -1,0 +1,8 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\OpenSmc.DotNet.Kernel\OpenSmc.DotNet.Kernel.csproj" />
+    <ProjectReference Include="..\OpenSmc.Scheduling\OpenSmc.Scheduling.csproj" />
+    <ProjectReference Include="..\OpenSmc.ServiceProvider\OpenSmc.ServiceProvider.csproj" />
+  </ItemGroup>
+</Project>
+
