@@ -107,7 +107,11 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Pivot.Test", "test\
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Json.Assertions", "test\OpenSmc.Json.Assertions\OpenSmc.Json.Assertions.csproj", "{15AD99F5-7B41-4DBF-8C4D-0A69CAB557D9}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DataSetReader.Csv", "src\OpenSmc.DataSetReader.Csv\OpenSmc.DataSetReader.Csv.csproj", "{76FE9D01-8916-46B2-84C8-C518DBFC37EA}"
+EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.TestDomain", "test\OpenSmc.TestDomain\OpenSmc.TestDomain.csproj", "{2F953679-9F9B-45E0-82BE-087A954AB6E2}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DataSetReader", "src\OpenSmc.DataSetReader\OpenSmc.DataSetReader.csproj", "{8DAF068D-9253-4463-8033-9F781DCC52CA}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Json.Assertions.Test", "test\OpenSmc.Json.Assertions.Test\OpenSmc.Json.Assertions.Test.csproj", "{2FD27F33-1613-4A77-B226-C3657671EE9F}"
 EndProject
@@ -311,6 +315,14 @@ Global
 		{2F953679-9F9B-45E0-82BE-087A954AB6E2}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{2F953679-9F9B-45E0-82BE-087A954AB6E2}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{2F953679-9F9B-45E0-82BE-087A954AB6E2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{76FE9D01-8916-46B2-84C8-C518DBFC37EA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{76FE9D01-8916-46B2-84C8-C518DBFC37EA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{76FE9D01-8916-46B2-84C8-C518DBFC37EA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{76FE9D01-8916-46B2-84C8-C518DBFC37EA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8DAF068D-9253-4463-8033-9F781DCC52CA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8DAF068D-9253-4463-8033-9F781DCC52CA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8DAF068D-9253-4463-8033-9F781DCC52CA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8DAF068D-9253-4463-8033-9F781DCC52CA}.Release|Any CPU.Build.0 = Release|Any CPU
 		{2FD27F33-1613-4A77-B226-C3657671EE9F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{2FD27F33-1613-4A77-B226-C3657671EE9F}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{2FD27F33-1613-4A77-B226-C3657671EE9F}.Release|Any CPU.ActiveCfg = Release|Any CPU
