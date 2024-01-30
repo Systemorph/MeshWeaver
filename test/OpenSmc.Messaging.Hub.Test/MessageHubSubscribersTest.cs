@@ -57,22 +57,34 @@ public class MessageHubSubscribersTest : TestBase
         // arrange: initiate subscription from client to host
         var client1 = GetClient("1");
         var client2 = GetClient("2");
+        var client3 = GetClient("3");
+        
         await client1.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
         await client2.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
+        // client 3 is not subscriber
+
         var clientOut1 = client1.AddObservable().Timeout(500.Milliseconds());
         var clientOut2 = client2.AddObservable().Timeout(500.Milliseconds());
+        var clientOut3 = client3.AddObservable();
         var client1Awaiter = clientOut1.Select(d => d.Message).OfType<HelloEvent>().FirstAsync().GetAwaiter();
         var client2Awaiter = clientOut2.Select(d => d.Message).OfType<HelloEvent>().FirstAsync().GetAwaiter();
+        var client3Awaiter = clientOut3.Select(d => d.Message).OfType<HelloEvent>().ToArray().GetAwaiter();
 
         // act 
         var host = GetHost();
         host.Post(new HelloEvent(), o => o.WithTarget(MessageTargets.Subscribers));
-        
+
         // assert
+        var delay = Task.Delay(500.Microseconds());
         var client1Messages = await client1Awaiter;
         var client2Messages = await client2Awaiter;
+        await delay;
+        clientOut3.OnCompleted();
+        var client3Messages = await client3Awaiter;
+
         client1Messages.Should().BeAssignableTo<HelloEvent>();
         client2Messages.Should().BeAssignableTo<HelloEvent>();
+        client3Messages.Should().BeEmpty();
     }
 
 }
