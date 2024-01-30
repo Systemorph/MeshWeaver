@@ -45,35 +45,4 @@ public interface IForwardConfigurationItem
     AsyncDelivery Route { get; }
     bool Filter(IMessageDelivery delivery);
 }
-public record ForwardConfigurationItem<TMessage> : IForwardConfigurationItem
-{
-
-
-    AsyncDelivery IForwardConfigurationItem.Route => d => Route((IMessageDelivery<TMessage>)d);
-
-
-    bool IForwardConfigurationItem.Filter(IMessageDelivery delivery)
-    {
-        if (delivery.Message is not TMessage)
-            return false;
-        return Filter?.Invoke((IMessageDelivery<TMessage>)delivery) ?? true;
-    }
-
-
-    internal AsyncDelivery Route { get; init; }
-
-
-    public ForwardConfigurationItem<TMessage> WithFilter(DeliveryFilter<TMessage> filter) => this with { Filter = filter };
-    internal DeliveryFilter<TMessage> Filter { get; init; }
-
-    public ForwardConfigurationItem<TMessage> WithInheritorsFromAssembliesOf(params Type[] types)
-    {
-        return this with { InheritorsFrom = types };
-    }
-
-    public ForwardConfigurationItem<TMessage> WithInheritance(bool inherit = true) => this with { ForwardInheritors = inherit };
-    internal bool ForwardInheritors { get; init; } = true;
-    public IReadOnlyCollection<Type> InheritorsFrom { get; init; } = Array.Empty<Type>();
-
-}
 
