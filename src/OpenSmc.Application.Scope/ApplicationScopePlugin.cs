@@ -35,11 +35,11 @@ public class ApplicationScopePlugin : MessageHubPlugin<ApplicationScopePlugin, A
 
     }
 
-    public override ApplicationScopeState StartupState() => new();
 
     public override async Task StartAsync()
     {
         await base.StartAsync();
+        InitializeState(new());
         scopeRegistry.InstanceRegistered += (_, scope) => TrackPropertyChanged(scope);
         foreach (var scope in scopeRegistry.Scopes)
             TrackPropertyChanged(scope);

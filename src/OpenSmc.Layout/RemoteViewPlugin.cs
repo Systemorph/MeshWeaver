@@ -13,6 +13,8 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
 {
     [Inject] private IUiControlService uiControlService; // TODO V10: call BuildUp(this) in some base? (2023/12/20, Alexander Yolokhov)
 
+    private ExpressionSynchronizationAddress ExpressionSynchronizationAddress =>
+        LayoutExtensions.ExpressionSynchronizationAddress(Hub.Address);
 
     public override void InitializeState(RemoteViewControl control)
     {
@@ -33,7 +35,6 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
     }
 
     private const string Data = nameof(Data);
-
 
 
     private void UpdateView(AreaChangedEvent areaChanged)

@@ -36,4 +36,16 @@ public static class LayoutExtensions
         return new LayoutStackPlugin(ld);
     }
 
+
+    public static object FindLayoutHost(object address)
+    {
+        if (address is UiControlAddress uiControlAddress)
+            return FindLayoutHost(uiControlAddress.Host);
+        return address;
+    }
+
+    public static ExpressionSynchronizationAddress ExpressionSynchronizationAddress(object address) =>
+        new(FindLayoutHost(address));
+
+
 }

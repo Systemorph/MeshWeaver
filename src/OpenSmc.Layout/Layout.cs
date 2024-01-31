@@ -1,5 +1,4 @@
-﻿using System.Collections.Immutable;
-using System.Text.Json.Serialization;
+﻿using System.Text.Json.Serialization;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Layout;
@@ -26,7 +25,7 @@ public record OpenModalDialogEvent(object View, Func<ModalDialogOptions, ModalDi
 public record CloseModalDialogEvent;
 
 
-public record SetAreaRequest : IRequest<AreaChangedEvent>
+public record SetAreaRequest : IRequest<AreaChangedEvent>, IRequestWithArea
 {
     public SetAreaRequest(string area, string Path)
     {
@@ -64,7 +63,12 @@ public record SetAreaRequest : IRequest<AreaChangedEvent>
     public IMessageDelivery ForwardedRequest { get; init; }
 }
 
-public record AreaChangedEvent
+[method: Newtonsoft.Json.JsonConstructor]
+public record AreaChangedEvent(
+    string Area,
+    object View,
+    object Options,
+    IReadOnlyCollection<ViewDependency> Dependencies)
 {
     public AreaChangedEvent(string area, object view)
         : this(area, view, null, null)
@@ -74,34 +78,18 @@ public record AreaChangedEvent
         : this(area, view, Options, null)
     {
     }
-
-    [Newtonsoft.Json.JsonConstructor]
-    public AreaChangedEvent(string area, object view, object options, IReadOnlyCollection<ViewDependency> dependencies)
-    {
-        Area = area;
-        View = view;
-        Options = options;
-        Dependencies = dependencies;
-    }
-
-    public string Area { get; init; }
-    public object Options { get; init; }
-    public object View { get; init; }
-    public IReadOnlyCollection<ViewDependency> Dependencies { get; init; }
 }
 
 public record ViewDependency(string ScopeId, string Property);
 
-public record RefreshRequest : IRequest<AreaChangedEvent>
+public interface IRequestWithArea
 {
-    public RefreshRequest(string Area = "")
-    {
-        this.Area = Area;
-    }
-
+    string Area { get; }
+}
+public record RefreshRequest(string Area = "") : IRequest<AreaChangedEvent>, IRequestWithArea
+{
     // TODO SMCv2: consider making this Dictionary<string, object> (2023-10-18, Andrei Sirotenko)
     public object Options { get; init; }
-    public string Area { get; init; }
     public string Path { get; init; }
 }
 public record SetAreaOptions(string Area)

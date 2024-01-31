@@ -15,6 +15,7 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
     private readonly ILogger logger;
     public MessageHubConfiguration Configuration { get; }
     private readonly HostedHubsCollection hostedHubs;
+    private readonly IMessageHub parentHub;
     private readonly IDisposable deferral;
 
     public MessageHub(IServiceProvider serviceProvider, HostedHubsCollection hostedHubs,
@@ -25,6 +26,7 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         MessageService.Initialize(DeliverMessageAsync);
 
         this.hostedHubs = hostedHubs;
+        this.parentHub = parentHub;
         ServiceProvider = serviceProvider;
         logger = serviceProvider.GetRequiredService<ILogger<MessageHub<TAddress>>>();
 
@@ -36,13 +38,12 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         var forwardConfig =
             (configuration.ForwardConfigurationBuilder ?? (x => x)).Invoke(new ForwardConfiguration(this));
 
+        AddPlugin(new RoutePlugin(this, forwardConfig));
+        AddPlugin(new SubscribersPlugin(this));
 
-        var routePlugin = new RoutePlugin(this, forwardConfig, parentHub);
 
         Register(HandleCallbacks);
 
-        AddPlugin(routePlugin);
-        AddPlugin(new SubscribersPlugin(configuration.ServiceProvider, this));
 
 
         foreach (var messageHandler in configuration.MessageHandlers)
@@ -52,6 +53,25 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         MessageService.Schedule(StartAsync);
         logger.LogInformation("Message hub {address} initialized", Address);
 
+    }
+
+
+    public override async Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery)
+    {
+        delivery = await base.DeliverMessageAsync(delivery);
+        return FinishDelivery(delivery);
+    }
+
+    private IMessageDelivery FinishDelivery(IMessageDelivery delivery)
+    {
+        if (delivery.Target == null || delivery.Target.Equals(Address) || delivery.State != MessageDeliveryState.Submitted)
+            return delivery;
+        
+        if (parentHub == null)
+            return delivery.NotFound();
+
+        parentHub.DeliverMessage(delivery);
+        return delivery.Forwarded();
     }
 
 
