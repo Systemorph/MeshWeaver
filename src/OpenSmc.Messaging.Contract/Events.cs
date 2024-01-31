@@ -16,9 +16,9 @@ public record HubInfo(object Address)
     public string Message { get; init; }
 }
 
-public record DisconnectHubRequest(object Address) : IRequest<HubDisconnected>;
+public record DisconnectHubRequest() : IRequest<HubDisconnected>;
 
-public record HubDisconnected(object Address);
+public record HubDisconnected();
 
 public record GetRequest<T> : IRequest<T>
 {

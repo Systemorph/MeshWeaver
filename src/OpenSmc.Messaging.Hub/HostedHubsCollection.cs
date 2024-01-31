@@ -24,6 +24,9 @@ public class HostedHubsCollection : IAsyncDisposable
         }
     }
 
+    public void Add(IMessageHub hub)
+        => messageHubs[hub.Address] = hub;
+
     private IMessageHub CreateHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
     {
         return serviceProvider.CreateMessageHub(address, config);
