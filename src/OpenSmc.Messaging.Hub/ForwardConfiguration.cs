@@ -10,7 +10,11 @@ public record ForwardConfiguration(IMessageHub Hub)
 
 
     public ForwardConfiguration RouteAddressToHub<TAddress>(Func<IMessageDelivery, IMessageHub> hubFactory) =>
-        RouteAddress<TAddress>(d => hubFactory(d).DeliverMessage(d));
+        RouteAddress<TAddress>(d =>
+        {
+            hubFactory(d).DeliverMessage(d);
+            return d.Forwarded();
+        });
 
     public ForwardConfiguration RouteAddress<TAddress>(SyncDelivery handler) =>
         RouteAddress<TAddress>(d => Task.FromResult(handler(d)));
