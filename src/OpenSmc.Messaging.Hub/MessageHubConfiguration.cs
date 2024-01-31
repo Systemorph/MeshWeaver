@@ -136,34 +136,6 @@ public record StartConfiguration(object Address)
     public StartConfiguration WithCreateMessage(object instance) => this with { CreationObjects = CreationObjects.Add(instance) };
 }
 
-public record RoutedHubConfiguration
-{
-    public IMessageHub Hub { get; init; }
-    internal ImmutableList<MessageRouteConfiguration> MessageRoutes { get; init; }
-    internal ImmutableList<IForwardConfigurationItem> ForwardConfigurationItems { get; init; }
-    internal ImmutableList<Func<IMessageHub, IForwardConfigurationItem>> ForwardConfigurationFunctions = ImmutableList<Func<IMessageHub, IForwardConfigurationItem>>.Empty;
-
-
-    public RoutedHubConfiguration ForwardToTarget<TMessage>(object address, Func<ForwardConfigurationItem<TMessage>, ForwardConfigurationItem<TMessage>> config = null)
-    {
-        return this with
-        {
-            ForwardConfigurationFunctions = ForwardConfigurationFunctions.Add(host =>
-            {
-                var ret = new ForwardConfigurationItem<TMessage>();
-                if (config != null)
-                    ret = config.Invoke(ret);
-                return ret;
-            })
-        };
-    }
-
-    public RoutedHubConfiguration Buildup(IMessageHub host) => this with
-    {
-        ForwardConfigurationItems = ForwardConfigurationFunctions.Select(c => c.Invoke(host)).ToImmutableList(),
-    };
-}
-
 public abstract record MessageRouteConfiguration(Func<IMessageDelivery, object> AddressMap, IMessageHub Host) : IForwardConfigurationItem
 {
     internal const string MaskedRequest = nameof(MaskedRequest);
@@ -189,14 +161,5 @@ public abstract record MessageRouteConfiguration(Func<IMessageDelivery, object> 
     }
 }
 
-
-public record MessageRouteConfiguration<TMessage>(Func<IMessageDelivery, object> AddressMap, IMessageHub Host) : MessageRouteConfiguration(AddressMap, Host)
-{
-    public MessageRouteConfiguration<TMessage> WithFilter(Func<IMessageDelivery<TMessage>, bool> filter) => this with { Filter = filter };
-    internal Func<IMessageDelivery<TMessage>, bool> Filter { get; init; } = _ => true;
-
-    protected bool AddressFilter(IMessageDelivery delivery) => (delivery.Target == null || delivery.Target.Equals(Host.Address));
-    protected override bool Applies(IMessageDelivery delivery) => AddressFilter(delivery) && delivery is IMessageDelivery<TMessage> typedDelivery && Filter(typedDelivery);
-}
 
 internal record MessageHandlerItem(Type MessageType, Func<IMessageHub, IMessageDelivery, Task<IMessageDelivery>> AsyncDelivery);
