@@ -1,0 +1,28 @@
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+.content {
+    display: flex;
+    position: relative;
+    background-color: $brandeis-blue;
+}
+
+.overlay {
+    overflow-y: auto;
+    width: 312px;
+    height: 100%;
+    padding: 16px 16px;
+    background-color: $white;
+    border-right: 1px solid rgba($gunmetal, 0.15);
+}
+
+.lazy {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+@media print {
+    .content {
+        display: none !important;
+    }
+}

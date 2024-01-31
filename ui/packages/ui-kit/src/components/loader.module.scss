@@ -1,0 +1,34 @@
+@use "../theme/variables" as *;
+
+.loading {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    justify-content: center;
+    align-items: center;
+    animation: flicker 1.5s infinite;
+    font-size: 18px;
+}
+
+.sideLoading {
+    text-align: center;
+    color: rgba($gunmetal, 0.7);
+    animation: flicker 1.5s infinite;
+}
+
+.flicking {
+    animation: flicker 1.5s infinite;
+    color: red;
+}
+
+@keyframes flicker {
+    0% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.3;
+    }
+    100% {
+        opacity: 1;
+    }
+}

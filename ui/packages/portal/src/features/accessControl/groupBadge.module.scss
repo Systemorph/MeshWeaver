@@ -1,0 +1,63 @@
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+.link {
+    font-family: $roboto-font;
+    font-style: normal;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 16px;
+    color: $gunmetal;
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+
+    &:hover {
+        color: $brandeis-blue;
+    }
+}
+
+:global .group-icon {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 2px;
+    background-color: $brandeis-blue;
+    margin-right: 8px;
+    background-repeat: no-repeat;
+    background-position: center;
+
+    &-R {
+        background-color: $flavescent;
+        background-image: url("../../images/readers-small.svg");
+    }
+
+    &-E {
+        background-color: $lilac-soap;
+        background-image: url("../../images/editors-small.svg");
+    }
+
+    &-O {
+        background-color: $blizzard-blue;
+        background-image: url("../../images/owners-small.svg");
+    }
+
+    &-U {
+        background-color: $cotton-candy;
+        background-image: url("../../images/play-small.svg");
+    }
+
+    &-B {
+        background-color: $sea-foam-green;
+        background-image: url("../../images/billing-small.svg");
+    }
+}
+
+:global .group-icon-big {
+    width: 64px;
+    height: 64px;
+    margin-left: 0;
+    background-size: 32px;
+    border-radius: 4px;
+}

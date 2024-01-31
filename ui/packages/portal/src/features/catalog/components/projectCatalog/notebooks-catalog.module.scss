@@ -1,0 +1,72 @@
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+.container {
+    position: relative;
+    margin: 0 auto;
+    margin-top: 24px;
+    max-width: 1224px;
+    width: 100%;
+}
+
+.content {
+    margin-top: 24px;
+}
+
+.icons {
+    width: 56px;
+    position: absolute;
+    top: 24px;
+    right: 24px;
+    display: flex;
+    justify-content: space-between;
+}
+
+.icon {
+    border: none;
+    background: transparent;
+    width: 24px;
+    height: 24px;
+    font-size: 16px;
+    color: $gunmetal;
+
+    &:hover {
+        color: $brandeis-blue;
+    }
+}
+
+.panel {
+    font-weight: 600;
+    font-size: 18px;
+    line-height: 24px;
+    color: $gunmetal;
+}
+
+.tab {
+    background: white;
+    padding: 24px;
+    padding-bottom: 15px;
+    border: 2px solid rgba($silver-sand, 0.5);
+    border-radius: 4px;
+}
+
+.active {
+    color: $brandeis-blue;
+}
+
+.more {
+    align-self: center;
+    margin-left: auto;
+    width: 32px;
+    height: 32px;
+    font-size: 16px;
+    border: none;
+    background-color: white;
+
+    &:hover {
+        color: $brandeis-blue;
+    }
+}
+
+.collMore {
+    padding-right: 0;
+}
