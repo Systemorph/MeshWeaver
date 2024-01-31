@@ -25,11 +25,12 @@ public class SerializationTest : TestBase
             .WithForwards(f => f
                 .RouteAddress<HostAddress>(d =>
                     {
-                        var hostHub = f.Hub.GetHostedHub((HostAddress)d.Target, ConfigureHost);
+                        var hostHub = f.Hub.GetHostedHub(d.Target, ConfigureHost);
                         var packagedDelivery = d.Package();
                         hostHub.DeliverMessage(packagedDelivery);
+                        return d.Forwarded();
                     })
-                .RouteAddressToHub<ClientAddress>(d => f.Hub.GetHostedHub((ClientAddress)d.Target, ConfigureClient))
+                .RouteAddressToHostedHub<ClientAddress>(ConfigureClient)
             ));
     }
 

@@ -39,7 +39,7 @@ public class MessageHubTest : HubTestBase
     [Fact]
     public async Task HelloWorldFromClient()
     {
-        var client = Router.GetHostedHub(new ClientAddress(), c => c);
+        var client = GetClient();
         var response = await client.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
         response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
     }
