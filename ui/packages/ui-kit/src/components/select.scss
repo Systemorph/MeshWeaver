@@ -1,0 +1,174 @@
+@use "../theme/variables" as *;
+
+.rc-select {
+    display: inline-block;
+    width: 100%;
+    position: relative;
+    font-family: $roboto-font;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 16px;
+    color: $gunmetal;
+    cursor: pointer;
+
+    &:hover {
+        .rc-select-arrow {
+            color: $brandeis-blue;
+        }
+    }
+}
+
+.rc-select-disabled,
+.rc-select-disabled input {
+    cursor: default;
+}
+
+.rc-select-disabled {
+    &:hover {
+        border-color: $silver-sand;
+    }
+}
+
+.rc-select-disabled .rc-select-arrow {
+    cursor: default;
+    opacity: .3;
+
+    &:hover {
+        color: $gunmetal;
+    }
+}
+
+.rc-select .rc-select-selection-search-input {
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    cursor: pointer;
+    outline: none;
+}
+
+.rc-select-disabled .rc-select-selection-search-input {
+    cursor: default;
+}
+
+.rc-select-show-search .rc-select-selection-search-input,
+.rc-select-show-search.rc-select-single:not(.rc-select-customize-input) .rc-select-selector:hover {
+    cursor: text;
+}
+
+.rc-select-single .rc-select-selector {
+    display: flex;
+    position: relative;
+    height: 32px;
+}
+
+.rc-select-single .rc-select-selector .rc-select-selection-search {
+    width: 100%
+}
+
+.rc-select-single .rc-select-selector .rc-select-selection-search-input {
+    width: 100%;
+    padding: 0;
+    border: none;
+}
+
+.rc-select-single:not(.rc-select-customize-input) .rc-select-selector .rc-select-selection-search-input {
+    background: transparent;
+    font-family: $roboto-font;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 16px;
+    color: $gunmetal;
+}
+
+.rc-select-single .rc-select-selector .rc-select-selection-item {
+    position: absolute;
+    top: 8px;
+    left: 10px;
+    pointer-events: none;
+}
+
+.rc-select-single.rc-select-open .rc-select-selection-item {
+    color: $silver-sand;
+}
+
+.rc-select-single:not(.rc-select-customize-input) .rc-select-selector {
+    padding: 7px 10px;
+    padding-right: 32px;
+    border: 1px solid $silver-sand;
+    border-radius: 4px;
+    background-color: rgba($bright-gray, 0.2);
+
+    &:hover {
+        border-color: rgba($gunmetal, 0.5);
+    }
+}
+
+.rc-select-show-arrow .rc-select-arrow {
+    pointer-events: none;
+    position: absolute;
+    right: 10px;
+    top: 9px;
+    width: 16px;
+    height: 16px;
+    font-size: 16px;
+    cursor: pointer;
+}
+
+.rc-select-focused .rc-select-selector {
+    border-color: $brandeis-blue !important;
+}
+
+.rc-select-single:not(.rc-select-customize-input).rc-select-open .rc-select-selector {
+    background-color: $white;
+}
+
+.rc-select-dropdown {
+    position: absolute;
+    background: white;
+    width: 100%;
+    border: 1px solid $blueberry;
+    box-shadow: 0px 8px 24px rgba(41, 43, 54, 0.14), 0px 4px 4px rgba(41, 43, 54, 0.05);
+    border-radius: 4px;
+    z-index: 10;
+    min-height: unset;
+}
+
+.rc-select-dropdown-hidden {
+    display: none;
+}
+
+.rc-select-item,
+.rc-select-item-empty,
+.renderOption {
+    font-family: $roboto-font;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 16px;
+    color: $gunmetal;
+    padding: 8px 12px;
+    min-height: 32px;
+}
+
+.rc-select-item-option {
+    position: relative;
+    cursor: pointer;
+}
+
+.rc-select-item-option-state {
+    display: none;
+}
+
+.rc-virtual-list-holder-inner {
+    padding: 8px 0;
+}
+
+.rc-select-item-option-active {
+    background-color: rgba($gunmetal, 0.05);
+}
+
+input[type="search"]::-webkit-search-decoration,
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-results-button,
+input[type="search"]::-webkit-search-results-decoration {
+    -webkit-appearance: none;
+}

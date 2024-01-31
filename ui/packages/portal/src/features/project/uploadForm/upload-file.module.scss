@@ -1,0 +1,213 @@
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+.fileWrapper {
+    display: flex;
+    justify-content: center;
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+.item .fileWrapper {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.buttonsBox {
+    margin-top: 8px;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+
+    &:last-of-type {
+        margin-bottom: 0;
+    }
+}
+
+.checkboxBox {
+    display: flex;
+    align-items: center;
+    margin-left: auto;
+}
+
+.checkboxLabel {
+    font-family: $roboto-font;
+    font-style: normal;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 16px;
+    color: $gunmetal;
+    margin-left: 8px;
+}
+
+.nameWrapper {
+    display: flex;
+    align-items: center;
+
+    i {
+        font-size: 16px;
+        margin-right: 4px;
+    }
+}
+
+.name {
+    font-family: $roboto-font;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 16px;
+    color: $gunmetal;
+    display: flex;
+}
+
+.fileName {
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.status {
+    align-items: center;
+    display: flex;
+    font-family: $roboto-font;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 16px;
+    color: $dark-silver;
+}
+
+.copy,
+.overwrite {
+    font-weight: 600;
+    font-size: 12px;
+    line-height: 16px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: $gunmetal;
+    margin-right: 16px;
+}
+
+.overwrite {
+    color: $brandeis-blue;
+}
+
+.retry,
+.cancel {
+    width: 24px;
+    height: 24px;
+    background: $bright-gray;
+    margin-left: 8px;
+    font-size: 16px;
+
+    &:hover {
+        box-shadow: 0 0 1px rgba(41, 43, 54, 0.24), 0 1px 4px rgba(41, 43, 54, 0.08);
+        color: $dark-silver;
+    }
+}
+
+.complete {
+    display: flex;
+    align-items: center;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 16px;
+    text-align: right;
+    color: $dark-silver;
+
+    i {
+        width: 24px;
+        height: 24px;
+        margin-left: 8px;
+        font-size: 16px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        background-color: white;
+        color: $malachite;
+    }
+}
+
+.progressbarWrapper {
+    height: 2px;
+    margin-top: 6px;
+}
+
+.errorItem {
+    color: $portland-orange;
+    padding: 0 8px;
+
+    .name {
+        color: $portland-orange;
+    }
+
+    .status {
+        color: $portland-orange;
+        font-weight: 600;
+        font-size: 12px;
+        line-height: 16px;
+        text-align: right;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+    }
+}
+
+.item {
+    padding: 0 8px;
+}
+
+.errorItem .fileWrapper {
+    justify-content: space-between;
+    flex-direction: row;
+    align-items: center;
+}
+
+.conflict .fileWrapper {
+    justify-content: space-between;
+    flex-direction: row;
+    align-items: center;
+}
+
+.errorItem .name {
+    color: $portland-orange;
+}
+
+.conflict {
+    background: $light-gray;
+    border-radius: 4px;
+    padding: 12px 8px;
+    padding-right: 12px;
+}
+
+.conflict .nameWrapper {
+    display: flex;
+    justify-content: space-between;
+}
+
+.conflict .status i {
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    color: $american-yellow;
+}
+
+.messageBox {
+    margin-top: 16px;
+}
+
+.formText {
+    font-family: $roboto-font;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 16px;
+    color: $dark-silver;
+    margin: 0;
+}
+
+.buttonsBox button:last-of-type {
+    margin-left: 8px;
+    padding: 0;
+}

@@ -1,0 +1,306 @@
+{
+  "type": "bar",
+  "data": {
+    "datasets": [
+      {
+        "backgroundColor": "rgba(102, 183, 255, 1)",
+        "data": [
+          {
+            "label": "Main1",
+            "dataLabel": "",
+            "dataLabelColor": "#66B7FF",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "range": [
+              50.0,
+              90.0
+            ],
+            "label": "Delta1",
+            "dataLabel": "▲ 40",
+            "dataLabelColor": "white",
+            "dataLabelAlignment": "center"
+          },
+          {
+            "range": [
+              90.0,
+              120.0
+            ],
+            "label": "Delta2",
+            "dataLabel": "▲ 30",
+            "dataLabelColor": "white",
+            "dataLabelAlignment": "center"
+          },
+          {
+            "label": "Middle",
+            "dataLabel": "",
+            "dataLabelColor": "#66B7FF",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "range": [
+              120.0,
+              130.0
+            ],
+            "label": "Delta3",
+            "dataLabel": "▲ 10",
+            "dataLabelColor": "#66B7FF",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "range": [
+              130.0,
+              150.0
+            ],
+            "label": "Delta4",
+            "dataLabel": "▲ 20",
+            "dataLabelColor": "white",
+            "dataLabelAlignment": "center"
+          },
+          {
+            "label": "Delta5",
+            "dataLabel": "",
+            "dataLabelColor": "#66B7FF",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Total",
+            "dataLabel": "",
+            "dataLabelColor": "#66B7FF",
+            "dataLabelAlignment": "end"
+          }
+        ],
+        "hoverBackgroundColor": "rgba(102, 183, 255, 1)",
+        "label": "Increments",
+        "datalabels": {
+          "align": "context => context.dataset.data[context.dataIndex].dataLabelAlignment",
+          "anchor": "context => context.dataset.data[context.dataIndex].dataLabelAlignment",
+          "color": "context => context.dataset.data[context.dataIndex].dataLabelColor",
+          "display": true,
+          "formatter": "(value, context) => context.dataset.data[context.dataIndex]?.dataLabel"
+        },
+        "parsing": {
+          "xAxisKey": "range",
+          "yAxisKey": "label"
+        }
+      },
+      {
+        "backgroundColor": "rgba(245, 98, 149, 1)",
+        "data": [
+          {
+            "label": "Main1",
+            "dataLabel": "",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Delta1",
+            "dataLabel": "",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Delta2",
+            "dataLabel": "",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Middle",
+            "dataLabel": "",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Delta3",
+            "dataLabel": "",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Delta4",
+            "dataLabel": "",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "range": [
+              100.0,
+              150.0
+            ],
+            "label": "Delta5",
+            "dataLabel": "▼ 50",
+            "dataLabelColor": "white",
+            "dataLabelAlignment": "center"
+          },
+          {
+            "label": "Total",
+            "dataLabel": "",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          }
+        ],
+        "hoverBackgroundColor": "rgba(245, 98, 149, 1)",
+        "label": "Decrements",
+        "datalabels": {
+          "align": "context => context.dataset.data[context.dataIndex].dataLabelAlignment",
+          "anchor": "context => context.dataset.data[context.dataIndex].dataLabelAlignment",
+          "color": "context => context.dataset.data[context.dataIndex].dataLabelColor",
+          "display": true,
+          "formatter": "(value, context) => context.dataset.data[context.dataIndex]?.dataLabel"
+        },
+        "parsing": {
+          "xAxisKey": "range",
+          "yAxisKey": "label"
+        }
+      },
+      {
+        "backgroundColor": "rgba(166, 171, 194, 1)",
+        "data": [
+          {
+            "range": [
+              0.0,
+              50.0
+            ],
+            "label": "Main1",
+            "dataLabel": "50",
+            "dataLabelColor": "white",
+            "dataLabelAlignment": "center"
+          },
+          null,
+          null,
+          {
+            "range": [
+              0.0,
+              120.0
+            ],
+            "label": "Middle",
+            "dataLabel": "120",
+            "dataLabelColor": "white",
+            "dataLabelAlignment": "center"
+          },
+          null,
+          null,
+          null,
+          {
+            "range": [
+              0.0,
+              100.0
+            ],
+            "label": "Total",
+            "dataLabel": "100",
+            "dataLabelColor": "white",
+            "dataLabelAlignment": "center"
+          }
+        ],
+        "hoverBackgroundColor": "rgba(166, 171, 194, 1)",
+        "label": "Total",
+        "datalabels": {
+          "align": "context => context.dataset.data[context.dataIndex].dataLabelAlignment",
+          "anchor": "context => context.dataset.data[context.dataIndex].dataLabelAlignment",
+          "color": "context => context.dataset.data[context.dataIndex].dataLabelColor",
+          "display": true,
+          "formatter": "(value, context) => context.dataset.data[context.dataIndex]?.dataLabel"
+        },
+        "parsing": {
+          "xAxisKey": "range",
+          "yAxisKey": "label"
+        }
+      },
+      {
+        "pointRadius": 0,
+        "borderWidth": 1,
+        "data": [
+          50.0,
+          50.0,
+          null,
+          120.0,
+          120.0,
+          null,
+          100.0,
+          100.0
+        ],
+        "label": "hidden",
+        "type": "line"
+      },
+      {
+        "pointRadius": 0,
+        "borderWidth": 1,
+        "data": [
+          null,
+          90.0,
+          90.0,
+          null,
+          130.0,
+          130.0,
+          null
+        ],
+        "label": "hidden",
+        "type": "line"
+      },
+      {
+        "pointRadius": 0,
+        "borderWidth": 1,
+        "data": [
+          null,
+          null,
+          120.0,
+          120.0,
+          null,
+          150.0,
+          150.0,
+          null
+        ],
+        "label": "hidden",
+        "type": "line"
+      }
+    ],
+    "labels": [
+      "Main1",
+      "Delta1",
+      "Delta2",
+      "Middle",
+      "Delta3",
+      "Delta4",
+      "Delta5",
+      "Total"
+    ]
+  },
+  "options": {
+    "scales": {
+      "y": {
+        "grid": {
+          "display": false
+        },
+        "stacked": true
+      },
+      "x": {
+        "display": false
+      }
+    },
+    "plugins": {
+      "legend": {
+        "display": true,
+        "labels": {
+          "filter": "item => item.text !== 'hidden'"
+        }
+      },
+      "title": {
+        "display": true,
+        "position": "top",
+        "text": "Waterfall"
+      },
+      "colorschemes": {
+        "scheme": [
+          "#66B7FF",
+          "#F56295",
+          "#A6ABC2",
+          "#A6ABC2",
+          "#A6ABC2",
+          "#A6ABC2"
+        ]
+      }
+    },
+    "indexAxis": "y"
+  }
+}

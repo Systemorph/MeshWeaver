@@ -1,0 +1,224 @@
+@use "sass:map";
+@use "@open-smc/ui-kit/theme/helpers" as *;
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+:root {
+    --globalColumnGap: 8px;
+}
+
+// Scrollbar
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    -webkit-border-radius: 12px;
+    background-color: $silver-sand;
+
+    &:hover {
+        background-color: $dark-silver;
+    }
+}
+
+::-webkit-scrollbar-button {
+    width: 0;
+    height: 0;
+    display: none;
+}
+
+::-webkit-scrollbar-corner {
+    background-color: transparent;
+}
+
+// scrollbar in Firefox
+* {
+    scrollbar-width: thin;
+    scrollbar-color: $silver-sand white;
+}
+
+.loading {
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    animation: flicker 1.5s infinite;
+    font-size: 18px;
+    color: rgba($gunmetal, 0.7);
+}
+
+.layout {
+    height: 100%;
+    height: 100vh;
+    display: grid;
+    padding: var(--globalColumnGap);
+    background-color: rgba($gunmetal, 0.1);
+    grid-template-areas:
+                        'menu toolbar toolbar'
+                        'menu content panel';
+    grid-template-rows: min-content 1fr;
+    grid-template-columns: minmax(0, min-content) minmax(0, 1fr) minmax(0px, min-content);
+    grid-row-gap: var(--globalColumnGap);
+    grid-column-gap: var(--globalColumnGap);
+}
+
+.sideMenu {
+    grid-area: menu;
+    background-color: $white;
+    border-radius: 8px;
+    padding: 8px;
+}
+
+.toolbar {
+    grid-area: toolbar;
+    background-color: white;
+    border-radius: 8px;
+    padding: 16px;
+}
+
+.mainContent {
+    padding: 16px;
+    background-color: $white;
+    border-radius: 8px;
+    grid-area: content;
+    overflow-y: auto;
+    margin-right: calc(-1 * var(--globalColumnGap));
+}
+
+:global(.smApp .presenter-Scope) {
+    display: flex;
+    gap: 12px;
+    row-gap: 16px;
+    flex-wrap: wrap;
+}
+
+:global(.smApp .presenter-Grid) {
+    padding-bottom: 16px;
+}
+
+:global(.smApp .presenter-button) {
+    label {
+        background-color: rgba($white, 0.15);
+        color: $white;
+    }
+}
+
+.contextPanel {
+    grid-area: panel;
+    background-color: $white;
+    padding: 16px;
+    border-radius: 8px;
+    overflow: hidden;
+    margin-left: var(--globalColumnGap);
+    position: relative;
+    user-select: none;
+    min-width: 180px;
+    max-width: calc(100% - var(--globalColumnGap));
+
+    .resizer {
+        position: absolute;
+        width: 10px;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        border-left: 3px solid rgba(white, 0);
+        cursor: col-resize;
+        transition: border-left-color 0.4s ease-in-out;
+        border-radius: 8px;
+
+        &:hover {
+            border-left-color: $sky-blue;
+        }
+    }
+
+    &:global(.isResizing) .resizer {
+        border-left-color: $sky-blue;
+    }
+}
+
+@keyframes flicker {
+    0% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.3;
+    }
+    100% {
+        opacity: 1;
+    }
+}
+
+:global(.dialog-wrapper) {
+    :global(.rc-dialog-content) {
+        padding: 0;
+    }
+
+    :global(.rc-dialog-close) {
+        right: 16px;
+        top: 16px;
+        width: 24px;
+        height: 24px;
+    }
+}
+
+:global(.bigNumber) {
+    background-color: rgba($pool-water, 0.8);
+    color: $sea-serpent;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    height: 100%;
+
+    div {
+        text-align: right;
+    }
+
+    h4 {
+        margin-bottom: 4px;
+    }
+
+    p {
+        font-size: 48px;
+        line-height: 1;
+        margin: 0 !important;
+    }
+}
+
+// TODO: temporary hard-coded styling of scenarios page, to be removed (11/7/2023, akravets)
+:global {
+    .scenarios-overview {
+        @media (min-width: 1024px) {
+            max-width: 704px;
+        }
+
+        img {
+            display: block;
+            width: 100%;
+            height: auto;
+            background-color: $gunmetal;
+            margin-bottom: 24px;
+            aspect-ratio: 88/25;
+        }
+
+        h2 {
+            margin-top: 24px;
+            margin-bottom: 16px;
+        }
+
+        h2:first-child {
+            margin-top: 24px;
+        }
+
+        hr {
+            border-top: 1px solid rgba(black, 0.15);
+            border-bottom: 0 none;
+            margin: 32px 0;
+            height: 0;
+        }
+
+    }
+}
