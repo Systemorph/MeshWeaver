@@ -1,14 +1,13 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <PackageReference Include="AspectCore.Extensions.Reflection" />
     <PackageReference Include="Castle.Core" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Newtonsoft.Json" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\OpenSmc.Arithmetics\OpenSmc.Arithmetics.csproj" />
     <ProjectReference Include="..\OpenSmc.DataCubes.Abstractions\OpenSmc.DataCubes.Abstractions.csproj" />
-    <ProjectReference Include="..\OpenSmc.Reflection\OpenSmc.Reflection.csproj" />
     <ProjectReference Include="..\OpenSmc.Utils\OpenSmc.Utils.csproj" />
   </ItemGroup>
 </Project>
