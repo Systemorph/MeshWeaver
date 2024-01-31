@@ -1,0 +1,197 @@
+@use "@open-smc/ui-kit/theme/helpers" as *;
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+.header {
+    display: flex;
+    height: 80px;
+    padding: 24px;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 2px solid $bright-gray;
+    background: white;
+}
+
+.name {
+    margin: 0;
+    font-family: $overpass-font;
+    font-style: normal;
+    font-weight: 600;
+    font-size: 24px;
+    line-height: 24px;
+    padding-top: 6px;
+    color: $gunmetal;
+}
+
+.row {
+    display: flex;
+    align-items: center;
+    width: 100%;
+}
+
+.addButton {
+    font-weight: 600;
+    padding: 8px 16px;
+
+    + button {
+        margin-left: 8px;
+    }
+
+    &:hover {
+        box-shadow: 0 0 1px rgba(41, 43, 54, 0.24), 0 1px 4px rgba(41, 43, 54, 0.08);
+        color: $dark-silver;
+    }
+
+    &:disabled {
+        opacity: 0.33;
+        color: $gunmetal;
+        box-shadow: none;
+    }
+}
+
+.runButtonsBox {
+    display: flex;
+    border-left: 2px solid rgba($gunmetal, 0.05);
+    margin-left: 16px;
+    padding-left: 16px;
+}
+
+.indicator {
+    width: 8px;
+    height: 8px;
+    margin-right: 6px;
+    display: inline-block;
+    border-radius: 50%;
+}
+
+.startingIndicator,
+.stoppingIndicator {
+    background-color: $american-yellow;
+}
+
+.runningIndicator {
+    background-color: $malachite;
+}
+
+.toggleBox {
+    display: flex;
+    border-left: 2px solid rgba($gunmetal, 0.05);
+    margin-left: 16px;
+    padding-left: 16px;
+}
+
+.toggle {
+    height: 32px;
+    border: none;
+    background: $bright-gray;
+    border-radius: 4px;
+    padding: 8px 24px;
+    font-family: $roboto-font;
+    font-weight: 600;
+    font-size: 12px;
+    line-height: 16px;
+    letter-spacing: 0.02em;
+    color: $gunmetal;
+    text-transform: uppercase;
+
+    i {
+        font-size: 16px;
+        margin-right: 4px;
+    }
+
+    &:global(.active) {
+        background: $brandeis-blue;
+        color: white;
+
+        &:hover {
+            color: white;
+            background: $blueberry;
+            box-shadow: 0px 0px 1px rgba(41, 43, 54, 0.24), 0px 1px 4px rgba(41, 43, 54, 0.08);
+        }
+    }
+
+    &:hover {
+        box-shadow: 0px 0px 1px rgba(41, 43, 54, 0.24), 0px 1px 4px rgba(41, 43, 54, 0.08);
+        color: $dark-silver;
+    }
+}
+
+.button {
+    height: 32px;
+}
+
+@keyframes spinner {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.stopSession {
+    height: 32px;
+    background: $malachite;
+    border-radius: 4px;
+    border: none;
+    padding: 8px 24px;
+    font-family: $roboto-font;
+    font-weight: 500;
+    font-size: 12px;
+    line-height: 16px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: white;
+
+    i {
+        font-size: 16px;
+        margin-right: 4px;
+    }
+
+    &:hover {
+        background: $fluorite;
+        box-shadow: 0px 0px 1px rgba(41, 43, 54, 0.24), 0px 1px 4px rgba(41, 43, 54, 0.08);
+    }
+
+    &:disabled {
+        background-color: $malachite;
+        color: white;
+        opacity: 0.33;
+    }
+
+    &:global(.loading) {
+        i {
+            animation: spinner .8s ease infinite;
+        }
+
+        i:before {
+            content: get-icon("refresh");
+        }
+    }
+}
+
+@media print {
+    .header {
+        display: none !important;
+    }
+}
+
+.toolbarButton {
+    height: 32px;
+    width: 32px;
+    background: $bright-gray;
+    padding: 8px 10px;
+    font-weight: 600;
+    color: $gunmetal;
+    font-size: 16px;
+
+    &:first-of-type {
+        margin-right: 8px;
+    }
+
+    &:hover {
+        color: $dark-silver;
+        box-shadow: 0 0 1px rgba(41, 43, 54, 0.24), 0 1px 4px rgba(41, 43, 54, 0.08);
+    }
+
+    &:global(.active) {
+        background-color: $brandeis-blue;
+        color: $white;
+    }
+}

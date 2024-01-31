@@ -1,0 +1,37 @@
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+.list {
+    width: 100%;
+    border-bottom: 2px solid $bright-gray;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: row;
+    margin-bottom: 32px;
+}
+
+.link {
+    display: block;
+    padding: 5px 16px;
+    font-family: $overpass-font;
+    font-weight: 500;
+    font-size: 16px;
+    line-height: 20px;
+    color: $dark-silver;
+    text-decoration: none;
+
+    &:global(.active) {
+        border-bottom: 2px solid $brandeis-blue;
+        color: $gunmetal;
+        margin-bottom: -2px;
+    }
+
+    &:hover {
+        color: $gunmetal;
+    }
+}
+
+:global(.link.active) {
+    color: $gunmetal;
+}

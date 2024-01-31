@@ -1,0 +1,50 @@
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+.p-checkbox {
+    width: 16px;
+    height: 16px;
+}
+
+.p-checkbox .p-checkbox-box {
+    border: 1px solid $silver-sand;
+    background: white;
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+    transition: background-color 0.15s, border-color 0.15s, box-shadow 0.15s;
+
+    &:hover {
+        background: rgba($bright-gray, 0.5);
+    }
+}
+
+.p-checkbox .p-checkbox-box .p-checkbox-icon {
+    transition-duration: 0.15s;
+    color: white;
+    font-size: 14px;
+}
+
+.p-checkbox .p-checkbox-box.p-highlight {
+    border-color: $brandeis-blue;
+    background: $brandeis-blue;
+}
+
+.p-checkbox .p-checkbox-box.p-highlight:not(.p-disabled):hover {
+    border-color: $blueberry;
+    background: $blueberry;
+    color: white;
+}
+
+.p-checkbox:not(.p-checkbox-disabled) .p-checkbox-box:hover {
+    border-color: $silver-sand;
+}
+
+.p-checkbox:not(.p-checkbox-disabled) .p-checkbox-box.p-highlight:hover {
+    border-color: $blueberry;
+    background: $blueberry;
+    color: white;
+}
+
+.pi-check:before {
+    content: "\e912";
+}

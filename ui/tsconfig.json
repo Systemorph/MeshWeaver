@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "target": "es5",
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
+    "experimentalDecorators": true,
+    "allowJs": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "strictNullChecks": false,
+    "forceConsistentCasingInFileNames": true,
+    "noFallthroughCasesInSwitch": true,
+    "module": "esnext",
+    "moduleResolution": "node",
+    "resolvePackageJsonExports": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "paths": {
+      "@open-smc/application/*": ["./packages/application/src/*"],
+      "@open-smc/sandbox/*": ["./packages/sandbox/src/*"],
+      "@open-smc/portal/*": ["./packages/portal/src/*"],
+      "@open-smc/store/*": ["./packages/store/src/*"],
+      "@open-smc/ui-kit/*": ["./packages/ui-kit/src/*"],
+      "@open-smc/utils/*": ["./packages/utils/src/*"]
+    }
+  }
+}

@@ -1,0 +1,122 @@
+@use "@open-smc/ui-kit/theme/helpers" as *;
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+.rc-notification {
+    position: fixed;
+    z-index: 1102;
+    display: flex;
+    max-height: 100vh;
+    padding: 10px;
+    overflow-y: auto;
+    align-items: flex-end;
+    height: 100%;
+}
+
+.rc-notification-top,
+.rc-notification-topLeft,
+.rc-notification-topRight {
+    top: 0;
+    flex-direction: column;
+}
+
+.rc-notification-topRight {
+    right: 0;
+}
+
+.rc-notification-notice {
+    position: relative;
+    display: block;
+    box-sizing: border-box;
+    width: auto;
+    margin: 12px 16px;
+    line-height: 24px;
+    background: $white;
+    border: 1px solid $bright-gray;
+    border-radius: 6px;
+    max-width: 500px;
+}
+
+.rc-notification-notice-content {
+    padding: 16px;
+    font-family: $overpass-font;
+    font-size: 14px;
+    line-height: 24px;
+    color: $gunmetal;
+
+    h3 {
+        margin: 0;
+        font-size: 14px;
+        margin-bottom: 8px;
+        font-weight: 600;
+    }
+
+    p {
+        margin: 0;
+        font-weight: 400;
+        font-size: 14px;
+        line-height: 16px;
+        color: $dark-silver;
+    }
+}
+
+.rc-notification-notice-close {
+    position: absolute;
+    display: block;
+    top: 4px;
+    right: 4px;
+    color: $dark-silver;
+    font-weight: 700;
+    line-height: 1;
+    text-decoration: none;
+    text-shadow: 0 1px 0 #fff;
+    outline: none;
+    cursor: pointer;
+    font-size: 16px;
+    font-family: $icons-font;
+
+    &:hover {
+        color: $gunmetal;
+    }
+}
+
+.rc-notification-notice-close:after {
+    content: get-icon("close");
+    width: 16px;
+    height: 16px;
+    font-size: 16px;
+}
+
+.rc-notification-notice-close {
+    font-size: 0;
+}
+
+.rc-notification-fade {
+    overflow: hidden;
+    transition: all 0.2s;
+}
+
+.rc-notification-fade-appear-start {
+    transform: translateY(100%);
+    opacity: 0;
+}
+
+.rc-notification-fade-appear-active {
+    transform: translateX(0);
+    opacity: 1;
+}
+
+.severity-Error {
+    border: 1px solid $portland-orange;
+
+    h3 {
+        color: $portland-orange;
+    }
+}
+
+.severity-Success {
+    border: 1px solid $malachite;
+
+    h3 {
+        color: $malachite;
+    }
+}

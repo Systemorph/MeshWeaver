@@ -1,0 +1,356 @@
+{
+  "type": "bar",
+  "data": {
+    "datasets": [
+      {
+        "backgroundColor": "rgba(102, 183, 255, 1)",
+        "data": [
+          {
+            "label": "Gross earned premiums",
+            "dataLabel": "",
+            "dataLabelColor": "#66B7FF",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Statutory duties",
+            "dataLabel": "",
+            "dataLabelColor": "#66B7FF",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "MP",
+            "dataLabel": "",
+            "dataLabelColor": "#66B7FF",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "range": [
+              0.0,
+              42883980.82999433
+            ],
+            "label": "Claims",
+            "dataLabel": "43M",
+            "dataLabelColor": "#66B7FF",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Contractual surplus",
+            "dataLabel": "",
+            "dataLabelColor": "#66B7FF",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Cost",
+            "dataLabel": "",
+            "dataLabelColor": "#66B7FF",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "range": [
+              -209420019.1700058,
+              -143664601.983892
+            ],
+            "label": "Cost of Capital",
+            "dataLabel": "66M",
+            "dataLabelColor": "#66B7FF",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Reinsurance",
+            "dataLabel": "",
+            "dataLabelColor": "#66B7FF",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Premiums",
+            "dataLabel": "",
+            "dataLabelColor": "#66B7FF",
+            "dataLabelAlignment": "end"
+          }
+        ],
+        "hoverBackgroundColor": "rgba(102, 183, 255, 1)",
+        "label": "hidden",
+        "parsing": {
+          "xAxisKey": "range",
+          "yAxisKey": "label"
+        }
+      },
+      {
+        "backgroundColor": "rgba(245, 98, 149, 1)",
+        "data": [
+          {
+            "range": [
+              -704288000.0,
+              0.0
+            ],
+            "label": "Gross earned premiums",
+            "dataLabel": "-704M",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "range": [
+              -739228000.0,
+              -704288000.0
+            ],
+            "label": "Statutory duties",
+            "dataLabel": "-35M",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "MP",
+            "dataLabel": "",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Claims",
+            "dataLabel": "",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "range": [
+              1687980.8299943283,
+              42883980.82999433
+            ],
+            "label": "Contractual surplus",
+            "dataLabel": "-41M",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "range": [
+              -209420019.1700058,
+              1687980.8299943283
+            ],
+            "label": "Cost",
+            "dataLabel": "-211M",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Cost of Capital",
+            "dataLabel": "",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "range": [
+              -218740806.26935512,
+              -143664601.983892
+            ],
+            "label": "Reinsurance",
+            "dataLabel": "-75M",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Premiums",
+            "dataLabel": "",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          }
+        ],
+        "hoverBackgroundColor": "rgba(245, 98, 149, 1)",
+        "label": "hidden",
+        "parsing": {
+          "xAxisKey": "range",
+          "yAxisKey": "label"
+        }
+      },
+      {
+        "backgroundColor": "rgba(166, 171, 194, 1)",
+        "data": [
+          {
+            "label": "Gross earned premiums",
+            "dataLabel": "",
+            "dataLabelColor": "#A6ABC2",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Statutory duties",
+            "dataLabel": "",
+            "dataLabelColor": "#A6ABC2",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "range": [
+              -739228000.0,
+              0.0
+            ],
+            "label": "MP",
+            "dataLabel": "-739M",
+            "dataLabelColor": "#A6ABC2",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Claims",
+            "dataLabel": "",
+            "dataLabelColor": "#A6ABC2",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Contractual surplus",
+            "dataLabel": "",
+            "dataLabelColor": "#A6ABC2",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Cost",
+            "dataLabel": "",
+            "dataLabelColor": "#A6ABC2",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Cost of Capital",
+            "dataLabel": "",
+            "dataLabelColor": "#A6ABC2",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Reinsurance",
+            "dataLabel": "",
+            "dataLabelColor": "#A6ABC2",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "range": [
+              -218740806.26935512,
+              0.0
+            ],
+            "label": "Premiums",
+            "dataLabel": "-219M",
+            "dataLabelColor": "#A6ABC2",
+            "dataLabelAlignment": "end"
+          }
+        ],
+        "hoverBackgroundColor": "rgba(166, 171, 194, 1)",
+        "label": "hidden",
+        "parsing": {
+          "xAxisKey": "range",
+          "yAxisKey": "label"
+        }
+      },
+      {
+        "pointRadius": 0,
+        "borderWidth": 1,
+        "data": [
+          -704288000.0,
+          -704288000.0,
+          null,
+          42883980.82999433,
+          42883980.82999433,
+          null,
+          -143664601.983892,
+          -143664601.983892,
+          null
+        ],
+        "label": "hidden",
+        "datalabels": {
+          "display": false
+        },
+        "type": "line"
+      },
+      {
+        "pointRadius": 0,
+        "borderWidth": 1,
+        "data": [
+          null,
+          -739228000.0,
+          -739228000.0,
+          null,
+          1687980.8299943283,
+          1687980.8299943283,
+          null,
+          -218740806.26935512,
+          -218740806.26935512
+        ],
+        "label": "hidden",
+        "datalabels": {
+          "display": false
+        },
+        "type": "line"
+      },
+      {
+        "pointRadius": 0,
+        "borderWidth": 1,
+        "data": [
+          null,
+          null,
+          null,
+          -739228000.0,
+          null,
+          -209420019.1700058,
+          -209420019.1700058,
+          null,
+          null
+        ],
+        "label": "hidden",
+        "datalabels": {
+          "display": false
+        },
+        "type": "line"
+      }
+    ],
+    "labels": [
+      ["Gross", "earned", "premiums"],
+      "Statutory duties",
+      "MP",
+      "Claims",
+      "Contractual surplus",
+      "Cost",
+      "Cost of Capital",
+      "Reinsurance",
+      "Premiums"
+    ]
+  },
+  "options": {
+    "scales": {
+      "y": {
+        "stacked": true
+      },
+      "x": {
+        "grace": "10%",
+        "suggestedMax": 10,
+        "ticks": {
+          "format": {
+            "notation": "compact",
+            "minimumFractionDigits": 0,
+            "maximumFractionDigits": 2
+          }
+        }
+      }
+    },
+    "plugins": {
+      "legend": {
+        "display": true,
+        "labels": {
+          "filter": "item => item.text !== 'hidden'"
+        }
+      },
+      "tooltip": {
+        "enabled": false
+      },
+      "colorschemes": {
+        "scheme": [
+          "#66B7FF",
+          "#F56295",
+          "#A6ABC2",
+          "#A6ABC2",
+          "#A6ABC2",
+          "#A6ABC2"
+        ]
+      },
+      "datalabels": {
+        "align": "context => context.dataset.data[context.dataIndex].dataLabelAlignment",
+        "anchor": "context => context.dataset.data[context.dataIndex].dataLabelAlignment",
+        "color": "context => context.dataset.data[context.dataIndex].dataLabelColor",
+        "display": true,
+        "formatter": "(value, context) => context.dataset.data[context.dataIndex]?.dataLabel"
+      }
+    },
+    "indexAxis": "y"
+  }
+}

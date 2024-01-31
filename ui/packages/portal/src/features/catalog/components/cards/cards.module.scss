@@ -1,0 +1,138 @@
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+.cards {
+    display: grid;
+    width: 100%;
+    margin: 0 auto;
+    margin-top: 24px;
+    grid-gap: 24px;
+    grid-template-columns: repeat(auto-fit, minmax(288px, 288px));
+}
+
+.small {
+    grid-gap: 24px;
+    grid-template-columns: repeat(auto-fit, minmax(274px, 274px));
+}
+
+.card {
+    background: white;
+    border: 2px solid rgba($silver-sand, 0.6);
+    border-radius: 4px;
+
+    &:hover {
+        border-color: $brandeis-blue;
+    }
+}
+
+.header {
+    display: flex;
+    padding: 16px;
+    justify-content: space-between;
+}
+
+.avatar {
+    width: 32px;
+    height: 32px;
+    margin-right: 8px;
+    background-color: $blueberry;
+    cursor: pointer;
+    display: none;
+}
+
+.wrapper {
+    display: flex;
+    flex-direction: row;
+}
+
+.info {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.author {
+    font-family: $roboto-font;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 16px;
+    color: $gunmetal;
+}
+
+.date {
+    font-family: $roboto-font;
+    font-weight: 600;
+    font-size: 12px;
+    line-height: 16px;
+    color: $silver-sand;
+}
+
+.more {
+    align-self: center;
+    margin-left: auto;
+    width: 24px;
+    height: 24px;
+    font-size: 24px;
+    border: none;
+    background-color: white;
+
+    &:hover {
+        color: $brandeis-blue;
+    }
+}
+
+.imagebox {
+    height: 142px;
+    background-color: $light-gray;
+}
+
+img.image {
+    width: 100%;
+    display: block;
+    height: 100%;
+    object-fit: cover;
+    opacity: 1;
+}
+
+.footer {
+    padding: 16px;
+    height: 74px;
+}
+
+.title {
+    font-weight: 600;
+    font-size: 16px;
+    line-height: 21px;
+    color: $gunmetal;
+    text-decoration: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
+}
+
+.name {
+    margin: 0;
+}
+
+.cardLink {
+    text-decoration: none;
+    display: block;
+}
+
+.emptyCard {
+    background-image: url("../../../../images/empty-recents.svg");
+    background-repeat: no-repeat;
+    background-position: center top;
+    min-height: 320px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+
+    p {
+        margin-top: auto;
+        font-size: 14px;
+        color: $dark-silver;
+        max-width: 32ch;
+        text-align: center;
+        margin-bottom: 64px;
+    }
+}

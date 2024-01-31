@@ -1,0 +1,119 @@
+@use "@open-smc/ui-kit/theme/variables" as *;
+@use "./table";
+
+.markdownContent {
+    @include table.table;
+
+    h1 {
+        font-weight: 600;
+        font-size: 24px;
+        line-height: 36px;
+        margin-top: 32px;
+        margin-bottom: 16px;
+    }
+
+    h1:first-child {
+        margin-top: 0;
+        margin-bottom: 16px;
+    }
+
+    h2 {
+        font-weight: 600;
+        font-size: 20px;
+        line-height: 24px;
+        margin-top: 24px;
+        margin-bottom: 16px;
+    }
+
+    h2:first-child {
+        margin-top: 0;
+        margin-bottom: 16px;
+    }
+
+    h3 {
+        font-weight: 600;
+        font-size: 16px;
+        line-height: 20px;
+        margin-top: 24px;
+        margin-bottom: 8px;
+    }
+
+    h3:first-child {
+        margin-top: 0;
+        margin-bottom: 8px;
+    }
+
+    h4 {
+        font-weight: 600;
+        font-size: 14px;
+        line-height: 18px;
+        margin-top: 24px;
+        margin-bottom: 8px;
+    }
+
+    h4:first-child {
+        margin-top: 0;
+        margin-bottom: 8px;
+    }
+
+    h5 {
+        font-weight: 600;
+        font-size: 12px;
+        line-height: 14px;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        margin-top: 24px;
+        margin-bottom: 8px;
+    }
+
+    h5:first-child {
+        margin-top: 0;
+        margin-bottom: 8px;
+    }
+
+    h6 {
+        font-weight: 600;
+        font-size: 10px;
+        line-height: 12px;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        margin-top: 18px;
+        margin-bottom: 8px;
+    }
+
+    h6:first-child {
+        margin-top: 0;
+        margin-bottom: 8px;
+    }
+
+    h1:only-child,
+    h2:only-child,
+    h3:only-child,
+    h4:only-child,
+    h5:only-child,
+    h6:only-child {
+        margin-top: 0;
+        margin-bottom: 0;
+    }
+
+    h1,
+    h2,
+    h3,
+    h4,
+    h5,
+    h6 {
+        display: flex;
+        align-items: center;
+
+        a {
+            display: inline-flex;
+            margin-right: 4px;
+        }
+
+        a:not(:global(.heading-anchor)) {
+            margin-left: 5px;
+            margin-right: 5px;
+        }
+    }
+}
+
