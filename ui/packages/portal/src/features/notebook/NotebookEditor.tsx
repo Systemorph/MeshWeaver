@@ -59,6 +59,8 @@ export function useElementsStore() {
 
 interface NotebookEditorProps {
     notebook: NotebookDto;
+    canEdit: boolean;
+    canRun: boolean;
 }
 
 export function NotebookEditor({notebook}: NotebookEditorProps) {
@@ -71,8 +73,6 @@ export function NotebookEditor({notebook}: NotebookEditorProps) {
     useEffect(() => {
         (async function () {
             const {elementIds} = notebook;
-            const canEdit =  await EnvAccessControlApi.getPermission(projectId, 'Edit', envId, notebook.id);
-            const canRun = await EnvAccessControlApi.getPermission(projectId, 'Session', envId, notebook.id);
             const elementModels = elementIds.map(elementId => getElementModel(elementId));
             const elementsById = keyBy(elementModels, c => c.elementId);
             // const markdown = getDocumentMarkdown(elementIds, elementsById, projectId, envId, notebookPath);

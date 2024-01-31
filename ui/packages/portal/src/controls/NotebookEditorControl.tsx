@@ -24,6 +24,8 @@ export default function NotebookEditorControl({notebook}: NotebookEditorView) {
     return (
         <NotebookEditor
             notebook={notebook}
+            canEdit={true}
+            canRun={true}
         />
     );
 }
