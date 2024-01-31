@@ -23,9 +23,9 @@ public class SerializationTest : TestBase
     {
         Services.AddMessageHubs(new RouterAddress(), hubConf => hubConf
             .WithForwards(f => f
-                .RouteAddress<HostAddress>(d =>
+                .RouteAddress<HostAddress>((routedAddress, d) =>
                     {
-                        var hostHub = f.Hub.GetHostedHub(d.Target, ConfigureHost);
+                        var hostHub = f.Hub.GetHostedHub(routedAddress, ConfigureHost);
                         var packagedDelivery = d.Package();
                         hostHub.DeliverMessage(packagedDelivery);
                         return d.Forwarded();
