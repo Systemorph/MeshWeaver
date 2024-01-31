@@ -1,0 +1,37 @@
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+@mixin table {
+    table {
+        background-color: white;
+        font-family: $roboto-font;
+        font-weight: 400;
+        font-size: 14px;
+        line-height: 16px;
+        color: $gunmetal;
+        border-collapse: collapse;
+    }
+    thead {
+        background: $light-gray;
+        border-bottom: 2px solid $bright-gray;
+        text-align: left;
+
+        th {
+            font-weight: 600;
+            font-size: 12px;
+            line-height: 16px;
+            letter-spacing: 0.02em;
+            padding: 16px 8px;
+        }
+    }
+    td {
+        text-align: left;
+        padding: 16px 8px;
+        vertical-align: top;
+    }
+    td div {
+        text-align: right;
+    }
+    tr {
+        border-bottom: 1px solid $bright-gray;
+    }
+}

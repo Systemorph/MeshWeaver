@@ -1,0 +1,132 @@
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+.box {
+    display: flex;
+    flex-grow: 1;
+    justify-content: flex-end;
+    align-items: center;
+    margin-left: 16px;
+}
+
+.text {
+    font-family: $roboto-font;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 16px;
+    color: $gunmetal;
+    margin-right: 16px;
+}
+
+.button {
+    height: 32px;
+    border-radius: 4px 0 0 4px;
+    border-right: 1px solid $white;
+    background-color: $bright-gray;
+    font-size: 16px;
+    color: $gunmetal;
+
+    &:hover {
+        color: $brandeis-blue;
+    }
+
+    &:global(.starting) {
+        background: $blueberry;
+        color: $white;
+    }
+
+    &:global(.started) {
+        background: $brandeis-blue;
+        color: $white;
+
+        &:hover {
+            background: $blueberry;
+        }
+
+        &:disabled:hover {
+            color: $white;
+        }
+    }
+
+    &:disabled {
+        opacity: 0.33;
+
+        &:hover {
+            color: $gunmetal;
+        }
+    }
+
+    :global(.icon) {
+        order: 2;
+        width: 32px;
+        height: 32px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        font-size: 16px;
+    }
+}
+
+.tierData {
+    display: flex;
+    flex-direction: column;
+    font-size: 10px;
+    order: 1;
+    font-family: $roboto-font;
+    font-weight: 400;
+    font-size: 10px;
+    line-height: 12px;
+    letter-spacing: 0.02em;
+    padding: 6px 8px;
+    padding-right: 0;
+}
+
+.chevron {
+    width: 23px;
+    height: 32px;
+    border: none;
+    background-color: $bright-gray;
+    font-size: 16px;
+    border-top-right-radius: 4px;
+    border-bottom-right-radius: 4px;
+    color: $gunmetal;
+
+    &:hover {
+        color: $brandeis-blue;
+        cursor: pointer;
+    }
+
+    &:disabled {
+        opacity: 0.33;
+
+        &:hover {
+            color: $gunmetal;
+        }
+    }
+}
+
+:global(.starting) + .chevron {
+    background: $blueberry;
+    color: $white;
+}
+
+:global(.started) + .chevron {
+    background-color: $brandeis-blue;
+    color: $white;
+
+    &:hover {
+        background-color: $blueberry;
+    }
+
+    &:disabled {
+        opacity: 0.53;
+        color: $white;
+    }
+}
+
+:global(.rc-dropdown-open .sm-chevron-down:before) {
+    content: "\e916";
+}
+
+:global .specificationEmpty {
+    border-radius: 4px;
+}

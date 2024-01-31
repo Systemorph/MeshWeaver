@@ -1,0 +1,111 @@
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+.checkboxControl {
+    --size: 16px;
+    display: inline-grid;
+    gap: 8px;
+    grid-template-columns: var(--size) auto;
+    align-items: center;
+
+    &:hover {
+        cursor: pointer;
+
+        :global {
+            .rc-checkbox-inner:before {
+                background-color: $bright-gray;
+            }
+
+            .rc-checkbox-checked .rc-checkbox-inner:before {
+                background-color: $blueberry;
+                border-color: $blueberry;
+            }
+        }
+    }
+}
+
+input[type=checkbox] {
+    position: absolute;
+    left: 0;
+    cursor: pointer;
+    opacity: 0;
+    top: 0;
+    bottom: 0;
+    right: 0;
+}
+
+input[disabled] {
+    cursor: default;
+}
+
+:global {
+    .rc-checkbox {
+        position: relative;
+    }
+
+    .rc-checkbox + span {
+        font-size: 14px;
+        color: $gunmetal;
+        font-family: $roboto-font;
+        font-weight: 400;
+        line-height: 16px;
+    }
+
+    .rc-checkbox-inner:before {
+        content: ' ';
+        width: var(--size);
+        height: var(--size);
+        background-color: $white;
+        border: 1px solid $silver-sand;
+        display: block;
+        border-radius: 3px;
+        box-sizing: border-box;
+        transition: all 0.3s ease-in;
+    }
+
+    .rc-checkbox-checked .rc-checkbox-inner:before {
+        background-color: $brandeis-blue;
+        border-color: $brandeis-blue;
+    }
+
+    .rc-checkbox-inner:after {
+        content: '';
+        width: var(--size);
+        height: var(--size);
+        line-height: var(--size);
+        position: absolute;
+        left: 0;
+        top: 0;
+        text-align: center;
+    }
+
+    .rc-checkbox-checked .rc-checkbox-inner:after {
+        color: $white;
+        content: "\e912";
+        font-family: $icons-font;
+    }
+
+    .rc-checkbox-disabled .rc-checkbox-inner {
+        opacity: 0.33;
+    }
+
+    .rc-checkbox-disabled .rc-checkbox-inner:before {
+        background-color: $bright-gray;
+    }
+
+    .rc-checkbox-disabled.rc-checkbox-checked .rc-checkbox-inner:before {
+        background-color: $brandeis-blue;
+    }
+}
+
+.disabled {
+    cursor: default;
+
+    &:hover {
+        cursor: default;
+    }
+
+    span {
+        opacity: 0.7;
+        cursor: default;
+    }
+}

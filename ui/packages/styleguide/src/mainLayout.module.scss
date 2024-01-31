@@ -1,0 +1,96 @@
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+.container {
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    grid-template-rows: 64px 1fr;
+    grid-template-areas:
+        "header header"
+        "sidebar content"
+        "sidebar content";
+    height: 100vh;
+    font-family: $roboto-font;
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 16px;
+}
+
+.header {
+    height: 56px;
+    grid-area: header;
+    border-bottom: 1px solid $bright-gray;
+    padding: 16px 24px;
+}
+
+.sidebar {
+    grid-area: sidebar;
+    padding: 24px 8px;
+    border-right: 1px solid $bright-gray;
+    overflow-y: auto;
+}
+
+.sidebarTitle {
+    font-family: $overpass-font;
+    font-size: 18px;
+    font-weight: 600;
+    line-height: 16px;
+    letter-spacing: 0.36px;
+    margin: 0;
+    padding: 0 16px;
+}
+
+.componentsList {
+    margin: 0;
+    padding: 0;
+    margin-top: 16px;
+}
+
+.content {
+    grid-area: content;
+    padding: 24px 32px;
+    overflow-y: auto;
+}
+
+.componentsItem {
+    padding: 8px 16px;
+
+    a {
+        text-decoration: none;
+        color: inherit;
+    }
+}
+
+// TODO: temporary hard-coded styling of scenarios page, to be removed (11/7/2023, akravets)
+:global {
+    .scenarios-overview {
+        @media (min-width: 1024px) {
+            max-width: 704px;
+        }
+
+        img {
+            display: block;
+            width: 100%;
+            height: auto;
+            background-color: $gunmetal;
+            margin-bottom: 24px;
+            aspect-ratio: 88/25;
+        }
+
+        h2 {
+            margin-top: 24px;
+            margin-bottom: 16px;
+        }
+
+        h2:first-child {
+            margin-top: 24px;
+        }
+
+        hr {
+            border-top: 1px solid rgba(black, 0.15);
+            border-bottom: 0 none;
+            margin: 32px 0;
+            height: 0;
+        }
+
+    }
+}

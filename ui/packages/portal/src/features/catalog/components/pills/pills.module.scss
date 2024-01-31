@@ -1,0 +1,39 @@
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+.tinyPills {
+  display: grid;
+  grid-auto-flow: column;
+  gap: 8px;
+  list-style: none;
+  font-family: $roboto-font;
+  font-weight: 500;
+
+  a {
+    text-decoration: none;
+    text-transform: uppercase;
+    font-size: 12px;
+    line-height: 17px;
+    color: $gunmetal;
+    padding: 4px 8px;
+    background-color: $bright-gray;
+    border-radius: 18px;
+    transition: all 0.3s ease 0s;
+    cursor: pointer;
+
+    &:hover,
+    &:active {
+      color: $blueberry;
+    }
+  }
+
+  :global(.active) {
+    background-color: $popsicle-blue;
+    color: $brandeis-blue;
+
+    &:hover,
+    &:active {
+      color: $brandeis-blue;
+      cursor: default;
+    }
+  }
+}
