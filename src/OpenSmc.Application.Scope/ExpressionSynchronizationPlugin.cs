@@ -23,10 +23,17 @@ public class ExpressionSynchronizationPlugin(IMessageHub hub)
 {
     [Inject] private IApplicationScope applicationScope;
 
-    public override ExpressionSynchronizationHubState StartupState()
+    public ExpressionSynchronizationHubState StartupState()
     {
         // ReSharper disable once SuspiciousTypeConversion.Global
         return new((IInternalMutableScope)applicationScope, new(Hub));
+    }
+
+    public override async Task StartAsync()
+    {
+        await base.StartAsync();
+        InitializeState(StartupState());
+
     }
 
     IMessageDelivery IMessageHandler<ScopePropertyChangedEvent>.HandleMessage(IMessageDelivery<ScopePropertyChangedEvent> delivery)

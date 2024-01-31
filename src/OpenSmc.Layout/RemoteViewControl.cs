@@ -1,4 +1,5 @@
-﻿using OpenSmc.Layout.Composition;
+﻿using OpenSmc.Application.Scope;
+using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Layout;
@@ -84,6 +85,18 @@ public record RemoteViewControl : UiControl<RemoteViewControl, RemoteViewPlugin>
         get;
         init;
     }
+
+    protected override MessageHubConfiguration ConfigureHub(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureHub(configuration).WithForwards
+            (
+                forward => forward
+                    .RouteMessageToTarget<SubscribeToEvaluationRequest>(_ => ExpressionSynchronizationAddress(forward.Hub))
+                    .RouteMessageToTarget<UnsubscribeFromEvaluationRequest>(_ => ExpressionSynchronizationAddress(forward.Hub))
+                );
+    }
+
+    private  ExpressionSynchronizationAddress ExpressionSynchronizationAddress(IMessageHub hub) => LayoutExtensions.ExpressionSynchronizationAddress(hub.Address);
 }
 
 public record RemoteViewRefreshOptions(bool ForceRefresh);

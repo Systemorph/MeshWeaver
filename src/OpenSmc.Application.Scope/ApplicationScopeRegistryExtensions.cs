@@ -14,12 +14,19 @@ public class ApplicationAddressOptions
     public ApplicationAddress Address { get; set; }
 }
 
-
+public record ExpressionSynchronizationAddress(object Host):IHostedAddress;
 public static class ApplicationScopeRegistryExtensions
 {
     public static MessageHubConfiguration AddExpressionSynchronization(this MessageHubConfiguration conf)
     {
-        return conf.AddPlugin<ExpressionSynchronizationPlugin>();
+        return conf.WithForwards
+        (
+            forward => forward
+                .RouteAddressToHostedHub<ExpressionSynchronizationAddress>
+                (
+                    c => c.AddPlugin<ExpressionSynchronizationPlugin>()
+                )
+        );
     }
 
 

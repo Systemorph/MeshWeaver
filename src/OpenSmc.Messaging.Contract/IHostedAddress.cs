@@ -20,7 +20,7 @@
 /// </summary>
 public interface IHostedAddress
 {
-    object Host { get; }
+    object Host { get; init; }
 }
 
 public interface IHostedAddressSettable : IHostedAddress

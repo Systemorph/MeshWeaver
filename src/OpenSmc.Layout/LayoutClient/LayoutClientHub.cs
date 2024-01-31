@@ -17,10 +17,18 @@ public record LayoutClientState(LayoutClientConfiguration Configuration)
                ? dict.Values
                : Enumerable.Empty<AreaChangedEvent>();
 
-    public AreaChangedEvent GetAreasByName(string controlId, string areaName)
-        => AreasByControlId.TryGetValue(controlId, out var dict)
+    public AreaChangedEvent GetAreaByName(string controlId, string areaName)
+    {
+        var ret = AreasByControlId.TryGetValue(controlId, out var dict)
             ? dict.GetValueOrDefault(areaName)
             : null;
+
+
+        if (ret == null || ret.View is RemoteViewControl { Data: AreaChangedEvent { View: SpinnerControl } })
+            return null;
+
+        return ret;
+    }
 }
 
 
@@ -31,8 +39,15 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
         IMessageHandler<AreaChangedEvent>,
         IMessageHandler<GetRequest<AreaChangedEvent>>
 {
-    public override LayoutClientState StartupState()
+    public LayoutClientState StartupState()
         => new(configuration);
+
+
+    public override async Task StartAsync()
+    {
+        await base.StartAsync();
+        InitializeState(StartupState());
+    }
 
     public override void InitializeState(LayoutClientState state)
     { 
@@ -171,7 +186,7 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
     {
         Hub.Post(new RefreshRequest(nameof(RemoteViewControl.Data)), o => o.WithTarget(remoteView.Address));
     }
-    private void CheckInDynamic(LayoutStackControl stack)
+    private void CheckInDynamic(Composition.Layout stack)
     {
         //Post(new RefreshRequest(), o => o.WithTarget(stack.Address));
         foreach (var area in stack.Areas.ToArray())

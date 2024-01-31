@@ -9,10 +9,7 @@ public static class LayoutClientExtensions
         var conf = new LayoutClientConfiguration(refreshRequest, refreshAddress);
         if (options != null)
             conf = options(conf);
-        return mhConfiguration.WithBuildupAction(hub =>
-                                                 {
-                                                     hub.AddPlugin(new LayoutClientPlugin(conf, hub));
-                                                 });
+        return mhConfiguration.AddPlugin(hub => new LayoutClientPlugin(conf, hub));
     }
 
     public static async Task<AreaChangedEvent> GetAreaAsync(this IMessageHub layoutClient, Func<LayoutClientState, AreaChangedEvent> selector)

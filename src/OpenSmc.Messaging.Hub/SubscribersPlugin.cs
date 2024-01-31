@@ -3,42 +3,44 @@
 public class SubscribersPlugin : MessageHubPlugin<SubscribersPlugin>
 {
     private readonly HashSet<object> subscribers = new();
-    private readonly HashSet<Type> subscribedTo = new();
+    private readonly HashSet<object> subscriptions = new();
 
-    public SubscribersPlugin(IServiceProvider serviceProvider, IMessageHub hub) : base(hub)
+    public SubscribersPlugin(IMessageHub hub) : base(hub)
     {
-        Register(ForwardMessageAsync);
+        Register(ForwardMessage);
     }
 
     public override bool Filter(IMessageDelivery d) => true;
 
-    private Task<IMessageDelivery> ForwardMessageAsync(IMessageDelivery delivery)
+    private static readonly HashSet<object> ReservedAddresses = [MessageTargets.Subscribers, MessageTargets.Subscriptions];
+    private IMessageDelivery ForwardMessage(IMessageDelivery delivery)
     {
-        var weSending = delivery.Sender == null || Hub.Address.Equals(delivery.Sender);
+        if (delivery.Target is MessageTargets.Subscribers)
+            return Forward(delivery, subscribers.ToArray());
+        if (delivery.Target is MessageTargets.Subscriptions)
+            return Forward(delivery, subscriptions.ToArray());
+
+        var usSending = delivery.Sender == null || Hub.Address.Equals(delivery.Sender);
         var sentToUs = delivery.Target == null || Hub.Address.Equals(delivery.Target);
 
-        if (weSending && sentToUs)
-            return Task.FromResult(delivery);
-
-        if (weSending && !MessageTargets.Subscribers.Equals(delivery.Target))
+        if (sentToUs)
         {
-            subscribedTo.Add(delivery.Target.GetType());
+            if (!usSending && !subscriptions.Contains(delivery.Sender))
+                 subscribers.Add(delivery.Sender);
+
+            return delivery;
         }
 
-        if (sentToUs && delivery.Sender != null && !subscribedTo.Contains(delivery.Sender.GetType()))
-        {
-            subscribers.Add(delivery.Sender);
-        }
+        if (!subscribers.Contains(delivery.Target))
+            subscriptions.Add(delivery.Target);
 
-        if (MessageTargets.Subscribers.Equals(delivery.Target))
-        {
-            foreach (var forwardAddress in subscribers.ToArray())
-            {
-                Hub.DeliverMessage(delivery.WithRoutedTarget(forwardAddress)); // TODO V10: order will be broken because handling will be scheduled (23.01.2024, Alexander Yolokhov)
-            }
-        }
-
-        return Task.FromResult(delivery);
+        return delivery;
     }
 
+    private IMessageDelivery Forward(IMessageDelivery delivery, object[] addresses)
+    {
+        foreach (var forwardAddress in addresses)
+            Hub.DeliverMessage(delivery.WithRoutedTarget(forwardAddress)); // TODO V10: order will be broken because handling will be scheduled (23.01.2024, Alexander Yolokhov)
+        return delivery.Forwarded();
+    }
 }
