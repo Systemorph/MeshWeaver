@@ -133,6 +133,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Scheduling", "src\O
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Partition", "src\OpenSmc.Partition\OpenSmc.Partition.csproj", "{AB5AF297-CD7C-4A78-993F-4B06F587B2FD}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Reporting", "src\OpenSmc.Reporting\OpenSmc.Reporting.csproj", "{E5E780D9-FCA3-4BAF-90C8-E1A4CE26E10A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -375,6 +377,10 @@ Global
 		{AB5AF297-CD7C-4A78-993F-4B06F587B2FD}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{AB5AF297-CD7C-4A78-993F-4B06F587B2FD}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{AB5AF297-CD7C-4A78-993F-4B06F587B2FD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E5E780D9-FCA3-4BAF-90C8-E1A4CE26E10A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E5E780D9-FCA3-4BAF-90C8-E1A4CE26E10A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E5E780D9-FCA3-4BAF-90C8-E1A4CE26E10A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E5E780D9-FCA3-4BAF-90C8-E1A4CE26E10A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
