@@ -1,0 +1,127 @@
+﻿{
+  Columns: [
+    {
+      Children: [
+        {
+          Coordinates: [
+            1,
+            Value
+          ],
+          SystemName: 1.Value,
+          DisplayName: Value,
+          GrouperName: ColumnName
+        }
+      ],
+      Coordinates: [
+        1
+      ],
+      SystemName: 1,
+      DisplayName: 1,
+      GrouperName: AutomaticNumber
+    },
+    {
+      Children: [
+        {
+          Coordinates: [
+            2,
+            Value
+          ],
+          SystemName: 2.Value,
+          DisplayName: Value,
+          GrouperName: ColumnName
+        }
+      ],
+      Coordinates: [
+        2
+      ],
+      SystemName: 2,
+      DisplayName: 2,
+      GrouperName: AutomaticNumber
+    },
+    {
+      Children: [
+        {
+          Coordinates: [
+            3,
+            Value
+          ],
+          SystemName: 3.Value,
+          DisplayName: Value,
+          GrouperName: ColumnName
+        }
+      ],
+      Coordinates: [
+        3
+      ],
+      SystemName: 3,
+      DisplayName: 3,
+      GrouperName: AutomaticNumber
+    }
+  ],
+  Rows: [
+    {
+      RowGroup: {
+        Coordinates: [
+          BoP
+        ],
+        SystemName: BoP,
+        DisplayName: Beginning of Period,
+        GrouperName: PropertyName
+      },
+      Data: {
+        1: {
+          Value: 0.0
+        },
+        2: {
+          Value: 0.0
+        },
+        3: {
+          Value: 0.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          Delta
+        ],
+        SystemName: Delta,
+        DisplayName: Delta,
+        GrouperName: PropertyName
+      },
+      Data: {
+        1: {
+          Value: 0.0
+        },
+        2: {
+          Value: 1.0
+        },
+        3: {
+          Value: 2.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EoP
+        ],
+        SystemName: EoP,
+        DisplayName: End of Period,
+        GrouperName: PropertyName
+      },
+      Data: {
+        1: {
+          Value: 0.0
+        },
+        2: {
+          Value: 1.0
+        },
+        3: {
+          Value: 2.0
+        }
+      }
+    }
+  ],
+  HasRowGrouping: true
+}

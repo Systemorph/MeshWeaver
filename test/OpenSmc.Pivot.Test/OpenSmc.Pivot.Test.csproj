@@ -2,11 +2,13 @@
 
 	<ItemGroup>
 		<PackageReference Include="Newtonsoft.Json" />
+		<PackageReference Include="Verify.Xunit" />
 	</ItemGroup>
 
 	<ItemGroup>
 	  <ProjectReference Include="..\..\src\OpenSmc.Pivot\OpenSmc.Pivot.csproj" />
 	  <ProjectReference Include="..\..\src\OpenSmc.Scopes\OpenSmc.Scopes.csproj" />
+	  <ProjectReference Include="..\..\src\OpenSmc.Scopes.DataCubes\OpenSmc.Scopes.DataCubes.csproj" />
 	  <ProjectReference Include="..\..\src\OpenSmc.Serialization.Abstractions\OpenSmc.Serialization.Abstractions.csproj" />
 	  <ProjectReference Include="..\OpenSmc.Hub.Fixture\OpenSmc.Hub.Fixture.csproj" />
 	  <ProjectReference Include="..\OpenSmc.Json.Assertions\OpenSmc.Json.Assertions.csproj" />
