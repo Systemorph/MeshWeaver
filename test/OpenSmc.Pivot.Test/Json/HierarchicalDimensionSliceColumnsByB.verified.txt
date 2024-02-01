@@ -1,0 +1,166 @@
+﻿{
+  Columns: [
+    {
+      Children: [
+        {
+          Children: [
+            {
+              Coordinates: [
+                B1,
+                B11,
+                Value
+              ],
+              SystemName: B1.B11.Value,
+              DisplayName: Value,
+              GrouperName: ColumnName
+            }
+          ],
+          Coordinates: [
+            B1,
+            B11
+          ],
+          SystemName: B1.B11,
+          DisplayName: B 11,
+          GrouperName: DimB1
+        },
+        {
+          Children: [
+            {
+              Coordinates: [
+                B1,
+                B12,
+                Value
+              ],
+              SystemName: B1.B12.Value,
+              DisplayName: Value,
+              GrouperName: ColumnName
+            }
+          ],
+          Coordinates: [
+            B1,
+            B12
+          ],
+          SystemName: B1.B12,
+          DisplayName: B 12,
+          GrouperName: DimB1
+        },
+        {
+          Children: [
+            {
+              Coordinates: [
+                B1,
+                NullGroup,
+                Value
+              ],
+              SystemName: B1.NullGroup.Value,
+              DisplayName: Value,
+              GrouperName: ColumnName
+            }
+          ],
+          Coordinates: [
+            B1,
+            NullGroup
+          ],
+          SystemName: B1.NullGroup,
+          DisplayName:  ,
+          GrouperName: DimB1
+        },
+        {
+          Children: [
+            {
+              Coordinates: [
+                B1,
+                TotalGroup,
+                Value
+              ],
+              SystemName: B1.TotalGroup.Value,
+              DisplayName: Value,
+              GrouperName: ColumnName
+            }
+          ],
+          Coordinates: [
+            B1,
+            TotalGroup
+          ],
+          SystemName: B1.TotalGroup,
+          DisplayName:  ,
+          GrouperName: DimB0
+        }
+      ],
+      Coordinates: [
+        B1
+      ],
+      SystemName: B1,
+      DisplayName: B 1,
+      GrouperName: DimB0
+    },
+    {
+      Children: [
+        {
+          Children: [
+            {
+              Coordinates: [
+                B2,
+                NullGroup,
+                Value
+              ],
+              SystemName: B2.NullGroup.Value,
+              DisplayName: Value,
+              GrouperName: ColumnName
+            }
+          ],
+          Coordinates: [
+            B2,
+            NullGroup
+          ],
+          SystemName: B2.NullGroup,
+          DisplayName:  ,
+          GrouperName: DimB1
+        }
+      ],
+      Coordinates: [
+        B2
+      ],
+      SystemName: B2,
+      DisplayName: B 2,
+      GrouperName: DimB0
+    }
+  ],
+  Rows: [
+    {
+      RowGroup: {
+        Coordinates: [
+          TopGroup
+        ],
+        SystemName: TopGroup,
+        DisplayName: Total,
+        GrouperName: Total
+      },
+      Data: {
+        B1: {
+          B11: {
+            Value: 2.0
+          },
+          B12: {
+            Value: 3.0
+          },
+          NullGroup: {
+            Value: 4.0
+          },
+          TotalGroup: {
+            Value: 9.0
+          }
+        },
+        B2: {
+          NullGroup: {
+            Value: 1.0
+          },
+          TotalGroup: {
+            Value: 1.0
+          }
+        }
+      }
+    }
+  ],
+  HasRowGrouping: true
+}

@@ -1,0 +1,67 @@
+﻿{
+  Columns: [
+    {
+      Coordinates: [
+        Value
+      ],
+      SystemName: Value,
+      DisplayName: Value,
+      GrouperName: ColumnName
+    }
+  ],
+  Rows: [
+    {
+      RowGroup: {
+        Coordinates: [
+          B
+        ],
+        SystemName: B,
+        DisplayName: B,
+        GrouperName: AmountType
+      },
+      Data: {
+        Value: null
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          C
+        ],
+        SystemName: C,
+        DisplayName: C,
+        GrouperName: AmountType
+      },
+      Data: {
+        Value: null
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          E
+        ],
+        SystemName: E,
+        DisplayName: E,
+        GrouperName: AmountType
+      },
+      Data: {
+        Value: null
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          P
+        ],
+        SystemName: P,
+        DisplayName: P,
+        GrouperName: AmountType
+      },
+      Data: {
+        Value: null
+      }
+    }
+  ],
+  HasRowGrouping: true
+}
