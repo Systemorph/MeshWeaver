@@ -1,0 +1,119 @@
+﻿{
+  Columns: [
+    {
+      Children: [
+        {
+          Coordinates: [
+            P,
+            Value
+          ],
+          SystemName: P.Value,
+          DisplayName: Value,
+          GrouperName: ColumnName
+        }
+      ],
+      Coordinates: [
+        P
+      ],
+      SystemName: P,
+      DisplayName: Premium,
+      GrouperName: AmountType
+    }
+  ],
+  Rows: [
+    {
+      RowGroup: {
+        Coordinates: [
+          BoP
+        ],
+        SystemName: BoP,
+        DisplayName: Beginning of Period,
+        GrouperName: PropertyName
+      },
+      Data: {
+        P: {
+          Value: 0.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          BoP,
+          CHF
+        ],
+        SystemName: BoP.CHF,
+        DisplayName: Swiss Franc,
+        GrouperName: Currency
+      },
+      Data: {
+        P: {
+          Value: 0.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          Delta
+        ],
+        SystemName: Delta,
+        DisplayName: Delta,
+        GrouperName: PropertyName
+      },
+      Data: {
+        P: {
+          Value: 4.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          Delta,
+          CHF
+        ],
+        SystemName: Delta.CHF,
+        DisplayName: Swiss Franc,
+        GrouperName: Currency
+      },
+      Data: {
+        P: {
+          Value: 4.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EoP
+        ],
+        SystemName: EoP,
+        DisplayName: End of Period,
+        GrouperName: PropertyName
+      },
+      Data: {
+        P: {
+          Value: 4.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EoP,
+          CHF
+        ],
+        SystemName: EoP.CHF,
+        DisplayName: Swiss Franc,
+        GrouperName: Currency
+      },
+      Data: {
+        P: {
+          Value: 4.0
+        }
+      }
+    }
+  ],
+  HasRowGrouping: true
+}
