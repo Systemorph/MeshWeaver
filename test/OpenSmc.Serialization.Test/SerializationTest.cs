@@ -3,10 +3,8 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using OpenSmc.Fixture;
 using OpenSmc.Hub.Fixture;
-using OpenSmc.Json.Assertions;
 using OpenSmc.Messaging;
 using OpenSmc.ServiceProvider;
-using Xunit;
 using Xunit.Abstractions;
 
 namespace OpenSmc.Serialization.Test;
@@ -62,11 +60,7 @@ public class SerializationTest : TestBase
         var events = await messageTask;
         events.Should().HaveCount(1);
         var rawJson = events.Single().Message.Should().BeOfType<RawJson>().Subject;
-        rawJson.Should().BeEquivalentTo(new
-        {
-            Text = "Hello",
-            NewProp = "New"
-        }, o => o.UsingJson(j => j.ExcludeTypeDiscriminator()));
+        await VerifyJson(rawJson.Content);
     }
 }
 

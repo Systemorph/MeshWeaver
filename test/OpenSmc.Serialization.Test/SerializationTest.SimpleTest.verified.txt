@@ -1,0 +1,4 @@
+﻿{
+  text: Hello,
+  newProp: New
+}
