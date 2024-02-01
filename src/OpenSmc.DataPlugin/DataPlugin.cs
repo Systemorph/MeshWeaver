@@ -8,14 +8,12 @@ using OpenSmc.Workspace;
 namespace OpenSmc.DataPlugin;
 
 /* TODO List: 
- *  a) move code DataPlugin to opensmc
+ *  a) move code DataPlugin to opensmc -- done
  *  b) create an immutable variant of the workspace
  *  c) make workspace methods fully sync
  *  d) offload saves & deletes to a different hub
  *  e) configure Ifrs Hubs
  */
-
-
 
 
 
