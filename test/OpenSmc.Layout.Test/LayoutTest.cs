@@ -51,14 +51,14 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                         .WithView(UpdatingView, (_, _) => 
                             Controls.TextBox(GetFromScope(def.Hub, UpdatingView))
                                 .WithId(UpdatingView)
-                                .WithClickAction(BusinessLogic)
+                                .WithClickAction(ChangeStringInScope)
                             )
                     )
             ;
 
     }
 
-    private void BusinessLogic(IUiActionContext context)
+    private void ChangeStringInScope(IUiActionContext context)
     {
         context.Hub.ServiceProvider.GetRequiredService<IApplicationScope>().GetScope<ITestScope>().String = NewString;
     }

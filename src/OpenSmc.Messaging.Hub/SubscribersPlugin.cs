@@ -1,46 +1,78 @@
-﻿namespace OpenSmc.Messaging;
+﻿using Microsoft.Extensions.DependencyInjection;
 
-public class SubscribersPlugin : MessageHubPlugin<SubscribersPlugin>
+namespace OpenSmc.Messaging;
+
+public record MessageHubConnections
 {
-    private readonly HashSet<object> subscribers = new();
-    private readonly HashSet<object> subscriptions = new();
+    public HashSet<object> Subscribers { get; } = new();
+    public HashSet<object> Subscriptions { get; } = new();
+}
+
+public class SubscribersPlugin : MessageHubPlugin<SubscribersPlugin, MessageHubConnections>
+{
 
     public SubscribersPlugin(IMessageHub hub) : base(hub)
     {
         Register(ForwardMessage);
     }
 
+    public override async Task StartAsync()
+    {
+        await base.StartAsync();
+        InitializeState(Hub.ServiceProvider.GetRequiredService<MessageHubConnections>());
+    }
+
     public override bool Filter(IMessageDelivery d) => true;
 
-    private static readonly HashSet<object> ReservedAddresses = [MessageTargets.Subscribers, MessageTargets.Subscriptions];
     private IMessageDelivery ForwardMessage(IMessageDelivery delivery)
     {
-        if (delivery.Target is MessageTargets.Subscribers)
-            return Forward(delivery, subscribers.ToArray());
-        if (delivery.Target is MessageTargets.Subscriptions)
-            return Forward(delivery, subscriptions.ToArray());
-
         var usSending = delivery.Sender == null || Hub.Address.Equals(delivery.Sender);
         var sentToUs = delivery.Target == null || Hub.Address.Equals(delivery.Target);
+        switch (delivery)
+        {
+            case { Target: MessageTargets.Subscribers }:
+                if (!usSending)
+                    throw new RoutingException("Trying to send to subscribers from outside hub.");
+                return Forward(delivery, State.Subscribers.ToArray());
+
+            case { Target: MessageTargets.Subscriptions }:
+                if (!usSending)
+                    throw new RoutingException("Trying to send to subscribers from outside hub.");
+
+                return Forward(delivery, State.Subscriptions.ToArray());
+
+            case { Message: DisconnectHubRequest }:
+                return HandleDisconnect(delivery);
+
+
+        }
+
 
         if (sentToUs)
         {
-            if (!usSending && !subscriptions.Contains(delivery.Sender))
-                 subscribers.Add(delivery.Sender);
+            if (!usSending && !State.Subscriptions.Contains(delivery.Sender))
+                State.Subscribers.Add(delivery.Sender);
 
             return delivery;
         }
 
-        if (!subscribers.Contains(delivery.Target))
-            subscriptions.Add(delivery.Target);
+        if (!State.Subscribers.Contains(delivery.Target))
+            State.Subscriptions.Add(delivery.Target);
 
         return delivery;
+    }
+
+    private IMessageDelivery HandleDisconnect(IMessageDelivery delivery)
+    {
+        State.Subscribers.Remove(delivery.Sender);
+        State.Subscriptions.Remove(delivery.Sender);
+        return delivery.Processed();
     }
 
     private IMessageDelivery Forward(IMessageDelivery delivery, object[] addresses)
     {
         foreach (var forwardAddress in addresses)
-            Hub.DeliverMessage(delivery.WithRoutedTarget(forwardAddress)); // TODO V10: order will be broken because handling will be scheduled (23.01.2024, Alexander Yolokhov)
+            Hub.DeliverMessage(delivery.WithRoutedTarget(forwardAddress)); 
         return delivery.Forwarded();
     }
 }
