@@ -1,11 +1,11 @@
-﻿using AspectCore.Extensions.Reflection;
+﻿using System.Dynamic;
+using AspectCore.Extensions.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
 using OpenSmc.Scopes;
 using OpenSmc.Scopes.Proxy;
 using OpenSmc.Serialization;
 using OpenSmc.ShortGuid;
-using System.Dynamic;
 
 namespace OpenSmc.Application.Scope;
 
@@ -14,12 +14,19 @@ public class ApplicationAddressOptions
     public ApplicationAddress Address { get; set; }
 }
 
-
+public record ExpressionSynchronizationAddress(object Host):IHostedAddress;
 public static class ApplicationScopeRegistryExtensions
 {
     public static MessageHubConfiguration AddExpressionSynchronization(this MessageHubConfiguration conf)
     {
-        return conf.AddPlugin<ExpressionSynchronizationPlugin>();
+        return conf.WithForwards
+        (
+            forward => forward
+                .RouteAddressToHostedHub<ExpressionSynchronizationAddress>
+                (
+                    c => c.AddPlugin<ExpressionSynchronizationPlugin>()
+                )
+        );
     }
 
 

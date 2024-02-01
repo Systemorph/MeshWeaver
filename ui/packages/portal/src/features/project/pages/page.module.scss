@@ -1,0 +1,38 @@
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+.cloning {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    min-height: 100%;
+
+    .content {
+        background-image: url("../../../images/cloning.svg");
+        background-repeat: no-repeat;
+        background-position: center top;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        padding-top: 132px;
+        text-align: center;
+    }
+
+    .title {
+        margin: 0;
+        font-size: 12px;
+        line-height: 14px;
+        text-transform: uppercase;
+    }
+
+    .description {
+        font-family: $roboto-font;
+        max-width: 36ch;
+        color: $dark-silver;
+        font-size: 14px;
+        line-height: 16px;
+        margin: 40px 0 0;
+    }
+}

@@ -1,14 +1,12 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\OpenSmc.Arithmetics.Abstractions\OpenSmc.Arithmetics.Abstractions.csproj" />
-    <ProjectReference Include="..\OpenSmc.Arithmetics\OpenSmc.Arithmetics.csproj" />
-    <ProjectReference Include="..\OpenSmc.DataCubes.Abstractions\OpenSmc.DataCubes.Abstractions.csproj" />
-    <ProjectReference Include="..\OpenSmc.DataSource.Abstractions\OpenSmc.DataSource.Abstractions.csproj" />
-    <ProjectReference Include="..\OpenSmc.Domain.Abstractions\OpenSmc.Domain.Abstractions.csproj" />
+    <PackageReference Include="AspectCore.Extensions.Reflection" />
+  </ItemGroup>
+  
+  <ItemGroup>
     <ProjectReference Include="..\OpenSmc.Hierarchies\OpenSmc.Hierarchies.csproj" />
-	<ProjectReference Include="..\OpenSmc.Reflection\OpenSmc.Reflection.csproj" />
-	<ProjectReference Include="..\OpenSmc.Utils\OpenSmc.Utils.csproj" />
+    <ProjectReference Include="..\OpenSmc.Utils\OpenSmc.Utils.csproj" />
   </ItemGroup>
 
 </Project>

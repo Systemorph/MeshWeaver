@@ -77,7 +77,7 @@ public record ItemTemplateControl : UiControl<ItemTemplateControl, GenericUiCont
 
     public UiControl GetUiControl(IUiControlService uiControlService, IServiceProvider serviceProvider)
     {
-        if (View is LayoutStackControl stackControl)
+        if (View is Composition.Layout stackControl)
         {
             stackControl = stackControl with
                            {

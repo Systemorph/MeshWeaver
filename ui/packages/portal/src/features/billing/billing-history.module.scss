@@ -1,0 +1,33 @@
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+.status {
+    border-radius: 999px;
+    padding: 4px 8px;
+    font-family: $roboto-font;
+    font-style: normal;
+    font-weight: 500;
+    font-size: 12px;
+    line-height: 16px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    display: block;
+}
+
+.open {
+    background: rgba($faded-pink, 0.5);
+    color: $portland-orange;
+}
+
+.paid {
+    background: rgba($last-sunray, 0.5);
+    color: $malachite;
+}
+
+.invoice,
+.details {
+    color: $brandeis-blue;
+    font-family: $roboto-font;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 16px;
+}

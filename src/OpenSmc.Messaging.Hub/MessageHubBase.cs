@@ -12,7 +12,7 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
 {
     [Inject]protected IEventsRegistry EventsRegistry;
     public virtual TAddress Address { get;  }
-    protected readonly LinkedList<RegistryRule> Rules;
+    protected readonly LinkedList<AsyncDelivery> Rules;
 
     protected readonly IMessageService MessageService;
     private readonly ConcurrentDictionary<Type, List<AsyncDelivery>> registeredTypes = new();
@@ -31,16 +31,16 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
         serviceProvider.Buildup(this);
         MessageService = serviceProvider.GetRequiredService<IMessageService>();
 
-        Rules = new LinkedList<RegistryRule>(new RegistryRule[]
+        Rules = new LinkedList<AsyncDelivery>(new AsyncDelivery[]
         {
-            new(async delivery =>
+            async delivery =>
             {
                 if (delivery?.Message == null || !registeredTypes.TryGetValue(delivery.Message.GetType(), out var registry))
                     return delivery;
                 foreach (var asyncDelivery in registry)
                     delivery = await asyncDelivery.Invoke(delivery);
                 return delivery;
-            })
+            }
         });
     }
 
@@ -128,14 +128,15 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
         return await DeliverMessageAsync(delivery.Submitted(), Rules.First);
     }
 
+
     public virtual bool IsDeferred(IMessageDelivery delivery)
     {
         return registeredTypes.ContainsKey(delivery.Message.GetType());
     }
 
-    public async Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, LinkedListNode<RegistryRule> node)
+    public async Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, LinkedListNode<AsyncDelivery> node)
     {
-        delivery = await node.Value.Rule(delivery);
+        delivery = await node.Value.Invoke(delivery);
 
         if (node.Next == null)
             return delivery;
@@ -154,7 +155,7 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
 
     public IMessageHandlerRegistry RegisterInherited<TMessage>(AsyncDelivery<TMessage> action, DeliveryFilter<TMessage> filter = null)
     {
-        Rules.AddFirst(new LinkedListNode<RegistryRule>(new RegistryRule(d => d is IMessageDelivery<TMessage> md && (filter?.Invoke(md) ?? true) ? action(md) : Task.FromResult(d))));
+        Rules.AddLast(new LinkedListNode<AsyncDelivery>(d => d is IMessageDelivery<TMessage> md && (filter?.Invoke(md) ?? true) ? action(md) : Task.FromResult(d)));
         return this;
     }
 
@@ -163,7 +164,7 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
 
     public IMessageHandlerRegistry Register(AsyncDelivery delivery)
     {
-        Rules.AddFirst(new LinkedListNode<RegistryRule>(new RegistryRule(delivery)));
+        Rules.AddLast(new LinkedListNode<AsyncDelivery>(delivery));
         return this;
     }
 

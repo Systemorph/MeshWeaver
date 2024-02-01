@@ -1,0 +1,47 @@
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+.container {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-top: 24px;
+    max-width: 786px;
+}
+
+.title {
+    margin: 0;
+    margin-top: 48px;
+    margin-bottom: 16px;
+    font-family: $roboto-font;
+    font-weight: 500;
+    font-size: 12px;
+    line-height: 16px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: $gunmetal;
+}
+
+.text {
+    font-family: $roboto-font;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 16px;
+    color: $dark-silver;
+    margin: 0;
+    margin-top: 16px;
+}
+
+.value {
+    font-weight: bold;
+}
+
+.valueCredits {
+    color: $portland-orange;
+}
+
+.bottomGrid {
+    :global(.ag-header) {
+        display: none;
+    }
+}

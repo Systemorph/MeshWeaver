@@ -1,0 +1,49 @@
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+.container {
+    display: flex;
+    flex-direction: row;
+    position: relative;
+    padding-left: 24px;
+    align-items: center;
+}
+
+.groupContainer {
+    margin-top: 40px;
+    max-width: 974px;
+}
+
+.nameContainer {
+    display: flex;
+    flex-direction: column;
+}
+
+.name {
+    display: block;
+    font-family: $roboto-font;
+    font-style: normal;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 16px;
+    color: $gunmetal;
+}
+
+.mail {
+    font-family: $roboto-font;
+    font-style: normal;
+    font-weight: 400;
+    font-size: 12px;
+    line-height: 16px;
+    color: $dark-silver;
+    text-decoration: none;
+}
+
+.lockIcon {
+    width: 16px;
+    height: 16px;
+    font-size: 16px;
+    color: $portland-orange;
+    position: absolute;
+    left: 0;
+    top: 8px;
+}

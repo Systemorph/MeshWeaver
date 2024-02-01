@@ -13,6 +13,8 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
 {
     [Inject] private IUiControlService uiControlService; // TODO V10: call BuildUp(this) in some base? (2023/12/20, Alexander Yolokhov)
 
+    private ExpressionSynchronizationAddress ExpressionSynchronizationAddress =>
+        LayoutExtensions.ExpressionSynchronizationAddress(Hub.Address);
 
     public override void InitializeState(RemoteViewControl control)
     {
@@ -29,12 +31,17 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
                                                                                {
                                                                                    var viewElement = await State.ViewDefinition(State.Options);
                                                                                    return new AreaChangedEvent(viewElement.Area, viewElement.View, viewElement.Options);
-                                                                               }));
+                                                                               }),
+                o => o.WithTarget(ExpressionSynchronizationAddress));
     }
 
     private const string Data = nameof(Data);
 
-
+    public override async Task StartAsync()
+    {
+        await base.StartAsync();
+        UpdateState(s => s with {Data = new AreaChangedEvent(Data, CreateUiControlHub(Controls.Spinner()))});
+    }
 
     private void UpdateView(AreaChangedEvent areaChanged)
     {
@@ -56,7 +63,7 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
             areaChanged = areaChanged with { Area = Data };
         else
         {
-            uiControl = CreateUiControlHub(uiControl, Data);
+            uiControl = CreateUiControlHub(uiControl);
             Hub.ConnectTo(uiControl.Hub);
             areaChanged = areaChanged with { Area = Data, View = uiControl };
 
@@ -85,7 +92,8 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
                                                                                    {
                                                                                        var viewElement = await State.ViewDefinition(State.Options);
                                                                                        return new AreaChangedEvent(viewElement.Area, viewElement.View, viewElement.Options);
-                                                                                   }));
+                                                                                   }),
+                                                                                   o => o.WithTarget(ExpressionSynchronizationAddress));
 
             }
             Post( State.View, o => o.ResponseFor(request));
@@ -120,7 +128,7 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
     {
         var areaChanged = request.Message.Value is AreaChangedEvent ae
                               ? ae with { Area = Data }
-                              : new AreaChangedEvent(Data, request.Message.Status == ExpressionChangedStatus.Evaluating ? Controls.Spinner() : request.Message.Value);
+                              : new AreaChangedEvent(Data, request.Message.Status == ExpressionChangedStatus.Evaluating ? CreateUiControlHub(Controls.Spinner()) : request.Message.Value);
 
         if (areaChanged.View != null && areaChanged.View is not IUiControl)
             areaChanged = areaChanged with { View = uiControlService.GetUiControl(areaChanged.View) };
@@ -130,6 +138,8 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
 
     }
 
+
+    // TODO V10: Not sure what this is ==> should probably be removed. (31.01.2024, Roland Bürgi)
     IMessageDelivery IMessageHandler<UpdateRequest<AreaChangedEvent>>.HandleMessage(IMessageDelivery<UpdateRequest<AreaChangedEvent>> request)
     {
         var oldView = State.View;
@@ -146,7 +156,7 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
     public override void Dispose()
     {
         if (State.ViewDefinition != null)
-            Post(new UnsubscribeFromEvaluationRequest(Data), o => o.WithTarget(State.RedirectAddress));
+            Post(new UnsubscribeFromEvaluationRequest(Data), o => o.WithTarget(ExpressionSynchronizationAddress));
         base.Dispose();
     }
 }

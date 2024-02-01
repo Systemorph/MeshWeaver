@@ -1,0 +1,131 @@
+@use "@open-smc/ui-kit/theme/helpers" as *;
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+.buttonsContainer {
+    padding: 24px;
+    padding-top: 0;
+    display: flex;
+}
+
+.slider {
+    margin-top: 16px;
+    margin-bottom: 50px;
+
+    &:last-child {
+        margin-bottom: 0;
+    }
+}
+
+.label {
+    font-family: $roboto-font;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 16px;
+    color: $dark-silver;
+    opacity: 0.7;
+    display: block;
+    margin-bottom: 14px;
+}
+
+.tierData {
+    margin: 0 5px;
+    display: flex;
+    flex-direction: column;
+    font-size: 10px;
+}
+
+.dropdownOverlay {
+    background-color: white;
+    box-shadow: 0px 8px 24px rgba(41, 43, 54, 0.14), 0px 4px 4px rgba(41, 43, 54, 0.05), inset 0px 0px 0px 1px rgba(1, 113, 255, 0.5);
+    border-radius: 4px;
+    border: 1px solid $blueberry;
+}
+
+.wrapper {
+    padding: 24px;
+}
+
+.sliderHandler {
+    position: absolute;
+    margin-top: 14px;
+    color: $blueberry;
+    font-family: $roboto-font;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 16px;
+    z-index: 1;
+    text-shadow: -1px 1px 0 white, 1px 1px 0 white, 1px -1px 0 white;
+}
+
+.header {
+    margin: 0;
+    font-family: $overpass-font;
+    font-weight: 600;
+    font-size: 24px;
+    line-height: 36px;
+    color: $gunmetal;
+}
+
+.selectBox {
+    margin-top: 4px;
+}
+
+.selectLabel {
+    font-family: $roboto-font;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 16px;
+    color: $dark-silver;
+    opacity: 0.7;
+    margin-bottom: 8px;
+    display: block;
+}
+
+.credits {
+    margin: 0;
+    margin-top: 8px;
+    font-family: $roboto-font;
+    font-weight: 500;
+    font-size: 12px;
+    line-height: 16px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: $gunmetal;
+}
+
+.creditsValue {
+    padding: 0 5px;
+    height: 16px;
+    color: white;
+    background: $gunmetal;
+    border-radius: 999px;
+    margin-left: 8px;
+    display: inline-block;
+}
+
+.apply {
+    :global(.icon) {
+        font-size: 16px;
+    }
+}
+
+button.cancel {
+    margin-left: 16px;
+}
+
+.cancel {
+    :global(.icon) {
+        margin-right: 6px;
+    }
+}
+
+.tierName {
+    margin-top: 4px;
+    font-family: $roboto-font;
+    font-weight: 500;
+    font-size: 12px;
+    line-height: 16px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: $gunmetal;
+}
