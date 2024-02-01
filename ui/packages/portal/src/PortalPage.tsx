@@ -1,5 +1,5 @@
 import { Connection } from "@open-smc/application/Connection";
-import { MessageRouter } from "@open-smc/application/MessageRouter";
+import { SignalrMessageRouter } from "@open-smc/application/SignalrMessageRouter";
 import { Outlet } from "react-router-dom";
 import { ApiProvider } from "./ApiProvider";
 import { LayoutHub } from "@open-smc/application/LayoutHub";
@@ -12,11 +12,11 @@ export function PortalPage() {
     return (
         <ApiProvider>
             <Connection fallback={fallback}>
-                <MessageRouter log={log}>
+                <SignalrMessageRouter log={log}>
                     <LayoutHub>
                         <Outlet/>
                     </LayoutHub>
-                </MessageRouter>
+                </SignalrMessageRouter>
             </Connection>
         </ApiProvider>
     );
