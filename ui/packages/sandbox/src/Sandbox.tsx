@@ -2,7 +2,7 @@ import React, { useCallback, Suspense, useMemo, PropsWithChildren, useState } fr
 import { messageRouterContext, pack } from "@open-smc/application/MessageRouter";
 import { MessageHub } from "@open-smc/application/messageHub/MessageHub";
 import { down, makeLogger, up } from "@open-smc/application/logger";
-import { AddHub, useMessageHub } from "@open-smc/application/messageHub/AddHub";
+import { AddHub } from "@open-smc/application/messageHub/AddHub";
 import { ControlStarter } from "@open-smc/application/ControlStarter";
 import { useNotification } from "rc-notification";
 import { notificationConfig } from "@open-smc/application/notificationConfig";
@@ -12,6 +12,7 @@ import { appContext } from "@open-smc/application/App";
 import { ViewModelHub } from "./ViewModelHub";
 import { SetAreaRequest } from "@open-smc/application/application.contract";
 import { ControlDef } from "@open-smc/application/ControlDef";
+import { layoutHubId } from "@open-smc/application/LayoutHub";
 
 interface Props {
     layoutHub?: MessageHub;
@@ -27,7 +28,7 @@ export function Sandbox({root, layoutHub: originalLayoutHub, path}: Props) {
     return (
         <Suspense fallback={<div>Loading...</div>}>
             <SandboxRouter>
-                <AddHub address={layoutHub}>
+                <AddHub address={layoutHub} id={layoutHubId}>
                     <SandboxApp path={path}/>
                 </AddHub>
             </SandboxRouter>
@@ -50,13 +51,11 @@ function SandboxApp({path}: SandboxAppProps) {
     const [notificationApi, notificationContainer] = useNotification(notificationConfig);
     const [toastApi] = useState(makeToastApi(notificationApi));
     const [store] = useState(makeAppStore);
-    const messageHub = useMessageHub();
 
     const value = useMemo(() => ({
         store,
         toastApi,
-        messageHub
-    }), [toastApi, store, messageHub]);
+    }), [toastApi, store]);
 
     return (
         <appContext.Provider value={value}>
