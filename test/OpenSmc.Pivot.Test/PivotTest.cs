@@ -45,10 +45,14 @@ namespace OpenSmc.Pivot.Test
 
         public PivotTest(ITestOutputHelper output) : base(output)
         {
+            Services.RegisterScopes();
+        }
+
+        static PivotTest()
+        {
             DataCubesRegistryExtensions.RegisterProviders();
             ArithmeticsRegistrationExtensions.RegisterProviders();
             Scopes.DataCubes.ModuleSetup.InitializeArithmetics();
-            Services.RegisterScopes();
         }
 
         //protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
