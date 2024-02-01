@@ -9,6 +9,7 @@ using OpenSmc.Pivot.Builder;
 using OpenSmc.Pivot.Models;
 using OpenSmc.Scopes;
 using OpenSmc.Scopes.Proxy;
+using OpenSmc.ServiceProvider;
 using OpenSmc.TestDomain;
 using OpenSmc.TestDomain.Cubes;
 using OpenSmc.TestDomain.Scopes;
@@ -41,7 +42,7 @@ namespace OpenSmc.Pivot.Test
 
     public class PivotTest : TestBase //HubTestBase
     {
-        //[Inject] protected IScopeFactory ScopeFactory;
+        [Inject] protected IScopeFactory ScopeFactory;
 
         public PivotTest(ITestOutputHelper output) : base(output)
         {
@@ -89,13 +90,13 @@ namespace OpenSmc.Pivot.Test
             await model.Verify(fileName);
         }
 
-        //[Theory]
-        //[MemberData(nameof(DataCubeScopeWithDimensionTestCases))]
-        //public void DataCubeScopeWithDimensionReports<TElement>(string fileName, Func<IScopeFactory, IEnumerable<IDataCube<TElement>>> dataGen, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>> pivotBuilder)
-        //{
-        //    var data = dataGen(ScopeFactory);
-        //    ExecuteDataCubeTest(fileName, data, pivotBuilder);
-        //}
+        [Theory]
+        [MemberData(nameof(DataCubeScopeWithDimensionTestCases))]
+        public void DataCubeScopeWithDimensionReports<TElement>(string fileName, Func<IScopeFactory, IEnumerable<IDataCube<TElement>>> dataGen, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>> pivotBuilder)
+        {
+            var data = dataGen(ScopeFactory);
+            ExecuteDataCubeTest(fileName, data, pivotBuilder);
+        }
 
         [Theory]
         [MemberData(nameof(DataCubeTestCases))]
@@ -118,13 +119,13 @@ namespace OpenSmc.Pivot.Test
             ExecuteDataCubeAverageTest(fileName, data, pivotBuilder);
         }
 
-        //[Theory]
-        //[MemberData(nameof(ScopeDataCubeTestCases))]
-        //public void ScopeDataCubeReports<TElement>(string fileName, Func<IScopeFactory, IEnumerable<IDataCube<TElement>>> dataGen, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>> pivotBuilder)
-        //{
-        //    var data = dataGen(ScopeFactory);
-        //    ExecuteDataCubeTest(fileName, data, pivotBuilder);
-        //}
+        [Theory]
+        [MemberData(nameof(ScopeDataCubeTestCases))]
+        public void ScopeDataCubeReports<TElement>(string fileName, Func<IScopeFactory, IEnumerable<IDataCube<TElement>>> dataGen, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>> pivotBuilder)
+        {
+            var data = dataGen(ScopeFactory);
+            ExecuteDataCubeTest(fileName, data, pivotBuilder);
+        }
 
         [Fact]
         public void NullQuerySourceShouldFlatten()
@@ -146,29 +147,29 @@ namespace OpenSmc.Pivot.Test
             qs.HasRowGrouping.Should().Be(flattened.HasRowGrouping);
         }
 
-        //[Fact]
-        //public void DataCubeScopeWithDimensionPropertiesErr()
-        //{
-        //    var storage = new YearAndQuarterAndCompanyIdentityStorage((2021, 1));
-        //    var scopes = ScopeFactory.ForIdentities(storage.Identities, storage)
-        //                             .ToScopes<IDataCubeScopeWithValueAndDimensionErr>();
+        [Fact]
+        public void DataCubeScopeWithDimensionPropertiesErr()
+        {
+            var storage = new YearAndQuarterAndCompanyIdentityStorage((2021, 1));
+            var scopes = ScopeFactory.ForIdentities(storage.Identities, storage)
+                                     .ToScopes<IDataCubeScopeWithValueAndDimensionErr>();
 
-        //    void Report() => PivotFactory.ForDataCubes(scopes).SliceColumnsBy(nameof(Country)).Execute();
-        //    var ex = Assert.Throws<InvalidOperationException>(Report);
-        //    ex.Message.Should().Be($"Duplicate dimensions: '{nameof(Country)}'");
-        //}
+            void Report() => PivotFactory.ForDataCubes(scopes).SliceColumnsBy(nameof(Country)).Execute();
+            var ex = Assert.Throws<InvalidOperationException>(Report);
+            ex.Message.Should().Be($"Duplicate dimensions: '{nameof(Country)}'");
+        }
 
-        //[Fact]
-        //public void DataCubeScopeWithDimensionPropertiesErr1()
-        //{
-        //    var storage = new YearAndQuarterAndCompanyIdentityStorage((2021, 1));
-        //    var scopes = ScopeFactory.ForIdentities(storage.Identities, storage)
-        //                             .ToScopes<IDataCubeScopeWithValueAndDimensionErr1>();
+        [Fact]
+        public void DataCubeScopeWithDimensionPropertiesErr1()
+        {
+            var storage = new YearAndQuarterAndCompanyIdentityStorage((2021, 1));
+            var scopes = ScopeFactory.ForIdentities(storage.Identities, storage)
+                                     .ToScopes<IDataCubeScopeWithValueAndDimensionErr1>();
 
-        //    void Report() => PivotFactory.ForDataCubes(scopes).SliceColumnsBy("MyCountry").Execute();
-        //    var ex = Assert.Throws<InvalidOperationException>(Report);//.WithMessage<InvalidOperationException>("Duplicate dimensions: 'MyCountry'");
-        //    ex.Message.Should().Be("Duplicate dimensions: 'MyCountry'");
-        //}
+            void Report() => PivotFactory.ForDataCubes(scopes).SliceColumnsBy("MyCountry").Execute();
+            var ex = Assert.Throws<InvalidOperationException>(Report);//.WithMessage<InvalidOperationException>("Duplicate dimensions: 'MyCountry'");
+            ex.Message.Should().Be("Duplicate dimensions: 'MyCountry'");
+        }
 
         public static IEnumerable<object[]> DataCubeCountTestCases()
         {
