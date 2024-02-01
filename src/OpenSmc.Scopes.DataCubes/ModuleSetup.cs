@@ -31,7 +31,7 @@ public class ModuleSetup : Attribute, IModuleInitialization
 
     }
 
-    private static void InitializeArithmetics()
+    public static void InitializeArithmetics()
     {
         // it may not be the right place here, but no specific sum function is needed, and scopes have to win over data cubes. This is the project which knows about both data cubes and scopes
         SumFunctionConventionService.Instance.Element(typeof(IsDataCubeSumFunctionProvider)).DependsOn(typeof(IsScopeSumFunctionProvider));

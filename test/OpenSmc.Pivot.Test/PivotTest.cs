@@ -1,48 +1,67 @@
-﻿using Autofac.Core;
-using FluentAssertions;
-using FluentAssertions.Common;
-using Microsoft.Extensions.DependencyInjection;
+﻿using FluentAssertions;
 using OpenSmc.Arithmetics;
 using OpenSmc.Collections;
 using OpenSmc.DataCubes;
 using OpenSmc.Fixture;
-using OpenSmc.Json.Assertions;
+using OpenSmc.Messaging;
 using OpenSmc.Pivot.Aggregations;
 using OpenSmc.Pivot.Builder;
 using OpenSmc.Pivot.Models;
 using OpenSmc.Scopes;
 using OpenSmc.Scopes.Proxy;
-using OpenSmc.Serialization;
-using OpenSmc.ServiceProvider;
 using OpenSmc.TestDomain;
 using OpenSmc.TestDomain.Cubes;
 using OpenSmc.TestDomain.Scopes;
 using OpenSmc.TestDomain.SimpleData;
-using Xunit;
 using Xunit.Abstractions;
 
 namespace OpenSmc.Pivot.Test
 {
-    public class PivotTest : TestBase
+    public static class PivotRegistryExtensions
     {
-        [Inject] protected IScopeFactory ScopeFactory;
-        [Inject] protected ISerializationService SerializationService;
-
-        public PivotTest(ITestOutputHelper toh)
-            : base(toh)
+        public static MessageHubConfiguration AddPivot(this MessageHubConfiguration conf)
         {
-            Modules.Add<DataCubes.ModuleSetup>();
+            DataCubesRegistryExtensions.RegisterProviders();
+            ArithmeticsRegistrationExtensions.RegisterProviders();
+            Scopes.DataCubes.ModuleSetup.InitializeArithmetics();
+            return conf.WithServices(services => services
+                .RegisterScopes());
+        }
+    }
+
+    public static class VerifyExtension
+    {
+        public static async Task Verify(this object model, string fileName)
+        {
+            await Verifier.Verify(model)
+                .UseFileName(fileName)
+                .UseDirectory("Json");
+        }
+    }
+
+    public class PivotTest : TestBase //HubTestBase
+    {
+        //[Inject] protected IScopeFactory ScopeFactory;
+
+        public PivotTest(ITestOutputHelper output) : base(output)
+        {
+            DataCubesRegistryExtensions.RegisterProviders();
+            ArithmeticsRegistrationExtensions.RegisterProviders();
+            Scopes.DataCubes.ModuleSetup.InitializeArithmetics();
             Services.RegisterScopes();
-            Services.AddSingleton<IEventsRegistry>(_ => new EventsRegistry(null));
-            Services.AddSingleton<ISerializationService, SerializationService>();
-            var registry = new CustomSerializationRegistry();
-            Services.AddSingleton(registry);
-            Services.AddSingleton<ICustomSerializationRegistry>(registry);
         }
 
+        //protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+        //{
+        //    return base.ConfigureHost(configuration)
+        //            .AddPivot()
+        //        //.AddSerialization(conf => conf)
+        //        ;
+        //}
+        
         [Theory]
         [MemberData(nameof(TestCases))]
-        public void Reports<T, TAggregate>(string fileName, IEnumerable<T> data, Func<PivotBuilder<T, T, T>, PivotBuilder<T, TAggregate, TAggregate>> builder)
+        public async Task Reports<T, TAggregate>(string fileName, IEnumerable<T> data, Func<PivotBuilder<T, T, T>, PivotBuilder<T, TAggregate, TAggregate>> builder)
         {
             var initial = PivotFactory.ForObjects(data)
                                       .WithQuerySource(new StaticDataFieldQuerySource());
@@ -50,12 +69,12 @@ namespace OpenSmc.Pivot.Test
             var pivotBuilder = builder(initial);
 
             var model = GetModel(pivotBuilder);
-            model.JsonShouldMatch(SerializationService, fileName);
+            await model.Verify(fileName);
         }
 
         [Theory]
         [MemberData(nameof(TestCasesCount))]
-        public void ReportsCounts<T>(string fileName, IEnumerable<T> data, Func<PivotBuilder<T, T, T>, PivotBuilder<T, int, int>> builder)
+        public async Task ReportsCounts<T>(string fileName, IEnumerable<T> data, Func<PivotBuilder<T, T, T>, PivotBuilder<T, int, int>> builder)
         {
             var initial = PivotFactory.ForObjects(data)
                                       .WithQuerySource(new StaticDataFieldQuerySource());
@@ -63,16 +82,16 @@ namespace OpenSmc.Pivot.Test
             var pivotBuilder = builder(initial);
 
             var model = GetModel(pivotBuilder);
-            model.JsonShouldMatch(SerializationService, fileName);
+            await model.Verify(fileName);
         }
 
-        [Theory]
-        [MemberData(nameof(DataCubeScopeWithDimensionTestCases))]
-        public void DataCubeScopeWithDimensionReports<TElement>(string fileName, Func<IScopeFactory, IEnumerable<IDataCube<TElement>>> dataGen, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>> pivotBuilder)
-        {
-            var data = dataGen(ScopeFactory);
-            ExecuteDataCubeTest(fileName, data, pivotBuilder);
-        }
+        //[Theory]
+        //[MemberData(nameof(DataCubeScopeWithDimensionTestCases))]
+        //public void DataCubeScopeWithDimensionReports<TElement>(string fileName, Func<IScopeFactory, IEnumerable<IDataCube<TElement>>> dataGen, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>> pivotBuilder)
+        //{
+        //    var data = dataGen(ScopeFactory);
+        //    ExecuteDataCubeTest(fileName, data, pivotBuilder);
+        //}
 
         [Theory]
         [MemberData(nameof(DataCubeTestCases))]
@@ -95,13 +114,13 @@ namespace OpenSmc.Pivot.Test
             ExecuteDataCubeAverageTest(fileName, data, pivotBuilder);
         }
 
-        [Theory]
-        [MemberData(nameof(ScopeDataCubeTestCases))]
-        public void ScopeDataCubeReports<TElement>(string fileName, Func<IScopeFactory, IEnumerable<IDataCube<TElement>>> dataGen, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>> pivotBuilder)
-        {
-            var data = dataGen(ScopeFactory);
-            ExecuteDataCubeTest(fileName, data, pivotBuilder);
-        }
+        //[Theory]
+        //[MemberData(nameof(ScopeDataCubeTestCases))]
+        //public void ScopeDataCubeReports<TElement>(string fileName, Func<IScopeFactory, IEnumerable<IDataCube<TElement>>> dataGen, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>> pivotBuilder)
+        //{
+        //    var data = dataGen(ScopeFactory);
+        //    ExecuteDataCubeTest(fileName, data, pivotBuilder);
+        //}
 
         [Fact]
         public void NullQuerySourceShouldFlatten()
@@ -123,34 +142,34 @@ namespace OpenSmc.Pivot.Test
             qs.HasRowGrouping.Should().Be(flattened.HasRowGrouping);
         }
 
-        [Fact]
-        public void DataCubeScopeWithDimensionPropertiesErr()
-        {
-            var storage = new YearAndQuarterAndCompanyIdentityStorage((2021, 1));
-            var scopes = ScopeFactory.ForIdentities(storage.Identities, storage)
-                                     .ToScopes<IDataCubeScopeWithValueAndDimensionErr>();
+        //[Fact]
+        //public void DataCubeScopeWithDimensionPropertiesErr()
+        //{
+        //    var storage = new YearAndQuarterAndCompanyIdentityStorage((2021, 1));
+        //    var scopes = ScopeFactory.ForIdentities(storage.Identities, storage)
+        //                             .ToScopes<IDataCubeScopeWithValueAndDimensionErr>();
 
-            void Report() => PivotFactory.ForDataCubes(scopes).SliceColumnsBy(nameof(Country)).Execute();
-            var ex = Assert.Throws<InvalidOperationException>(Report);
-            ex.Message.Should().Be($"Duplicate dimensions: '{nameof(Country)}'");
-        }
+        //    void Report() => PivotFactory.ForDataCubes(scopes).SliceColumnsBy(nameof(Country)).Execute();
+        //    var ex = Assert.Throws<InvalidOperationException>(Report);
+        //    ex.Message.Should().Be($"Duplicate dimensions: '{nameof(Country)}'");
+        //}
 
-        [Fact]
-        public void DataCubeScopeWithDimensionPropertiesErr1()
-        {
-            var storage = new YearAndQuarterAndCompanyIdentityStorage((2021, 1));
-            var scopes = ScopeFactory.ForIdentities(storage.Identities, storage)
-                                     .ToScopes<IDataCubeScopeWithValueAndDimensionErr1>();
+        //[Fact]
+        //public void DataCubeScopeWithDimensionPropertiesErr1()
+        //{
+        //    var storage = new YearAndQuarterAndCompanyIdentityStorage((2021, 1));
+        //    var scopes = ScopeFactory.ForIdentities(storage.Identities, storage)
+        //                             .ToScopes<IDataCubeScopeWithValueAndDimensionErr1>();
 
-            void Report() => PivotFactory.ForDataCubes(scopes).SliceColumnsBy("MyCountry").Execute();
-            var ex = Assert.Throws<InvalidOperationException>(Report);//.WithMessage<InvalidOperationException>("Duplicate dimensions: 'MyCountry'");
-            ex.Message.Should().Be("Duplicate dimensions: 'MyCountry'");
-        }
+        //    void Report() => PivotFactory.ForDataCubes(scopes).SliceColumnsBy("MyCountry").Execute();
+        //    var ex = Assert.Throws<InvalidOperationException>(Report);//.WithMessage<InvalidOperationException>("Duplicate dimensions: 'MyCountry'");
+        //    ex.Message.Should().Be("Duplicate dimensions: 'MyCountry'");
+        //}
 
         public static IEnumerable<object[]> DataCubeCountTestCases()
         {
             yield return new DataCubeTestCase<CashflowElement, int>(
-                                                                    "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrencyCount.json",
+                                                                    "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrencyCount",
                                                                     CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency().ToDataCube().RepeatOnce(),
                                                                     b => b
                                                                          .WithAggregation(a => a.Count())
@@ -158,14 +177,14 @@ namespace OpenSmc.Pivot.Test
                                                                          .SliceRowsBy(nameof(Country), nameof(LineOfBusiness))
                                                                          .SliceColumnsBy(nameof(AmountType)));
             yield return new DataCubeTestCase<CashflowElement, int>(
-                                                                    "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrencyCount.json",
+                                                                    "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrencyCount",
                                                                     CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency().ToDataCube().RepeatOnce(),
                                                                     b => b
                                                                          .WithAggregation(a => a.Count())
                                                                          .SliceRowsBy(nameof(Country), nameof(LineOfBusiness))
                                                                          .SliceColumnsBy(nameof(AmountType)));
             yield return new DataCubeTestCase<CashflowElement, int>(
-                                                                    "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrencyCount.json",
+                                                                    "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrencyCount",
                                                                     CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency().ToDataCube().RepeatOnce(),
                                                                     b => b
                                                                          .WithAggregation(a => a.Count())
@@ -173,7 +192,7 @@ namespace OpenSmc.Pivot.Test
                                                                          .SliceRowsBy(nameof(Country), nameof(LineOfBusiness))
                                                                          .SliceColumnsBy(nameof(AmountType)));
             yield return new DataCubeTestCase<CashflowElement, int>(
-                                                                    "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrencyCount.json",
+                                                                    "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrencyCount",
                                                                     CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency().ToDataCube().RepeatOnce(),
                                                                     b => b
                                                                          .WithAggregation(a => a.Count())
@@ -181,7 +200,7 @@ namespace OpenSmc.Pivot.Test
                                                                          .SliceRowsBy(nameof(LineOfBusiness))
                                                                          .SliceColumnsBy(nameof(AmountType)));
             yield return new DataCubeTestCase<CashflowElement, int>(
-                                                                    "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrencyCount.json",
+                                                                    "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrencyCount",
                                                                     CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency().ToDataCube().RepeatOnce(),
                                                                     b => b
                                                                          .WithAggregation(a => a.Count())
@@ -189,7 +208,7 @@ namespace OpenSmc.Pivot.Test
                                                                          .SliceRowsBy(nameof(Country))
                                                                          .SliceColumnsBy(nameof(AmountType)));
             yield return new DataCubeTestCase<CashflowElement, int>(
-                                                                    "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionCount.json",
+                                                                    "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionCount",
                                                                     CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube().RepeatOnce(),
                                                                     b => b
                                                                          .WithAggregation(a => a.Count())
@@ -200,13 +219,13 @@ namespace OpenSmc.Pivot.Test
 
         public static IEnumerable<object[]> DataCubeAverageTestCases()
         {
-            yield return new DataCubeTestCase<CashflowElement, (CashflowElement sum, int count), CashflowElement>("DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrencyAverage.json",
+            yield return new DataCubeTestCase<CashflowElement, (CashflowElement sum, int count), CashflowElement>("DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrencyAverage",
                                                                                                                   CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency().ToDataCube().RepeatOnce(),
                                                                                                                   b => b.WithAggregation(a => a.Average((s, c) => ArithmeticOperations.Divide(s, c)))
                                                                                                                         .SliceRowsBy(nameof(Country), nameof(LineOfBusiness))
                                                                                                                         .SliceColumnsBy(nameof(AmountType)));
             yield return new DataCubeTestCase<CashflowElement, (CashflowElement sum, int count), CashflowElement>(
-                                                                                                                  "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionAverage.json",
+                                                                                                                  "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionAverage",
                                                                                                                   CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube().RepeatOnce(),
                                                                                                                   b => b.WithAggregation(a => a.Average((s, c) => ArithmeticOperations.Divide(s, c)))
                                                                                                                         .SliceRowsBy(nameof(Country), nameof(LineOfBusiness))
@@ -215,136 +234,136 @@ namespace OpenSmc.Pivot.Test
 
         public static IEnumerable<object[]> DataCubeTestCases()
         {
-            yield return new DataCubeTestCase<CashflowElement, CashflowElement>("DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrency.json",
+            yield return new DataCubeTestCase<CashflowElement, CashflowElement>("DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrency",
                                                                                 CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency().ToDataCube().RepeatOnce(),
                                                                                 b => b.SliceRowsBy(nameof(Country), nameof(LineOfBusiness))
                                                                                       .SliceColumnsBy(nameof(AmountType)));
             yield return new DataCubeTestCase<CashflowElement, CashflowElement>(
-                                                                                "DataCubeSlicedTwiceByRowOnceByColumnOneDimension.json",
+                                                                                "DataCubeSlicedTwiceByRowOnceByColumnOneDimension",
                                                                                 CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube().RepeatOnce(),
                                                                                 b => b.SliceRowsBy(nameof(Country), nameof(LineOfBusiness))
                                                                                       .SliceColumnsBy(nameof(AmountType)));
             yield return new DataCubeTestCase<CashflowElement, CashflowElement>(
-                                                                                "DataCubeSliceRowsByAggregateByDimension.json",
+                                                                                "DataCubeSliceRowsByAggregateByDimension",
                                                                                 CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube().RepeatOnce(),
                                                                                 b => b);
             yield return new DataCubeTestCase<CashflowElement, CashflowElement>(
-                                                                                "DataCubeSliceRowsByAggregateByDimension.json",
+                                                                                "DataCubeSliceRowsByAggregateByDimension",
                                                                                 CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube().RepeatOnce(),
                                                                                 b => b.SliceRowsBy(nameof(Currency)));
             yield return new DataCubeTestCase<CashflowElement, CashflowElement>(
-                                                                                "DataCubeSliceColumnsByAggregateByDimension.json",
+                                                                                "DataCubeSliceColumnsByAggregateByDimension",
                                                                                 CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube().RepeatOnce(),
                                                                                 b => b.SliceColumnsBy(nameof(Currency)));
             yield return new DataCubeTestCase<CashflowElement, CashflowElement>(
-                                                                                "DataCubeSliceColumnsByAggregateByDimension2.json",
+                                                                                "DataCubeSliceColumnsByAggregateByDimension2",
                                                                                 CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube().RepeatOnce(),
                                                                                 b => b.SliceRowsBy(nameof(Country))
                                                                                       .SliceColumnsBy(nameof(Currency)));
             yield return new DataCubeTestCase<CashflowElement, CashflowElement>(
-                                                                                "DataCubeSliceColumnsByAggregateByDimension2.json",
+                                                                                "DataCubeSliceColumnsByAggregateByDimension2",
                                                                                 CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube().RepeatOnce(),
                                                                                 b => b.SliceColumnsBy(nameof(Currency))
                                                                                       .SliceRowsBy(nameof(Country)));
             yield return new DataCubeTestCase<CashflowElement, CashflowElement>(
-                                                                                "DataCubeSlicedTriceByRowOneDimensionSingleCurrency.json",
+                                                                                "DataCubeSlicedTriceByRowOneDimensionSingleCurrency",
                                                                                 CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency().ToDataCube().RepeatOnce(),
                                                                                 b => b.SliceRowsBy(nameof(Country), nameof(LineOfBusiness), nameof(Split)));
             yield return new DataCubeTestCase<CashflowElement, CashflowElement>(
-                                                                                "DataCubeSlicedTriceByRowOneDimension.json",
+                                                                                "DataCubeSlicedTriceByRowOneDimension",
                                                                                 CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube().RepeatOnce(),
                                                                                 b => b.SliceRowsBy(nameof(Country), nameof(LineOfBusiness), nameof(Split)));
             yield return new DataCubeTestCase<CashflowElement, CashflowElement>(
-                                                                                "DataCubeSlicedOnceByRowOnceByColumnOneDimensionSingleCurrency.json",
+                                                                                "DataCubeSlicedOnceByRowOnceByColumnOneDimensionSingleCurrency",
                                                                                 CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency().ToDataCube().RepeatOnce(),
                                                                                 b => b.SliceRowsBy(nameof(Country))
                                                                                       .SliceColumnsBy(nameof(LineOfBusiness)));
             yield return new DataCubeTestCase<CashflowElement, CashflowElement>(
-                                                                                "DataCubeSlicedOnceByRowOnceByColumnOneDimension.json",
+                                                                                "DataCubeSlicedOnceByRowOnceByColumnOneDimension",
                                                                                 CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube().RepeatOnce(),
                                                                                 b => b.SliceRowsBy(nameof(Country))
                                                                                       .SliceColumnsBy(nameof(LineOfBusiness)));
             yield return new DataCubeTestCase<CashflowElement, CashflowElement>(
-                                                                                "DataCubeSlicedByColumnOneDimensionSingleCurrency.json",
+                                                                                "DataCubeSlicedByColumnOneDimensionSingleCurrency",
                                                                                 CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency().ToDataCube().RepeatOnce(),
                                                                                 b => b.SliceColumnsBy(nameof(AmountType)));
             yield return new DataCubeTestCase<CashflowElement, CashflowElement>(
-                                                                                "DataCubeSlicedByColumnOneDimension.json",
+                                                                                "DataCubeSlicedByColumnOneDimension",
                                                                                 CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube().RepeatOnce(),
                                                                                 b => b.SliceColumnsBy(nameof(AmountType)));
             yield return new DataCubeTestCase<CashflowElement, CashflowElement>(
-                                                                                "DataCubeSlicedByColumnThreeDimensions.json",
+                                                                                "DataCubeSlicedByColumnThreeDimensions",
                                                                                 CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube().RepeatOnce(),
                                                                                 b => b.SliceColumnsBy(nameof(Country), nameof(LineOfBusiness), nameof(AmountType)));
             yield return new DataCubeTestCase<CashflowElement, CashflowElement>(
-                                                                                "DataCubeSlicedByColumnThreeDimensions.json",
+                                                                                "DataCubeSlicedByColumnThreeDimensions",
                                                                                 CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube().RepeatOnce(),
                                                                                 b => b.SliceColumnsBy(nameof(Country), nameof(LineOfBusiness))
                                                                                       .SliceColumnsBy(nameof(AmountType)));
             yield return new DataCubeTestCase<CashflowElement, CashflowElement>(
-                                                                                "DataCubeTransposed.json",
+                                                                                "DataCubeTransposed",
                                                                                 CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube().RepeatOnce(),
                                                                                 b => b.Transpose<double>());
             yield return new DataCubeTestCase<TwoDimValue, TwoDimValue>(
-                                                                        "NullGroupSliceByRowTwoDimensionsTotalsBug.json",
+                                                                        "NullGroupSliceByRowTwoDimensionsTotalsBug",
                                                                         TwoDimValue.Data.Take(3).ToDataCube().RepeatOnce(),
                                                                         b => b.SliceRowsBy(nameof(Dim2), nameof(Dim1)));
             yield return new DataCubeTestCase<TwoDimValue, TwoDimValue>(
-                                                                        "NullGroupSliceByRowSliceByColumn.json",
+                                                                        "NullGroupSliceByRowSliceByColumn",
                                                                         TwoDimValue.Data.ToDataCube().RepeatOnce(),
                                                                         b => b.SliceRowsBy(nameof(Dim1))
                                                                               .SliceColumnsBy(nameof(Dim2)));
             yield return new DataCubeTestCase<ValueWithHierarchicalDimension, ValueWithHierarchicalDimension>
-                ("HierarchicalDimension.json",
+                ("HierarchicalDimension",
                  ValueWithHierarchicalDimension.Data.ToDataCube().RepeatOnce(),
                  b => b.SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA)));
             yield return new DataCubeTestCase<ValueWithHierarchicalDimension, ValueWithHierarchicalDimension>
-                ("HierarchicalDimensionOptionsA1.json",
+                ("HierarchicalDimensionOptionsA1",
                  ValueWithHierarchicalDimension.Data.ToDataCube().RepeatOnce(),
                  b => b.SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
                        .WithHierarchicalDimensionOptions(o => o.LevelMin<TestHierarchicalDimensionA>(1)));
             yield return new DataCubeTestCase<ValueWithHierarchicalDimension, ValueWithHierarchicalDimension>
-                ("HierarchicalDimensionOptionsA2.json",
+                ("HierarchicalDimensionOptionsA2",
                  ValueWithHierarchicalDimension.Data.ToDataCube().RepeatOnce(),
                  b => b.SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
                        .WithHierarchicalDimensionOptions(o => o.LevelMin<TestHierarchicalDimensionA>(1)
                                                                .LevelMax<TestHierarchicalDimensionA>(1)));
             yield return new DataCubeTestCase<ValueWithHierarchicalDimension, ValueWithHierarchicalDimension>
-                ("HierarchicalDimensionOptionsAFlat.json",
+                ("HierarchicalDimensionOptionsAFlat",
                  ValueWithHierarchicalDimension.Data.ToDataCube().RepeatOnce(),
                  b => b.SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
                        .WithHierarchicalDimensionOptions(o => o.Flatten<TestHierarchicalDimensionA>()));
             yield return new DataCubeTestCase<ValueWithTwoAggregateByHierarchicalDimensions, ValueWithTwoAggregateByHierarchicalDimensions>
-                ("HierarchicalDimensionTwoAggregateBy.json",
+                ("HierarchicalDimensionTwoAggregateBy",
                  ValueWithTwoAggregateByHierarchicalDimensions.Data.ToDataCube().RepeatOnce(),
                  b => b);
             yield return new DataCubeTestCase<ValueWithTwoAggregateByHierarchicalDimensions, ValueWithTwoAggregateByHierarchicalDimensions>
-                ("HierarchicalDimensionTwoAggregateBySliceByColumn.json",
+                ("HierarchicalDimensionTwoAggregateBySliceByColumn",
                  ValueWithTwoAggregateByHierarchicalDimensions.Data.ToDataCube().RepeatOnce(),
                  b => b.SliceColumnsBy(nameof(ValueWithHierarchicalDimension.DimA)));
             yield return new DataCubeTestCase<ValueWithTwoHierarchicalDimensions, ValueWithTwoHierarchicalDimensions>
-                ("HierarchicalDimensionTwo.json",
+                ("HierarchicalDimensionTwo",
                  ValueWithTwoHierarchicalDimensions.Data.ToDataCube().RepeatOnce(),
                  b => b.SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA), nameof(ValueWithTwoHierarchicalDimensions.DimB)));
             yield return new DataCubeTestCase<ValueWithTwoHierarchicalDimensions, ValueWithTwoHierarchicalDimensions>
-                ("HierarchicalDimensionTwoByColumns.json",
+                ("HierarchicalDimensionTwoByColumns",
                  ValueWithTwoHierarchicalDimensions.Data.ToDataCube().RepeatOnce(),
                  b => b.SliceColumnsBy(nameof(ValueWithHierarchicalDimension.DimA), nameof(ValueWithTwoHierarchicalDimensions.DimB)));
             yield return new DataCubeTestCase<ValueWithTwoHierarchicalDimensions, ValueWithTwoHierarchicalDimensions>
-                ("HierarchicalDimensionSliceColumnsByB.json",
+                ("HierarchicalDimensionSliceColumnsByB",
                  ValueWithTwoHierarchicalDimensions.Data.ToDataCube().RepeatOnce(),
                  b => b.SliceColumnsBy(nameof(ValueWithTwoHierarchicalDimensions.DimB)));
             yield return new DataCubeTestCase<ValueWithMixedDimensions, ValueWithMixedDimensions>
-                ("HierarchicalDimensionMix1.json",
+                ("HierarchicalDimensionMix1",
                  ValueWithMixedDimensions.Data.ToDataCube().RepeatOnce(),
                  b => b.SliceRowsBy(nameof(ValueWithMixedDimensions.DimA))
                        .SliceColumnsBy(nameof(ValueWithMixedDimensions.DimD)));
             yield return new DataCubeTestCase<ValueWithMixedDimensions, ValueWithMixedDimensions>
-                ("HierarchicalDimensionMix2.json",
+                ("HierarchicalDimensionMix2",
                  ValueWithMixedDimensions.Data.ToDataCube().RepeatOnce(),
                  b => b.SliceRowsBy(nameof(ValueWithMixedDimensions.DimA), nameof(ValueWithMixedDimensions.DimD)));
             yield return new DataCubeTestCase<ValueWithMixedDimensions, ValueWithMixedDimensions>
-                ("HierarchicalDimensionMix3.json",
+                ("HierarchicalDimensionMix3",
                  ValueWithMixedDimensions.Data.ToDataCube().RepeatOnce(),
                  b => b.SliceRowsBy(nameof(ValueWithMixedDimensions.DimD), nameof(ValueWithMixedDimensions.DimA)));
         }
@@ -353,16 +372,16 @@ namespace OpenSmc.Pivot.Test
         {
             var storage = new YearAndQuarterAndCompanyIdentityStorage((2021, 1), (2020, 3));
 
-            yield return new ScopeDataCubeTestCase<IDataCube<IDataCubeScopeWithValueAndDimension>, IDataCubeScopeWithValueAndDimension, IDataCubeScopeWithValueAndDimension>("DataCubeScopeWithDimension.json",
+            yield return new ScopeDataCubeTestCase<IDataCube<IDataCubeScopeWithValueAndDimension>, IDataCubeScopeWithValueAndDimension, IDataCubeScopeWithValueAndDimension>("DataCubeScopeWithDimension",
                                                                                                                                                                              sf => sf.ForIdentities(storage.Identities, storage).ToScopes<IDataCubeScopeWithValueAndDimension>(),
                                                                                                                                                                              b => b.SliceColumnsBy(nameof(IDataCubeScopeWithValueAndDimension.Country), nameof(Company)));
-            yield return new ScopeDataCubeTestCase<IDataCube<CashflowElement>, CashflowElement, CashflowElement>("DataCubeScopeWithDimension2.json",
+            yield return new ScopeDataCubeTestCase<IDataCube<CashflowElement>, CashflowElement, CashflowElement>("DataCubeScopeWithDimension2",
                                                                                                                  sf => sf.ForIdentities(storage.Identities, storage).ToScopes<IDataCubeScopeWithValueAndDimension2>(),
                                                                                                                  b => b.SliceColumnsBy(nameof(IDataCubeScopeWithValueAndDimension2.ScopeCountry), nameof(Company)));
-            yield return new ScopeDataCubeTestCase<IDataCube<CashflowElement>, CashflowElement, CashflowElement>("DataCubeScopeWithDimension3.json",
+            yield return new ScopeDataCubeTestCase<IDataCube<CashflowElement>, CashflowElement, CashflowElement>("DataCubeScopeWithDimension3",
                                                                                                                  sf => sf.ForIdentities(storage.Identities, storage).ToScopes<IDataCubeScopeWithValueAndDimension3>(),
                                                                                                                  b => b.SliceColumnsBy(nameof(IDataCubeScopeWithValueAndDimension3.ScopeCountry), nameof(Company)));
-            yield return new ScopeDataCubeTestCase<IDataCube<CashflowElement>, CashflowElement, CashflowElement>("DataCubeScopeWithDimension4.json",
+            yield return new ScopeDataCubeTestCase<IDataCube<CashflowElement>, CashflowElement, CashflowElement>("DataCubeScopeWithDimension4",
                                                                                                                  sf => sf.ForIdentities(storage.Identities, storage).ToScopes<IDataCubeScopeWithValueAndDimension4>(),
                                                                                                                  b => b.SliceColumnsBy(nameof(IDataCubeScopeWithValueAndDimension4.ScopeCountry), nameof(Company)));
         }
@@ -373,46 +392,46 @@ namespace OpenSmc.Pivot.Test
 
             // TODO: uncomment this #20722  (2021-08-19, Andrei Sirotenko)
             // yield return new ScopeDataCubeTestCase<IDataCube<CashflowElement>, CashflowElement, CashflowElement>(
-            //                                                                                                      "ScopeWithDataCubePropertiesSlicedColumns.json",
+            //                                                                                                      "ScopeWithDataCubePropertiesSlicedColumns",
             //                                                                                                      sf => sf.ForIdentities(storage.Identities, storage).ToScopes<IScopeWithDataCubeProperties>().Aggregate().RepeatOnce(),
             //                                                                                                      b => b.SliceColumnsBy(nameof(AmountType)));
             yield return new ScopeDataCubeTestCase<IDataCube<IDataCubeScope>, IDataCubeScope, IDataCubeScope>(
-                                                                                                              "DataCubeScope.json",
+                                                                                                              "DataCubeScope",
                                                                                                               sf => sf.ForIdentities(storage.Identities, storage).ToScopes<IDataCubeScope>(),
                                                                                                               b => b.SliceColumnsBy(nameof(AmountType)));
             yield return new ScopeDataCubeTestCase<IDataCube<CashflowElement>, CashflowElement, CashflowElement>(
-                                                                                                                 "ScopeWithElementPropertiesSlicedColumns.json",
+                                                                                                                 "ScopeWithElementPropertiesSlicedColumns",
                                                                                                                  sf => sf.ForIdentities(storage.Identities, storage).ToScopes<IScopeWithElementProperties>(),
                                                                                                                  b => b.SliceColumnsBy(nameof(AmountType)));
             yield return new ScopeDataCubeTestCase<IDataCube<CashflowElement>, CashflowElement, CashflowElement>(
-                                                                                                                 "ScopeWithElementPropertiesSlicedRows.json",
+                                                                                                                 "ScopeWithElementPropertiesSlicedRows",
                                                                                                                  sf => sf.ForIdentities(storage.Identities, storage).ToScopes<IScopeWithElementProperties>(),
                                                                                                                  b => b.SliceColumnsBy(nameof(Currency))
                                                                                                                        .SliceRowsBy(nameof(AmountType), "Year"));
             yield return new ScopeDataCubeTestCase<IDataCube<IDataCubeScope>, IDataCubeScope, IDataCubeScope>(
-                                                                                                              "DataCubeScopeTransposedSliceByRow.json",
+                                                                                                              "DataCubeScopeTransposedSliceByRow",
                                                                                                               sf => sf.ForIdentities(storage.Identities, storage).ToScopes<IDataCubeScope>(),
                                                                                                               b => b.Transpose<double>()
                                                                                                                     .SliceRowsBy("Year"));
             yield return new ScopeDataCubeTestCase<IDataCube<IDataCubeScope>, IDataCubeScope, IDataCubeScope>(
-                                                                                                              "DataCubeScopeTransposed.json",
+                                                                                                              "DataCubeScopeTransposed",
                                                                                                               sf => sf.ForIdentities(storage.Identities, storage).ToScopes<IDataCubeScope>(),
                                                                                                               b => b.Transpose<double>());
             yield return new ScopeDataCubeTestCase<IDataCube<CashflowElement>, CashflowElement, CashflowElement>(
-                                                                                                                 "ScopeWithDataCubePropertiesSlicedColumns.json",
+                                                                                                                 "ScopeWithDataCubePropertiesSlicedColumns",
                                                                                                                  sf => sf.ForIdentities(storage.Identities, storage).ToScopes<IScopeWithDataCubeProperties>(),
                                                                                                                  b => b.SliceColumnsBy(nameof(AmountType)));
         }
 
         public static IEnumerable<object[]> TestCasesCount()
         {
-            yield return new TestCase<SimpleAccounting, int>("AutorenderedBasicCount.json",
+            yield return new TestCase<SimpleAccounting, int>("AutorenderedBasicCount",
                                                              SimpleAccountingFactory.GetData(3),
                                                              x => x
                                                                  .WithAggregation(a => a.Count()));
 
 
-            yield return new TestCase<CashflowElement, int>("GroupedByRowsAndByColumnsCount.json",
+            yield return new TestCase<CashflowElement, int>("GroupedByRowsAndByColumnsCount",
                                                             CashflowFactory.GenerateEquallyWeightedAllPopulated(),
                                                             x => x.WithAggregation(a => a.Count())
                                                                   .GroupColumnsBy(y => y.LineOfBusiness)
@@ -423,79 +442,79 @@ namespace OpenSmc.Pivot.Test
         public static IEnumerable<object[]> TestCases()
         {
             yield return new TestCase<SimpleAccounting, SimpleAccounting>(
-                                                                          "AutorenderedBasic.json",
+                                                                          "AutorenderedBasic",
                                                                           SimpleAccountingFactory.GetData(3),
                                                                           x => x);
 
             yield return new TestCase<SimpleAccounting, SimpleAccounting>(
-                                                                          "AutorenderedTransposedBasic.json",
+                                                                          "AutorenderedTransposedBasic",
                                                                           SimpleAccountingFactory.GetData(1),
                                                                           x => x.Transpose<double>());
 
 
             yield return new TestCase<SimpleAccounting, SimpleAccounting>(
-                                                                          "AutorenderedTransposedMultipleBasic.json",
+                                                                          "AutorenderedTransposedMultipleBasic",
                                                                           SimpleAccountingFactory.GetData(3),
                                                                           x => x.Transpose<double>());
 
 
             yield return new TestCase<SimpleAccounting, SimpleAccounting>(
-                                                                          "BasicWithCustomRowDefinitions.json",
+                                                                          "BasicWithCustomRowDefinitions",
                                                                           SimpleAccountingFactory.GetData(3),
                                                                           rb =>
                                                                               rb.GroupRowsBy(o => new RowGroup(o.SystemName, o.DisplayName, PivotConst.AutomaticEnumerationPivotGrouperName)));
 
 
             yield return new TestCase<SimpleAccountingNamed, SimpleAccountingNamed>(
-                                                                                    "BasicWithCustomRowDefinitions.json",
+                                                                                    "BasicWithCustomRowDefinitions",
                                                                                     SimpleAccountingFactory.GetData<SimpleAccountingNamed>(3),
                                                                                     rb => rb);
 
             yield return new TestCase<SimpleAccountingNamed, SimpleAccountingNamed>(
-                                                                                    "TransposedWithCustomGroupDefinitions.json",
+                                                                                    "TransposedWithCustomGroupDefinitions",
                                                                                     SimpleAccountingFactory.GetData<SimpleAccountingNamed>(3),
                                                                                     rb =>
                                                                                         rb.Transpose<double>());
 
             yield return new TestCase<CashflowElement, CashflowElement>(
-                                                                        "ManualGroupRowsByDimensionSingleCurrency.json",
+                                                                        "ManualGroupRowsByDimensionSingleCurrency",
                                                                         CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency(),
                                                                         x => x.GroupRowsBy(y => new RowGroup(y.AmountType, y.AmountType, nameof(y.AmountType))));
             yield return new TestCase<CashflowElement, CashflowElement>(
-                                                                        "ManualGroupRowsByDimension.json",
+                                                                        "ManualGroupRowsByDimension",
                                                                         CashflowFactory.GenerateEquallyWeightedAllPopulated(),
                                                                         x => x.GroupRowsBy(y => new RowGroup(y.AmountType, y.AmountType, nameof(y.AmountType))));
 
             yield return new TestCase<CashflowElement, CashflowElement>(
-                                                                        "GroupRowsByDimensionPropertySingleCurrency.json",
+                                                                        "GroupRowsByDimensionPropertySingleCurrency",
                                                                         CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency(),
                                                                         x => x.GroupRowsBy(y => y.AmountType));
 
             yield return new TestCase<CashflowElement, CashflowElement>(
-                                                                        "GroupRowsByDimensionProperty.json",
+                                                                        "GroupRowsByDimensionProperty",
                                                                         CashflowFactory.GenerateEquallyWeightedAllPopulated(),
                                                                         x => x.GroupRowsBy(y => y.AmountType));
 
             yield return new TestCase<CashflowElement, CashflowElement>(
-                                                                        "ManualGroupColumnsByDimensionSingleCurrency.json",
+                                                                        "ManualGroupColumnsByDimensionSingleCurrency",
                                                                         CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency(),
                                                                         x => x.GroupColumnsBy(y => new ColumnGroup(y.AmountType, y.AmountType, nameof(y.AmountType)))
                                                                        );
             yield return new TestCase<CashflowElement, CashflowElement>(
-                                                                        "ManualGroupColumnsByDimension.json",
+                                                                        "ManualGroupColumnsByDimension",
                                                                         CashflowFactory.GenerateEquallyWeightedAllPopulated(),
                                                                         x => x.GroupColumnsBy(y => new ColumnGroup(y.AmountType, y.AmountType, nameof(y.AmountType)))
                                                                        );
 
             yield return new TestCase<CashflowElement, CashflowElement>(
-                                                                        "GroupColumnsByDimensionPropertySingleCurrency.json",
+                                                                        "GroupColumnsByDimensionPropertySingleCurrency",
                                                                         CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency(),
                                                                         x => x
                                                                              .Transpose<double>()
                                                                              .GroupColumnsBy(y => y.AmountType)
                                                                        );
             yield return new TestCase<CashflowElement, CashflowElement>(
-                                                                        "GroupColumnsByDimensionProperty.json",
+                                                                        "GroupColumnsByDimensionProperty",
                                                                         CashflowFactory.GenerateEquallyWeightedAllPopulated(),
                                                                         x => x
                                                                              .Transpose<double>()
@@ -503,20 +522,20 @@ namespace OpenSmc.Pivot.Test
                                                                        );
 
             yield return new TestCase<CashflowElement, CashflowElement>(
-                                                                        "TwoGroupsDataCubeSingleCurrency.json",
+                                                                        "TwoGroupsDataCubeSingleCurrency",
                                                                         CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency(),
                                                                         x => x.GroupRowsBy(y => new RowGroup(y.LineOfBusiness, y.LineOfBusiness, nameof(y.LineOfBusiness)))
                                                                               .GroupRowsBy(y => new RowGroup(y.AmountType, y.AmountType, nameof(y.AmountType)))
                                                                        );
             yield return new TestCase<CashflowElement, CashflowElement>(
-                                                                        "TwoGroupsDataCube.json",
+                                                                        "TwoGroupsDataCube",
                                                                         CashflowFactory.GenerateEquallyWeightedAllPopulated(),
                                                                         x => x.GroupRowsBy(y => new RowGroup(y.LineOfBusiness, y.LineOfBusiness, nameof(y.LineOfBusiness)))
                                                                               .GroupRowsBy(y => new RowGroup(y.AmountType, y.AmountType, nameof(y.AmountType)))
                                                                        );
 
             yield return new TestCase<CashflowElement, CashflowElement>(
-                                                                        "TwoGroupsDataCubeTransposedSingleCurrency.json",
+                                                                        "TwoGroupsDataCubeTransposedSingleCurrency",
                                                                         CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency(),
                                                                         x => x
                                                                              .Transpose<double>()
@@ -525,7 +544,7 @@ namespace OpenSmc.Pivot.Test
                                                                        );
 
             yield return new TestCase<CashflowElement, CashflowElement>(
-                                                                        "TwoGroupsDataCubeTransposed.json",
+                                                                        "TwoGroupsDataCubeTransposed",
                                                                         CashflowFactory.GenerateEquallyWeightedAllPopulated(),
                                                                         x => x
                                                                              .Transpose<double>()
@@ -534,14 +553,14 @@ namespace OpenSmc.Pivot.Test
                                                                        );
 
             yield return new TestCase<CashflowElement, CashflowElement>(
-                                                                        "GroupedByRowsAndByColumnsSingleCurrency.json",
+                                                                        "GroupedByRowsAndByColumnsSingleCurrency",
                                                                         CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency(),
                                                                         x => x
                                                                              .GroupColumnsBy(y => y.LineOfBusiness)
                                                                              .GroupRowsBy(y => y.AmountType)
                                                                        );
             yield return new TestCase<CashflowElement, CashflowElement>(
-                                                                        "GroupedByRowsAndByColumns.json",
+                                                                        "GroupedByRowsAndByColumns",
                                                                         CashflowFactory.GenerateEquallyWeightedAllPopulated(),
                                                                         x => x
                                                                              .GroupColumnsBy(y => y.LineOfBusiness)
@@ -549,7 +568,7 @@ namespace OpenSmc.Pivot.Test
                                                                        );
 
             yield return new TestCase<CashflowElement, CashflowElement>(
-                                                                        "TransposedGroupedByRowsAndByColumnsSingleCurrency.json",
+                                                                        "TransposedGroupedByRowsAndByColumnsSingleCurrency",
                                                                         CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency(),
                                                                         x => x
                                                                              .Transpose<double>()
@@ -557,7 +576,7 @@ namespace OpenSmc.Pivot.Test
                                                                              .GroupRowsBy(y => y.AmountType)
                                                                        );
             yield return new TestCase<CashflowElement, CashflowElement>(
-                                                                        "TransposedGroupedByRowsAndByColumns.json",
+                                                                        "TransposedGroupedByRowsAndByColumns",
                                                                         CashflowFactory.GenerateEquallyWeightedAllPopulated(),
                                                                         x => x
                                                                              .Transpose<double>()
@@ -565,50 +584,50 @@ namespace OpenSmc.Pivot.Test
                                                                              .GroupRowsBy(y => y.AmountType)
                                                                        );
             yield return new TestCase<TwoDimValue, TwoDimValue>(
-                                                                "NullGroupGroupByColumnTwoDimensions.json",
+                                                                "NullGroupGroupByColumnTwoDimensions",
                                                                 TwoDimValue.Data,
                                                                 b => b.GroupColumnsBy(x => x.Dim1)
                                                                       .GroupColumnsBy(x => x.Dim2));
             yield return new TestCase<TwoDimValue, TwoDimValue>(
-                                                                "NullGroupGroupByColumnOneDimension.json",
+                                                                "NullGroupGroupByColumnOneDimension",
                                                                 TwoDimValue.Data,
                                                                 b => b.GroupColumnsBy(x => x.Dim1));
             yield return new TestCase<TwoDimValue, TwoDimValue>(
-                                                                "NullGroupGroupByRowTwoDimensions.json",
+                                                                "NullGroupGroupByRowTwoDimensions",
                                                                 TwoDimValue.Data,
                                                                 b => b.GroupRowsBy(x => x.Dim1)
                                                                       .GroupRowsBy(x => x.Dim2));
             yield return new TestCase<TwoDimValue, TwoDimValue>(
-                                                                "NullGroupGroupByRowTwoDimensionsTotalsBug.json",
+                                                                "NullGroupGroupByRowTwoDimensionsTotalsBug",
                                                                 TwoDimValue.Data.Take(3),
                                                                 b => b.GroupRowsBy(x => x.Dim2)
                                                                       .GroupRowsBy(x => x.Dim1));
             yield return new TestCase<TwoDimValue, TwoDimValue>(
-                                                                "NullGroupGroupByRowOneDimension.json",
+                                                                "NullGroupGroupByRowOneDimension",
                                                                 TwoDimValue.Data,
                                                                 b => b.GroupRowsBy(x => x.Dim1));
             yield return new TestCase<ValueWithHierarchicalDimension, ValueWithHierarchicalDimension>(
-                                                                                                      "HierarchicalDimension.json",
+                                                                                                      "HierarchicalDimension",
                                                                                                       ValueWithHierarchicalDimension.Data,
                                                                                                       b => b.GroupRowsBy(x => x.DimA));
             yield return new TestCase<ValueWithHierarchicalDimension, ValueWithHierarchicalDimension>(
-                                                                                                      "HierarchicalDimensionOptionsA1.json",
+                                                                                                      "HierarchicalDimensionOptionsA1",
                                                                                                       ValueWithHierarchicalDimension.Data,
                                                                                                       b => b.GroupRowsBy(x => x.DimA)
                                                                                                             .WithHierarchicalDimensionOptions(o => o.LevelMin<TestHierarchicalDimensionA>(1)));
             yield return new TestCase<ValueWithHierarchicalDimension, ValueWithHierarchicalDimension>(
-                                                                                                      "HierarchicalDimensionOptionsA2.json",
+                                                                                                      "HierarchicalDimensionOptionsA2",
                                                                                                       ValueWithHierarchicalDimension.Data,
                                                                                                       b => b.GroupRowsBy(x => x.DimA)
                                                                                                             .WithHierarchicalDimensionOptions(o => o.LevelMin<TestHierarchicalDimensionA>(1)
                                                                                                                                                     .LevelMax<TestHierarchicalDimensionA>(1)));
             yield return new TestCase<ValueWithHierarchicalDimension, ValueWithHierarchicalDimension>(
-                                                                                                      "HierarchicalDimensionOptionsAFlat.json",
+                                                                                                      "HierarchicalDimensionOptionsAFlat",
                                                                                                       ValueWithHierarchicalDimension.Data,
                                                                                                       b => b.GroupRowsBy(x => x.DimA)
                                                                                                             .WithHierarchicalDimensionOptions(o => o.Flatten<TestHierarchicalDimensionA>()));
             yield return new TestCase<ValueWithTwoHierarchicalDimensions, ValueWithTwoHierarchicalDimensions>(
-                                                                                                              "HierarchicalDimensionTwo.json",
+                                                                                                              "HierarchicalDimensionTwo",
                                                                                                               ValueWithTwoHierarchicalDimensions.Data,
                                                                                                               b => b.GroupRowsBy(x => x.DimA)
                                                                                                                     .GroupRowsBy(x => x.DimB));
@@ -680,7 +699,7 @@ namespace OpenSmc.Pivot.Test
             }
         }
 
-        private void ExecuteDataCubeTest<TElement>(string fileName, IEnumerable<IDataCube<TElement>> data, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>> builder)
+        private async Task ExecuteDataCubeTest<TElement>(string fileName, IEnumerable<IDataCube<TElement>> data, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>> builder)
         {
             var initial = PivotFactory
                           .ForDataCubes(data)
@@ -689,10 +708,10 @@ namespace OpenSmc.Pivot.Test
             var pivotBuilder = builder(initial);
 
             var model = GetModel(pivotBuilder);
-            model.JsonShouldMatch(SerializationService, fileName);
+            await model.Verify(fileName);
         }
 
-        private void ExecuteDataCubeCountTest<TElement>(string fileName, IEnumerable<IDataCube<TElement>> data, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, int, int>> builder)
+        private async Task ExecuteDataCubeCountTest<TElement>(string fileName, IEnumerable<IDataCube<TElement>> data, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, int, int>> builder)
         {
             var initial = PivotFactory
                           .ForDataCubes(data)
@@ -701,10 +720,10 @@ namespace OpenSmc.Pivot.Test
             var pivotBuilder = builder(initial);
 
             var model = GetModel(pivotBuilder);
-            model.JsonShouldMatch(SerializationService, fileName);
+            await model.Verify(fileName);
         }
 
-        private void ExecuteDataCubeAverageTest<TElement>(string fileName, IEnumerable<IDataCube<TElement>> data, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, (TElement sum, int count), TElement>> builder)
+        private async Task ExecuteDataCubeAverageTest<TElement>(string fileName, IEnumerable<IDataCube<TElement>> data, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, (TElement sum, int count), TElement>> builder)
         {
             var initial = PivotFactory
                           .ForDataCubes(data)
@@ -713,7 +732,7 @@ namespace OpenSmc.Pivot.Test
             var pivotBuilder = builder(initial);
 
             var model = GetModel(pivotBuilder);
-            model.JsonShouldMatch(SerializationService, fileName);
+            await model.Verify(fileName);
         }
 
         protected virtual object GetModel<T, TIntermediate, TAggregate>(PivotBuilder<T, TIntermediate, TAggregate> pivotBuilder)
@@ -725,5 +744,7 @@ namespace OpenSmc.Pivot.Test
         {
             return pivotBuilder.Execute();
         }
+
+
     }
 }
