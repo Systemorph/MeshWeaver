@@ -105,6 +105,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DomainDesigner.Exce
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Pivot.Test", "test\OpenSmc.Pivot.Test\OpenSmc.Pivot.Test.csproj", "{699AF08A-FA0F-4021-B92C-4F83CF8E5B5F}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Import", "src\OpenSmc.Import\OpenSmc.Import.csproj", "{8AA4FE80-28A8-4778-96F8-5EC2D7D49D8C}"
+EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Json.Assertions", "test\OpenSmc.Json.Assertions\OpenSmc.Json.Assertions.csproj", "{15AD99F5-7B41-4DBF-8C4D-0A69CAB557D9}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DataSetReader.Csv", "src\OpenSmc.DataSetReader.Csv\OpenSmc.DataSetReader.Csv.csproj", "{76FE9D01-8916-46B2-84C8-C518DBFC37EA}"
@@ -122,6 +124,8 @@ EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Scopes.DataCubes", "src\OpenSmc.Scopes.DataCubes\OpenSmc.Scopes.DataCubes.csproj", "{127C5840-E91E-4073-A406-F17F99CFC046}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Project.Contract", "src\OpenSmc.Project.Contract\OpenSmc.Project.Contract.csproj", "{14F37AC8-41AC-4F42-8A64-B673FB48D104}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Activities", "src\OpenSmc.Activities\OpenSmc.Activities.csproj", "{DA956DA1-471F-4B92-A8E0-A10E632A4336}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Workspace", "src\OpenSmc.Workspace\OpenSmc.Workspace.csproj", "{9F168331-ACE1-4E8A-8253-280A80518630}"
 EndProject
@@ -315,6 +319,10 @@ Global
 		{699AF08A-FA0F-4021-B92C-4F83CF8E5B5F}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{699AF08A-FA0F-4021-B92C-4F83CF8E5B5F}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{699AF08A-FA0F-4021-B92C-4F83CF8E5B5F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8AA4FE80-28A8-4778-96F8-5EC2D7D49D8C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8AA4FE80-28A8-4778-96F8-5EC2D7D49D8C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8AA4FE80-28A8-4778-96F8-5EC2D7D49D8C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8AA4FE80-28A8-4778-96F8-5EC2D7D49D8C}.Release|Any CPU.Build.0 = Release|Any CPU
 		{15AD99F5-7B41-4DBF-8C4D-0A69CAB557D9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{15AD99F5-7B41-4DBF-8C4D-0A69CAB557D9}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{15AD99F5-7B41-4DBF-8C4D-0A69CAB557D9}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -351,6 +359,10 @@ Global
 		{14F37AC8-41AC-4F42-8A64-B673FB48D104}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{14F37AC8-41AC-4F42-8A64-B673FB48D104}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{14F37AC8-41AC-4F42-8A64-B673FB48D104}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DA956DA1-471F-4B92-A8E0-A10E632A4336}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DA956DA1-471F-4B92-A8E0-A10E632A4336}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DA956DA1-471F-4B92-A8E0-A10E632A4336}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DA956DA1-471F-4B92-A8E0-A10E632A4336}.Release|Any CPU.Build.0 = Release|Any CPU
 		{9F168331-ACE1-4E8A-8253-280A80518630}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{9F168331-ACE1-4E8A-8253-280A80518630}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{9F168331-ACE1-4E8A-8253-280A80518630}.Release|Any CPU.ActiveCfg = Release|Any CPU

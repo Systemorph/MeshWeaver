@@ -1,6 +1,5 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
-	  <ProjectReference Include="..\OpenSmc.Collections\OpenSmc.Collections.csproj" />
 	  <ProjectReference Include="..\OpenSmc.DataSource.Abstractions\OpenSmc.DataSource.Abstractions.csproj" />
 	  <ProjectReference Include="..\OpenSmc.Equality\OpenSmc.Equality.csproj" />
 	  <ProjectReference Include="..\OpenSmc.ServiceProvider\OpenSmc.ServiceProvider.csproj" />
