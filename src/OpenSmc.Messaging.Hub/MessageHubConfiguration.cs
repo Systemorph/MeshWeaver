@@ -83,6 +83,7 @@ public record MessageHubConfiguration
     protected virtual ServiceCollection ConfigureServices<TAddress>(IMessageHub parent)
     {
         var services = new ServiceCollection();
+        services.Replace(ServiceDescriptor.Singleton<MessageHubConnections>(_ => new()));
         services.Replace(ServiceDescriptor.Singleton<IMessageHub>(sp => new MessageHub<TAddress>(sp, sp.GetRequiredService<HostedHubsCollection>(), this, parent)));
         services.Replace(ServiceDescriptor.Singleton<HostedHubsCollection, HostedHubsCollection>());
         services.Replace(ServiceDescriptor.Singleton(typeof(IEventsRegistry),
@@ -121,10 +122,11 @@ public record MessageHubConfiguration
         // TODO V10: Check whether this address is already built in hosted hubs collection, if not build. (18.01.2024, Roland Buergi)
         var parentHub = ParentServiceProvider.GetService<ParentMessageHub>()?.Value;
         CreateServiceProvider<TAddress>(parentHub);
-        
+        var parentHubs = ParentServiceProvider.GetService<HostedHubsCollection>();
 
         HubInstance = ServiceProvider.GetRequiredService<IMessageHub>();
-
+        if(parentHubs != null)
+            parentHubs.Add(HubInstance);
         return HubInstance;
     }
 
@@ -134,34 +136,6 @@ public record StartConfiguration(object Address)
 {
     internal ImmutableList<object> CreationObjects { get; init; } = ImmutableList<object>.Empty;
     public StartConfiguration WithCreateMessage(object instance) => this with { CreationObjects = CreationObjects.Add(instance) };
-}
-
-public record RoutedHubConfiguration
-{
-    public IMessageHub Hub { get; init; }
-    internal ImmutableList<MessageRouteConfiguration> MessageRoutes { get; init; }
-    internal ImmutableList<IForwardConfigurationItem> ForwardConfigurationItems { get; init; }
-    internal ImmutableList<Func<IMessageHub, IForwardConfigurationItem>> ForwardConfigurationFunctions = ImmutableList<Func<IMessageHub, IForwardConfigurationItem>>.Empty;
-
-
-    public RoutedHubConfiguration ForwardToTarget<TMessage>(object address, Func<ForwardConfigurationItem<TMessage>, ForwardConfigurationItem<TMessage>> config = null)
-    {
-        return this with
-        {
-            ForwardConfigurationFunctions = ForwardConfigurationFunctions.Add(host =>
-            {
-                var ret = new ForwardConfigurationItem<TMessage>();
-                if (config != null)
-                    ret = config.Invoke(ret);
-                return ret;
-            })
-        };
-    }
-
-    public RoutedHubConfiguration Buildup(IMessageHub host) => this with
-    {
-        ForwardConfigurationItems = ForwardConfigurationFunctions.Select(c => c.Invoke(host)).ToImmutableList(),
-    };
 }
 
 public abstract record MessageRouteConfiguration(Func<IMessageDelivery, object> AddressMap, IMessageHub Host) : IForwardConfigurationItem
@@ -189,14 +163,5 @@ public abstract record MessageRouteConfiguration(Func<IMessageDelivery, object> 
     }
 }
 
-
-public record MessageRouteConfiguration<TMessage>(Func<IMessageDelivery, object> AddressMap, IMessageHub Host) : MessageRouteConfiguration(AddressMap, Host)
-{
-    public MessageRouteConfiguration<TMessage> WithFilter(Func<IMessageDelivery<TMessage>, bool> filter) => this with { Filter = filter };
-    internal Func<IMessageDelivery<TMessage>, bool> Filter { get; init; } = _ => true;
-
-    protected bool AddressFilter(IMessageDelivery delivery) => (delivery.Target == null || delivery.Target.Equals(Host.Address));
-    protected override bool Applies(IMessageDelivery delivery) => AddressFilter(delivery) && delivery is IMessageDelivery<TMessage> typedDelivery && Filter(typedDelivery);
-}
 
 internal record MessageHandlerItem(Type MessageType, Func<IMessageHub, IMessageDelivery, Task<IMessageDelivery>> AsyncDelivery);

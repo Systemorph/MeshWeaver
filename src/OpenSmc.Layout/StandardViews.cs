@@ -13,7 +13,7 @@ public static class StandardViews
     public static string ActivityLogViewId = nameof(ActivityLogViewId); 
     public static string CloseButtonId = nameof(CloseButtonId); 
 
-    public static LayoutStackControl RenderLog(this ActivityLog log)
+    public static Composition.Layout RenderLog(this ActivityLog log)
     {
         IconControl icon = log.Status switch 
         {
@@ -67,7 +67,7 @@ public static class StandardViews
         return stack;
     }
 
-    public static LayoutStackControl RenderImportButton(string title, string description, string buttonArea, object address, string buttonId)
+    public static Composition.Layout RenderImportButton(string title, string description, string buttonArea, object address, string buttonId)
     {
         return Stack()
                .WithStyle(x => x.WithMinWidth(120))
@@ -94,12 +94,12 @@ public static class StandardViews
                    : colorPickerFunction(log.Category);
     }
 
-    public static LayoutStackControl VerticalStackWithGap(this LayoutStackControl control, string gap = "16px") => control.WithSkin(Skin.VerticalPanel)
+    public static Composition.Layout VerticalStackWithGap(this Composition.Layout control, string gap = "16px") => control.WithSkin(Skin.VerticalPanel)
                                                                                        .WithStyle(style => style.WithGap(gap));
 
-    public static LayoutStackControl DialogBodyStack() => Stack().WithDialogBodyStyle();
+    public static Composition.Layout DialogBodyStack() => Stack().WithDialogBodyStyle();
 
-    public static LayoutStackControl WithDialogBodyStyle(this LayoutStackControl stack)
+    public static Composition.Layout WithDialogBodyStyle(this Composition.Layout stack)
         => stack
            .WithSkin("HorizontalPanel")
            .WithStyle(style => style.WithGap("24px")

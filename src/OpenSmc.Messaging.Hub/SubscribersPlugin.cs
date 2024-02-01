@@ -1,44 +1,78 @@
-﻿namespace OpenSmc.Messaging;
+﻿using Microsoft.Extensions.DependencyInjection;
 
-public class SubscribersPlugin : MessageHubPlugin<SubscribersPlugin>
+namespace OpenSmc.Messaging;
+
+public record MessageHubConnections
 {
-    private readonly HashSet<object> subscribers = new();
-    private readonly HashSet<Type> subscribedTo = new();
+    public HashSet<object> Subscribers { get; } = new();
+    public HashSet<object> Subscriptions { get; } = new();
+}
 
-    public SubscribersPlugin(IServiceProvider serviceProvider, IMessageHub hub) : base(hub)
+public class SubscribersPlugin : MessageHubPlugin<SubscribersPlugin, MessageHubConnections>
+{
+
+    public SubscribersPlugin(IMessageHub hub) : base(hub)
     {
-        Register(ForwardMessageAsync);
+        Register(ForwardMessage);
+    }
+
+    public override async Task StartAsync()
+    {
+        await base.StartAsync();
+        InitializeState(Hub.ServiceProvider.GetRequiredService<MessageHubConnections>());
     }
 
     public override bool Filter(IMessageDelivery d) => true;
 
-    private Task<IMessageDelivery> ForwardMessageAsync(IMessageDelivery delivery)
+    private IMessageDelivery ForwardMessage(IMessageDelivery delivery)
     {
-        var weSending = delivery.Sender == null || Hub.Address.Equals(delivery.Sender);
+        var usSending = delivery.Sender == null || Hub.Address.Equals(delivery.Sender);
         var sentToUs = delivery.Target == null || Hub.Address.Equals(delivery.Target);
-
-        if (weSending && sentToUs)
-            return Task.FromResult(delivery);
-
-        if (weSending && !MessageTargets.Subscribers.Equals(delivery.Target))
+        switch (delivery)
         {
-            subscribedTo.Add(delivery.Target.GetType());
+            case { Target: MessageTargets.Subscribers }:
+                if (!usSending)
+                    throw new RoutingException("Trying to send to subscribers from outside hub.");
+                return Forward(delivery, State.Subscribers.ToArray());
+
+            case { Target: MessageTargets.Subscriptions }:
+                if (!usSending)
+                    throw new RoutingException("Trying to send to subscribers from outside hub.");
+
+                return Forward(delivery, State.Subscriptions.ToArray());
+
+            case { Message: DisconnectHubRequest }:
+                return HandleDisconnect(delivery);
+
+
         }
 
-        if (sentToUs && delivery.Sender != null && !subscribedTo.Contains(delivery.Sender.GetType()))
+
+        if (sentToUs)
         {
-            subscribers.Add(delivery.Sender);
+            if (!usSending && !State.Subscriptions.Contains(delivery.Sender))
+                State.Subscribers.Add(delivery.Sender);
+
+            return delivery;
         }
 
-        if (MessageTargets.Subscribers.Equals(delivery.Target))
-        {
-            foreach (var forwardAddress in subscribers.ToArray())
-            {
-                Hub.DeliverMessage(delivery.WithRoutedTarget(forwardAddress)); // TODO V10: order will be broken because handling will be scheduled (23.01.2024, Alexander Yolokhov)
-            }
-        }
+        if (!State.Subscribers.Contains(delivery.Target))
+            State.Subscriptions.Add(delivery.Target);
 
-        return Task.FromResult(delivery);
+        return delivery;
     }
 
+    private IMessageDelivery HandleDisconnect(IMessageDelivery delivery)
+    {
+        State.Subscribers.Remove(delivery.Sender);
+        State.Subscriptions.Remove(delivery.Sender);
+        return delivery.Processed();
+    }
+
+    private IMessageDelivery Forward(IMessageDelivery delivery, object[] addresses)
+    {
+        foreach (var forwardAddress in addresses)
+            Hub.DeliverMessage(delivery.WithRoutedTarget(forwardAddress)); 
+        return delivery.Forwarded();
+    }
 }

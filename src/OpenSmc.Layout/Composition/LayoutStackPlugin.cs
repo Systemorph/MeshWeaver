@@ -7,9 +7,8 @@ using OpenSmc.ServiceProvider;
 namespace OpenSmc.Layout.Composition;
 
 public class LayoutStackPlugin(IMessageHub hub) :
-    UiControlPlugin<LayoutStackControl>(hub),
-    IMessageHandler<SetAreaRequest>,
-    IMessageHandler<LayoutStackUpdateRequest>
+    UiControlPlugin<Layout>(hub),
+    IMessageHandler<SetAreaRequest>
 
 {
     [Inject] private IUiControlService uiControlService;
@@ -20,11 +19,17 @@ public class LayoutStackPlugin(IMessageHub hub) :
         this.layoutDefinition = layoutDefinition;
     }
 
-    public override LayoutStackControl StartupState()
+    public Layout StartupState()
     {
         if (layoutDefinition?.InitialState == null)
             return null;
         return layoutDefinition.InitialState with { Hub = hub1, Address = hub1.Address };
+    }
+
+    public override async Task StartAsync()
+    {
+        await base.StartAsync();
+        InitializeState(StartupState());
     }
 
     private AreaChangedEvent GetArea(string area)
@@ -32,7 +37,7 @@ public class LayoutStackPlugin(IMessageHub hub) :
         return Control.Areas.FirstOrDefault(x => x.Area == area);
     }
 
-    protected AreaChangedEvent SetAreaImpl(object view, ViewDefinition viewDefinition, string path, SetAreaOptions options)
+    protected AreaChangedEvent SetAreaImpl(IMessageDelivery request, object view, ViewDefinition viewDefinition, string path, SetAreaOptions options)
     {
         var area = options.Area;
         var deleteView = view == null && viewDefinition == null && path == null;
@@ -46,32 +51,33 @@ public class LayoutStackPlugin(IMessageHub hub) :
         if (deleteView)
             return null;
 
+        viewDefinition ??= view as ViewDefinition;
+
         if (path != null)
-            view = GetViewByPath(path, options);
+            viewDefinition = GetViewDefinition(request);
 
         var control = viewDefinition != null
                           ? Controls.RemoteView(viewDefinition, options)
                           : view as UiControl ?? uiControlService.GetUiControl(view);
 
 
-        control = CreateUiControlHub(control, area);
+        control = CreateUiControlHub(control);
         Hub.ConnectTo(control.Hub);
         var ret = new AreaChangedEvent(area, control, options.AreaViewOptions);
         UpdateState(state => state.SetAreaToState(ret));
-        Post(ret, x => x.WithTarget(MessageTargets.Subscribers));
+        //Post(ret, x => x.WithTarget(MessageTargets.Subscribers));
 
         return ret;
     }
 
-    private object GetViewByPath(string path, SetAreaOptions options)
+    private ViewDefinition GetViewDefinition(IMessageDelivery request)
     {
-        var request = new RefreshRequest { Path = path, Options = options };
         var generator = layoutDefinition.ViewGenerators.FirstOrDefault(g => g.Filter(request));
-        return generator?.Generator(request);
+        return options => Task.FromResult(new ViewElementWithView(generator?.Generator(request, options), options));
     }
 
 
-    public override void InitializeState(LayoutStackControl control)
+    public override void InitializeState(Layout control)
     {
         if(control == null) return;
         base.InitializeState(control);
@@ -79,12 +85,12 @@ public class LayoutStackPlugin(IMessageHub hub) :
                                  .Select
                                      (
                                       a => a is ViewElementWithView { View: not null } vv
-                                                     ? SetAreaImpl(vv.View, null, null, vv.Options)
+                                                     ? SetAreaImpl(null, vv.View, null, null, vv.Options)
                                                      : a is ViewElementWithViewDefinition { ViewDefinition: not null } vd
-                                                         ? SetAreaImpl(null, vd.ViewDefinition, null, vd.Options)
+                                                         ? SetAreaImpl(null, null, vd.ViewDefinition, null, vd.Options)
                                                          :
                                                          a is ViewElementWithPath vp
-                                                             ? SetAreaImpl(null, null, vp.Path, vp.Options)
+                                                             ? SetAreaImpl(null, null, null, vp.Path, vp.Options)
                                                              : new AreaChangedEvent(a.Area, null)
 
                                      )
@@ -97,8 +103,14 @@ public class LayoutStackPlugin(IMessageHub hub) :
 
     IMessageDelivery IMessageHandler<SetAreaRequest>.HandleMessage(IMessageDelivery<SetAreaRequest> request)
     {
-        var areaChanged = SetAreaImpl(request.Message.View, request.Message.ViewDefinition, request.Message.Path, request.Message.Options);
-        Post(areaChanged ?? new AreaChangedEvent(request.Message.Area, null), o => o.ResponseFor(request.Message.ForwardedRequest ?? request).WithTarget(MessageTargets.Subscribers));
+        return SetArea(request, request.Message.Area, request.Message.View, request.Message.ViewDefinition, request.Message.Path, request.Message.Options);
+    }
+
+    private IMessageDelivery SetArea(IMessageDelivery request,  string area, object view, ViewDefinition viewDefinition, string path,
+        SetAreaOptions options)
+    {
+        var areaChanged = SetAreaImpl(request, view, viewDefinition, path, options);
+        Post(areaChanged ?? new AreaChangedEvent(area, null), o => o.ResponseFor(request ?? request).WithTarget(MessageTargets.Subscribers));
         return request.Processed();
     }
 
@@ -110,14 +122,14 @@ public class LayoutStackPlugin(IMessageHub hub) :
 
         if (areaChanged == null)
         {
-            var view = CreateView(request);
+            var view = GetViewDefinition(request);
             if (view == null)
             {
                 Post(new AreaChangedEvent(request.Message.Area, null), o => o.ResponseFor(request));
                 return request.Processed();
             }
 
-            UpdateState(s => s with { AreasImpl = s.AreasImpl.Add(new(request.Message.Area, new SpinnerControl())) });
+            UpdateState(s => s with { AreasImpl = s.AreasImpl.Add(new(request.Message.Area, Controls.Spinner())) });
             return SetArea(request, view);
         }
 
@@ -126,11 +138,12 @@ public class LayoutStackPlugin(IMessageHub hub) :
     }
 
     protected IMessageDelivery SetArea(IMessageDelivery<RefreshRequest> request, object view)
-        => SetArea(request, view, new(request.Message.Area));
+        => SetArea(request, request.Message.Area, view, new(request.Message.Area));
 
-    protected IMessageDelivery SetArea(IMessageDelivery request, object view, SetAreaOptions options)
+    protected IMessageDelivery SetArea(IMessageDelivery request, string area, object view, SetAreaOptions options)
     {
-        Post(GetSetAreaRequest(request, options, view), o => o.WithRequestIdFrom(request));
+
+        SetArea(request, area, view, null, null, options);
         return request.Processed();
     }
 
@@ -197,37 +210,21 @@ public class LayoutStackPlugin(IMessageHub hub) :
     // ReSharper disable once UnusedMethodReturnValue.Local
     private static async Task<ViewElementWithView> AwaitTask<T>(SetAreaOptions options, Task<T> task) => new(await task, options);
 
-    protected virtual object CreateView(IMessageDelivery<RefreshRequest> request)
-    {
-        var generator = layoutDefinition.ViewGenerators.FirstOrDefault(g => g.Filter(request.Message));
-        return generator?.Generator.Invoke(request.Message);
-    }
 
 
 
-    IMessageDelivery IMessageHandler<LayoutStackUpdateRequest>.HandleMessage(IMessageDelivery<LayoutStackUpdateRequest> request)
-    {
-        var (updatedView, action) = request.Message;
-        action(Hub, State.Areas, updatedView.ViewElements.OfType<ViewElementWithView>());
-        return request.Processed();
-    }
-
-    public override bool IsDeferred(IMessageDelivery delivery)
-    {
-        return base.IsDeferred(delivery);
-    }
 }
 
-internal record ViewGenerator(Func<RefreshRequest, bool> Filter, Func<RefreshRequest, object> Generator);
+internal record ViewGenerator(Func<IMessageDelivery, bool> Filter, Func<IMessageDelivery, SetAreaOptions, object> Generator);
 
 public record LayoutDefinition(IMessageHub Hub) : MessageHubModuleConfiguration
 {
-    internal LayoutStackControl InitialState { get; init; }
+    internal Layout InitialState { get; init; }
     internal ImmutableList<ViewGenerator> ViewGenerators { get; init; } = ImmutableList<ViewGenerator>.Empty;
-    public LayoutDefinition WithInitialState(LayoutStackControl initialState) => this with { InitialState = initialState };
-    public LayoutDefinition WithGenerator(Func<RefreshRequest, bool> filter, Func<RefreshRequest, object> viewGenerator) => this with { ViewGenerators = ViewGenerators.Add(new(filter, viewGenerator)) };
+    public LayoutDefinition WithInitialState(Layout initialState) => this with { InitialState = initialState };
+    public LayoutDefinition WithGenerator(Func<IMessageDelivery, bool> filter, Func<IMessageDelivery, SetAreaOptions, object> viewGenerator) => this with { ViewGenerators = ViewGenerators.Add(new(filter, viewGenerator)) };
 
-    public LayoutDefinition WithView(string area, Func<RefreshRequest, object> generator) =>
-        WithGenerator(r => r.Area == area, generator);
+    public LayoutDefinition WithView(string area, Func<IMessageDelivery, SetAreaOptions, object> generator) =>
+        WithGenerator(r => r.Message is IRequestWithArea requestWithArea && requestWithArea.Area == area, generator);
 
 }

@@ -16,10 +16,16 @@ public class HostedHubsCollection : IAsyncDisposable
 
     public IMessageHub GetHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
     {
-        if (messageHubs.TryGetValue(address, out var hub))
-            return hub;
-        return messageHubs[address] = CreateHub(address, config);
+        lock (locker)
+        {
+            if (messageHubs.TryGetValue(address, out var hub))
+                return hub;
+            return messageHubs[address] = CreateHub(address, config);
+        }
     }
+
+    public void Add(IMessageHub hub)
+        => messageHubs[hub.Address] = hub;
 
     private IMessageHub CreateHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
     {

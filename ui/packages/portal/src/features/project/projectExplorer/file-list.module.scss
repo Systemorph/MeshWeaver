@@ -1,0 +1,245 @@
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+.list {
+    margin: 0;
+    margin-top: 13px;
+    padding: 0;
+    list-style: none;
+    font-family: $overpass-font;
+    font-weight: 400;
+    font-size: 15px;
+    line-height: 16px;
+    color: $gunmetal;
+}
+
+.item {
+    height: 28px;
+    padding: 0 6px;
+    border-radius: 4px;
+    margin-bottom: 4px;
+    position: relative;
+
+    &:hover {
+        background-color: rgba($bright-gray, 0.5);
+
+        .more {
+            visibility: visible;
+        }
+    }
+}
+
+.active {
+    background: rgba($popsicle-blue, 0.5);
+    color: $brandeis-blue;
+
+    a {
+        color: $brandeis-blue;
+    }
+
+    &:hover {
+        background: rgba($popsicle-blue, 0.5);
+        color: $brandeis-blue;
+
+        a {
+            color: $brandeis-blue;
+        }
+    }
+}
+
+.editMode {
+    background: white;
+    color: $gunmetal;
+
+    &:hover {
+        background: white;
+        color: $gunmetal;
+    }
+}
+
+.wrapper {
+    display: flex;
+    align-items: center;
+    width: 100%;
+
+    i {
+        width: 16px;
+        height: 16px;
+        margin-right: 8px;
+    }
+}
+
+.link {
+    height: 28px;
+    padding: 6px 0;
+    padding-top: 7px;
+    padding-right: 18px;
+    text-decoration: none;
+    color: $gunmetal;
+    display: block;
+    width: 100%;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.breadcrumbs {
+    margin-top: 20px;
+    padding: 4px 5px;
+    padding-bottom: 0;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.breadcrumb {
+    color: $gunmetal;
+    margin: 0 2px;
+    margin-bottom: 4px;
+    cursor: pointer;
+
+    &:last-of-type {
+        cursor: unset;
+    }
+
+    &:hover {
+        color: $dark-silver;
+    }
+}
+
+.rootBreadcrumb:global(.active) {
+    color: $dark-silver;
+    cursor: unset;
+
+    &:hover {
+        color: $dark-silver;
+    }
+}
+
+.breadcrumb:global(.active) {
+    color: $brandeis-blue;
+    cursor: pointer;
+
+    &:hover {
+        color: $brandeis-blue;
+    }
+}
+
+.separator {
+    color: $silver-sand;
+    margin: 0 2px;
+    margin-bottom: 4px;
+}
+
+.rootBreadcrumb {
+    align-self: center;
+    width: 16px;
+    height: 16px;
+    font-size: 16px;
+    border: none;
+    background-color: white;
+    border-radius: 4px;
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    margin-right: 2px;
+    cursor: pointer;
+    margin-bottom: 4px;
+
+    i {
+        font-size: 16px;
+    }
+
+    &:hover {
+        color: $brandeis-blue;
+    }
+}
+
+.more {
+    visibility: hidden;
+    position: absolute;
+    right: 8px;
+    height: 16px;
+    width: 16px;
+    align-self: center;
+    font-size: 14px;
+    background-color: transparent;
+
+    &:hover {
+        color: $brandeis-blue;
+    }
+
+    &:active {
+        color: $brandeis-blue;
+    }
+}
+
+.menu {
+    background-color: white;
+    padding: 8px 0;
+    border: 1px solid $brandeis-blue;
+    box-shadow: 0 8px 24px rgba(41, 43, 54, 0.14), 0 4px 4px rgba(41, 43, 54, 0.05);
+    border-radius: 4px;
+    transform: translate(-158px, 1px);
+    width: 173px;
+}
+
+.rename {
+    width: 100%;
+    height: 28px;
+    border: 1px solid $brandeis-blue;
+    border-radius: 4px;
+    padding: 6px 8px;
+    outline: none;
+    z-index: 1;
+    font-family: $overpass-font;
+    font-weight: 400;
+    font-size: 15px;
+    line-height: 16px;
+}
+
+.emptyWrapper {
+    display: flex;
+    margin-top: 200px;
+    flex-direction: column;
+    align-items: center;
+}
+
+.title {
+    font-weight: 700;
+    font-size: 14px;
+    line-height: 24px;
+    color: $gunmetal;
+}
+
+.subtitle {
+    font-family: $roboto-font;
+    font-weight: 400;
+    font-size: 12px;
+    line-height: 16px;
+    color: $dark-silver;
+}
+
+.upload {
+    font-family: $roboto-font;
+    font-weight: 500;
+    font-size: 12px;
+    line-height: 16px;
+    letter-spacing: 0.02em;
+    text-decoration-line: underline;
+    text-transform: uppercase;
+    color: $brandeis-blue;
+    cursor: pointer;
+}
+
+.uploadWrapper {
+    margin-top: 32px;
+    display: flex;
+
+    i {
+        font-size: 16px;
+        margin-right: 2px;
+        color: $brandeis-blue;
+        cursor: pointer;
+    }
+}

@@ -1,0 +1,14 @@
+@use "sass:map";
+@use "./icons" as sm;
+
+@function get-icon($s, $icons: sm.$icons) {
+	$output : false;
+
+	@if map.has-key($icons, $s) {
+		$output : map.get($icons, $s);
+	} @else {
+		@error "We do not have '#{$s}' icon yet";
+	}
+
+	@return $output;
+}

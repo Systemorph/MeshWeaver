@@ -1,0 +1,64 @@
+@use "../theme/variables" as *;
+
+.rc-dropdown {
+    font-family: $overpass-font;
+    position: absolute;
+    left: -9999px;
+    top: -9999px;
+    z-index: 1070;
+    display: block;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 16px;
+}
+
+.rc-dropdown-hidden {
+    display: none;
+}
+
+div.popupMenu {
+    .rc-menu {
+        outline: none;
+        position: relative;
+        list-style-type: none;
+        background-clip: padding-box;
+        margin: 0;
+        width: 173px;
+        background-color: white;
+        padding: 8px 0;
+        border: 1px solid $brandeis-blue;
+        box-shadow: 0 8px 24px rgba(41, 43, 54, 0.14), 0 4px 4px rgba(41, 43, 54, 0.05);
+        border-radius: 4px;
+        transform: translate(-142px, 12px);
+    }
+
+    .rc-menu > li {
+        font-family: $overpass-font;
+        font-weight: 400;
+        font-size: 14px;
+        line-height: 16px;
+        color: $gunmetal;
+        padding: 8px 16px;
+        display: flex;
+        align-items: center;
+        cursor: pointer;
+
+        &:hover {
+            background-color: rgba($bright-gray, 0.5);
+        }
+
+        span:first-child {
+            font-size: 16px;
+            margin-right: 4px;
+        }
+
+        span:last-child {
+            padding-top: 2px;
+            line-height: 16px;
+        }
+
+        & :global .p-disabled {
+            opacity: 0.33;
+        }
+    }
+}

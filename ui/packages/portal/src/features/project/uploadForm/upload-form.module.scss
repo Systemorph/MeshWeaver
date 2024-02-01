@@ -1,0 +1,107 @@
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+.upload {
+    background-color: rgba($bright-gray, 0.2);
+    border: 1px dashed $silver-sand;
+    border-radius: 4px;
+    height: 194px;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+
+    &:hover {
+        background-color: rgba($popsicle-blue, 0.2);
+        border: 1px dashed $brandeis-blue;
+    }
+}
+
+.hasFiles {
+    height: 112px;
+}
+
+.dragging {
+    background-color: rgba($popsicle-blue, 0.2);
+    border: 1px dashed $brandeis-blue;
+}
+
+.drugDrop {
+    margin: 0;
+    font-family: $roboto-font;
+    font-weight: 500;
+    font-size: 12px;
+    line-height: 16px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: $gunmetal;
+}
+
+.wrapper {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+.drugDropContainer {
+    padding: 0 8px;
+    width: 100%;
+    margin-top: 24px;
+}
+
+.browse {
+    background-color: transparent;
+    margin-top: 8px;
+    color: $brandeis-blue;
+
+    & span:first-child {
+        font-size: 16px;
+        margin-right: 2px;
+    }
+
+    & span:last-child {
+        text-decoration: underline;
+    }
+
+    &:hover {
+        color: $blueberry;
+    }
+}
+
+.text {
+    font-family: $roboto-font;
+    font-weight: 400;
+    font-size: 12px;
+    line-height: 16px;
+    color: $gunmetal;
+    margin-top: 8px;
+}
+
+.files {
+    width: 100%;
+    margin-top: 24px;
+}
+
+.list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+
+    li {
+        margin-bottom: 8px;
+
+        &:last-of-type {
+            margin-bottom: 0;
+        }
+    }
+}
+
+.actions {
+    justify-self: flex-start;
+    display: flex;
+    width: 100%;
+    margin-top: 16px;
+    padding: 0 8px;
+}

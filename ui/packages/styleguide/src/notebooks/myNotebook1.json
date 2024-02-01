@@ -1,0 +1,57 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "source": [
+    "# My notebook"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "source": [
+    "## Subtitle"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "language": "typescript",
+   "source": [
+    "Controls.makeMenuItem()",
+    "\n\t.withTitle(\"Say hello\")",
+    "\n\t.withColor(\"#0171ff\")",
+    "\n\t.withIcon(\"systemorph-fill\")",
+    "\n\t.withClickAction(() => alert(\"Hello\"))",
+    "\n\t.build()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "source": [
+    "public interface IArgs : IMutableScope<string>\n",
+    "{\n",
+    "    string Name {get;set;}\n",
+    "    string InlineGreeting => $\"Hello, {Name ?? \"anonymous\"}\";\n",
+    "}\n",
+    "\n",
+    "public interface IMyState : IMutableScope \n",
+    "{\n",
+    "    IArgs Args => GetScope<IArgs>(\"1\");\n",
+    "    string Greeting => $\"Hello, {Args.Name ?? \"anonymous\"}\";\n",
+    "}"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "source": [
+    "InteractiveObject.CreateView(\"Scope\", state => state.GetScope<IArgs>(\"1\"))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "source": [
+    "InteractiveObject.CreateView(\"View1\", state => state.GetScope<IMyState>().Greeting)"
+   ]
+  }
+ ]
+}

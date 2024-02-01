@@ -1,0 +1,176 @@
+@use "@open-smc/ui-kit/theme/variables" as *;
+
+.outline {
+    padding: 24px 16px;
+}
+
+.heading {
+    margin: 0;
+    font-family: $overpass-font;
+    font-style: normal;
+    font-weight: 600;
+    font-size: 18px;
+    line-height: 24px;
+    color: black;
+}
+
+.list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-family: $roboto-font;
+    font-style: normal;
+    font-weight: 600;
+    font-size: 16px;
+    line-height: 32px;
+    color: $gunmetal;
+    overflow-wrap: break-word;
+}
+
+.link {
+    font-family: $roboto-font;
+    color: inherit;
+    text-decoration: none;
+}
+
+.level {
+    color: $gunmetal;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 24px;
+
+    &:global.level-1 {
+        margin-top: 24px;
+        margin-bottom: 16px;
+        font-weight: 600;
+        font-size: 16px;
+        line-height: 24px;
+        color: $gunmetal;
+    }
+
+    &:global.level-2 {
+        margin-top: 16px;
+        margin-bottom: 16px;
+        line-height: 16px;
+    }
+
+    &:global.level-3,
+    &:global.level-4,
+    &:global.level-5,
+    &:global.level-6 {
+        color: $dark-silver;
+        padding-left: 16px;
+        margin-bottom: 8px;
+        line-height: 18px;
+    }
+
+    &:last-child {
+        margin-bottom: 0;
+    }
+
+    &:hover {
+        color: $brandeis-blue;
+        text-decoration: underline;
+    }
+}
+
+.elementAction {
+    opacity: 0;
+    margin-right: 8px;
+    width: 24px;
+    height: 24px;
+    border: none;
+    font-size: 20px;
+    background: transparent;
+    color: $brandeis-blue;
+}
+
+.newBlock {
+    opacity: 0;
+    padding-top: 2px;
+    font-family: $roboto-font;
+    font-style: italic;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 24px;
+    color: $silver-sand;
+}
+
+.elementMenu {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    position: absolute;
+    opacity: 0;
+    transition: opacity 0.3s;
+    margin-top: -4px;
+    margin-bottom: -4px;
+    z-index: 1;
+    width: 100%;
+
+    &:hover {
+        opacity: 1;
+    }
+
+    &:hover {
+        .elementAction {
+            opacity: 1;
+        }
+    }
+
+    &:hover {
+        .newBlock {
+            opacity: 1;
+        }
+    }
+}
+
+.elementMenu:first-child {
+    top: -16px;
+}
+
+.addBox {
+    display: flex;
+    width: 100%;
+    justify-content: center;
+}
+
+.elementButton {
+    padding: 4px 8px;
+    padding-top: 5px;
+    height: 24px;
+    background: $bright-gray;
+    font-weight: 600;
+    color: $gunmetal;
+    flex-shrink: 0;
+
+    &:first-of-type {
+        margin-right: 8px;
+    }
+
+    &:last-of-type {
+        margin-right: 16px;
+    }
+
+    &:global > :global(.icon) {
+        margin-right: 2px;
+        font-size: 16px;
+    }
+
+    &:hover {
+        box-shadow: 0px 0px 1px rgba(41, 43, 54, 0.24), 0px 1px 4px rgba(41, 43, 54, 0.08);
+        color: $dark-silver;
+    }
+}
+
+:global(.elementsContainer:last-child) .elementMenu {
+    padding-bottom: 24px;
+    padding-top: 8px;
+    margin-top: 0;
+}
+
+@media print {
+    .elementMenu {
+        display: none !important;
+    }
+}

@@ -16,7 +16,7 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
     public MessageHubConfiguration Configuration { get; }
     private readonly HostedHubsCollection hostedHubs;
     private readonly IDisposable deferral;
-
+    private readonly MessageHubConnections connections;
     public MessageHub(IServiceProvider serviceProvider, HostedHubsCollection hostedHubs,
         MessageHubConfiguration configuration, IMessageHub parentHub) : base(serviceProvider)
     {
@@ -29,20 +29,19 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         logger = serviceProvider.GetRequiredService<ILogger<MessageHub<TAddress>>>();
 
         Configuration = configuration;
-
+        connections = serviceProvider.GetRequiredService<MessageHubConnections>();
 
         disposeActions.AddRange(configuration.DisposeActions);
 
         var forwardConfig =
             (configuration.ForwardConfigurationBuilder ?? (x => x)).Invoke(new ForwardConfiguration(this));
 
+        AddPlugin(new SubscribersPlugin(this));
+        AddPlugin(new RoutePlugin(this, forwardConfig, parentHub));
 
-        var routePlugin = new RoutePlugin(this, forwardConfig, parentHub);
 
         Register(HandleCallbacks);
 
-        AddPlugin(routePlugin);
-        AddPlugin(new SubscribersPlugin(configuration.ServiceProvider, this));
 
 
         foreach (var messageHandler in configuration.MessageHandlers)
@@ -52,6 +51,19 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         MessageService.Schedule(StartAsync);
         logger.LogInformation("Message hub {address} initialized", Address);
 
+    }
+
+
+    public override async Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery)
+    {
+        delivery = await base.DeliverMessageAsync(delivery);
+        return FinishDelivery(delivery);
+    }
+
+    private IMessageDelivery FinishDelivery(IMessageDelivery delivery)
+    {
+        // TODO V10: Add logging for failed messages, not found, etc. (31.01.2024, Roland Bürgi)
+        return delivery;
     }
 
 
@@ -167,7 +179,7 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
 
     public void Disconnect(IMessageHub hub)
     {
-        Post(new DisconnectHubRequest(Address), o => o.WithTarget(hub.Address));
+        Post(new DisconnectHubRequest(), o => o.WithTarget(hub.Address));
     }
 
     public IMessageDelivery<TMessage> Post<TMessage>(TMessage message, Func<PostOptions, PostOptions> configure = null)
@@ -239,7 +251,45 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
 
         await hostedHubs.DisposeAsync();
 
-        Post(new DisconnectHubRequest(Address));
+        ProperDisconnectFromSubscribers();
+
+    }
+
+    private void ProperDisconnectFromSubscribers()
+    {
+        var allSubscriptions = new HashSet<object>(connections.Subscriptions);
+        foreach (var subscription in allSubscriptions)
+        {
+            RegisterCallback(Post(new DisconnectHubRequest(), o => o.WithTarget(subscription)),
+                response => HandleDisconnectCallback(response, allSubscriptions));
+        }
+
+        Task.Run(async () =>
+        {
+            await Task.Delay(10000);
+            await ShutdownAsync();
+        });
+    }
+
+    private async Task<IMessageDelivery> HandleDisconnectCallback(IMessageDelivery response, HashSet<object> allSubscriptions)
+    {
+        allSubscriptions.Remove(response.Sender);
+        if (allSubscriptions.Count == 0)
+            await ShutdownAsync();
+
+        return response.Processed();
+    }
+
+    private bool isShuttingDown;
+
+    private async Task ShutdownAsync()
+    {
+        lock (locker)
+        {
+            if(isShuttingDown)
+                return;
+            isShuttingDown = true;
+        }
         await MessageService.DisposeAsync();
 
         foreach (var configurationDisposeAction in disposeActions)
