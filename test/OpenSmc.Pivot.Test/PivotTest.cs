@@ -471,7 +471,7 @@ namespace OpenSmc.Pivot.Test
 
 
             yield return new TestCase<SimpleAccountingNamed, SimpleAccountingNamed>(
-                                                                                    "BasicWithCustomRowDefinitions",
+                                                                                    "BasicWithCustomRowDefinitions2",
                                                                                     SimpleAccountingFactory.GetData<SimpleAccountingNamed>(3),
                                                                                     rb => rb);
 

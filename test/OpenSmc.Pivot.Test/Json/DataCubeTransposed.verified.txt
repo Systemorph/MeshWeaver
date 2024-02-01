@@ -1,0 +1,111 @@
+﻿{
+  Columns: [
+    {
+      Coordinates: [
+        Value
+      ],
+      SystemName: Value,
+      DisplayName: Value,
+      GrouperName: ColumnName
+    }
+  ],
+  Rows: [
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR
+        ],
+        SystemName: EUR,
+        DisplayName: Euro,
+        GrouperName: Currency
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR,
+          Value
+        ],
+        SystemName: EUR.Value,
+        DisplayName: Value,
+        GrouperName: PropertyName
+      },
+      Data: {
+        Value: 384.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB
+        ],
+        SystemName: RUB,
+        DisplayName: Russian rouble,
+        GrouperName: Currency
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB,
+          Value
+        ],
+        SystemName: RUB.Value,
+        DisplayName: Value,
+        GrouperName: PropertyName
+      },
+      Data: {
+        Value: 384.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF
+        ],
+        SystemName: CHF,
+        DisplayName: Swiss Franc,
+        GrouperName: Currency
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          Value
+        ],
+        SystemName: CHF.Value,
+        DisplayName: Value,
+        GrouperName: PropertyName
+      },
+      Data: {
+        Value: 384.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD
+        ],
+        SystemName: USD,
+        DisplayName: US Dollar,
+        GrouperName: Currency
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD,
+          Value
+        ],
+        SystemName: USD.Value,
+        DisplayName: Value,
+        GrouperName: PropertyName
+      },
+      Data: {
+        Value: 384.0
+      }
+    }
+  ],
+  HasRowGrouping: true
+}
