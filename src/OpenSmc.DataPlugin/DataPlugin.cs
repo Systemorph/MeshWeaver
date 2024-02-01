@@ -4,7 +4,6 @@ using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 using OpenSmc.ServiceProvider;
 using OpenSmc.Workspace;
-using System.Collections.Immutable;
 
 namespace OpenSmc.DataPlugin;
 
@@ -15,32 +14,7 @@ namespace OpenSmc.DataPlugin;
  *  d) offload saves & deletes to a different hub
  *  e) configure Ifrs Hubs
  */
-public static class DataPluginExtensions
-{
-    public static MessageHubConfiguration AddData(this MessageHubConfiguration configuration,
-        Func<DataPluginConfiguration, DataPluginConfiguration> dataConfiguration)
-        => configuration.AddPlugin(hub => new DataPlugin(hub, configuration, dataConfiguration));
-}
 
-public record DataPluginConfiguration
-{
-    internal ImmutableList<TypeConfiguration> TypeConfigurations { get; private set; }
-
-    public DataPluginConfiguration WithType<T>(
-        Func<Task<IReadOnlyCollection<T>>> initialize,
-        Func<IReadOnlyCollection<T>, Task> save,
-        Func<IReadOnlyCollection<object>, Task> delete)
-        => this with { TypeConfigurations = TypeConfigurations.Add(new TypeConfiguration<T>(initialize, save, delete)) };
-}
-
-public record TypeConfiguration<T>(
-    Func<Task<IReadOnlyCollection<T>>> Initialize,
-    Func<IReadOnlyCollection<T>, Task> Save,
-    Func<IReadOnlyCollection<object>, Task> Delete) : TypeConfiguration;
-
-public abstract record TypeConfiguration();
-
-public record TypeConfigurationWithType<T>(TypeConfiguration<T> TypeConfiguration, Type Type);
 
 
 
