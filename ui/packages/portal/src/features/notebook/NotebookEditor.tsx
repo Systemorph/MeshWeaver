@@ -24,7 +24,7 @@ import { Header } from "./Header";
 import classNames from "classnames";
 import { TableOfContents } from "./TableOfContents";
 import { Elements } from "./Elements";
-import { NotebookSessionDialog } from "./NotebookSessionDialog";
+// import { NotebookSessionDialog } from "./NotebookSessionDialog";
 import { useSubscribeToNewElements } from "./documentStore/hooks/useSubscribeToNewElements";
 import { NotebookElementDto } from "../../controls/ElementEditorControl";
 import { useProject } from "../project/projectStore/hooks/useProject";

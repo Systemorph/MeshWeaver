@@ -1,5 +1,5 @@
 import { PropsWithChildren, useMemo } from "react";
-import { useConnectionStatus } from "./Connection";
+import { useConnectionStatus } from "./SignalrConnectionProvider";
 import { LayoutAddress } from "./application.contract";
 import { AddHub } from "./messageHub/AddHub";
 

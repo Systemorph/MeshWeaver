@@ -14,7 +14,7 @@ import { FormHeader } from "../../../shared/components/sideMenuComponents/FormHe
 import { IdEditorField } from "./IdEditorField";
 import { useSuggestId } from "./useSuggestId";
 import { Button } from "@open-smc/ui-kit/components/Button";
-import { useToast } from "@open-smc/application/useToast";
+import { useToast } from "@open-smc/application/notifications/useToast";
 import classNames from "classnames";
 
 type Props = {

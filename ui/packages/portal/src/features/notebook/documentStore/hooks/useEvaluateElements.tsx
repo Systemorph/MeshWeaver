@@ -1,7 +1,7 @@
 import { useElementsStore, useNotebookEditorStore } from "../../NotebookEditor";
 import { intersection } from "lodash";
 import { useChangeElementContent } from "./useChangeElementContent";
-import { useToast } from "@open-smc/application/useToast";
+import { useToast } from "@open-smc/application/notifications/useToast";
 import { EvaluationStatus } from "../../../../app/notebookFormat";
 import { EvaluateElementsCommand } from "../../notebookEditor/notebookEditor.contract";
 import { validateStatus } from "@open-smc/application/messageHub/validateStatus";

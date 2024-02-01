@@ -1,21 +1,27 @@
-import { PropsWithChildren, useEffect, useMemo, useState } from "react";
+import { JSX, PropsWithChildren, useEffect, useMemo, useState } from "react";
 import { MessageHub } from "./messageHub/MessageHub";
 import { MessageDelivery, SignalrHub } from "./SignalrHub";
 import { filter, map } from "rxjs";
 import { isEqual } from "lodash";
-import { useConnection, useConnectionStatus } from "./Connection";
+import { useConnection, useConnectionStatus } from "./SignalrConnectionProvider";
 import { down, makeLogger, up } from "./logger";
 import { UiAddress } from "./application.contract";
 import { messageRouterContext } from "./messageRouterContext";
+import BlockUi from "@availity/block-ui";
+import "@availity/block-ui/dist/index.css";
+import { v4 } from "uuid";
 
 interface Props {
+    fallback?: () => JSX.Element;
     log?: boolean;
 }
 
-export function SignalrMessageRouter({log, children}: PropsWithChildren & Props) {
+export function SignalrMessageRouter({fallback, log, children}: PropsWithChildren & Props) {
+    const [key, setKey] = useState(v4);
     const connection = useConnection();
-    const {appId} = useConnectionStatus();
+    const {appId, connectionStatus, started} = useConnectionStatus();
     const [signalr] = useState(new SignalrHub(connection));
+    useEffect(() => connection.onReconnected(() => setKey(v4())), [connection]);
 
     const uiAddress = useMemo(() => new UiAddress(appId), [appId]);
 
@@ -53,8 +59,14 @@ export function SignalrMessageRouter({log, children}: PropsWithChildren & Props)
         }
     }, [addHub, uiAddress]);
 
+    if (!started) {
+        return fallback?.();
+    }
+
     return (
-        <messageRouterContext.Provider value={value} children={children}/>
+        <BlockUi blocking={connectionStatus === "Disconnected"} loader={null} key={key}>
+            <messageRouterContext.Provider value={value} children={children}/>
+        </BlockUi>
     );
 }
 

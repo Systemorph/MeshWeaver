@@ -1,10 +1,11 @@
-import { ToastApi } from "./makeToastApi";
 import { useEffect } from "react";
-import { useConnection } from "./Connection";
+import { useConnection } from "./SignalrConnectionProvider";
+import { useToast } from "./notifications/useToast";
 
 const DISCONNECTED_KEY = 'Disconnected';
 
-export function useNotifyOnDisconnected({showToast, closeToast}: ToastApi) {
+export function useNotifyOnDisconnected() {
+    const {showToast, closeToast} = useToast();
     const connection = useConnection();
 
     useEffect(() => {

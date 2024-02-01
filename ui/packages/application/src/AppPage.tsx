@@ -1,23 +1,25 @@
-import { App } from "./App";
 import { useParams } from "react-router-dom";
-import { Connection } from "./Connection";
+import { SignalrConnectionProvider } from "./SignalrConnectionProvider";
 import { SignalrMessageRouter } from "./SignalrMessageRouter";
 import { LayoutHub } from "./LayoutHub";
+import { NotificationProvider } from "./notifications/NotificationProvider";
+import { ControlStarter } from "./ControlStarter";
 
 const log = process.env.NODE_ENV === 'development';
 
 export function AppPage() {
     const {projectId, id} = useParams();
-
     const fallback = () => <div>Loading...</div>;
 
     return (
-        <Connection fallback={fallback}>
-            <SignalrMessageRouter log={log}>
-                <LayoutHub>
-                    <App fallback={fallback} projectId={projectId} id={id}/>
-                </LayoutHub>
-            </SignalrMessageRouter>
-        </Connection>
+        <NotificationProvider>
+            <SignalrConnectionProvider fallback={fallback}>
+                <SignalrMessageRouter fallback={fallback} log={log}>
+                    <LayoutHub>
+                        <ControlStarter area={"app"} path={`application/${projectId}/${id}`}/>
+                    </LayoutHub>
+                </SignalrMessageRouter>
+            </SignalrConnectionProvider>
+        </NotificationProvider>
     );
 }

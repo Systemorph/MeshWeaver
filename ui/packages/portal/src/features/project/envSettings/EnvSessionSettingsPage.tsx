@@ -6,7 +6,7 @@ import { useEnvSettingsState } from "./useEnvSettingsState";
 import { EnvSessionApi } from "../envSessionApi";
 import { useSessionSettingsEditor } from "../../sessionSettings/sessionSettingsEditor";
 import classNames from "classnames";
-import { useToast } from "@open-smc/application/useToast";
+import { useToast } from "@open-smc/application/notifications/useToast";
 import loader from "@open-smc/ui-kit/components/loader.module.scss";
 
 export function EnvSessionSettingsPage() {

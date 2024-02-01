@@ -1,4 +1,4 @@
-import { Connection } from "@open-smc/application/Connection";
+import { SignalrConnectionProvider } from "@open-smc/application/SignalrConnectionProvider";
 import { SignalrMessageRouter } from "@open-smc/application/SignalrMessageRouter";
 import { Outlet } from "react-router-dom";
 import { ApiProvider } from "./ApiProvider";
@@ -11,13 +11,13 @@ export function PortalPage() {
 
     return (
         <ApiProvider>
-            <Connection fallback={fallback}>
+            <SignalrConnectionProvider fallback={fallback}>
                 <SignalrMessageRouter log={log}>
                     <LayoutHub>
                         <Outlet/>
                     </LayoutHub>
                 </SignalrMessageRouter>
-            </Connection>
+            </SignalrConnectionProvider>
         </ApiProvider>
     );
 }

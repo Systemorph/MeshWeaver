@@ -11,4 +11,5 @@ export const motion: CSSMotionProps = {
     },
     onLeaveActive: () => ({height: 0, opacity: 0, margin: 0}),
 }
+
 export const notificationConfig = {motion};

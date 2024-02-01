@@ -1,4 +1,4 @@
-import { useToast } from "@open-smc/application/useToast";
+import { useToast } from "@open-smc/application/notifications/useToast";
 import { useMessageHub } from "@open-smc/application/messageHub/AddHub";
 import { CancelCommand } from "../../notebookEditor/notebookEditor.contract";
 
