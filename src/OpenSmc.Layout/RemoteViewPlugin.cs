@@ -37,6 +37,11 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
 
     private const string Data = nameof(Data);
 
+    public override async Task StartAsync()
+    {
+        await base.StartAsync();
+        UpdateState(s => s with {Data = new AreaChangedEvent(Data, CreateUiControlHub(Controls.Spinner()))});
+    }
 
     private void UpdateView(AreaChangedEvent areaChanged)
     {
@@ -58,7 +63,7 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
             areaChanged = areaChanged with { Area = Data };
         else
         {
-            uiControl = CreateUiControlHub(uiControl, Data);
+            uiControl = CreateUiControlHub(uiControl);
             Hub.ConnectTo(uiControl.Hub);
             areaChanged = areaChanged with { Area = Data, View = uiControl };
 
@@ -123,7 +128,7 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
     {
         var areaChanged = request.Message.Value is AreaChangedEvent ae
                               ? ae with { Area = Data }
-                              : new AreaChangedEvent(Data, request.Message.Status == ExpressionChangedStatus.Evaluating ? Controls.Spinner() : request.Message.Value);
+                              : new AreaChangedEvent(Data, request.Message.Status == ExpressionChangedStatus.Evaluating ? CreateUiControlHub(Controls.Spinner()) : request.Message.Value);
 
         if (areaChanged.View != null && areaChanged.View is not IUiControl)
             areaChanged = areaChanged with { View = uiControlService.GetUiControl(areaChanged.View) };

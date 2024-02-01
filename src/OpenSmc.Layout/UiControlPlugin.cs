@@ -41,7 +41,7 @@ public class UiControlPlugin<TControl> : MessageHubPlugin<UiControlPlugin<TContr
 
 
 
-    public  TControl2  CreateUiControlHub<TControl2>(TControl2 control, string area)
+    public  TControl2  CreateUiControlHub<TControl2>(TControl2 control)
         where TControl2 : UiControl
     {
         if (control == null)
