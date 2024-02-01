@@ -1,7 +1,7 @@
 import { createContext, PropsWithChildren, useContext, useEffect, useState } from "react";
 import { ConnectToHubRequest } from "../application.contract";
-import { useMessageRouter } from "../MessageRouter";
 import { MessageHub } from "./MessageHub";
+import { useMessageRouter } from "../messageRouterContext";
 
 const hubContext = createContext<MessageHubFinder>(null);
 

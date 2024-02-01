@@ -1,30 +1,18 @@
-import { createContext, PropsWithChildren, useContext, useEffect, useMemo, useState } from "react";
+import { PropsWithChildren, useEffect, useMemo, useState } from "react";
 import { MessageHub } from "./messageHub/MessageHub";
 import { MessageDelivery, SignalrHub } from "./SignalrHub";
-import { filter, map, Subscription, tap } from "rxjs";
+import { filter, map } from "rxjs";
 import { isEqual } from "lodash";
 import { useConnection, useConnectionStatus } from "./Connection";
 import { down, makeLogger, up } from "./logger";
 import { UiAddress } from "./application.contract";
-
-type AddHub = (address: unknown, hub: MessageHub) => Subscription;
-
-interface MessageRouterContext {
-    addHub: AddHub;
-    uiAddress: any;
-}
-
-export const messageRouterContext = createContext<MessageRouterContext>(null);
-
-export function useMessageRouter() {
-    return useContext(messageRouterContext);
-}
+import { messageRouterContext } from "./messageRouterContext";
 
 interface Props {
     log?: boolean;
 }
 
-export function MessageRouter({log, children}: PropsWithChildren & Props) {
+export function SignalrMessageRouter({log, children}: PropsWithChildren & Props) {
     const connection = useConnection();
     const {appId} = useConnectionStatus();
     const [signalr] = useState(new SignalrHub(connection));
