@@ -11,6 +11,7 @@
     <ProjectReference Include="..\OpenSmc.Domain.Abstractions\OpenSmc.Domain.Abstractions.csproj" />
     <ProjectReference Include="..\OpenSmc.Equality\OpenSmc.Equality.csproj" />
     <ProjectReference Include="..\OpenSmc.Reflection\OpenSmc.Reflection.csproj" />
+    <ProjectReference Include="..\OpenSmc.ServiceProvider\OpenSmc.ServiceProvider.csproj" />
   </ItemGroup>
 
 </Project>
