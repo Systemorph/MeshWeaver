@@ -83,6 +83,7 @@ public record MessageHubConfiguration
     protected virtual ServiceCollection ConfigureServices<TAddress>(IMessageHub parent)
     {
         var services = new ServiceCollection();
+        services.Replace(ServiceDescriptor.Singleton<MessageHubConnections>(_ => new()));
         services.Replace(ServiceDescriptor.Singleton<IMessageHub>(sp => new MessageHub<TAddress>(sp, sp.GetRequiredService<HostedHubsCollection>(), this, parent)));
         services.Replace(ServiceDescriptor.Singleton<HostedHubsCollection, HostedHubsCollection>());
         services.Replace(ServiceDescriptor.Singleton(typeof(IEventsRegistry),
@@ -121,10 +122,11 @@ public record MessageHubConfiguration
         // TODO V10: Check whether this address is already built in hosted hubs collection, if not build. (18.01.2024, Roland Buergi)
         var parentHub = ParentServiceProvider.GetService<ParentMessageHub>()?.Value;
         CreateServiceProvider<TAddress>(parentHub);
-        
+        var parentHubs = ParentServiceProvider.GetService<HostedHubsCollection>();
 
         HubInstance = ServiceProvider.GetRequiredService<IMessageHub>();
-
+        if(parentHubs != null)
+            parentHubs.Add(HubInstance);
         return HubInstance;
     }
 

@@ -61,11 +61,11 @@ public class LayoutStackPlugin(IMessageHub hub) :
                           : view as UiControl ?? uiControlService.GetUiControl(view);
 
 
-        control = CreateUiControlHub(control, area);
+        control = CreateUiControlHub(control);
         Hub.ConnectTo(control.Hub);
         var ret = new AreaChangedEvent(area, control, options.AreaViewOptions);
         UpdateState(state => state.SetAreaToState(ret));
-        Post(ret, x => x.WithTarget(MessageTargets.Subscribers));
+        //Post(ret, x => x.WithTarget(MessageTargets.Subscribers));
 
         return ret;
     }
@@ -129,7 +129,7 @@ public class LayoutStackPlugin(IMessageHub hub) :
                 return request.Processed();
             }
 
-            UpdateState(s => s with { AreasImpl = s.AreasImpl.Add(new(request.Message.Area, new SpinnerControl())) });
+            UpdateState(s => s with { AreasImpl = s.AreasImpl.Add(new(request.Message.Area, Controls.Spinner())) });
             return SetArea(request, view);
         }
 
