@@ -1,0 +1,67 @@
+﻿{
+  Columns: [
+    {
+      Coordinates: [
+        Value
+      ],
+      SystemName: Value,
+      DisplayName: Value,
+      GrouperName: ColumnName
+    }
+  ],
+  Rows: [
+    {
+      RowGroup: {
+        Coordinates: [
+          2021
+        ],
+        SystemName: 2021,
+        DisplayName: 2021,
+        GrouperName: Year
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          2021,
+          BoP
+        ],
+        SystemName: 2021.BoP,
+        DisplayName: Beginning of Period,
+        GrouperName: PropertyName
+      },
+      Data: {
+        Value: 4.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          2021,
+          Delta
+        ],
+        SystemName: 2021.Delta,
+        DisplayName: Delta,
+        GrouperName: PropertyName
+      },
+      Data: {
+        Value: 4.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          2021,
+          EoP
+        ],
+        SystemName: 2021.EoP,
+        DisplayName: End of Period,
+        GrouperName: PropertyName
+      },
+      Data: {
+        Value: 4.0
+      }
+    }
+  ],
+  HasRowGrouping: true
+}

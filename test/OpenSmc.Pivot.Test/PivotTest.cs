@@ -18,17 +18,17 @@ using Xunit.Abstractions;
 
 namespace OpenSmc.Pivot.Test
 {
-    public static class PivotRegistryExtensions
-    {
-        public static MessageHubConfiguration AddPivot(this MessageHubConfiguration conf)
-        {
-            DataCubesRegistryExtensions.RegisterProviders();
-            ArithmeticsRegistrationExtensions.RegisterProviders();
-            Scopes.DataCubes.ModuleSetup.InitializeArithmetics();
-            return conf.WithServices(services => services
-                .RegisterScopes());
-        }
-    }
+    //public static class PivotRegistryExtensions
+    //{
+    //    public static MessageHubConfiguration AddPivot(this MessageHubConfiguration conf)
+    //    {
+    //        DataCubesRegistryExtensions.RegisterProviders();
+    //        ArithmeticsRegistrationExtensions.RegisterProviders();
+    //        Scopes.DataCubes.ModuleSetup.InitializeArithmetics();
+    //        return conf.WithServices(services => services
+    //            .RegisterScopes());
+    //    }
+    //}
 
     public static class VerifyExtension
     {
@@ -92,39 +92,39 @@ namespace OpenSmc.Pivot.Test
 
         [Theory]
         [MemberData(nameof(DataCubeScopeWithDimensionTestCases))]
-        public void DataCubeScopeWithDimensionReports<TElement>(string fileName, Func<IScopeFactory, IEnumerable<IDataCube<TElement>>> dataGen, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>> pivotBuilder)
+        public async Task DataCubeScopeWithDimensionReports<TElement>(string fileName, Func<IScopeFactory, IEnumerable<IDataCube<TElement>>> dataGen, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>> pivotBuilder)
         {
             var data = dataGen(ScopeFactory);
-            ExecuteDataCubeTest(fileName, data, pivotBuilder);
+            await ExecuteDataCubeTest(fileName, data, pivotBuilder);
         }
 
         [Theory]
         [MemberData(nameof(DataCubeTestCases))]
-        public void DataCubeReports<TElement>(string fileName, IEnumerable<IDataCube<TElement>> data, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>> pivotBuilder)
+        public async Task DataCubeReports<TElement>(string fileName, IEnumerable<IDataCube<TElement>> data, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>> pivotBuilder)
         {
-             ExecuteDataCubeTest(fileName, data, pivotBuilder);
+             await ExecuteDataCubeTest(fileName, data, pivotBuilder);
         }
 
         [Theory]
         [MemberData(nameof(DataCubeCountTestCases))]
-        public void DataCubeCountReports<TElement>(string fileName, IEnumerable<IDataCube<TElement>> data, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, int, int>> pivotBuilder)
+        public async Task DataCubeCountReports<TElement>(string fileName, IEnumerable<IDataCube<TElement>> data, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, int, int>> pivotBuilder)
         {
-            ExecuteDataCubeCountTest(fileName, data, pivotBuilder);
+            await ExecuteDataCubeCountTest(fileName, data, pivotBuilder);
         }
 
         [Theory]
         [MemberData(nameof(DataCubeAverageTestCases))]
-        public void DataCubeAverageReports<TElement>(string fileName, IEnumerable<IDataCube<TElement>> data, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, (TElement sum, int count), TElement>> pivotBuilder)
+        public async Task DataCubeAverageReports<TElement>(string fileName, IEnumerable<IDataCube<TElement>> data, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, (TElement sum, int count), TElement>> pivotBuilder)
         {
-            ExecuteDataCubeAverageTest(fileName, data, pivotBuilder);
+            await ExecuteDataCubeAverageTest(fileName, data, pivotBuilder);
         }
 
         [Theory]
         [MemberData(nameof(ScopeDataCubeTestCases))]
-        public void ScopeDataCubeReports<TElement>(string fileName, Func<IScopeFactory, IEnumerable<IDataCube<TElement>>> dataGen, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>> pivotBuilder)
+        public async Task ScopeDataCubeReports<TElement>(string fileName, Func<IScopeFactory, IEnumerable<IDataCube<TElement>>> dataGen, Func<DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>, DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>> pivotBuilder)
         {
             var data = dataGen(ScopeFactory);
-            ExecuteDataCubeTest(fileName, data, pivotBuilder);
+            await ExecuteDataCubeTest(fileName, data, pivotBuilder);
         }
 
         [Fact]
@@ -182,14 +182,14 @@ namespace OpenSmc.Pivot.Test
                                                                          .SliceRowsBy(nameof(Country), nameof(LineOfBusiness))
                                                                          .SliceColumnsBy(nameof(AmountType)));
             yield return new DataCubeTestCase<CashflowElement, int>(
-                                                                    "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrencyCount",
+                                                                    "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrencyCount1",
                                                                     CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency().ToDataCube().RepeatOnce(),
                                                                     b => b
                                                                          .WithAggregation(a => a.Count())
                                                                          .SliceRowsBy(nameof(Country), nameof(LineOfBusiness))
                                                                          .SliceColumnsBy(nameof(AmountType)));
             yield return new DataCubeTestCase<CashflowElement, int>(
-                                                                    "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrencyCount",
+                                                                    "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrencyCount2",
                                                                     CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency().ToDataCube().RepeatOnce(),
                                                                     b => b
                                                                          .WithAggregation(a => a.Count())
@@ -197,7 +197,7 @@ namespace OpenSmc.Pivot.Test
                                                                          .SliceRowsBy(nameof(Country), nameof(LineOfBusiness))
                                                                          .SliceColumnsBy(nameof(AmountType)));
             yield return new DataCubeTestCase<CashflowElement, int>(
-                                                                    "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrencyCount",
+                                                                    "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrencyCount3",
                                                                     CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency().ToDataCube().RepeatOnce(),
                                                                     b => b
                                                                          .WithAggregation(a => a.Count())
@@ -205,7 +205,7 @@ namespace OpenSmc.Pivot.Test
                                                                          .SliceRowsBy(nameof(LineOfBusiness))
                                                                          .SliceColumnsBy(nameof(AmountType)));
             yield return new DataCubeTestCase<CashflowElement, int>(
-                                                                    "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrencyCount",
+                                                                    "DataCubeSlicedTwiceByRowOnceByColumnOneDimensionSingleCurrencyCount4",
                                                                     CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency().ToDataCube().RepeatOnce(),
                                                                     b => b
                                                                          .WithAggregation(a => a.Count())
@@ -253,7 +253,7 @@ namespace OpenSmc.Pivot.Test
                                                                                 CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube().RepeatOnce(),
                                                                                 b => b);
             yield return new DataCubeTestCase<CashflowElement, CashflowElement>(
-                                                                                "DataCubeSliceRowsByAggregateByDimension",
+                                                                                "DataCubeSliceRowsByAggregateByDimension2",
                                                                                 CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube().RepeatOnce(),
                                                                                 b => b.SliceRowsBy(nameof(Currency)));
             yield return new DataCubeTestCase<CashflowElement, CashflowElement>(
@@ -266,7 +266,7 @@ namespace OpenSmc.Pivot.Test
                                                                                 b => b.SliceRowsBy(nameof(Country))
                                                                                       .SliceColumnsBy(nameof(Currency)));
             yield return new DataCubeTestCase<CashflowElement, CashflowElement>(
-                                                                                "DataCubeSliceColumnsByAggregateByDimension2",
+                                                                                "DataCubeSliceColumnsByAggregateByDimension3",
                                                                                 CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube().RepeatOnce(),
                                                                                 b => b.SliceColumnsBy(nameof(Currency))
                                                                                       .SliceRowsBy(nameof(Country)));
@@ -301,7 +301,7 @@ namespace OpenSmc.Pivot.Test
                                                                                 CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube().RepeatOnce(),
                                                                                 b => b.SliceColumnsBy(nameof(Country), nameof(LineOfBusiness), nameof(AmountType)));
             yield return new DataCubeTestCase<CashflowElement, CashflowElement>(
-                                                                                "DataCubeSlicedByColumnThreeDimensions",
+                                                                                "DataCubeSlicedByColumnThreeDimensions2",
                                                                                 CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube().RepeatOnce(),
                                                                                 b => b.SliceColumnsBy(nameof(Country), nameof(LineOfBusiness))
                                                                                       .SliceColumnsBy(nameof(AmountType)));
@@ -319,22 +319,22 @@ namespace OpenSmc.Pivot.Test
                                                                         b => b.SliceRowsBy(nameof(Dim1))
                                                                               .SliceColumnsBy(nameof(Dim2)));
             yield return new DataCubeTestCase<ValueWithHierarchicalDimension, ValueWithHierarchicalDimension>
-                ("HierarchicalDimension",
+                ("HierarchicalDimension2",
                  ValueWithHierarchicalDimension.Data.ToDataCube().RepeatOnce(),
                  b => b.SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA)));
             yield return new DataCubeTestCase<ValueWithHierarchicalDimension, ValueWithHierarchicalDimension>
-                ("HierarchicalDimensionOptionsA1",
+                ("HierarchicalDimensionOptionsA12",
                  ValueWithHierarchicalDimension.Data.ToDataCube().RepeatOnce(),
                  b => b.SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
                        .WithHierarchicalDimensionOptions(o => o.LevelMin<TestHierarchicalDimensionA>(1)));
             yield return new DataCubeTestCase<ValueWithHierarchicalDimension, ValueWithHierarchicalDimension>
-                ("HierarchicalDimensionOptionsA2",
+                ("HierarchicalDimensionOptionsA22",
                  ValueWithHierarchicalDimension.Data.ToDataCube().RepeatOnce(),
                  b => b.SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
                        .WithHierarchicalDimensionOptions(o => o.LevelMin<TestHierarchicalDimensionA>(1)
                                                                .LevelMax<TestHierarchicalDimensionA>(1)));
             yield return new DataCubeTestCase<ValueWithHierarchicalDimension, ValueWithHierarchicalDimension>
-                ("HierarchicalDimensionOptionsAFlat",
+                ("HierarchicalDimensionOptionsAFlat2",
                  ValueWithHierarchicalDimension.Data.ToDataCube().RepeatOnce(),
                  b => b.SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
                        .WithHierarchicalDimensionOptions(o => o.Flatten<TestHierarchicalDimensionA>()));
@@ -347,7 +347,7 @@ namespace OpenSmc.Pivot.Test
                  ValueWithTwoAggregateByHierarchicalDimensions.Data.ToDataCube().RepeatOnce(),
                  b => b.SliceColumnsBy(nameof(ValueWithHierarchicalDimension.DimA)));
             yield return new DataCubeTestCase<ValueWithTwoHierarchicalDimensions, ValueWithTwoHierarchicalDimensions>
-                ("HierarchicalDimensionTwo",
+                ("HierarchicalDimensionTwo2",
                  ValueWithTwoHierarchicalDimensions.Data.ToDataCube().RepeatOnce(),
                  b => b.SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA), nameof(ValueWithTwoHierarchicalDimensions.DimB)));
             yield return new DataCubeTestCase<ValueWithTwoHierarchicalDimensions, ValueWithTwoHierarchicalDimensions>
