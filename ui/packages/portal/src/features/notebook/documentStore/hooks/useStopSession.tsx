@@ -1,5 +1,5 @@
 import { useNotebookEditorStore } from "../../NotebookEditor";
-import { useToast } from "@open-smc/application/useToast";
+import { useToast } from "@open-smc/application/notifications/useToast";
 import { useMessageHub } from "@open-smc/application/messageHub/AddHub";
 import { StopSessionEvent } from "../../notebookEditor/notebookEditor.contract";
 

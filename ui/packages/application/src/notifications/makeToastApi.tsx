@@ -1,7 +1,7 @@
 import { NotificationAPI } from "rc-notification";
 import { Key, ReactNode } from "react";
-import { OpenConfig } from "rc-notification/es/Notifications";
 import classNames from "classnames";
+import { OpenConfig } from "rc-notification/es/interface";
 
 interface ToastContentProps {
     title: ReactNode;

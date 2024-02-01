@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { AreaChangedEvent, SetAreaRequest } from "./application.contract";
 import { useSubscribeToAreaChanged } from "./useSubscribeToAreaChanged";
 import { renderControl } from "./renderControl";
-import { useMessageHub } from "@open-smc/application/messageHub/AddHub";
-import { layoutHubId } from "@open-smc/application/LayoutHub";
+import { useMessageHub } from "./messageHub/AddHub";
+import { layoutHubId } from "./LayoutHub";
 
 interface ControlStarterProps {
     area: string;

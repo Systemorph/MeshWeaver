@@ -1,9 +1,9 @@
-import { createContext, PropsWithChildren, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, PropsWithChildren, useContext, useEffect, useMemo, useState, JSX } from "react";
 import { makeSignalrConnection, SignalrConnection } from "./makeSignalrConnection";
 import { createStore, Store } from "@open-smc/store/store";
-
 import { getAppId, setAppId } from "./appId";
 import { useSelector } from "@open-smc/store/useSelector";
+import { useNotifyOnDisconnected } from "./useNotifyOnDisconnected";
 
 interface ConnectionContext {
     connection: SignalrConnection;
@@ -37,11 +37,12 @@ interface ConnectionProps {
     fallback?: () => JSX.Element;
 }
 
-export function Connection({fallback, children}: PropsWithChildren & ConnectionProps) {
+export function SignalrConnectionProvider({fallback, children}: PropsWithChildren & ConnectionProps) {
     const [connection] = useState(makeSignalrConnection);
     const [started, setStarted] = useState<Promise<void>>();
     const [ready, setReady] = useState(false);
 
+    useNotifyOnDisconnected();
     const [store] = useState(makeStore());
 
     useEffect(() => {
