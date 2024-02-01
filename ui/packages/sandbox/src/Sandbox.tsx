@@ -1,5 +1,5 @@
 import React, { useCallback, Suspense, useMemo, PropsWithChildren, useState } from "react";
-import { messageRouterContext, pack } from "@open-smc/application/MessageRouter";
+import { messageRouterContext } from "@open-smc/application/messageRouterContext";
 import { MessageHub } from "@open-smc/application/messageHub/MessageHub";
 import { down, makeLogger, up } from "@open-smc/application/logger";
 import { AddHub } from "@open-smc/application/messageHub/AddHub";
@@ -13,6 +13,7 @@ import { ViewModelHub } from "./ViewModelHub";
 import { SetAreaRequest } from "@open-smc/application/application.contract";
 import { ControlDef } from "@open-smc/application/ControlDef";
 import { layoutHubId } from "@open-smc/application/LayoutHub";
+import { pack } from "@open-smc/application/SignalrMessageRouter";
 
 interface Props {
     layoutHub?: MessageHub;
@@ -27,11 +28,11 @@ export function Sandbox({root, layoutHub: originalLayoutHub, path}: Props) {
 
     return (
         <Suspense fallback={<div>Loading...</div>}>
-            <SandboxRouter>
+            <InMemoryRouter>
                 <AddHub address={layoutHub} id={layoutHubId}>
                     <SandboxApp path={path}/>
                 </AddHub>
-            </SandboxRouter>
+            </InMemoryRouter>
         </Suspense>
     );
 }
@@ -65,7 +66,7 @@ function SandboxApp({path}: SandboxAppProps) {
     );
 }
 
-export function SandboxRouter({children}: PropsWithChildren) {
+export function InMemoryRouter({children}: PropsWithChildren) {
     const log = true;
 
     const addHub = useCallback((address: unknown, hub: MessageHub) => {
