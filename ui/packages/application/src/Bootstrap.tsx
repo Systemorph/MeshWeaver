@@ -2,14 +2,14 @@ import "./App.scss";
 import "./SmappApp.scss";
 import { Connection } from "./Connection";
 import { PropsWithChildren } from "react";
-import { MessageRouter } from "./MessageRouter";
+import { SignalrMessageRouter } from "./SignalrMessageRouter";
 
 export function Bootstrap({children}: PropsWithChildren) {
     return (
         <Connection>
-            <MessageRouter log={true}>
+            <SignalrMessageRouter log={true}>
                 {children}
-            </MessageRouter>
+            </SignalrMessageRouter>
         </Connection>
     );
 }
