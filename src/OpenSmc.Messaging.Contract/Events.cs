@@ -26,7 +26,7 @@ public record GetRequest<T> : IRequest<T>
 }
 
 
-public record GetPagedRequest<T>(int Page, int PageSize) : IRequest<PagedGetResult<T>> { public object Options { get; init; } };
+public record GetManyRequest<T>(int? Page, int? PageSize) : IRequest<PagedGetResult<T>> { public object Options { get; init; } };
 
 public record PagedGetResult<T>(int Total, IReadOnlyCollection<T> Items)
 {
