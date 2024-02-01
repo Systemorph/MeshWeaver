@@ -1,16 +1,16 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-	<ItemGroup>
-		<PackageReference Include="Newtonsoft.Json" />
-		<PackageReference Include="Verify.Xunit" />
-	</ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" />
+    <PackageReference Include="Verify.Xunit" />
+  </ItemGroup>
 
-	<ItemGroup>
-	  <ProjectReference Include="..\..\src\OpenSmc.Pivot\OpenSmc.Pivot.csproj" />
-	  <ProjectReference Include="..\..\src\OpenSmc.Scopes.DataCubes\OpenSmc.Scopes.DataCubes.csproj" />
-	  <ProjectReference Include="..\OpenSmc.Fixture\OpenSmc.Fixture.csproj" />
-	  <ProjectReference Include="..\OpenSmc.TestDomain\OpenSmc.TestDomain.csproj" />
-	</ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OpenSmc.Pivot\OpenSmc.Pivot.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.Scopes.DataCubes\OpenSmc.Scopes.DataCubes.csproj" />
+    <ProjectReference Include="..\OpenSmc.Fixture\OpenSmc.Fixture.csproj" />
+    <ProjectReference Include="..\OpenSmc.TestDomain\OpenSmc.TestDomain.csproj" />
+  </ItemGroup>
   <ItemGroup>
     <None Update="**\*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
