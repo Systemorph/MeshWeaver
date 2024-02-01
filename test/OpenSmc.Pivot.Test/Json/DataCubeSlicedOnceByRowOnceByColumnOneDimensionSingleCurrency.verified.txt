@@ -1,0 +1,207 @@
+﻿{
+  Columns: [
+    {
+      Children: [
+        {
+          Coordinates: [
+            C,
+            Value
+          ],
+          SystemName: C.Value,
+          DisplayName: Value,
+          GrouperName: ColumnName
+        }
+      ],
+      Coordinates: [
+        C
+      ],
+      SystemName: C,
+      DisplayName: Casualty,
+      GrouperName: LineOfBusiness
+    },
+    {
+      Children: [
+        {
+          Coordinates: [
+            H,
+            Value
+          ],
+          SystemName: H.Value,
+          DisplayName: Value,
+          GrouperName: ColumnName
+        }
+      ],
+      Coordinates: [
+        H
+      ],
+      SystemName: H,
+      DisplayName: Health,
+      GrouperName: LineOfBusiness
+    },
+    {
+      Children: [
+        {
+          Coordinates: [
+            L,
+            Value
+          ],
+          SystemName: L.Value,
+          DisplayName: Value,
+          GrouperName: ColumnName
+        }
+      ],
+      Coordinates: [
+        L
+      ],
+      SystemName: L,
+      DisplayName: Life,
+      GrouperName: LineOfBusiness
+    },
+    {
+      Children: [
+        {
+          Coordinates: [
+            P,
+            Value
+          ],
+          SystemName: P.Value,
+          DisplayName: Value,
+          GrouperName: ColumnName
+        }
+      ],
+      Coordinates: [
+        P
+      ],
+      SystemName: P,
+      DisplayName: Property,
+      GrouperName: LineOfBusiness
+    }
+  ],
+  Rows: [
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF
+        ],
+        SystemName: CHF,
+        DisplayName: Swiss Franc,
+        GrouperName: Currency
+      },
+      Data: {
+        C: {
+          Value: 96.0
+        },
+        H: {
+          Value: 96.0
+        },
+        L: {
+          Value: 96.0
+        },
+        P: {
+          Value: 96.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          D
+        ],
+        SystemName: CHF.D,
+        DisplayName: Germany,
+        GrouperName: Country
+      },
+      Data: {
+        C: {
+          Value: 24.0
+        },
+        H: {
+          Value: 24.0
+        },
+        L: {
+          Value: 24.0
+        },
+        P: {
+          Value: 24.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          PT
+        ],
+        SystemName: CHF.PT,
+        DisplayName: Portugal,
+        GrouperName: Country
+      },
+      Data: {
+        C: {
+          Value: 24.0
+        },
+        H: {
+          Value: 24.0
+        },
+        L: {
+          Value: 24.0
+        },
+        P: {
+          Value: 24.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          RU
+        ],
+        SystemName: CHF.RU,
+        DisplayName: Russia,
+        GrouperName: Country
+      },
+      Data: {
+        C: {
+          Value: 24.0
+        },
+        H: {
+          Value: 24.0
+        },
+        L: {
+          Value: 24.0
+        },
+        P: {
+          Value: 24.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          CH
+        ],
+        SystemName: CHF.CH,
+        DisplayName: Switzerland,
+        GrouperName: Country
+      },
+      Data: {
+        C: {
+          Value: 24.0
+        },
+        H: {
+          Value: 24.0
+        },
+        L: {
+          Value: 24.0
+        },
+        P: {
+          Value: 24.0
+        }
+      }
+    }
+  ],
+  HasRowGrouping: true
+}

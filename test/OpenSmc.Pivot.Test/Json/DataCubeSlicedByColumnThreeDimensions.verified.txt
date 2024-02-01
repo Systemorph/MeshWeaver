@@ -1,0 +1,3363 @@
+﻿{
+  Columns: [
+    {
+      Children: [
+        {
+          Children: [
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    D,
+                    C,
+                    E,
+                    Value
+                  ],
+                  SystemName: D.C.E.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                D,
+                C,
+                E
+              ],
+              SystemName: D.C.E,
+              DisplayName: Expenses,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    D,
+                    C,
+                    P,
+                    Value
+                  ],
+                  SystemName: D.C.P.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                D,
+                C,
+                P
+              ],
+              SystemName: D.C.P,
+              DisplayName: Premium,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    D,
+                    C,
+                    C,
+                    Value
+                  ],
+                  SystemName: D.C.C.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                D,
+                C,
+                C
+              ],
+              SystemName: D.C.C,
+              DisplayName: Cost,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    D,
+                    C,
+                    B,
+                    Value
+                  ],
+                  SystemName: D.C.B.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                D,
+                C,
+                B
+              ],
+              SystemName: D.C.B,
+              DisplayName: Benefit,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    D,
+                    C,
+                    TotalGroup,
+                    Value
+                  ],
+                  SystemName: D.C.TotalGroup.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                D,
+                C,
+                TotalGroup
+              ],
+              SystemName: D.C.TotalGroup,
+              DisplayName:  ,
+              GrouperName: LineOfBusiness
+            }
+          ],
+          Coordinates: [
+            D,
+            C
+          ],
+          SystemName: D.C,
+          DisplayName: Casualty,
+          GrouperName: LineOfBusiness
+        },
+        {
+          Children: [
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    D,
+                    H,
+                    E,
+                    Value
+                  ],
+                  SystemName: D.H.E.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                D,
+                H,
+                E
+              ],
+              SystemName: D.H.E,
+              DisplayName: Expenses,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    D,
+                    H,
+                    P,
+                    Value
+                  ],
+                  SystemName: D.H.P.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                D,
+                H,
+                P
+              ],
+              SystemName: D.H.P,
+              DisplayName: Premium,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    D,
+                    H,
+                    C,
+                    Value
+                  ],
+                  SystemName: D.H.C.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                D,
+                H,
+                C
+              ],
+              SystemName: D.H.C,
+              DisplayName: Cost,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    D,
+                    H,
+                    B,
+                    Value
+                  ],
+                  SystemName: D.H.B.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                D,
+                H,
+                B
+              ],
+              SystemName: D.H.B,
+              DisplayName: Benefit,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    D,
+                    H,
+                    TotalGroup,
+                    Value
+                  ],
+                  SystemName: D.H.TotalGroup.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                D,
+                H,
+                TotalGroup
+              ],
+              SystemName: D.H.TotalGroup,
+              DisplayName:  ,
+              GrouperName: LineOfBusiness
+            }
+          ],
+          Coordinates: [
+            D,
+            H
+          ],
+          SystemName: D.H,
+          DisplayName: Health,
+          GrouperName: LineOfBusiness
+        },
+        {
+          Children: [
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    D,
+                    L,
+                    E,
+                    Value
+                  ],
+                  SystemName: D.L.E.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                D,
+                L,
+                E
+              ],
+              SystemName: D.L.E,
+              DisplayName: Expenses,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    D,
+                    L,
+                    P,
+                    Value
+                  ],
+                  SystemName: D.L.P.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                D,
+                L,
+                P
+              ],
+              SystemName: D.L.P,
+              DisplayName: Premium,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    D,
+                    L,
+                    C,
+                    Value
+                  ],
+                  SystemName: D.L.C.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                D,
+                L,
+                C
+              ],
+              SystemName: D.L.C,
+              DisplayName: Cost,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    D,
+                    L,
+                    B,
+                    Value
+                  ],
+                  SystemName: D.L.B.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                D,
+                L,
+                B
+              ],
+              SystemName: D.L.B,
+              DisplayName: Benefit,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    D,
+                    L,
+                    TotalGroup,
+                    Value
+                  ],
+                  SystemName: D.L.TotalGroup.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                D,
+                L,
+                TotalGroup
+              ],
+              SystemName: D.L.TotalGroup,
+              DisplayName:  ,
+              GrouperName: LineOfBusiness
+            }
+          ],
+          Coordinates: [
+            D,
+            L
+          ],
+          SystemName: D.L,
+          DisplayName: Life,
+          GrouperName: LineOfBusiness
+        },
+        {
+          Children: [
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    D,
+                    P,
+                    E,
+                    Value
+                  ],
+                  SystemName: D.P.E.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                D,
+                P,
+                E
+              ],
+              SystemName: D.P.E,
+              DisplayName: Expenses,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    D,
+                    P,
+                    P,
+                    Value
+                  ],
+                  SystemName: D.P.P.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                D,
+                P,
+                P
+              ],
+              SystemName: D.P.P,
+              DisplayName: Premium,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    D,
+                    P,
+                    C,
+                    Value
+                  ],
+                  SystemName: D.P.C.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                D,
+                P,
+                C
+              ],
+              SystemName: D.P.C,
+              DisplayName: Cost,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    D,
+                    P,
+                    B,
+                    Value
+                  ],
+                  SystemName: D.P.B.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                D,
+                P,
+                B
+              ],
+              SystemName: D.P.B,
+              DisplayName: Benefit,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    D,
+                    P,
+                    TotalGroup,
+                    Value
+                  ],
+                  SystemName: D.P.TotalGroup.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                D,
+                P,
+                TotalGroup
+              ],
+              SystemName: D.P.TotalGroup,
+              DisplayName:  ,
+              GrouperName: LineOfBusiness
+            }
+          ],
+          Coordinates: [
+            D,
+            P
+          ],
+          SystemName: D.P,
+          DisplayName: Property,
+          GrouperName: LineOfBusiness
+        },
+        {
+          Children: [
+            {
+              Coordinates: [
+                D,
+                TotalGroup,
+                Value
+              ],
+              SystemName: D.TotalGroup.Value,
+              DisplayName: Value,
+              GrouperName: ColumnName
+            }
+          ],
+          Coordinates: [
+            D,
+            TotalGroup
+          ],
+          SystemName: D.TotalGroup,
+          DisplayName:  ,
+          GrouperName: Country
+        }
+      ],
+      Coordinates: [
+        D
+      ],
+      SystemName: D,
+      DisplayName: Germany,
+      GrouperName: Country
+    },
+    {
+      Children: [
+        {
+          Children: [
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    PT,
+                    C,
+                    E,
+                    Value
+                  ],
+                  SystemName: PT.C.E.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                PT,
+                C,
+                E
+              ],
+              SystemName: PT.C.E,
+              DisplayName: Expenses,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    PT,
+                    C,
+                    P,
+                    Value
+                  ],
+                  SystemName: PT.C.P.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                PT,
+                C,
+                P
+              ],
+              SystemName: PT.C.P,
+              DisplayName: Premium,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    PT,
+                    C,
+                    C,
+                    Value
+                  ],
+                  SystemName: PT.C.C.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                PT,
+                C,
+                C
+              ],
+              SystemName: PT.C.C,
+              DisplayName: Cost,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    PT,
+                    C,
+                    B,
+                    Value
+                  ],
+                  SystemName: PT.C.B.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                PT,
+                C,
+                B
+              ],
+              SystemName: PT.C.B,
+              DisplayName: Benefit,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    PT,
+                    C,
+                    TotalGroup,
+                    Value
+                  ],
+                  SystemName: PT.C.TotalGroup.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                PT,
+                C,
+                TotalGroup
+              ],
+              SystemName: PT.C.TotalGroup,
+              DisplayName:  ,
+              GrouperName: LineOfBusiness
+            }
+          ],
+          Coordinates: [
+            PT,
+            C
+          ],
+          SystemName: PT.C,
+          DisplayName: Casualty,
+          GrouperName: LineOfBusiness
+        },
+        {
+          Children: [
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    PT,
+                    H,
+                    E,
+                    Value
+                  ],
+                  SystemName: PT.H.E.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                PT,
+                H,
+                E
+              ],
+              SystemName: PT.H.E,
+              DisplayName: Expenses,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    PT,
+                    H,
+                    P,
+                    Value
+                  ],
+                  SystemName: PT.H.P.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                PT,
+                H,
+                P
+              ],
+              SystemName: PT.H.P,
+              DisplayName: Premium,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    PT,
+                    H,
+                    C,
+                    Value
+                  ],
+                  SystemName: PT.H.C.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                PT,
+                H,
+                C
+              ],
+              SystemName: PT.H.C,
+              DisplayName: Cost,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    PT,
+                    H,
+                    B,
+                    Value
+                  ],
+                  SystemName: PT.H.B.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                PT,
+                H,
+                B
+              ],
+              SystemName: PT.H.B,
+              DisplayName: Benefit,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    PT,
+                    H,
+                    TotalGroup,
+                    Value
+                  ],
+                  SystemName: PT.H.TotalGroup.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                PT,
+                H,
+                TotalGroup
+              ],
+              SystemName: PT.H.TotalGroup,
+              DisplayName:  ,
+              GrouperName: LineOfBusiness
+            }
+          ],
+          Coordinates: [
+            PT,
+            H
+          ],
+          SystemName: PT.H,
+          DisplayName: Health,
+          GrouperName: LineOfBusiness
+        },
+        {
+          Children: [
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    PT,
+                    L,
+                    E,
+                    Value
+                  ],
+                  SystemName: PT.L.E.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                PT,
+                L,
+                E
+              ],
+              SystemName: PT.L.E,
+              DisplayName: Expenses,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    PT,
+                    L,
+                    P,
+                    Value
+                  ],
+                  SystemName: PT.L.P.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                PT,
+                L,
+                P
+              ],
+              SystemName: PT.L.P,
+              DisplayName: Premium,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    PT,
+                    L,
+                    C,
+                    Value
+                  ],
+                  SystemName: PT.L.C.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                PT,
+                L,
+                C
+              ],
+              SystemName: PT.L.C,
+              DisplayName: Cost,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    PT,
+                    L,
+                    B,
+                    Value
+                  ],
+                  SystemName: PT.L.B.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                PT,
+                L,
+                B
+              ],
+              SystemName: PT.L.B,
+              DisplayName: Benefit,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    PT,
+                    L,
+                    TotalGroup,
+                    Value
+                  ],
+                  SystemName: PT.L.TotalGroup.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                PT,
+                L,
+                TotalGroup
+              ],
+              SystemName: PT.L.TotalGroup,
+              DisplayName:  ,
+              GrouperName: LineOfBusiness
+            }
+          ],
+          Coordinates: [
+            PT,
+            L
+          ],
+          SystemName: PT.L,
+          DisplayName: Life,
+          GrouperName: LineOfBusiness
+        },
+        {
+          Children: [
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    PT,
+                    P,
+                    E,
+                    Value
+                  ],
+                  SystemName: PT.P.E.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                PT,
+                P,
+                E
+              ],
+              SystemName: PT.P.E,
+              DisplayName: Expenses,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    PT,
+                    P,
+                    P,
+                    Value
+                  ],
+                  SystemName: PT.P.P.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                PT,
+                P,
+                P
+              ],
+              SystemName: PT.P.P,
+              DisplayName: Premium,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    PT,
+                    P,
+                    C,
+                    Value
+                  ],
+                  SystemName: PT.P.C.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                PT,
+                P,
+                C
+              ],
+              SystemName: PT.P.C,
+              DisplayName: Cost,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    PT,
+                    P,
+                    B,
+                    Value
+                  ],
+                  SystemName: PT.P.B.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                PT,
+                P,
+                B
+              ],
+              SystemName: PT.P.B,
+              DisplayName: Benefit,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    PT,
+                    P,
+                    TotalGroup,
+                    Value
+                  ],
+                  SystemName: PT.P.TotalGroup.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                PT,
+                P,
+                TotalGroup
+              ],
+              SystemName: PT.P.TotalGroup,
+              DisplayName:  ,
+              GrouperName: LineOfBusiness
+            }
+          ],
+          Coordinates: [
+            PT,
+            P
+          ],
+          SystemName: PT.P,
+          DisplayName: Property,
+          GrouperName: LineOfBusiness
+        },
+        {
+          Children: [
+            {
+              Coordinates: [
+                PT,
+                TotalGroup,
+                Value
+              ],
+              SystemName: PT.TotalGroup.Value,
+              DisplayName: Value,
+              GrouperName: ColumnName
+            }
+          ],
+          Coordinates: [
+            PT,
+            TotalGroup
+          ],
+          SystemName: PT.TotalGroup,
+          DisplayName:  ,
+          GrouperName: Country
+        }
+      ],
+      Coordinates: [
+        PT
+      ],
+      SystemName: PT,
+      DisplayName: Portugal,
+      GrouperName: Country
+    },
+    {
+      Children: [
+        {
+          Children: [
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    RU,
+                    C,
+                    E,
+                    Value
+                  ],
+                  SystemName: RU.C.E.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                RU,
+                C,
+                E
+              ],
+              SystemName: RU.C.E,
+              DisplayName: Expenses,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    RU,
+                    C,
+                    P,
+                    Value
+                  ],
+                  SystemName: RU.C.P.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                RU,
+                C,
+                P
+              ],
+              SystemName: RU.C.P,
+              DisplayName: Premium,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    RU,
+                    C,
+                    C,
+                    Value
+                  ],
+                  SystemName: RU.C.C.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                RU,
+                C,
+                C
+              ],
+              SystemName: RU.C.C,
+              DisplayName: Cost,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    RU,
+                    C,
+                    B,
+                    Value
+                  ],
+                  SystemName: RU.C.B.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                RU,
+                C,
+                B
+              ],
+              SystemName: RU.C.B,
+              DisplayName: Benefit,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    RU,
+                    C,
+                    TotalGroup,
+                    Value
+                  ],
+                  SystemName: RU.C.TotalGroup.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                RU,
+                C,
+                TotalGroup
+              ],
+              SystemName: RU.C.TotalGroup,
+              DisplayName:  ,
+              GrouperName: LineOfBusiness
+            }
+          ],
+          Coordinates: [
+            RU,
+            C
+          ],
+          SystemName: RU.C,
+          DisplayName: Casualty,
+          GrouperName: LineOfBusiness
+        },
+        {
+          Children: [
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    RU,
+                    H,
+                    E,
+                    Value
+                  ],
+                  SystemName: RU.H.E.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                RU,
+                H,
+                E
+              ],
+              SystemName: RU.H.E,
+              DisplayName: Expenses,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    RU,
+                    H,
+                    P,
+                    Value
+                  ],
+                  SystemName: RU.H.P.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                RU,
+                H,
+                P
+              ],
+              SystemName: RU.H.P,
+              DisplayName: Premium,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    RU,
+                    H,
+                    C,
+                    Value
+                  ],
+                  SystemName: RU.H.C.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                RU,
+                H,
+                C
+              ],
+              SystemName: RU.H.C,
+              DisplayName: Cost,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    RU,
+                    H,
+                    B,
+                    Value
+                  ],
+                  SystemName: RU.H.B.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                RU,
+                H,
+                B
+              ],
+              SystemName: RU.H.B,
+              DisplayName: Benefit,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    RU,
+                    H,
+                    TotalGroup,
+                    Value
+                  ],
+                  SystemName: RU.H.TotalGroup.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                RU,
+                H,
+                TotalGroup
+              ],
+              SystemName: RU.H.TotalGroup,
+              DisplayName:  ,
+              GrouperName: LineOfBusiness
+            }
+          ],
+          Coordinates: [
+            RU,
+            H
+          ],
+          SystemName: RU.H,
+          DisplayName: Health,
+          GrouperName: LineOfBusiness
+        },
+        {
+          Children: [
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    RU,
+                    L,
+                    E,
+                    Value
+                  ],
+                  SystemName: RU.L.E.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                RU,
+                L,
+                E
+              ],
+              SystemName: RU.L.E,
+              DisplayName: Expenses,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    RU,
+                    L,
+                    P,
+                    Value
+                  ],
+                  SystemName: RU.L.P.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                RU,
+                L,
+                P
+              ],
+              SystemName: RU.L.P,
+              DisplayName: Premium,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    RU,
+                    L,
+                    C,
+                    Value
+                  ],
+                  SystemName: RU.L.C.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                RU,
+                L,
+                C
+              ],
+              SystemName: RU.L.C,
+              DisplayName: Cost,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    RU,
+                    L,
+                    B,
+                    Value
+                  ],
+                  SystemName: RU.L.B.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                RU,
+                L,
+                B
+              ],
+              SystemName: RU.L.B,
+              DisplayName: Benefit,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    RU,
+                    L,
+                    TotalGroup,
+                    Value
+                  ],
+                  SystemName: RU.L.TotalGroup.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                RU,
+                L,
+                TotalGroup
+              ],
+              SystemName: RU.L.TotalGroup,
+              DisplayName:  ,
+              GrouperName: LineOfBusiness
+            }
+          ],
+          Coordinates: [
+            RU,
+            L
+          ],
+          SystemName: RU.L,
+          DisplayName: Life,
+          GrouperName: LineOfBusiness
+        },
+        {
+          Children: [
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    RU,
+                    P,
+                    E,
+                    Value
+                  ],
+                  SystemName: RU.P.E.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                RU,
+                P,
+                E
+              ],
+              SystemName: RU.P.E,
+              DisplayName: Expenses,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    RU,
+                    P,
+                    P,
+                    Value
+                  ],
+                  SystemName: RU.P.P.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                RU,
+                P,
+                P
+              ],
+              SystemName: RU.P.P,
+              DisplayName: Premium,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    RU,
+                    P,
+                    C,
+                    Value
+                  ],
+                  SystemName: RU.P.C.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                RU,
+                P,
+                C
+              ],
+              SystemName: RU.P.C,
+              DisplayName: Cost,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    RU,
+                    P,
+                    B,
+                    Value
+                  ],
+                  SystemName: RU.P.B.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                RU,
+                P,
+                B
+              ],
+              SystemName: RU.P.B,
+              DisplayName: Benefit,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    RU,
+                    P,
+                    TotalGroup,
+                    Value
+                  ],
+                  SystemName: RU.P.TotalGroup.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                RU,
+                P,
+                TotalGroup
+              ],
+              SystemName: RU.P.TotalGroup,
+              DisplayName:  ,
+              GrouperName: LineOfBusiness
+            }
+          ],
+          Coordinates: [
+            RU,
+            P
+          ],
+          SystemName: RU.P,
+          DisplayName: Property,
+          GrouperName: LineOfBusiness
+        },
+        {
+          Children: [
+            {
+              Coordinates: [
+                RU,
+                TotalGroup,
+                Value
+              ],
+              SystemName: RU.TotalGroup.Value,
+              DisplayName: Value,
+              GrouperName: ColumnName
+            }
+          ],
+          Coordinates: [
+            RU,
+            TotalGroup
+          ],
+          SystemName: RU.TotalGroup,
+          DisplayName:  ,
+          GrouperName: Country
+        }
+      ],
+      Coordinates: [
+        RU
+      ],
+      SystemName: RU,
+      DisplayName: Russia,
+      GrouperName: Country
+    },
+    {
+      Children: [
+        {
+          Children: [
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    CH,
+                    C,
+                    E,
+                    Value
+                  ],
+                  SystemName: CH.C.E.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                CH,
+                C,
+                E
+              ],
+              SystemName: CH.C.E,
+              DisplayName: Expenses,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    CH,
+                    C,
+                    P,
+                    Value
+                  ],
+                  SystemName: CH.C.P.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                CH,
+                C,
+                P
+              ],
+              SystemName: CH.C.P,
+              DisplayName: Premium,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    CH,
+                    C,
+                    C,
+                    Value
+                  ],
+                  SystemName: CH.C.C.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                CH,
+                C,
+                C
+              ],
+              SystemName: CH.C.C,
+              DisplayName: Cost,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    CH,
+                    C,
+                    B,
+                    Value
+                  ],
+                  SystemName: CH.C.B.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                CH,
+                C,
+                B
+              ],
+              SystemName: CH.C.B,
+              DisplayName: Benefit,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    CH,
+                    C,
+                    TotalGroup,
+                    Value
+                  ],
+                  SystemName: CH.C.TotalGroup.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                CH,
+                C,
+                TotalGroup
+              ],
+              SystemName: CH.C.TotalGroup,
+              DisplayName:  ,
+              GrouperName: LineOfBusiness
+            }
+          ],
+          Coordinates: [
+            CH,
+            C
+          ],
+          SystemName: CH.C,
+          DisplayName: Casualty,
+          GrouperName: LineOfBusiness
+        },
+        {
+          Children: [
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    CH,
+                    H,
+                    E,
+                    Value
+                  ],
+                  SystemName: CH.H.E.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                CH,
+                H,
+                E
+              ],
+              SystemName: CH.H.E,
+              DisplayName: Expenses,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    CH,
+                    H,
+                    P,
+                    Value
+                  ],
+                  SystemName: CH.H.P.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                CH,
+                H,
+                P
+              ],
+              SystemName: CH.H.P,
+              DisplayName: Premium,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    CH,
+                    H,
+                    C,
+                    Value
+                  ],
+                  SystemName: CH.H.C.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                CH,
+                H,
+                C
+              ],
+              SystemName: CH.H.C,
+              DisplayName: Cost,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    CH,
+                    H,
+                    B,
+                    Value
+                  ],
+                  SystemName: CH.H.B.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                CH,
+                H,
+                B
+              ],
+              SystemName: CH.H.B,
+              DisplayName: Benefit,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    CH,
+                    H,
+                    TotalGroup,
+                    Value
+                  ],
+                  SystemName: CH.H.TotalGroup.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                CH,
+                H,
+                TotalGroup
+              ],
+              SystemName: CH.H.TotalGroup,
+              DisplayName:  ,
+              GrouperName: LineOfBusiness
+            }
+          ],
+          Coordinates: [
+            CH,
+            H
+          ],
+          SystemName: CH.H,
+          DisplayName: Health,
+          GrouperName: LineOfBusiness
+        },
+        {
+          Children: [
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    CH,
+                    L,
+                    E,
+                    Value
+                  ],
+                  SystemName: CH.L.E.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                CH,
+                L,
+                E
+              ],
+              SystemName: CH.L.E,
+              DisplayName: Expenses,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    CH,
+                    L,
+                    P,
+                    Value
+                  ],
+                  SystemName: CH.L.P.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                CH,
+                L,
+                P
+              ],
+              SystemName: CH.L.P,
+              DisplayName: Premium,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    CH,
+                    L,
+                    C,
+                    Value
+                  ],
+                  SystemName: CH.L.C.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                CH,
+                L,
+                C
+              ],
+              SystemName: CH.L.C,
+              DisplayName: Cost,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    CH,
+                    L,
+                    B,
+                    Value
+                  ],
+                  SystemName: CH.L.B.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                CH,
+                L,
+                B
+              ],
+              SystemName: CH.L.B,
+              DisplayName: Benefit,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    CH,
+                    L,
+                    TotalGroup,
+                    Value
+                  ],
+                  SystemName: CH.L.TotalGroup.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                CH,
+                L,
+                TotalGroup
+              ],
+              SystemName: CH.L.TotalGroup,
+              DisplayName:  ,
+              GrouperName: LineOfBusiness
+            }
+          ],
+          Coordinates: [
+            CH,
+            L
+          ],
+          SystemName: CH.L,
+          DisplayName: Life,
+          GrouperName: LineOfBusiness
+        },
+        {
+          Children: [
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    CH,
+                    P,
+                    E,
+                    Value
+                  ],
+                  SystemName: CH.P.E.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                CH,
+                P,
+                E
+              ],
+              SystemName: CH.P.E,
+              DisplayName: Expenses,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    CH,
+                    P,
+                    P,
+                    Value
+                  ],
+                  SystemName: CH.P.P.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                CH,
+                P,
+                P
+              ],
+              SystemName: CH.P.P,
+              DisplayName: Premium,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    CH,
+                    P,
+                    C,
+                    Value
+                  ],
+                  SystemName: CH.P.C.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                CH,
+                P,
+                C
+              ],
+              SystemName: CH.P.C,
+              DisplayName: Cost,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    CH,
+                    P,
+                    B,
+                    Value
+                  ],
+                  SystemName: CH.P.B.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                CH,
+                P,
+                B
+              ],
+              SystemName: CH.P.B,
+              DisplayName: Benefit,
+              GrouperName: AmountType
+            },
+            {
+              Children: [
+                {
+                  Coordinates: [
+                    CH,
+                    P,
+                    TotalGroup,
+                    Value
+                  ],
+                  SystemName: CH.P.TotalGroup.Value,
+                  DisplayName: Value,
+                  GrouperName: ColumnName
+                }
+              ],
+              Coordinates: [
+                CH,
+                P,
+                TotalGroup
+              ],
+              SystemName: CH.P.TotalGroup,
+              DisplayName:  ,
+              GrouperName: LineOfBusiness
+            }
+          ],
+          Coordinates: [
+            CH,
+            P
+          ],
+          SystemName: CH.P,
+          DisplayName: Property,
+          GrouperName: LineOfBusiness
+        },
+        {
+          Children: [
+            {
+              Coordinates: [
+                CH,
+                TotalGroup,
+                Value
+              ],
+              SystemName: CH.TotalGroup.Value,
+              DisplayName: Value,
+              GrouperName: ColumnName
+            }
+          ],
+          Coordinates: [
+            CH,
+            TotalGroup
+          ],
+          SystemName: CH.TotalGroup,
+          DisplayName:  ,
+          GrouperName: Country
+        }
+      ],
+      Coordinates: [
+        CH
+      ],
+      SystemName: CH,
+      DisplayName: Switzerland,
+      GrouperName: Country
+    }
+  ],
+  Rows: [
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR
+        ],
+        SystemName: EUR,
+        DisplayName: Euro,
+        GrouperName: Currency
+      },
+      Data: {
+        CH: {
+          C: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          H: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          L: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          P: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          TotalGroup: {
+            Value: 96.0
+          }
+        },
+        D: {
+          C: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          H: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          L: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          P: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          TotalGroup: {
+            Value: 96.0
+          }
+        },
+        PT: {
+          C: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          H: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          L: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          P: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          TotalGroup: {
+            Value: 96.0
+          }
+        },
+        RU: {
+          C: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          H: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          L: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          P: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          TotalGroup: {
+            Value: 96.0
+          }
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB
+        ],
+        SystemName: RUB,
+        DisplayName: Russian rouble,
+        GrouperName: Currency
+      },
+      Data: {
+        CH: {
+          C: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          H: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          L: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          P: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          TotalGroup: {
+            Value: 96.0
+          }
+        },
+        D: {
+          C: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          H: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          L: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          P: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          TotalGroup: {
+            Value: 96.0
+          }
+        },
+        PT: {
+          C: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          H: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          L: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          P: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          TotalGroup: {
+            Value: 96.0
+          }
+        },
+        RU: {
+          C: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          H: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          L: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          P: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          TotalGroup: {
+            Value: 96.0
+          }
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF
+        ],
+        SystemName: CHF,
+        DisplayName: Swiss Franc,
+        GrouperName: Currency
+      },
+      Data: {
+        CH: {
+          C: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          H: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          L: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          P: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          TotalGroup: {
+            Value: 96.0
+          }
+        },
+        D: {
+          C: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          H: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          L: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          P: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          TotalGroup: {
+            Value: 96.0
+          }
+        },
+        PT: {
+          C: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          H: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          L: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          P: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          TotalGroup: {
+            Value: 96.0
+          }
+        },
+        RU: {
+          C: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          H: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          L: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          P: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          TotalGroup: {
+            Value: 96.0
+          }
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD
+        ],
+        SystemName: USD,
+        DisplayName: US Dollar,
+        GrouperName: Currency
+      },
+      Data: {
+        CH: {
+          C: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          H: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          L: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          P: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          TotalGroup: {
+            Value: 96.0
+          }
+        },
+        D: {
+          C: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          H: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          L: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          P: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          TotalGroup: {
+            Value: 96.0
+          }
+        },
+        PT: {
+          C: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          H: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          L: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          P: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          TotalGroup: {
+            Value: 96.0
+          }
+        },
+        RU: {
+          C: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          H: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          L: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          P: {
+            B: {
+              Value: 6.0
+            },
+            C: {
+              Value: 6.0
+            },
+            E: {
+              Value: 6.0
+            },
+            P: {
+              Value: 6.0
+            },
+            TotalGroup: {
+              Value: 24.0
+            }
+          },
+          TotalGroup: {
+            Value: 96.0
+          }
+        }
+      }
+    }
+  ],
+  HasRowGrouping: true
+}
