@@ -13,7 +13,7 @@ public record RemoteViewControl : UiControl<RemoteViewControl, RemoteViewPlugin>
     //needed for serialization
     // ReSharper disable once ConvertToPrimaryConstructor
     public RemoteViewControl()
-        : base(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new AreaChangedEvent(nameof(Data), new SpinnerControl()))
+        : base(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
                                                                {
                                                                }
 
