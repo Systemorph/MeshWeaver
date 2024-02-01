@@ -1,0 +1,291 @@
+﻿{
+  Columns: [
+    {
+      Coordinates: [
+        Value
+      ],
+      SystemName: Value,
+      DisplayName: Value,
+      GrouperName: ColumnName
+    }
+  ],
+  Rows: [
+    {
+      RowGroup: {
+        Coordinates: [
+          C
+        ],
+        SystemName: C,
+        DisplayName: C,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        Value: 96.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          C,
+          B
+        ],
+        SystemName: C.B,
+        DisplayName: B,
+        GrouperName: AmountType
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          C,
+          C
+        ],
+        SystemName: C.C,
+        DisplayName: C,
+        GrouperName: AmountType
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          C,
+          E
+        ],
+        SystemName: C.E,
+        DisplayName: E,
+        GrouperName: AmountType
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          C,
+          P
+        ],
+        SystemName: C.P,
+        DisplayName: P,
+        GrouperName: AmountType
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          H
+        ],
+        SystemName: H,
+        DisplayName: H,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        Value: 96.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          H,
+          B
+        ],
+        SystemName: H.B,
+        DisplayName: B,
+        GrouperName: AmountType
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          H,
+          C
+        ],
+        SystemName: H.C,
+        DisplayName: C,
+        GrouperName: AmountType
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          H,
+          E
+        ],
+        SystemName: H.E,
+        DisplayName: E,
+        GrouperName: AmountType
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          H,
+          P
+        ],
+        SystemName: H.P,
+        DisplayName: P,
+        GrouperName: AmountType
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          L
+        ],
+        SystemName: L,
+        DisplayName: L,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        Value: 96.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          L,
+          B
+        ],
+        SystemName: L.B,
+        DisplayName: B,
+        GrouperName: AmountType
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          L,
+          C
+        ],
+        SystemName: L.C,
+        DisplayName: C,
+        GrouperName: AmountType
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          L,
+          E
+        ],
+        SystemName: L.E,
+        DisplayName: E,
+        GrouperName: AmountType
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          L,
+          P
+        ],
+        SystemName: L.P,
+        DisplayName: P,
+        GrouperName: AmountType
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          P
+        ],
+        SystemName: P,
+        DisplayName: P,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        Value: 96.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          P,
+          B
+        ],
+        SystemName: P.B,
+        DisplayName: B,
+        GrouperName: AmountType
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          P,
+          C
+        ],
+        SystemName: P.C,
+        DisplayName: C,
+        GrouperName: AmountType
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          P,
+          E
+        ],
+        SystemName: P.E,
+        DisplayName: E,
+        GrouperName: AmountType
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          P,
+          P
+        ],
+        SystemName: P.P,
+        DisplayName: P,
+        GrouperName: AmountType
+      },
+      Data: {
+        Value: 24.0
+      }
+    }
+  ],
+  HasRowGrouping: true
+}
