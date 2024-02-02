@@ -1,5 +1,5 @@
 import React, { Suspense, useMemo } from "react";
-import { MessageHub } from "@open-smc/application/messageHub/MessageHub";
+import { MessageHubBase } from "@open-smc/application/messageHub/MessageHubBase";
 import { AddHub } from "@open-smc/application/messageHub/AddHub";
 import { ControlStarter } from "@open-smc/application/ControlStarter";
 import { ViewModelHub } from "./ViewModelHub";
@@ -10,7 +10,7 @@ import { NotificationProvider } from "@open-smc/application/notifications/Notifi
 import { InMemoryMessageRouter } from "@open-smc/sandbox/InMemoryMessageRouter";
 
 interface Props {
-    layoutHub?: MessageHub;
+    layoutHub?: MessageHubBase;
     path?: string;
     root?: ControlDef;
     log?: boolean;
@@ -22,13 +22,11 @@ export function Sandbox({root, layoutHub: originalLayoutHub, path}: Props) {
 
     return (
         <NotificationProvider>
-            <Suspense fallback={<div>Loading...</div>}>
-                <InMemoryMessageRouter>
-                    <AddHub address={layoutHub} id={layoutHubId}>
-                        <ControlStarter area={"app"} path={path}/>
-                    </AddHub>
-                </InMemoryMessageRouter>
-            </Suspense>
+            <InMemoryMessageRouter>
+                <AddHub address={layoutHub} id={layoutHubId}>
+                    <ControlStarter area={"app"} path={path}/>
+                </AddHub>
+            </InMemoryMessageRouter>
         </NotificationProvider>
     );
 }

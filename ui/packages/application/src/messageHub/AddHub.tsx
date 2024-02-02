@@ -1,11 +1,11 @@
 import { createContext, PropsWithChildren, useContext, useEffect, useState } from "react";
 import { ConnectToHubRequest } from "../application.contract";
-import { MessageHub } from "./MessageHub";
-import { useMessageRouter } from "../messageRouterContext";
+import { MessageHubBase } from "./MessageHubBase";
+import { useMessageRouter } from "../MessageRouter";
 
 const hubContext = createContext<MessageHubFinder>(null);
 
-type MessageHubFinder = (id: string) => MessageHub;
+type MessageHubFinder = (id: string) => MessageHubBase;
 
 export const useMessageHub = (id?: string) => {
     return useContext(hubContext)?.(id);
@@ -22,8 +22,8 @@ export function AddHub({address, id, children}: PropsWithChildren<MessageHubProp
     const [value, setValue] = useState<MessageHubFinder>();
 
     useEffect(() => {
-        const hub = new MessageHub();
-        const exposed = new MessageHub();
+        const hub = new MessageHubBase();
+        const exposed = new MessageHubBase();
         const subscription = hub.exposeAs(exposed);
         subscription.add(addHub(address, exposed));
         hub.sendMessage(new ConnectToHubRequest(uiAddress, address));
