@@ -50,6 +50,7 @@ public record UpdateRequest<TElement>(TElement Element) : IRequest<DataChanged>
     public object Options { get; init; }
 }
 
+public record UpdateRequest(IReadOnlyCollection<object> Elements) : IRequest<DataChanged>;
 public record UpdateBatchRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataChanged>;
 
 public record DataChanged(object Changes)
@@ -58,6 +59,7 @@ public record DataChanged(object Changes)
     public ActivityLog Log { get; init; }
 };
 
+public record DeleteRequest(IReadOnlyCollection<object> Elements) : IRequest<DataDeleted>;
 public record DeleteBatchRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataDeleted>;
 
 public record DataDeleted(object Changes)
@@ -66,9 +68,9 @@ public record DataDeleted(object Changes)
     public ActivityLog Log { get; init; }
 }
 
-public record DeleteRequest<TState>(TState State) : IRequest<ObjectDeleted> { public object Options { get; init; } };
+// public record DeleteRequest<TState>(TState State) : IRequest<ObjectDeleted> { public object Options { get; init; } };
 
-public record ObjectDeleted(object Id);
+// public record ObjectDeleted(object Id);
 
 
 public enum ConnectionState
