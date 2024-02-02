@@ -4,7 +4,7 @@ import { keyBy, keys, map, mapValues, pick } from "lodash";
 import { Category, Named, SelectionByCategory } from "../../application.contract";
 import { MultiselectInner } from "./MultiselectInner";
 import { useCategoryApi } from "../../useCategoryApi";
-import { getUseSelector } from "@open-smc/store/useSelector";
+import { makeUseSelector } from "@open-smc/store/useSelector";
 
 export interface MultiselectState {
     readonly selectedElements: Record<string, string[]>;
@@ -20,7 +20,7 @@ export function useMultiselectStore() {
     return useContext(context);
 }
 
-export const useMultiselectSelector = getUseSelector(useMultiselectStore);
+export const useMultiselectSelector = makeUseSelector(useMultiselectStore);
 
 interface Props {
     data: SelectionByCategory;

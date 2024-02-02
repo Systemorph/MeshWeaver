@@ -1,4 +1,4 @@
-import { getUseSelector } from "@open-smc/store/useSelector";
+import { makeUseSelector } from "@open-smc/store/useSelector";
 import { useSmappStore } from "./useSmappStore";
 
-export const useSmappSelector = getUseSelector(useSmappStore);
+export const useSmappSelector = makeUseSelector(useSmappStore);
