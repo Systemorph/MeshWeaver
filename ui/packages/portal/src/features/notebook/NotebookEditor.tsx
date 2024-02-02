@@ -31,7 +31,7 @@ import { useProject } from "../project/projectStore/hooks/useProject";
 import { useEnv } from "../project/projectStore/hooks/useEnv";
 import { useProjectSelector } from "../project/projectStore/projectStore";
 import { useApi } from "../../ApiProvider";
-import { getUseSelector } from "@open-smc/store/useSelector";
+import { makeUseSelector } from "@open-smc/store/useSelector";
 
 interface NotebookEditorContext {
     readonly store: Store<NotebookEditorState>;
@@ -49,7 +49,7 @@ export function useNotebookEditorStore() {
     return store;
 }
 
-export const useNotebookEditorSelector = getUseSelector(useNotebookEditorStore);
+export const useNotebookEditorSelector = makeUseSelector(useNotebookEditorStore);
 
 export function useElementsStore() {
     const {elementsStore} = useNotebookEditorContext();
