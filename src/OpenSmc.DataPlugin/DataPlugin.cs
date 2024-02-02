@@ -1,9 +1,5 @@
-﻿using OpenSmc.Activities;
-using OpenSmc.DataSource.Abstractions;
-using OpenSmc.Messaging;
+﻿using OpenSmc.Messaging;
 using OpenSmc.Reflection;
-using OpenSmc.ServiceProvider;
-using OpenSmc.Workspace;
 
 namespace OpenSmc.DataPlugin;
 
@@ -40,10 +36,6 @@ public record Workspace()
 
 public class DataPlugin : MessageHubPlugin<DataPlugin, Workspace>
 {
-    //[Inject] private IActivityService activityService;
-
-    //private IDataSource dataSource;
-
     private DataPluginConfiguration DataConfiguration { get; set; } = new();
 
     public DataPlugin(IMessageHub hub, MessageHubConfiguration configuration,
