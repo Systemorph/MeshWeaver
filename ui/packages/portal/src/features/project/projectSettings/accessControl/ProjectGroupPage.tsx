@@ -4,11 +4,11 @@ import { AccessControlParams } from "../../../accessControl/AccessControlPage";
 import { Group } from "../../../accessControl/Group";
 import { useProject } from "../../projectStore/hooks/useProject";
 import { useAccessControlEditorApi } from "../../projectStore/hooks/useAccessControlEditorApi";
-import { useIncrement } from "@open-smc/utils/useIncrement";
+import { useIncrement } from "@open-smc/utils/src/useIncrement";
 import { ProjectAccessControlApi } from "./projectAccessControlApi";
 import { AccessGroup, GroupMember } from "../../../accessControl/accessControl.contract";
 import { useProjectPermissions } from "../../projectStore/hooks/useProjectPermissions";
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 
 export function ProjectGroupPage() {
     const {project} = useProject();

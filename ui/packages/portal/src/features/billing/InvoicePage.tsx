@@ -5,13 +5,13 @@ import { BillingAddress } from "./BillingAddress";
 import { BillingSessions } from "./BillingSessions";
 import { SessionDescriptor } from "../../app/notebookFormat";
 import classNames from "classnames";
-import { formatDate } from "@open-smc/utils/formatDate";
+import { formatDate } from "@open-smc/utils/src/formatDate";
 import { formatAmount, formatCredits } from "./billingUtils";
 
 import styles from "./invoice-page.module.scss";
 import credits from "./credits.module.scss";
 import fee from "./fee.module.scss";
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 import { Page } from "../../shared/utils/requestWrapper";
 
 type InvoicePageParams = {

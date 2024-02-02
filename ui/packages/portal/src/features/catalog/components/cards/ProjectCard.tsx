@@ -1,13 +1,13 @@
 import styles from './cards.module.scss';
 import { Link, useNavigate } from "react-router-dom";
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import classNames from "classnames";
 import { format } from 'date-fns';
 import { defaultThumbnail, ProjectCatalogItem } from "../../../../app/projectApi";
 import { useSideMenu } from "../../../components/sideMenu/hooks/useSideMenu";
 import { CloneProjectForm } from "../../../project/editProject/CloneProjectForm";
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
-import PopupMenu from "@open-smc/ui-kit/components/PopupMenu";
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
+import PopupMenu from "@open-smc/ui-kit/src/components/PopupMenu";
 import Dropdown from "rc-dropdown";
 
 

@@ -1,5 +1,5 @@
 export {}
-// import {InputText} from "@open-smc/ui-kit/components/InputText";
+// import {InputText} from "@open-smc/ui-kit/src/components/InputText";
 //
 // interface StringEditorProps  {
 //     data: string;

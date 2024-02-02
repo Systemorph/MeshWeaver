@@ -1,8 +1,8 @@
-import { createStore, Store } from "@open-smc/store/store";
+import { createStore, Store } from "@open-smc/store/src/store";
 import { AreaChangedEvent } from "./application.contract";
 import { createContext, PropsWithChildren, useContext, useEffect, useMemo } from "react";
 import { useMessageHub } from "./messageHub/AddHub";
-import { makeUseSelector } from "@open-smc/store/useSelector";
+import { makeUseSelector } from "@open-smc/store/src/useSelector";
 
 interface AreaStoreContext {
     areaStore: Store<Record<string, AreaChangedEvent>>;

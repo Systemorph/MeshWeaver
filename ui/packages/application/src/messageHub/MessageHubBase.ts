@@ -2,9 +2,9 @@ import { filter, first, firstValueFrom } from "rxjs";
 import { MessageDelivery } from "../SignalrHub";
 import { ClassType, getMessageType, getMessageTypeConstructor } from "../contractMessage";
 import { Hub } from "./Hub";
-import { withTimeout } from "@open-smc/utils/promiseWithTimeout";
-import { BaseEvent, ErrorEvent } from "@open-smc/application/application.contract";
-import { MessageHub } from "@open-smc/application/messageHub/MessageHub";
+import { withTimeout } from "@open-smc/utils/src/promiseWithTimeout";
+import { BaseEvent, ErrorEvent } from "@open-smc/application/src/application.contract";
+import { MessageHub } from "@open-smc/application/src/messageHub/MessageHub";
 
 export class MessageHubBase extends Hub<MessageDelivery<any>> implements MessageHub {
     constructor() {

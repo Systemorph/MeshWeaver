@@ -6,7 +6,7 @@ import { triggerContentWidthChanged } from "./contentWidthEvent";
 import { debounce } from "lodash";
 import { usePrefixHashFragment } from "../../shared/hooks/usePrefixHashFragment";
 import { useNotebookEditorSelector } from "./NotebookEditor";
-import { ControlStarter } from "@open-smc/application/ControlStarter";
+import { ControlStarter } from "@open-smc/application/src/ControlStarter";
 import { useProject } from "../project/projectStore/hooks/useProject";
 import { useEnv } from "../project/projectStore/hooks/useEnv";
 

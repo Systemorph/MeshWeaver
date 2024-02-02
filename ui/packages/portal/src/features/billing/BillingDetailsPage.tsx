@@ -11,10 +11,10 @@ import Tooltip from "rc-tooltip";
 import { formatAmount, formatFee } from "./billingUtils";
 import styles from "./billing-details.module.scss";
 import fee from "./fee.module.scss";
-import "@open-smc/ui-kit/components/tooltip.scss";
-import { formatDate } from "@open-smc/utils/numbers";
+import "@open-smc/ui-kit/src/components/tooltip.scss";
+import { formatDate } from "@open-smc/utils/src/numbers";
 import { Page } from "../../shared/utils/requestWrapper";
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 
 export type BillingDetailsPageParams = {
     billId: string;

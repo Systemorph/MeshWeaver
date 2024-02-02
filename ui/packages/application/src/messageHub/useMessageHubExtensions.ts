@@ -1,7 +1,7 @@
 import { ClassType } from "../contractMessage";
 import { useMessageHub } from "./AddHub";
 import { BaseEvent, ErrorEvent } from "../application.contract";
-import { withTimeout } from "@open-smc/utils/promiseWithTimeout";
+import { withTimeout } from "@open-smc/utils/src/promiseWithTimeout";
 import { MessageDelivery } from "../SignalrHub";
 
 // TODO: legacy (8/3/2023, akravets)

@@ -1,6 +1,6 @@
 import { useFileExplorerSelector, useFileExplorerStore, useFileStore } from "../../ProjectExplorerContextProvider";
 import { FolderAddedEvent, NotebookAddedEvent } from "../../projectExplorerEditorGrain/projectExplorerEditor.contract";
-import { useMessageHubExtensions } from "@open-smc/application/messageHub/useMessageHubExtensions";
+import { useMessageHubExtensions } from "@open-smc/application/src/messageHub/useMessageHubExtensions";
 
 export function useSaveNewFile() {
     const fileStore = useFileStore();

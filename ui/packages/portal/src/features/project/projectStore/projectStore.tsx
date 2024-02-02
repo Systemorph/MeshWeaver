@@ -1,8 +1,8 @@
 import { ProjectState } from "./projectState";
 import { createContext, PropsWithChildren, useContext, useMemo } from "react";
-import { createStore, Selector, Store } from "@open-smc/store/store";
-import { makeUseSelector } from "@open-smc/store/useSelector";
-import { useSelectorDeprecated } from "@open-smc/store/storeContext";
+import { createStore, Selector, Store } from "@open-smc/store/src/store";
+import { makeUseSelector } from "@open-smc/store/src/useSelector";
+import { useSelectorDeprecated } from "@open-smc/store/src/storeContext";
 
 interface ProjectContext {
     readonly store: Store<ProjectState>;

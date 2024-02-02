@@ -1,9 +1,9 @@
-import { makeBinding } from "@open-smc/application/dataBinding/resolveBinding";
-import { makeCheckbox } from "@open-smc/sandbox/Checkbox";
-import { makeHtml } from "@open-smc/sandbox/Html";
-import { makeIcon } from "@open-smc/sandbox/Icon";
-import { makeItemTemplate } from "@open-smc/sandbox/ItemTemplate";
-import { makeStack } from "@open-smc/sandbox/LayoutStack";
+import { makeBinding } from "@open-smc/application/src/dataBinding/resolveBinding";
+import { makeCheckbox } from "@open-smc/sandbox/src/Checkbox";
+import { makeHtml } from "@open-smc/sandbox/src/Html";
+import { makeIcon } from "@open-smc/sandbox/src/Icon";
+import { makeItemTemplate } from "@open-smc/sandbox/src/ItemTemplate";
+import { makeStack } from "@open-smc/sandbox/src/LayoutStack";
 import { v4 } from "uuid";
 
 export const main = makeStack()

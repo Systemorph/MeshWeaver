@@ -2,7 +2,7 @@ import { useEnv } from "../projectStore/hooks/useEnv";
 import { PropsWithChildren } from "react";
 import page from "../pages/page.module.scss";
 import errorpage from "../../errorpage.module.scss";
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 
 export function EnvContent({children}: PropsWithChildren) {
     const {isLoading, env, error} = useEnv();

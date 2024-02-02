@@ -1,10 +1,10 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import { createStore, Store } from "@open-smc/store/store";
+import { createStore, Store } from "@open-smc/store/src/store";
 import { keyBy, keys, map, mapValues, pick } from "lodash";
 import { Category, Named, SelectionByCategory } from "../../application.contract";
 import { MultiselectInner } from "./MultiselectInner";
 import { useCategoryApi } from "../../useCategoryApi";
-import { makeUseSelector } from "@open-smc/store/useSelector";
+import { makeUseSelector } from "@open-smc/store/src/useSelector";
 
 export interface MultiselectState {
     readonly selectedElements: Record<string, string[]>;

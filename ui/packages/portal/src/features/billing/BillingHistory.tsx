@@ -2,7 +2,7 @@ import { AgGridReact } from "ag-grid-react";
 import { useState } from "react";
 import { Bill, dateFormat } from "./billingApi";
 import { Link } from "react-router-dom";
-import { formatDate } from "@open-smc/utils/numbers";
+import { formatDate } from "@open-smc/utils/src/numbers";
 import { ColDef } from "ag-grid-community";
 import { useProject } from "../project/projectStore/hooks/useProject";
 import { formatAmount } from "./billingUtils";

@@ -1,6 +1,6 @@
 import styles from "./sidebar.module.scss";
 import { PropsWithChildren } from "react";
-import {Button, ButtonProps} from "@open-smc/ui-kit/components/Button";
+import {Button, ButtonProps} from "@open-smc/ui-kit/src/components/Button";
 import { useNavigate } from "react-router-dom";
 import classNames from "classnames";
 

@@ -3,8 +3,8 @@ import { useProject } from "../../projectStore/hooks/useProject";
 import { Groups } from "../../../accessControl/Groups";
 import { ProjectAccessControlApi } from "./projectAccessControlApi";
 import { AccessGroup } from "../../../accessControl/accessControl.contract";
-import { useThrowAsync } from "@open-smc/utils/useThrowAsync";
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
+import { useThrowAsync } from "@open-smc/utils/src/useThrowAsync";
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 
 export function ProjectGroupsPage() {
     const {project} = useProject();

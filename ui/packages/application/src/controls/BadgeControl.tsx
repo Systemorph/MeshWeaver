@@ -1,6 +1,6 @@
 import Tooltip from "rc-tooltip";
 import styles from "./badgeControl.module.scss";
-import "@open-smc/ui-kit/components/tooltip.scss";
+import "@open-smc/ui-kit/src/components/tooltip.scss";
 import classNames from "classnames";
 import tinycolor from "tinycolor2";
 import { ControlView } from "../ControlDef";

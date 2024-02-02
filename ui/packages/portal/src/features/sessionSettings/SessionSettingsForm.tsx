@@ -13,8 +13,8 @@ import { IdleTimeout } from "./IdleTimeout";
 import { TierField } from "./TierField";
 import { CpuField } from "./CpuField";
 import { MemoryField } from "./MemoryField";
-import { Button } from "@open-smc/ui-kit/components/Button";
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
+import { Button } from "@open-smc/ui-kit/src/components/Button";
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
 import classNames from "classnames";
 import { CreditsPerMinuteField } from "./CreditsPerMinuteField";
 import { ImageField } from "./ImageField";

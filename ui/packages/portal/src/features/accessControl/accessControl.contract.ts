@@ -1,5 +1,5 @@
-import { contractMessage } from "@open-smc/application/contractMessage";
-import { BaseEvent } from "@open-smc/application/application.contract";
+import { contractMessage } from "@open-smc/application/src/contractMessage";
+import { BaseEvent } from "@open-smc/application/src/application.contract";
 
 export class AccessChangedEvent extends BaseEvent {
     constructor(public objectId: string) {

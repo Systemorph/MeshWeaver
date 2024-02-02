@@ -7,7 +7,7 @@ import { useNavigate } from "react-router-dom";
 import { useProject } from "../../../projectStore/hooks/useProject";
 import { useActiveFile } from "../../../projectStore/hooks/useActiveFile";
 import { useEnv } from "../../../projectStore/hooks/useEnv";
-import { PopupMenuItem } from "@open-smc/ui-kit/components/PopupMenu";
+import { PopupMenuItem } from "@open-smc/ui-kit/src/components/PopupMenu";
 
 export function useCommonFileMenuItems(file: FileModel, canEdit: boolean) {
     const setFile = useSetFile();
