@@ -12,7 +12,7 @@ import { ClassificationInner } from "./ClassificationInner";
 import { insertAfter } from "@open-smc/utils/insertAfter";
 import { arrayMove } from "@dnd-kit/sortable";
 import { insertBefore } from "@open-smc/utils/insertBefore";
-import { getUseSelector } from "@open-smc/store/useSelector";
+import { makeUseSelector } from "@open-smc/store/useSelector";
 
 type ClassificationContext = {
     readonly store: Store<ClassificationState>;
@@ -47,7 +47,7 @@ export function useClassificationStore() {
     return store;
 }
 
-export const useClassificationSelector = getUseSelector(useClassificationStore);
+export const useClassificationSelector = makeUseSelector(useClassificationStore);
 
 interface ClassificationProps {
     data: SelectionByCategory;

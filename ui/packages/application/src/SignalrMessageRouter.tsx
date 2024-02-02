@@ -1,45 +1,44 @@
-import { JSX, PropsWithChildren, useEffect, useMemo, useState } from "react";
+import { PropsWithChildren, useEffect, useMemo, useState } from "react";
 import { MessageHub } from "./messageHub/MessageHub";
 import { MessageDelivery, SignalrHub } from "./SignalrHub";
 import { filter, map } from "rxjs";
 import { isEqual } from "lodash";
-import { useConnection, useConnectionStatus } from "./SignalrConnectionProvider";
+import { SignalrConnectionProvider, useConnectionSelector } from "./SignalrConnectionProvider";
 import { down, makeLogger, up } from "./logger";
 import { UiAddress } from "./application.contract";
 import { messageRouterContext } from "./messageRouterContext";
-import BlockUi from "@availity/block-ui";
-import "@availity/block-ui/dist/index.css";
-import { v4 } from "uuid";
 
-interface Props {
-    fallback?: () => JSX.Element;
-    log?: boolean;
+const log = process.env.NODE_ENV === 'development';
+
+export function SignalrMessageRouter({children}: PropsWithChildren) {
+    return (
+        <SignalrConnectionProvider>
+            <SignalrMessageRouterInner children={children}/>
+        </SignalrConnectionProvider>
+    );
 }
 
-export function SignalrMessageRouter({fallback, log, children}: PropsWithChildren & Props) {
-    const [key, setKey] = useState(v4);
-    const connection = useConnection();
-    const {appId, connectionStatus, started} = useConnectionStatus();
-    const [signalr] = useState(new SignalrHub(connection));
-    useEffect(() => connection.onReconnected(() => setKey(v4())), [connection]);
-
+function SignalrMessageRouterInner({children}: PropsWithChildren) {
+    const appId = useConnectionSelector("appId");
+    const connection = useConnectionSelector("connection");
+    const [signalrHub] = useState(new SignalrHub(connection));
     const uiAddress = useMemo(() => new UiAddress(appId), [appId]);
 
     useEffect(() => {
         if (log) {
-            const subscription = signalr.subscribe(makeLogger(down));
+            const subscription = signalrHub.subscribe(makeLogger(down));
             return () => subscription.unsubscribe();
         }
-    }, [signalr, log]);
+    }, [signalrHub]);
 
     const addHub = useMemo(
         () =>
             function addHub(address: unknown, hub: MessageHub) {
                 const hubPacked = hub.pipe(pack(address, uiAddress));
-                const subscription = hubPacked.subscribe(signalr);
+                const subscription = hubPacked.subscribe(signalrHub);
 
                 subscription.add(
-                    signalr.pipe(filterBySender(address))
+                    signalrHub.pipe(filterBySender(address))
                         // .pipe(tap(x => console.log(`Message ${x.id} reached target`)))
                         .subscribe(hub));
 
@@ -49,24 +48,16 @@ export function SignalrMessageRouter({fallback, log, children}: PropsWithChildre
 
                 return subscription;
             },
-        [signalr, log, uiAddress]
+        [signalrHub, uiAddress]
     );
 
-    const value = useMemo(() => {
-        return {
-            addHub,
-            uiAddress
-        }
-    }, [addHub, uiAddress]);
-
-    if (!started) {
-        return fallback?.();
-    }
+    const value = useMemo(() => ({
+        addHub,
+        uiAddress
+    }), [addHub, uiAddress]);
 
     return (
-        <BlockUi blocking={connectionStatus === "Disconnected"} loader={null} key={key}>
-            <messageRouterContext.Provider value={value} children={children}/>
-        </BlockUi>
+        <messageRouterContext.Provider value={value} children={children}/>
     );
 }
 
