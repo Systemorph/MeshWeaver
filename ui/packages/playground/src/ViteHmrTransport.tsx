@@ -1,19 +1,13 @@
-import { PropsWithChildren, useEffect, useMemo } from "react";
+import { PropsWithChildren, useMemo } from "react";
 import { transportContext } from "@open-smc/application/src/transportContext";
-import { MessageHubBase } from "@open-smc/application/src/messageHub/MessageHubBase.ts";
+import { ViteHmrHub } from "./ViteHmrHub.tsx";
 
 export function ViteHmrTransport({children}: PropsWithChildren) {
-    useEffect(() => {
-        if (import.meta.hot) {
-            import.meta.hot.send('my:from-client', { msg: 'Hey!' })
-        }
-    }, []);
-
     const value = useMemo(() => ({
-        transportHub: new MessageHubBase(),
+        transportHub: new ViteHmrHub(),
         layoutAddress: "Layout",
         uiAddress: "Ui"
-    }), []) as any;
+    }), []);
 
     return (
         <transportContext.Provider value={value} children={children}/>
