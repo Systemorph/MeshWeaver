@@ -8,7 +8,7 @@ namespace OpenSmc.Layout.LayoutClient;
 public record LayoutClientState(LayoutClientConfiguration Configuration)
 {
     internal ImmutableDictionary<string, ImmutableDictionary<string, AreaChangedEvent>> AreasByControlId { get; init; } = ImmutableDictionary<string, ImmutableDictionary<string, AreaChangedEvent>>.Empty;
-    internal ImmutableDictionary<object, AreaChangedEvent> AreasByControlAddress { get; init; } = ImmutableDictionary<object, AreaChangedEvent>.Empty;
+    internal ImmutableDictionary<object, ImmutableDictionary<string, AreaChangedEvent>> AreasByControlAddress { get; init; } = ImmutableDictionary<object, ImmutableDictionary<string, AreaChangedEvent>>.Empty;
     internal ImmutableDictionary<(object Address, string Area), AreaChangedEvent> AreasByAddressAndName { get; init; } = ImmutableDictionary<(object Address, string Area), AreaChangedEvent>.Empty;
     internal ImmutableList<(Func<LayoutClientState, AreaChangedEvent> Selector, IMessageDelivery Request)> PendingRequests { get; init; } = ImmutableList<(Func<LayoutClientState, AreaChangedEvent> Selector, IMessageDelivery Request)>.Empty;
 
@@ -39,21 +39,13 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
         IMessageHandler<AreaChangedEvent>,
         IMessageHandler<GetRequest<AreaChangedEvent>>
 {
-    public LayoutClientState StartupState()
-        => new(configuration);
-
-
     public override async Task StartAsync()
     {
         await base.StartAsync();
-        InitializeState(StartupState());
-    }
-
-    public override void InitializeState(LayoutClientState state)
-    { 
-        base.InitializeState(state);
+        InitializeState(new(configuration));
         Hub.Post(configuration.RefreshMessage, o => o.WithTarget(State.Configuration.LayoutHostAddress));
     }
+
 
     IMessageDelivery IMessageHandler<AreaChangedEvent>.HandleMessage(IMessageDelivery<AreaChangedEvent> request)
     {
@@ -68,8 +60,10 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
 
         var control = request.Message.View as UiControl;
         State.AreasByAddressAndName.TryGetValue((sender, request.Message.Area), out var existing);
-        if (existing == null && control != null && control.Address != null && State.AreasByControlAddress.TryGetValue(control.Address, out var inner))
-            existing = inner;
+        if (existing != null &&
+            State.AreasByControlAddress.TryGetValue(((IUiControl)existing.View).Address, out var hs) &&
+            hs.TryGetValue(string.Empty, out var updated))
+            existing = updated;
 
         var areaChanged = request.Message;
 
@@ -84,7 +78,7 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
 
         }
 
-        if (State.AreasByControlAddress.TryGetValue(sender, out var parentArea))
+        if (State.AreasByControlAddress.TryGetValue(sender, out var inner) && inner.TryGetValue(string.Empty, out var parentArea))
         {
             if (parentArea.View is IUiControlWithSubAreas controlWithSubAreas)
             {
@@ -160,8 +154,8 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
     {
         return s with
         {
-                   AreasByControlAddress = s.AreasByControlAddress.SetItems(area.Select(a => new KeyValuePair<object,AreaChangedEvent>(control.Address, a))),
-                   AreasByControlId = s.AreasByControlId.SetItem(control.Id, (s.AreasByControlId.TryGetValue(control.Id, out var list) ? list : ImmutableDictionary<string, AreaChangedEvent>.Empty).SetItems(area.Select(a => new KeyValuePair<string, AreaChangedEvent>(a.Area,a))))
+                   AreasByControlAddress = s.AreasByControlAddress.SetItem(control.Address, (s.AreasByControlAddress.TryGetValue(control.Address, out var hs) ? hs :ImmutableDictionary<string, AreaChangedEvent>.Empty ).SetItems(area.Select(a => new KeyValuePair<string, AreaChangedEvent>(a.Area, a)).Where(x => x.Value.View != null))),
+                   AreasByControlId = s.AreasByControlId.SetItem(control.Id, (s.AreasByControlId.TryGetValue(control.Id, out var list) ? list : ImmutableDictionary<string, AreaChangedEvent>.Empty).SetItems(area.Select(a => new KeyValuePair<string, AreaChangedEvent>(a.Area,a)).Where(x => x.Value.View != null)))
                };
     }
 
@@ -184,7 +178,7 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
 
     private void CheckInDynamic(RemoteViewControl remoteView)
     {
-        Hub.Post(new RefreshRequest(nameof(RemoteViewControl.Data)), o => o.WithTarget(remoteView.Address));
+        Hub.Post(new RefreshRequest(string.Empty), o => o.WithTarget(remoteView.Address));
     }
     private void CheckInDynamic(Composition.Layout stack)
     {

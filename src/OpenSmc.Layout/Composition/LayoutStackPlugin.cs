@@ -19,17 +19,38 @@ public class LayoutStackPlugin(IMessageHub hub) :
         this.layoutDefinition = layoutDefinition;
     }
 
-    public Layout StartupState()
+
+    public override Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery)
     {
-        if (layoutDefinition?.InitialState == null)
-            return null;
-        return layoutDefinition.InitialState with { Hub = hub1, Address = hub1.Address };
+        return base.DeliverMessageAsync(delivery);
     }
 
     public override async Task StartAsync()
     {
         await base.StartAsync();
-        InitializeState(StartupState());
+
+        if (layoutDefinition?.InitialState == null)
+            return;
+        var control = layoutDefinition.InitialState with { Hub = hub1, Address = hub1.Address };
+
+        var areas = control.ViewElements
+            .Select
+            (
+                a => a is ViewElementWithView { View: not null } vv
+                    ? SetAreaImpl(null, vv.View, null, null, vv.Options)
+                    : a is ViewElementWithViewDefinition { ViewDefinition: not null } vd
+                        ? SetAreaImpl(null, null, vd.ViewDefinition, null, vd.Options)
+                        :
+                        a is ViewElementWithPath vp
+                            ? SetAreaImpl(null, null, null, vp.Path, vp.Options)
+                            : new AreaChangedEvent(a.Area, null)
+
+            )
+            .ToArray();
+
+        control = control with { Areas = areas };
+        InitializeState(control);
+
     }
 
     private AreaChangedEvent GetArea(string area)
@@ -77,28 +98,6 @@ public class LayoutStackPlugin(IMessageHub hub) :
     }
 
 
-    public override void InitializeState(Layout control)
-    {
-        if(control == null) return;
-        base.InitializeState(control);
-        var areas = Control.ViewElements
-                                 .Select
-                                     (
-                                      a => a is ViewElementWithView { View: not null } vv
-                                                     ? SetAreaImpl(null, vv.View, null, null, vv.Options)
-                                                     : a is ViewElementWithViewDefinition { ViewDefinition: not null } vd
-                                                         ? SetAreaImpl(null, null, vd.ViewDefinition, null, vd.Options)
-                                                         :
-                                                         a is ViewElementWithPath vp
-                                                             ? SetAreaImpl(null, null, null, vp.Path, vp.Options)
-                                                             : new AreaChangedEvent(a.Area, null)
-
-                                     )
-                                 .ToArray();
-
-
-        UpdateState(s => s with { Areas = areas });
-    }
 
 
     IMessageDelivery IMessageHandler<SetAreaRequest>.HandleMessage(IMessageDelivery<SetAreaRequest> request)

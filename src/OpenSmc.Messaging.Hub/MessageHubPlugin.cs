@@ -29,7 +29,7 @@ public class MessageHubPlugin<TPlugin, TState> : MessageHubPlugin<TPlugin>
     }
 
 
-    public virtual void InitializeState(TState state)
+    public void InitializeState(TState state)
     {
         State = state;
     }
