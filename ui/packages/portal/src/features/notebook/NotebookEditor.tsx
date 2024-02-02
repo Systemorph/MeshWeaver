@@ -59,12 +59,12 @@ export function useElementsStore() {
 
 interface NotebookEditorProps {
     notebook: NotebookDto;
+    projectId: string;
     canEdit: boolean;
     canRun: boolean;
 }
 
-export function NotebookEditor({notebook}: NotebookEditorProps) {
-    const {project: {id: projectId}} = useProject();
+export function NotebookEditor({notebook, projectId, canEdit, canRun}: NotebookEditorProps) {
     const {envId} = useEnv();
     const {path: notebookPath} = useProjectSelector("activeFile");
     const [contextValue, setContextValue] = useState<NotebookEditorContext>();
@@ -84,6 +84,7 @@ export function NotebookEditor({notebook}: NotebookEditorProps) {
 
             const initialState = {
                 notebook,
+                projectId,
                 elementIds,
                 selectedElementIds,
                 activeElementId,

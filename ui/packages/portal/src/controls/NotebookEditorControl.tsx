@@ -18,12 +18,14 @@ export interface NotebookDto {
     readonly evaluationStatus?: EvaluationStatus;
     readonly sessionDialog?: ControlDef;
     readonly elementIds: string[];
+    readonly projectId: string;
 }
 
 export default function NotebookEditorControl({notebook}: NotebookEditorView) {
     return (
         <NotebookEditor
             notebook={notebook}
+            projectId={'1'}
             canEdit={true}
             canRun={true}
         />
