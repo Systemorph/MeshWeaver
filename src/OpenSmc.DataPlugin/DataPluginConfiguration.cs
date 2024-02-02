@@ -15,5 +15,5 @@ public record DataPluginConfiguration
         => this with { TypeConfigurations = TypeConfigurations.Add(new TypeConfiguration<T>(initialize, save, delete)) };
 
     public DataPluginConfiguration WithType<T>(IDataSource dataSource) =>
-        this.WithType<T>(async () => await dataSource.Query<T>().ToArrayAsync(), items => dataSource.UpdateAsync(items), ids => dataSource.DeleteAsync(ids));
+        WithType<T>(async () => await dataSource.Query<T>().ToArrayAsync(), items => dataSource.UpdateAsync(items), ids => dataSource.DeleteAsync(ids));
 }
