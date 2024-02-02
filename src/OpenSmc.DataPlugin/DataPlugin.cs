@@ -21,6 +21,9 @@ public record Workspace()
     // think about message forwarding and trigger saving to DataSource
     // storage feed must be a Hub
 
+    public Workspace Delete(IEnumerable<object> items) => this; // TODO: this should create a copy of existed data, group by type, remove instances and return new clone with incremented version
+
+    public IQueryable<T> Query<T>() => new List<T>().AsQueryable();
 
     // 1st hub -> DataHub (unique source of truth for data)
     // Upon save issue DataChanged(e.g new unique version of data) to Sender(ResponseFor) and to the Subscribers as well
@@ -60,7 +63,7 @@ public class DataPlugin : MessageHubPlugin<DataPlugin, Workspace>
         {
             var config = (TypeConfiguration<object>)typeConfig;
             var items = await config.Initialize();
-            await State.UpdateAsync(items);
+            State.Update(items);
         }
     }
 
@@ -94,7 +97,7 @@ public class DataPlugin : MessageHubPlugin<DataPlugin, Workspace>
     {
         var items = request.Message.Elements;
         await save(items);                     // save to db
-        await State.UpdateAsync(items);        // update the state in memory (workspace)
+        State.Update(items);        // update the state in memory (workspace)
         Hub.Post(new DataChanged(items));      // notify all subscribers that the data has changed
     }
 
@@ -102,7 +105,7 @@ public class DataPlugin : MessageHubPlugin<DataPlugin, Workspace>
     {
         var items = request.Message.Elements;
         await delete(items);
-        await State.DeleteAsync(items);
+        State.Delete(items);
         Hub.Post(new DataDeleted(items));
     }
 
