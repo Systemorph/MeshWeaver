@@ -2,7 +2,6 @@
 using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Text;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
 using OpenSmc.Collections;
@@ -11,13 +10,13 @@ using OpenSmc.DataSource.Abstractions;
 using OpenSmc.DataStructures;
 using OpenSmc.DomainDesigner.Abstractions;
 using OpenSmc.FileStorage;
-using OpenSmc.Import.Mapping;
-using OpenSmc.Import.Options;
+using OpenSmc.Import.Contract.Mapping;
+using OpenSmc.Import.Contract.Options;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 using OpenSmc.ServiceProvider;
 
-namespace OpenSmc.Import.Builders
+namespace OpenSmc.Import.Contract.Builders
 {
     public static class ImportRegistryExtensions
     {
@@ -31,7 +30,16 @@ namespace OpenSmc.Import.Builders
             //TODO: implement
         }
     }
-
+    /*
+     * Create a .Contract folder
+     * create ImportRequest (all options for import), must be serializable
+     * types should go to type registry (manually or from dataplugin)
+     *
+     * format specification goes to add plugin
+     *
+     * hubs (tests use only hubs)
+     *
+     */
 
     public class ImportPlugin : MessageHubPlugin<ImportPlugin>
     {
@@ -72,7 +80,6 @@ namespace OpenSmc.Import.Builders
         private protected Func<IDataSetReaderOptionsBuilder, IDataSetReaderOptionsBuilder> DataSetReaderOptionsBuilderFunc { get; init; } = ds => ds;
 
         protected internal ImportOptionsBuilder(IActivityService activityService,
-                                                IDataSetReaderVariable dataSetReaderVariable,
                                                 IMappingService mappingService,
                                                 IFileReadStorage storage,
                                                 CancellationToken cancellationToken,
@@ -83,7 +90,6 @@ namespace OpenSmc.Import.Builders
                                                 ImmutableList<Func<object, ValidationContext, Task<bool>>> defaultValidations)
         {
             ActivityService = activityService;
-            DataSetReaderVariable = dataSetReaderVariable;
             MappingService = mappingService;
             Storage = storage;
             Domain = domain;

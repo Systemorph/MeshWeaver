@@ -2,10 +2,10 @@
 using System.Linq.Expressions;
 using System.Reflection;
 using OpenSmc.DataStructures;
-using OpenSmc.Import.Mapping;
-using OpenSmc.Import.Options;
+using OpenSmc.Import.Contract.Mapping;
+using OpenSmc.Import.Contract.Options;
 
-namespace OpenSmc.Import.Builders
+namespace OpenSmc.Import.Contract.Builders
 {
     public interface ITableMappingBuilder 
     {
