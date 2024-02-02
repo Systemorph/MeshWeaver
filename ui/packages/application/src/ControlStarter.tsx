@@ -7,7 +7,7 @@ import { layoutHubId } from "./LayoutHub";
 
 interface ControlStarterProps {
     area: string;
-    path: string;
+    path?: string;
     options?: unknown
 }
 
