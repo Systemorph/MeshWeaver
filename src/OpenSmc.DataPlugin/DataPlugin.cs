@@ -12,29 +12,6 @@ namespace OpenSmc.DataPlugin;
  *  e) configure Ifrs Hubs
  */
 
-public record Workspace()
-{
-    public Workspace Update(IEnumerable<object> items) => this; // TODO: this should group by type and put to immutable Dictionary structure
-    // think about message forwarding and trigger saving to DataSource
-    // storage feed must be a Hub
-
-    public Workspace Delete(IEnumerable<object> items) => this; // TODO: this should create a copy of existed data, group by type, remove instances and return new clone with incremented version
-
-    public IQueryable<T> Query<T>() => new List<T>().AsQueryable();
-
-    // 1st hub -> DataHub (unique source of truth for data)
-    // Upon save issue DataChanged(e.g new unique version of data) to Sender(ResponseFor) and to the Subscribers as well
-    // Post to DataSourceHub (lambda)
-
-    // 2nd hub as Child -> DataSourceHub (reflects the state which is in DataSource, lacks behind DataHub)
-    // applies lambda expression and calls Update of DataSource
-
-    // on Initialize Hub1 will send GetManyRequest to Hub2 and Hub2 wakes up and StartAsync
-    // Hub2 uses InitializeAsync from and loads data from DB and returns result to Hub1
-    // as soon as Hub 1 will receive callback from Hub 2 it will finish its startup
-    // right after startup both hubs will be in Sync
-}
-
 public class DataPlugin : MessageHubPlugin<DataPlugin, Workspace>
 {
     private DataPluginConfiguration DataConfiguration { get; set; } = new();
