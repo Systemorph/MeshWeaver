@@ -1,15 +1,13 @@
-import { PropsWithChildren, useMemo } from "react";
-import { LayoutAddress } from "./application.contract";
+import { PropsWithChildren } from "react";
 import { AddHub } from "./messageHub/AddHub";
-import { useConnectionSelector } from "./SignalrConnectionProvider";
+import { useTransport } from "@open-smc/application/transportContext";
 
 export const layoutHubId = "LayoutHub";
 
 export function LayoutHub({children}: PropsWithChildren) {
-    const appId = useConnectionSelector("appId");
-    const address = useMemo(() => new LayoutAddress(appId), [appId]);
+    const {layoutAddress} = useTransport();
 
     return (
-        <AddHub address={address} children={children} id={layoutHubId}/>
+        <AddHub address={layoutAddress} children={children} id={layoutHubId}/>
     );
 }

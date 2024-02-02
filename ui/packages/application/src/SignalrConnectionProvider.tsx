@@ -3,7 +3,7 @@ import { makeSignalrConnection, SignalrConnection } from "./makeSignalrConnectio
 import { createStore, Store } from "@open-smc/store/store";
 import { getAppId, setAppId } from "./appId";
 import { makeUseSelector } from "@open-smc/store/useSelector";
-import { useToast } from "@open-smc/application/notifications/useToast";
+import { useToast } from "./notifications/useToast";
 import { v4 } from "uuid";
 import BlockUi from "@availity/block-ui";
 import "@availity/block-ui/dist/index.css";

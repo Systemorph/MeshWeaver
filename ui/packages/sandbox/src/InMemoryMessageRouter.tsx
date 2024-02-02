@@ -1,16 +1,16 @@
 import React, { PropsWithChildren, useCallback, useMemo } from "react";
-import { MessageHub } from "@open-smc/application/messageHub/MessageHub";
-import { pack } from "@open-smc/application/SignalrMessageRouter";
+import { MessageHubBase } from "@open-smc/application/messageHub/MessageHubBase";
+import { pack } from "@open-smc/application/MessageRouter";
 import { down, makeLogger, up } from "@open-smc/application/logger";
-import { messageRouterContext } from "@open-smc/application/messageRouterContext";
+import { messageRouterContext } from "@open-smc/application/MessageRouter";
 
 export function InMemoryMessageRouter({children}: PropsWithChildren) {
     const log = true;
 
-    const addHub = useCallback((address: unknown, hub: MessageHub) => {
+    const addHub = useCallback((address: unknown, hub: MessageHubBase) => {
         const hubPacked = hub.pipe(pack(address, "UI"));
-        const modelHub = new MessageHub();
-        const subscription = (address as MessageHub).exposeAs(modelHub);
+        const modelHub = new MessageHubBase();
+        const subscription = (address as MessageHubBase).exposeAs(modelHub);
         subscription.add(modelHub.subscribe(hub));
         subscription.add(hubPacked.subscribe(modelHub));
 
