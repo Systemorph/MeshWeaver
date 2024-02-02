@@ -4,7 +4,7 @@ using OpenSmc.DataSource.Abstractions;
 using OpenSmc.DomainDesigner.Abstractions;
 using OpenSmc.FileStorage;
 
-namespace OpenSmc.Import.Options
+namespace OpenSmc.Import.Contract.Options
 {
     public record FileImportOptions : ImportOptions
     {

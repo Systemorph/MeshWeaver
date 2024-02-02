@@ -5,7 +5,7 @@ using OpenSmc.DataStructures;
 using OpenSmc.DomainDesigner.Abstractions;
 using OpenSmc.FileStorage;
 
-namespace OpenSmc.Import.Options
+namespace OpenSmc.Import.Contract.Options
 {
     public record DataSetImportOptions : ImportOptions
     {

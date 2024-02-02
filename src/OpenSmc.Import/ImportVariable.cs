@@ -6,16 +6,15 @@ using OpenSmc.DataSource.Abstractions;
 using OpenSmc.DataStructures;
 using OpenSmc.DomainDesigner.Abstractions;
 using OpenSmc.FileStorage;
-using OpenSmc.Import.Builders;
-using OpenSmc.Import.Mapping;
-using OpenSmc.Import.Options;
+using OpenSmc.Import.Contract.Builders;
+using OpenSmc.Import.Contract.Mapping;
+using OpenSmc.Import.Contract.Options;
 
 namespace OpenSmc.Import
 {
     public class ImportVariable : IImportVariable
     {
         private readonly IActivityService activityService;
-        private readonly IDataSetReaderVariable dataSetReaderVariable;
         private readonly IMappingService mappingService;
         //private readonly ISessionContext sessionContext;
         private readonly IServiceProvider serviceProvider;
@@ -35,7 +34,6 @@ namespace OpenSmc.Import
                               IServiceProvider serviceProvider)
         {
             this.activityService = activityService;
-            this.dataSetReaderVariable = dataSetReaderVariable;
             this.mappingService = mappingService;
             //this.sessionContext = sessionContext;
             this.serviceProvider = serviceProvider;
@@ -83,10 +81,8 @@ namespace OpenSmc.Import
         public FileReaderImportOptionsBuilder FromFile(string filePath)
         {
             return new(activityService, 
-                       dataSetReaderVariable, 
                        mappingService,
                        fileReadStorage,
-                       //cancelFunc(sessionContext), 
                        CancellationToken.None,
                        defaultDomain,
                        targetSource,
@@ -99,10 +95,8 @@ namespace OpenSmc.Import
         public StringImportOptionsBuilder FromString(string content)
         {
             return new(activityService,
-                       dataSetReaderVariable,
                        mappingService,
                        fileReadStorage,
-                       //cancelFunc(sessionContext),
                        CancellationToken.None,
                        defaultDomain,
                        targetSource,
@@ -115,10 +109,8 @@ namespace OpenSmc.Import
         public StreamImportOptionsBuilder FromStream(Stream stream)
         {
             return new(activityService,
-                       dataSetReaderVariable,
                        mappingService,
                        fileReadStorage,
-                       //cancelFunc(sessionContext),
                        CancellationToken.None,
                        defaultDomain,
                        targetSource,
@@ -131,10 +123,8 @@ namespace OpenSmc.Import
         public DataSetImportOptionsBuilder FromDataSet(IDataSet dataSet)
         {
             return new(activityService,
-                       dataSetReaderVariable,
                        mappingService,
                        fileReadStorage,
-                       //cancelFunc(sessionContext),
                        CancellationToken.None,
                        defaultDomain,
                        targetSource,
