@@ -1,4 +1,5 @@
-﻿using OpenSmc.Messaging;
+﻿using System.Reflection;
+using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 
 namespace OpenSmc.DataPlugin;
@@ -58,6 +59,9 @@ public class DataPlugin : MessageHubPlugin<DataPlugin, Workspace>
         }
     }
 
+    private static MethodInfo updateElementsMethod = ReflectionHelper.GetMethodGeneric<DataPlugin>(x => x.UpdateElements<object>(null, null));
+    private static MethodInfo deleteElementsMethod = ReflectionHelper.GetMethodGeneric<DataPlugin>(x => x.DeleteElements<object>(null, null));
+
     private IMessageDelivery HandleUpdateAndDeleteRequest(IMessageDelivery request)
     {
         var type = request.Message.GetType();
@@ -68,34 +72,31 @@ public class DataPlugin : MessageHubPlugin<DataPlugin, Workspace>
                     x.GetType().GetGenericArguments().First() == elementType);  // TODO: check whether this works
 
             if (typeConfig is null) return request;
-            var config = (TypeConfiguration<object>)typeConfig;
 
             if (type.GetGenericTypeDefinition() == typeof(UpdateBatchRequest<>))
             {
-                var getElementsMethod = ReflectionHelper.GetMethodGeneric<DataPlugin>(x => x.UpdateElements<object>(null, null));
-                getElementsMethod.MakeGenericMethod(elementType).InvokeAsFunction(this, config.Save);
+                updateElementsMethod.MakeGenericMethod(elementType).InvokeAsFunction(this, typeConfig);
             }
             else if (type.GetGenericTypeDefinition() == typeof(DeleteBatchRequest<>))
             {
-                var getElementsMethod = ReflectionHelper.GetMethodGeneric<DataPlugin>(x => x.DeleteElements<object>(null, null));
-                getElementsMethod.MakeGenericMethod(elementType).InvokeAsFunction(this, config.Delete);
+                deleteElementsMethod.MakeGenericMethod(elementType).InvokeAsFunction(this, typeConfig);
             }
         }
         return request.Processed();
     }
 
-    async Task UpdateElements<T>(IMessageDelivery<UpdateBatchRequest<T>> request, Func<IReadOnlyCollection<T>, Task> save) where T : class
+    async Task UpdateElements<T>(IMessageDelivery<UpdateBatchRequest<T>> request, TypeConfiguration<T> config) where T : class
     {
         var items = request.Message.Elements;
-        await save(items);                     // save to db
+        await config.Save(items);   // save to db
         State.Update(items);        // update the state in memory (workspace)
         Hub.Post(new DataChanged(items));      // notify all subscribers that the data has changed
     }
 
-    async Task DeleteElements<T>(IMessageDelivery<DeleteBatchRequest<T>> request, Func<IReadOnlyCollection<T>, Task> delete) where T : class
+    async Task DeleteElements<T>(IMessageDelivery<DeleteBatchRequest<T>> request, TypeConfiguration<T> config) where T : class
     {
         var items = request.Message.Elements;
-        await delete(items);
+        await config.Delete(items);
         State.Delete(items);
         Hub.Post(new DataDeleted(items));
     }
