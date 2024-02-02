@@ -3,10 +3,10 @@ import { isEmpty } from "lodash";
 import classNames from "classnames";
 import { EnvApi } from "./envApi";
 import { useEffect, useState } from "react";
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import styles from "./environments.module.scss";
-import button from "@open-smc/ui-kit/components/buttons.module.scss";
-import { InputText } from '@open-smc/ui-kit/components/InputText';
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss";
+import { InputText } from '@open-smc/ui-kit/src/components/InputText';
 
 type Props = {
     projectId: string;

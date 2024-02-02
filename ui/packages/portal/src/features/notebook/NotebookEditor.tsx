@@ -4,9 +4,9 @@ import {
     NotebookElementModel,
     SHOW_OUTLINE
 } from "./documentStore/documentState";
-import { createStore, Store } from "@open-smc/store/store";
+import { createStore, Store } from "@open-smc/store/src/store";
 import { createContext, createRef, useContext, useEffect, useState } from "react";
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 import { getDocumentMarkdown } from "./documentStore/markdownTools";
 import { debounce, head, keyBy } from "lodash";
 import { NotebookDto } from "../../controls/NotebookEditorControl";
@@ -31,7 +31,7 @@ import { useProject } from "../project/projectStore/hooks/useProject";
 import { useEnv } from "../project/projectStore/hooks/useEnv";
 import { useProjectSelector } from "../project/projectStore/projectStore";
 import { useApi } from "../../ApiProvider";
-import { makeUseSelector } from "@open-smc/store/useSelector";
+import { makeUseSelector } from "@open-smc/store/src/useSelector";
 
 interface NotebookEditorContext {
     readonly store: Store<NotebookEditorState>;

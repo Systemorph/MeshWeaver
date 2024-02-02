@@ -3,11 +3,11 @@ import { Permissions } from "../../../accessControl/Permissions";
 import { useProject } from "../../projectStore/hooks/useProject";
 import { useAccessControlEditorApi } from "./useAccessControlEditorApi";
 import { EnvAccessControlApi } from "./envAccessControlApi";
-import { useIncrement } from "@open-smc/utils/useIncrement";
+import { useIncrement } from "@open-smc/utils/src/useIncrement";
 import { AccessRestriction } from "../../../accessControl/accessControl.contract";
 import { useEnvSettingsState } from "../useEnvSettingsState";
-import { useThrowAsync } from "@open-smc/utils/useThrowAsync";
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
+import { useThrowAsync } from "@open-smc/utils/src/useThrowAsync";
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 
 export function EnvPermissionsPage() {
     const {project} = useProject();

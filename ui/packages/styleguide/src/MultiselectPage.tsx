@@ -1,8 +1,8 @@
-import { Sandbox } from "@open-smc/sandbox/Sandbox";
-import { makeMultiselect } from "@open-smc/sandbox/Multiselect";
+import { Sandbox } from "@open-smc/sandbox/src/Sandbox";
+import { makeMultiselect } from "@open-smc/sandbox/src/Multiselect";
 import { makeCategoryFactory } from "./categoryFactory";
-import { makeBinding } from "@open-smc/application/dataBinding/resolveBinding";
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { makeBinding } from "@open-smc/application/src/dataBinding/resolveBinding";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import { useState } from "react";
 
 export function MultiselectPage() {

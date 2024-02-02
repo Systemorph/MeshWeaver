@@ -7,8 +7,8 @@ import { Bill, BillingApi, Subscription } from "./billingApi";
 import { Pagination } from "../../shared/components/paginator/Pagination";
 import { usePaginationParams } from "../../shared/hooks/usePaginationParams";
 import styles from "./billing-overview.module.scss";
-import { useThrowAsync } from "@open-smc/utils/useThrowAsync";
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
+import { useThrowAsync } from "@open-smc/utils/src/useThrowAsync";
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 
 const PAGE_SIZE = 10;
 

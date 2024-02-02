@@ -2,16 +2,16 @@ import { useState, useCallback, useEffect, MutableRefObject, Ref } from "react";
 import { IKeyboardEvent, KeyCode } from "monaco-editor";
 import * as monaco from "monaco-editor";
 import { ElementEditor, ElementEditorApi } from "./ElementEditor";
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import {MarkdownExtension} from "../../shared/monaco-markdown/markdownExtension";
 import { ElementFooter } from "./ElementFooter";
 import styles from "./element.module.scss";
 import { useSelectNextElement } from "./documentStore/hooks/useSelectNextElement";
 import { useEventListener } from "usehooks-ts";
-import { Html } from "@open-smc/ui-kit/components/Html";
+import { Html } from "@open-smc/ui-kit/src/components/Html";
 import mdStyles from '../../shared/components/markdown.module.scss';
 import classNames from "classnames";
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
 import { useElementsStore, useNotebookEditorSelector } from "./NotebookEditor";
 import { NotebookElementModel } from "./documentStore/documentState";
 

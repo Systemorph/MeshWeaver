@@ -1,4 +1,4 @@
-import type { TitleSize, TitleView } from "@open-smc/application/controls/TitleControl";
+import type { TitleSize, TitleView } from "@open-smc/application/src/controls/TitleControl";
 import { ControlBase } from "./ControlBase";
 
 export class Title extends ControlBase implements TitleView {

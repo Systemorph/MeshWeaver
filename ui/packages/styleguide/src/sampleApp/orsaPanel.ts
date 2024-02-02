@@ -1,14 +1,14 @@
-import { makeStack } from "@open-smc/sandbox/LayoutStack";
-import { makeHtml } from "@open-smc/sandbox/Html";
-import { makeMenuItem } from "@open-smc/sandbox/MenuItem";
-import { makeItemTemplate } from "@open-smc/sandbox/ItemTemplate";
-import { makeActivity } from "@open-smc/sandbox/Activity";
-import { makeBinding } from "@open-smc/application/dataBinding/resolveBinding";
+import { makeStack } from "@open-smc/sandbox/src/LayoutStack";
+import { makeHtml } from "@open-smc/sandbox/src/Html";
+import { makeMenuItem } from "@open-smc/sandbox/src/MenuItem";
+import { makeItemTemplate } from "@open-smc/sandbox/src/ItemTemplate";
+import { makeActivity } from "@open-smc/sandbox/src/Activity";
+import { makeBinding } from "@open-smc/application/src/dataBinding/resolveBinding";
 import { openContextPanel } from "./sampleApp";
 import { chance } from "../chance";
-import { makeIcon } from "@open-smc/sandbox/Icon";
-import { brandeisBlue, brightGray } from "@open-smc/application/colors";
-import { makeCheckbox } from "@open-smc/sandbox/Checkbox";
+import { makeIcon } from "@open-smc/sandbox/src/Icon";
+import { brandeisBlue, brightGray } from "@open-smc/application/src/colors";
+import { makeCheckbox } from "@open-smc/sandbox/src/Checkbox";
 import { v4 } from "uuid";
 import { sum } from "lodash";
 import {

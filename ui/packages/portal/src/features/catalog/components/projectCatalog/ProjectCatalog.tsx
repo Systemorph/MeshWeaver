@@ -6,7 +6,7 @@ import {AgGridReact} from "ag-grid-react";
 import { ColDef } from "ag-grid-community";
 import { Link } from "react-router-dom";
 import "./tab-view.scss"
-import {Button} from "@open-smc/ui-kit/components/Button";
+import {Button} from "@open-smc/ui-kit/src/components/Button";
 import "../../../../ag-grid-theme.scss"
 import { Project } from "../../../../app/projectApi";
 import {format} from 'date-fns';

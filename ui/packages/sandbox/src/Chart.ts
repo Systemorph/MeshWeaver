@@ -1,5 +1,5 @@
 import type { ChartConfiguration } from 'chart.js';
-import type { ChartView } from "@open-smc/application/controls/ChartControl";
+import type { ChartView } from "@open-smc/application/src/controls/ChartControl";
 import { ControlBase, ControlBuilderBase } from "./ControlBase";
 
 export class Chart extends ControlBase implements ChartView {

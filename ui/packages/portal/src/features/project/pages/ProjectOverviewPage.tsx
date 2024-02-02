@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ProjectApi } from "../../../app/projectApi";
 import { useProject } from "../projectStore/hooks/useProject";
 import { getCompiler, getParser } from "../../notebook/markdownParser";
-import { Html } from "@open-smc/ui-kit/components/Html";
+import { Html } from "@open-smc/ui-kit/src/components/Html";
 import { Helmet } from "react-helmet";
 import { useSideMenu } from "../../components/sideMenu/hooks/useSideMenu";
 import { CloneProjectForm } from "../editProject/CloneProjectForm";
@@ -13,9 +13,9 @@ import { useEnv } from "../projectStore/hooks/useEnv";
 import styles from "./project-overview.module.scss";
 import page from "../../errorpage.module.scss";
 import mdStyles from "../../../shared/components/markdown.module.scss";
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
-import { Button } from "@open-smc/ui-kit/components/Button";
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import classNames from "classnames";
 
 export function ProjectOverviewPage() {

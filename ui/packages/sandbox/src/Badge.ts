@@ -1,4 +1,4 @@
-import type { BadgeView } from "@open-smc/application/controls/BadgeControl";
+import type { BadgeView } from "@open-smc/application/src/controls/BadgeControl";
 import { ControlBase, ControlBuilderBase } from "./ControlBase";
 
 export class Badge extends ControlBase implements BadgeView {

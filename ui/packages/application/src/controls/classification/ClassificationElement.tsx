@@ -2,7 +2,7 @@ import { useDraggable } from "@dnd-kit/core";
 import { forwardRef, HTMLAttributes } from "react";
 import style from './classification.module.scss';
 import classNames from "classnames";
-import buttons from "@open-smc/ui-kit/components/buttons.module.scss";
+import buttons from "@open-smc/ui-kit/src/components/buttons.module.scss";
 import { Named } from "../../application.contract";
 import {Button} from "@open-smc/ui-kit/components";
 

@@ -1,4 +1,4 @@
-import type { ActivityView, UserInfo } from "@open-smc/application/controls/ActivityControl";
+import type { ActivityView, UserInfo } from "@open-smc/application/src/controls/ActivityControl";
 import { ControlBase, ControlBuilderBase } from "./ControlBase";
 
 export class Activity extends ControlBase implements ActivityView {

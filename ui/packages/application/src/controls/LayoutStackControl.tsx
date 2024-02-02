@@ -7,7 +7,7 @@ import styles from "./layoutStackControl.module.scss";
 import { ModalWindow } from "./ModalWindow";
 import { ControlView } from "../ControlDef";
 import { useSubscribeToAreaChanged } from "../useSubscribeToAreaChanged";
-import { insertAfter } from "@open-smc/utils/insertAfter";
+import { insertAfter } from "@open-smc/utils/src/insertAfter";
 
 export type StackSkin = "VerticalPanel" | "HorizontalPanel" | "HorizontalPanelEqualCols" | "Toolbar" | "SideMenu" | "ContextMenu" | "MainWindow" |
     "Action" | "Modal" | "GridLayout";

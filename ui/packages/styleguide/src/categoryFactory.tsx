@@ -1,4 +1,4 @@
-import { Category, Named } from "@open-smc/application/application.contract";
+import { Category, Named } from "@open-smc/application/src/application.contract";
 import { chance } from "./chance";
 
 export function makeCategoryFactory() {

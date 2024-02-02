@@ -1,12 +1,12 @@
 import { useUploadDialog } from "./projectExplorerStore/hooks/useUploadDialog";
 import { useAddNewFile } from "./projectExplorerStore/hooks/useAddNewFile";
 import { useFileExplorerSelector } from "./ProjectExplorerContextProvider";
-import PopupMenu, { PopupMenuItem } from "@open-smc/ui-kit/components/PopupMenu";
+import PopupMenu, { PopupMenuItem } from "@open-smc/ui-kit/src/components/PopupMenu";
 import classNames from "classnames";
 import { FormHeader } from "../../../shared/components/sideMenuComponents/FormHeader";
 import Dropdown from "rc-dropdown";
 import { Button } from "@open-smc/ui-kit/components";
-import button from "@open-smc/ui-kit/components/buttons.module.scss";
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss";
 import styles from "./project-explorer.module.scss";
 import { useSideMenu } from "../../components/sideMenu/hooks/useSideMenu";
 

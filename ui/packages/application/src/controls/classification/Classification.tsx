@@ -4,15 +4,15 @@ import {
     useEffect,
     useMemo, useState
 } from "react";
-import { createStore, Store } from "@open-smc/store/store";
+import { createStore, Store } from "@open-smc/store/src/store";
 import { flatten, keyBy, keys, map, mapValues, pick, values, without } from "lodash";
 import { Category, Named, SelectionByCategory } from "../../application.contract";
 import { useCategoryApi } from "../../useCategoryApi";
 import { ClassificationInner } from "./ClassificationInner";
-import { insertAfter } from "@open-smc/utils/insertAfter";
+import { insertAfter } from "@open-smc/utils/src/insertAfter";
 import { arrayMove } from "@dnd-kit/sortable";
-import { insertBefore } from "@open-smc/utils/insertBefore";
-import { makeUseSelector } from "@open-smc/store/useSelector";
+import { insertBefore } from "@open-smc/utils/src/insertBefore";
+import { makeUseSelector } from "@open-smc/store/src/useSelector";
 
 type ClassificationContext = {
     readonly store: Store<ClassificationState>;

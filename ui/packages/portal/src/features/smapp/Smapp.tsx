@@ -1,11 +1,11 @@
-import '@open-smc/application/SmappApp.scss';
+import '@open-smc/application/src/SmappApp.scss';
 import { useSmappSelector } from "./useSmappSelector";
-import button from "@open-smc/ui-kit/components/buttons.module.scss";
-import { ErrorBoundary } from "@open-smc/ui-kit/components/ErrorBoundary";
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss";
+import { ErrorBoundary } from "@open-smc/ui-kit/src/components/ErrorBoundary";
 import { Suspense } from 'react';
 import { getPresenter } from "@open-smc/rendering";
-import { Button } from "@open-smc/ui-kit/components/Button";
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 
 export function Smapp() {
     const {smappStatus, data: presenter} = useSmappSelector('smappStatusEvent');

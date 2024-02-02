@@ -7,9 +7,9 @@ import { useElementEvents } from "../features/notebook/useElementEvents";
 import { ElementRunButton } from "../features/notebook/ElementRunButton";
 import styles from "../features/notebook/element.module.scss";
 import { isElementInViewport } from "../shared/utils/helpers";
-import { formatNumber } from "@open-smc/utils/numbers";
+import { formatNumber } from "@open-smc/utils/src/numbers";
 import { useSubscribeToElementStatusChanged } from "../features/notebook/documentStore/hooks/useSubscribeToElementStatusChanged";
-import { AreaChangedEvent } from "@open-smc/application/application.contract";
+import { AreaChangedEvent } from "@open-smc/application/src/application.contract";
 import { ElementKind, EvaluationStatus } from "../app/notebookFormat";
 import {
     useElementsStore,
@@ -18,7 +18,7 @@ import {
 } from "../features/notebook/NotebookEditor";
 import { useElement } from "../features/notebook/documentStore/hooks/useElement";
 import { useSubscribeToElementContentChanged } from "../features/notebook/documentStore/hooks/useSubscribeToElementContentChanged";
-import { ControlView } from "@open-smc/application/ControlDef";
+import { ControlView } from "@open-smc/application/src/ControlDef";
 import { useUpdateMarkdown } from "../features/notebook/documentStore/hooks/useUpdateMarkdown";
 import { debounce } from "lodash";
 

@@ -1,8 +1,8 @@
 import { createContext, PropsWithChildren, useContext, useEffect, useState } from "react";
 import { makeSignalrConnection, SignalrConnection } from "./makeSignalrConnection";
-import { createStore, Store } from "@open-smc/store/store";
+import { createStore, Store } from "@open-smc/store/src/store";
 import { getAppId, setAppId } from "./appId";
-import { makeUseSelector } from "@open-smc/store/useSelector";
+import { makeUseSelector } from "@open-smc/store/src/useSelector";
 import { useToast } from "./notifications/useToast";
 import { v4 } from "uuid";
 import BlockUi from "@availity/block-ui";

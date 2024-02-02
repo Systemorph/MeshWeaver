@@ -3,8 +3,8 @@ import { useProject } from "../../projectStore/hooks/useProject";
 import { Users } from "../../../accessControl/Users";
 import { AccessObject } from "../../../accessControl/accessControl.contract";
 import { ProjectAccessControlApi } from "./projectAccessControlApi";
-import { useThrowAsync } from "@open-smc/utils/";
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
+import { useThrowAsync } from "@open-smc/utils/src/";
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 
 export function ProjectUsersPage() {
     const {project} = useProject();

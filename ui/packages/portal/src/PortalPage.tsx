@@ -1,8 +1,8 @@
-import { SignalrTransport } from "@open-smc/application/SignalrTransport";
-import { MessageRouter } from "@open-smc/application/MessageRouter";
+import { SignalrTransport } from "@open-smc/application/src/SignalrTransport";
+import { MessageRouter } from "@open-smc/application/src/MessageRouter";
 import { Outlet } from "react-router-dom";
 import { ApiProvider } from "./ApiProvider";
-import { LayoutHub } from "@open-smc/application/LayoutHub";
+import { LayoutHub } from "@open-smc/application/src/LayoutHub";
 
 export function PortalPage() {
     return (

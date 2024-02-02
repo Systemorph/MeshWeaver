@@ -1,13 +1,13 @@
 import { AgGridReact } from "ag-grid-react";
 import { useState } from "react";
 import { ColDef } from "ag-grid-community";
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import { AddUserForm } from "./AddUserForm";
 import Tooltip from "rc-tooltip";
 import { AccessGroup, GroupChangeToggle, GroupMember } from "./accessControl.contract";
 import { Link } from "react-router-dom";
 import classNames from "classnames";
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
 import user from "./users.module.scss";
 import avatar from '../../shared/components/avatar.module.scss';
 import styles from "./group.module.scss";

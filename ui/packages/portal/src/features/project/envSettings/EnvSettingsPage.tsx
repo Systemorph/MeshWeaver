@@ -1,14 +1,14 @@
 import { NavLink, Outlet, useParams } from "react-router-dom";
 import styles from "../editProject/setupProject.module.scss";
 import tabs from '../../../shared/components/tabs.module.scss';
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 import classNames from "classnames";
 import { useEffect, useState } from "react";
 import { EnvSettingsState, EnvSettingsStore, getInitialState } from "./envSettingsStore";
 import { useProject } from "../projectStore/hooks/useProject";
 import { useEnvSettingsState } from "./useEnvSettingsState";
-import { ErrorBoundary } from "@open-smc/ui-kit/components/ErrorBoundary";
-import { useThrowAsync } from "@open-smc/utils/useThrowAsync";
+import { ErrorBoundary } from "@open-smc/ui-kit/src/components/ErrorBoundary";
+import { useThrowAsync } from "@open-smc/utils/src/useThrowAsync";
 
 export type EnvSettingsPageParams = {
     settingsEnvId: string;

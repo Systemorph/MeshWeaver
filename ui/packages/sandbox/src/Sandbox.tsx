@@ -1,13 +1,13 @@
 import React, { Suspense, useMemo } from "react";
-import { MessageHubBase } from "@open-smc/application/messageHub/MessageHubBase";
-import { AddHub } from "@open-smc/application/messageHub/AddHub";
-import { ControlStarter } from "@open-smc/application/ControlStarter";
+import { MessageHubBase } from "@open-smc/application/src/messageHub/MessageHubBase";
+import { AddHub } from "@open-smc/application/src/messageHub/AddHub";
+import { ControlStarter } from "@open-smc/application/src/ControlStarter";
 import { ViewModelHub } from "./ViewModelHub";
-import { SetAreaRequest } from "@open-smc/application/application.contract";
-import { ControlDef } from "@open-smc/application/ControlDef";
-import { layoutHubId } from "@open-smc/application/LayoutHub";
-import { NotificationProvider } from "@open-smc/application/notifications/NotificationProvider";
-import { InMemoryMessageRouter } from "@open-smc/sandbox/InMemoryMessageRouter";
+import { SetAreaRequest } from "@open-smc/application/src/application.contract";
+import { ControlDef } from "@open-smc/application/src/ControlDef";
+import { layoutHubId } from "@open-smc/application/src/LayoutHub";
+import { NotificationProvider } from "@open-smc/application/src/notifications/NotificationProvider";
+import { InMemoryMessageRouter } from "@open-smc/sandbox/src/InMemoryMessageRouter";
 
 interface Props {
     layoutHub?: MessageHubBase;

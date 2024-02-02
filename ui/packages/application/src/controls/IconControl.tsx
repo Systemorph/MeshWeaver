@@ -2,7 +2,7 @@ import React from "react";
 import classNames from "classnames";
 import tinycolor from "tinycolor2";
 import styles from "./iconControl.module.scss";
-import { IconDef, renderIcon } from "@open-smc/ui-kit/components/renderIcon";
+import { IconDef, renderIcon } from "@open-smc/ui-kit/src/components/renderIcon";
 import { ControlView } from "../ControlDef";
 import { useClickAction } from "../useClickAction";
 

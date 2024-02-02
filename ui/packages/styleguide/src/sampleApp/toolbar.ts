@@ -1,10 +1,10 @@
-import { makeStack } from "@open-smc/sandbox/LayoutStack";
-import { makeMenuItem } from "@open-smc/sandbox/MenuItem";
+import { makeStack } from "@open-smc/sandbox/src/LayoutStack";
+import { makeMenuItem } from "@open-smc/sandbox/src/MenuItem";
 import { openDataPanel } from "./dataPanel";
 import { openOrsaPanel } from "./orsaPanel";
-import { makeItemTemplate } from "@open-smc/sandbox/ItemTemplate";
-import { makeBadge } from "@open-smc/sandbox/Badge";
-import { makeBinding } from "@open-smc/application/dataBinding/resolveBinding";
+import { makeItemTemplate } from "@open-smc/sandbox/src/ItemTemplate";
+import { makeBadge } from "@open-smc/sandbox/src/Badge";
+import { makeBinding } from "@open-smc/application/src/dataBinding/resolveBinding";
 import { modal } from "./modalSample/modal";
 import { openModalWindow } from "./sampleApp";
 

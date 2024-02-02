@@ -1,7 +1,7 @@
-import { getOrAdd } from "@open-smc/utils/getOrAdd";
+import { getOrAdd } from "@open-smc/utils/src/getOrAdd";
 import { produce } from "immer";
 import { set } from "lodash";
-import { visit, PropertyPath } from "@open-smc/utils/visit";
+import { visit, PropertyPath } from "@open-smc/utils/src/visit";
 
 export function createScopeMonitor<T extends object>(data: T, next: (data: T) => void) {
     const scopes = new Map<string, PropertyPath[]>;

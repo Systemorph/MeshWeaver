@@ -3,10 +3,10 @@ import { v4 as uuid } from "uuid";
 import { getElementModel, useElementsStore, useNotebookEditorStore } from "../../NotebookEditor";
 import { ElementKind } from "../../../../app/notebookFormat";
 import { useUpdateMarkdown } from "./useUpdateMarkdown";
-import { useMessageHub } from "@open-smc/application/messageHub/AddHub";
+import { useMessageHub } from "@open-smc/application/src/messageHub/AddHub";
 import { NotebookElementCreatedEvent } from "../../notebookEditor/notebookEditor.contract";
-import { insertAfter } from "@open-smc/utils/insertAfter";
-import { castDraft } from "@open-smc/store/store";
+import { insertAfter } from "@open-smc/utils/src/insertAfter";
+import { castDraft } from "@open-smc/store/src/store";
 
 export function useCreateElement() {
     const notebookEditorStore = useNotebookEditorStore();

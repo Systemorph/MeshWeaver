@@ -1,5 +1,5 @@
 import { createContext } from "react";
-import { getStoreHooks, getStoreProvider, Store } from "@open-smc/store/store";
+import { getStoreHooks, getStoreProvider, Store } from "@open-smc/store/src/store";
 // import {
 //     getProjectExplorerEditorViewModel
 // } from "../projectExplorer/projectExplorerEditorGrain/projectExplorerEditorGrain";

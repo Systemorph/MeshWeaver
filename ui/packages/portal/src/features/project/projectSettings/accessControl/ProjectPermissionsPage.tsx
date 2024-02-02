@@ -2,12 +2,12 @@ import { useEffect, useState } from "react";
 import { useProject } from "../../projectStore/hooks/useProject";
 import { Permissions } from "../../../accessControl/Permissions";
 import { useAccessControlEditorApi } from "../../projectStore/hooks/useAccessControlEditorApi";
-import { useIncrement } from "@open-smc/utils/useIncrement";
+import { useIncrement } from "@open-smc/utils/src/useIncrement";
 import { ProjectAccessControlApi } from "./projectAccessControlApi";
 import { AccessRestriction } from "../../../accessControl/accessControl.contract";
 import { useProjectPermissions } from "../../projectStore/hooks/useProjectPermissions";
-import { useThrowAsync } from "@open-smc/utils/useThrowAsync";
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
+import { useThrowAsync } from "@open-smc/utils/src/useThrowAsync";
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 
 export function ProjectPermissionsPage() {
     const {project} = useProject();

@@ -1,10 +1,10 @@
-import { createStore } from "@open-smc/store/store";
+import { createStore } from "@open-smc/store/src/store";
 import { AttachSmappEvent, RunSmappEvent, SmappStatusEvent } from "./smapp.contract";
 import { PropsWithChildren, useEffect, useState } from "react";
 // import { ApplicationHub } from "@open-smc/application";
 import { getSmappApi, SmappApi } from "./smappApi";
 import { ProjectApi } from "../../app/projectApi";
-import { useThrowAsync } from "@open-smc/utils/useThrowAsync";
+import { useThrowAsync } from "@open-smc/utils/src/useThrowAsync";
 
 
 export interface SmappContext extends NotebookContext<SmappState> {
