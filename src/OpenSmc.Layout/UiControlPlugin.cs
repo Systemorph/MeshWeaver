@@ -35,8 +35,13 @@ public class UiControlPlugin<TControl> : MessageHubPlugin<UiControlPlugin<TContr
 
     protected virtual IMessageDelivery RefreshView(IMessageDelivery<RefreshRequest> request)
     {
-        Post(new AreaChangedEvent(request.Message.Area, State), o => o.ResponseFor(request));
-        return request.Processed();
+        if (string.IsNullOrWhiteSpace(request.Message.Area))
+        {
+            Post(new AreaChangedEvent(request.Message.Area, State), o => o.ResponseFor(request));
+            return request.Processed();
+        }
+
+        return request.NotFound();
     }
 
 

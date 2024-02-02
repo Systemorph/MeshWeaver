@@ -60,7 +60,7 @@ public record MessageHubConfiguration
     }
 
 
-    internal Func<ForwardConfiguration, ForwardConfiguration> ForwardConfigurationBuilder { get; init; }
+    internal Func<RouteConfiguration, RouteConfiguration> ForwardConfigurationBuilder { get; init; }
     public ImmutableList<Func<IMessageHub, Task<IMessageHubPlugin>>> PluginFactories { get; init; } = ImmutableList<Func<IMessageHub, Task<IMessageHubPlugin>>>.Empty;
 
 
@@ -71,7 +71,7 @@ public record MessageHubConfiguration
     public MessageHubConfiguration SynchronizeFrom(object address) => this with { SynchronizationAddress = address };
 
 
-    public MessageHubConfiguration WithForwards(Func<ForwardConfiguration, ForwardConfiguration> configuration) => this with { ForwardConfigurationBuilder = x => configuration(ForwardConfigurationBuilder?.Invoke(x) ?? x) };
+    public MessageHubConfiguration WithForwards(Func<RouteConfiguration, RouteConfiguration> configuration) => this with { ForwardConfigurationBuilder = x => configuration(ForwardConfigurationBuilder?.Invoke(x) ?? x) };
 
 
     public MessageHubConfiguration WithAccessObject(Func<string> getAccessObject)

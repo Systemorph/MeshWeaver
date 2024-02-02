@@ -1,15 +1,19 @@
 ﻿using System.Collections.Immutable;
+using OpenSmc.Collections;
 
 namespace OpenSmc.Messaging;
 
-public record ForwardConfiguration(IMessageHub Hub)
+
+public record RouteConfiguration(IMessageHub Hub)
 {
+
 
     internal ImmutableList<AsyncDelivery> Handlers { get; init; } = ImmutableList<AsyncDelivery>.Empty;
 
+    internal readonly Dictionary<object, HashSet<object>> RoutedMessageAddresses = new();
 
 
-    public ForwardConfiguration RouteAddressToHub<TAddress>(Func<TAddress, IMessageHub> hubFactory) =>
+    public RouteConfiguration RouteAddressToHub<TAddress>(Func<TAddress, IMessageHub> hubFactory) =>
         RouteAddress<TAddress>((routedAddress, d) =>
         {
             var hub = hubFactory(routedAddress);
@@ -17,10 +21,10 @@ public record ForwardConfiguration(IMessageHub Hub)
             return d.Forwarded();
         });
 
-    public ForwardConfiguration RouteAddress<TAddress>(SyncRouteDelivery<TAddress> handler) =>
+    public RouteConfiguration RouteAddress<TAddress>(SyncRouteDelivery<TAddress> handler) =>
         RouteAddress<TAddress>((routedAddress, d) => Task.FromResult(handler(routedAddress, d)));
         
-    public ForwardConfiguration RouteAddress<TAddress>(AsyncRouteDelivery<TAddress> handler)
+    public RouteConfiguration RouteAddress<TAddress>(AsyncRouteDelivery<TAddress> handler)
         => this with
         {
             Handlers = Handlers.Add(async delivery =>
@@ -37,7 +41,7 @@ public record ForwardConfiguration(IMessageHub Hub)
         };
 
 
-    public ForwardConfiguration RouteMessageToTarget<TMessage>(Func<IMessageDelivery, object> addressMap) =>
+    public RouteConfiguration RouteMessageToTarget<TMessage>(Func<IMessageDelivery, object> addressMap) =>
         RouteMessage<TMessage>(delivery =>
         {
             Hub.Post(delivery.Message, o => o.WithTarget(addressMap.Invoke(delivery)));
@@ -45,26 +49,37 @@ public record ForwardConfiguration(IMessageHub Hub)
         });
 
 
-    public ForwardConfiguration RouteMessage<TMessage>(SyncDelivery handler) =>
-        RouteMessage<TMessage>(d => Task.FromResult(handler(d)));
+    public RouteConfiguration RouteMessage<TMessage>(Func<IMessageDelivery, object> addressMap) =>
+        RouteMessage<TMessage>(message =>
+        {
+            var mappedAddress = addressMap(message);
+            if(!message.Sender.Equals(Hub.Address))
+                RoutedMessageAddresses.GetOrAdd(mappedAddress, _ => new()).Add(message.Sender);
+            return Hub.Post(message.Message, o => o.WithProperties(message.Properties).WithTarget(mappedAddress));
+        });
 
-    public ForwardConfiguration RouteMessage<TMessage>(AsyncDelivery handler)
+
+    private RouteConfiguration RouteMessage<TMessage>(SyncDelivery handler)
+        => RouteMessage<TMessage>(d => Task.FromResult(handler(d)));
+    private RouteConfiguration RouteMessage<TMessage>(AsyncDelivery handler)
         => this with
         {
-            Handlers = Handlers.Add(async delivery =>
+            Handlers = Handlers.Add(async message =>
                 {
-                    if (delivery.State != MessageDeliveryState.Submitted || delivery.Message is not TMessage)
-                        return delivery;
-                    return await handler(delivery);
+                    if (message.State != MessageDeliveryState.Submitted || message.Message is not TMessage)
+                        return message;
+
+                    if (message.Target != null && !Hub.Address.Equals(message.Target))
+                        return message;
+
+                    return await handler(message);
                 }
             ),
         };
 
-    public ForwardConfiguration RouteAddressToHostedHub<TAddress>(Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
-        => RouteAddressToHub<TAddress>(a => Hub.GetHostedHub(a, configuration));
 
-    public ForwardConfiguration RouteAddressToHostedHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
-        => RouteAddressToHub<TAddress>(d => Hub.GetHostedHub(address, configuration));
+    public RouteConfiguration RouteAddressToHostedHub<TAddress>(Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
+        => RouteAddressToHub<TAddress>(a => Hub.GetHostedHub(a, configuration));
 
     private IEnumerable<object> FlattenAddressHierarchy(object address)
     {
@@ -74,6 +89,7 @@ public record ForwardConfiguration(IMessageHub Hub)
             address = (address as IHostedAddress)?.Host;
         }
     }
+
 }
 
 

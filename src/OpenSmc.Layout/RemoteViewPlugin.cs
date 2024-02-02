@@ -16,31 +16,27 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
     private ExpressionSynchronizationAddress ExpressionSynchronizationAddress =>
         LayoutExtensions.ExpressionSynchronizationAddress(Hub.Address);
 
-    public override void InitializeState(RemoteViewControl control)
-    {
-        base.InitializeState(control);
-        FullRefreshFromModelHubAsync();
-    }
 
-    private void FullRefreshFromModelHubAsync()
-    {
-        if (State.Message != null)
-            Post(State.Message, o => o.WithTarget(State.RedirectAddress));
-        if (State.ViewDefinition != null)
-            Hub.Post(new SubscribeToEvaluationRequest(nameof(Data), async () =>
-                                                                               {
-                                                                                   var viewElement = await State.ViewDefinition(State.Options);
-                                                                                   return new AreaChangedEvent(viewElement.Area, viewElement.View, viewElement.Options);
-                                                                               }),
-                o => o.WithTarget(ExpressionSynchronizationAddress));
-    }
 
     private const string Data = nameof(Data);
 
     public override async Task StartAsync()
     {
         await base.StartAsync();
-        UpdateState(s => s with {Data = new AreaChangedEvent(Data, CreateUiControlHub(Controls.Spinner()))});
+        FullRefreshFromModelHubAsync();
+    }
+    private void FullRefreshFromModelHubAsync()
+    {
+        UpdateState(s => s with { Data = new AreaChangedEvent(Data, CreateUiControlHub(Controls.Spinner())) });
+        if (State.Message != null)
+            Post(State.Message, o => o.WithTarget(State.RedirectAddress));
+        if (State.ViewDefinition != null)
+            Hub.Post(new SubscribeToEvaluationRequest(nameof(Data), async () =>
+                {
+                    var viewElement = await State.ViewDefinition(State.Options);
+                    return new AreaChangedEvent(viewElement.Area, viewElement.View, viewElement.Options);
+                }),
+                o => o.WithTarget(ExpressionSynchronizationAddress));
     }
 
     private void UpdateView(AreaChangedEvent areaChanged)
@@ -100,8 +96,8 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
             return request.Processed();
         }
 
-        Post(new AreaChangedEvent(request.Message.Area, State), o => o.ResponseFor(request));
-        return request.Processed();
+
+        return base.RefreshView(request);
     }
 
     public IMessageDelivery HandleMessage(IMessageDelivery<AreaChangedEvent> request)
