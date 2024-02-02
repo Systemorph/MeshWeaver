@@ -1,6 +1,6 @@
-import { Sandbox } from "@open-smc/sandbox/Sandbox";
+import { Sandbox } from "@open-smc/sandbox/src/Sandbox";
 import styles from "./menuItemPage.module.scss";
-import { Number } from "@open-smc/sandbox/Number";
+import { Number } from "@open-smc/sandbox/src/Number";
 
 
 const number = makeNumber();

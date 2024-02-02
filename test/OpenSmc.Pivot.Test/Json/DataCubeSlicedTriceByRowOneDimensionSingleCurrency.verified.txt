@@ -1,0 +1,836 @@
+﻿{
+  Columns: [
+    {
+      Coordinates: [
+        Value
+      ],
+      SystemName: Value,
+      DisplayName: Value,
+      GrouperName: ColumnName
+    }
+  ],
+  Rows: [
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF
+        ],
+        SystemName: CHF,
+        DisplayName: Swiss Franc,
+        GrouperName: Currency
+      },
+      Data: {
+        Value: 384.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          D
+        ],
+        SystemName: CHF.D,
+        DisplayName: Germany,
+        GrouperName: Country
+      },
+      Data: {
+        Value: 96.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          D,
+          C
+        ],
+        SystemName: CHF.D.C,
+        DisplayName: Casualty,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          D,
+          C,
+          B
+        ],
+        SystemName: CHF.D.C.B,
+        DisplayName: Broked,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          D,
+          C,
+          D
+        ],
+        SystemName: CHF.D.C.D,
+        DisplayName: Direct,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          D,
+          H
+        ],
+        SystemName: CHF.D.H,
+        DisplayName: Health,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          D,
+          H,
+          B
+        ],
+        SystemName: CHF.D.H.B,
+        DisplayName: Broked,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          D,
+          H,
+          D
+        ],
+        SystemName: CHF.D.H.D,
+        DisplayName: Direct,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          D,
+          L
+        ],
+        SystemName: CHF.D.L,
+        DisplayName: Life,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          D,
+          L,
+          B
+        ],
+        SystemName: CHF.D.L.B,
+        DisplayName: Broked,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          D,
+          L,
+          D
+        ],
+        SystemName: CHF.D.L.D,
+        DisplayName: Direct,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          D,
+          P
+        ],
+        SystemName: CHF.D.P,
+        DisplayName: Property,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          D,
+          P,
+          B
+        ],
+        SystemName: CHF.D.P.B,
+        DisplayName: Broked,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          D,
+          P,
+          D
+        ],
+        SystemName: CHF.D.P.D,
+        DisplayName: Direct,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          PT
+        ],
+        SystemName: CHF.PT,
+        DisplayName: Portugal,
+        GrouperName: Country
+      },
+      Data: {
+        Value: 96.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          PT,
+          C
+        ],
+        SystemName: CHF.PT.C,
+        DisplayName: Casualty,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          PT,
+          C,
+          B
+        ],
+        SystemName: CHF.PT.C.B,
+        DisplayName: Broked,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          PT,
+          C,
+          D
+        ],
+        SystemName: CHF.PT.C.D,
+        DisplayName: Direct,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          PT,
+          H
+        ],
+        SystemName: CHF.PT.H,
+        DisplayName: Health,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          PT,
+          H,
+          B
+        ],
+        SystemName: CHF.PT.H.B,
+        DisplayName: Broked,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          PT,
+          H,
+          D
+        ],
+        SystemName: CHF.PT.H.D,
+        DisplayName: Direct,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          PT,
+          L
+        ],
+        SystemName: CHF.PT.L,
+        DisplayName: Life,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          PT,
+          L,
+          B
+        ],
+        SystemName: CHF.PT.L.B,
+        DisplayName: Broked,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          PT,
+          L,
+          D
+        ],
+        SystemName: CHF.PT.L.D,
+        DisplayName: Direct,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          PT,
+          P
+        ],
+        SystemName: CHF.PT.P,
+        DisplayName: Property,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          PT,
+          P,
+          B
+        ],
+        SystemName: CHF.PT.P.B,
+        DisplayName: Broked,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          PT,
+          P,
+          D
+        ],
+        SystemName: CHF.PT.P.D,
+        DisplayName: Direct,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          RU
+        ],
+        SystemName: CHF.RU,
+        DisplayName: Russia,
+        GrouperName: Country
+      },
+      Data: {
+        Value: 96.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          RU,
+          C
+        ],
+        SystemName: CHF.RU.C,
+        DisplayName: Casualty,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          RU,
+          C,
+          B
+        ],
+        SystemName: CHF.RU.C.B,
+        DisplayName: Broked,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          RU,
+          C,
+          D
+        ],
+        SystemName: CHF.RU.C.D,
+        DisplayName: Direct,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          RU,
+          H
+        ],
+        SystemName: CHF.RU.H,
+        DisplayName: Health,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          RU,
+          H,
+          B
+        ],
+        SystemName: CHF.RU.H.B,
+        DisplayName: Broked,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          RU,
+          H,
+          D
+        ],
+        SystemName: CHF.RU.H.D,
+        DisplayName: Direct,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          RU,
+          L
+        ],
+        SystemName: CHF.RU.L,
+        DisplayName: Life,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          RU,
+          L,
+          B
+        ],
+        SystemName: CHF.RU.L.B,
+        DisplayName: Broked,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          RU,
+          L,
+          D
+        ],
+        SystemName: CHF.RU.L.D,
+        DisplayName: Direct,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          RU,
+          P
+        ],
+        SystemName: CHF.RU.P,
+        DisplayName: Property,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          RU,
+          P,
+          B
+        ],
+        SystemName: CHF.RU.P.B,
+        DisplayName: Broked,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          RU,
+          P,
+          D
+        ],
+        SystemName: CHF.RU.P.D,
+        DisplayName: Direct,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          CH
+        ],
+        SystemName: CHF.CH,
+        DisplayName: Switzerland,
+        GrouperName: Country
+      },
+      Data: {
+        Value: 96.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          CH,
+          C
+        ],
+        SystemName: CHF.CH.C,
+        DisplayName: Casualty,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          CH,
+          C,
+          B
+        ],
+        SystemName: CHF.CH.C.B,
+        DisplayName: Broked,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          CH,
+          C,
+          D
+        ],
+        SystemName: CHF.CH.C.D,
+        DisplayName: Direct,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          CH,
+          H
+        ],
+        SystemName: CHF.CH.H,
+        DisplayName: Health,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          CH,
+          H,
+          B
+        ],
+        SystemName: CHF.CH.H.B,
+        DisplayName: Broked,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          CH,
+          H,
+          D
+        ],
+        SystemName: CHF.CH.H.D,
+        DisplayName: Direct,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          CH,
+          L
+        ],
+        SystemName: CHF.CH.L,
+        DisplayName: Life,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          CH,
+          L,
+          B
+        ],
+        SystemName: CHF.CH.L.B,
+        DisplayName: Broked,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          CH,
+          L,
+          D
+        ],
+        SystemName: CHF.CH.L.D,
+        DisplayName: Direct,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          CH,
+          P
+        ],
+        SystemName: CHF.CH.P,
+        DisplayName: Property,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        Value: 24.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          CH,
+          P,
+          B
+        ],
+        SystemName: CHF.CH.P.B,
+        DisplayName: Broked,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          CH,
+          P,
+          D
+        ],
+        SystemName: CHF.CH.P.D,
+        DisplayName: Direct,
+        GrouperName: Split
+      },
+      Data: {
+        Value: 12.0
+      }
+    }
+  ],
+  HasRowGrouping: true
+}

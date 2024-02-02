@@ -1,8 +1,8 @@
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import { useCreateElement } from "./documentStore/hooks/useCreateElement";
 import styles from "./outline.module.scss";
 import classNames from "classnames";
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
 
 type Props = {
     afterElementId?: string;

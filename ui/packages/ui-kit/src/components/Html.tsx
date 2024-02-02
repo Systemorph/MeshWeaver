@@ -1,5 +1,5 @@
 import { HTMLAttributes } from "react";
-import {Style} from "@open-smc/application/Style";
+import {Style} from "@open-smc/application/src/Style";
 
 interface Props extends HTMLAttributes<HTMLDivElement>{
     html: string;

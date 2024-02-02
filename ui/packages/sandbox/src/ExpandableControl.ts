@@ -1,6 +1,6 @@
-import { ExpandRequest } from "@open-smc/application/application.contract";
-import { Constructor } from "@open-smc/utils/Builder";
-import { ExpandableView, MessageAndAddressAndArea } from "@open-smc/application/ControlDef";
+import { ExpandRequest } from "@open-smc/application/src/application.contract";
+import { Constructor } from "@open-smc/utils/src/Builder";
+import { ExpandableView, MessageAndAddressAndArea } from "@open-smc/application/src/ControlDef";
 import { ControlBase, ControlBuilderBase } from "./ControlBase";
 
 export type ExpandAction = (request: ExpandRequest, control: ControlBase) => void;

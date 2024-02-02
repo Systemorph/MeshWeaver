@@ -1,9 +1,9 @@
 import { useNotebookEditorStore } from "../../NotebookEditor";
 import { SessionSpecification } from "../../../../app/notebookFormat";
-import { useToast } from "@open-smc/application/useToast";
+import { useToast } from "@open-smc/application/src/notifications/useToast";
 import { StartSessionEvent } from "../../notebookEditor/notebookEditor.contract";
-import { validateStatus } from "@open-smc/application/messageHub/validateStatus";
-import { useMessageHubExtensions } from "@open-smc/application/messageHub/useMessageHubExtensions";
+import { validateStatus } from "@open-smc/application/src/messageHub/validateStatus";
+import { useMessageHubExtensions } from "@open-smc/application/src/messageHub/useMessageHubExtensions";
 
 export function useStartSession() {
     const {showToast} = useToast();

@@ -1,7 +1,7 @@
 import { Controller, UseFormReturn } from 'react-hook-form';
 import { ProjectSettings } from "../../../app/projectApi";
 import styles from "./setupProject.module.scss";
-import { InputText } from '@open-smc/ui-kit/components/InputText';
+import { InputText } from '@open-smc/ui-kit/src/components/InputText';
 
 export function DefaultEnvField({form: {control, formState}}: {form: UseFormReturn<ProjectSettings>}) {
     const {errors} = formState;

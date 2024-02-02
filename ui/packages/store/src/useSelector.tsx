@@ -16,5 +16,5 @@ export function useSelector<TState, TKey extends keyof TState>(store: Store<TSta
     return getState()[key];
 }
 
-export const getUseSelector = <TState extends any>(useStore: () => Store<TState>) =>
+export const makeUseSelector = <TState extends any>(useStore: () => Store<TState>) =>
     <TKey extends keyof TState>(key: TKey) => useSelector(useStore(), key);

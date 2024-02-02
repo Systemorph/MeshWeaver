@@ -2,7 +2,7 @@ import { useEnv } from "../../../projectStore/hooks/useEnv";
 import { useProject } from "../../../projectStore/hooks/useProject";
 import { useNavigate } from "react-router-dom";
 import { ProjectNodeMoveEvent } from "../../projectExplorerEditorGrain/projectExplorerEditor.contract";
-import { useMessageHubExtensions } from "@open-smc/application/messageHub/useMessageHubExtensions";
+import { useMessageHubExtensions } from "@open-smc/application/src/messageHub/useMessageHubExtensions";
 import { useFileExplorerStore, useFileStore } from "../../ProjectExplorerContextProvider";
 import { useProjectSelector, useProjectStore } from "../../../projectStore/projectStore";
 

@@ -1,12 +1,12 @@
-import { makeGrid } from "@open-smc/sandbox/Grid";
-import { mainWindowAreas } from "@open-smc/application/controls/MainWindow";
-import { getOrAdd } from "@open-smc/utils/getOrAdd";
-import { makeStack } from "@open-smc/sandbox/LayoutStack";
-import { makeMenuItem } from "@open-smc/sandbox/MenuItem";
+import { makeGrid } from "@open-smc/sandbox/src/Grid";
+import { mainWindowAreas } from "@open-smc/application/src/controls/MainWindow";
+import { getOrAdd } from "@open-smc/utils/src/getOrAdd";
+import { makeStack } from "@open-smc/sandbox/src/LayoutStack";
+import { makeMenuItem } from "@open-smc/sandbox/src/MenuItem";
 import { sampleApp } from "./sampleApp";
-import { makeChart } from "@open-smc/sandbox/Chart";
-import { makeIcon } from "@open-smc/sandbox/Icon";
-import { brandeisBlue } from "@open-smc/application/colors";
+import { makeChart } from "@open-smc/sandbox/src/Chart";
+import { makeIcon } from "@open-smc/sandbox/src/Icon";
+import { brandeisBlue } from "@open-smc/application/src/colors";
 
 import gridTarPar from "../grids/TarParReport.json";
 import gridEconomicProfit from "../grids/EconomicProfitReport.json";
@@ -15,8 +15,8 @@ import chartEconomicProfit from "../charts/EconomicProfitChart.json";
 import lineChart from "../charts/TarParLineChart.json";
 import waterfall1 from "../charts/TarParWaterfallByBusinessSegmentChart.json";
 import waterfall2 from "../charts/TarParWaterfallByReportTypeChart.json";
-import { makeHtml } from "@open-smc/sandbox/Html";
-import { ControlDef } from "@open-smc/application/ControlDef";
+import { makeHtml } from "@open-smc/sandbox/src/Html";
+import { ControlDef } from "@open-smc/application/src/ControlDef";
 
 export const sideMenu = makeStack()
     .withView(

@@ -3,7 +3,7 @@ import { ReactNode, useEffect, useRef } from "react";
 import raf from 'rc-util/lib/raf';
 import { TooltipProps } from "rc-tooltip/lib/Tooltip";
 import { identity } from "lodash";
-import "@open-smc/ui-kit/components/tooltip.scss";
+import "@open-smc/ui-kit/src/components/tooltip.scss";
 
 interface HandleTooltipProps {
     value: number;

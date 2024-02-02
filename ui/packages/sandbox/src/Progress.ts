@@ -1,4 +1,4 @@
-import type { ProgressView } from "@open-smc/application/controls/ProgressControl";
+import type { ProgressView } from "@open-smc/application/src/controls/ProgressControl";
 import { ControlBase, ControlBuilderBase } from "./ControlBase";
 
 export class Progress extends ControlBase implements ProgressView {

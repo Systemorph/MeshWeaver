@@ -1,7 +1,7 @@
 import { NotebookEditor } from "../features/notebook/NotebookEditor";
 import "../features/notebook/monaco-editor.scss";
 import { EvaluationStatus, SessionDescriptor } from "../app/notebookFormat";
-import { ControlDef, ControlView } from "@open-smc/application/ControlDef";
+import { ControlDef, ControlView } from "@open-smc/application/src/ControlDef";
 
 export interface NotebookEditorView extends ControlView{
     notebook: NotebookDto;

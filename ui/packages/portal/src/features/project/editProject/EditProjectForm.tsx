@@ -1,6 +1,6 @@
 import styles from './setupProject.module.scss';
 import { useForm } from 'react-hook-form';
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import classNames from "classnames";
 import React, { useCallback, useEffect } from "react";
 import { isEmpty } from "lodash";
@@ -11,7 +11,7 @@ import { DescriptionField } from "./DescriptionField";
 import { HomeRegionFieldReadOnly } from "./HomeRegionFieldReadOnly";
 import { IdField } from "./IdField";
 import { ThumbnailField } from './ThumbnailField';
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
 
 type Props = {
     canEdit: boolean;

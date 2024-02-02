@@ -1,5 +1,4 @@
-﻿using System.Text.Json.Serialization;
-using OpenSmc.Activities;
+﻿using OpenSmc.Activities;
 
 namespace OpenSmc.Messaging;
 
@@ -26,7 +25,12 @@ public record GetRequest<T> : IRequest<T>
 }
 
 
-public record GetPagedRequest<T>(int Page, int PageSize) : IRequest<PagedGetResult<T>> { public object Options { get; init; } };
+public record GetManyRequest<T>() : IRequest<PagedGetResult<T>> 
+{ 
+    public int Page { get; init; }
+    public int? PageSize { get; init; } 
+    public object Options { get; init; } 
+};
 
 public record PagedGetResult<T>(int Total, IReadOnlyCollection<T> Items)
 {
@@ -48,14 +52,22 @@ public record UpdateRequest<TElement>(TElement Element) : IRequest<DataChanged>
 
 public record UpdateBatchRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataChanged>;
 
-
 public record DataChanged(object Changes)
 {
     public object Items { get; init; }
     public ActivityLog Log { get; init; }
 };
 
+public record DeleteBatchRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataDeleted>;
+
+public record DataDeleted(object Changes)
+{
+    public object Items { get; init; }
+    public ActivityLog Log { get; init; }
+}
+
 public record DeleteRequest<TState>(TState State) : IRequest<ObjectDeleted> { public object Options { get; init; } };
+
 public record ObjectDeleted(object Id);
 
 

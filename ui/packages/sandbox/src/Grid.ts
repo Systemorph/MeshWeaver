@@ -1,4 +1,4 @@
-import type { GridView } from "@open-smc/application/controls/GridControl";
+import type { GridView } from "@open-smc/application/src/controls/GridControl";
 import type { GridOptions } from 'ag-grid-community';
 import { ControlBase, ControlBuilderBase } from "./ControlBase";
 

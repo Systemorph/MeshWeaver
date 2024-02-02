@@ -1,6 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Import;
-using OpenSmc.Import.Mapping;
+using OpenSmc.Import.Contract.Mapping;
 using OpenSmc.ServiceProvider;
 
 [assembly:ModuleSetup]

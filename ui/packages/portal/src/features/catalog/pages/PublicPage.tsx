@@ -1,5 +1,5 @@
 import toolBarStyles from "../components/toolbar.module.scss";
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 import React, { useEffect, useState } from "react";
 import { ProjectApi, ProjectTuple } from "../../../app/projectApi";
 import { Search } from "../components/search/Search";

@@ -1,14 +1,14 @@
 import styles from "./environments.module.scss";
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
 import { Controller, useForm } from "react-hook-form";
 import React, { useCallback, useEffect, useState } from "react";
 import { isEmpty } from "lodash";
 import classNames from "classnames";
 import pDebounce from "p-debounce";
 import { EnvApi } from "./envApi";
-import { Button } from "@open-smc/ui-kit/components/Button";
-import { InputText } from "@open-smc/ui-kit/components/InputText";
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
+import { InputText } from "@open-smc/ui-kit/src/components/InputText";
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 
 type EnvironmentForm = {
     projectId: string,

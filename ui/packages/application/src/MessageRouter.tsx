@@ -1,11 +1,12 @@
-import { createContext, PropsWithChildren, useContext, useEffect, useMemo, useState } from "react";
-import { MessageHub } from "./messageHub/MessageHub";
-import { MessageDelivery, SignalrHub } from "./SignalrHub";
-import { filter, map, Subscription, tap } from "rxjs";
+import { createContext, PropsWithChildren, useCallback, useContext, useEffect, useMemo } from "react";
+import { MessageDelivery } from "./SignalrHub";
+import { filter, map, Subscription } from "rxjs";
 import { isEqual } from "lodash";
-import { useConnection, useConnectionStatus } from "./Connection";
 import { down, makeLogger, up } from "./logger";
-import { UiAddress } from "./application.contract";
+import { useTransport } from "./transportContext";
+import { MessageHub } from "./messageHub/MessageHub";
+
+const log = process.env.NODE_ENV === 'development';
 
 type AddHub = (address: unknown, hub: MessageHub) => Subscription;
 
@@ -20,50 +21,39 @@ export function useMessageRouter() {
     return useContext(messageRouterContext);
 }
 
-interface Props {
-    log?: boolean;
-}
-
-export function MessageRouter({log, children}: PropsWithChildren & Props) {
-    const connection = useConnection();
-    const {appId} = useConnectionStatus();
-    const [signalr] = useState(new SignalrHub(connection));
-
-    const uiAddress = useMemo(() => new UiAddress(appId), [appId]);
+export function MessageRouter({children}: PropsWithChildren<MessageRouterProps>) {
+    const {transportHub, uiAddress} = useTransport();
 
     useEffect(() => {
         if (log) {
-            const subscription = signalr.subscribe(makeLogger(down));
+            const subscription = transportHub.subscribe(makeLogger(down));
             return () => subscription.unsubscribe();
         }
-    }, [signalr, log]);
+    }, [transportHub]);
 
-    const addHub = useMemo(
-        () =>
-            function addHub(address: unknown, hub: MessageHub) {
-                const hubPacked = hub.pipe(pack(address, uiAddress));
-                const subscription = hubPacked.subscribe(signalr);
+    const addHub = useCallback(
+        function addHub(address: unknown, hub: MessageHub) {
+            const hubPacked = hub.pipe(pack(address, uiAddress));
+            const subscription = hubPacked.subscribe(transportHub);
 
-                subscription.add(
-                    signalr.pipe(filterBySender(address))
-                        // .pipe(tap(x => console.log(`Message ${x.id} reached target`)))
-                        .subscribe(hub));
+            subscription.add(
+                transportHub.pipe(filterBySender(address))
+                    // .pipe(tap(x => console.log(`Message ${x.id} reached target`)))
+                    .subscribe(hub));
 
-                if (log) {
-                    subscription.add(hubPacked.subscribe(makeLogger(up)));
-                }
+            if (log) {
+                subscription.add(hubPacked.subscribe(makeLogger(up)));
+            }
 
-                return subscription;
-            },
-        [signalr, log, uiAddress]
+            return subscription;
+        },
+        [transportHub, uiAddress]
     );
 
-    const value = useMemo(() => {
-        return {
-            addHub,
-            uiAddress
-        }
-    }, [addHub, uiAddress]);
+    const value = useMemo(() => ({
+        addHub,
+        uiAddress
+    }), [addHub, uiAddress]);
 
     return (
         <messageRouterContext.Provider value={value} children={children}/>

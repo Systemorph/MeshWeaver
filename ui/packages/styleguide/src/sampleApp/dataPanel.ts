@@ -1,16 +1,16 @@
-import { makeHtml } from "@open-smc/sandbox/Html";
-import { makeStack } from "@open-smc/sandbox/LayoutStack";
+import { makeHtml } from "@open-smc/sandbox/src/Html";
+import { makeStack } from "@open-smc/sandbox/src/LayoutStack";
 import { openContextPanel } from "./sampleApp";
-import { makeMultiselect } from "@open-smc/sandbox/Multiselect";
-import { makeClassification } from "@open-smc/sandbox/Classification";
-import { makeItemTemplate } from "@open-smc/sandbox/ItemTemplate";
-import { makeBinding } from "@open-smc/application/dataBinding/resolveBinding";
-import { makeMenuItem } from "@open-smc/sandbox/MenuItem";
+import { makeMultiselect } from "@open-smc/sandbox/src/Multiselect";
+import { makeClassification } from "@open-smc/sandbox/src/Classification";
+import { makeItemTemplate } from "@open-smc/sandbox/src/ItemTemplate";
+import { makeBinding } from "@open-smc/application/src/dataBinding/resolveBinding";
+import { makeMenuItem } from "@open-smc/sandbox/src/MenuItem";
 import { makeCategoryFactory } from "../categoryFactory";
-import { makeIcon } from "@open-smc/sandbox/Icon";
-import { brandeisBlue } from "@open-smc/application/colors";
-import { makeBadge } from "@open-smc/sandbox/Badge";
-import { makeCheckbox } from "@open-smc/sandbox/Checkbox";
+import { makeIcon } from "@open-smc/sandbox/src/Icon";
+import { brandeisBlue } from "@open-smc/application/src/colors";
+import { makeBadge } from "@open-smc/sandbox/src/Badge";
+import { makeCheckbox } from "@open-smc/sandbox/src/Checkbox";
 
 const categoryFactory = makeCategoryFactory();
 

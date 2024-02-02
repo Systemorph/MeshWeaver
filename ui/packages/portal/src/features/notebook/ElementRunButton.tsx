@@ -1,8 +1,8 @@
 import { useEvaluateElements } from "./documentStore/hooks/useEvaluateElements";
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import { NotebookElementModel } from "./documentStore/documentState";
 import styles from "./element.module.scss";
-import { ProgressSpinner } from "@open-smc/ui-kit/components/ProgressSpinner";
+import { ProgressSpinner } from "@open-smc/ui-kit/src/components/ProgressSpinner";
 import { useElementsStore } from "./NotebookEditor";
 
 interface ElementButtonProps {

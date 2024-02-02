@@ -6,7 +6,7 @@ import { StackView } from "./LayoutStackControl";
 import { keyBy } from "lodash";
 import { AreaChangedEvent, CloseModalDialogEvent } from "../application.contract";
 import Dialog from "rc-dialog";
-import "@open-smc/ui-kit/components/dialog.scss";
+import "@open-smc/ui-kit/src/components/dialog.scss";
 import classNames from "classnames";
 import { useMessageHub } from "../messageHub/AddHub";
 

@@ -1,11 +1,11 @@
 import { useElementsStore, useNotebookEditorStore } from "../../NotebookEditor";
 import { intersection } from "lodash";
 import { useChangeElementContent } from "./useChangeElementContent";
-import { useToast } from "@open-smc/application/useToast";
+import { useToast } from "@open-smc/application/src/notifications/useToast";
 import { EvaluationStatus } from "../../../../app/notebookFormat";
 import { EvaluateElementsCommand } from "../../notebookEditor/notebookEditor.contract";
-import { validateStatus } from "@open-smc/application/messageHub/validateStatus";
-import { useMessageHubExtensions } from "@open-smc/application/messageHub/useMessageHubExtensions";
+import { validateStatus } from "@open-smc/application/src/messageHub/validateStatus";
+import { useMessageHubExtensions } from "@open-smc/application/src/messageHub/useMessageHubExtensions";
 
 export function useEvaluateElements() {
     const {showToast} = useToast();

@@ -1,6 +1,6 @@
 import { useNotebookEditorStore } from "../../NotebookEditor";
 import { useEffect } from "react";
-import { useMessageHub } from "@open-smc/application/messageHub/AddHub";
+import { useMessageHub } from "@open-smc/application/src/messageHub/AddHub";
 import { SessionEvaluationStatusChangedEvent } from "../../notebookEditor/notebookEditor.contract";
 
 export function useSubscribeToSessionEvaluationStatusChanged() {

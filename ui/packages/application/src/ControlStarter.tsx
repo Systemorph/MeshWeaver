@@ -2,17 +2,18 @@ import { useEffect, useState } from "react";
 import { AreaChangedEvent, SetAreaRequest } from "./application.contract";
 import { useSubscribeToAreaChanged } from "./useSubscribeToAreaChanged";
 import { renderControl } from "./renderControl";
-import { useApp } from "./App";
+import { useMessageHub } from "./messageHub/AddHub";
+import { layoutHubId } from "./LayoutHub";
 
 interface ControlStarterProps {
     area: string;
-    path: string;
+    path?: string;
     options?: unknown
 }
 
 export function ControlStarter({area, path, options}: ControlStarterProps) {
     const [event, setEvent] = useState<AreaChangedEvent>();
-    const {messageHub} = useApp();
+    const messageHub = useMessageHub(layoutHubId);
     const {sendMessage} = messageHub;
 
     useSubscribeToAreaChanged(setEvent, area, messageHub);

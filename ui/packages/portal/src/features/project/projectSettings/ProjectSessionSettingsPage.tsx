@@ -5,8 +5,8 @@ import { useEffect, useState } from "react";
 import { useProjectPermissions } from "../projectStore/hooks/useProjectPermissions";
 import { useSessionSettingsEditor } from "../../sessionSettings/sessionSettingsEditor";
 import { useViewModelId } from "../projectStore/hooks/useViewModelId";
-import { useToast } from "@open-smc/application/useToast";
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
+import { useToast } from "@open-smc/application/src/notifications/useToast";
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 
 export function ProjectSessionSettingsPage() {
     const {project} = useProject();
