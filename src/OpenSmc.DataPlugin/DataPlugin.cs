@@ -53,8 +53,7 @@ public class DataPlugin : MessageHubPlugin<DataPlugin, Workspace>
 
         foreach (var typeConfig in DataConfiguration.TypeConfigurations)
         {
-            var config = (TypeConfiguration<object>)typeConfig;
-            var items = await config.Initialize();
+            var items = await typeConfig.DoInitialize();
             State.Update(items);
         }
     }
