@@ -1,0 +1,188 @@
+﻿{
+  Columns: [
+    {
+      Coordinates: [
+        Value
+      ],
+      SystemName: Value,
+      DisplayName: Value,
+      GrouperName: ColumnName
+    }
+  ],
+  Rows: [
+    {
+      RowGroup: {
+        Coordinates: [
+          A1
+        ],
+        SystemName: A1,
+        DisplayName: A 1,
+        GrouperName: DimA0
+      },
+      Data: {
+        Value: null
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A1,
+          A11
+        ],
+        SystemName: A1.A11,
+        DisplayName: A 11,
+        GrouperName: DimA1
+      },
+      Data: {
+        Value: null
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A1,
+          A11,
+          A111
+        ],
+        SystemName: A1.A11.A111,
+        DisplayName: A 111,
+        GrouperName: DimA2
+      },
+      Data: {
+        Value: null
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A1,
+          A11,
+          A111,
+          B1
+        ],
+        SystemName: A1.A11.A111.B1,
+        DisplayName: B 1,
+        GrouperName: DimB0
+      },
+      Data: {
+        Value: 3.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A1,
+          A11,
+          A111,
+          B1,
+          B12
+        ],
+        SystemName: A1.A11.A111.B1.B12,
+        DisplayName: B 12,
+        GrouperName: DimB1
+      },
+      Data: {
+        Value: 3.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A1,
+          A11,
+          A111,
+          B2
+        ],
+        SystemName: A1.A11.A111.B2,
+        DisplayName: B 2,
+        GrouperName: DimB0
+      },
+      Data: {
+        Value: 1.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A1,
+          A11,
+          A111,
+          B2,
+          NullGroup
+        ],
+        SystemName: A1.A11.A111.B2.NullGroup,
+        DisplayName:  ,
+        GrouperName: DimB1
+      },
+      Data: {
+        Value: 1.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A1,
+          A11,
+          A112
+        ],
+        SystemName: A1.A11.A112,
+        DisplayName: A 112,
+        GrouperName: DimA2
+      },
+      Data: {
+        Value: null
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A1,
+          A11,
+          A112,
+          B1
+        ],
+        SystemName: A1.A11.A112.B1,
+        DisplayName: B 1,
+        GrouperName: DimB0
+      },
+      Data: {
+        Value: null
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A1,
+          A11,
+          A112,
+          B1,
+          B11
+        ],
+        SystemName: A1.A11.A112.B1.B11,
+        DisplayName: B 11,
+        GrouperName: DimB1
+      },
+      Data: {
+        Value: 2.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A1,
+          A11,
+          A112,
+          B1,
+          NullGroup
+        ],
+        SystemName: A1.A11.A112.B1.NullGroup,
+        DisplayName:  ,
+        GrouperName: DimB1
+      },
+      Data: {
+        Value: 4.0
+      }
+    }
+  ],
+  HasRowGrouping: true
+}

@@ -4,8 +4,8 @@ import {
     CategoryItemsResponse,
     Named,
     SelectionByCategory
-} from "@open-smc/application/application.contract";
-import type { ClassificationView } from "@open-smc/application/controls/ClassificationControl";
+} from "@open-smc/application/src/application.contract";
+import type { ClassificationView } from "@open-smc/application/src/controls/ClassificationControl";
 import { CategoryItemsRequestHandler } from "./CategoryItemsRequestHandler";
 import { ControlBase, ControlBuilderBase } from "./ControlBase";
 

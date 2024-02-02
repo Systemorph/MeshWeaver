@@ -1,4 +1,4 @@
-@use "@open-smc/ui-kit/theme/variables" as *;
+@use "@open-smc/ui-kit/src/theme/variables" as *;
 
 $grayGradient: linear-gradient(90deg, rgba(41, 43, 54, 0.2) 0%, rgba(41, 43, 54, 0.2) 100%);
 $whiteGradient: linear-gradient(90deg, rgba(255, 255, 255, 0.6) 0%, rgba(255, 255, 255, 0.6) 100%);

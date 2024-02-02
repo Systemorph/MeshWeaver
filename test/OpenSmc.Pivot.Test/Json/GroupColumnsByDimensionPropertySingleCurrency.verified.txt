@@ -1,0 +1,107 @@
+﻿{
+  Columns: [
+    {
+      Children: [
+        {
+          Coordinates: [
+            E,
+            Value
+          ],
+          SystemName: E.Value,
+          DisplayName: Value,
+          GrouperName: ColumnName
+        }
+      ],
+      Coordinates: [
+        E
+      ],
+      SystemName: E,
+      DisplayName: Expenses,
+      GrouperName: AmountType
+    },
+    {
+      Children: [
+        {
+          Coordinates: [
+            P,
+            Value
+          ],
+          SystemName: P.Value,
+          DisplayName: Value,
+          GrouperName: ColumnName
+        }
+      ],
+      Coordinates: [
+        P
+      ],
+      SystemName: P,
+      DisplayName: Premium,
+      GrouperName: AmountType
+    },
+    {
+      Children: [
+        {
+          Coordinates: [
+            C,
+            Value
+          ],
+          SystemName: C.Value,
+          DisplayName: Value,
+          GrouperName: ColumnName
+        }
+      ],
+      Coordinates: [
+        C
+      ],
+      SystemName: C,
+      DisplayName: Cost,
+      GrouperName: AmountType
+    },
+    {
+      Children: [
+        {
+          Coordinates: [
+            B,
+            Value
+          ],
+          SystemName: B.Value,
+          DisplayName: Value,
+          GrouperName: ColumnName
+        }
+      ],
+      Coordinates: [
+        B
+      ],
+      SystemName: B,
+      DisplayName: Benefit,
+      GrouperName: AmountType
+    }
+  ],
+  Rows: [
+    {
+      RowGroup: {
+        Coordinates: [
+          Value
+        ],
+        SystemName: Value,
+        DisplayName: Value,
+        GrouperName: PropertyName
+      },
+      Data: {
+        B: {
+          Value: 96.0
+        },
+        C: {
+          Value: 96.0
+        },
+        E: {
+          Value: 96.0
+        },
+        P: {
+          Value: 96.0
+        }
+      }
+    }
+  ],
+  HasRowGrouping: true
+}

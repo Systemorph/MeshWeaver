@@ -1,6 +1,6 @@
 import page from "./errorpage.module.scss";
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
-import { Button } from "@open-smc/ui-kit/components/Button";
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import styles from "./catalog/layout.module.scss";
 import { SideMenu } from "./components/sideMenu/SideMenu";
 import { NavigateButton } from "../shared/components/sideBar/SideBarButtons";

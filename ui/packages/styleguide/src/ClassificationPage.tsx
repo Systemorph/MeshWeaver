@@ -1,9 +1,9 @@
-import { Sandbox } from "@open-smc/sandbox/Sandbox";
+import { Sandbox } from "@open-smc/sandbox/src/Sandbox";
 import { makeCategoryFactory } from "./categoryFactory";
-import { SelectionByCategory } from "@open-smc/application/application.contract";
-import { makeBinding } from "@open-smc/application/dataBinding/resolveBinding";
-import { makeClassification } from "@open-smc/sandbox/Classification";
-import { makeStack } from "@open-smc/sandbox/LayoutStack";
+import { SelectionByCategory } from "@open-smc/application/src/application.contract";
+import { makeBinding } from "@open-smc/application/src/dataBinding/resolveBinding";
+import { makeClassification } from "@open-smc/sandbox/src/Classification";
+import { makeStack } from "@open-smc/sandbox/src/LayoutStack";
 
 const {makeCategory, makeCategories, getItems} = makeCategoryFactory();
 

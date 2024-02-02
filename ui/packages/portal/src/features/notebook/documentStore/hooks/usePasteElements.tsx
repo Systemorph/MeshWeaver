@@ -1,11 +1,11 @@
 import { useElementsStore, useNotebookEditorStore } from "../../NotebookEditor";
 // import { getNewElementModel } from "../documentState";
 // import { v4 as uuid } from "uuid";
-// import { castDraft } from "@open-smc/store/store";
+// import { castDraft } from "@open-smc/store/src/store";
 // import { forEachRight, map } from "lodash";
 // import { NotebookElementCreatedEvent } from "../../notebookEditor/notebookEditor.contract";
 // import { useUpdateMarkdown } from "./useUpdateMarkdown";
-// import { useMessageHub } from "@open-smc/application/messageHub/MessageHub";
+// import { useMessageHub } from "@open-smc/application/src/messageHub/MessageHub";
 // import { NotebookElementDto } from "../../NotebookElement";
 //
 // export function usePasteElements() {

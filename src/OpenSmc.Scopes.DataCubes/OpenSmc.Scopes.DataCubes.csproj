@@ -4,7 +4,6 @@
     <ProjectReference Include="..\OpenSmc.DataCubes\OpenSmc.DataCubes.csproj" />
     <ProjectReference Include="..\OpenSmc.DotNet.Kernel\OpenSmc.DotNet.Kernel.csproj" />
     <ProjectReference Include="..\OpenSmc.Scopes\OpenSmc.Scopes.csproj" />
-    <ProjectReference Include="..\OpenSmc.ServiceProvider\OpenSmc.ServiceProvider.csproj" />
   </ItemGroup>
 
 </Project>

@@ -2,7 +2,7 @@ import styles from './setupProject.module.scss';
 
 import { Controller, UseFormReturn } from 'react-hook-form';
 import { ProjectSettings } from "../../../app/projectApi";
-import { Select } from '@open-smc/ui-kit/components/Select';
+import { Select } from '@open-smc/ui-kit/src/components/Select';
 
 type Props = {
     form: UseFormReturn<ProjectSettings>,

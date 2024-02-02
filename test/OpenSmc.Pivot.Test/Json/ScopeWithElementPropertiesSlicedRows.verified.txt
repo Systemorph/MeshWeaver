@@ -1,0 +1,170 @@
+﻿{
+  Columns: [
+    {
+      Children: [
+        {
+          Coordinates: [
+            CHF,
+            Value
+          ],
+          SystemName: CHF.Value,
+          DisplayName: Value,
+          GrouperName: ColumnName
+        }
+      ],
+      Coordinates: [
+        CHF
+      ],
+      SystemName: CHF,
+      DisplayName: Swiss Franc,
+      GrouperName: Currency
+    }
+  ],
+  Rows: [
+    {
+      RowGroup: {
+        Coordinates: [
+          BoP
+        ],
+        SystemName: BoP,
+        DisplayName: Beginning of Period,
+        GrouperName: PropertyName
+      },
+      Data: {
+        CHF: {
+          Value: 0.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          BoP,
+          P
+        ],
+        SystemName: BoP.P,
+        DisplayName: Premium,
+        GrouperName: AmountType
+      },
+      Data: {
+        CHF: {
+          Value: 0.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          BoP,
+          P,
+          2021
+        ],
+        SystemName: BoP.P.2021,
+        DisplayName: 2021,
+        GrouperName: Year
+      },
+      Data: {
+        CHF: {
+          Value: 0.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          Delta
+        ],
+        SystemName: Delta,
+        DisplayName: Delta,
+        GrouperName: PropertyName
+      },
+      Data: {
+        CHF: {
+          Value: 4.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          Delta,
+          P
+        ],
+        SystemName: Delta.P,
+        DisplayName: Premium,
+        GrouperName: AmountType
+      },
+      Data: {
+        CHF: {
+          Value: 4.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          Delta,
+          P,
+          2021
+        ],
+        SystemName: Delta.P.2021,
+        DisplayName: 2021,
+        GrouperName: Year
+      },
+      Data: {
+        CHF: {
+          Value: 4.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EoP
+        ],
+        SystemName: EoP,
+        DisplayName: End of Period,
+        GrouperName: PropertyName
+      },
+      Data: {
+        CHF: {
+          Value: 4.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EoP,
+          P
+        ],
+        SystemName: EoP.P,
+        DisplayName: Premium,
+        GrouperName: AmountType
+      },
+      Data: {
+        CHF: {
+          Value: 4.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EoP,
+          P,
+          2021
+        ],
+        SystemName: EoP.P.2021,
+        DisplayName: 2021,
+        GrouperName: Year
+      },
+      Data: {
+        CHF: {
+          Value: 4.0
+        }
+      }
+    }
+  ],
+  HasRowGrouping: true
+}

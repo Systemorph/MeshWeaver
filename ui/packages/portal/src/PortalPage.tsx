@@ -1,23 +1,19 @@
-import { Connection } from "@open-smc/application/Connection";
-import { MessageRouter } from "@open-smc/application/MessageRouter";
+import { SignalrTransport } from "@open-smc/application/src/SignalrTransport";
+import { MessageRouter } from "@open-smc/application/src/MessageRouter";
 import { Outlet } from "react-router-dom";
 import { ApiProvider } from "./ApiProvider";
-import { LayoutHub } from "@open-smc/application/LayoutHub";
-
-const log = process.env.NODE_ENV === 'development';
+import { LayoutHub } from "@open-smc/application/src/LayoutHub";
 
 export function PortalPage() {
-    const fallback = () => <div>Loading...</div>;
-
     return (
         <ApiProvider>
-            <Connection fallback={fallback}>
-                <MessageRouter log={log}>
+            <SignalrTransport>
+                <MessageRouter>
                     <LayoutHub>
                         <Outlet/>
                     </LayoutHub>
                 </MessageRouter>
-            </Connection>
+            </SignalrTransport>
         </ApiProvider>
     );
 }

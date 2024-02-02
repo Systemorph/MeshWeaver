@@ -1,5 +1,5 @@
-import { makeHtml } from "@open-smc/sandbox/Html";
-import { Sandbox } from "@open-smc/sandbox/Sandbox";
+import { makeHtml } from "@open-smc/sandbox/src/Html";
+import { Sandbox } from "@open-smc/sandbox/src/Sandbox";
 
 const htmlTemplate =
     makeHtml()

@@ -2,8 +2,8 @@ import type {
     BorderRadius,
     IconSize,
     IconView
-} from "@open-smc/application/controls/IconControl";
-import { IconDef } from "@open-smc/ui-kit/components/renderIcon";
+} from "@open-smc/application/src/controls/IconControl";
+import { IconDef } from "@open-smc/ui-kit/src/components/renderIcon";
 import { ControlBase, ControlBuilderBase } from "./ControlBase";
 
 export class Icon extends ControlBase implements IconView {

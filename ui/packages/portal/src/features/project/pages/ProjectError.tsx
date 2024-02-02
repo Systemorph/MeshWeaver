@@ -2,8 +2,8 @@ import styles from "../layout.module.scss";
 import { SideBar } from "../../../shared/components/sideBar/SideBar";
 import { NavigateButton } from "../../../shared/components/sideBar/SideBarButtons";
 import { NavigateFunction, useNavigate } from "react-router-dom";
-import { Button } from "@open-smc/ui-kit/components/Button";
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
+import { Button } from "@open-smc/ui-kit/src/components/Button";
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
 import { AxiosError } from "axios";
 import page from "../../errorpage.module.scss";
 import { SideMenuStoreProvider } from "../../components/sideMenu/SideMenuStore";

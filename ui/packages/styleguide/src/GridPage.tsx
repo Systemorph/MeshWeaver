@@ -1,6 +1,6 @@
-import { Sandbox } from "@open-smc/sandbox/Sandbox";
+import { Sandbox } from "@open-smc/sandbox/src/Sandbox";
 import { makeGridOptions } from "./makeGridOptions";
-import { makeGrid } from "@open-smc/sandbox/Grid";
+import { makeGrid } from "@open-smc/sandbox/src/Grid";
 
 import gridConfig from "./grids/EconomicProfitReport.json";
 

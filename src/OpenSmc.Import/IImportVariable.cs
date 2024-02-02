@@ -3,8 +3,8 @@ using OpenSmc.DataSource.Abstractions;
 using OpenSmc.DataStructures;
 using OpenSmc.DomainDesigner.Abstractions;
 using OpenSmc.FileStorage;
-using OpenSmc.Import.Builders;
-using OpenSmc.Import.Options;
+using OpenSmc.Import.Contract.Builders;
+using OpenSmc.Import.Contract.Options;
 
 namespace OpenSmc.Import
 {

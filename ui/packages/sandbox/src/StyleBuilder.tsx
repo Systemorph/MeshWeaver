@@ -1,4 +1,4 @@
-import { Builder } from "@open-smc/utils/Builder";
+import { Builder } from "@open-smc/utils/src/Builder";
 import {
     AlignContent,
     AlignItems,
@@ -12,7 +12,7 @@ import {
     HtmlElement,
     JustifyContent,
     Position
-} from "@open-smc/application/Style";
+} from "@open-smc/application/src/Style";
 
 export class StyleBuilder extends Builder<HtmlElement & FlexContainer & FlexElement> {
     constructor() {

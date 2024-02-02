@@ -2,14 +2,14 @@ import type {
     StackOptions,
     StackSkin,
     StackView
-} from "@open-smc/application/controls/LayoutStackControl";
-import { AreaChangedEvent } from "@open-smc/application/application.contract";
+} from "@open-smc/application/src/controls/LayoutStackControl";
+import { AreaChangedEvent } from "@open-smc/application/src/application.contract";
 import { v4 } from "uuid";
-import { mainWindowAreas } from "@open-smc/application/controls/MainWindow";
-import { modalWindowAreas } from "@open-smc/application/controls/ModalWindow";
-import {Builder} from "@open-smc/utils/Builder";
+import { mainWindowAreas } from "@open-smc/application/src/controls/MainWindow";
+import { modalWindowAreas } from "@open-smc/application/src/controls/ModalWindow";
+import {Builder} from "@open-smc/utils/src/Builder";
 import {StyleBuilder} from "./StyleBuilder";
-import { insertAfter } from "@open-smc/utils/insertAfter";
+import { insertAfter } from "@open-smc/utils/src/insertAfter";
 import { ControlBase, ControlBuilderBase } from "./ControlBase";
 
 export class LayoutStack extends ControlBase implements StackView {

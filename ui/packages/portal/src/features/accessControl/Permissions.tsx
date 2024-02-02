@@ -1,8 +1,8 @@
 import Switch from "rc-switch";
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import { AccessChangeToggle, AccessRestriction, Permission } from "./accessControl.contract";
 import styles from "./permissions.module.scss";
-import buttons from "@open-smc/ui-kit/components/buttons.module.scss"
+import buttons from "@open-smc/ui-kit/src/components/buttons.module.scss"
 import classNames from "classnames";
 
 interface PermissionsProps {

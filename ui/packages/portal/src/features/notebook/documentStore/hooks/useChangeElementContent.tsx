@@ -3,7 +3,7 @@ import { useUpdateMarkdown } from "./useUpdateMarkdown";
 import { isEmpty } from "lodash";
 import { useCallback } from "react";
 import { NotebookElementChangeData, NotebookElementContentChangedEvent } from "../../notebookElement.contract";
-import { useMessageHub } from "@open-smc/application/messageHub/AddHub";
+import { useMessageHub } from "@open-smc/application/src/messageHub/AddHub";
 
 export function useChangeElementContent() {
     const {setState} = useNotebookEditorStore();

@@ -1,6 +1,6 @@
 @use "sass:map";
-@use "@open-smc/ui-kit/theme/helpers" as *;
-@use "@open-smc/ui-kit/theme/variables" as *;
+@use "@open-smc/ui-kit/src/theme/helpers" as *;
+@use "@open-smc/ui-kit/src/theme/variables" as *;
 
 @mixin size-s {
     @media (min-width: 768px) {

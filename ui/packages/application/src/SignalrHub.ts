@@ -1,7 +1,8 @@
 import { SignalrConnection } from "./makeSignalrConnection";
-import { Observable, Observer } from "rxjs";
+import { Observable } from "rxjs";
+import { MessageHub } from "./messageHub/MessageHub";
 
-export class SignalrHub extends Observable<MessageDelivery> implements Observer<MessageDelivery> {
+export class SignalrHub extends Observable<MessageDelivery> implements MessageHub {
     constructor(private connection: SignalrConnection) {
         super(subscriber => {
             const methodName = "HandleEvent";

@@ -1,0 +1,2243 @@
+{
+  Columns: [
+    {
+      Children: [
+        {
+          Coordinates: [
+            P,
+            Value
+          ],
+          SystemName: P.Value,
+          DisplayName: Value,
+          GrouperName: ColumnName
+        }
+      ],
+      Coordinates: [
+        P
+      ],
+      SystemName: P,
+      DisplayName: P,
+      GrouperName: AmountType
+    },
+    {
+      Children: [
+        {
+          Coordinates: [
+            E,
+            Value
+          ],
+          SystemName: E.Value,
+          DisplayName: Value,
+          GrouperName: ColumnName
+        }
+      ],
+      Coordinates: [
+        E
+      ],
+      SystemName: E,
+      DisplayName: E,
+      GrouperName: AmountType
+    },
+    {
+      Children: [
+        {
+          Coordinates: [
+            C,
+            Value
+          ],
+          SystemName: C.Value,
+          DisplayName: Value,
+          GrouperName: ColumnName
+        }
+      ],
+      Coordinates: [
+        C
+      ],
+      SystemName: C,
+      DisplayName: C,
+      GrouperName: AmountType
+    },
+    {
+      Children: [
+        {
+          Coordinates: [
+            B,
+            Value
+          ],
+          SystemName: B.Value,
+          DisplayName: Value,
+          GrouperName: ColumnName
+        }
+      ],
+      Coordinates: [
+        B
+      ],
+      SystemName: B,
+      DisplayName: B,
+      GrouperName: AmountType
+    }
+  ],
+  Rows: [
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF
+        ],
+        SystemName: CHF,
+        DisplayName: CHF,
+        GrouperName: Currency
+      },
+      Data: {
+        B: {
+          Value: 96
+        },
+        C: {
+          Value: 96
+        },
+        E: {
+          Value: 96
+        },
+        P: {
+          Value: 96
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          CH
+        ],
+        SystemName: CHF.CH,
+        DisplayName: CH,
+        GrouperName: Country
+      },
+      Data: {
+        B: {
+          Value: 24
+        },
+        C: {
+          Value: 24
+        },
+        E: {
+          Value: 24
+        },
+        P: {
+          Value: 24
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          CH,
+          C
+        ],
+        SystemName: CHF.CH.C,
+        DisplayName: C,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          CH,
+          H
+        ],
+        SystemName: CHF.CH.H,
+        DisplayName: H,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          CH,
+          L
+        ],
+        SystemName: CHF.CH.L,
+        DisplayName: L,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          CH,
+          P
+        ],
+        SystemName: CHF.CH.P,
+        DisplayName: P,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          D
+        ],
+        SystemName: CHF.D,
+        DisplayName: D,
+        GrouperName: Country
+      },
+      Data: {
+        B: {
+          Value: 24
+        },
+        C: {
+          Value: 24
+        },
+        E: {
+          Value: 24
+        },
+        P: {
+          Value: 24
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          D,
+          C
+        ],
+        SystemName: CHF.D.C,
+        DisplayName: C,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          D,
+          H
+        ],
+        SystemName: CHF.D.H,
+        DisplayName: H,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          D,
+          L
+        ],
+        SystemName: CHF.D.L,
+        DisplayName: L,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          D,
+          P
+        ],
+        SystemName: CHF.D.P,
+        DisplayName: P,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          PT
+        ],
+        SystemName: CHF.PT,
+        DisplayName: PT,
+        GrouperName: Country
+      },
+      Data: {
+        B: {
+          Value: 24
+        },
+        C: {
+          Value: 24
+        },
+        E: {
+          Value: 24
+        },
+        P: {
+          Value: 24
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          PT,
+          C
+        ],
+        SystemName: CHF.PT.C,
+        DisplayName: C,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          PT,
+          H
+        ],
+        SystemName: CHF.PT.H,
+        DisplayName: H,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          PT,
+          L
+        ],
+        SystemName: CHF.PT.L,
+        DisplayName: L,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          PT,
+          P
+        ],
+        SystemName: CHF.PT.P,
+        DisplayName: P,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          RU
+        ],
+        SystemName: CHF.RU,
+        DisplayName: RU,
+        GrouperName: Country
+      },
+      Data: {
+        B: {
+          Value: 24
+        },
+        C: {
+          Value: 24
+        },
+        E: {
+          Value: 24
+        },
+        P: {
+          Value: 24
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          RU,
+          C
+        ],
+        SystemName: CHF.RU.C,
+        DisplayName: C,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          RU,
+          H
+        ],
+        SystemName: CHF.RU.H,
+        DisplayName: H,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          RU,
+          L
+        ],
+        SystemName: CHF.RU.L,
+        DisplayName: L,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          CHF,
+          RU,
+          P
+        ],
+        SystemName: CHF.RU.P,
+        DisplayName: P,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR
+        ],
+        SystemName: EUR,
+        DisplayName: EUR,
+        GrouperName: Currency
+      },
+      Data: {
+        B: {
+          Value: 96
+        },
+        C: {
+          Value: 96
+        },
+        E: {
+          Value: 96
+        },
+        P: {
+          Value: 96
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR,
+          CH
+        ],
+        SystemName: EUR.CH,
+        DisplayName: CH,
+        GrouperName: Country
+      },
+      Data: {
+        B: {
+          Value: 24
+        },
+        C: {
+          Value: 24
+        },
+        E: {
+          Value: 24
+        },
+        P: {
+          Value: 24
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR,
+          CH,
+          C
+        ],
+        SystemName: EUR.CH.C,
+        DisplayName: C,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR,
+          CH,
+          H
+        ],
+        SystemName: EUR.CH.H,
+        DisplayName: H,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR,
+          CH,
+          L
+        ],
+        SystemName: EUR.CH.L,
+        DisplayName: L,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR,
+          CH,
+          P
+        ],
+        SystemName: EUR.CH.P,
+        DisplayName: P,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR,
+          D
+        ],
+        SystemName: EUR.D,
+        DisplayName: D,
+        GrouperName: Country
+      },
+      Data: {
+        B: {
+          Value: 24
+        },
+        C: {
+          Value: 24
+        },
+        E: {
+          Value: 24
+        },
+        P: {
+          Value: 24
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR,
+          D,
+          C
+        ],
+        SystemName: EUR.D.C,
+        DisplayName: C,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR,
+          D,
+          H
+        ],
+        SystemName: EUR.D.H,
+        DisplayName: H,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR,
+          D,
+          L
+        ],
+        SystemName: EUR.D.L,
+        DisplayName: L,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR,
+          D,
+          P
+        ],
+        SystemName: EUR.D.P,
+        DisplayName: P,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR,
+          PT
+        ],
+        SystemName: EUR.PT,
+        DisplayName: PT,
+        GrouperName: Country
+      },
+      Data: {
+        B: {
+          Value: 24
+        },
+        C: {
+          Value: 24
+        },
+        E: {
+          Value: 24
+        },
+        P: {
+          Value: 24
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR,
+          PT,
+          C
+        ],
+        SystemName: EUR.PT.C,
+        DisplayName: C,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR,
+          PT,
+          H
+        ],
+        SystemName: EUR.PT.H,
+        DisplayName: H,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR,
+          PT,
+          L
+        ],
+        SystemName: EUR.PT.L,
+        DisplayName: L,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR,
+          PT,
+          P
+        ],
+        SystemName: EUR.PT.P,
+        DisplayName: P,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR,
+          RU
+        ],
+        SystemName: EUR.RU,
+        DisplayName: RU,
+        GrouperName: Country
+      },
+      Data: {
+        B: {
+          Value: 24
+        },
+        C: {
+          Value: 24
+        },
+        E: {
+          Value: 24
+        },
+        P: {
+          Value: 24
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR,
+          RU,
+          C
+        ],
+        SystemName: EUR.RU.C,
+        DisplayName: C,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR,
+          RU,
+          H
+        ],
+        SystemName: EUR.RU.H,
+        DisplayName: H,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR,
+          RU,
+          L
+        ],
+        SystemName: EUR.RU.L,
+        DisplayName: L,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EUR,
+          RU,
+          P
+        ],
+        SystemName: EUR.RU.P,
+        DisplayName: P,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB
+        ],
+        SystemName: RUB,
+        DisplayName: RUB,
+        GrouperName: Currency
+      },
+      Data: {
+        B: {
+          Value: 96
+        },
+        C: {
+          Value: 96
+        },
+        E: {
+          Value: 96
+        },
+        P: {
+          Value: 96
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB,
+          CH
+        ],
+        SystemName: RUB.CH,
+        DisplayName: CH,
+        GrouperName: Country
+      },
+      Data: {
+        B: {
+          Value: 24
+        },
+        C: {
+          Value: 24
+        },
+        E: {
+          Value: 24
+        },
+        P: {
+          Value: 24
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB,
+          CH,
+          C
+        ],
+        SystemName: RUB.CH.C,
+        DisplayName: C,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB,
+          CH,
+          H
+        ],
+        SystemName: RUB.CH.H,
+        DisplayName: H,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB,
+          CH,
+          L
+        ],
+        SystemName: RUB.CH.L,
+        DisplayName: L,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB,
+          CH,
+          P
+        ],
+        SystemName: RUB.CH.P,
+        DisplayName: P,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB,
+          D
+        ],
+        SystemName: RUB.D,
+        DisplayName: D,
+        GrouperName: Country
+      },
+      Data: {
+        B: {
+          Value: 24
+        },
+        C: {
+          Value: 24
+        },
+        E: {
+          Value: 24
+        },
+        P: {
+          Value: 24
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB,
+          D,
+          C
+        ],
+        SystemName: RUB.D.C,
+        DisplayName: C,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB,
+          D,
+          H
+        ],
+        SystemName: RUB.D.H,
+        DisplayName: H,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB,
+          D,
+          L
+        ],
+        SystemName: RUB.D.L,
+        DisplayName: L,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB,
+          D,
+          P
+        ],
+        SystemName: RUB.D.P,
+        DisplayName: P,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB,
+          PT
+        ],
+        SystemName: RUB.PT,
+        DisplayName: PT,
+        GrouperName: Country
+      },
+      Data: {
+        B: {
+          Value: 24
+        },
+        C: {
+          Value: 24
+        },
+        E: {
+          Value: 24
+        },
+        P: {
+          Value: 24
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB,
+          PT,
+          C
+        ],
+        SystemName: RUB.PT.C,
+        DisplayName: C,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB,
+          PT,
+          H
+        ],
+        SystemName: RUB.PT.H,
+        DisplayName: H,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB,
+          PT,
+          L
+        ],
+        SystemName: RUB.PT.L,
+        DisplayName: L,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB,
+          PT,
+          P
+        ],
+        SystemName: RUB.PT.P,
+        DisplayName: P,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB,
+          RU
+        ],
+        SystemName: RUB.RU,
+        DisplayName: RU,
+        GrouperName: Country
+      },
+      Data: {
+        B: {
+          Value: 24
+        },
+        C: {
+          Value: 24
+        },
+        E: {
+          Value: 24
+        },
+        P: {
+          Value: 24
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB,
+          RU,
+          C
+        ],
+        SystemName: RUB.RU.C,
+        DisplayName: C,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB,
+          RU,
+          H
+        ],
+        SystemName: RUB.RU.H,
+        DisplayName: H,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB,
+          RU,
+          L
+        ],
+        SystemName: RUB.RU.L,
+        DisplayName: L,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          RUB,
+          RU,
+          P
+        ],
+        SystemName: RUB.RU.P,
+        DisplayName: P,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD
+        ],
+        SystemName: USD,
+        DisplayName: USD,
+        GrouperName: Currency
+      },
+      Data: {
+        B: {
+          Value: 96
+        },
+        C: {
+          Value: 96
+        },
+        E: {
+          Value: 96
+        },
+        P: {
+          Value: 96
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD,
+          CH
+        ],
+        SystemName: USD.CH,
+        DisplayName: CH,
+        GrouperName: Country
+      },
+      Data: {
+        B: {
+          Value: 24
+        },
+        C: {
+          Value: 24
+        },
+        E: {
+          Value: 24
+        },
+        P: {
+          Value: 24
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD,
+          CH,
+          C
+        ],
+        SystemName: USD.CH.C,
+        DisplayName: C,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD,
+          CH,
+          H
+        ],
+        SystemName: USD.CH.H,
+        DisplayName: H,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD,
+          CH,
+          L
+        ],
+        SystemName: USD.CH.L,
+        DisplayName: L,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD,
+          CH,
+          P
+        ],
+        SystemName: USD.CH.P,
+        DisplayName: P,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD,
+          D
+        ],
+        SystemName: USD.D,
+        DisplayName: D,
+        GrouperName: Country
+      },
+      Data: {
+        B: {
+          Value: 24
+        },
+        C: {
+          Value: 24
+        },
+        E: {
+          Value: 24
+        },
+        P: {
+          Value: 24
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD,
+          D,
+          C
+        ],
+        SystemName: USD.D.C,
+        DisplayName: C,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD,
+          D,
+          H
+        ],
+        SystemName: USD.D.H,
+        DisplayName: H,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD,
+          D,
+          L
+        ],
+        SystemName: USD.D.L,
+        DisplayName: L,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD,
+          D,
+          P
+        ],
+        SystemName: USD.D.P,
+        DisplayName: P,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD,
+          PT
+        ],
+        SystemName: USD.PT,
+        DisplayName: PT,
+        GrouperName: Country
+      },
+      Data: {
+        B: {
+          Value: 24
+        },
+        C: {
+          Value: 24
+        },
+        E: {
+          Value: 24
+        },
+        P: {
+          Value: 24
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD,
+          PT,
+          C
+        ],
+        SystemName: USD.PT.C,
+        DisplayName: C,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD,
+          PT,
+          H
+        ],
+        SystemName: USD.PT.H,
+        DisplayName: H,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD,
+          PT,
+          L
+        ],
+        SystemName: USD.PT.L,
+        DisplayName: L,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD,
+          PT,
+          P
+        ],
+        SystemName: USD.PT.P,
+        DisplayName: P,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD,
+          RU
+        ],
+        SystemName: USD.RU,
+        DisplayName: RU,
+        GrouperName: Country
+      },
+      Data: {
+        B: {
+          Value: 24
+        },
+        C: {
+          Value: 24
+        },
+        E: {
+          Value: 24
+        },
+        P: {
+          Value: 24
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD,
+          RU,
+          C
+        ],
+        SystemName: USD.RU.C,
+        DisplayName: C,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD,
+          RU,
+          H
+        ],
+        SystemName: USD.RU.H,
+        DisplayName: H,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD,
+          RU,
+          L
+        ],
+        SystemName: USD.RU.L,
+        DisplayName: L,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          USD,
+          RU,
+          P
+        ],
+        SystemName: USD.RU.P,
+        DisplayName: P,
+        GrouperName: LineOfBusiness
+      },
+      Data: {
+        B: {
+          Value: 6
+        },
+        C: {
+          Value: 6
+        },
+        E: {
+          Value: 6
+        },
+        P: {
+          Value: 6
+        }
+      }
+    }
+  ],
+  HasRowGrouping: true
+}

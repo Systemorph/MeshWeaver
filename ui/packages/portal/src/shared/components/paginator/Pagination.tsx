@@ -7,7 +7,7 @@ import {
 } from "primereact/paginator";
 import styles from "./pagination.module.scss";
 import classNames from "classnames";
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 
 type Props = {
     page: number;

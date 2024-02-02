@@ -1,4 +1,4 @@
-import {InputNumber} from "@open-smc/ui-kit/components/InputNumber";
+import {InputNumber} from "@open-smc/ui-kit/src/components/InputNumber";
 import { useControlContext } from "../ControlContext";
 import { useState, useEffect } from 'react';
 import { ControlView } from "../ControlDef";

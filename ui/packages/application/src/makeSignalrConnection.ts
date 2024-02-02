@@ -16,18 +16,18 @@ export function makeSignalrConnection() {
     const disconnectedSubject = new Subject<Error>();
     const reconnectedSubject = new Subject();
 
-    connection.onreconnecting(disconnectedSubject.next);
-    connection.onreconnected(reconnectedSubject.next);
+    connection.onreconnecting(error => disconnectedSubject.next(error));
+    connection.onreconnected(connectionId => reconnectedSubject.next(connectionId));
 
     return {
         connection,
         onDisconnected: (subscriber: (error: Error) => void) => {
             const subscription = disconnectedSubject.subscribe(subscriber)
-            return subscription.unsubscribe();
+            return () => subscription.unsubscribe();
         },
         onReconnected: (subscriber: () => void) => {
             const subscription = reconnectedSubject.subscribe(subscriber)
-            return subscription.unsubscribe();
+            return () => subscription.unsubscribe();
         },
     }
 }

@@ -1,11 +1,11 @@
-import type { MultiselectView } from "@open-smc/application/controls/MultiselectControl";
+import type { MultiselectView } from "@open-smc/application/src/controls/MultiselectControl";
 import {
     Category,
     CategoryItemsRequest,
     CategoryItemsResponse,
     Named,
     SelectionByCategory
-} from "@open-smc/application/application.contract";
+} from "@open-smc/application/src/application.contract";
 import { CategoryItemsRequestHandler } from "./CategoryItemsRequestHandler";
 import { ControlBase, ControlBuilderBase } from "./ControlBase";
 

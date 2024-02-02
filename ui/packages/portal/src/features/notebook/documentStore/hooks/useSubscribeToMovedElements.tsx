@@ -4,7 +4,7 @@ import { debounce, flatten, map } from "lodash";
 import { useElementsStore, useNotebookEditorSelector, useNotebookEditorStore } from "../../NotebookEditor";
 import { useUpdateMarkdown } from "./useUpdateMarkdown";
 import { moveElements } from "../moveElements";
-import { useMessageHub } from "@open-smc/application/messageHub/AddHub";
+import { useMessageHub } from "@open-smc/application/src/messageHub/AddHub";
 
 export function useSubscribeToMovedElements() {
     const notebook = useNotebookEditorSelector("notebook");

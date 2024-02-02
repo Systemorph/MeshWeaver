@@ -4,7 +4,7 @@ import {
     AccessRestrictionChangedEvent,
     GroupChangeToggle, Permission
 } from "./accessControl.contract";
-// import { ApplicationHub, ErrorEvent } from "@open-smc/application/applicationHub/applicationHub";
+// import { ApplicationHub, ErrorEvent } from "@open-smc/application/src/applicationHub/applicationHub";
 
 export function getAccessControlEditorApi(viewModelId: string) {
     async function changeAccessMembership(memberOf: string, accessObject: string, toggle: GroupChangeToggle, objectId: string) {

@@ -2,15 +2,15 @@ import { useMultiselectSelector, useMultiselectStore, useSelectElement, useUnsel
 import { startTransition, useEffect, useRef, useState } from "react";
 import { isEmpty, keyBy, keys, trim, without } from "lodash";
 import style from "./multiselect.module.scss";
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import classNames from "classnames";
-import searchInput from "@open-smc/ui-kit/components/search.module.scss";
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
+import searchInput from "@open-smc/ui-kit/src/components/search.module.scss";
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 import { useCategoryApi } from "../../useCategoryApi";
-import { InputText } from "@open-smc/ui-kit/components/InputText";
+import { InputText } from "@open-smc/ui-kit/src/components/InputText";
 import Checkbox from "rc-checkbox";
 import Switch from "rc-switch";
-import "@open-smc/ui-kit/components/rc-switch.scss";
+import "@open-smc/ui-kit/src/components/rc-switch.scss";
 
 export function CategoryElements() {
     const {setState} = useMultiselectStore();

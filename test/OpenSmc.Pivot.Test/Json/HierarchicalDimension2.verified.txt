@@ -1,0 +1,143 @@
+﻿{
+  Columns: [
+    {
+      Coordinates: [
+        Value
+      ],
+      SystemName: Value,
+      DisplayName: Value,
+      GrouperName: ColumnName
+    }
+  ],
+  Rows: [
+    {
+      RowGroup: {
+        Coordinates: [
+          A1
+        ],
+        SystemName: A1,
+        DisplayName: A 1,
+        GrouperName: DimA0
+      },
+      Data: {
+        Value: 6.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A1,
+          A11
+        ],
+        SystemName: A1.A11,
+        DisplayName: A 11,
+        GrouperName: DimA1
+      },
+      Data: {
+        Value: 3.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A1,
+          A11,
+          A111
+        ],
+        SystemName: A1.A11.A111,
+        DisplayName: A 111,
+        GrouperName: DimA2
+      },
+      Data: {
+        Value: 1.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A1,
+          A11,
+          A112
+        ],
+        SystemName: A1.A11.A112,
+        DisplayName: A 112,
+        GrouperName: DimA2
+      },
+      Data: {
+        Value: 2.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A1,
+          A12
+        ],
+        SystemName: A1.A12,
+        DisplayName: A 12,
+        GrouperName: DimA1
+      },
+      Data: {
+        Value: 3.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A1,
+          A12,
+          NullGroup
+        ],
+        SystemName: A1.A12.NullGroup,
+        DisplayName:  ,
+        GrouperName: DimA2
+      },
+      Data: {
+        Value: 3.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A2
+        ],
+        SystemName: A2,
+        DisplayName: A 2,
+        GrouperName: DimA0
+      },
+      Data: {
+        Value: 4.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A2,
+          NullGroup
+        ],
+        SystemName: A2.NullGroup,
+        DisplayName:  ,
+        GrouperName: DimA1
+      },
+      Data: {
+        Value: 4.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A2,
+          NullGroup,
+          NullGroup
+        ],
+        SystemName: A2.NullGroup.NullGroup,
+        DisplayName:  ,
+        GrouperName: DimA2
+      },
+      Data: {
+        Value: 4.0
+      }
+    }
+  ],
+  HasRowGrouping: true
+}

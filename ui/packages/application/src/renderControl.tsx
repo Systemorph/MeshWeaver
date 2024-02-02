@@ -1,14 +1,14 @@
 import { camelCase, isString, memoize, upperFirst } from 'lodash';
 import { DataContextProvider, useDataContext } from "./dataBinding/DataContextProvider";
 import { AddHub } from "./messageHub/AddHub";
-import { ComponentType, useMemo } from "react";
+import React, { ComponentType, useMemo } from "react";
 import { ControlContext } from "./ControlContext";
 import { isScope } from "./scopes/createScopeMonitor";
 import { bind, bindIteratee } from "./dataBinding/bind";
 import { makeDataContext } from "./dataBinding/DataContextBuilder";
 import { ControlDef } from "./ControlDef";
 import { useScopeMonitor } from "./scopes/useScopeMonitor";
-import { lazy } from "react";
+import { lazy, Suspense } from "react";
 
 export function renderControl(control: ControlDef) {
     const {address, $type} = control;
@@ -17,11 +17,13 @@ export function renderControl(control: ControlDef) {
     const component = getControlComponent(name);
 
     const renderedControl = (
-        <RenderControl
-            component={component}
-            name={name}
-            control={control}
-        />
+        <Suspense fallback={<div>Loading...</div>}>
+            <RenderControl
+                component={component}
+                name={name}
+                control={control}
+            />
+        </Suspense>
     );
 
     if (address) {
@@ -111,7 +113,7 @@ export function registerControlResolver(resolver: ControlModuleResolver) {
     controlResolvers.push(resolver);
 }
 
-export type ControlModuleResolver = (name: string) => Promise<{default: ComponentType}>;
+export type ControlModuleResolver = (name: string) => Promise<{ default: ComponentType }>;
 
 const controlResolvers: ControlModuleResolver[] = [];
 

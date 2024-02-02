@@ -1,6 +1,6 @@
 import { createContext, PropsWithChildren, useContext, useEffect, useMemo } from "react";
-import { createStore, Store } from "@open-smc/store/store";
-import { getUseSelector } from "@open-smc/store/useSelector";
+import { createStore, Store } from "@open-smc/store/src/store";
+import { makeUseSelector } from "@open-smc/store/src/useSelector";
 
 interface SideMenuPanelProps {
     isOpen: boolean;
@@ -49,4 +49,4 @@ export function useSideMenuPanelStore() {
     return store;
 }
 
-export const useSideMenuPanelSelector = getUseSelector(useSideMenuPanelStore);
+export const useSideMenuPanelSelector = makeUseSelector(useSideMenuPanelStore);

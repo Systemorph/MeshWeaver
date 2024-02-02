@@ -21,14 +21,6 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "jsx": "react-jsx",
-    "paths": {
-      "@open-smc/application/*": ["./packages/application/src/*"],
-      "@open-smc/sandbox/*": ["./packages/sandbox/src/*"],
-      "@open-smc/portal/*": ["./packages/portal/src/*"],
-      "@open-smc/store/*": ["./packages/store/src/*"],
-      "@open-smc/ui-kit/*": ["./packages/ui-kit/src/*"],
-      "@open-smc/utils/*": ["./packages/utils/src/*"]
-    }
+    "jsx": "react-jsx"
   }
 }

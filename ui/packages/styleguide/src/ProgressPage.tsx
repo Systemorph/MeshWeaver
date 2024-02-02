@@ -1,5 +1,5 @@
-import { makeProgress } from "@open-smc/sandbox/Progress";
-import { Sandbox } from "@open-smc/sandbox/Sandbox";
+import { makeProgress } from "@open-smc/sandbox/src/Progress";
+import { Sandbox } from "@open-smc/sandbox/src/Sandbox";
 
 const progressTemplate = makeProgress()
     .withProgress(50)

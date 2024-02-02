@@ -1,11 +1,11 @@
-import { makeActivity } from "@open-smc/sandbox/Activity";
-import { Sandbox } from "@open-smc/sandbox/Sandbox";
-import { makeBinding } from "@open-smc/application/dataBinding/resolveBinding";
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { makeActivity } from "@open-smc/sandbox/src/Activity";
+import { Sandbox } from "@open-smc/sandbox/src/Sandbox";
+import { makeBinding } from "@open-smc/application/src/dataBinding/resolveBinding";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import { useState } from "react";
 import { chance } from "./chance";
-import {LayoutStack, makeStack} from "@open-smc/sandbox/LayoutStack";
-import {makeMenuItem} from "@open-smc/sandbox/MenuItem";
+import {LayoutStack, makeStack} from "@open-smc/sandbox/src/LayoutStack";
+import {makeMenuItem} from "@open-smc/sandbox/src/MenuItem";
 import { v4 } from "uuid";
 import BlockUi from "@availity/block-ui";
 import "@availity/block-ui/dist/index.css";

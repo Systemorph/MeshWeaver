@@ -1,9 +1,9 @@
 import { ViewModelHub } from "./ViewModelHub";
-import { ControlDef, MessageAndAddress } from "@open-smc/application/ControlDef";
-import { Style } from "@open-smc/application/Style";
+import { ControlDef, MessageAndAddress } from "@open-smc/application/src/ControlDef";
+import { Style } from "@open-smc/application/src/Style";
 import { v4 } from "uuid";
-import { ClickedEvent } from "@open-smc/application/application.contract";
-import { Builder, Constructor } from "@open-smc/utils/Builder";
+import { ClickedEvent } from "@open-smc/application/src/application.contract";
+import { Builder, Constructor } from "@open-smc/utils/src/Builder";
 import { StyleBuilder } from "./StyleBuilder";
 
 export type ClickAction = <TView>(payload: unknown, control: ControlBase) => void;

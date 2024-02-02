@@ -1,5 +1,5 @@
 import styles from '../layout.module.scss';
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 import { Outlet, useParams } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { ProjectContextProvider } from "../projectStore/projectStore";

@@ -1,5 +1,5 @@
-import { contractMessage } from "@open-smc/application/contractMessage";
-import { BaseEvent } from "@open-smc/application/application.contract";
+import { contractMessage } from "@open-smc/application/src/contractMessage";
+import { BaseEvent } from "@open-smc/application/src/application.contract";
 
 @contractMessage("OpenSmc.Notebook.SessionSettings.SessionSettingsChangedEvent")
 export class SessionSettingsChangedEvent extends BaseEvent {

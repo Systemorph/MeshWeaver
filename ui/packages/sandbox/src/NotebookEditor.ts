@@ -1,4 +1,4 @@
-import type { NotebookDto, NotebookEditorView } from "@open-smc/portal/controls/NotebookEditorControl";
+import type { NotebookDto, NotebookEditorView } from "@open-smc/portal/src/controls/NotebookEditorControl";
 import {
     EvaluateElementsCommand,
     NotebookElementCreatedEvent,
@@ -7,14 +7,14 @@ import {
     SessionEvaluationStatusChangedEvent,
     SessionStatusEvent, StartSessionEvent,
     StopSessionEvent
-} from "@open-smc/portal/features/notebook/notebookEditor/notebookEditor.contract";
-import { NotebookElementDto } from "@open-smc/portal/controls/ElementEditorControl";
+} from "@open-smc/portal/src/features/notebook/notebookEditor/notebookEditor.contract";
+import { NotebookElementDto } from "@open-smc/portal/src/controls/ElementEditorControl";
 import {keyBy, map, without} from "lodash";
 import { ElementEditor } from "./ElementEditor";
 import { v4 } from "uuid";
-import { insertAfter } from "@open-smc/utils/insertAfter";
-import { EvaluationStatus } from "@open-smc/portal/app/notebookFormat";
-import {moveElements} from "@open-smc/portal/features/notebook/documentStore/moveElements";
+import { insertAfter } from "@open-smc/utils/src/insertAfter";
+import { EvaluationStatus } from "@open-smc/portal/src/app/notebookFormat";
+import {moveElements} from "@open-smc/portal/src/features/notebook/documentStore/moveElements";
 import { makeHtml } from "./Html";
 import { ControlBase } from "./ControlBase";
 

@@ -1,0 +1,9 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\src\OpenSmc.DataSetReader\OpenSmc.DataSetReader.csproj" />
+    <ProjectReference Include="..\src\OpenSmc.DataSource.Abstractions\OpenSmc.DataSource.Abstractions.csproj" />
+    <ProjectReference Include="..\src\OpenSmc.DataStructures\OpenSmc.DataStructures.csproj" />
+    <ProjectReference Include="..\src\OpenSmc.DomainDesigner.Abstractions\OpenSmc.DomainDesigner.Abstractions.csproj" />
+    <ProjectReference Include="..\src\OpenSmc.Messaging.Contract\OpenSmc.Messaging.Contract.csproj" />
+  </ItemGroup>
+</Project>
