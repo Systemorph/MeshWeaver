@@ -1,12 +1,12 @@
 import { PropsWithChildren, useMemo } from "react";
-import { useConnectionStatus } from "./SignalrConnectionProvider";
 import { LayoutAddress } from "./application.contract";
 import { AddHub } from "./messageHub/AddHub";
+import { useConnectionSelector } from "./SignalrConnectionProvider";
 
 export const layoutHubId = "LayoutHub";
 
 export function LayoutHub({children}: PropsWithChildren) {
-    const {appId} = useConnectionStatus();
+    const appId = useConnectionSelector("appId");
     const address = useMemo(() => new LayoutAddress(appId), [appId]);
 
     return (

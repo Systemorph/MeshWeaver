@@ -6,7 +6,7 @@ import { useEnv } from "../projectStore/hooks/useEnv";
 import { ProjectApi } from "../../../app/projectApi";
 import { EnvAccessControlApi } from "../envSettings/accessControl/envAccessControlApi";
 import { keyBy, map } from "lodash";
-import { getUseSelector } from "@open-smc/store/useSelector";
+import { makeUseSelector } from "@open-smc/store/useSelector";
 
 interface ProjectExplorerContext {
     store: Store<FileExplorerState>;
@@ -29,9 +29,9 @@ export function useFileStore() {
     return fileStore;
 }
 
-export const useFileExplorerSelector = getUseSelector(useFileExplorerStore);
+export const useFileExplorerSelector = makeUseSelector(useFileExplorerStore);
 
-export const useFileStoreSelector = getUseSelector(useFileStore);
+export const useFileStoreSelector = makeUseSelector(useFileStore);
 
 interface ProjectExplorerContextProviderProps {
     files: FileModel[];

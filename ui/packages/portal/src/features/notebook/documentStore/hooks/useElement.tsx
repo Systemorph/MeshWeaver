@@ -1,4 +1,4 @@
-import { getUseSelector } from "@open-smc/store/useSelector";
+import { makeUseSelector } from "@open-smc/store/useSelector";
 import { useElementsStore } from "../../NotebookEditor";
 
-export const useElement = getUseSelector(useElementsStore);
+export const useElement = makeUseSelector(useElementsStore);
