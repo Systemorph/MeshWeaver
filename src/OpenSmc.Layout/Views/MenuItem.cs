@@ -97,7 +97,7 @@ public record MenuItemControl(object Title, object Icon) : ExpandableUiControl<M
         if(children.Count == 1)
             return children.First();
 
-        var ret = new Composition.Layout();
+        var ret = new Composition.LayoutStackControl();
         foreach (var menuItem in children)
             ret = ret.WithView(menuItem);
         return ret;
