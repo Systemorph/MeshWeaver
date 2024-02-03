@@ -7,7 +7,7 @@ using OpenSmc.ServiceProvider;
 namespace OpenSmc.Layout.Composition;
 
 public class LayoutStackPlugin(IMessageHub hub) :
-    UiControlPlugin<Layout>(hub),
+    UiControlPlugin<LayoutStackControl>(hub),
     IMessageHandler<SetAreaRequest>
 
 {
@@ -218,9 +218,9 @@ internal record ViewGenerator(Func<IMessageDelivery, bool> Filter, Func<IMessage
 
 public record LayoutDefinition(IMessageHub Hub) : MessageHubModuleConfiguration
 {
-    internal Layout InitialState { get; init; }
+    internal LayoutStackControl InitialState { get; init; }
     internal ImmutableList<ViewGenerator> ViewGenerators { get; init; } = ImmutableList<ViewGenerator>.Empty;
-    public LayoutDefinition WithInitialState(Layout initialState) => this with { InitialState = initialState };
+    public LayoutDefinition WithInitialState(LayoutStackControl initialState) => this with { InitialState = initialState };
     public LayoutDefinition WithGenerator(Func<IMessageDelivery, bool> filter, Func<IMessageDelivery, SetAreaOptions, object> viewGenerator) => this with { ViewGenerators = ViewGenerators.Add(new(filter, viewGenerator)) };
 
     public LayoutDefinition WithView(string area, Func<IMessageDelivery, SetAreaOptions, object> generator) =>

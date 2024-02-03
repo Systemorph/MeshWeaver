@@ -6,9 +6,9 @@ namespace OpenSmc.Layout.Composition;
 
 public record LayoutStackAreaChangedOptions(string InsertAfter = null);
 public delegate void LayoutStackUpdateDelegate(IMessageHub hub, IReadOnlyCollection<AreaChangedEvent> oldAreas, IEnumerable<ViewElementWithView> updatedViewElements);
-public record LayoutStackUpdateRequest(Layout UpdatedView, LayoutStackUpdateDelegate Update);
+public record LayoutStackUpdateRequest(LayoutStackControl UpdatedView, LayoutStackUpdateDelegate Update);
 
-public record Layout() : UiControl<Layout, LayoutStackPlugin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null), IUiControlWithSubAreas
+public record LayoutStackControl() : UiControl<LayoutStackControl, LayoutStackPlugin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null), IUiControlWithSubAreas
 {
     private readonly ImmutableList<AreaChangedEvent> areasImpl = ImmutableList<AreaChangedEvent>.Empty;
     internal const string Root = "";
@@ -34,7 +34,7 @@ public record Layout() : UiControl<Layout, LayoutStackPlugin>(ModuleSetup.Module
     }
 
 
-    internal Layout SetAreaToState(AreaChangedEvent area)
+    internal LayoutStackControl SetAreaToState(AreaChangedEvent area)
     {
         var insertAfter = (area.Options as LayoutStackAreaChangedOptions)?.InsertAfter;
         var toBeReplaced = AreasImpl.FirstOrDefault(x => x.Area == area.Area);
@@ -48,9 +48,9 @@ public record Layout() : UiControl<Layout, LayoutStackPlugin>(ModuleSetup.Module
     }
 
 
-public Layout WithView(object value) => WithView(value, null);
+public LayoutStackControl WithView(object value) => WithView(value, null);
 
-    public Layout WithView(object value, Func<SetAreaOptions, SetAreaOptions> options)
+    public LayoutStackControl WithView(object value, Func<SetAreaOptions, SetAreaOptions> options)
     {
         var o = GetOptions(options);
         return this with { ViewElements = ViewElements.Add(new ViewElementWithView(value, o)) };
@@ -64,8 +64,8 @@ public Layout WithView(object value) => WithView(value, null);
         return ret;
     }
 
-    public Layout WithView<T>(Func<T> view, Func<SetAreaOptions, SetAreaOptions> options = null) => WithView(() => Task.FromResult(new ViewElementWithView(view(), GetOptions(options))));
-    public Layout WithView<T>(Func<Task<T>> viewDefinition, Func<SetAreaOptions, SetAreaOptions> options = null) => WithView(ConvertToViewDefinition(viewDefinition), options);
+    public LayoutStackControl WithView<T>(Func<T> view, Func<SetAreaOptions, SetAreaOptions> options = null) => WithView(() => Task.FromResult(new ViewElementWithView(view(), GetOptions(options))));
+    public LayoutStackControl WithView<T>(Func<Task<T>> viewDefinition, Func<SetAreaOptions, SetAreaOptions> options = null) => WithView(ConvertToViewDefinition(viewDefinition), options);
 
     private ViewDefinition ConvertToViewDefinition<T>(Func<Task<T>> viewDefinition)
     {
@@ -74,7 +74,7 @@ public Layout WithView(object value) => WithView(value, null);
         return async opt => new ViewElementWithView(await viewDefinition(), opt);
     }
 
-    public Layout WithView(ViewDefinition viewDefinition, Func<SetAreaOptions, SetAreaOptions> options = null)
+    public LayoutStackControl WithView(ViewDefinition viewDefinition, Func<SetAreaOptions, SetAreaOptions> options = null)
     {
         var o = GetOptions(options);
         return this with { ViewElements = ViewElements.Add(new ViewElementWithViewDefinition(viewDefinition, o)) };
@@ -86,14 +86,14 @@ public Layout WithView(object value) => WithView(value, null);
     }
 
 
-    public Layout WithColumns(int columns)
+    public LayoutStackControl WithColumns(int columns)
     {
         return this with { ColumnCount = columns };
     }
 
     public int ColumnCount { get; init; }
 
-    public Layout UpdateArea(AreaChangedEvent areaChangedEvent)
+    public LayoutStackControl UpdateArea(AreaChangedEvent areaChangedEvent)
     {
         var old = AreasImpl.Find(x => x.Area == areaChangedEvent.Area);
         var areas = areaChangedEvent.View == null ? AreasImpl.RemoveAll(x => x.Area == areaChangedEvent.Area) : old != null ? AreasImpl.Replace(old, areaChangedEvent) : AreasImpl.Add(areaChangedEvent);
@@ -104,7 +104,7 @@ public Layout WithView(object value) => WithView(value, null);
 
     public override bool IsUpToDate(object other)
     {
-        if (other is not Layout stack)
+        if (other is not LayoutStackControl stack)
             return false;
 
 
@@ -117,7 +117,7 @@ public Layout WithView(object value) => WithView(value, null);
 
     }
 
-    public void Update(Layout updatedView, int maxAreas)
+    public void Update(LayoutStackControl updatedView, int maxAreas)
     {
         if (Hub == null)
             throw new InvalidOperationException("Cannot update detached control");
@@ -137,7 +137,7 @@ public Layout WithView(object value) => WithView(value, null);
     }
 
     public bool HighlightNewAreas { get; init; }
-    public Layout WithHighlightNewAreas()
+    public LayoutStackControl WithHighlightNewAreas()
     {
         return this with { HighlightNewAreas = true };
     }
