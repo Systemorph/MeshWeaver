@@ -19,9 +19,8 @@ public static class LayoutExtensions
                 services => services.AddSingleton<IUiControlService, UiControlService>()
                 .AddAllControlHubs()
             )
-            .AddApplicationScope()
             .AddExpressionSynchronization()
-            .WithForwards(forward => forward
+            .WithRoutes(forward => forward
                 .RouteMessage<RefreshRequest>(d => mainLayoutAddress)
                 .RouteMessage<SetAreaRequest>(d => mainLayoutAddress)
             )

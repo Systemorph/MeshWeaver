@@ -24,7 +24,7 @@ public class MessageHubHostedAddressTest : TestBase
     {
         Services.AddSingleton<IMessageHub>(sp => sp.CreateMessageHub(new RouterAddress(),
             conf => conf
-                .WithForwards(forward => forward
+                .WithRoutes(forward => forward
                     .RouteAddressToHostedHub<HostAddress>(ConfigureHost)
                     .RouteAddressToHostedHub<ClientAddress>(ConfigureClient)
                 )));
@@ -34,7 +34,7 @@ public class MessageHubHostedAddressTest : TestBase
 
     protected MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         => configuration
-                .WithForwards(forward => forward
+                .WithRoutes(forward => forward
                     .RouteAddressToHostedHub<SubHubAddress>(ConfigureSubHub)
                 );
 

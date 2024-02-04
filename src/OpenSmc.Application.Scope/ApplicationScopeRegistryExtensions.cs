@@ -19,9 +19,11 @@ public static class ApplicationScopeRegistryExtensions
 {
     public static MessageHubConfiguration AddExpressionSynchronization(this MessageHubConfiguration conf)
     {
-        return conf.WithForwards
+        return conf
+            .AddApplicationScope()
+            .WithRoutes
         (
-            forward => forward
+            routes => routes
                 .RouteAddressToHostedHub<ExpressionSynchronizationAddress>
                 (
                     c => c.AddPlugin<ExpressionSynchronizationPlugin>()
@@ -32,12 +34,24 @@ public static class ApplicationScopeRegistryExtensions
 
     public static MessageHubConfiguration AddApplicationScope(this MessageHubConfiguration conf)
     {
-        return conf.AddPlugin<ApplicationScopePlugin>()
-                   .WithServices(services => services
-                       .RegisterScopes()
-                       .AddSingleton<IScopeFactory, ScopeFactory>()
-                       .AddSingleton(serviceProvider => serviceProvider.GetRequiredService<IScopeFactory>().ForSingleton().ToScope<IApplicationScope>()))
-                   .AddSerialization(rule => rule.ForType<IScope>(typeBuilder => typeBuilder.WithTransformation(TransformScope)));
+        return conf
+            .WithServices(services => services
+                .RegisterScopes()
+                .AddSingleton<IScopeFactory, ScopeFactory>()
+                .AddSingleton(serviceProvider => serviceProvider.GetRequiredService<IScopeFactory>().ForSingleton().ToScope<IApplicationScope>()))
+            .AddSerialization(rule => rule.ForType<IScope>(typeBuilder => typeBuilder.WithTransformation(TransformScope)))
+
+                .WithHostedHub
+                    (
+                        new ApplicationScopeAddress(conf.Address), 
+                        d => d.AddPlugin<ApplicationScopePlugin>())
+                .WithRoutes
+            (
+                forward => forward
+                    .RouteMessageToTarget<ScopePropertyChanged>(_ => new ApplicationScopeAddress(conf.Address), f => f.Message.Status == PropertyChangeStatus.Requested)
+                    .RouteMessageToTarget<ScopePropertyChangedEvent>(_ => new ApplicationScopeAddress(conf.Address), f => f.Message.Status == ScopeChangedStatus.Requested)
+            );
+            
     }
 
 

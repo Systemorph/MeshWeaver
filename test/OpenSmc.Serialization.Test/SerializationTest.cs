@@ -20,7 +20,7 @@ public class SerializationTest : TestBase
     public SerializationTest(ITestOutputHelper output) : base(output)
     {
         Services.AddMessageHubs(new RouterAddress(), hubConf => hubConf
-            .WithForwards(f => f
+            .WithRoutes(f => f
                 .RouteAddress<HostAddress>((routedAddress, d) =>
                     {
                         var hostHub = f.Hub.GetHostedHub(routedAddress, ConfigureHost);
