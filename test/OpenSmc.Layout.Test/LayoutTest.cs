@@ -3,7 +3,6 @@ using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Application.Scope;
 using OpenSmc.Hub.Fixture;
-using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.LayoutClient;
 using OpenSmc.Messaging;
 using OpenSmc.Scopes;
@@ -49,7 +48,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                             .WithId(NamedArea)
                         )
                         .WithView(UpdatingView, (_, _) => 
-                            Controls.TextBox(GetFromScope(def.Hub, UpdatingView))
+                            Controls.TextBox(GetFromScope(def.Hub))
                                 .WithId(UpdatingView)
                                 .WithClickAction(ChangeStringInScope)
                             )
@@ -63,7 +62,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         context.Hub.ServiceProvider.GetRequiredService<IApplicationScope>().GetScope<ITestScope>().String = NewString;
     }
 
-    private string GetFromScope(IMessageHub hub, string updatingView)
+    private string GetFromScope(IMessageHub hub)
     {
         return hub.ServiceProvider.GetRequiredService<IApplicationScope>().GetScope<ITestScope>().String;
     }
