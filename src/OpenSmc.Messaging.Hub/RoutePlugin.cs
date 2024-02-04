@@ -1,6 +1,6 @@
 ﻿namespace OpenSmc.Messaging;
 
-public class RoutePlugin : MessageHubPlugin<RoutePlugin, RouteConfiguration>
+public class RoutePlugin : MessageHubPlugin<RouteConfiguration>
 {
     private readonly IMessageHub parentHub;
 
