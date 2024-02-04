@@ -169,9 +169,9 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
 
     public void ConnectTo(IMessageHub hub)
     {
-        hub.DeliverMessage(new MessageDelivery<ConnectToHubRequest>()
+        hub.DeliverMessage(new MessageDelivery<ConnectToHubRequest>
         {
-            Message = new ConnectToHubRequest(Address, hub.Address),
+            Message = new ConnectToHubRequest(),
             Sender = Address,
             Target = hub.Address
         });

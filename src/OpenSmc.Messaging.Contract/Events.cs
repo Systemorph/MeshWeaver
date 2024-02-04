@@ -2,18 +2,11 @@
 
 namespace OpenSmc.Messaging;
 
-public record ConnectToHubRequest(object From, object To) : IRequest<HubInfo>;
+public record ConnectToHubRequest : IRequest<HubInfo>;
 
-// TODO SMCv2: which one to use? DeleteHubRequest OR DeleteRequest<TState> ? (2023/09/24, Maxim Meshkov)
 public record DeleteHubRequest(object Address) : IRequest<HubDeleted>;
-
 public record HubDeleted(object Address);
-
-public record HubInfo(object Address)
-{
-    public ConnectionState State { get; init; }
-    public string Message { get; init; }
-}
+public record HubInfo(object Address);
 
 public record DisconnectHubRequest() : IRequest<HubDisconnected>;
 
@@ -25,16 +18,16 @@ public record GetRequest<T> : IRequest<T>
 }
 
 
-public record GetManyRequest<T>() : IRequest<PagedGetResult<T>> 
+public record GetManyRequest<T>() : IRequest<GetManyResponse<T>> 
 { 
     public int Page { get; init; }
     public int? PageSize { get; init; } 
     public object Options { get; init; } 
 };
 
-public record PagedGetResult<T>(int Total, IReadOnlyCollection<T> Items)
+public record GetManyResponse<T>(int Total, IReadOnlyCollection<T> Items)
 {
-    public static PagedGetResult<T> Empty() => new(0, Array.Empty<T>());
+    public static GetManyResponse<T> Empty() => new(0, Array.Empty<T>());
 }
 
 public record CreateRequest<TObject>(TObject Element) : IRequest<DataChanged> { public object Options { get; init; } };
@@ -71,12 +64,6 @@ public record DeleteRequest<TState>(TState State) : IRequest<ObjectDeleted> { pu
 public record ObjectDeleted(object Id);
 
 
-public enum ConnectionState
-{
-    Connected,
-    Refused,
-    TimedOut
-}
 
 public record HeartbeatEvent(SyncDelivery Route);
 
