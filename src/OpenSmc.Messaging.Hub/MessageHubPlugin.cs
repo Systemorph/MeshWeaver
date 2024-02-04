@@ -1,9 +1,8 @@
 ﻿namespace OpenSmc.Messaging;
 
-public class MessageHubPlugin<TPlugin> : 
+public class MessageHubPlugin : 
     MessageHubBase<object>,
     IMessageHubPlugin
-    where TPlugin : MessageHubPlugin<TPlugin>
 {
 
 
@@ -17,11 +16,9 @@ public class MessageHubPlugin<TPlugin> :
 }
 
 
-public class MessageHubPlugin<TPlugin, TState> : MessageHubPlugin<TPlugin>
-    where TPlugin : MessageHubPlugin<TPlugin, TState>
+public class MessageHubPlugin<TState> : MessageHubPlugin
 {
     public TState State { get; private set; }
-    protected TPlugin This => (TPlugin)this;
 
     protected void UpdateState(Func<TState, TState> changes)
     {

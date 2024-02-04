@@ -5,7 +5,7 @@ namespace OpenSmc.Layout;
 
 
 
-public class UiControlPlugin<TControl> : MessageHubPlugin<UiControlPlugin<TControl>, TControl>,
+public class UiControlPlugin<TControl> : MessageHubPlugin<TControl>,
     IMessageHandler<GetRequest<TControl>>,
     IMessageHandler<RefreshRequest>,
     IMessageHandlerAsync<ClickedEvent>

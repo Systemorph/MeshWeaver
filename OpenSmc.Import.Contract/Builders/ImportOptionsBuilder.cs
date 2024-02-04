@@ -41,7 +41,7 @@ namespace OpenSmc.Import.Contract.Builders
      *
      */
 
-    public class ImportPlugin : MessageHubPlugin<ImportPlugin>
+    public class ImportPlugin : MessageHubPlugin
     {
         [Inject] private IActivityService activityService;
 

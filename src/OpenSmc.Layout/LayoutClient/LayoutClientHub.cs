@@ -41,7 +41,7 @@ public record LayoutClientState(LayoutClientConfiguration Configuration)
 public record LayoutClientConfiguration(object RefreshMessage, object LayoutHostAddress, string MainArea = "");
 
 public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessageHub hub)
-    : MessageHubPlugin<LayoutClientPlugin, LayoutClientState>(hub),
+    : MessageHubPlugin<LayoutClientState>(hub),
         IMessageHandler<AreaChangedEvent>,
         IMessageHandler<GetRequest<AreaChangedEvent>>
 {
