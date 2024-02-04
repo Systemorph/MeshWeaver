@@ -48,15 +48,22 @@ public record RouteConfiguration(IMessageHub Hub)
             return Task.FromResult(delivery.Forwarded());
         });
 
+    public RouteConfiguration RouteMessage<TMessage>(Func<IMessageDelivery<TMessage>, object> addressMap) =>
+        RouteMessage<TMessage>(addressMap, _ => true);
 
-    public RouteConfiguration RouteMessage<TMessage>(Func<IMessageDelivery, object> addressMap) =>
-        RouteMessage<TMessage>(message =>
+    public RouteConfiguration RouteMessage<TMessage>(Func<IMessageDelivery<TMessage>, object> addressMap, Func<IMessageDelivery<TMessage>, bool> filter)
+    {
+        return RouteMessage<TMessage>(d =>
         {
-            var mappedAddress = addressMap(message);
-            if(!message.Sender.Equals(Hub.Address))
-                RoutedMessageAddresses.GetOrAdd(mappedAddress, _ => new()).Add(message.Sender);
-            return Hub.Post(message.Message, o => o.WithProperties(message.Properties).WithTarget(mappedAddress));
+            if (d is not IMessageDelivery<TMessage> delivery || !filter(delivery))
+                return d;
+
+            var mappedAddress = addressMap(delivery);
+            if (!delivery.Sender.Equals(Hub.Address))
+                RoutedMessageAddresses.GetOrAdd(mappedAddress, _ => new()).Add(delivery.Sender);
+            return Hub.Post(delivery.Message, o => o.WithProperties(delivery.Properties).WithTarget(mappedAddress));
         });
+    }
 
 
     private RouteConfiguration RouteMessage<TMessage>(SyncDelivery handler)

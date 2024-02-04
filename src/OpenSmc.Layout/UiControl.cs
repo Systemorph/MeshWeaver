@@ -1,15 +1,11 @@
 ﻿using System.Collections.Immutable;
-using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json;
+using OpenSmc.Application.Scope;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
+using OpenSmc.Scopes.Proxy;
 using OpenSmc.ShortGuid;
-#if DEBUG
-#endif
-#if !DEBUG
-using OpenSmc.ShortGuid;
-#endif
 
 namespace OpenSmc.Layout;
 
@@ -94,7 +90,16 @@ public abstract record UiControl<TControl, TPlugin>(string ModuleName, string Ap
 
     protected virtual MessageHubConfiguration ConfigureHub(MessageHubConfiguration configuration)
     {
-        return configuration.AddPlugin(CreatePlugin);
+        return configuration.AddPlugin(CreatePlugin)
+            .WithForwards(forward =>
+                forward
+                    .RouteMessage<ScopePropertyChanged>(
+                        _ => new ApplicationScopeAddress(LayoutExtensions.FindLayoutHost(Address)),
+                        r => r.Message.Status == PropertyChangeStatus.Requested)
+                    .RouteMessage<ScopePropertyChangedEvent>(
+                        _ => new ExpressionSynchronizationAddress(LayoutExtensions.FindLayoutHost(Address)),
+                        r => r.Message.Status == ScopeChangedStatus.Committed)
+            );
     }
 
     protected virtual TPlugin CreatePlugin(IMessageHub hub)
