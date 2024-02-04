@@ -1,15 +1,12 @@
 ﻿using System.Collections.Immutable;
-using OpenSmc.Messaging;
 using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Layout.Composition;
 
-public record LayoutStackAreaChangedOptions(string InsertAfter = null);
-public delegate void LayoutStackUpdateDelegate(IMessageHub hub, IReadOnlyCollection<AreaChangedEvent> oldAreas, IEnumerable<ViewElementWithView> updatedViewElements);
-public record LayoutStackUpdateRequest(LayoutStackControl UpdatedView, LayoutStackUpdateDelegate Update);
 
 public record LayoutStackControl() : UiControl<LayoutStackControl, LayoutStackPlugin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null), IUiControlWithSubAreas
 {
+    public record AreaChangedOptions(string InsertAfter = null);
     private readonly ImmutableList<AreaChangedEvent> areasImpl = ImmutableList<AreaChangedEvent>.Empty;
     internal const string Root = "";
 
@@ -36,7 +33,7 @@ public record LayoutStackControl() : UiControl<LayoutStackControl, LayoutStackPl
 
     internal LayoutStackControl SetAreaToState(AreaChangedEvent area)
     {
-        var insertAfter = (area.Options as LayoutStackAreaChangedOptions)?.InsertAfter;
+        var insertAfter = (area.Options as AreaChangedOptions)?.InsertAfter;
         var toBeReplaced = AreasImpl.FirstOrDefault(x => x.Area == area.Area);
         var areas = toBeReplaced != null
                         ? AreasImpl.Replace(toBeReplaced, area)
@@ -128,7 +125,7 @@ public LayoutStackControl WithView(object value) => WithView(value, null);
             var area = Guid.NewGuid().AsString();
             Hub.Post(new SetAreaRequest(new SetAreaOptions(area)
                                         {
-                                            AreaViewOptions = new LayoutStackAreaChangedOptions(Areas.LastOrDefault()?.Area)
+                                            AreaViewOptions = new AreaChangedOptions(Areas.LastOrDefault()?.Area)
                                         }, newArea.View));
         }
 
