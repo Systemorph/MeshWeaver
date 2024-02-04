@@ -33,7 +33,6 @@ public class ExpressionSynchronizationPlugin(IMessageHub hub)
     {
         await base.StartAsync();
         InitializeState(StartupState());
-
     }
 
     IMessageDelivery IMessageHandler<ScopePropertyChangedEvent>.HandleMessage(IMessageDelivery<ScopePropertyChangedEvent> delivery)

@@ -40,46 +40,49 @@ public record RouteConfiguration(IMessageHub Hub)
             ),
         };
 
+    public RouteConfiguration RouteMessageToTarget<TMessage>(Func<IMessageDelivery<TMessage>, object> addressMap)
+        => RouteMessageToTarget(addressMap, _ => true);
 
-    public RouteConfiguration RouteMessageToTarget<TMessage>(Func<IMessageDelivery, object> addressMap) =>
-        RouteMessage<TMessage>(delivery =>
-        {
-            Hub.Post(delivery.Message, o => o.WithTarget(addressMap.Invoke(delivery)));
-            return Task.FromResult(delivery.Forwarded());
-        });
+    public RouteConfiguration RouteMessageToTarget<TMessage>(Func<IMessageDelivery<TMessage>, object> addressMap,
+        Func<IMessageDelivery<TMessage>, bool> filter) =>
+        RouteMessage(delivery =>
+            {
+                Hub.Post(delivery.Message, o => o.WithTarget(addressMap.Invoke(delivery)));
+                return Task.FromResult(delivery.Forwarded());
+            },
+            filter);
 
     public RouteConfiguration RouteMessage<TMessage>(Func<IMessageDelivery<TMessage>, object> addressMap) =>
-        RouteMessage<TMessage>(addressMap, _ => true);
+        RouteMessage(addressMap, _ => true);
 
     public RouteConfiguration RouteMessage<TMessage>(Func<IMessageDelivery<TMessage>, object> addressMap, Func<IMessageDelivery<TMessage>, bool> filter)
     {
-        return RouteMessage<TMessage>(d =>
-        {
-            if (d is not IMessageDelivery<TMessage> delivery || !filter(delivery))
-                return d;
-
-            var mappedAddress = addressMap(delivery);
-            if (!delivery.Sender.Equals(Hub.Address))
-                RoutedMessageAddresses.GetOrAdd(mappedAddress, _ => new()).Add(delivery.Sender);
-            return Hub.Post(delivery.Message, o => o.WithProperties(delivery.Properties).WithTarget(mappedAddress));
-        });
+        return RouteMessage(delivery =>
+            {
+                var mappedAddress = addressMap((IMessageDelivery<TMessage>)delivery);
+                if (!delivery.Sender.Equals(Hub.Address))
+                    RoutedMessageAddresses.GetOrAdd(mappedAddress, _ => new()).Add(delivery.Sender);
+                Hub.Post(delivery.Message, o => o.WithProperties(delivery.Properties).WithTarget(mappedAddress));
+                return Task.FromResult(delivery.Forwarded());
+            },
+            filter);
     }
 
 
-    private RouteConfiguration RouteMessage<TMessage>(SyncDelivery handler)
-        => RouteMessage<TMessage>(d => Task.FromResult(handler(d)));
-    private RouteConfiguration RouteMessage<TMessage>(AsyncDelivery handler)
+    private RouteConfiguration RouteMessage<TMessage>(AsyncDelivery handler, Func<IMessageDelivery<TMessage>, bool> filter)
         => this with
         {
-            Handlers = Handlers.Add(async message =>
+            Handlers = Handlers.Add(d =>
                 {
-                    if (message.State != MessageDeliveryState.Submitted || message.Message is not TMessage)
-                        return message;
+                    if(
+                            (d.Target != null && !Hub.Address.Equals(d.Target))
+                            || d.State != MessageDeliveryState.Submitted 
+                            || d is not IMessageDelivery<TMessage> delivery 
+                            || !filter(delivery)
+                            )
+                        return Task.FromResult(d);
 
-                    if (message.Target != null && !Hub.Address.Equals(message.Target))
-                        return message;
-
-                    return await handler(message);
+                    return handler(delivery);
                 }
             ),
         };

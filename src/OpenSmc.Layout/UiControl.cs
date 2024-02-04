@@ -91,14 +91,14 @@ public abstract record UiControl<TControl, TPlugin>(string ModuleName, string Ap
     protected virtual MessageHubConfiguration ConfigureHub(MessageHubConfiguration configuration)
     {
         return configuration.AddPlugin(CreatePlugin)
-            .WithForwards(forward =>
+            .WithRoutes(forward =>
                 forward
                     .RouteMessage<ScopePropertyChanged>(
                         _ => new ApplicationScopeAddress(LayoutExtensions.FindLayoutHost(Address)),
                         r => r.Message.Status == PropertyChangeStatus.Requested)
-                    .RouteMessage<ScopePropertyChangedEvent>(
-                        _ => new ExpressionSynchronizationAddress(LayoutExtensions.FindLayoutHost(Address)),
-                        r => r.Message.Status == ScopeChangedStatus.Committed)
+                    .RouteMessage<ScopePropertyChanged>(
+                        _ => MessageTargets.Subscribers,
+                        r => r.Message.Status != PropertyChangeStatus.Requested)
             );
     }
 

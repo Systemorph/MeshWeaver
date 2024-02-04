@@ -38,7 +38,6 @@ public record MessageHubConfiguration
 
     internal ImmutableList<MessageHandlerItem> MessageHandlers { get; init; } = ImmutableList<MessageHandlerItem>.Empty;
     internal Func<string> GetAccessObject { get; init; }
-    internal ImmutableList<StartConfiguration> StartConfigurations { get; init; } = ImmutableList<StartConfiguration>.Empty;
 
     protected internal ImmutableList<Func<IMessageHub, Task>> BuildupActions { get; init; } = ImmutableList<Func<IMessageHub, Task>>.Empty;
 
@@ -71,13 +70,24 @@ public record MessageHubConfiguration
     public MessageHubConfiguration SynchronizeFrom(object address) => this with { SynchronizationAddress = address };
 
 
-    public MessageHubConfiguration WithForwards(Func<RouteConfiguration, RouteConfiguration> configuration) => this with { ForwardConfigurationBuilder = x => configuration(ForwardConfigurationBuilder?.Invoke(x) ?? x) };
+    public MessageHubConfiguration WithRoutes(Func<RouteConfiguration, RouteConfiguration> configuration) => this with { ForwardConfigurationBuilder = x => configuration(ForwardConfigurationBuilder?.Invoke(x) ?? x) };
 
 
     public MessageHubConfiguration WithAccessObject(Func<string> getAccessObject)
     {
         return this with { GetAccessObject = getAccessObject };
     }
+
+
+    public MessageHubConfiguration WithHostedHub(object address,
+        Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
+        => WithRoutes(f => f.RouteAddress<object>((a, d) =>
+        {
+            if (!address.Equals(a))
+                return d;
+            f.Hub.GetHostedHub(a, configuration).DeliverMessage(d);
+            return d.Forwarded();
+        }));
 
 
     protected virtual ServiceCollection ConfigureServices<TAddress>(IMessageHub parent)
@@ -130,37 +140,6 @@ public record MessageHubConfiguration
         return HubInstance;
     }
 
-}
-
-public record StartConfiguration(object Address)
-{
-    internal ImmutableList<object> CreationObjects { get; init; } = ImmutableList<object>.Empty;
-    public StartConfiguration WithCreateMessage(object instance) => this with { CreationObjects = CreationObjects.Add(instance) };
-}
-
-public abstract record MessageRouteConfiguration(Func<IMessageDelivery, object> AddressMap, IMessageHub Host) : IForwardConfigurationItem
-{
-    internal const string MaskedRequest = nameof(MaskedRequest);
-    AsyncDelivery IForwardConfigurationItem.Route => d => Task.FromResult(Route(d));
-
-    bool IForwardConfigurationItem.Filter(IMessageDelivery delivery) => Applies(delivery);
-    protected abstract bool Applies(IMessageDelivery delivery);
-
-    private IMessageDelivery Route(IMessageDelivery delivery)
-    {
-        var posted = Host.Post(delivery.Message, d => d.WithTarget(AddressMap.Invoke(delivery)).WithProperties(d.Properties));
-
-        if (delivery.Message is IRequest)
-            Host.RegisterCallback(posted, r => HandleWayBack(delivery, r));
-
-        return delivery.Forwarded();
-    }
-
-    private IMessageDelivery HandleWayBack(IMessageDelivery request, IMessageDelivery response)
-    {
-        Host.Post(response.Message, o => o.WithTarget(request.Sender).WithProperties(response.Properties).WithRequestIdFrom(request));
-        return request.Processed();
-    }
 }
 
 

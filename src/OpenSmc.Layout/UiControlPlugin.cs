@@ -7,8 +7,8 @@ namespace OpenSmc.Layout;
 
 public class UiControlPlugin<TControl> : MessageHubPlugin<UiControlPlugin<TControl>, TControl>,
     IMessageHandler<GetRequest<TControl>>,
-                                                  IMessageHandler<RefreshRequest>,
-                                                  IMessageHandlerAsync<ClickedEvent>
+    IMessageHandler<RefreshRequest>,
+    IMessageHandlerAsync<ClickedEvent>
     where TControl : UiControl
 {
     private Action scopeDispose;
@@ -46,7 +46,7 @@ public class UiControlPlugin<TControl> : MessageHubPlugin<UiControlPlugin<TContr
 
 
 
-    public  TControl2  CreateUiControlHub<TControl2>(TControl2 control)
+    public TControl2 CreateUiControlHub<TControl2>(TControl2 control)
         where TControl2 : UiControl
     {
         if (control == null)
@@ -61,7 +61,8 @@ public class UiControlPlugin<TControl> : MessageHubPlugin<UiControlPlugin<TContr
     }
 
 
-    async Task<IMessageDelivery> IMessageHandlerAsync<ClickedEvent>.HandleMessageAsync(IMessageDelivery<ClickedEvent> delivery)
+    async Task<IMessageDelivery> IMessageHandlerAsync<ClickedEvent>.HandleMessageAsync(
+        IMessageDelivery<ClickedEvent> delivery)
     {
         try
         {
@@ -73,6 +74,7 @@ public class UiControlPlugin<TControl> : MessageHubPlugin<UiControlPlugin<TContr
             return delivery.Failed($"Exception in click action: \n{e}");
             //errorDelivery.ChangeDeliveryState(MessageDeliveryState.Failed);
         }
+
         return delivery.Processed();
     }
 
