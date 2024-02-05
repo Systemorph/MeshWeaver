@@ -6,12 +6,12 @@ import {
     CurrentFolderSavedData, FileModel, getFileModel
 } from "./projectExplorerStore/fileExplorerState";
 import { SessionStorageWrapper } from "../../../shared/utils/sessionStorageWrapper";
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 import { useAddNewFile } from "./projectExplorerStore/hooks/useAddNewFile";
 import classNames from "classnames";
 import styles from "./project-explorer.module.scss";
 import { Button } from "@open-smc/ui-kit/components";
-import button from "@open-smc/ui-kit/components/buttons.module.scss";
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { FileList } from "./FileList";
 import { UploadFormDialog } from "../uploadForm/UploadFormDialog";

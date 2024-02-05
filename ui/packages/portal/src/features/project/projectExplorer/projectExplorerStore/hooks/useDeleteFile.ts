@@ -2,7 +2,7 @@ import { useProjectStore as useProjectStore } from "../../../projectStore/projec
 import { without } from "lodash";
 import { useNavigate } from "react-router-dom";
 import { useFileStore, useFileExplorerStore } from "../../ProjectExplorerContextProvider";
-import { useMessageHubExtensions } from "@open-smc/application/messageHub/useMessageHubExtensions";
+import { useMessageHubExtensions } from "@open-smc/application/src/messageHub/useMessageHubExtensions";
 import { DeleteNodeEvent } from "../../projectExplorerEditorGrain/projectExplorerEditor.contract";
 
 export function useDeleteFile() {

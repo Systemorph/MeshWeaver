@@ -1,8 +1,8 @@
 import styles from './formHeader.module.scss';
 import { ReactNode } from "react";
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import classNames from "classnames";
-import buttons from "@open-smc/ui-kit/components/buttons.module.scss"
+import buttons from "@open-smc/ui-kit/src/components/buttons.module.scss"
 
 type Props = {
     text: string,

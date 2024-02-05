@@ -14,7 +14,7 @@ using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Application.Scope;
 
-public class ApplicationScopePlugin : MessageHubPlugin<ApplicationScopePlugin, ApplicationScopeState>,
+public class ApplicationScopePlugin : MessageHubPlugin<ApplicationScopeState>,
                                         IMessageHandler<SubscribeScopeRequest>,
                                         IMessageHandler<UnsubscribeScopeRequest>,
                                         IMessageHandler<DisposeScopeRequest>,

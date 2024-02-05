@@ -2,7 +2,6 @@ const path = require('path');
 const {babelInclude} = require("customize-cra");
 const {name, version} = require("./package.json");
 const MonacoWebpackPlugin = require('monaco-editor-webpack-plugin');
-const addPackageAliases = require("../../addPackageAliases");
 
 const packageId = `${name}-${version}`;
 
@@ -26,8 +25,6 @@ module.exports = function override(config, env) {
     path.resolve('../ui-kit/src'),
     path.resolve('../utils/src'),
   ])(config);
-
-  addPackageAliases(config);
 
   return config;
 }

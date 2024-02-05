@@ -1,14 +1,14 @@
-import { makeHtml } from "@open-smc/sandbox/Html";
-import { makeModalWindow, makeStack } from "@open-smc/sandbox/LayoutStack";
-import { makeIcon } from "@open-smc/sandbox/Icon";
-import { makeItemTemplate } from "@open-smc/sandbox/ItemTemplate";
-import { makeCheckbox } from "@open-smc/sandbox/Checkbox";
-import { makeBinding } from "@open-smc/application/dataBinding/resolveBinding";
+import { makeHtml } from "@open-smc/sandbox/src/Html";
+import { makeModalWindow, makeStack } from "@open-smc/sandbox/src/LayoutStack";
+import { makeIcon } from "@open-smc/sandbox/src/Icon";
+import { makeItemTemplate } from "@open-smc/sandbox/src/ItemTemplate";
+import { makeCheckbox } from "@open-smc/sandbox/src/Checkbox";
+import { makeBinding } from "@open-smc/application/src/dataBinding/resolveBinding";
 import { v4 } from "uuid";
-import { makeMenuItem } from "@open-smc/sandbox/MenuItem";
-import { brandeisBlue, brightGray } from "@open-smc/application/colors";
+import { makeMenuItem } from "@open-smc/sandbox/src/MenuItem";
+import { brandeisBlue, brightGray } from "@open-smc/application/src/colors";
 import { closeModalWindow, openModalWindow } from "./sampleApp";
-import { ControlBuilderBase } from "@open-smc/sandbox/ControlBase";
+import { ControlBuilderBase } from "@open-smc/sandbox/src/ControlBase";
 
 type PromotionDialogFactory = (next: () => void, finish: () => void) => ModalDef;
 

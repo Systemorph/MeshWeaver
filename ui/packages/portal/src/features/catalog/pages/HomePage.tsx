@@ -1,13 +1,13 @@
 import styles from '../layout.module.scss';
 import style from "../components/toolbar.module.scss";
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
 import React, { useEffect, useState } from "react";
 import { ProjectCards } from "../components/cards/ProjectCards";
 import { ProjectApi, ProjectCatalogItem, ProjectTuple, RecentTypeParam } from "../../../app/projectApi";
 import { useNavigate } from "react-router-dom";
 import classNames from "classnames";
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import { EmptyProjectCollection } from "../components/cards/EmptyProjectCollection";
 import { Pills } from "../components/pills/Pills";
 import {

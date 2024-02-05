@@ -1,8 +1,8 @@
-import { Sandbox } from "@open-smc/sandbox/Sandbox";
+import { Sandbox } from "@open-smc/sandbox/src/Sandbox";
 import styles from "./menuItemPage.module.scss";
 import Chance from "chance";
-import { Title } from "@open-smc/sandbox/Title";
-import { TitleSize } from "@open-smc/application/controls/TitleControl";
+import { Title } from "@open-smc/sandbox/src/Title";
+import { TitleSize } from "@open-smc/application/src/controls/TitleControl";
 
 const chance = new Chance();
 

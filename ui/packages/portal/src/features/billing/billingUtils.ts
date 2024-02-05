@@ -1,4 +1,4 @@
-import { formatNumber } from "@open-smc/utils/numbers";
+import { formatNumber } from "@open-smc/utils/src/numbers";
 
 export function formatAmount(amount: number) {
     return formatNumber(amount, '# ##0.00');

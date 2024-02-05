@@ -3,7 +3,7 @@ import {useEffect, useState} from "react";
 import {find, keyBy} from "lodash";
 import {ProjectApi, ProjectSettings, Region} from "../../../app/projectApi";
 import styles from './setupProject.module.scss';
-import { Select } from '@open-smc/ui-kit/components/Select';
+import { Select } from '@open-smc/ui-kit/src/components/Select';
 
 export function HomeRegionField({form: {setValue, control, resetField}}: { form: UseFormReturn<ProjectSettings> }) {
     const [regions, setRegions] = useState<Region[]>();

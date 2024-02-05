@@ -1,12 +1,12 @@
 import { useDropzone } from "react-dropzone";
 import { UploadFormFile } from "./UploadFormFile";
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import { useUploadFormFileIds } from "./hooks/useUploadFormFileIds";
 import { useAddUploadFormFiles } from "./hooks/useAddUploadFormFiles";
 import { useCancelAll } from "./hooks/useCancelAll";
 import { useEffect } from "react";
 import styles from "./upload-form.module.scss";
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
 import { useKeyPress } from "../../../shared/hooks/useKeyPress";
 import { useSelectFiles } from "./hooks/useSelectFiles";
 import { useUploadDialog } from "../projectExplorer/projectExplorerStore/hooks/useUploadDialog";

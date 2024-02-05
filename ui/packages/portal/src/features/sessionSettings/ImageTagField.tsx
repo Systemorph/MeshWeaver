@@ -1,7 +1,7 @@
 import { ImageSettingsDto } from "../project/projectSessionApi";
 import styles from "../project/editProject/setupProject.module.scss";
 import { Controller, useWatch } from "react-hook-form";
-import { Select } from "@open-smc/ui-kit/components/Select";
+import { Select } from "@open-smc/ui-kit/src/components/Select";
 import * as React from "react";
 import { FormFieldProps } from "./SessionSettingsForm";
 import classNames from "classnames";

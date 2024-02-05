@@ -1,7 +1,7 @@
 import { FileModel } from "./projectExplorerStore/fileExplorerState";
 import { useGoTo } from "./projectExplorerStore/hooks/useGoTo";
 import styles from "./file-list.module.scss";
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import classNames from "classnames";
 import { useState } from "react";
 import { FileNameEditor } from "./FileNameEditor";
@@ -9,8 +9,8 @@ import { useFolderMenuItems } from "./projectExplorerStore/hooks/useFolderMenuIt
 import { useProject } from "../projectStore/hooks/useProject";
 import { useEnvironmentId } from "../projectStore/hooks/useEnvironmentId";
 import { EnvAccessControlApi } from "../envSettings/accessControl/envAccessControlApi";
-import button from "@open-smc/ui-kit/components/buttons.module.scss";
-import PopupMenu from "@open-smc/ui-kit/components/PopupMenu";
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss";
+import PopupMenu from "@open-smc/ui-kit/src/components/PopupMenu";
 import Dropdown from "rc-dropdown";
 
 interface FolderProps {

@@ -1,7 +1,7 @@
 ﻿using System.Linq.Expressions;
 using System.Reflection;
 
-namespace OpenSmc.Import.Mapping
+namespace OpenSmc.Import.Contract.Mapping
 {
     public static class MappingHelper
     {

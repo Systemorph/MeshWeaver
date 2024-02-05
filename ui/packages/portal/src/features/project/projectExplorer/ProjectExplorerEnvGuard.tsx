@@ -2,7 +2,7 @@ import { ReactNode } from "react";
 import { useEnv } from "../projectStore/hooks/useEnv";
 import errorpage from "../../errorpage.module.scss";
 import styles from "./project-explorer.module.scss";
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 import { FormHeader } from "../../../shared/components/sideMenuComponents/FormHeader";
 import { useSideMenu } from "../../components/sideMenu/hooks/useSideMenu";
 

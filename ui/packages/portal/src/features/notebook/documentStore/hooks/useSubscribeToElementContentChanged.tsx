@@ -4,7 +4,7 @@ import { useElementsStore, useNotebookEditorSelector } from "../../NotebookEdito
 import { applyContentEdits } from "../applyContentEdits";
 import { useUpdateMarkdown } from "./useUpdateMarkdown";
 import { NotebookElementContentChangedEvent } from "../../notebookElement.contract";
-import { useMessageHub } from "@open-smc/application/messageHub/AddHub";
+import { useMessageHub } from "@open-smc/application/src/messageHub/AddHub";
 
 export function useSubscribeToElementContentChanged() {
     const notebook = useNotebookEditorSelector("notebook");

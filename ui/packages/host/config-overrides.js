@@ -1,7 +1,6 @@
 const path = require('path');
 const {babelInclude} = require("customize-cra");
 const {name, version} = require("./package.json");
-const addPackageAliases = require("../../addPackageAliases");
 
 const packageId = `${name}-${version}`;
 
@@ -22,8 +21,6 @@ module.exports = function override(config, env) {
     // path.resolve('../notebook/src'),
     path.resolve('../portal/src'),
   ])(config);
-
-  addPackageAliases(config);
 
   return config;
 }

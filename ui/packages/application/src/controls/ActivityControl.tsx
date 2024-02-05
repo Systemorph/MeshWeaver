@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { getInitials } from "@open-smc/utils/getInitials";
+import { getInitials } from "@open-smc/utils/src/getInitials";
 import { format } from "date-fns";
 import styles from "./activityControl.module.scss";
 import { ControlView } from "../ControlDef";

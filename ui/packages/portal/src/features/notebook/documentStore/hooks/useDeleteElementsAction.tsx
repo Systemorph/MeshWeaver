@@ -1,5 +1,5 @@
 import { useDeleteElements } from "./useDeleteElements";
-import { useMessageHub } from "@open-smc/application/messageHub/AddHub";
+import { useMessageHub } from "@open-smc/application/src/messageHub/AddHub";
 import { NotebookElementDeletedEvent } from "../../notebookEditor/notebookEditor.contract";
 
 export function useDeleteElementsAction() {

@@ -12,7 +12,7 @@ public static class MessageHubReactiveExtensions
         return plugin.Out;
     }
 }
-public class ObservablePlugin : MessageHubPlugin<ObservablePlugin>
+public class ObservablePlugin : MessageHubPlugin
 {
     public Subject<IMessageDelivery> Out { get; } = new();
 

@@ -1,4 +1,4 @@
-import { formatDate } from "@open-smc/utils/formatDate";
+import { formatDate } from "@open-smc/utils/src/formatDate";
 import { dateFormat, Subscription } from "./billingApi";
 import { formatAmount, formatCredits, formatFee } from "./billingUtils";
 

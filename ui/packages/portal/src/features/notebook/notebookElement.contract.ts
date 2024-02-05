@@ -1,4 +1,4 @@
-import { contractMessage } from "@open-smc/application/contractMessage";
+import { contractMessage } from "@open-smc/application/src/contractMessage";
 import { NotebookChangedEvent } from "./notebookEditor/notebookEditor.contract";
 import { EvaluationStatus } from "../../app/notebookFormat";
 

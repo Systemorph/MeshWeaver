@@ -1,5 +1,5 @@
 import React from 'react'
-import { Html } from "@open-smc/ui-kit/components/Html";
+import { Html } from "@open-smc/ui-kit/src/components/Html";
 import { ControlView } from "../ControlDef";
 import "./HtmlControl.module.scss";
 

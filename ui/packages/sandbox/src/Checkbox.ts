@@ -1,4 +1,4 @@
-import type { CheckboxView } from "@open-smc/application/controls/CheckboxControl";
+import type { CheckboxView } from "@open-smc/application/src/controls/CheckboxControl";
 import { ControlBase, ControlBuilderBase } from "./ControlBase";
 
 export class Checkbox extends ControlBase implements CheckboxView {

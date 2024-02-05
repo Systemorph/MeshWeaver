@@ -1,5 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <ProjectReference Include="..\..\OpenSmc.Import.Contract\OpenSmc.Import.Contract.csproj" />
     <ProjectReference Include="..\OpenSmc.Activities\OpenSmc.Activities.csproj" />
     <ProjectReference Include="..\OpenSmc.DataSetReader\OpenSmc.DataSetReader.csproj" />
     <ProjectReference Include="..\OpenSmc.DataSource.Abstractions\OpenSmc.DataSource.Abstractions.csproj" />

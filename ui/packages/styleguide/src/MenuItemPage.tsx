@@ -1,13 +1,13 @@
-import { makeMenuItem } from "@open-smc/sandbox/MenuItem";
-import { Sandbox } from "@open-smc/sandbox/Sandbox";
+import { makeMenuItem } from "@open-smc/sandbox/src/MenuItem";
+import { Sandbox } from "@open-smc/sandbox/src/Sandbox";
 import styles from "./menuItemPage.module.scss";
-import { AreaChangedEvent } from "@open-smc/application/application.contract";
-import { makeStack } from "@open-smc/sandbox/LayoutStack";
-import { ExpandAction } from "@open-smc/sandbox/ExpandableControl";
-import { makeItemTemplate } from "@open-smc/sandbox/ItemTemplate";
-import { makeBinding } from "@open-smc/application/dataBinding/resolveBinding";
+import { AreaChangedEvent } from "@open-smc/application/src/application.contract";
+import { makeStack } from "@open-smc/sandbox/src/LayoutStack";
+import { ExpandAction } from "@open-smc/sandbox/src/ExpandableControl";
+import { makeItemTemplate } from "@open-smc/sandbox/src/ItemTemplate";
+import { makeBinding } from "@open-smc/application/src/dataBinding/resolveBinding";
 import { useMemo, useState } from "react";
-import { InputText } from "@open-smc/ui-kit/components/InputText";
+import { InputText } from "@open-smc/ui-kit/src/components/InputText";
 
 const expandPromotionMenu: ExpandAction = ({area}, menuItem) => {
     const promotions = ["Submission", "Review", "Sign-off", "Complete"];

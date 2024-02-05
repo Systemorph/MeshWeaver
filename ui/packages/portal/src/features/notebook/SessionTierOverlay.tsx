@@ -1,7 +1,7 @@
 import styles from "./sessionTier.module.scss";
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import '../../shared/components/slider.scss';
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
 import * as React from "react";
 import { useRef, useState } from "react";
 import { SessionSpecification } from "../../app/notebookFormat";

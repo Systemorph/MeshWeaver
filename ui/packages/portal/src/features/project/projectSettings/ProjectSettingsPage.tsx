@@ -2,7 +2,7 @@ import { NavLink, Outlet } from "react-router-dom";
 import tabs from '../../../shared/components/tabs.module.scss';
 import styles from "../editProject/setupProject.module.scss";
 import classNames from "classnames";
-import {ErrorBoundary} from "@open-smc/ui-kit/components/ErrorBoundary";
+import {ErrorBoundary} from "@open-smc/ui-kit/src/components/ErrorBoundary";
 import { useProjectPermissions } from "../projectStore/hooks/useProjectPermissions";
 
 export function ProjectSettingsPage() {

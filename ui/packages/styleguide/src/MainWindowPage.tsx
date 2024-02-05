@@ -1,4 +1,4 @@
-import { Sandbox } from "@open-smc/sandbox/Sandbox";
+import { Sandbox } from "@open-smc/sandbox/src/Sandbox";
 import { sampleApp } from "./sampleApp/sampleApp";
 
 export function MainWindowPage() {

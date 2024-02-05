@@ -1,16 +1,16 @@
 import React, { Suspense, useMemo } from "react";
-import { MessageHub } from "@open-smc/application/messageHub/MessageHub";
-import { AddHub } from "@open-smc/application/messageHub/AddHub";
-import { ControlStarter } from "@open-smc/application/ControlStarter";
+import { MessageHubBase } from "@open-smc/application/src/messageHub/MessageHubBase";
+import { AddHub } from "@open-smc/application/src/messageHub/AddHub";
+import { ControlStarter } from "@open-smc/application/src/ControlStarter";
 import { ViewModelHub } from "./ViewModelHub";
-import { SetAreaRequest } from "@open-smc/application/application.contract";
-import { ControlDef } from "@open-smc/application/ControlDef";
-import { layoutHubId } from "@open-smc/application/LayoutHub";
-import { NotificationProvider } from "@open-smc/application/notifications/NotificationProvider";
-import { InMemoryMessageRouter } from "@open-smc/sandbox/InMemoryMessageRouter";
+import { SetAreaRequest } from "@open-smc/application/src/application.contract";
+import { ControlDef } from "@open-smc/application/src/ControlDef";
+import { layoutHubId } from "@open-smc/application/src/LayoutHub";
+import { NotificationProvider } from "@open-smc/application/src/notifications/NotificationProvider";
+import { InMemoryMessageRouter } from "@open-smc/sandbox/src/InMemoryMessageRouter";
 
 interface Props {
-    layoutHub?: MessageHub;
+    layoutHub?: MessageHubBase;
     path?: string;
     root?: ControlDef;
     log?: boolean;
@@ -22,13 +22,11 @@ export function Sandbox({root, layoutHub: originalLayoutHub, path}: Props) {
 
     return (
         <NotificationProvider>
-            <Suspense fallback={<div>Loading...</div>}>
-                <InMemoryMessageRouter>
-                    <AddHub address={layoutHub} id={layoutHubId}>
-                        <ControlStarter area={"app"} path={path}/>
-                    </AddHub>
-                </InMemoryMessageRouter>
-            </Suspense>
+            <InMemoryMessageRouter>
+                <AddHub address={layoutHub} id={layoutHubId}>
+                    <ControlStarter area={"app"} path={path}/>
+                </AddHub>
+            </InMemoryMessageRouter>
         </NotificationProvider>
     );
 }

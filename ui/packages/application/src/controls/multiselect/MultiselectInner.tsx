@@ -3,8 +3,8 @@ import style from "./multiselect.module.scss";
 import { CategoryElements } from "./CategoryElements";
 import { useMultiselectSelector, useMultiselectStore, useUnselectAll } from "./Multiselect";
 import classNames from "classnames";
-import { Button } from "@open-smc/ui-kit/components/Button";
-import buttons from "@open-smc/ui-kit/components/buttons.module.scss";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
+import buttons from "@open-smc/ui-kit/src/components/buttons.module.scss";
 
 export function MultiselectInner() {
     const {setState} = useMultiselectStore();
