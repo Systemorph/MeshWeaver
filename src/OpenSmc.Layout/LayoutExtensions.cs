@@ -19,7 +19,7 @@ public static class LayoutExtensions
                 services => services.AddSingleton<IUiControlService, UiControlService>()
                 .AddAllControlHubs()
             )
-            .AddExpressionSynchronization()
+            .AddApplicationScope()
             .WithRoutes(forward => forward
                 .RouteMessage<RefreshRequest>(_ => mainLayoutAddress)
                 .RouteMessage<SetAreaRequest>(_ => mainLayoutAddress)
@@ -58,14 +58,6 @@ public static class LayoutExtensions
     }
 
 
-    /// <summary>
-    /// Typically this method is used from a UI control.
-    /// UiControl1 can host UiControl2 can host UiControl3
-    /// </summary>
-    /// <param name="address"></param>
-    /// <returns></returns>
-    public static ExpressionSynchronizationAddress ExpressionSynchronizationAddress(object address) =>
-        new(FindLayoutHost(address));
 
 
 }

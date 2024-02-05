@@ -226,11 +226,6 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
     private Task disposing;
 
 
-    public void Log(Action<ILogger> log)
-    {
-        log(logger);
-    }
-
     private readonly object locker = new();
 
     public override Task DisposeAsync()
@@ -354,6 +349,8 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         RegisterCallback(request, d => callback((IMessageDelivery<TResponse>)d), cancellationToken);
         return request.Forwarded();
     }
+
+    public ILogger Logger => logger;
 }
 
 
