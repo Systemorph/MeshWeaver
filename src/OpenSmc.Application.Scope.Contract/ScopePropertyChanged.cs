@@ -13,3 +13,7 @@ public enum PropertyChangeStatus
 
 public record ScopePropertyChanged(string ScopeId, string Property, RawJson Value, PropertyChangeStatus Status) : IRequest<ScopePropertyChanged>;
 
+record ScopePropertyStringAdded(string ScopeId, string Property, int Position, string Text);
+
+record ScopePropertyStringRemoved(string ScopeId, string Property, int Position, string Text);
+

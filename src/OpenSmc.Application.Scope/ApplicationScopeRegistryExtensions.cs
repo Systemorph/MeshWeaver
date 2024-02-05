@@ -34,24 +34,37 @@ public static class ApplicationScopeRegistryExtensions
 
     public static MessageHubConfiguration AddApplicationScope(this MessageHubConfiguration conf)
     {
+        var applicationScopeAddress = new ApplicationScopeAddress(conf.Address);
         return conf
             .WithServices(services => services
                 .RegisterScopes()
                 .AddSingleton<IScopeFactory, ScopeFactory>()
-                .AddSingleton(serviceProvider => serviceProvider.GetRequiredService<IScopeFactory>().ForSingleton().ToScope<IApplicationScope>()))
-            .AddSerialization(rule => rule.ForType<IScope>(typeBuilder => typeBuilder.WithTransformation(TransformScope)))
+                .AddSingleton(serviceProvider => serviceProvider.GetRequiredService<IScopeFactory>().ForSingleton()
+                    .ToScope<IApplicationScope>()))
+            .AddSerialization(rule =>
+                rule.ForType<IScope>(typeBuilder => typeBuilder.WithTransformation(TransformScope)))
 
-                .WithHostedHub
-                    (
-                        new ApplicationScopeAddress(conf.Address), 
-                        d => d.AddPlugin<ApplicationScopePlugin>())
-                .WithRoutes
+            .WithHostedHub
+            (
+                new ApplicationScopeAddress(conf.Address),
+                d => d.AddPlugin<ApplicationScopePlugin>())
+            .WithRoutes
             (
                 forward => forward
-                    .RouteMessageToTarget<ScopePropertyChanged>(_ => new ApplicationScopeAddress(conf.Address), f => f.Message.Status == PropertyChangeStatus.Requested)
-                    .RouteMessageToTarget<ScopePropertyChangedEvent>(_ => new ApplicationScopeAddress(conf.Address), f => f.Message.Status == ScopeChangedStatus.Requested)
+                    .RouteMessage<ScopePropertyChanged>(
+                        d => d.Message.Status switch
+                        {
+                            PropertyChangeStatus.Requested => applicationScopeAddress,
+                            _ => MessageTargets.Subscribers
+                        })
+                    .RouteMessage<ScopePropertyChangedEvent>(
+                        d => d.Message.Status switch
+                        {
+                            ScopeChangedStatus.Requested => applicationScopeAddress,
+                            _ => MessageTargets.Subscribers
+                        })
             );
-            
+
     }
 
 

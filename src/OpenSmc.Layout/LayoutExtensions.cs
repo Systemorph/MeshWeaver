@@ -21,17 +21,13 @@ public static class LayoutExtensions
             )
             .AddExpressionSynchronization()
             .WithRoutes(forward => forward
-                .RouteMessage<RefreshRequest>(d => mainLayoutAddress)
-                .RouteMessage<SetAreaRequest>(d => mainLayoutAddress)
+                .RouteMessage<RefreshRequest>(_ => mainLayoutAddress)
+                .RouteMessage<SetAreaRequest>(_ => mainLayoutAddress)
             )
-            .WithBuildupAction(hub => CreateLayoutHub(layoutDefinition, hub, mainLayoutAddress))
+            .WithHostedHub(mainLayoutAddress, c => MainLayoutConfiguration(c, layoutDefinition))
             ;
     }
 
-    private static IMessageHub CreateLayoutHub(Func<LayoutDefinition, LayoutDefinition> layoutDefinition, IMessageHub hub, UiControlAddress mainLayoutAddress)
-    {
-        return hub.GetHostedHub(mainLayoutAddress, c => MainLayoutConfiguration(c, layoutDefinition));
-    }
 
     private static MessageHubConfiguration MainLayoutConfiguration(MessageHubConfiguration configuration,
         Func<LayoutDefinition, LayoutDefinition> layoutDefinition)
