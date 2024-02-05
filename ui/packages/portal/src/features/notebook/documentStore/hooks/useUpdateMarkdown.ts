@@ -1,22 +1,20 @@
-import { useElementsStore, useNotebookEditorStore } from "../../NotebookEditor";
+import {useElementsStore, useNotebookEditorSelector, useNotebookEditorStore} from "../../NotebookEditor";
 import { getCompiler, getParser } from "../../markdownParser";
 import { ElementMarkdown } from "../documentState";
-import { useProject } from "../../../project/projectStore/hooks/useProject";
-import { useEnv } from "../../../project/projectStore/hooks/useEnv";
 import { useProjectSelector } from "../../../project/projectStore/projectStore";
 import { useCallback } from "react";
 
 export function useUpdateMarkdown() {
     const notebookEditorStore = useNotebookEditorStore();
     const elementsStore = useElementsStore();
-    const {env} = useEnv();
-    const {project: {id: projectId}} = useProject();
+    const projectId = useNotebookEditorSelector("projectId");
+    const envId = useNotebookEditorSelector("envId");
     const activeFile = useProjectSelector("activeFile");
 
     return useCallback((updatedElementIds?: string[]) => {
         const {elementIds, markdown} = notebookEditorStore.getState();
         const models = elementsStore.getState();
-        const parse = getParser(true, projectId, env.id, activeFile.path);
+        const parse = getParser(true, projectId, envId, activeFile.path);
         const compile = getCompiler(true);
 
         notebookEditorStore.setState(state => {
@@ -42,5 +40,5 @@ export function useUpdateMarkdown() {
 
             state.markdown = newMarkdown;
         });
-    }, [notebookEditorStore, elementsStore, env, projectId, activeFile]);
+    }, [notebookEditorStore, elementsStore, envId, projectId, activeFile]);
 }

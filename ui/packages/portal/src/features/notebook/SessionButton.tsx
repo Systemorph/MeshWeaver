@@ -10,9 +10,7 @@ import { useEffect, useState } from "react";
 import { isEmpty, round } from "lodash";
 import { SessionSpecification } from "../../app/notebookFormat";
 import { SessionTierOverlay } from "./SessionTierOverlay";
-import { useProject } from "../project/projectStore/hooks/useProject";
 import button from "@open-smc/ui-kit/components/buttons.module.scss"
-import { useEnv } from "../project/projectStore/hooks/useEnv";
 import { ImageSettingsDto, SessionTierSpecificationDto } from "../project/projectSessionApi";
 import { rcTooltipOptions } from "../../shared/tooltipOptions";
 import { useNotebookEditorSelector } from "./NotebookEditor";
@@ -27,8 +25,8 @@ export function SessionButton() {
     const [specification, setSpecification] = useState<SessionSpecification>();
     const [availableTiers, setAvailableTiers] = useState<SessionTierSpecificationDto[]>();
     const [availableImages, setAvailableImages] = useState<ImageSettingsDto[]>();
-    const {project} = useProject();
-    const {env} = useEnv();
+    const projectId = useNotebookEditorSelector("projectId");
+    const envId = useNotebookEditorSelector("envId");
     const {canRun} = useNotebookEditorSelector("permissions");
     const [overlayOpen, setOverlayOpen] = useState(false);
     const {ProjectSessionApi, EnvSessionApi} = useApi();
@@ -44,7 +42,7 @@ export function SessionButton() {
                 if (sessionStatus === "Running") {
                     setSpecification(notebook?.currentSession?.specification);
                 } else if (!isEmpty(tiers)) {
-                    const settings = await EnvSessionApi.getSessionSettings(project.id, env.id, notebook.id);
+                    const settings = await EnvSessionApi.getSessionSettings(projectId, envId, notebook.id);
                     const defaultTier = tiers[0];
                     const defaultImage = images[0];
                     const {cpu, memory, systemName: tier} = (settings.tier ?? defaultTier);
@@ -53,7 +51,7 @@ export function SessionButton() {
                 }
             }
         )()
-    }, [env.id, project.id, notebook.id])
+    }, [envId, projectId, notebook.id])
 
     const getText = () => {
         if (sessionStatus === 'Starting' || sessionStatus === 'Initializing') {

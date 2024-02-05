@@ -27,8 +27,6 @@ import { Elements } from "./Elements";
 import { NotebookSessionDialog } from "./NotebookSessionDialog";
 import { useSubscribeToNewElements } from "./documentStore/hooks/useSubscribeToNewElements";
 import { NotebookElementDto } from "../../controls/ElementEditorControl";
-import { useProject } from "../project/projectStore/hooks/useProject";
-import { useEnv } from "../project/projectStore/hooks/useEnv";
 import { useProjectSelector } from "../project/projectStore/projectStore";
 import { useApi } from "../../ApiProvider";
 import { getUseSelector } from "@open-smc/store/useSelector";
@@ -60,12 +58,12 @@ export function useElementsStore() {
 interface NotebookEditorProps {
     notebook: NotebookDto;
     projectId: string;
+    envId: string;
     canEdit: boolean;
     canRun: boolean;
 }
 
-export function NotebookEditor({notebook, projectId, canEdit, canRun}: NotebookEditorProps) {
-    const {envId} = useEnv();
+export function NotebookEditor({notebook, projectId, envId, canEdit, canRun}: NotebookEditorProps) {
     const {path: notebookPath} = useProjectSelector("activeFile");
     const [contextValue, setContextValue] = useState<NotebookEditorContext>();
     const {EnvAccessControlApi} = useApi();
@@ -85,6 +83,7 @@ export function NotebookEditor({notebook, projectId, canEdit, canRun}: NotebookE
             const initialState = {
                 notebook,
                 projectId,
+                envId,
                 elementIds,
                 selectedElementIds,
                 activeElementId,

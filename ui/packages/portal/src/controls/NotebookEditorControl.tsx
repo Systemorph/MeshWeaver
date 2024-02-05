@@ -26,6 +26,7 @@ export default function NotebookEditorControl({notebook}: NotebookEditorView) {
         <NotebookEditor
             notebook={notebook}
             projectId={'1'}
+            envId={'1'}
             canEdit={true}
             canRun={true}
         />

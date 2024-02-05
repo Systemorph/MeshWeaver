@@ -7,15 +7,13 @@ import { debounce } from "lodash";
 import { usePrefixHashFragment } from "../../shared/hooks/usePrefixHashFragment";
 import { useNotebookEditorSelector } from "./NotebookEditor";
 import { ControlStarter } from "@open-smc/application/ControlStarter";
-import { useProject } from "../project/projectStore/hooks/useProject";
-import { useEnv } from "../project/projectStore/hooks/useEnv";
 
 export function Elements() {
     const permissions = useNotebookEditorSelector("permissions");
     const elementIds = useNotebookEditorSelector("elementIds");
     const {canEdit} = permissions;
-    const {project} = useProject();
-    const {envId} = useEnv();
+    const projectId = useNotebookEditorSelector("projectId");
+    const envId = useNotebookEditorSelector("envId");
     const notebook = useNotebookEditorSelector("notebook");
 
     usePrefixHashFragment();
@@ -23,7 +21,7 @@ export function Elements() {
     const renderedElements = elementIds.map(elementId => {
             return (
                 <div className={styles.elementsContainer} key={elementId}>
-                    <ControlStarter area={`element-${elementId}`} path={`notebookElement/${project.id}/${envId}/${notebook.id}/${elementId}`}/>
+                    <ControlStarter area={`element-${elementId}`} path={`notebookElement/${projectId}/${envId}/${notebook.id}/${elementId}`}/>
                     {canEdit && <AddElement afterElementId={elementId}/>}
                 </div>
             );

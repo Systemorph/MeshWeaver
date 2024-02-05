@@ -20,6 +20,8 @@ export interface NotebookEditorState  {
     readonly permissions: NotebookPermissions,
     readonly notebook: NotebookDto;
     readonly elementIds: string[];
+    readonly projectId: string;
+    readonly envId: string;
     readonly markdown?: Record<string, ElementMarkdown>;
     readonly updateMarkdownDebouncedFunc: DebouncedFunc<(func: () => void) => void>;
     readonly activeElementId?: string;
