@@ -1,9 +1,5 @@
-﻿using OpenSmc.Activities;
-using OpenSmc.DataSource.Abstractions;
-using OpenSmc.Messaging;
+﻿using OpenSmc.Messaging;
 using OpenSmc.Reflection;
-using OpenSmc.ServiceProvider;
-using OpenSmc.Workspace;
 
 namespace OpenSmc.DataPlugin;
 
@@ -15,77 +11,59 @@ namespace OpenSmc.DataPlugin;
  *  e) configure Ifrs Hubs
  */
 
-
-
-public class DataPlugin : MessageHubPlugin<DataPlugin, IWorkspace>
+public class DataPlugin : MessageHubPlugin<Workspace>,
+    IMessageHandler<UpdateRequest>,
+    IMessageHandler<DeleteRequest>
 {
-    [Inject] private IActivityService activityService;
+    private readonly Func<DataConfiguration, DataConfiguration> configure;
+    public record SatelliteAddress(object Host) : IHostedAddress;
+    private SatelliteAddress satelliteAddress;
 
-    private IDataSource dataSource;
-
-    private DataPluginConfiguration DataConfiguration { get; set; } = new();
-
-    public DataPlugin(IMessageHub hub, MessageHubConfiguration configuration,
-                      Func<DataPluginConfiguration, DataPluginConfiguration> dataConfiguration) : base(hub)
+    public DataPlugin(IMessageHub hub, Func<DataConfiguration, DataConfiguration> configure) : base(hub)
     {
+        this.configure = configure;
         Register(HandleGetRequest);              // This takes care of all Read (CRUD)
-        Register(HandleUpdateAndDeleteRequest);  // This takes care of all Update and Delete (CRUD)
-
-        DataConfiguration = dataConfiguration(DataConfiguration);
     }
 
     public override async Task StartAsync()  // This takes care of the Create (CRUD)
     {
         await base.StartAsync();
 
-        foreach (var typeConfig in DataConfiguration.TypeConfigurations)
+        var dataConfiguration = configure(new DataConfiguration());
+        if (dataConfiguration.CreateSatellitePlugin != null)
         {
-            var config = (TypeConfiguration<object>)typeConfig;
-            var items = await config.Initialize();
-            await State.UpdateAsync(items);
+            satelliteAddress = new SatelliteAddress(Hub.Address);
+            var persistenceHub = Hub.GetHostedHub(satelliteAddress, conf => conf.AddPlugin(persistenceHub => dataConfiguration.CreateSatellitePlugin(persistenceHub)));
+            var workspaceConfiguration = dataConfiguration.Workspace;
+            var response = await persistenceHub.AwaitResponse(new GetDataStateRequest(workspaceConfiguration));
+            UpdateState(_ => response.Message);
+        }
+        else
+        {
+            // TODO V10: how to initialize state without satellite plugin? (05.02.2024, Alexander Yolokhov)
+            var workspaceConfiguration = dataConfiguration.Workspace;
+            UpdateState(_ => new Workspace(workspaceConfiguration));
         }
     }
 
-    private IMessageDelivery HandleUpdateAndDeleteRequest(IMessageDelivery request)
+    IMessageDelivery IMessageHandler<UpdateRequest>.HandleMessage(IMessageDelivery<UpdateRequest> request)
     {
-        var type = request.Message.GetType();
-        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(UpdateBatchRequest<>) || type.GetGenericTypeDefinition() == typeof(DeleteBatchRequest<>))
-        {
-            var elementType = type.GetGenericArguments().First();
-            var typeConfig = DataConfiguration.TypeConfigurations.FirstOrDefault(x =>
-                    x.GetType().GetGenericArguments().First() == elementType);  // TODO: check whether this works
-
-            if (typeConfig is null) return request;
-            var config = (TypeConfiguration<object>)typeConfig;
-
-            if (type.GetGenericTypeDefinition() == typeof(UpdateBatchRequest<>))
-            {
-                var getElementsMethod = ReflectionHelper.GetMethodGeneric<DataPlugin>(x => x.UpdateElements<object>(null, null));
-                getElementsMethod.MakeGenericMethod(elementType).InvokeAsFunction(this, config.Save);
-            }
-            else if (type.GetGenericTypeDefinition() == typeof(DeleteBatchRequest<>))
-            {
-                var getElementsMethod = ReflectionHelper.GetMethodGeneric<DataPlugin>(x => x.DeleteElements<object>(null, null));
-                getElementsMethod.MakeGenericMethod(elementType).InvokeAsFunction(this, config.Delete);
-            }
-        }
+        var items = request.Message.Elements;
+        UpdateState(s => s.Update(items)); // update the state in memory (workspace)
+        Hub.Post(new DataChanged(items), o => o.ResponseFor(request).WithTarget(MessageTargets.Subscribers));      // notify all subscribers that the data has changed
+        if (satelliteAddress != null)
+            Hub.Post(request, o => o.WithTarget(satelliteAddress));
         return request.Processed();
     }
 
-    async Task UpdateElements<T>(IMessageDelivery<UpdateBatchRequest<T>> request, Func<IReadOnlyCollection<T>, Task> save) where T : class
+    IMessageDelivery IMessageHandler<DeleteRequest>.HandleMessage(IMessageDelivery<DeleteRequest> request)
     {
         var items = request.Message.Elements;
-        await save(items);                     // save to db
-        await State.UpdateAsync(items);        // update the state in memory (workspace)
-        Hub.Post(new DataChanged(items));      // notify all subscribers that the data has changed
-    }
-
-    async Task DeleteElements<T>(IMessageDelivery<DeleteBatchRequest<T>> request, Func<IReadOnlyCollection<T>, Task> delete) where T : class
-    {
-        var items = request.Message.Elements;
-        await delete(items);
-        await State.DeleteAsync(items);
-        Hub.Post(new DataDeleted(items));
+        UpdateState(s => s.Delete(items));
+        Hub.Post(new DataDeleted(items), o => o.ResponseFor(request).WithTarget(MessageTargets.Subscribers));
+        if (satelliteAddress != null)
+            Hub.Post(request, o => o.WithTarget(satelliteAddress));
+        return request.Processed();
     }
 
     private IMessageDelivery HandleGetRequest(IMessageDelivery request)
@@ -102,11 +80,11 @@ public class DataPlugin : MessageHubPlugin<DataPlugin, IWorkspace>
 
     private IMessageDelivery GetElements<T>(IMessageDelivery<GetManyRequest<T>> request) where T : class
     {
-        var query = State.Query<T>();
+        var items = State.GetItems<T>();
         var message = request.Message;
         if (message.PageSize is not null)
-            query = query.Skip(message.Page * message.PageSize.Value).Take(message.PageSize.Value);
-        var queryResult = query.ToArray();
+            items = items.Skip(message.Page * message.PageSize.Value).Take(message.PageSize.Value);
+        var queryResult = items.ToArray();
         Hub.Post(queryResult, o => o.ResponseFor(request));
         return request.Processed();
     }
