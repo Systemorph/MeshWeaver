@@ -1,8 +1,6 @@
 ﻿using System.ComponentModel;
 using FluentAssertions;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using OpenSmc.Application.Scope;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout.LayoutClient;
 using OpenSmc.Messaging;
@@ -35,8 +33,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
-                .AddLayout(def =>
-                    def
+                .AddLayout(layout =>
+                    layout
                         .WithInitialState(Controls.Stack()
                             .WithId(MainStackId)
                             .WithClickAction(context =>
@@ -52,28 +50,19 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                             .WithId(NamedArea)
                         )
                         .WithView(UpdatingView, (_, _) => 
-                            Controls.TextBox(GetFromScope(def.Hub))
+                            Controls.TextBox(layout.ApplicationScope.GetScope<ITestScope>().String)
                                 .WithId(UpdatingView)
-                                .WithClickAction(ChangeStringInScope)
+                                .WithClickAction(_ => layout.ApplicationScope.GetScope<ITestScope>().String = NewString)
                             )
                     )
             ;
 
     }
 
-    private void ChangeStringInScope(IUiActionContext context)
-    {
-        context.Hub.ServiceProvider.GetRequiredService<IApplicationScope>().GetScope<ITestScope>().String = NewString;
-    }
-
-    private string GetFromScope(IMessageHub hub)
-    {
-        return hub.ServiceProvider.GetRequiredService<IApplicationScope>().GetScope<ITestScope>().String;
-    }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
-        return base.ConfigureClient(configuration).AddLayoutClient(new RefreshRequest(), new HostAddress());
+        return base.ConfigureClient(configuration).AddLayoutClient(new HostAddress());
     }
 
 

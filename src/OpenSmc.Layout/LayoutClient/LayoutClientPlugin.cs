@@ -13,7 +13,7 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
     {
         await base.StartAsync();
         InitializeState(new(configuration));
-        Hub.Post(configuration.RefreshMessage, o => o.WithTarget(State.Configuration.LayoutHostAddress));
+        Hub.Post(configuration.RefreshRequest, o => o.WithTarget(State.Configuration.LayoutHostAddress));
     }
 
 
