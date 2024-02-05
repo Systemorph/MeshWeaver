@@ -111,7 +111,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         AreaChangedEvent IsUpdatedView(LayoutClientState layoutClientState)
         {
             var ret = layoutClientState.GetAreaByControlId(UpdatingView);
-            if(ret?.View is TextBoxControl textBox && textBox.Data is not SomeString)
+            if(ret?.View is TextBoxControl { Data: not SomeString })
                 return ret;
             return null;
         }
