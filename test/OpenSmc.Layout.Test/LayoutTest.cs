@@ -1,11 +1,13 @@
 ﻿using System.ComponentModel;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using OpenSmc.Application.Scope;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout.LayoutClient;
 using OpenSmc.Messaging;
 using OpenSmc.Scopes;
+using OpenSmc.ServiceProvider;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -20,6 +22,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
     private const string SomeString = nameof(SomeString);
     private const string NewString = nameof(NewString);
+
+    [Inject] private ILogger<LayoutTest> logger;
     public interface ITestScope : IMutableScope
     {
         int Integer { get; set; }
@@ -113,6 +117,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             var ret = layoutClientState.GetAreaByControlId(UpdatingView);
             if(ret?.View is TextBoxControl { Data: not SomeString })
                 return ret;
+
+            logger.LogInformation($"Found view: {ret?.View}" );
             return null;
         }
 
@@ -120,7 +126,6 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         changedArea.View
             .Should().BeOfType<TextBoxControl>()
             .Which.Data.Should().Be(NewString);
-
 
 
     }

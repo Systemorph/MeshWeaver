@@ -86,17 +86,6 @@ public record RemoteViewControl : UiControl<RemoteViewControl, RemoteViewPlugin>
         init;
     }
 
-    //protected override MessageHubConfiguration ConfigureHub(MessageHubConfiguration configuration)
-    //{
-    //    return base.ConfigureHub(configuration).WithRoutes
-    //        (
-    //            forward => forward
-    //                .RouteMessage<SubscribeToEvaluationRequest>(_ => ExpressionSynchronizationAddress(forward.Hub))
-    //                .RouteMessage<UnsubscribeFromEvaluationRequest>(_ => ExpressionSynchronizationAddress(forward.Hub))
-    //            );
-    //}
-
-    private  ExpressionSynchronizationAddress ExpressionSynchronizationAddress(IMessageHub hub) => LayoutExtensions.ExpressionSynchronizationAddress(hub.Address);
 }
 
 public record RemoteViewRefreshOptions(bool ForceRefresh);

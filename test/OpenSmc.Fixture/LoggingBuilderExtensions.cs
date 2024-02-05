@@ -18,6 +18,7 @@ public static class LoggingBuilderExtensions
     public static ILoggingBuilder AddXUnitLogger(this ILoggingBuilder builder, TestOutputHelperAccessor outputHelperAccessor = null)
     {
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ILoggerProvider, XUnitLoggerProvider>());
+        builder.SetMinimumLevel(LogLevel.Debug);
         if (outputHelperAccessor == null)
             builder.Services.AddSingleton<TestOutputHelperAccessor>();
         else

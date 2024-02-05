@@ -9,29 +9,8 @@ using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Application.Scope;
 
-public class ApplicationAddressOptions
-{
-    public ApplicationAddress Address { get; set; }
-}
-
-public record ExpressionSynchronizationAddress(object Host):IHostedAddress;
 public static class ApplicationScopeRegistryExtensions
 {
-    public static MessageHubConfiguration AddExpressionSynchronization(this MessageHubConfiguration conf)
-    {
-        return conf
-            .AddApplicationScope()
-            .WithRoutes
-        (
-            routes => routes
-                .RouteAddressToHostedHub<ExpressionSynchronizationAddress>
-                (
-                    c => c.AddPlugin<ExpressionSynchronizationPlugin>()
-                )
-        );
-    }
-
-
     public static MessageHubConfiguration AddApplicationScope(this MessageHubConfiguration conf)
     {
         var applicationScopeAddress = new ApplicationScopeAddress(conf.Address);
