@@ -11,12 +11,17 @@ namespace OpenSmc.DataPlugin;
  *  e) configure Ifrs Hubs
  */
 
-public class DataPlugin : MessageHubPlugin<DataPlugin, Workspace>,
+public class DataPlugin : MessageHubPlugin<Workspace>,
     IMessageHandler<UpdateRequest>,
     IMessageHandler<DeleteRequest>
 {
-    public DataPlugin(IMessageHub hub, MessageHubConfiguration configuration) : base(hub)
+    private readonly Func<DataConfiguration, DataConfiguration> configure;
+    public record SatelliteAddress(object Host) : IHostedAddress;
+    private SatelliteAddress satelliteAddress;
+
+    public DataPlugin(IMessageHub hub, Func<DataConfiguration, DataConfiguration> configure) : base(hub)
     {
+        this.configure = configure;
         Register(HandleGetRequest);              // This takes care of all Read (CRUD)
     }
 
@@ -24,16 +29,30 @@ public class DataPlugin : MessageHubPlugin<DataPlugin, Workspace>,
     {
         await base.StartAsync();
 
-        var persistenceHub = Hub.GetHostedHub(new DataPersistenceAddress(Hub.Address), conf => conf.AddPlugin<DataPersistencePlugin>());
-        var response = await persistenceHub.AwaitResponse(new GetDataStateRequest(State.Configuration));
-        UpdateState(_ => response.Message);
+        var dataConfiguration = configure(new DataConfiguration());
+        if (dataConfiguration.CreateSatellitePlugin != null)
+        {
+            satelliteAddress = new SatelliteAddress(Hub.Address);
+            var persistenceHub = Hub.GetHostedHub(satelliteAddress, conf => conf.AddPlugin(persistenceHub => dataConfiguration.CreateSatellitePlugin(persistenceHub)));
+            var workspaceConfiguration = dataConfiguration.Workspace;
+            var response = await persistenceHub.AwaitResponse(new GetDataStateRequest(workspaceConfiguration));
+            UpdateState(_ => response.Message);
+        }
+        else
+        {
+            // TODO V10: how to initialize state without satellite plugin? (05.02.2024, Alexander Yolokhov)
+            var workspaceConfiguration = dataConfiguration.Workspace;
+            UpdateState(_ => new Workspace(workspaceConfiguration));
+        }
     }
 
     IMessageDelivery IMessageHandler<UpdateRequest>.HandleMessage(IMessageDelivery<UpdateRequest> request)
     {
         var items = request.Message.Elements;
         UpdateState(s => s.Update(items)); // update the state in memory (workspace)
-        Hub.Post(new DataChanged(items));      // notify all subscribers that the data has changed
+        Hub.Post(new DataChanged(items), o => o.ResponseFor(request).WithTarget(MessageTargets.Subscribers));      // notify all subscribers that the data has changed
+        if (satelliteAddress != null)
+            Hub.Post(request, o => o.WithTarget(satelliteAddress));
         return request.Processed();
     }
 
@@ -41,7 +60,9 @@ public class DataPlugin : MessageHubPlugin<DataPlugin, Workspace>,
     {
         var items = request.Message.Elements;
         UpdateState(s => s.Delete(items));
-        Hub.Post(new DataDeleted(items));
+        Hub.Post(new DataDeleted(items), o => o.ResponseFor(request).WithTarget(MessageTargets.Subscribers));
+        if (satelliteAddress != null)
+            Hub.Post(request, o => o.WithTarget(satelliteAddress));
         return request.Processed();
     }
 
