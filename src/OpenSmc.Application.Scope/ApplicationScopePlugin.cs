@@ -269,8 +269,8 @@ IMessageHandler<SubscribeToEvaluationRequest>,
                 if (item.Dependencies.Any())
                 {
                     var scopes = item.Dependencies.Values.SelectMany(x => x.Values.SelectMany(y => y.Select(z => z.Scope))).Distinct().OfType<IInternalMutableScope>().ToArray();
-                    State.ExpressionSynchronizationsCache.Synchronize(scopes, item.Id);
-                    item.DisposeActions.Add(() => State.ExpressionSynchronizationsCache.StopSynchronization(scopes, item.Id));
+                    State.ExpressionSynchronizationCache.Synchronize(scopes, item.Id);
+                    item.DisposeActions.Add(() => State.ExpressionSynchronizationCache.StopSynchronization(scopes, item.Id));
                 }
 
                 var expressionChangedEvent = new ScopeExpressionChangedEvent(item.Id, evaluation.Result, evaluation.Status, evaluation.Dependencies, sw.Elapsed);
@@ -407,5 +407,5 @@ public record ApplicationScopeState
     public ImmutableDictionary<(object address, string ScopeType, object Identity), object> SynchronizedByTypeAndIdentity { get; init; } = ImmutableDictionary<(object address, string ScopeType, object Identity), object>.Empty;
     public ImmutableDictionary<(object Address, string Id), object> SynchronizedById { get; init; } = ImmutableDictionary<(object Address, string Id), object>.Empty;
     public ImmutableDictionary<string, ExpressionRegistryItem> RegisteredExpressions { get; init; } = ImmutableDictionary<string, ExpressionRegistryItem>.Empty;
-    public ExpressionSynchronizationsCache ExpressionSynchronizationsCache { get; } = new();
+    public ExpressionSynchronizationCache ExpressionSynchronizationCache { get; } = new();
 }
