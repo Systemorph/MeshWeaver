@@ -6,8 +6,6 @@ namespace OpenSmc.DataPlugin;
 
 public record GetDataStateRequest(WorkspaceConfiguration WorkspaceConfiguration) : IRequest<Workspace>;
 
-public record DataPersistenceAddress(object Host) : IHostedAddress;
-
 public class DataPersistencePlugin : MessageHubPlugin<Workspace>,
     IMessageHandlerAsync<GetDataStateRequest>
 {
