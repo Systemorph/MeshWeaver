@@ -1,17 +1,16 @@
 ﻿namespace OpenSmc.Messaging;
 
-public class RoutePlugin : MessageHubPlugin<RoutePlugin>
+public class RoutePlugin : MessageHubPlugin<RouteConfiguration>
 {
-    private readonly ForwardConfiguration forwardConfiguration;
     private readonly IMessageHub parentHub;
 
 
-    public RoutePlugin(IMessageHub hub, ForwardConfiguration forwardConfiguration, IMessageHub parentHub) : base(hub)
+    public RoutePlugin(IMessageHub hub, RouteConfiguration routeConfiguration, IMessageHub parentHub) : base(hub)
     {
-        this.forwardConfiguration = forwardConfiguration;
         this.parentHub = parentHub;
+        InitializeState(routeConfiguration);
 
-        Register(ForwardMessageAsync);
+        Register(RouteMessageAsync);
     }
 
     public override bool Filter(IMessageDelivery d) => d.State == MessageDeliveryState.Submitted;
@@ -21,9 +20,20 @@ public class RoutePlugin : MessageHubPlugin<RoutePlugin>
     /// </summary>
     /// <param name="delivery"></param>
     /// <returns></returns>
-    private async Task<IMessageDelivery> ForwardMessageAsync(IMessageDelivery delivery)
+    private async Task<IMessageDelivery> RouteMessageAsync(IMessageDelivery delivery)
     {
-        foreach (var handler in forwardConfiguration.Handlers)
+        // TODO V10: This should probably also react upon disconnect. (02.02.2024, Roland Bürgi)
+        if (State.RoutedMessageAddresses.TryGetValue(delivery.Sender, out var originalSenders))
+        {
+            foreach (var originalSender in originalSenders)
+            {
+                var delivery1 = delivery;
+                Hub.Post(delivery.Message, o => o.WithTarget(originalSender).WithProperties(delivery1.Properties));
+            }
+
+        }
+
+        foreach (var handler in State.Handlers)
             delivery = await handler(delivery);
 
         if (delivery.State != MessageDeliveryState.Submitted || delivery.Target == null || Hub.Address.Equals(delivery.Target))

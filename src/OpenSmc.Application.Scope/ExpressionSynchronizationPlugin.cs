@@ -16,7 +16,7 @@ public record ExpressionSynchronizationHubState(IInternalMutableScope Applicatio
 }
 
 public class ExpressionSynchronizationPlugin(IMessageHub hub)
-    : MessageHubPlugin<ExpressionSynchronizationPlugin, ExpressionSynchronizationHubState>(hub),
+    : MessageHubPlugin<ExpressionSynchronizationHubState>(hub),
         IMessageHandler<SubscribeToEvaluationRequest>,
         IMessageHandler<UnsubscribeFromEvaluationRequest>,
         IMessageHandler<ScopePropertyChangedEvent>
@@ -33,7 +33,6 @@ public class ExpressionSynchronizationPlugin(IMessageHub hub)
     {
         await base.StartAsync();
         InitializeState(StartupState());
-
     }
 
     IMessageDelivery IMessageHandler<ScopePropertyChangedEvent>.HandleMessage(IMessageDelivery<ScopePropertyChangedEvent> delivery)

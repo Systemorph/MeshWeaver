@@ -1,9 +1,9 @@
 import type {
     MenuItemSkin,
     MenuItemView
-} from "@open-smc/application/controls/MenuItemControl";
+} from "@open-smc/application/src/controls/MenuItemControl";
 import { ExpandableControl, ExpandableControlBuilder } from "./ExpandableControl";
-import { IconDef } from "@open-smc/ui-kit/components/renderIcon";
+import { IconDef } from "@open-smc/ui-kit/src/components/renderIcon";
 
 export class MenuItem extends ExpandableControl implements MenuItemView {
     title: string;

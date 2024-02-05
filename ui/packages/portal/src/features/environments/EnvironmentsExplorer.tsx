@@ -1,8 +1,8 @@
 import { EnvironmentCard } from "./EnvironmentCard";
 import styles from "./environments.module.scss";
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
 import { map } from "lodash";
-import { Button, ButtonProps } from "@open-smc/ui-kit/components/Button";
+import { Button, ButtonProps } from "@open-smc/ui-kit/src/components/Button";
 import { CreateEnvironmentForm } from "./CreateEnvironmentForm";
 import { useState } from "react";
 import { useProject } from "../project/projectStore/hooks/useProject";

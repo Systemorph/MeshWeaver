@@ -1,8 +1,8 @@
 import { Link } from "react-router-dom";
 import { FileModel } from "./projectExplorerStore/fileExplorerState";
 import styles from "./file-list.module.scss";
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
-import { Button } from "@open-smc/ui-kit/components/Button";
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import classNames from "classnames";
 import { useEnvironmentId } from "../projectStore/hooks/useEnvironmentId";
 import { useProject } from "../projectStore/hooks/useProject";
@@ -10,7 +10,7 @@ import { useState } from "react";
 import { FileNameEditor } from "./FileNameEditor";
 import { useFileMenuItems } from "./projectExplorerStore/hooks/useFileMenuItems";
 import { EnvAccessControlApi } from "../envSettings/accessControl/envAccessControlApi";
-import PopupMenu from "@open-smc/ui-kit/components/PopupMenu";
+import PopupMenu from "@open-smc/ui-kit/src/components/PopupMenu";
 import Dropdown from "rc-dropdown";
 interface FileProps {
     file: FileModel;

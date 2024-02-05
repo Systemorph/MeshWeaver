@@ -25,9 +25,9 @@ import { GridLayoutPage } from "./GridLayoutPage";
 import {LayoutPage} from "./LayoutPage";
 import { ModalPage } from "./ModalPage";
 import { NotebookEditorPage } from "./NotebookEditorPage";
-import { registerControlResolver } from "@open-smc/application/renderControl";
-import { portalControlsResolver } from "@open-smc/portal/portalControlResolver";
-import { applicationControlsResolver } from "@open-smc/application/applicationControlResolver";
+import { registerControlResolver } from "@open-smc/application/src/renderControl";
+import { portalControlsResolver } from "@open-smc/portal/src/portalControlResolver";
+import { applicationControlsResolver } from "@open-smc/application/src/applicationControlResolver";
 
 registerControlResolver(applicationControlsResolver);
 registerControlResolver(portalControlsResolver);

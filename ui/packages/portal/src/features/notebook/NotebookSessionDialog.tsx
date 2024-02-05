@@ -1,13 +1,13 @@
 // import { Dialog } from "primereact/dialog";
 // import { useStopEvaluation } from "./documentStore/hooks/useStopEvaluation";
 import React from 'react';
-// import { Button } from "@open-smc/ui-kit/components/Button";
-// import loader from "@open-smc/ui-kit/components/loader.module.scss";
+// import { Button } from "@open-smc/ui-kit/src/components/Button";
+// import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 // import { useNotebookEditorSelector } from "./NotebookEditor";
 // import styles from "./session-dialog.module.scss";
 // import classNames from "classnames";
-// import button from "@open-smc/ui-kit/components/buttons.module.scss";
-// import { renderControl } from "@open-smc/application/renderControl";
+// import button from "@open-smc/ui-kit/src/components/buttons.module.scss";
+// import { renderControl } from "@open-smc/application/src/renderControl";
 //
 // // todo must be completed properly #25469
 //

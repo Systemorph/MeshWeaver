@@ -3,7 +3,7 @@ import { useEnvironmentId } from "../../projectStore/hooks/useEnvironmentId";
 import { useProject } from "../../projectStore/hooks/useProject";
 import styles from './image-viewer.module.scss';
 import classNames from "classnames";
-import buttons from "@open-smc/ui-kit/components/buttons.module.scss"
+import buttons from "@open-smc/ui-kit/src/components/buttons.module.scss"
 
 interface FileProps {
     file: FileModel;

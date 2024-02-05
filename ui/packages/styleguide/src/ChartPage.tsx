@@ -1,5 +1,5 @@
-import { makeChart } from "@open-smc/sandbox/Chart";
-import { Sandbox } from "@open-smc/sandbox/Sandbox";
+import { makeChart } from "@open-smc/sandbox/src/Chart";
+import { Sandbox } from "@open-smc/sandbox/src/Sandbox";
 
 import barConfig from "./charts/bar.json";
 import waterfallConfig from "./charts/EconomicProfitChart.json";

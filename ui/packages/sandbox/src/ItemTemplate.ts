@@ -1,6 +1,6 @@
-import type { ItemTemplateView } from "@open-smc/application/controls/ItemTemplateControl";
-import { StackSkin } from "@open-smc/application/controls/LayoutStackControl";
-import { ControlDef } from "@open-smc/application/ControlDef";
+import type { ItemTemplateView } from "@open-smc/application/src/controls/ItemTemplateControl";
+import { StackSkin } from "@open-smc/application/src/controls/LayoutStackControl";
+import { ControlDef } from "@open-smc/application/src/ControlDef";
 import { ControlBase, ControlBuilderBase } from "./ControlBase";
 
 export class ItemTemplate extends ControlBase implements ItemTemplateView {

@@ -5,9 +5,9 @@ import classNames from "classnames";
 import pDebounce from 'p-debounce';
 import { isEmpty } from "lodash";
 import { ProjectApi, ProjectSettings } from "../../../app/projectApi";
-import { Button } from "@open-smc/ui-kit/components/Button";
-import { InputText } from "@open-smc/ui-kit/components/InputText";
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
+import { Button } from "@open-smc/ui-kit/src/components/Button";
+import { InputText } from "@open-smc/ui-kit/src/components/InputText";
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
 
 type Props = {
     form: UseFormReturn<ProjectSettings>,

@@ -4,14 +4,14 @@ import { useStopSession } from "./documentStore/hooks/useStopSession";
 import classNames from "classnames";
 import styles from "./header.module.scss";
 import sessionButton from "./sessionButton.module.scss";
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import Dropdown from 'rc-dropdown';
 import { useEffect, useState } from "react";
 import { isEmpty, round } from "lodash";
 import { SessionSpecification } from "../../app/notebookFormat";
 import { SessionTierOverlay } from "./SessionTierOverlay";
 import { useProject } from "../project/projectStore/hooks/useProject";
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
 import { useEnv } from "../project/projectStore/hooks/useEnv";
 import { ImageSettingsDto, SessionTierSpecificationDto } from "../project/projectSessionApi";
 import { rcTooltipOptions } from "../../shared/tooltipOptions";

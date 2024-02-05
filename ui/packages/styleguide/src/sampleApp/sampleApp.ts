@@ -1,10 +1,10 @@
-import { makeSmappWindow, makeStack } from "@open-smc/sandbox/LayoutStack";
+import { makeSmappWindow, makeStack } from "@open-smc/sandbox/src/LayoutStack";
 import { sideMenu } from "./sideMenu";
-import { makeMenuItem } from "@open-smc/sandbox/MenuItem";
-import { mainWindowAreas } from "@open-smc/application/controls/MainWindow";
+import { makeMenuItem } from "@open-smc/sandbox/src/MenuItem";
+import { mainWindowAreas } from "@open-smc/application/src/controls/MainWindow";
 import {toolbar} from "./toolbar";
-import {ModalOptions} from '@open-smc/application/controls/MainWindow';
-import { ControlBuilderBase } from "@open-smc/sandbox/ControlBase";
+import {ModalOptions} from '@open-smc/application/src/controls/MainWindow';
+import { ControlBuilderBase } from "@open-smc/sandbox/src/ControlBase";
 
 export const sampleApp = makeSmappWindow()
     .withSideMenu(sideMenu)

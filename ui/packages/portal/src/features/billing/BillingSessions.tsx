@@ -1,13 +1,13 @@
 import { Bill, dateTimeFormat } from "./billingApi";
 import { AgGridReact } from "ag-grid-react";
 import { useRef, useState } from "react";
-import { formatNumber } from "@open-smc/utils/numbers";
-import { formatDate } from "@open-smc/utils/formatDate";
+import { formatNumber } from "@open-smc/utils/src/numbers";
+import { formatDate } from "@open-smc/utils/src/formatDate";
 import { ColDef } from "ag-grid-community";
 import { SessionDescriptor } from "../../app/notebookFormat";
 import { formatCredits } from "./billingUtils";
 import styles from "./billing-overview.module.scss";
-import { useIncrement } from "@open-smc/utils/useIncrement";
+import { useIncrement } from "@open-smc/utils/src/useIncrement";
 import classNames from "classnames";
 import { Page } from "../../shared/utils/requestWrapper";
 

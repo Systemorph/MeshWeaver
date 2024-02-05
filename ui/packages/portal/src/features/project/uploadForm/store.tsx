@@ -1,7 +1,7 @@
 import { CancelTokenSource } from "axios";
 import { PropsWithChildren, useEffect, useMemo } from "react";
 import { clearFileSelectorsCache } from "./hooks/useUploadFormFile";
-import { createStoreContext } from "@open-smc/store/storeContext";
+import { createStoreContext } from "@open-smc/store/src/storeContext";
 
 export type UploadFormState = {
     readonly files: Record<string, UploadFileModel>;

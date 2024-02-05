@@ -7,7 +7,7 @@ namespace OpenSmc.Layout;
 
 public static class Controls
 {
-    public static Composition.Layout Stack() => new();
+    public static Composition.LayoutStackControl Stack() => new();
     public static SpinnerControl Spinner() => new();   
     public static TextBoxControl TextBox(object data) => new(data);
     public static NumberControl Number(object data) => new(data);
@@ -41,7 +41,7 @@ public static class Controls
     public static RemoteViewControl RemoteView(object message, object address, string area) => new(message, address, area);
     public static RemoteViewControl RemoteView(RefreshRequest message, object address) => new(message, address, message.Area);
     public static RemoteViewControl RemoteView(ViewDefinition viewDefinition, SetAreaOptions options) => new(viewDefinition, options);
-    public static Composition.Layout ApplicationWindow() => Stack().WithSkin(Skin.MainWindow); 
+    public static Composition.LayoutStackControl ApplicationWindow() => Stack().WithSkin(Skin.MainWindow); 
 
-    public static Composition.Layout SideMenu() => Stack().WithSkin(Skin.SideMenu);
+    public static Composition.LayoutStackControl SideMenu() => Stack().WithSkin(Skin.SideMenu);
 }

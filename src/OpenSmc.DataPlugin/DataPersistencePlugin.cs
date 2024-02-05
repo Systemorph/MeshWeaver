@@ -8,17 +8,17 @@ public record GetDataStateRequest(WorkspaceConfiguration WorkspaceConfiguration)
 
 public record DataPersistenceAddress(object Host) : IHostedAddress;
 
-public class DataPersistencePlugin : MessageHubPlugin<DataPersistencePlugin, object>,
+public class DataPersistencePlugin : MessageHubPlugin<Workspace>,
     IMessageHandlerAsync<GetDataStateRequest>
 {
-    private DataPluginConfiguration DataConfiguration { get; set; } = new();
+    private DataPluginConfiguration DataConfiguration { get; set; }
 
     public DataPersistencePlugin(IMessageHub hub, MessageHubConfiguration configuration,
-                      Func<DataPluginConfiguration, DataPluginConfiguration> dataConfiguration) : base(hub)
+                      Func<DataPluginConfiguration, DataPluginConfiguration> configure) : base(hub)
     {
         Register(HandleUpdateAndDeleteRequest);  // This takes care of all Update and Delete (CRUD)
 
-        DataConfiguration = dataConfiguration(DataConfiguration);
+        DataConfiguration = configure(new DataPluginConfiguration(hub));
     }
 
     private static MethodInfo updateElementsMethod = ReflectionHelper.GetMethodGeneric<DataPersistencePlugin>(x => x.UpdateElements<object>(null, null));

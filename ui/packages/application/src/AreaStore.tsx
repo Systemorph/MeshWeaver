@@ -1,8 +1,8 @@
-import { createStore, Store } from "@open-smc/store/store";
+import { createStore, Store } from "@open-smc/store/src/store";
 import { AreaChangedEvent } from "./application.contract";
 import { createContext, PropsWithChildren, useContext, useEffect, useMemo } from "react";
 import { useMessageHub } from "./messageHub/AddHub";
-import { getUseSelector } from "@open-smc/store/useSelector";
+import { makeUseSelector } from "@open-smc/store/src/useSelector";
 
 interface AreaStoreContext {
     areaStore: Store<Record<string, AreaChangedEvent>>;
@@ -15,7 +15,7 @@ export function useAreaStore() {
     return areaStore;
 }
 
-export const useAreaSelector = getUseSelector(useAreaStore);
+export const useAreaSelector = makeUseSelector(useAreaStore);
 
 export function AreaStore({children}: PropsWithChildren) {
     const value = useMemo(() => {

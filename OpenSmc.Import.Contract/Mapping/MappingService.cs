@@ -5,10 +5,10 @@ using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Collections;
 using OpenSmc.DataStructures;
-using OpenSmc.Import.Options;
+using OpenSmc.Import.Contract.Options;
 using OpenSmc.Reflection;
 
-namespace OpenSmc.Import.Mapping
+namespace OpenSmc.Import.Contract.Mapping
 {
     public interface IMappingService
     {

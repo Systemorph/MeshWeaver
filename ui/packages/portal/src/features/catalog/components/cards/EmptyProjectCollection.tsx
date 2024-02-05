@@ -1,6 +1,6 @@
 import styles from "./cards.module.scss";
-import { Button } from "@open-smc/ui-kit/components/Button";
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
+import { Button } from "@open-smc/ui-kit/src/components/Button";
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
 import { CreateProjectForm } from "../../../project/editProject/CreateProjectForm";
 import { useSideMenu } from "../../../components/sideMenu/hooks/useSideMenu";
 import { useNavigate } from "react-router-dom";

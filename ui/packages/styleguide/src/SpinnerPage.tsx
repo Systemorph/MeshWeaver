@@ -1,5 +1,5 @@
-import { makeSpinner } from "@open-smc/sandbox/Spinner";
-import { Sandbox } from "@open-smc/sandbox/Sandbox";
+import { makeSpinner } from "@open-smc/sandbox/src/Spinner";
+import { Sandbox } from "@open-smc/sandbox/src/Sandbox";
 
 const spinnerTemplate = makeSpinner().build();
 

@@ -1,9 +1,9 @@
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import { NotebookElementModel } from "./documentStore/documentState";
 import { useDeleteElementsAction } from "./documentStore/hooks/useDeleteElementsAction";
 import { useMoveElements } from './documentStore/hooks/useMoveElements';
 import styles from "./element.module.scss";
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
 import classNames from "classnames";
 import { useNotebookEditorSelector } from "./NotebookEditor";
 

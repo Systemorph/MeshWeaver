@@ -1,7 +1,7 @@
 import { KeyboardEvent, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import Input from 'rc-input';
-import {Button} from "@open-smc/ui-kit/components/Button";
+import {Button} from "@open-smc/ui-kit/src/components/Button";
 import styles from "./search.module.scss"
 import { isEmpty } from "lodash";
 import { SEARCH_PARAM } from "../../../../shared/hooks/useSearchParamsUpdate";

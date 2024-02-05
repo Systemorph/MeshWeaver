@@ -4,7 +4,7 @@ import 'chartjs-adapter-moment';
 import ChartDataLabels from 'chartjs-plugin-datalabels';
 import { useEffect, useRef } from "react";
 import { cloneDeep, isObjectLike, keys } from "lodash";
-import { evalJs, REGEXPS } from "@open-smc/utils/evalJs";
+import { evalJs, REGEXPS } from "@open-smc/utils/src/evalJs";
 
 import { ControlView } from "../ControlDef";
 

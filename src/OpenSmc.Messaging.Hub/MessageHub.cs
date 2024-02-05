@@ -34,7 +34,7 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         disposeActions.AddRange(configuration.DisposeActions);
 
         var forwardConfig =
-            (configuration.ForwardConfigurationBuilder ?? (x => x)).Invoke(new ForwardConfiguration(this));
+            (configuration.ForwardConfigurationBuilder ?? (x => x)).Invoke(new RouteConfiguration(this));
 
         AddPlugin(new SubscribersPlugin(this));
         AddPlugin(new RoutePlugin(this, forwardConfig, parentHub));
@@ -169,9 +169,9 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
 
     public void ConnectTo(IMessageHub hub)
     {
-        hub.DeliverMessage(new MessageDelivery<ConnectToHubRequest>()
+        hub.DeliverMessage(new MessageDelivery<ConnectToHubRequest>
         {
-            Message = new ConnectToHubRequest(Address, hub.Address),
+            Message = new ConnectToHubRequest(),
             Sender = Address,
             Target = hub.Address
         });

@@ -1,101 +1,109 @@
-import { createContext, PropsWithChildren, useContext, useEffect, useMemo, useState, JSX } from "react";
+import { createContext, PropsWithChildren, useContext, useEffect, useState } from "react";
 import { makeSignalrConnection, SignalrConnection } from "./makeSignalrConnection";
-import { createStore, Store } from "@open-smc/store/store";
+import { createStore, Store } from "@open-smc/store/src/store";
 import { getAppId, setAppId } from "./appId";
-import { useSelector } from "@open-smc/store/useSelector";
-import { useNotifyOnDisconnected } from "./useNotifyOnDisconnected";
-
-interface ConnectionContext {
-    connection: SignalrConnection;
-    store: Store<State>;
-}
+import { makeUseSelector } from "@open-smc/store/src/useSelector";
+import { useToast } from "./notifications/useToast";
+import { v4 } from "uuid";
+import BlockUi from "@availity/block-ui";
+import "@availity/block-ui/dist/index.css";
 
 interface State {
+    connection: SignalrConnection;
     started: boolean;
+    reconnectionCount: number;
     connectionStatus: ConnectionStatus;
     appId: string;
 }
 
 export type ConnectionStatus = "Connecting" | "Connected" | "Disconnected";
 
-const context = createContext<ConnectionContext>(null);
+const context = createContext<Store<State>>(null);
 
-export function useConnection() {
-    const {connection} = useContext(context);
-    return connection;
+function useConnectionStore() {
+    return useContext(context);
 }
 
-export function useConnectionStatus() {
-    const {store} = useContext(context);
-    const started = useSelector(store, "started");
-    const appId = useSelector(store, "appId");
-    const connectionStatus = useSelector(store, "connectionStatus");
-    return {started, connectionStatus, appId};
-}
+export const useConnectionSelector = makeUseSelector(useConnectionStore);
 
-interface ConnectionProps {
-    fallback?: () => JSX.Element;
-}
+const DISCONNECTED_KEY = 'Disconnected';
 
-export function SignalrConnectionProvider({fallback, children}: PropsWithChildren & ConnectionProps) {
-    const [connection] = useState(makeSignalrConnection);
-    const [started, setStarted] = useState<Promise<void>>();
-    const [ready, setReady] = useState(false);
+export function SignalrConnectionProvider({children}: PropsWithChildren) {
+    const [signalrConnection] = useState(makeSignalrConnection);
+    const {connection, onDisconnected, onReconnected} = signalrConnection;
+    const [startPromise, setStartPromise] = useState<Promise<void>>();
+    const [store] = useState(makeStore(signalrConnection));
+    const {showToast, closeToast} = useToast();
+    const [key, setKey] = useState(v4);
 
-    useNotifyOnDisconnected();
-    const [store] = useState(makeStore());
+    useEffect(() => onReconnected(() => setKey(v4())), [onReconnected]);
+
+    async function initialize() {
+        const {appId} = store.getState();
+        const serverAppId = await connection.invoke('Initialize', appId);
+        store.setState(state => {
+            state.connectionStatus = "Connected"
+            state.started = true;
+            state.appId = serverAppId;
+        });
+    }
 
     useEffect(() => {
-        setStarted(connection.connection.start());
+        setStartPromise(connection.start());
     }, [connection]);
 
     useEffect(() => {
-        const {appId} = store.getState();
-
-        started?.then(async () => {
-            const serverAppId = await connection.connection.invoke('Initialize', appId);
-            store?.setState(state => {
-                state.connectionStatus = "Connected"
-                state.started = true;
-                state.appId = serverAppId;
-            });
-            setReady(true);
-        });
-    }, [started, store]);
-
-    useEffect(() => {
-        return connection.onDisconnected(error => {
+        return onDisconnected(() => {
             store.setState(state => {
                 state.connectionStatus = "Disconnected";
             });
+
+            showToast(
+                'Disconnected',
+                'Trying to reconnect...',
+                'Error',
+                {
+                    closable: false,
+                    duration: null,
+                    key: DISCONNECTED_KEY
+                }
+            );
         });
-    }, [connection, store]);
+    }, [onDisconnected, store, showToast]);
 
     useEffect(() => {
-        return connection.onReconnected(() => {
-            store.setState(state => {
-                state.connectionStatus = "Connected";
-            });
+        return onReconnected(async () => {
+            await initialize();
+
+            closeToast(DISCONNECTED_KEY);
+            showToast('Reconnected', 'Connection restored successfully.', 'Success');
         });
-    }, [connection, store]);
+    }, [onReconnected, store, closeToast, showToast]);
 
-    const value = useMemo(() => ({
-        connection,
-        store
-    }), [connection, store]);
+    useEffect(() => {
+        if (startPromise && store) {
+            startPromise.then(initialize);
+        }
+    }, [startPromise, store]);
 
-    if (!ready) {
-        return fallback?.();
+    const {connectionStatus} = store.getState();
+
+    if (connectionStatus === "Connecting") {
+        return <div>Loading...</div>;
     }
 
     return (
-        <context.Provider value={value} children={children}/>
+        <BlockUi blocking={connectionStatus === "Disconnected"} loader={null}>
+            <context.Provider value={store} children={children} key={key}/>
+        </BlockUi>
     );
 }
 
-function makeStore() {
+function makeStore(connection: SignalrConnection) {
     const store = createStore<State>({
+        connection,
         started: false,
+        reconnectionCount: 0,
         connectionStatus: "Connecting",
         appId: getAppId()
     });

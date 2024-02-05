@@ -1,7 +1,7 @@
 import { useElementsStore, useNotebookEditorStore } from "../../NotebookEditor";
 import { moveElements } from "../moveElements";
 import { useUpdateMarkdown } from "./useUpdateMarkdown";
-import { useMessageHub } from "@open-smc/application/messageHub/AddHub";
+import { useMessageHub } from "@open-smc/application/src/messageHub/AddHub";
 import { NotebookElementMovedEvent } from "../../notebookEditor/notebookEditor.contract";
 
 export function useMoveElements() {

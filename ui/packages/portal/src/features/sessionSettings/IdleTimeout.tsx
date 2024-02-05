@@ -1,6 +1,6 @@
 import styles from "../project/editProject/setupProject.module.scss";
 import { Controller } from "react-hook-form";
-import { InputNumber } from "@open-smc/ui-kit/components/InputNumber";
+import { InputNumber } from "@open-smc/ui-kit/src/components/InputNumber";
 import { FormFieldProps, SessionSettingsFormModel } from "./SessionSettingsForm";
 import sessionSettings from "./session-settings.module.scss";
 import classNames from "classnames";

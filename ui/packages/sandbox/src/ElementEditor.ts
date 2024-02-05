@@ -1,13 +1,13 @@
 import type {
     ElementEditorView,
     NotebookElementDto
-} from "@open-smc/portal/controls/ElementEditorControl";
-import { ControlDef } from "@open-smc/application/ControlDef";
-import { AreaChangedEvent } from "@open-smc/application/application.contract";
+} from "@open-smc/portal/src/controls/ElementEditorControl";
+import { ControlDef } from "@open-smc/application/src/ControlDef";
+import { AreaChangedEvent } from "@open-smc/application/src/application.contract";
 import { NotebookEditor } from "./NotebookEditor";
-import {NotebookElementContentChangedEvent} from "@open-smc/portal/features/notebook/notebookElement.contract";
+import {NotebookElementContentChangedEvent} from "@open-smc/portal/src/features/notebook/notebookElement.contract";
 import {debounce} from "lodash";
-import {applyContentEdits} from "@open-smc/portal/features/notebook/documentStore/applyContentEdits";
+import {applyContentEdits} from "@open-smc/portal/src/features/notebook/documentStore/applyContentEdits";
 import { ControlBase } from "./ControlBase";
 
 export class ElementEditor extends ControlBase implements ElementEditorView {

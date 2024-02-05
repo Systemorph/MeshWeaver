@@ -1,5 +1,5 @@
 import { useNotebookEditorStore } from "../../NotebookEditor";
-import { useMessageHub } from "@open-smc/application/messageHub/AddHub";
+import { useMessageHub } from "@open-smc/application/src/messageHub/AddHub";
 import { SessionStatusEvent } from "../../notebookEditor/notebookEditor.contract";
 import { useEffect } from "react";
 

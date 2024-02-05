@@ -4,7 +4,7 @@ import { Users } from "../../../accessControl/Users";
 import { EnvAccessControlApi } from "./envAccessControlApi";
 import { AccessObject } from "../../../accessControl/accessControl.contract";
 import { useEnvSettingsState } from "../useEnvSettingsState";
-import { useThrowAsync } from "@open-smc/utils/useThrowAsync";
+import { useThrowAsync } from "@open-smc/utils/src/useThrowAsync";
 
 export function EnvUsersPage() {
     const {project} = useProject();

@@ -1,8 +1,8 @@
 import styles from "./environments.module.scss";
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
 import { useNavigate } from "react-router-dom";
 import { useProject } from "../project/projectStore/hooks/useProject";
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import classNames from "classnames";
 import { useState } from "react";
 import { CloneProjectForm } from "../project/editProject/CloneProjectForm";
@@ -11,7 +11,7 @@ import { DuplicateEnvironmentForm } from "./DuplicateEnvironmentForm";
 import { DeleteEnvironmentForm } from "./DeleteEnvironmentForm";
 import { useProjectPermissions } from "../project/projectStore/hooks/useProjectPermissions";
 import { ProjectApi } from "../../app/projectApi";
-import PopupMenu, { PopupMenuItem } from "@open-smc/ui-kit/components/PopupMenu";
+import PopupMenu, { PopupMenuItem } from "@open-smc/ui-kit/src/components/PopupMenu";
 import Dropdown from "rc-dropdown";
 
 type Props = {

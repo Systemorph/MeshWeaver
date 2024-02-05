@@ -1,7 +1,7 @@
-import { makeCheckbox } from "@open-smc/sandbox/Checkbox";
-import { Sandbox } from "@open-smc/sandbox//Sandbox";
-import { makeItemTemplate } from "@open-smc/sandbox/ItemTemplate";
-import { makeBinding } from "@open-smc/application/dataBinding/resolveBinding";
+import { makeCheckbox } from "@open-smc/sandbox/src/Checkbox";
+import { Sandbox } from "@open-smc/sandbox/src//Sandbox";
+import { makeItemTemplate } from "@open-smc/sandbox/src/ItemTemplate";
+import { makeBinding } from "@open-smc/application/src/dataBinding/resolveBinding";
 import { v4 } from "uuid";
 
 const itemTemplate =

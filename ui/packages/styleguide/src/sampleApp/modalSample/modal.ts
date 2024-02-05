@@ -1,9 +1,9 @@
-import { makeHtml } from "@open-smc/sandbox/Html";
-import { makeModalWindow, makeStack } from "@open-smc/sandbox/LayoutStack";
+import { makeHtml } from "@open-smc/sandbox/src/Html";
+import { makeModalWindow, makeStack } from "@open-smc/sandbox/src/LayoutStack";
 import { closeModalWindow, openModalWindow } from "../sampleApp";
-import { makeMenuItem } from "@open-smc/sandbox/MenuItem";
+import { makeMenuItem } from "@open-smc/sandbox/src/MenuItem";
 import { main } from "./main";
-import { brandeisBlue, brightGray } from "@open-smc/application/colors";
+import { brandeisBlue, brightGray } from "@open-smc/application/src/colors";
 
 export const header = makeHtml('<h2>Sign off</h2>');
 

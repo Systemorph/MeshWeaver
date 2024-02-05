@@ -1,22 +1,20 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using OpenSmc.Activities;
-using OpenSmc.DataSetReader;
 using OpenSmc.DataSource.Abstractions;
 using OpenSmc.DataStructures;
 using OpenSmc.DomainDesigner.Abstractions;
 using OpenSmc.FileStorage;
-using OpenSmc.Import.Mapping;
-using OpenSmc.Import.Options;
+using OpenSmc.Import.Contract.Mapping;
+using OpenSmc.Import.Contract.Options;
 
-namespace OpenSmc.Import.Builders
+namespace OpenSmc.Import.Contract.Builders
 {
     public record DataSetImportOptionsBuilder : ImportOptionsBuilder
     {
         private IDataSet DataSet { get; }
 
-        internal DataSetImportOptionsBuilder(IActivityService activityService,
-                                             IDataSetReaderVariable dataSetReaderVariable,
+        public DataSetImportOptionsBuilder(IActivityService activityService,
                                              IMappingService mappingService,
                                              IFileReadStorage storage,
                                              CancellationToken cancellationToken,
@@ -26,7 +24,7 @@ namespace OpenSmc.Import.Builders
                                              Dictionary<string, Func<ImportOptions, IDataSet, Task>> importFormatFunctions,
                                              ImmutableList<Func<object, ValidationContext, Task<bool>>> defaultValidations,
                                              IDataSet dataSet)
-            : base(activityService, dataSetReaderVariable, mappingService, storage, cancellationToken, domain, targetSource, serviceProvider, importFormatFunctions, defaultValidations)
+            : base(activityService, mappingService, storage, cancellationToken, domain, targetSource, serviceProvider, importFormatFunctions, defaultValidations)
         {
             DataSet = dataSet;
         }

@@ -1,6 +1,6 @@
 import { SideMenuState } from "./SideMenuState";
 import React, { PropsWithChildren, useMemo } from "react";
-import { createStoreContext } from "@open-smc/store/storeContext";
+import { createStoreContext } from "@open-smc/store/src/storeContext";
 
 export const {useStore, useSelector, StoreProvider} = createStoreContext<SideMenuState>();
 

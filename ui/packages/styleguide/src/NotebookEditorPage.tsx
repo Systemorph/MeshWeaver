@@ -1,19 +1,19 @@
-import { Sandbox } from "@open-smc/sandbox/Sandbox";
-import { NotebookEditor } from "@open-smc/sandbox/NotebookEditor";
+import { Sandbox } from "@open-smc/sandbox/src/Sandbox";
+import { NotebookEditor } from "@open-smc/sandbox/src/NotebookEditor";
 import { v4 } from "uuid";
-import { NotebookElementDto } from "@open-smc/portal/controls/ElementEditorControl";
+import { NotebookElementDto } from "@open-smc/portal/src/controls/ElementEditorControl";
 import { last } from "lodash";
 import { PropsWithChildren, useMemo, useState } from "react";
-import { getOrAdd } from "@open-smc/utils/getOrAdd";
-import { ViewModelHub } from "@open-smc/sandbox/ViewModelHub";
-import { SetAreaRequest } from "@open-smc/application/application.contract";
+import { getOrAdd } from "@open-smc/utils/src/getOrAdd";
+import { ViewModelHub } from "@open-smc/sandbox/src/ViewModelHub";
+import { SetAreaRequest } from "@open-smc/application/src/application.contract";
 
 import myNotebook1 from "./notebooks/myNotebook1.json";
-import { ProjectContextProvider } from "@open-smc/portal/features/project/projectStore/projectStore";
-import { ProjectNode } from "@open-smc/portal/app/projectApi";
-import { ApiContext, apiContext } from "@open-smc/portal/ApiProvider";
-import { Permission } from "@open-smc/portal/features/accessControl/accessControl.contract";
-import { ControlBase } from "@open-smc/sandbox/ControlBase";
+import { ProjectContextProvider } from "@open-smc/portal/src/features/project/projectStore/projectStore";
+import { ProjectNode } from "@open-smc/portal/src/app/projectApi";
+import { ApiContext, apiContext } from "@open-smc/portal/src/ApiProvider";
+import { Permission } from "@open-smc/portal/src/features/accessControl/accessControl.contract";
+import { ControlBase } from "@open-smc/sandbox/src/ControlBase";
 
 const elements: NotebookElementDto[] = myNotebook1.cells.map((cell: any) => {
     const {cell_type, source, language} = cell;

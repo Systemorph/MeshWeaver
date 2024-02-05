@@ -6,17 +6,16 @@ using OpenSmc.DataSource.Abstractions;
 using OpenSmc.DataStructures;
 using OpenSmc.DomainDesigner.Abstractions;
 using OpenSmc.FileStorage;
-using OpenSmc.Import.Mapping;
-using OpenSmc.Import.Options;
+using OpenSmc.Import.Contract.Mapping;
+using OpenSmc.Import.Contract.Options;
 
-namespace OpenSmc.Import.Builders
+namespace OpenSmc.Import.Contract.Builders
 {
     public record StreamImportOptionsBuilder : ImportOptionsBuilder
     {
         private Stream Stream { get; }
 
-        internal StreamImportOptionsBuilder(IActivityService activityService,
-                                            IDataSetReaderVariable dataSetReaderVariable,
+        public StreamImportOptionsBuilder(IActivityService activityService,
                                             IMappingService mappingService,
                                             IFileReadStorage storage,
                                             CancellationToken cancellationToken,
@@ -26,7 +25,7 @@ namespace OpenSmc.Import.Builders
                                             Dictionary<string, Func<ImportOptions, IDataSet, Task>> importFormatFunctions,
                                             ImmutableList<Func<object, ValidationContext, Task<bool>>> defaultValidations,
                                             Stream stream)
-            : base(activityService, dataSetReaderVariable, mappingService, storage, cancellationToken, domain, targetSource, serviceProvider, importFormatFunctions, defaultValidations)
+            : base(activityService, mappingService, storage, cancellationToken, domain, targetSource, serviceProvider, importFormatFunctions, defaultValidations)
         {
             Stream = stream;
         }

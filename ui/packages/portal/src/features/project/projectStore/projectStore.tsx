@@ -1,8 +1,8 @@
 import { ProjectState } from "./projectState";
 import { createContext, PropsWithChildren, useContext, useMemo } from "react";
-import { createStore, Selector, Store } from "@open-smc/store/store";
-import { getUseSelector } from "@open-smc/store/useSelector";
-import { useSelectorDeprecated } from "@open-smc/store/storeContext";
+import { createStore, Selector, Store } from "@open-smc/store/src/store";
+import { makeUseSelector } from "@open-smc/store/src/useSelector";
+import { useSelectorDeprecated } from "@open-smc/store/src/storeContext";
 
 interface ProjectContext {
     readonly store: Store<ProjectState>;
@@ -32,7 +32,7 @@ export function useProjectStore() {
 }
 
 
-export const useProjectSelector = getUseSelector(useProjectStore);
+export const useProjectSelector = makeUseSelector(useProjectStore);
 
 /**
  @deprecated use useNotebookSelector instead (4/20/2023, akravets)

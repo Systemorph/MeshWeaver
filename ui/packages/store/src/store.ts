@@ -1,5 +1,5 @@
 import { isEmpty, isFunction, isString, remove } from "lodash";
-import { getOrAdd } from "@open-smc/utils/getOrAdd";
+import { getOrAdd } from "@open-smc/utils/src/getOrAdd";
 import { Draft, produce, setAutoFreeze } from "immer";
 export {castDraft} from "immer";
 

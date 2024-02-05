@@ -1,12 +1,12 @@
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import { Controller, useForm, UseFormReturn } from "react-hook-form";
 import styles from "./addForm.module.scss";
 import { isEmpty } from "lodash";
 import 'rc-checkbox/assets/index.css';
 import { useEffect } from "react";
 import { AccessGroup, AccessUser, GroupChangeToggle } from "./accessControl.contract";
-import { Select } from "@open-smc/ui-kit/components/Select";
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
+import { Select } from "@open-smc/ui-kit/src/components/Select";
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
 import classNames from "classnames";
 
 interface AddGroupFormFields {

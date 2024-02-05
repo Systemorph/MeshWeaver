@@ -1,7 +1,7 @@
 import { createRoot } from "react-dom/client";
 import React from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
-import { AppPage } from "@open-smc/application/AppPage";
+import { AppPage } from "@open-smc/application/src/AppPage";
 import "./index.scss";
 
 import { Helmet } from "react-helmet";

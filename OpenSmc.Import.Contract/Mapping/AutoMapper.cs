@@ -7,13 +7,13 @@ using Autofac.Core.Activators.Reflection;
 using OpenSmc.Collections;
 using OpenSmc.DataStructures;
 using OpenSmc.Domain.Abstractions.Attributes;
-using OpenSmc.Import.Options;
+using OpenSmc.Import.Contract.Options;
 using OpenSmc.Reflection;
 using OpenSmc.ShortGuid;
 
 // ReSharper disable AssignNullToNotNullAttribute
 
-namespace OpenSmc.Import.Mapping
+namespace OpenSmc.Import.Contract.Mapping
 {
     public static class AutoMapper
     {
