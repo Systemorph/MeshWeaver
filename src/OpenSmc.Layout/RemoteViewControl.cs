@@ -91,8 +91,8 @@ public record RemoteViewControl : UiControl<RemoteViewControl, RemoteViewPlugin>
     //    return base.ConfigureHub(configuration).WithRoutes
     //        (
     //            forward => forward
-    //                .RouteMessageToTarget<SubscribeToEvaluationRequest>(_ => ExpressionSynchronizationAddress(forward.Hub))
-    //                .RouteMessageToTarget<UnsubscribeFromEvaluationRequest>(_ => ExpressionSynchronizationAddress(forward.Hub))
+    //                .RouteMessage<SubscribeToEvaluationRequest>(_ => ExpressionSynchronizationAddress(forward.Hub))
+    //                .RouteMessage<UnsubscribeFromEvaluationRequest>(_ => ExpressionSynchronizationAddress(forward.Hub))
     //            );
     //}
 
