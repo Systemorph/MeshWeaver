@@ -47,47 +47,39 @@ namespace OpenSmc.Import.Contract.Builders
 
         public ImportPlugin(IMessageHub hub, ImportOptionsBuilder options) : base(hub)
         {
-            
+            //new MessageHubConfiguration().AddImport(builder => builder.)
         }
     }
 
-    public abstract record ImportOptionsBuilder
+    public class ImportService
     {
-        // TODO V10: Is this a builder? Separate API from implementation (30.01.2024, Valery Petrov)
-        private protected IDataSetReaderVariable DataSetReaderVariable;
-        //this will be used in the future to handle properly progress
-        // ReSharper disable once NotAccessedField.Local
-        private protected readonly CancellationToken CancellationToken;
-        private protected ImmutableList<Func<object, ValidationContext, Task<bool>>> Validations;
         private protected IActivityService ActivityService;
         private protected IMappingService MappingService;
-
-        private protected string Format { get; private set; }
+        
         private protected DomainDescriptor Domain { get; init; } = new();
+        private protected IFileReadStorage Storage { get; init; }
+        
         private protected IDataSource TargetDataSource { get; init; }
         private protected IServiceProvider ServiceProvider { get; init; }
-        private protected IFileReadStorage Storage { get; init; }
+        
+        private protected readonly CancellationToken CancellationToken;
+        
+        //this will be used in the future to handle properly progress
+        // ReSharper disable once NotAccessedField.Local
+        private protected ImmutableList<Func<object, ValidationContext, Task<bool>>> Validations;
+        
         private protected Dictionary<string, Func<ImportOptions, IDataSet, Task>> ImportFormatFunctions { get; init; }
 
-        private protected ImmutableDictionary<Type, ITableMappingBuilder> TableMappingBuilders { get; init; } = ImmutableDictionary<Type, ITableMappingBuilder>.Empty;
-        private protected ImmutableHashSet<string> IgnoredTables { get; init; } = ImmutableHashSet<string>.Empty;
-        private protected ImmutableHashSet<Type> IgnoredTypes { get; init; } = ImmutableHashSet<Type>.Empty;
-        //tableName => { ignoredColumns }
-        private protected ImmutableDictionary<string, IEnumerable<string>> IgnoredColumns { get; init; } = ImmutableDictionary<string, IEnumerable<string>>.Empty;
 
-        private protected bool SnapshotModeEnabled { get; init; }
-
-        private protected Func<IDataSetReaderOptionsBuilder, IDataSetReaderOptionsBuilder> DataSetReaderOptionsBuilderFunc { get; init; } = ds => ds;
-
-        protected internal ImportOptionsBuilder(IActivityService activityService,
-                                                IMappingService mappingService,
-                                                IFileReadStorage storage,
-                                                CancellationToken cancellationToken,
-                                                DomainDescriptor domain,
-                                                IDataSource targetSource,
-                                                IServiceProvider serviceProvider,
-                                                Dictionary<string, Func<ImportOptions, IDataSet, Task>> importFormatFunctions,
-                                                ImmutableList<Func<object, ValidationContext, Task<bool>>> defaultValidations)
+        protected internal ImportService(IActivityService activityService,
+            IMappingService mappingService,
+            IFileReadStorage storage,
+            CancellationToken cancellationToken,
+            DomainDescriptor domain,
+            IDataSource targetSource,
+            IServiceProvider serviceProvider,
+            Dictionary<string, Func<ImportOptions, IDataSet, Task>> importFormatFunctions,
+            ImmutableList<Func<object, ValidationContext, Task<bool>>> defaultValidations)
         {
             ActivityService = activityService;
             MappingService = mappingService;
@@ -98,6 +90,105 @@ namespace OpenSmc.Import.Contract.Builders
             ImportFormatFunctions = importFormatFunctions;
             Validations = defaultValidations;
             ServiceProvider = serviceProvider;
+        }
+
+           public async Task<ActivityLog> ExecuteAsync()
+        {
+            ActivityLog log;
+            ActivityService.Start(); // TODO: Add category (2022.01.18, Armen Sirotenko)
+
+            try
+            {
+               //get options
+
+                // in case if import format function is defined, then we get this function and execute
+                if (importMappings.Format != null && ImportFormatFunctions.TryGetValue(importOptions.Format, out var importFunction))
+                    await importFunction(importOptions, dataSet);
+                else
+                {
+                    if (TargetDataSource == null)
+                        throw new ArgumentException("Please specify target.");
+
+                    var instancesPerTypes = await MappingService.MapAsync(dataSet,
+                                                                          importOptions,
+                                                                          ActivityService,
+                                                                          ServiceProvider,
+                                                                          new Dictionary<object, object>(),
+                                                                          CancellationToken);
+
+
+                    if (!ActivityService.HasErrors())
+                    {
+                        foreach (var instancesPerType in instancesPerTypes)
+                        {
+                            var isSnapshot = importOptions.SnapshotModeEnabled ||
+                                             importOptions.TableMappings.TryGetValue(instancesPerType.Key, out var tableMapping) &&
+                                             tableMapping.SnapshotModeEnabled;
+                            if (instancesPerType.Value.Count > 0 || isSnapshot)
+                                await UpdateMethod.MakeGenericMethod(instancesPerType.Key).InvokeAsActionAsync(TargetDataSource, instancesPerType.Value, isSnapshot);
+                        }
+                       
+                        await TargetDataSource.CommitAsync();
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                var message = new StringBuilder(e.Message);
+                while (e.InnerException != null)
+                {
+                    message.AppendLine(e.InnerException.Message);
+                    e = e.InnerException;
+                }
+
+                ActivityService.LogError(message.ToString());
+            }
+            finally
+            {
+                log = ActivityService.Finish();
+                if (SaveLog && TargetDataSource != null)
+                {
+                    await TargetDataSource.UpdateAsync(new[]{log});
+                    await TargetDataSource.CommitAsync();
+                }
+            }
+
+            return log;
+        }
+
+           
+        protected virtual Task<(IDataSet DataSet, string Format)> GetDataSetAsync()
+        {
+            throw new NotImplementedException();
+        }
+    }
+
+    public abstract record ImportOptionsBuilder
+    {
+        // TODO V10: Is this a builder? Separate API from implementation (30.01.2024, Valery Petrov)
+        private protected IDataSetReaderVariable DataSetReaderVariable;
+
+        private protected string Format { get; private set; }
+        private protected ImmutableDictionary<Type, ITableMappingBuilder> TableMappingBuilders { get; init; } = ImmutableDictionary<Type, ITableMappingBuilder>.Empty;
+        private protected ImmutableHashSet<string> IgnoredTables { get; init; } = ImmutableHashSet<string>.Empty;
+        private protected ImmutableHashSet<Type> IgnoredTypes { get; init; } = ImmutableHashSet<Type>.Empty;
+        //tableName => { ignoredColumns }
+        private protected ImmutableDictionary<string, IEnumerable<string>> IgnoredColumns { get; init; } = ImmutableDictionary<string, IEnumerable<string>>.Empty;
+
+        private protected bool SnapshotModeEnabled { get; init; }
+
+        private protected Func<IDataSetReaderOptionsBuilder, IDataSetReaderOptionsBuilder> DataSetReaderOptionsBuilderFunc { get; init; } = ds => ds;
+
+        public ImportOptions Build()
+        {
+            var importMappings = this;
+
+            var (dataSet, format) = await GetDataSetAsync();
+            //even if format was defined we take it from file
+            if (format != null)
+                importMappings = importMappings with { Format = format };
+
+            var importOptions = importMappings.GetImportOptions();
         }
 
         public ImportOptionsBuilder WithDomain(DomainDescriptor domainDescriptor)
@@ -238,8 +329,6 @@ namespace OpenSmc.Import.Contract.Builders
             return this with { DataSetReaderOptionsBuilderFunc = readFunc };
         }
 
-        protected abstract Task<(IDataSet DataSet, string Format)> GetDataSetAsync();
-
 
         private bool SaveLog { get; init; }
         public ImportOptionsBuilder SaveLogs(bool save = true)
@@ -247,76 +336,7 @@ namespace OpenSmc.Import.Contract.Builders
             return this with { SaveLog = save };
         }
 
-        public async Task<ActivityLog> ExecuteAsync()
-        {
-            ActivityLog log;
-            ActivityService.Start(); // TODO: Add category (2022.01.18, Armen Sirotenko)
-
-            try
-            {
-                var importMappings = this;
-
-                var (dataSet, format) = await GetDataSetAsync();
-                //even if format was defined we take it from file
-                if (format != null)
-                    importMappings = importMappings with { Format = format };
-
-                var importOptions = importMappings.GetImportOptions();
-
-                // in case if import format function is defined, then we get this function and execute
-                if (importMappings.Format != null && ImportFormatFunctions.TryGetValue(importOptions.Format, out var importFunction))
-                    await importFunction(importOptions, dataSet);
-                else
-                {
-                    if (TargetDataSource == null)
-                        throw new ArgumentException("Please specify target.");
-
-                    var instancesPerTypes = await MappingService.MapAsync(dataSet,
-                                                                          importOptions,
-                                                                          ActivityService,
-                                                                          ServiceProvider,
-                                                                          new Dictionary<object, object>(),
-                                                                          CancellationToken);
-
-
-                    if (!ActivityService.HasErrors())
-                    {
-                        foreach (var instancesPerType in instancesPerTypes)
-                        {
-                            var isSnapshot = importOptions.SnapshotModeEnabled ||
-                                             importOptions.TableMappings.TryGetValue(instancesPerType.Key, out var tableMapping) &&
-                                             tableMapping.SnapshotModeEnabled;
-                            if (instancesPerType.Value.Count > 0 || isSnapshot)
-                                await UpdateMethod.MakeGenericMethod(instancesPerType.Key).InvokeAsActionAsync(TargetDataSource, instancesPerType.Value, isSnapshot);
-                        }
-                       
-                        await TargetDataSource.CommitAsync();
-                    }
-                }
-            }
-            catch (Exception e)
-            {
-                var message = new StringBuilder(e.Message);
-                while (e.InnerException != null)
-                {
-                    message.AppendLine(e.InnerException.Message);
-                    e = e.InnerException;
-                }
-
-                ActivityService.LogError(message.ToString());
-            }
-            finally
-            {
-                log = ActivityService.Finish();
-                if (SaveLog && TargetDataSource != null)
-                {
-                    await TargetDataSource.UpdateAsync(new[]{log});
-                    await TargetDataSource.CommitAsync();
-                }
-            }
-
-            return log;
-        }
+     
 #pragma warning disable 4014
         private static readonly IGenericMethodCache UpdateMethod =
             GenericCaches.GetMethodCacheStatic(() => PerformUpdate<object>(null, null, false));

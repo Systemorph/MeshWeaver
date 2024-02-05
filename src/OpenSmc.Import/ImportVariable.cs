@@ -16,7 +16,6 @@ namespace OpenSmc.Import
     {
         private readonly IActivityService activityService;
         private readonly IMappingService mappingService;
-        //private readonly ISessionContext sessionContext;
         private readonly IServiceProvider serviceProvider;
 
         private IFileReadStorage fileReadStorage;
@@ -25,17 +24,13 @@ namespace OpenSmc.Import
         private ImmutableList<Func<object, ValidationContext, Task<bool>>> defaultValidations = ImmutableList<Func<object, ValidationContext, Task<bool>>>.Empty;
         private readonly Dictionary<string, Func<ImportOptions, IDataSet, Task>> importFormatFunctions = new();
 
-        //private readonly Func<ISessionContext, CancellationToken> cancelFunc = x => x == null ? CancellationToken.None : x.CancellationToken;
-
         public ImportVariable(IActivityService activityService, 
                               IDataSetReaderVariable dataSetReaderVariable,
                               IMappingService mappingService,
-                              //ISessionContext sessionContext,
                               IServiceProvider serviceProvider)
         {
             this.activityService = activityService;
             this.mappingService = mappingService;
-            //this.sessionContext = sessionContext;
             this.serviceProvider = serviceProvider;
         }
         public void SetDefaultFileStorage(IFileReadStorage storage)
