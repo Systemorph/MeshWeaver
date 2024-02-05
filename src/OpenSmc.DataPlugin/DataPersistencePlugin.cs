@@ -11,14 +11,13 @@ public record DataPersistenceAddress(object Host) : IHostedAddress;
 public class DataPersistencePlugin : MessageHubPlugin<Workspace>,
     IMessageHandlerAsync<GetDataStateRequest>
 {
-    private DataPluginConfiguration DataConfiguration { get; set; }
+    private DataPersistenceConfiguration DataPersistenceConfiguration { get; set; }
 
-    public DataPersistencePlugin(IMessageHub hub, MessageHubConfiguration configuration,
-                      Func<DataPluginConfiguration, DataPluginConfiguration> configure) : base(hub)
+    public DataPersistencePlugin(IMessageHub hub, Func<DataPersistenceConfiguration, DataPersistenceConfiguration> configure) : base(hub)
     {
         Register(HandleUpdateAndDeleteRequest);  // This takes care of all Update and Delete (CRUD)
 
-        DataConfiguration = configure(new DataPluginConfiguration(hub));
+        DataPersistenceConfiguration = configure(new DataPersistenceConfiguration(hub));
     }
 
     private static MethodInfo updateElementsMethod = ReflectionHelper.GetMethodGeneric<DataPersistencePlugin>(x => x.UpdateElements<object>(null, null));
@@ -30,7 +29,7 @@ public class DataPersistencePlugin : MessageHubPlugin<Workspace>,
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(UpdateBatchRequest<>) || type.GetGenericTypeDefinition() == typeof(DeleteBatchRequest<>))
         {
             var elementType = type.GetGenericArguments().First();
-            var typeConfig = DataConfiguration.TypeConfigurations.FirstOrDefault(x =>
+            var typeConfig = DataPersistenceConfiguration.TypeConfigurations.FirstOrDefault(x =>
                     x.GetType().GetGenericArguments().First() == elementType);  // TODO: check whether this works
 
             if (typeConfig is null) return request;
@@ -64,7 +63,7 @@ public class DataPersistencePlugin : MessageHubPlugin<Workspace>,
     async Task<IMessageDelivery> IMessageHandlerAsync<GetDataStateRequest>.HandleMessageAsync(IMessageDelivery<GetDataStateRequest> request)
     {
         var workspace = new Workspace(request.Message.WorkspaceConfiguration);
-        foreach (var typeConfiguration in DataConfiguration.TypeConfigurations)
+        foreach (var typeConfiguration in DataPersistenceConfiguration.TypeConfigurations)
         {
             var items = await typeConfiguration.DoInitialize();
             workspace = workspace.Update(items);

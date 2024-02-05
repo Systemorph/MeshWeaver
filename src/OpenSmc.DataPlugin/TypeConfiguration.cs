@@ -8,7 +8,7 @@ public abstract record TypeConfiguration()
 public record TypeConfiguration<T>(
     Func<Task<IReadOnlyCollection<T>>> Initialize,
     Func<IReadOnlyCollection<T>, Task> Save,
-    Func<IReadOnlyCollection<object>, Task> Delete) : TypeConfiguration
+    Func<IReadOnlyCollection<T>, Task> Delete) : TypeConfiguration
 {
     public override async Task<IEnumerable<object>> DoInitialize()
     {
