@@ -3,7 +3,7 @@ using OpenSmc.Scopes.Synchronization;
 
 namespace OpenSmc.Application.Scope;
 
-public class ExpressionSynchronizationsCache
+public class ExpressionSynchronizationCache
 {
     private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<string, IInternalMutableScope>> scopeSynchronizations = new();
     //public EventHandler<ScopePropertyChangedEvent> ScopePropertyChanged;
