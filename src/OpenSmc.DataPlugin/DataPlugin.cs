@@ -12,8 +12,8 @@ namespace OpenSmc.DataPlugin;
  */
 
 public class DataPlugin : MessageHubPlugin<Workspace>,
-    IMessageHandler<UpdateRequest>,
-    IMessageHandler<DeleteRequest>
+    IMessageHandler<UpdateDataRequest>,
+    IMessageHandler<DeleteDataRequest>
 {
     private readonly Func<DataConfiguration, DataConfiguration> configure;
     public record SatelliteAddress(object Host) : IHostedAddress;
@@ -46,7 +46,7 @@ public class DataPlugin : MessageHubPlugin<Workspace>,
         }
     }
 
-    IMessageDelivery IMessageHandler<UpdateRequest>.HandleMessage(IMessageDelivery<UpdateRequest> request)
+    IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(IMessageDelivery<UpdateDataRequest> request)
     {
         var items = request.Message.Elements;
         UpdateState(s => s.Update(items)); // update the state in memory (workspace)
@@ -56,7 +56,7 @@ public class DataPlugin : MessageHubPlugin<Workspace>,
         return request.Processed();
     }
 
-    IMessageDelivery IMessageHandler<DeleteRequest>.HandleMessage(IMessageDelivery<DeleteRequest> request)
+    IMessageDelivery IMessageHandler<DeleteDataRequest>.HandleMessage(IMessageDelivery<DeleteDataRequest> request)
     {
         var items = request.Message.Elements;
         UpdateState(s => s.Delete(items));

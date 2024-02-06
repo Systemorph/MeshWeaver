@@ -43,8 +43,8 @@ public record UpdateRequest<TElement>(TElement Element) : IRequest<DataChanged>
     public object Options { get; init; }
 }
 
-public record UpdateRequest(IReadOnlyCollection<object> Elements) : IRequest<DataChanged>;
-public record UpdateBatchRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataChanged>;
+public record UpdateDataRequest(IReadOnlyCollection<object> Elements) : IRequest<DataChanged>;
+public record UpdatePersistenceRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataChanged>;
 
 public record DataChanged(object Changes)
 {
@@ -52,7 +52,7 @@ public record DataChanged(object Changes)
     public ActivityLog Log { get; init; }
 };
 
-public record DeleteRequest(IReadOnlyCollection<object> Elements) : IRequest<DataDeleted>;
+public record DeleteDataRequest(IReadOnlyCollection<object> Elements) : IRequest<DataDeleted>;
 public record DeleteBatchRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataDeleted>;
 
 public record DataDeleted(object Changes)
