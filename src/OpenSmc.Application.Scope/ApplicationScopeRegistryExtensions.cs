@@ -11,7 +11,7 @@ namespace OpenSmc.Application.Scope;
 
 public static class ApplicationScopeRegistryExtensions
 {
-    public static MessageHubConfiguration AddApplicationScope(this MessageHubConfiguration conf)
+    public static MessageHubConfiguration AddApplicationScope(this MessageHubConfiguration conf, Func<ApplicationScopeConfiguration, ApplicationScopeConfiguration> applicationScopeConfig = null)
     {
         var applicationScopeAddress = new ApplicationScopeAddress(conf.Address);
         return conf
@@ -69,4 +69,10 @@ public static class ApplicationScopeRegistryExtensions
         return ret;
     }
 
+}
+
+public class ApplicationScopeConfiguration
+{
+    public ApplicationScopeConfiguration WithTypesFromAssembly<T>() => this; // T will be interface type, inherited from IMutableScope
+    public ApplicationScopeConfiguration WithType<T>() => this;
 }

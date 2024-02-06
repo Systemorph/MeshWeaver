@@ -2,6 +2,7 @@
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Hub.Fixture;
+using OpenSmc.Layout.DataBinding;
 using OpenSmc.Layout.LayoutClient;
 using OpenSmc.Messaging;
 using OpenSmc.Scopes;
@@ -20,6 +21,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
     private const string SomeString = nameof(SomeString);
     private const string NewString = nameof(NewString);
+
+    private const string DataBoundView = nameof(DataBoundView);
 
     [Inject] private ILogger<LayoutTest> logger;
     public interface ITestScope : IMutableScope
@@ -45,18 +48,23 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                                 return Task.CompletedTask;
                             })
                         )
-                        .WithView(NamedArea, (_,_) => 
+                        .WithView(NamedArea, (_, _) =>
                             Controls.TextBox(NamedArea)
-                            .WithId(NamedArea)
+                                .WithId(NamedArea)
                         )
                         // this tests proper updating in the case of MVP
-                        .WithView(UpdatingView, (_, _) => 
+                        .WithView(UpdatingView, (_, _) =>
                             Controls.TextBox(layout.ApplicationScope.GetScope<ITestScope>().String)
                                 .WithId(UpdatingView)
                                 .WithClickAction(_ => layout.ApplicationScope.GetScope<ITestScope>().String = NewString)
+                        )
+                        // this tests proper updating in the case of MVP
+                        .WithView(DataBoundView, (_, _) =>
+                            Template.Bind(layout.ApplicationScope.GetScope<ITestScope>(),
+                                scope => Controls.TextBox(scope.String).WithId(DataBoundView)
                             )
-                    )
-            ;
+                        )
+                );
 
     }
 
@@ -100,21 +108,54 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public async Task GetAreaWithUpdatingView()
     {
+
         var client = GetClient();
         client.Post(new RefreshRequest { Area = UpdatingView }, o => o.WithTarget(new HostAddress()));
         var area = await client.GetAreaAsync(state => state.GetById(UpdatingView));
         area.View
             .Should().BeOfType<TextBoxControl>()
             .Which.Data.Should().Be(SomeString);
+
         await client.ClickAsync(_ => area);
 
         AreaChangedEvent IsUpdatedView(LayoutClientState layoutClientState)
         {
             var ret = layoutClientState.GetById(UpdatingView);
-            if(ret?.View is TextBoxControl { Data: not SomeString })
+            if (ret?.View is TextBoxControl { Data: not SomeString })
                 return ret;
 
-            logger.LogInformation($"Found view: {ret?.View}" );
+            logger.LogInformation($"Found view: {ret?.View}");
+            return null;
+        }
+
+        var changedArea = await client.GetAreaAsync(IsUpdatedView);
+        changedArea.View
+            .Should().BeOfType<TextBoxControl>()
+            .Which.Data.Should().Be(NewString);
+
+
+    }
+    [Fact]
+    public async Task GetAreaWithDataBoundView()
+    {
+
+        var client = GetClient();
+        client.Post(new RefreshRequest { Area = DataBoundView }, o => o.WithTarget(new HostAddress()));
+        var area = await client.GetAreaAsync(state => state.GetById(DataBoundView));
+        area.View
+            .Should().BeOfType<TextBoxControl>()
+            .Which.Data.Should().BeOfType<Binding>()
+            .Which.Path.Should().Be(nameof(ITestScope.String));
+
+        //await client.ClickAsync(_ => area);
+
+        AreaChangedEvent IsUpdatedView(LayoutClientState layoutClientState)
+        {
+            var ret = layoutClientState.GetById(UpdatingView);
+            if (ret?.View is TextBoxControl { Data: not SomeString })
+                return ret;
+
+            logger.LogInformation($"Found view: {ret?.View}");
             return null;
         }
 
