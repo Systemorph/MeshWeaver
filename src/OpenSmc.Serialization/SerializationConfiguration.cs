@@ -5,6 +5,7 @@ namespace OpenSmc.Serialization;
 public record SerializationConfiguration
 {
     internal ImmutableList<SerializationTypeRule> Rules = ImmutableList<SerializationTypeRule>.Empty;
+    internal ImmutableDictionary<Type, Func<IServiceProvider, object>> TypeFactories = ImmutableDictionary<Type, Func<IServiceProvider, object>>.Empty;
 
     public SerializationConfiguration ForType<T>(Func<SerializationTypeRule<T>, SerializationTypeRule<T>> configure)
     {
@@ -21,6 +22,10 @@ public record SerializationConfiguration
         }
     }
 
+    public SerializationConfiguration WithTypeFactory(Type type, Func<IServiceProvider, object> factory)
+    {
+        return this with { TypeFactories = TypeFactories.SetItem(type, factory) };
+    }
 }
 
 public abstract record SerializationTypeRule

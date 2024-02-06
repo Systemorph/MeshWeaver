@@ -21,7 +21,8 @@ public static class SerializationExtensions
                 .Replace(ServiceDescriptor.Singleton(conf))
                 .Replace(ServiceDescriptor.Singleton(customSerializationRegistry))
                 .Replace(ServiceDescriptor.Singleton<ICustomSerializationRegistry>(customSerializationRegistry))
-                .Replace(ServiceDescriptor.Singleton<ISerializationService, SerializationService>());
+                .Replace(ServiceDescriptor.Singleton<ISerializationService, SerializationService>())
+                .Replace(ServiceDescriptor.Singleton(new TypeFactoryProvider(conf.TypeFactories)));
         });
         
     }
