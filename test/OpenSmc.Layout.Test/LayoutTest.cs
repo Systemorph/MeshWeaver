@@ -49,6 +49,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                             Controls.TextBox(NamedArea)
                             .WithId(NamedArea)
                         )
+                        // this tests proper updating in the case of MVP
                         .WithView(UpdatingView, (_, _) => 
                             Controls.TextBox(layout.ApplicationScope.GetScope<ITestScope>().String)
                                 .WithId(UpdatingView)
@@ -70,12 +71,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task LayoutStackUpdateTest()
     {
         var client = GetClient();
-        var area = await client.GetAreaAsync(state => state.GetAreaByControlId(MainStackId));
+        var area = await client.GetAreaAsync(state => state.GetById(MainStackId));
         area.View.Should().BeOfType<Composition.LayoutStackControl>().Which.Areas.Should().BeEmpty();
         await client.ClickAsync(_ => area);
 
-        await client.GetAreaAsync(state => state.GetAreaByControlId("HelloId"));
-        area = await client.GetAreaAsync(state => state.GetAreaByControlId(MainStackId));
+        await client.GetAreaAsync(state => state.GetById("HelloId"));
+        area = await client.GetAreaAsync(state => state.GetById(MainStackId));
         area.View.Should().BeOfType<Composition.LayoutStackControl>().Which.Areas.Should().HaveCount(1);
 
     }
@@ -84,8 +85,14 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var client = GetClient();
         client.Post(new RefreshRequest { Area = NamedArea }, o => o.WithTarget(new HostAddress()));
-        var area = await client.GetAreaAsync(state => state.GetAreaByIdAndArea(MainStackId, NamedArea));
+        var area = await client.GetAreaAsync(state => state.GetByIdAndArea(MainStackId, NamedArea));
         area.View.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(NamedArea);
+        area = await client.GetAreaAsync(state => state.GetById(NamedArea));
+        area.View.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(NamedArea);
+        var address = ((IUiControl)area.View).Address;
+        area = await client.GetAreaAsync(state => state.GetByAddress(address));
+        area.View.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(NamedArea);
+
     }
 
 
@@ -95,7 +102,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var client = GetClient();
         client.Post(new RefreshRequest { Area = UpdatingView }, o => o.WithTarget(new HostAddress()));
-        var area = await client.GetAreaAsync(state => state.GetAreaById(UpdatingView));
+        var area = await client.GetAreaAsync(state => state.GetById(UpdatingView));
         area.View
             .Should().BeOfType<TextBoxControl>()
             .Which.Data.Should().Be(SomeString);
@@ -103,7 +110,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         AreaChangedEvent IsUpdatedView(LayoutClientState layoutClientState)
         {
-            var ret = layoutClientState.GetAreaByControlId(UpdatingView);
+            var ret = layoutClientState.GetById(UpdatingView);
             if(ret?.View is TextBoxControl { Data: not SomeString })
                 return ret;
 

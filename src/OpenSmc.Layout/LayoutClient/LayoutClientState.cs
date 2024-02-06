@@ -13,16 +13,18 @@ public record LayoutClientState(LayoutClientConfiguration Configuration)
     internal ImmutableDictionary<object, AreaChangedEvent> AreasByControlAddress { get; init; } = ImmutableDictionary<object, AreaChangedEvent>.Empty;
     internal ImmutableList<(Func<LayoutClientState, AreaChangedEvent> Selector, IMessageDelivery Request)> PendingRequests { get; init; } = ImmutableList<(Func<LayoutClientState, AreaChangedEvent> Selector, IMessageDelivery Request)>.Empty;
 
-    public AreaChangedEvent GetAreaByControlId(string controlId)
-        => CollectionExtensions.GetValueOrDefault(AreasByControlId, controlId);
+    public AreaChangedEvent GetById(string controlId)
+        => AreasByControlId.GetValueOrDefault(controlId);
+    public AreaChangedEvent GetByAddress(object address)
+        => AreasByControlAddress.GetValueOrDefault(address);
 
-    public AreaChangedEvent GetAreaByIdAndArea(string id, string areaName)
+    public AreaChangedEvent GetByIdAndArea(string id, string areaName)
         => AreasByControlId.TryGetValue(id, out var area) 
            && area.View is IUiControl control
-            ? GetAreaByAddressAndArea(control.Address, areaName)
+            ? GetByAddressAndArea(control.Address, areaName)
             : null;
 
-    public AreaChangedEvent GetAreaByAddressAndArea(object address, string areaName)
+    public AreaChangedEvent GetByAddressAndArea(object address, string areaName)
     {
         if (!ControlAddressByParentArea.TryGetValue((address, areaName), out var controlAddress)
             || !AreasByControlAddress.TryGetValue(controlAddress, out var ret))
@@ -37,6 +39,4 @@ public record LayoutClientState(LayoutClientConfiguration Configuration)
         return ret;
     }
 
-    public AreaChangedEvent GetAreaById(string controlId)
-        => AreasByControlId.GetValueOrDefault(controlId);
 }
