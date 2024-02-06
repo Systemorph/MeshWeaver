@@ -16,8 +16,8 @@ public class DataPlugin : MessageHubPlugin<Workspace>,
     IMessageHandler<DeleteDataRequest>
 {
     private readonly Func<DataConfiguration, DataConfiguration> configure;
-    public record SatelliteAddress(object Host) : IHostedAddress;
-    private SatelliteAddress satelliteAddress;
+    public record DataPersistencyAddress(object Host) : IHostedAddress;
+    private DataPersistencyAddress dataPersistencyAddress;
 
     public DataPlugin(IMessageHub hub, Func<DataConfiguration, DataConfiguration> configure) : base(hub)
     {
@@ -32,8 +32,8 @@ public class DataPlugin : MessageHubPlugin<Workspace>,
         var dataConfiguration = configure(new DataConfiguration());
         if (dataConfiguration.CreateSatellitePlugin != null)
         {
-            satelliteAddress = new SatelliteAddress(Hub.Address);
-            var persistenceHub = Hub.GetHostedHub(satelliteAddress, conf => conf.AddPlugin(persistenceHub => dataConfiguration.CreateSatellitePlugin(persistenceHub)));
+            dataPersistencyAddress = new DataPersistencyAddress(Hub.Address);
+            var persistenceHub = Hub.GetHostedHub(dataPersistencyAddress, conf => conf.AddPlugin(persistenceHub => dataConfiguration.CreateSatellitePlugin(persistenceHub)));
             var workspaceConfiguration = dataConfiguration.Workspace;
             var response = await persistenceHub.AwaitResponse(new GetDataStateRequest(workspaceConfiguration));
             UpdateState(_ => response.Message);
@@ -51,8 +51,8 @@ public class DataPlugin : MessageHubPlugin<Workspace>,
         var items = request.Message.Elements;
         UpdateState(s => s.Update(items)); // update the state in memory (workspace)
         Hub.Post(new DataChanged(items), o => o.ResponseFor(request).WithTarget(MessageTargets.Subscribers));      // notify all subscribers that the data has changed
-        if (satelliteAddress != null)
-            Hub.Post(request, o => o.WithTarget(satelliteAddress));
+        if (dataPersistencyAddress != null)
+            Hub.Post(request, o => o.WithTarget(dataPersistencyAddress));
         return request.Processed();
     }
 
@@ -61,8 +61,8 @@ public class DataPlugin : MessageHubPlugin<Workspace>,
         var items = request.Message.Elements;
         UpdateState(s => s.Delete(items));
         Hub.Post(new DataDeleted(items), o => o.ResponseFor(request).WithTarget(MessageTargets.Subscribers));
-        if (satelliteAddress != null)
-            Hub.Post(request, o => o.WithTarget(satelliteAddress));
+        if (dataPersistencyAddress != null)
+            Hub.Post(request, o => o.WithTarget(dataPersistencyAddress));
         return request.Processed();
     }
 
@@ -88,4 +88,7 @@ public class DataPlugin : MessageHubPlugin<Workspace>,
         Hub.Post(queryResult, o => o.ResponseFor(request));
         return request.Processed();
     }
+
+    public override bool IsDeferred(IMessageDelivery delivery)
+        => delivery.Message.GetType().Namespace == typeof(GetRequest<>).Namespace;
 }

@@ -35,6 +35,7 @@ public record Workspace(WorkspaceConfiguration Configuration)
     public Workspace Delete(IEnumerable<object> items)
     {
         // TODO: this should create a copy of existed data, group by type, remove instances and return new clone with incremented version
+        // RB: Not necessarily ==> data should be generally immutable
 
         var newData = data;
         foreach (var g in items.GroupBy(item => item.GetType()))
