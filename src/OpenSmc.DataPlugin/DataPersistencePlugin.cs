@@ -24,7 +24,7 @@ public class DataPersistencePlugin : MessageHubPlugin<Workspace>,
     private IMessageDelivery HandleUpdateAndDeleteRequest(IMessageDelivery request)
     {
         var type = request.Message.GetType();
-        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(UpdateBatchRequest<>) || type.GetGenericTypeDefinition() == typeof(DeleteBatchRequest<>))
+        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(UpdatePersistenceRequest<>) || type.GetGenericTypeDefinition() == typeof(DeleteBatchRequest<>))
         {
             var elementType = type.GetGenericArguments().First();
             var typeConfig = DataPersistenceConfiguration.TypeConfigurations.FirstOrDefault(x =>
@@ -32,7 +32,7 @@ public class DataPersistencePlugin : MessageHubPlugin<Workspace>,
 
             if (typeConfig is null) return request;
 
-            if (type.GetGenericTypeDefinition() == typeof(UpdateBatchRequest<>))
+            if (type.GetGenericTypeDefinition() == typeof(UpdatePersistenceRequest<>))
             {
                 updateElementsMethod.MakeGenericMethod(elementType).InvokeAsFunction(this, typeConfig);
             }
@@ -44,7 +44,7 @@ public class DataPersistencePlugin : MessageHubPlugin<Workspace>,
         return request.Processed();
     }
 
-    async Task UpdateElements<T>(IMessageDelivery<UpdateBatchRequest<T>> request, TypeConfiguration<T> config) where T : class
+    async Task UpdateElements<T>(IMessageDelivery<UpdatePersistenceRequest<T>> request, TypeConfiguration<T> config) where T : class
     {
         var items = request.Message.Elements;
         await config.Save(items);   // save to db
