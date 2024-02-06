@@ -1,7 +1,10 @@
-﻿using System.Dynamic;
+﻿using System.Collections.Immutable;
+using System.Dynamic;
+using System.Reflection;
 using AspectCore.Extensions.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
+using OpenSmc.Reflection;
 using OpenSmc.Scopes;
 using OpenSmc.Scopes.Proxy;
 using OpenSmc.Serialization;
@@ -11,8 +14,9 @@ namespace OpenSmc.Application.Scope;
 
 public static class ApplicationScopeRegistryExtensions
 {
-    public static MessageHubConfiguration AddApplicationScope(this MessageHubConfiguration conf, Func<ApplicationScopeConfiguration, ApplicationScopeConfiguration> applicationScopeConfig = null)
+    public static MessageHubConfiguration AddApplicationScope(this MessageHubConfiguration conf, Func<ApplicationScopeConfiguration, ApplicationScopeConfiguration> configureApplicationScope = null)
     {
+        var applicationScopeConfig = configureApplicationScope?.Invoke(new ApplicationScopeConfiguration()) ?? new ApplicationScopeConfiguration();
         var applicationScopeAddress = new ApplicationScopeAddress(conf.Address);
         return conf
             .WithServices(services => services
@@ -21,7 +25,8 @@ public static class ApplicationScopeRegistryExtensions
                 .AddSingleton(serviceProvider => serviceProvider.GetRequiredService<IScopeFactory>().ForSingleton()
                     .ToScope<IApplicationScope>()))
             .AddSerialization(rule =>
-                rule.ForType<IScope>(typeBuilder => typeBuilder.WithTransformation(TransformScope)))
+                rule.ForType<IScope>(typeBuilder => typeBuilder.WithTransformation(TransformScope))
+                    .ApplyScopeDeserialization(applicationScopeConfig))
 
             .WithHostedHub
             (
@@ -46,6 +51,19 @@ public static class ApplicationScopeRegistryExtensions
 
     }
 
+    static readonly MethodInfo GetScopeMethod = ReflectionHelper.GetMethodGeneric<IApplicationScope>(x => x.GetScope<object>());
+    private static SerializationConfiguration ApplyScopeDeserialization(this SerializationConfiguration conf, ApplicationScopeConfiguration scopeConfiguration)
+    {
+        foreach(var type in scopeConfiguration.Types)
+        {
+            conf = conf.WithTypeFactory(type, sp =>
+            {
+                var appScope = sp.GetRequiredService<IApplicationScope>();                
+                return GetScopeMethod.MakeGenericMethod(type).InvokeAsFunction(appScope); // todo Identity
+        });
+        }
+        return conf;
+    }
 
     public const string ScopeId = "$scopeId";
     public const string TypeDiscriminator = "$type";
@@ -71,8 +89,9 @@ public static class ApplicationScopeRegistryExtensions
 
 }
 
-public class ApplicationScopeConfiguration
+public record ApplicationScopeConfiguration
 {
+    internal ImmutableHashSet<Type> Types = ImmutableHashSet<Type>.Empty;
     public ApplicationScopeConfiguration WithTypesFromAssembly<T>() => this; // T will be interface type, inherited from IMutableScope
-    public ApplicationScopeConfiguration WithType<T>() => this;
+    public ApplicationScopeConfiguration WithType<T>() => this with { Types = Types.Add(typeof(T)) };
 }
