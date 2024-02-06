@@ -24,7 +24,7 @@ public class DataPersistencePlugin : MessageHubPlugin<Workspace>,
     private IMessageDelivery HandleUpdateAndDeleteRequest(IMessageDelivery request)
     {
         var type = request.Message.GetType();
-        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(UpdatePersistenceRequest<>) || type.GetGenericTypeDefinition() == typeof(DeleteBatchRequest<>))
+        if (type.IsGenericType && (type.GetGenericTypeDefinition() == typeof(UpdatePersistenceRequest<>) || type.GetGenericTypeDefinition() == typeof(DeleteBatchRequest<>)))
         {
             var elementType = type.GetGenericArguments().First();
             var typeConfig = DataPersistenceConfiguration.TypeConfigurations.FirstOrDefault(x =>
