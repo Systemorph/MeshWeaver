@@ -18,18 +18,6 @@ public record GetRequest<T> : IRequest<T>
 }
 
 
-public record GetManyRequest<T>() : IRequest<GetManyResponse<T>> 
-{ 
-    public int Page { get; init; }
-    public int? PageSize { get; init; } 
-    public object Options { get; init; } 
-};
-
-public record GetManyResponse<T>(int Total, IReadOnlyCollection<T> Items)
-{
-    public static GetManyResponse<T> Empty() => new(0, Array.Empty<T>());
-}
-
 public record CreateRequest<TObject>(TObject Element) : IRequest<DataChanged> { public object Options { get; init; } };
 
 
@@ -43,7 +31,6 @@ public record UpdateRequest<TElement>(TElement Element) : IRequest<DataChanged>
     public object Options { get; init; }
 }
 
-public record UpdateDataRequest(IReadOnlyCollection<object> Elements) : IRequest<DataChanged>;
 public record UpdatePersistenceRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataChanged>;
 
 public record DataChanged(object Changes)
@@ -52,7 +39,6 @@ public record DataChanged(object Changes)
     public ActivityLog Log { get; init; }
 };
 
-public record DeleteDataRequest(IReadOnlyCollection<object> Elements) : IRequest<DataDeleted>;
 public record DeleteBatchRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataDeleted>;
 
 public record DataDeleted(object Changes)
