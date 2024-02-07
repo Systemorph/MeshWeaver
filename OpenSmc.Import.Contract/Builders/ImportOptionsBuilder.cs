@@ -21,13 +21,102 @@ namespace OpenSmc.Import.Contract.Builders
     public static class ImportRegistryExtensions
     {
         public static MessageHubConfiguration AddImport(this MessageHubConfiguration configuration,
-            Func<ImportOptionsBuilder, ImportOptionsBuilder> importConfiguration)
+            Func<ImportBuilder, ImportBuilder> importConfiguration)
         {
+            importConfiguration.Invoke(new )
             //var options = importConfiguration.Invoke(new);
             //return configuration.WithServices(services => services.AddSingleton<IActivityService>())
             //    .AddPlugin(hub => new ImportPlugin(hub, options));
             throw new NotImplementedException();
             //TODO: implement
+        }
+    }
+
+    /*
+     *
+     config => config.AddImport(import => import.WithFormat(HandleFormat1)
+       						.WithFileSource(request => filename, basepath)
+       					.WithDataSource(“datasource1”, datasource1))
+       
+       IMessageDelivery HandleFormat1(IMessageDelivery<ImportRequest> request, ImportConfiguration configuration)
+       {
+       	if (request.Format != “format1”)
+       		return request;
+       	var dataset = configuration.ReadDataSet(request);
+       	var datasource = configuration.GetDataSource(request); //if (request.message.format == “format1”) return “datasource1”
+       }
+       
+     *
+     */
+
+    public class ImportBuilder
+    {
+        [Inject] private IMappingService mappingService;
+        [Inject] private IServiceProvider serviceProvider;
+        [Inject] private IActivityService activityService;
+        [Inject] private IFileReadStorage fileReadStorage;
+        [Inject] private IDataSource targetSource;
+
+
+        public ImportBuilder WithFormat(Func<IMessageDelivery<ImportRequest>, ImportConfiguration, IMessageDelivery> format)
+        {
+            throw new NotImplementedException();
+        }
+        
+        public FileReaderImportOptionsBuilder FromFile(string filePath)
+        {
+            return new(activityService, 
+                       mappingService,
+                       fileReadStorage,
+                       CancellationToken.None,
+                       defaultDomain,
+                       targetSource,
+                       serviceProvider,
+                       importFormatFunctions,
+                       defaultValidations,
+                       filePath);
+        }
+
+        public StringImportOptionsBuilder FromString(string content)
+        {
+            return new(activityService,
+                       mappingService,
+                       fileReadStorage,
+                       CancellationToken.None,
+                       defaultDomain,
+                       targetSource,
+                       serviceProvider,
+                       importFormatFunctions,
+                       defaultValidations,
+                       content);
+        }
+
+        public StreamImportOptionsBuilder FromStream(Stream stream)
+        {
+            return new(activityService,
+                       mappingService,
+                       fileReadStorage,
+                       CancellationToken.None,
+                       defaultDomain,
+                       targetSource,
+                       serviceProvider,
+                       importFormatFunctions,
+                       defaultValidations,
+                       stream);
+        }
+
+        public DataSetImportOptionsBuilder FromDataSet(IDataSet dataSet)
+        {
+            return new(activityService,
+                       mappingService,
+                       fileReadStorage,
+                       CancellationToken.None,
+                       defaultDomain,
+                       targetSource,
+                       serviceProvider,
+                       importFormatFunctions,
+                       defaultValidations,
+                       dataSet);
         }
     }
     /*
@@ -45,9 +134,11 @@ namespace OpenSmc.Import.Contract.Builders
     {
         [Inject] private IActivityService activityService;
 
-        public ImportPlugin(IMessageHub hub, ImportOptionsBuilder options) : base(hub)
+        public ImportPlugin(IMessageHub hub, Func<ImportBuilder, ImportBuilder> optionsBuilder) : base(hub)
         {
-            //new MessageHubConfiguration().AddImport(builder => builder.)
+            var importBuilder = new ImportBuilder();
+            hub.ServiceProvider.Buildup(importBuilder);
+            optionsBuilder.Invoke(importBuilder);
         }
     }
 
