@@ -29,7 +29,8 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var client = GetClient();
         var response = await client.AwaitResponse(new GetManyRequest<MyData>(), o => o.WithTarget(new HostAddress()));
-        response.Message.Should().BeEquivalentTo(initialData);
+        var expected = new GetManyResponse<MyData>(initialData.Length, initialData);
+        response.Message.Should().BeEquivalentTo(expected);
     }
 
     [Fact]
