@@ -47,6 +47,8 @@ public class MessageHubPluginTest : TestBase
             Hub.Post(Events, o => o.ResponseFor(request));
             return request.Processed();
         }
+
+        public override bool IsDeferred(IMessageDelivery delivery) => true;
     }
 
     [Inject] protected IMessageHub Hub;
