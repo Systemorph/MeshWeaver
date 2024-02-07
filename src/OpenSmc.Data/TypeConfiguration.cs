@@ -1,4 +1,4 @@
-﻿namespace OpenSmc.DataPlugin;
+﻿namespace OpenSmc.Data;
 
 public abstract record TypeConfiguration()
 {

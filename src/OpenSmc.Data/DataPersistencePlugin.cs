@@ -2,11 +2,11 @@
 using OpenSmc.Reflection;
 using System.Reflection;
 
-namespace OpenSmc.DataPlugin;
+namespace OpenSmc.Data;
 
 public record GetDataStateRequest(WorkspaceConfiguration WorkspaceConfiguration) : IRequest<Workspace>;
 
-public class DataPersistencePlugin : MessageHubPlugin<Workspace>,
+public class DataPersistencePlugin : MessageHubPlugin,
     IMessageHandlerAsync<GetDataStateRequest>
 {
     private DataPersistenceConfiguration DataPersistenceConfiguration { get; set; }
@@ -24,7 +24,7 @@ public class DataPersistencePlugin : MessageHubPlugin<Workspace>,
     private IMessageDelivery HandleUpdateAndDeleteRequest(IMessageDelivery request)
     {
         var type = request.Message.GetType();
-        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(UpdateBatchRequest<>) || type.GetGenericTypeDefinition() == typeof(DeleteBatchRequest<>))
+        if (type.IsGenericType && (type.GetGenericTypeDefinition() == typeof(UpdatePersistenceRequest<>) || type.GetGenericTypeDefinition() == typeof(DeleteBatchRequest<>)))
         {
             var elementType = type.GetGenericArguments().First();
             var typeConfig = DataPersistenceConfiguration.TypeConfigurations.FirstOrDefault(x =>
@@ -32,7 +32,7 @@ public class DataPersistencePlugin : MessageHubPlugin<Workspace>,
 
             if (typeConfig is null) return request;
 
-            if (type.GetGenericTypeDefinition() == typeof(UpdateBatchRequest<>))
+            if (type.GetGenericTypeDefinition() == typeof(UpdatePersistenceRequest<>))
             {
                 updateElementsMethod.MakeGenericMethod(elementType).InvokeAsFunction(this, typeConfig);
             }
@@ -44,7 +44,7 @@ public class DataPersistencePlugin : MessageHubPlugin<Workspace>,
         return request.Processed();
     }
 
-    async Task UpdateElements<T>(IMessageDelivery<UpdateBatchRequest<T>> request, TypeConfiguration<T> config) where T : class
+    async Task UpdateElements<T>(IMessageDelivery<UpdatePersistenceRequest<T>> request, TypeConfiguration<T> config) where T : class
     {
         var items = request.Message.Elements;
         await config.Save(items);   // save to db
@@ -68,17 +68,6 @@ public class DataPersistencePlugin : MessageHubPlugin<Workspace>,
         }
 
         Hub.Post(workspace, o => o.ResponseFor(request));
-        return request.Processed();
-    }
-
-    private IMessageDelivery GetElements<T>(IMessageDelivery<GetManyRequest<T>> request) where T : class
-    {
-        var query = State.GetItems<T>();
-        var message = request.Message;
-        if (message.PageSize is not null)
-            query = query.Skip(message.Page * message.PageSize.Value).Take(message.PageSize.Value);
-        var queryResult = query.ToArray();
-        Hub.Post(queryResult, o => o.ResponseFor(request));
         return request.Processed();
     }
 }

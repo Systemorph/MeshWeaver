@@ -1,7 +1,7 @@
 ﻿using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 
-namespace OpenSmc.DataPlugin;
+namespace OpenSmc.Data;
 
 /* TODO List: 
  *  a) move code DataPlugin to opensmc -- done
@@ -12,12 +12,12 @@ namespace OpenSmc.DataPlugin;
  */
 
 public class DataPlugin : MessageHubPlugin<Workspace>,
-    IMessageHandler<UpdateRequest>,
-    IMessageHandler<DeleteRequest>
+    IMessageHandler<UpdateDataRequest>,
+    IMessageHandler<DeleteDataRequest>
 {
     private readonly Func<DataConfiguration, DataConfiguration> configure;
-    public record SatelliteAddress(object Host) : IHostedAddress;
-    private SatelliteAddress satelliteAddress;
+    public record DataPersistencyAddress(object Host) : IHostedAddress;
+    private DataPersistencyAddress dataPersistencyAddress;
 
     public DataPlugin(IMessageHub hub, Func<DataConfiguration, DataConfiguration> configure) : base(hub)
     {
@@ -32,8 +32,8 @@ public class DataPlugin : MessageHubPlugin<Workspace>,
         var dataConfiguration = configure(new DataConfiguration());
         if (dataConfiguration.CreateSatellitePlugin != null)
         {
-            satelliteAddress = new SatelliteAddress(Hub.Address);
-            var persistenceHub = Hub.GetHostedHub(satelliteAddress, conf => conf.AddPlugin(persistenceHub => dataConfiguration.CreateSatellitePlugin(persistenceHub)));
+            dataPersistencyAddress = new DataPersistencyAddress(Hub.Address);
+            var persistenceHub = Hub.GetHostedHub(dataPersistencyAddress, conf => conf.AddPlugin(persistenceHub => dataConfiguration.CreateSatellitePlugin(persistenceHub)));
             var workspaceConfiguration = dataConfiguration.Workspace;
             var response = await persistenceHub.AwaitResponse(new GetDataStateRequest(workspaceConfiguration));
             UpdateState(_ => response.Message);
@@ -46,23 +46,23 @@ public class DataPlugin : MessageHubPlugin<Workspace>,
         }
     }
 
-    IMessageDelivery IMessageHandler<UpdateRequest>.HandleMessage(IMessageDelivery<UpdateRequest> request)
+    IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(IMessageDelivery<UpdateDataRequest> request)
     {
         var items = request.Message.Elements;
         UpdateState(s => s.Update(items)); // update the state in memory (workspace)
         Hub.Post(new DataChanged(items), o => o.ResponseFor(request).WithTarget(MessageTargets.Subscribers));      // notify all subscribers that the data has changed
-        if (satelliteAddress != null)
-            Hub.Post(request, o => o.WithTarget(satelliteAddress));
+        if (dataPersistencyAddress != null)
+            Hub.Post(request, o => o.WithTarget(dataPersistencyAddress));
         return request.Processed();
     }
 
-    IMessageDelivery IMessageHandler<DeleteRequest>.HandleMessage(IMessageDelivery<DeleteRequest> request)
+    IMessageDelivery IMessageHandler<DeleteDataRequest>.HandleMessage(IMessageDelivery<DeleteDataRequest> request)
     {
         var items = request.Message.Elements;
         UpdateState(s => s.Delete(items));
         Hub.Post(new DataDeleted(items), o => o.ResponseFor(request).WithTarget(MessageTargets.Subscribers));
-        if (satelliteAddress != null)
-            Hub.Post(request, o => o.WithTarget(satelliteAddress));
+        if (dataPersistencyAddress != null)
+            Hub.Post(request, o => o.WithTarget(dataPersistencyAddress));
         return request.Processed();
     }
 
@@ -80,12 +80,16 @@ public class DataPlugin : MessageHubPlugin<Workspace>,
 
     private IMessageDelivery GetElements<T>(IMessageDelivery<GetManyRequest<T>> request) where T : class
     {
-        var items = State.GetItems<T>();
+        var (items, count) = State.GetItems<T>();
         var message = request.Message;
         if (message.PageSize is not null)
             items = items.Skip(message.Page * message.PageSize.Value).Take(message.PageSize.Value);
         var queryResult = items.ToArray();
-        Hub.Post(queryResult, o => o.ResponseFor(request));
+        var response = new GetManyResponse<T>(count, queryResult);
+        Hub.Post(response, o => o.ResponseFor(request));
         return request.Processed();
     }
+
+    public override bool IsDeferred(IMessageDelivery delivery)
+        => delivery.Message.GetType().Namespace == typeof(GetManyRequest<>).Namespace;
 }
