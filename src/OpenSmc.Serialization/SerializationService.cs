@@ -16,7 +16,7 @@ public class SerializationService : ISerializationService
     public JsonSerializer Serializer => serializer;
 
     public SerializationService(IServiceProvider serviceProvider, 
-                                IEventsRegistry eventRegistry, 
+                                ITypeRegistry typeRegistry, 
                                 CustomSerializationRegistry customSerializationRegistry,
                                 TypeFactoryProvider typeFactoryProvider)
     {
@@ -31,8 +31,8 @@ public class SerializationService : ISerializationService
                                                NullValueHandling = NullValueHandling.Ignore,
                                                ContractResolver = contractResolver,
                                                MetadataPropertyHandling = MetadataPropertyHandling.ReadAhead,
-                                               Converters = new List<JsonConverter> { new StringEnumConverter(), new RawJsonNewtonsoftConverter(), new ObjectDeserializationConverter(eventRegistry), new FactoryConverter(serviceProvider, typeFactoryProvider.TypeFactories) },
-                                               SerializationBinder = new SerializationBinder(eventRegistry)
+                                               Converters = new List<JsonConverter> { new StringEnumConverter(), new RawJsonNewtonsoftConverter(), new ObjectDeserializationConverter(typeRegistry), new FactoryConverter(serviceProvider, typeFactoryProvider.TypeFactories) },
+                                               SerializationBinder = new SerializationBinder(typeRegistry)
                                            });
     }
 

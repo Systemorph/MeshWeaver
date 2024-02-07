@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using Autofac.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -96,8 +97,8 @@ public record MessageHubConfiguration
         services.Replace(ServiceDescriptor.Singleton<MessageHubConnections>(_ => new()));
         services.Replace(ServiceDescriptor.Singleton<IMessageHub>(sp => new MessageHub<TAddress>(sp, sp.GetRequiredService<HostedHubsCollection>(), this, parent)));
         services.Replace(ServiceDescriptor.Singleton<HostedHubsCollection, HostedHubsCollection>());
-        services.Replace(ServiceDescriptor.Singleton(typeof(IEventsRegistry),
-            sp => new EventsRegistry(ParentServiceProvider.GetService<IEventsRegistry>())));
+        services.Replace(ServiceDescriptor.Singleton(typeof(ITypeRegistry),
+            sp => new TypeRegistry(ParentServiceProvider.GetService<ITypeRegistry>())));
         services.Replace(ServiceDescriptor.Singleton<IMessageService>(sp => new MessageService(Address,
             sp.GetService<ISerializationService>(), // HACK: GetRequiredService replaced by GetService (16.01.2024, Alexander Yolokhov)
             sp.GetRequiredService<ILogger<MessageService>>()

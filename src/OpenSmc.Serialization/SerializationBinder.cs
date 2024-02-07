@@ -4,23 +4,23 @@ namespace OpenSmc.Serialization;
 
 public class SerializationBinder : DefaultSerializationBinder
 {
-    private readonly IEventsRegistry eventRegistry;
+    private readonly ITypeRegistry typeRegistry;
 
-    public SerializationBinder(IEventsRegistry eventRegistry)
+    public SerializationBinder(ITypeRegistry typeRegistry)
     {
-        this.eventRegistry = eventRegistry;
+        this.typeRegistry = typeRegistry;
     }
 
     public override Type BindToType(string assemblyName, string typeName)
     {
-        return eventRegistry.TryGetType(typeName, out var type) 
+        return typeRegistry.TryGetType(typeName, out var type) 
                    ? type 
                    : base.BindToType(assemblyName, typeName) ?? typeof(RawJson);
     }
 
     public override void BindToName(Type serializedType, out string assemblyName, out string typeName)
     {
-        if (eventRegistry.TryGetTypeName(serializedType, out typeName))
+        if (typeRegistry.TryGetTypeName(serializedType, out typeName))
         {
             assemblyName = null;
             return;
