@@ -20,7 +20,7 @@ namespace OpenSmc.Workspace
 
         public void Initialize(IServiceProvider serviceProvider)
         {
-            throw new NotImplementedException();
+            //throw new NotImplementedException();
         }
     }
 }
