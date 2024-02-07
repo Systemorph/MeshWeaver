@@ -1,10 +1,11 @@
-﻿using OpenSmc.Hub.Fixture;
+﻿using OpenSmc.Data;
+using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using FluentAssertions;
 using Xunit;
 using Xunit.Abstractions;
 
-namespace OpenSmc.Hub.DataPlugin.Test;
+namespace OpenSmc.Hub.Data.Test;
 
 public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 {
@@ -18,7 +19,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
-            .AddPlugin(hub => new OpenSmc.DataPlugin.DataPlugin(hub, conf => conf
+            .AddPlugin(hub => new DataPlugin(hub, conf => conf
                 .WithWorkspace(workspace => workspace.Key<MyData>(x => x.Id))
                 .WithPersistence(persistence => persistence.WithType<MyData>(InitializeMyData, SaveMyData, DeleteMyData))));
     }

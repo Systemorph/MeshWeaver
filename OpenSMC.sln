@@ -135,11 +135,11 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Partition", "src\Op
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Reporting", "src\OpenSmc.Reporting\OpenSmc.Reporting.csproj", "{E5E780D9-FCA3-4BAF-90C8-E1A4CE26E10A}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DataPlugin", "src\OpenSmc.DataPlugin\OpenSmc.DataPlugin.csproj", "{18C3CDA0-87E5-4E05-91A2-EE95F8B7E7F7}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Data", "src\OpenSmc.Data\OpenSmc.Data.csproj", "{18C3CDA0-87E5-4E05-91A2-EE95F8B7E7F7}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Import.Contract", "OpenSmc.Import.Contract\OpenSmc.Import.Contract.csproj", "{59A46BD8-8926-4EAB-988B-0842092E389F}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Hub.DataPlugin.Test", "test\OpenSmc.Hub.DataPlugin.Test\OpenSmc.Hub.DataPlugin.Test.csproj", "{AA71FF58-CF0D-467F-9FDA-2883DD73DA31}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Hub.Data.Test", "test\OpenSmc.Hub.Data.Test\OpenSmc.Hub.Data.Test.csproj", "{AA71FF58-CF0D-467F-9FDA-2883DD73DA31}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

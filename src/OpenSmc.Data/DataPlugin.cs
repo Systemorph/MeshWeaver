@@ -1,7 +1,7 @@
 ﻿using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 
-namespace OpenSmc.DataPlugin;
+namespace OpenSmc.Data;
 
 /* TODO List: 
  *  a) move code DataPlugin to opensmc -- done
