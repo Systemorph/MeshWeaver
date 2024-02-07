@@ -1,7 +1,8 @@
 ﻿using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using OpenSmc.Serialization;
 
-namespace OpenSmc.Serialization;
+namespace OpenSmc.Messaging.Serialization;
 
 public class ObjectDeserializationConverter : JsonConverter
 {

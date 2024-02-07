@@ -2,7 +2,7 @@
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 
-namespace OpenSmc.Serialization;
+namespace OpenSmc.Messaging.Serialization;
 
 public class CustomContractResolver : CamelCasePropertyNamesContractResolver
 {

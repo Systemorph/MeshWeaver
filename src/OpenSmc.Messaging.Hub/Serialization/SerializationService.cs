@@ -1,28 +1,36 @@
 ﻿using System.Collections;
 using System.Reflection;
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
 using Newtonsoft.Json.Linq;
+using OpenSmc.Serialization;
 using OpenSmc.Utils;
 
-namespace OpenSmc.Serialization;
+namespace OpenSmc.Messaging.Serialization;
 
 public class SerializationService : ISerializationService
 {
     private readonly IServiceProvider serviceProvider;
-    private readonly CustomSerializationRegistry customSerializationRegistry;
+    public SerializationConfiguration Configuration { get; }
     private readonly JsonSerializer serializer;
     public JsonSerializer Serializer => serializer;
 
-    public SerializationService(IServiceProvider serviceProvider, 
-                                ITypeRegistry typeRegistry, 
-                                CustomSerializationRegistry customSerializationRegistry,
-                                TypeFactoryProvider typeFactoryProvider)
+
+
+    public SerializationService(IServiceProvider serviceProvider, SerializationConfiguration configuration)
     {
         this.serviceProvider = serviceProvider;
-        this.customSerializationRegistry = customSerializationRegistry;
+        Configuration = configuration;
         var contractResolver = new CustomContractResolver();
+        var typeRegistry = serviceProvider.GetRequiredService<ITypeRegistry>();
+        var converters = new List<JsonConverter>
+        {
+            new StringEnumConverter(), new RawJsonNewtonsoftConverter(),
+            new ObjectDeserializationConverter(typeRegistry)
+        };
+        converters.AddRange(configuration.TypeFactories.Select(t => new FactoryConverter(t)));
         serializer = JsonSerializer.Create(new()
                                            {
                                                ReferenceLoopHandling = ReferenceLoopHandling.Error,
@@ -31,7 +39,7 @@ public class SerializationService : ISerializationService
                                                NullValueHandling = NullValueHandling.Ignore,
                                                ContractResolver = contractResolver,
                                                MetadataPropertyHandling = MetadataPropertyHandling.ReadAhead,
-                                               Converters = new List<JsonConverter> { new StringEnumConverter(), new RawJsonNewtonsoftConverter(), new ObjectDeserializationConverter(typeRegistry), new FactoryConverter(serviceProvider, typeFactoryProvider.TypeFactories) },
+                                               Converters = converters,
                                                SerializationBinder = new SerializationBinder(typeRegistry)
                                            });
     }
@@ -64,26 +72,16 @@ public class SerializationService : ISerializationService
         return deserialized;
     }
 
+
     internal void SerializeTraverse(SerializationContext context)
     {
         var originalValue = context.OriginalValue;
 
         if (originalValue != null)
         {
-            var type = originalValue.GetType();
-            var transformation = customSerializationRegistry.Transformations.Get(type);
-            if (transformation != null)
-            {
-                var transformedValue = transformation(originalValue, context);
-                context.SetResult(transformedValue);
-                return;
-            }
-
-            var mutation = customSerializationRegistry.Mutations.Get(type);
-            if (mutation != null)
-            {
-                mutation(originalValue, context);
-            }
+            originalValue = Configuration.Transformations.Aggregate(originalValue, (ov, t) => t.Invoke(context, ov));
+            foreach (var mutation in Configuration.Mutations)
+                mutation.Invoke(context, originalValue);
         }
 
 

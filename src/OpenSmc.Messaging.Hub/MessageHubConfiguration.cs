@@ -1,8 +1,8 @@
 ﻿using System.Collections.Immutable;
-using Autofac.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using OpenSmc.Messaging.Serialization;
 using OpenSmc.Serialization;
 using OpenSmc.ServiceProvider;
 using OpenSmc.ShortGuid;
@@ -26,6 +26,16 @@ public record MessageHubConfiguration
     {
         Address = address;
         ParentServiceProvider = parentServiceProvider;
+        Properties = InitializeProperties();
+    }
+
+    private ImmutableDictionary<Type, object> InitializeProperties()
+    {
+        return ImmutableDictionary<Type, object>.Empty
+            .Add(typeof(SerializationConfiguration), ParentServiceProvider
+                .GetService<ISerializationService>()?.Configuration
+            ?? new()
+            );
     }
 
     internal Func<IServiceCollection, IServiceCollection> Services { get; init; } = x => x;
@@ -104,6 +114,7 @@ public record MessageHubConfiguration
             sp.GetRequiredService<ILogger<MessageService>>()
         )));
         services.Replace(ServiceDescriptor.Singleton(sp => new ParentMessageHub(sp.GetRequiredService<IMessageHub>())));
+        services.Replace(ServiceDescriptor.Singleton<ISerializationService>(sp => new SerializationService(sp, Get<SerializationConfiguration>())));
         Services.Invoke(services);
         return services;
     }
@@ -140,6 +151,12 @@ public record MessageHubConfiguration
             parentHubs.Add(HubInstance);
         return HubInstance;
     }
+
+
+
+    internal ImmutableDictionary<Type, object> Properties { get; init; } = ImmutableDictionary<Type, object>.Empty;
+    public T Get<T>() => (T)Properties.GetValueOrDefault(typeof(T));
+    public MessageHubConfiguration Set<T>(T value) => this with { Properties = Properties.SetItem(typeof(T), value) };
 
 }
 

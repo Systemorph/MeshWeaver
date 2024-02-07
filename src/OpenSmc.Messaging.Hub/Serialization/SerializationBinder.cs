@@ -1,6 +1,7 @@
 ﻿using Newtonsoft.Json.Serialization;
+using OpenSmc.Serialization;
 
-namespace OpenSmc.Serialization;
+namespace OpenSmc.Messaging.Serialization;
 
 public class SerializationBinder : DefaultSerializationBinder
 {
@@ -20,12 +21,7 @@ public class SerializationBinder : DefaultSerializationBinder
 
     public override void BindToName(Type serializedType, out string assemblyName, out string typeName)
     {
-        if (typeRegistry.TryGetTypeName(serializedType, out typeName))
-        {
-            assemblyName = null;
-            return;
-        }
-
-        base.BindToName(serializedType, out assemblyName, out typeName);
+        assemblyName = null;
+        typeName = typeRegistry.GetTypeName(serializedType);
     }
 }

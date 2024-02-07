@@ -24,11 +24,15 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
         return parent?.TryGetType(name, out type) ?? false;
     }
 
-    public bool TryGetTypeName(Type type, out string typeName)
+    public string GetTypeName(Type type)
     {
-        if (nameByType.TryGetValue(type, out typeName))
-            return true;
-        return parent?.TryGetTypeName(type, out typeName) ?? false;
+        if (nameByType.TryGetValue(type, out var typeName))
+            return typeName;
+
+        // ReSharper disable once AssignNullToNotNullAttribute
+        typeByName[type.FullName] = type;
+        nameByType[type] = type.FullName;
+        return type.FullName;
     }
 
     public string GetOrAddTypeName(Type type)

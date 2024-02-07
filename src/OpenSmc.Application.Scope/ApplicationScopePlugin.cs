@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using OpenSmc.Collections;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 using OpenSmc.Queues;
 using OpenSmc.Reflection;
 using OpenSmc.Scopes;

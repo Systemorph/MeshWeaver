@@ -9,7 +9,7 @@ public interface ITypeRegistry
     ITypeRegistry WithType(Type type);
     
     bool TryGetType(string name, out Type type);
-    bool TryGetTypeName(Type type, out string typeName);
+    string GetTypeName(Type type);
     string GetOrAddTypeName(Type type);
 
     public ITypeRegistry WithTypesFromAssembly<T>(Func<Type, bool> filter)
