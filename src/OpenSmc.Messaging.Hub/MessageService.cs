@@ -87,7 +87,8 @@ public class MessageService : IMessageService
     {
         try
         {
-            delivery = serializationService.DeserializeDelivery(delivery);
+            if (serializationService != null)
+                delivery = serializationService.DeserializeDelivery(delivery);
         }
         catch
         {

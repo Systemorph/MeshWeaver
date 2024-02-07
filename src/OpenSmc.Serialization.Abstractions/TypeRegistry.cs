@@ -21,14 +21,14 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
     {
         if (typeByName.TryGetValue(name, out type))
             return true;
-        return parent.TryGetType(name, out type);
+        return parent?.TryGetType(name, out type) ?? false;
     }
 
     public bool TryGetTypeName(Type type, out string typeName)
     {
         if (nameByType.TryGetValue(type, out typeName))
             return true;
-        return parent.TryGetTypeName(type, out typeName);
+        return parent?.TryGetTypeName(type, out typeName) ?? false;
     }
 
     public string GetOrAddTypeName(Type type)
