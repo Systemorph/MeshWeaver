@@ -6,7 +6,7 @@ namespace OpenSmc.Data;
 
 public record GetDataStateRequest(WorkspaceConfiguration WorkspaceConfiguration) : IRequest<Workspace>;
 
-public class DataPersistencePlugin : MessageHubPlugin<Workspace>,
+public class DataPersistencePlugin : MessageHubPlugin,
     IMessageHandlerAsync<GetDataStateRequest>
 {
     private DataPersistenceConfiguration DataPersistenceConfiguration { get; set; }
@@ -68,17 +68,6 @@ public class DataPersistencePlugin : MessageHubPlugin<Workspace>,
         }
 
         Hub.Post(workspace, o => o.ResponseFor(request));
-        return request.Processed();
-    }
-
-    private IMessageDelivery GetElements<T>(IMessageDelivery<GetManyRequest<T>> request) where T : class
-    {
-        var query = State.GetItems<T>();
-        var message = request.Message;
-        if (message.PageSize is not null)
-            query = query.Skip(message.Page * message.PageSize.Value).Take(message.PageSize.Value);
-        var queryResult = query.ToArray();
-        Hub.Post(queryResult, o => o.ResponseFor(request));
         return request.Processed();
     }
 }

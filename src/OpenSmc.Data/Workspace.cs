@@ -52,14 +52,14 @@ public record Workspace(WorkspaceConfiguration Configuration)
         return this with { data = newData };
     }
 
-    public IEnumerable<T> GetItems<T>()
+    public (IEnumerable<T> Items, int Count) GetItems<T>()
     {
         if (data.TryGetValue(typeof(T), out var itemsOfType))
         {
-            return itemsOfType.Values.Cast<T>();
+            return (itemsOfType.Values.Cast<T>(), itemsOfType.Count);
         }
 
-        return Enumerable.Empty<T>();
+        return (Enumerable.Empty<T>(), 0);
     }
 
     // 1st hub -> DataHub (unique source of truth for data)

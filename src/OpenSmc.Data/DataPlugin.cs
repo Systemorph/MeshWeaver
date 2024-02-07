@@ -80,15 +80,16 @@ public class DataPlugin : MessageHubPlugin<Workspace>,
 
     private IMessageDelivery GetElements<T>(IMessageDelivery<GetManyRequest<T>> request) where T : class
     {
-        var items = State.GetItems<T>();
+        var (items, count) = State.GetItems<T>();
         var message = request.Message;
         if (message.PageSize is not null)
             items = items.Skip(message.Page * message.PageSize.Value).Take(message.PageSize.Value);
         var queryResult = items.ToArray();
-        Hub.Post(queryResult, o => o.ResponseFor(request));
+        var response = new GetManyResponse<T>(count, queryResult);
+        Hub.Post(response, o => o.ResponseFor(request));
         return request.Processed();
     }
 
     public override bool IsDeferred(IMessageDelivery delivery)
-        => delivery.Message.GetType().Namespace == typeof(GetRequest<>).Namespace;
+        => delivery.Message.GetType().Namespace == typeof(GetManyRequest<>).Namespace;
 }
