@@ -1,6 +1,6 @@
 ﻿using System.Collections.Immutable;
 
-namespace OpenSmc.DataPlugin;
+namespace OpenSmc.Data;
 
 public record Workspace(WorkspaceConfiguration Configuration)
 {
@@ -35,6 +35,7 @@ public record Workspace(WorkspaceConfiguration Configuration)
     public Workspace Delete(IEnumerable<object> items)
     {
         // TODO: this should create a copy of existed data, group by type, remove instances and return new clone with incremented version
+        // RB: Not necessarily ==> data should be generally immutable
 
         var newData = data;
         foreach (var g in items.GroupBy(item => item.GetType()))
@@ -51,14 +52,14 @@ public record Workspace(WorkspaceConfiguration Configuration)
         return this with { data = newData };
     }
 
-    public IEnumerable<T> GetItems<T>()
+    public (IEnumerable<T> Items, int Count) GetItems<T>()
     {
         if (data.TryGetValue(typeof(T), out var itemsOfType))
         {
-            return itemsOfType.Values.Cast<T>();
+            return (itemsOfType.Values.Cast<T>(), itemsOfType.Count);
         }
 
-        return Enumerable.Empty<T>();
+        return (Enumerable.Empty<T>(), 0);
     }
 
     // 1st hub -> DataHub (unique source of truth for data)
