@@ -1,9 +1,9 @@
-﻿using System.Collections.Immutable;
-using System.Dynamic;
+﻿using System.Dynamic;
 using System.Reflection;
 using AspectCore.Extensions.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 using OpenSmc.Reflection;
 using OpenSmc.Scopes;
 using OpenSmc.Scopes.Proxy;
@@ -24,10 +24,7 @@ public static class ApplicationScopeRegistryExtensions
                 .AddSingleton<IScopeFactory, ScopeFactory>()
                 .AddSingleton(serviceProvider => serviceProvider.GetRequiredService<IScopeFactory>().ForSingleton()
                     .ToScope<IApplicationScope>()))
-            .AddSerialization(rule =>
-                rule.ForType<IScope>(typeBuilder => typeBuilder.WithTransformation(TransformScope))
-                    .ApplyScopeDeserialization(applicationScopeConfig))
-
+            .WithSerialization(rule => rule.WithTransformation<IScope>(TransformScope))
             .WithHostedHub
             (
                 new ApplicationScopeAddress(conf.Address),
@@ -52,23 +49,11 @@ public static class ApplicationScopeRegistryExtensions
     }
 
     static readonly MethodInfo GetScopeMethod = ReflectionHelper.GetMethodGeneric<IApplicationScope>(x => x.GetScope<object>());
-    private static SerializationConfiguration ApplyScopeDeserialization(this SerializationConfiguration conf, ApplicationScopeConfiguration scopeConfiguration)
-    {
-        foreach(var type in scopeConfiguration.Types)
-        {
-            conf = conf.WithTypeFactory(type, sp =>
-            {
-                var appScope = sp.GetRequiredService<IApplicationScope>();                
-                return GetScopeMethod.MakeGenericMethod(type).InvokeAsFunction(appScope); // todo Identity
-        });
-        }
-        return conf;
-    }
 
     public const string ScopeId = "$scopeId";
     public const string TypeDiscriminator = "$type";
 
-    private static object TransformScope(IScope scope, ISerializationTransformContext context)
+    private static object TransformScope(ISerializationContext context, IScope scope)
     {
         var scopeType = scope.GetScopeType();
         var properties = scopeType.GetScopeProperties().SelectMany(x => x.Properties);
@@ -89,7 +74,4 @@ public static class ApplicationScopeRegistryExtensions
 
 }
 
-public record ApplicationScopeConfiguration
-{
-    internal ImmutableHashSet<Type> Types = ImmutableHashSet<Type>.Empty;
-}
+public record ApplicationScopeConfiguration;

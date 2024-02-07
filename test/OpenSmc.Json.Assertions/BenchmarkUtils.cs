@@ -3,6 +3,7 @@
 using FluentAssertions;
 using OpenSmc.Serialization;
 using Newtonsoft.Json.Linq;
+using OpenSmc.Messaging.Serialization;
 
 namespace OpenSmc.Json.Assertions;
 
