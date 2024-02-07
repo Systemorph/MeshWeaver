@@ -92,6 +92,4 @@ public static class ApplicationScopeRegistryExtensions
 public record ApplicationScopeConfiguration
 {
     internal ImmutableHashSet<Type> Types = ImmutableHashSet<Type>.Empty;
-    public ApplicationScopeConfiguration WithTypesFromAssembly<T>() => this; // T will be interface type, inherited from IMutableScope
-    public ApplicationScopeConfiguration WithType<T>() => this with { Types = Types.Add(typeof(T)) };
 }

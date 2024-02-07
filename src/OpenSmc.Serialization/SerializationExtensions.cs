@@ -15,7 +15,7 @@ public static class SerializationExtensions
 
         return hubConf.WithServices(services =>
         {
-            services.TryAdd(ServiceDescriptor.Singleton<IEventsRegistry, EventsRegistry>());
+            services.TryAdd(ServiceDescriptor.Singleton<ITypeRegistry, TypeRegistry>());
 
             return services
                 .Replace(ServiceDescriptor.Singleton(conf))
