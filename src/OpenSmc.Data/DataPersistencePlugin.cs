@@ -2,7 +2,7 @@
 using OpenSmc.Reflection;
 using System.Reflection;
 
-namespace OpenSmc.DataPlugin;
+namespace OpenSmc.Data;
 
 public record GetDataStateRequest(WorkspaceConfiguration WorkspaceConfiguration) : IRequest<Workspace>;
 

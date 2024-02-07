@@ -1,6 +1,6 @@
 ﻿using OpenSmc.Messaging;
 
-namespace OpenSmc.DataPlugin;
+namespace OpenSmc.Data;
 
 public static class DataPluginExtensions
 {

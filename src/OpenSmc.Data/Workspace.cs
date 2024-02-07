@@ -1,6 +1,6 @@
 ﻿using System.Collections.Immutable;
 
-namespace OpenSmc.DataPlugin;
+namespace OpenSmc.Data;
 
 public record Workspace(WorkspaceConfiguration Configuration)
 {

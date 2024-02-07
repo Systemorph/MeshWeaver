@@ -3,7 +3,7 @@ using OpenSmc.DataSource.Abstractions;
 using OpenSmc.Messaging;
 using System.Collections.Immutable;
 
-namespace OpenSmc.DataPlugin;
+namespace OpenSmc.Data;
 
 public record DataPersistenceConfiguration(IMessageHub Hub)
 {
