@@ -1,0 +1,83 @@
+﻿{
+  Columns: [
+    {
+      Coordinates: [
+        Value
+      ],
+      SystemName: Value,
+      DisplayName: Value,
+      GrouperName: ColumnName
+    }
+  ],
+  Rows: [
+    {
+      RowGroup: {
+        Coordinates: [
+          A
+        ],
+        SystemName: A,
+        DisplayName: A,
+        GrouperName: Dim2
+      },
+      Data: {
+        Value: 4.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A,
+          a
+        ],
+        SystemName: A.a,
+        DisplayName: a,
+        GrouperName: Dim1
+      },
+      Data: {
+        Value: 3.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A,
+          NullGroup
+        ],
+        SystemName: A.NullGroup,
+        DisplayName:  ,
+        GrouperName: Dim1
+      },
+      Data: {
+        Value: 1.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          B
+        ],
+        SystemName: B,
+        DisplayName: B,
+        GrouperName: Dim2
+      },
+      Data: {
+        Value: 2.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          B,
+          NullGroup
+        ],
+        SystemName: B.NullGroup,
+        DisplayName:  ,
+        GrouperName: Dim1
+      },
+      Data: {
+        Value: 2.0
+      }
+    }
+  ],
+  HasRowGrouping: true
+}

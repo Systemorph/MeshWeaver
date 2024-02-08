@@ -1,4 +1,4 @@
-import type { HtmlView } from "@open-smc/application/controls/HtmlControl";
+import type { HtmlView } from "@open-smc/application/src/controls/HtmlControl";
 import { ControlBase, ControlBuilderBase } from "./ControlBase";
 
 export class Html extends ControlBase implements HtmlView {

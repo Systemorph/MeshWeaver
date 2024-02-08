@@ -8,7 +8,7 @@ public record MessageHubConnections
     public HashSet<object> Subscriptions { get; } = new();
 }
 
-public class SubscribersPlugin : MessageHubPlugin<SubscribersPlugin, MessageHubConnections>
+public class SubscribersPlugin : MessageHubPlugin<MessageHubConnections>
 {
 
     public SubscribersPlugin(IMessageHub hub) : base(hub)

@@ -1,20 +1,12 @@
-﻿using System.Text.Json.Serialization;
-using OpenSmc.Activities;
+﻿using OpenSmc.Activities;
 
 namespace OpenSmc.Messaging;
 
-public record ConnectToHubRequest(object From, object To) : IRequest<HubInfo>;
+public record ConnectToHubRequest : IRequest<HubInfo>;
 
-// TODO SMCv2: which one to use? DeleteHubRequest OR DeleteRequest<TState> ? (2023/09/24, Maxim Meshkov)
 public record DeleteHubRequest(object Address) : IRequest<HubDeleted>;
-
 public record HubDeleted(object Address);
-
-public record HubInfo(object Address)
-{
-    public ConnectionState State { get; init; }
-    public string Message { get; init; }
-}
+public record HubInfo(object Address);
 
 public record DisconnectHubRequest() : IRequest<HubDisconnected>;
 
@@ -25,13 +17,6 @@ public record GetRequest<T> : IRequest<T>
     public object Options { get; init; }
 }
 
-
-public record GetPagedRequest<T>(int Page, int PageSize) : IRequest<PagedGetResult<T>> { public object Options { get; init; } };
-
-public record PagedGetResult<T>(int Total, IReadOnlyCollection<T> Items)
-{
-    public static PagedGetResult<T> Empty() => new(0, Array.Empty<T>());
-}
 
 public record CreateRequest<TObject>(TObject Element) : IRequest<DataChanged> { public object Options { get; init; } };
 
@@ -46,8 +31,7 @@ public record UpdateRequest<TElement>(TElement Element) : IRequest<DataChanged>
     public object Options { get; init; }
 }
 
-public record UpdateBatchRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataChanged>;
-
+public record UpdatePersistenceRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataChanged>;
 
 public record DataChanged(object Changes)
 {
@@ -55,16 +39,19 @@ public record DataChanged(object Changes)
     public ActivityLog Log { get; init; }
 };
 
-public record DeleteRequest<TState>(TState State) : IRequest<ObjectDeleted> { public object Options { get; init; } };
-public record ObjectDeleted(object Id);
+public record DeleteBatchRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataDeleted>;
 
-
-public enum ConnectionState
+public record DataDeleted(object Changes)
 {
-    Connected,
-    Refused,
-    TimedOut
+    public object Items { get; init; }
+    public ActivityLog Log { get; init; }
 }
+
+// public record DeleteRequest<TState>(TState State) : IRequest<ObjectDeleted> { public object Options { get; init; } };
+
+// public record ObjectDeleted(object Id);
+
+
 
 public record HeartbeatEvent(SyncDelivery Route);
 

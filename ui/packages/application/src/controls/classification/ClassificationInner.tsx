@@ -17,9 +17,9 @@ import {
 import { ClassificationElement } from "./ClassificationElement";
 import { keys } from "lodash";
 import { ClassificationElements } from "./ClassificationElements";
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import classNames from "classnames";
-import buttons from "@open-smc/ui-kit/components/buttons.module.scss";
+import buttons from "@open-smc/ui-kit/src/components/buttons.module.scss";
 
 export function ClassificationInner() {
     const {setState} = useClassificationStore();

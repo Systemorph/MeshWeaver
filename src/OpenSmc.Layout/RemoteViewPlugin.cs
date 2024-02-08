@@ -16,27 +16,28 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
     private ExpressionSynchronizationAddress ExpressionSynchronizationAddress =>
         LayoutExtensions.ExpressionSynchronizationAddress(Hub.Address);
 
-    public override void InitializeState(RemoteViewControl control)
+
+
+    private const string Data = nameof(Data);
+
+    public override async Task StartAsync()
     {
-        base.InitializeState(control);
+        await base.StartAsync();
         FullRefreshFromModelHubAsync();
     }
-
     private void FullRefreshFromModelHubAsync()
     {
+        UpdateState(s => s with { Data = new AreaChangedEvent(Data, CreateUiControlHub(Controls.Spinner())) });
         if (State.Message != null)
             Post(State.Message, o => o.WithTarget(State.RedirectAddress));
         if (State.ViewDefinition != null)
             Hub.Post(new SubscribeToEvaluationRequest(nameof(Data), async () =>
-                                                                               {
-                                                                                   var viewElement = await State.ViewDefinition(State.Options);
-                                                                                   return new AreaChangedEvent(viewElement.Area, viewElement.View, viewElement.Options);
-                                                                               }),
+                {
+                    var viewElement = await State.ViewDefinition(State.Options);
+                    return new AreaChangedEvent(viewElement.Area, viewElement.View, viewElement.Options);
+                }),
                 o => o.WithTarget(ExpressionSynchronizationAddress));
     }
-
-    private const string Data = nameof(Data);
-
 
     private void UpdateView(AreaChangedEvent areaChanged)
     {
@@ -58,7 +59,7 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
             areaChanged = areaChanged with { Area = Data };
         else
         {
-            uiControl = CreateUiControlHub(uiControl, Data);
+            uiControl = CreateUiControlHub(uiControl);
             Hub.ConnectTo(uiControl.Hub);
             areaChanged = areaChanged with { Area = Data, View = uiControl };
 
@@ -95,8 +96,8 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
             return request.Processed();
         }
 
-        Post(new AreaChangedEvent(request.Message.Area, State), o => o.ResponseFor(request));
-        return request.Processed();
+
+        return base.RefreshView(request);
     }
 
     public IMessageDelivery HandleMessage(IMessageDelivery<AreaChangedEvent> request)
@@ -123,7 +124,7 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
     {
         var areaChanged = request.Message.Value is AreaChangedEvent ae
                               ? ae with { Area = Data }
-                              : new AreaChangedEvent(Data, request.Message.Status == ExpressionChangedStatus.Evaluating ? Controls.Spinner() : request.Message.Value);
+                              : new AreaChangedEvent(Data, request.Message.Status == ExpressionChangedStatus.Evaluating ? CreateUiControlHub(Controls.Spinner()) : request.Message.Value);
 
         if (areaChanged.View != null && areaChanged.View is not IUiControl)
             areaChanged = areaChanged with { View = uiControlService.GetUiControl(areaChanged.View) };

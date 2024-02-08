@@ -1,5 +1,5 @@
 import { useParams, useSearchParams } from "react-router-dom";
-import { ErrorBoundary } from "@open-smc/ui-kit/components/ErrorBoundary";
+import { ErrorBoundary } from "@open-smc/ui-kit/src/components/ErrorBoundary";
 import { SmappContext } from "./SmappContext";
 import { Smapp } from "./Smapp";
 import page from "../errorpage.module.scss";

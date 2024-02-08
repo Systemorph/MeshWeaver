@@ -4,7 +4,7 @@ import { AgGridReact } from 'ag-grid-react';
 import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-alpine.css';
 import { cloneDeep, cloneDeepWith, omit } from 'lodash';
-import { evalJs, REGEXPS } from "@open-smc/utils/evalJs";
+import { evalJs, REGEXPS } from "@open-smc/utils/src/evalJs";
 import { useEffect, useState } from "react";
 import styles from "./gridControl.module.scss";
 import { ControlView } from "../ControlDef";

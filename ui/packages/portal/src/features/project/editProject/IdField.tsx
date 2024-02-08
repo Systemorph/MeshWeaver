@@ -2,9 +2,9 @@ import styles from './setupProject.module.scss';
 import { Controller, UseFormReturn } from 'react-hook-form';
 import classNames from "classnames";
 import { ProjectSettings } from "../../../app/projectApi";
-import { Button } from "@open-smc/ui-kit/components/Button";
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
-import { ProgressSpinner } from '@open-smc/ui-kit/components/ProgressSpinner';
+import { Button } from "@open-smc/ui-kit/src/components/Button";
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
+import { ProgressSpinner } from '@open-smc/ui-kit/src/components/ProgressSpinner';
 
 type Props = {
     form: UseFormReturn<ProjectSettings>,

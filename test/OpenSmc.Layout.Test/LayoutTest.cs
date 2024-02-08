@@ -3,7 +3,6 @@ using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Application.Scope;
 using OpenSmc.Hub.Fixture;
-using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.LayoutClient;
 using OpenSmc.Messaging;
 using OpenSmc.Scopes;
@@ -49,7 +48,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                             .WithId(NamedArea)
                         )
                         .WithView(UpdatingView, (_, _) => 
-                            Controls.TextBox(GetFromScope(def.Hub, UpdatingView))
+                            Controls.TextBox(GetFromScope(def.Hub))
                                 .WithId(UpdatingView)
                                 .WithClickAction(ChangeStringInScope)
                             )
@@ -63,7 +62,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         context.Hub.ServiceProvider.GetRequiredService<IApplicationScope>().GetScope<ITestScope>().String = NewString;
     }
 
-    private string GetFromScope(IMessageHub hub, string updatingView)
+    private string GetFromScope(IMessageHub hub)
     {
         return hub.ServiceProvider.GetRequiredService<IApplicationScope>().GetScope<ITestScope>().String;
     }
@@ -78,13 +77,13 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task LayoutStackUpdateTest()
     {
         var client = GetClient();
-        var area = await client.GetAreaAsync(state => state.GetAreasByControlId(MainStackId).FirstOrDefault());
-        area.View.Should().BeOfType<Composition.Layout>().Which.Areas.Should().BeEmpty();
-        await client.ClickAsync(state => area);
+        var area = await client.GetAreaAsync(state => state.GetAreaByControlId(MainStackId));
+        area.View.Should().BeOfType<Composition.LayoutStackControl>().Which.Areas.Should().BeEmpty();
+        await client.ClickAsync(_ => area);
 
-        await client.GetAreaAsync(state => state.GetAreasByControlId("HelloId").FirstOrDefault());
-        area = await client.GetAreaAsync(state => state.GetAreasByControlId(MainStackId).FirstOrDefault());
-        area.View.Should().BeOfType<Composition.Layout>().Which.Areas.Should().HaveCount(1);
+        await client.GetAreaAsync(state => state.GetAreaByControlId("HelloId"));
+        area = await client.GetAreaAsync(state => state.GetAreaByControlId(MainStackId));
+        area.View.Should().BeOfType<Composition.LayoutStackControl>().Which.Areas.Should().HaveCount(1);
 
     }
     [Fact]
@@ -92,7 +91,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var client = GetClient();
         client.Post(new RefreshRequest { Area = NamedArea }, o => o.WithTarget(new HostAddress()));
-        var area = await client.GetAreaAsync(state => state.GetAreaByName(MainStackId, NamedArea));
+        var area = await client.GetAreaAsync(state => state.GetAreaByIdAndArea(MainStackId, NamedArea));
         area.View.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(NamedArea);
     }
 
@@ -103,18 +102,16 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var client = GetClient();
         client.Post(new RefreshRequest { Area = UpdatingView }, o => o.WithTarget(new HostAddress()));
-        var area = await client.GetAreaAsync(state => state.GetAreaByName(MainStackId, UpdatingView));
+        var area = await client.GetAreaAsync(state => state.GetAreaById(UpdatingView));
         area.View
-            .Should().BeOfType<RemoteViewControl>()
-            .Which.Data.Should().BeOfType<AreaChangedEvent>()
-            .Which.View.Should().BeOfType<TextBoxControl>()
+            .Should().BeOfType<TextBoxControl>()
             .Which.Data.Should().Be(SomeString);
         await client.ClickAsync(_ => area);
 
         AreaChangedEvent IsUpdatedView(LayoutClientState layoutClientState)
         {
-            var ret = layoutClientState.GetAreaByName(MainStackId, UpdatingView);
-            if(ret?.View is TextBoxControl textBox && textBox.Data is not SomeString)
+            var ret = layoutClientState.GetAreaByControlId(UpdatingView);
+            if(ret?.View is TextBoxControl { Data: not SomeString })
                 return ret;
             return null;
         }

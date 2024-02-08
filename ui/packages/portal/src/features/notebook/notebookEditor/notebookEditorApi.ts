@@ -13,9 +13,9 @@ import {
     StartSessionEvent,
     StopSessionEvent
 } from "./notebookEditor.contract";
-import { EventStatus } from "@open-smc/application/application.contract";
+import { EventStatus } from "@open-smc/application/src/application.contract";
 import { ElementKind, SessionSpecification } from "../../../app/notebookFormat";
-// import { MessageHubInstance } from "@open-smc/application/messageHub/createMessageHub";
+// import { MessageHubInstance } from "@open-smc/application/src/messageHub/createMessageHub";
 
 export function getNotebookEditorApi(messageHub: MessageHubInstance) {
     const {sendMessage, receiveMessage} = messageHub;

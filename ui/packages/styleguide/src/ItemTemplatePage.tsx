@@ -1,8 +1,8 @@
-import { Sandbox } from "@open-smc/sandbox/Sandbox";
+import { Sandbox } from "@open-smc/sandbox/src/Sandbox";
 import styles from "./menuItemPage.module.scss";
-import { makeItemTemplate } from "@open-smc/sandbox/ItemTemplate";
-import { makeMenuItem } from "@open-smc/sandbox/MenuItem";
-import { makeBinding } from "@open-smc/application/dataBinding/resolveBinding";
+import { makeItemTemplate } from "@open-smc/sandbox/src/ItemTemplate";
+import { makeMenuItem } from "@open-smc/sandbox/src/MenuItem";
+import { makeBinding } from "@open-smc/application/src/dataBinding/resolveBinding";
 
 const itemTemplate = makeItemTemplate()
     .withView(

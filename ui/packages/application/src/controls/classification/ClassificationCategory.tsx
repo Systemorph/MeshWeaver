@@ -4,8 +4,8 @@ import { CSS } from '@dnd-kit/utilities';
 import { DroppableType, useClassificationSelector, useUnselectElement } from "./Classification";
 import style from './classification.module.scss';
 import classNames from "classnames";
-import buttons from "@open-smc/ui-kit/components/buttons.module.scss";
-import { Button } from "@open-smc/ui-kit/components/Button";
+import buttons from "@open-smc/ui-kit/src/components/buttons.module.scss";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import { Category } from "../../application.contract";
 
 interface CategoryProps {

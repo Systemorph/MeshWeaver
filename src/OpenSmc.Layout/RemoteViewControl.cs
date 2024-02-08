@@ -13,7 +13,7 @@ public record RemoteViewControl : UiControl<RemoteViewControl, RemoteViewPlugin>
     //needed for serialization
     // ReSharper disable once ConvertToPrimaryConstructor
     public RemoteViewControl()
-        : base(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new AreaChangedEvent(nameof(Data), new SpinnerControl()))
+        : base(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
                                                                {
                                                                }
 
@@ -88,11 +88,11 @@ public record RemoteViewControl : UiControl<RemoteViewControl, RemoteViewPlugin>
 
     //protected override MessageHubConfiguration ConfigureHub(MessageHubConfiguration configuration)
     //{
-    //    return base.ConfigureHub(configuration).WithForwards
+    //    return base.ConfigureHub(configuration).WithRoutes
     //        (
     //            forward => forward
-    //                .RouteMessageToTarget<SubscribeToEvaluationRequest>(_ => ExpressionSynchronizationAddress(forward.Hub))
-    //                .RouteMessageToTarget<UnsubscribeFromEvaluationRequest>(_ => ExpressionSynchronizationAddress(forward.Hub))
+    //                .RouteMessage<SubscribeToEvaluationRequest>(_ => ExpressionSynchronizationAddress(forward.Hub))
+    //                .RouteMessage<UnsubscribeFromEvaluationRequest>(_ => ExpressionSynchronizationAddress(forward.Hub))
     //            );
     //}
 

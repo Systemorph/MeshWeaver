@@ -2,8 +2,8 @@ import { useEffect } from "react";
 import { debounce } from "lodash";
 import { NotebookElementCreatedEvent } from "../../notebookEditor/notebookEditor.contract";
 import { useUpdateMarkdown } from "./useUpdateMarkdown";
-import { castDraft } from "@open-smc/store/store";
-import { useMessageHub } from "@open-smc/application/messageHub/AddHub";
+import { castDraft } from "@open-smc/store/src/store";
+import { useMessageHub } from "@open-smc/application/src/messageHub/AddHub";
 import {
     getElementModel,
     useElementsStore,

@@ -4,9 +4,9 @@ import {
     NotebookElementModel,
     SHOW_OUTLINE
 } from "./documentStore/documentState";
-import { createStore, Store } from "@open-smc/store/store";
+import { createStore, Store } from "@open-smc/store/src/store";
 import { createContext, createRef, useContext, useEffect, useState } from "react";
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 import { getDocumentMarkdown } from "./documentStore/markdownTools";
 import { debounce, head, keyBy } from "lodash";
 import { NotebookDto } from "../../controls/NotebookEditorControl";
@@ -24,12 +24,12 @@ import { Header } from "./Header";
 import classNames from "classnames";
 import { TableOfContents } from "./TableOfContents";
 import { Elements } from "./Elements";
-import { NotebookSessionDialog } from "./NotebookSessionDialog";
+// import { NotebookSessionDialog } from "./NotebookSessionDialog";
 import { useSubscribeToNewElements } from "./documentStore/hooks/useSubscribeToNewElements";
 import { NotebookElementDto } from "../../controls/ElementEditorControl";
 import { useProjectSelector } from "../project/projectStore/projectStore";
 import { useApi } from "../../ApiProvider";
-import { getUseSelector } from "@open-smc/store/useSelector";
+import { makeUseSelector } from "@open-smc/store/src/useSelector";
 
 interface NotebookEditorContext {
     readonly store: Store<NotebookEditorState>;
@@ -47,7 +47,7 @@ export function useNotebookEditorStore() {
     return store;
 }
 
-export const useNotebookEditorSelector = getUseSelector(useNotebookEditorStore);
+export const useNotebookEditorSelector = makeUseSelector(useNotebookEditorStore);
 
 export function useElementsStore() {
     const {elementsStore} = useNotebookEditorContext();

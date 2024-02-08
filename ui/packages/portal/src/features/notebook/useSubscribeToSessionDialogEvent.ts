@@ -1,8 +1,8 @@
-// import { PresenterSpec } from "@open-smc/application/renderPresenter";
-// import { useMessageHub } from "@open-smc/application/messageHub/AddHub";
+// import { PresenterSpec } from "@open-smc/application/src/renderPresenter";
+// import { useMessageHub } from "@open-smc/application/src/messageHub/AddHub";
 import { DisposeSessionDialogEvent, ShowSessionDialogEvent } from "./notebookEditor/notebookEditor.contract";
-import { ControlDef } from "@open-smc/application/ControlDef";
-import { useMessageHub } from "@open-smc/application/messageHub/AddHub";
+import { ControlDef } from "@open-smc/application/src/ControlDef";
+import { useMessageHub } from "@open-smc/application/src/messageHub/AddHub";
 
 export function useSubscribeToSessionDialogEvent(handler: (sessionDialog?: ControlDef) => void) {
     const {receiveMessage} = useMessageHub();

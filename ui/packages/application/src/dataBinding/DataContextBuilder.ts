@@ -1,4 +1,4 @@
-import { Builder } from "@open-smc/utils/Builder";
+import { Builder } from "@open-smc/utils/src/Builder";
 import { DataContext, DataContextChangeHandler } from "./DataContext";
 
 export class DataContextBuilder extends Builder<DataContext> {

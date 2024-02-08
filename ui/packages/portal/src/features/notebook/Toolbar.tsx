@@ -1,4 +1,4 @@
-import { Button } from "@open-smc/ui-kit/components/Button";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
 import { useStopEvaluation } from "./documentStore/hooks/useStopEvaluation";
 import classNames from "classnames";
 import { useRunActiveElement } from "./documentStore/hooks/useRunActiveElement";
@@ -9,7 +9,7 @@ import { useRunAllElements } from "./documentStore/hooks/useRunAllElements";
 import { rcTooltipOptions } from "../../shared/tooltipOptions";
 import { SessionButton } from "./SessionButton";
 import styles from "./header.module.scss";
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
 import { useNotebookEditorSelector, useNotebookEditorStore } from "./NotebookEditor";
 
 export function Toolbar() {

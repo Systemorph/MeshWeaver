@@ -5,10 +5,10 @@ namespace OpenSmc.Layout;
 
 
 
-public class UiControlPlugin<TControl> : MessageHubPlugin<UiControlPlugin<TControl>, TControl>,
+public class UiControlPlugin<TControl> : MessageHubPlugin<TControl>,
     IMessageHandler<GetRequest<TControl>>,
-                                                  IMessageHandler<RefreshRequest>,
-                                                  IMessageHandlerAsync<ClickedEvent>
+    IMessageHandler<RefreshRequest>,
+    IMessageHandlerAsync<ClickedEvent>
     where TControl : UiControl
 {
     private Action scopeDispose;
@@ -35,13 +35,18 @@ public class UiControlPlugin<TControl> : MessageHubPlugin<UiControlPlugin<TContr
 
     protected virtual IMessageDelivery RefreshView(IMessageDelivery<RefreshRequest> request)
     {
-        Post(new AreaChangedEvent(request.Message.Area, State), o => o.ResponseFor(request));
-        return request.Processed();
+        if (string.IsNullOrWhiteSpace(request.Message.Area))
+        {
+            Post(new AreaChangedEvent(request.Message.Area, State), o => o.ResponseFor(request));
+            return request.Processed();
+        }
+
+        return request.NotFound();
     }
 
 
 
-    public  TControl2  CreateUiControlHub<TControl2>(TControl2 control, string area)
+    public TControl2 CreateUiControlHub<TControl2>(TControl2 control)
         where TControl2 : UiControl
     {
         if (control == null)
@@ -56,7 +61,8 @@ public class UiControlPlugin<TControl> : MessageHubPlugin<UiControlPlugin<TContr
     }
 
 
-    async Task<IMessageDelivery> IMessageHandlerAsync<ClickedEvent>.HandleMessageAsync(IMessageDelivery<ClickedEvent> delivery)
+    async Task<IMessageDelivery> IMessageHandlerAsync<ClickedEvent>.HandleMessageAsync(
+        IMessageDelivery<ClickedEvent> delivery)
     {
         try
         {
@@ -68,6 +74,7 @@ public class UiControlPlugin<TControl> : MessageHubPlugin<UiControlPlugin<TContr
             return delivery.Failed($"Exception in click action: \n{e}");
             //errorDelivery.ChangeDeliveryState(MessageDeliveryState.Failed);
         }
+
         return delivery.Processed();
     }
 

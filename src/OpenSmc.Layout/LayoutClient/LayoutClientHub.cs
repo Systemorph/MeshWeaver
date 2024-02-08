@@ -7,53 +7,56 @@ namespace OpenSmc.Layout.LayoutClient;
 
 public record LayoutClientState(LayoutClientConfiguration Configuration)
 {
-    internal ImmutableDictionary<string, ImmutableDictionary<string, AreaChangedEvent>> AreasByControlId { get; init; } = ImmutableDictionary<string, ImmutableDictionary<string, AreaChangedEvent>>.Empty;
+    internal ImmutableDictionary<(object ParentAddress, string Area), object> ControlAddressByParentArea { get; init; } = ImmutableDictionary<(object ParentAddress, string Area), object>.Empty;
+    internal ImmutableDictionary<object, (object Address, string Area)> ParentsByAddress { get; init; } = ImmutableDictionary<object, (object Address, string Area)>.Empty;
+
+    internal ImmutableDictionary<string, AreaChangedEvent> AreasByControlId { get; init; } = ImmutableDictionary<string, AreaChangedEvent>.Empty;
     internal ImmutableDictionary<object, AreaChangedEvent> AreasByControlAddress { get; init; } = ImmutableDictionary<object, AreaChangedEvent>.Empty;
-    internal ImmutableDictionary<(object Address, string Area), AreaChangedEvent> AreasByAddressAndName { get; init; } = ImmutableDictionary<(object Address, string Area), AreaChangedEvent>.Empty;
     internal ImmutableList<(Func<LayoutClientState, AreaChangedEvent> Selector, IMessageDelivery Request)> PendingRequests { get; init; } = ImmutableList<(Func<LayoutClientState, AreaChangedEvent> Selector, IMessageDelivery Request)>.Empty;
 
-    public IEnumerable<AreaChangedEvent> GetAreasByControlId(string controlId)
-        => AreasByControlId.TryGetValue(controlId, out var dict)
-               ? dict.Values
-               : Enumerable.Empty<AreaChangedEvent>();
+    public AreaChangedEvent GetAreaByControlId(string controlId)
+        => CollectionExtensions.GetValueOrDefault(AreasByControlId, controlId);
 
-    public AreaChangedEvent GetAreaByName(string controlId, string areaName)
+    public AreaChangedEvent GetAreaByIdAndArea(string id, string areaName)
+    => AreasByControlId.TryGetValue(id, out var area) 
+        && area.View is IUiControl control
+    ? GetAreaByAddressAndArea(control.Address, areaName)
+    : null;
+
+    public AreaChangedEvent GetAreaByAddressAndArea(object address, string areaName)
     {
-        var ret = AreasByControlId.TryGetValue(controlId, out var dict)
-            ? dict.GetValueOrDefault(areaName)
-            : null;
+        if (!ControlAddressByParentArea.TryGetValue((address, areaName), out var controlAddress)
+            || !AreasByControlAddress.TryGetValue(controlAddress, out var ret))
+            return null;
 
+        if (ret?.View is RemoteViewControl remoteView)
+            ret = remoteView.Data as AreaChangedEvent;
 
-        if (ret == null || ret.View is RemoteViewControl { Data: AreaChangedEvent { View: SpinnerControl } })
+        if (ret?.View is SpinnerControl)
             return null;
 
         return ret;
     }
+
+    public AreaChangedEvent GetAreaById(string controlId)
+        => AreasByControlId.GetValueOrDefault(controlId);
 }
 
 
 public record LayoutClientConfiguration(object RefreshMessage, object LayoutHostAddress, string MainArea = "");
 
 public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessageHub hub)
-    : MessageHubPlugin<LayoutClientPlugin, LayoutClientState>(hub),
+    : MessageHubPlugin<LayoutClientState>(hub),
         IMessageHandler<AreaChangedEvent>,
         IMessageHandler<GetRequest<AreaChangedEvent>>
 {
-    public LayoutClientState StartupState()
-        => new(configuration);
-
-
     public override async Task StartAsync()
     {
         await base.StartAsync();
-        InitializeState(StartupState());
-    }
-
-    public override void InitializeState(LayoutClientState state)
-    { 
-        base.InitializeState(state);
+        InitializeState(new(configuration));
         Hub.Post(configuration.RefreshMessage, o => o.WithTarget(State.Configuration.LayoutHostAddress));
     }
+
 
     IMessageDelivery IMessageHandler<AreaChangedEvent>.HandleMessage(IMessageDelivery<AreaChangedEvent> request)
     {
@@ -64,42 +67,49 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
     {
         var sender = request.Sender;
         if (sender.Equals(Hub.Address))
-            return request.Ignored();
+            return request;
 
-        var control = request.Message.View as UiControl;
-        State.AreasByAddressAndName.TryGetValue((sender, request.Message.Area), out var existing);
-        if (existing == null && control != null && control.Address != null && State.AreasByControlAddress.TryGetValue(control.Address, out var inner))
-            existing = inner;
 
         var areaChanged = request.Message;
-
-        if (existing != null)
+        if(State.ControlAddressByParentArea.TryGetValue((sender, areaChanged.Area), out var controlAddress) &&
+            State.AreasByControlAddress.TryGetValue(controlAddress, out var existing) )
         {
-
             if (IsUpToDate(areaChanged, existing))
                 return request.Ignored();
 
-            if (existing.View is UiControl existingControl)
-                CheckOutControl(existingControl);
+            CheckOutArea(areaChanged);
+            RemoveAreaFromParent(areaChanged);
 
         }
 
-        if (State.AreasByControlAddress.TryGetValue(sender, out var parentArea))
+        if (areaChanged.View is IUiControl control)
         {
-            if (parentArea.View is IUiControlWithSubAreas controlWithSubAreas)
+            var area = areaChanged;
+            UpdateState(s =>s with{ControlAddressByParentArea = s.ControlAddressByParentArea.SetItem((sender, area.Area), control.Address)}) ;
+
+            // the parent address might differ from sender, as the sender could be the top level logical hub,
+            // which will forward the messages to the appropriate control
+            var parentAddress = sender;
+            if (string.IsNullOrEmpty(areaChanged.Area))
             {
-                controlWithSubAreas = controlWithSubAreas.SetArea(areaChanged);
-                UpdateState(s => UpdateControlsRelatedState(s, controlWithSubAreas, new AreaChangedEvent("", controlWithSubAreas), areaChanged));
+                parentAddress = State.ParentsByAddress.TryGetValue(control.Address, out var parent)
+                    ? parent.Address
+                    : null;
+
             }
-            else
-            {
-                Debug.Fail(areaChanged.ToString());
-            }
+
+            areaChanged = CheckInArea(parentAddress, areaChanged);
+
+            if (parentAddress != null)
+                UpdateParents(parentAddress, areaChanged);
+
         }
 
-        UpdateState(s => UpdateControlsRelatedState(s, control, sender, areaChanged));
 
-        CheckInArea(areaChanged);
+
+
+
+
 
         foreach (var (o, r) in State.PendingRequests.ToArray())
         {
@@ -114,6 +124,50 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
         return request.Processed();
     }
 
+
+    private AreaChangedEvent CheckInArea(object parentAddress, AreaChangedEvent areaChanged)
+    {
+        var control = areaChanged.View as IUiControl;
+        if (control == null)
+            return areaChanged;
+
+        areaChanged = areaChanged with { View = CheckInDynamic((dynamic)control) };
+        UpdateState(s =>
+            s with
+            {
+                ControlAddressByParentArea = s.ControlAddressByParentArea.SetItem((parentAddress, areaChanged.Area), control.Address),
+                ParentsByAddress = s.ParentsByAddress.SetItem(control.Address, (parentAddress, areaChanged.Area)),
+                AreasByControlAddress = s.AreasByControlAddress.SetItem(control.Address, areaChanged),
+                AreasByControlId = s.AreasByControlId.SetItem(control.Id, areaChanged)
+            });
+        Hub.Post(new RefreshRequest(), o => o.WithTarget(control.Address));
+        return areaChanged;
+    }
+
+    private void UpdateParents(object parentAddress, AreaChangedEvent areaChanged)
+    {
+        if (State.AreasByControlAddress.TryGetValue(parentAddress, out var parentArea))
+        {
+            if (parentArea.View is IUiControlWithSubAreas controlWithSubAreas)
+            {
+                controlWithSubAreas = controlWithSubAreas.SetArea(areaChanged);
+                parentArea = parentArea with { View = controlWithSubAreas };
+                State.ParentsByAddress.TryGetValue(controlWithSubAreas.Address, out var parentOfParent);
+                UpdateState(s =>
+                    s with
+                    {
+                        AreasByControlAddress = s.AreasByControlAddress.SetItem(controlWithSubAreas.Address, parentArea),
+                        AreasByControlId = s.AreasByControlId.SetItem(controlWithSubAreas.Id, parentArea)
+                    });
+                UpdateParents(parentOfParent, parentArea);
+            }
+            else
+            {
+                Debug.Fail(areaChanged.ToString());
+            }
+        }
+    }
+
     private bool IsUpToDate(AreaChangedEvent areaChanged, AreaChangedEvent existing)
     {
         if (areaChanged.View == null)
@@ -124,80 +178,64 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
     }
 
 
-    private void CheckOutControl(UiControl existingControl)
+    private void CheckOutArea(AreaChangedEvent area)
     {
-        if (existingControl.Address == null)
+        if (area == null)
+            return;
+        RemoveAreaFromParent(area);
+
+        if (area.View is not IUiControl existingControl)
             return;
 
-        UpdateState(s => s with
-                         {
-                             AreasByControlAddress = s.AreasByControlAddress.Remove(existingControl.Address),
-                             AreasByControlId = s.AreasByControlId.Remove(existingControl.Id)
-                         });
 
-        if(existingControl is IUiControlWithSubAreas controlWithSubAreas)
+        
+        if (existingControl is IUiControlWithSubAreas controlWithSubAreas)
+        {
             foreach (var subArea in controlWithSubAreas.SubAreas)
-                if (subArea.View is UiControl subAreaControl)
-                    CheckOutControl(subAreaControl);
+                CheckOutArea(subArea);
+        }
+
+
+        UpdateState(s => s with
+        {
+            ParentsByAddress = s.ParentsByAddress.Remove(existingControl.Address),
+            AreasByControlAddress = s.AreasByControlAddress.Remove(existingControl.Address),
+            AreasByControlId = s.AreasByControlId.Remove(existingControl.Id),
+        });
+
     }
 
-
-    private void CheckInArea(AreaChangedEvent areaChanged)
+    private void RemoveAreaFromParent( AreaChangedEvent area)
     {
-        if (areaChanged.View is UiControl control && control.Address != null)
+        if (State.ParentsByAddress.TryGetValue(area, out var parent)
+            && State.AreasByControlAddress.TryGetValue(parent.Address, out var parentArea))
         {
-            UpdateState(s => UpdateControlsRelatedState(s, control, areaChanged));
-            Hub.Post(new ConnectToHubRequest(Hub.Address, control.Address), o => o.WithTarget(control.Address));
-
-            CheckInDynamic((dynamic)control);
-
+            if (parentArea.View is IUiControlWithSubAreas controlWithSubAreas)
+            {
+                controlWithSubAreas = controlWithSubAreas.SetArea(area);
+                UpdateParents(parent.Address, parentArea with { View = controlWithSubAreas });
+            }
         }
 
     }
 
-    private static LayoutClientState UpdateControlsRelatedState(LayoutClientState s, IUiControl control,
-        params AreaChangedEvent[] area)
-    {
-        return s with
-        {
-                   AreasByControlAddress = s.AreasByControlAddress.SetItems(area.Select(a => new KeyValuePair<object,AreaChangedEvent>(control.Address, a))),
-                   AreasByControlId = s.AreasByControlId.SetItem(control.Id, (s.AreasByControlId.TryGetValue(control.Id, out var list) ? list : ImmutableDictionary<string, AreaChangedEvent>.Empty).SetItems(area.Select(a => new KeyValuePair<string, AreaChangedEvent>(a.Area,a))))
-               };
-    }
-
-    private static LayoutClientState UpdateControlsRelatedState(LayoutClientState s, IUiControl control, object sender,
-        params AreaChangedEvent[] area)
-    {
-        return UpdateControlsRelatedState(s, control, area) with
-               {
-                   AreasByAddressAndName = s.AreasByAddressAndName.SetItems(ConvertAreas(sender, area))
-               };
-    }
-
-    private static IEnumerable<KeyValuePair<(object, string), AreaChangedEvent>> ConvertAreas(object sender, AreaChangedEvent[] area)
-    {
-        return area.Select(a => new KeyValuePair<(object,string),AreaChangedEvent>((sender, a.Area), a));
-    }
 
     // ReSharper disable once UnusedParameter.Local
-    private void CheckInDynamic(UiControl _) { }
+    private object CheckInDynamic(UiControl control) => control;
 
-    private void CheckInDynamic(RemoteViewControl remoteView)
-    {
-        Hub.Post(new RefreshRequest(nameof(RemoteViewControl.Data)), o => o.WithTarget(remoteView.Address));
-    }
-    private void CheckInDynamic(Composition.Layout stack)
+    private object CheckInDynamic(LayoutStackControl stack)
     {
         //Post(new RefreshRequest(), o => o.WithTarget(stack.Address));
-        foreach (var area in stack.Areas.ToArray())
-        {
-            CheckInArea(area);
-        }
+        var areas = stack.Areas.Select(a => CheckInArea(stack.Address, a)).ToArray();
+        return stack with { Areas = areas };
     }
 
-    private void CheckInDynamic(RedirectControl redirect)
+    private object CheckInDynamic(RedirectControl redirect)
     {
         Hub.Post(redirect.Message, o => o.WithTarget(redirect.RedirectAddress));
+        if (redirect.Data is AreaChangedEvent area)
+            return redirect with { Data = CheckInArea(redirect.Address, area) };
+        return redirect;
     }
 
 

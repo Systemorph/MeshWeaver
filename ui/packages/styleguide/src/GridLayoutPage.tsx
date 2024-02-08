@@ -1,11 +1,11 @@
-import { Sandbox } from "@open-smc/sandbox/Sandbox";
-import { makeStack } from "@open-smc/sandbox/LayoutStack";
-import { makeChart } from "@open-smc/sandbox/Chart";
+import { Sandbox } from "@open-smc/sandbox/src/Sandbox";
+import { makeStack } from "@open-smc/sandbox/src/LayoutStack";
+import { makeChart } from "@open-smc/sandbox/src/Chart";
 import waterfall1 from "./charts/TarParWaterfallByBusinessSegmentChart.json";
 import waterfall2 from "./charts/TarParWaterfallByReportTypeChart.json";
 import lineChart from "./charts/TarParLineChart.json";
 import styles from "./sample.module.scss";
-import { makeHtml } from "@open-smc/sandbox/Html";
+import { makeHtml } from "@open-smc/sandbox/src/Html";
 
 const gridLayoutTemplate = makeStack()
     .withView(makeChart()

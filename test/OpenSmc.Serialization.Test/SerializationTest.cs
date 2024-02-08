@@ -3,10 +3,8 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using OpenSmc.Fixture;
 using OpenSmc.Hub.Fixture;
-using OpenSmc.Json.Assertions;
 using OpenSmc.Messaging;
 using OpenSmc.ServiceProvider;
-using Xunit;
 using Xunit.Abstractions;
 
 namespace OpenSmc.Serialization.Test;
@@ -22,10 +20,10 @@ public class SerializationTest : TestBase
     public SerializationTest(ITestOutputHelper output) : base(output)
     {
         Services.AddMessageHubs(new RouterAddress(), hubConf => hubConf
-            .WithForwards(f => f
-                .RouteAddress<HostAddress>(d =>
+            .WithRoutes(f => f
+                .RouteAddress<HostAddress>((routedAddress, d) =>
                     {
-                        var hostHub = f.Hub.GetHostedHub(d.Target, ConfigureHost);
+                        var hostHub = f.Hub.GetHostedHub(routedAddress, ConfigureHost);
                         var packagedDelivery = d.Package();
                         hostHub.DeliverMessage(packagedDelivery);
                         return d.Forwarded();
@@ -62,11 +60,7 @@ public class SerializationTest : TestBase
         var events = await messageTask;
         events.Should().HaveCount(1);
         var rawJson = events.Single().Message.Should().BeOfType<RawJson>().Subject;
-        rawJson.Should().BeEquivalentTo(new
-        {
-            Text = "Hello",
-            NewProp = "New"
-        }, o => o.UsingJson(j => j.ExcludeTypeDiscriminator()));
+        await VerifyJson(rawJson.Content);
     }
 }
 

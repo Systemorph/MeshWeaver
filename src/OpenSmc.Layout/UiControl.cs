@@ -1,14 +1,11 @@
 ﻿using System.Collections.Immutable;
-using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json;
+using OpenSmc.Application.Scope;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
-#if DEBUG
-#endif
-#if !DEBUG
+using OpenSmc.Scopes.Proxy;
 using OpenSmc.ShortGuid;
-#endif
 
 namespace OpenSmc.Layout;
 
@@ -36,36 +33,12 @@ public interface IUiControl<out TControl> : IUiControl
 }
 
 
-public abstract record UiControl : IUiControl
+public abstract record UiControl(object Data) : IUiControl
 {
-    public string Id { get; init; }
+    public string Id { get; init; } = Guid.NewGuid().AsString();
 
     public abstract IMessageHub CreateHub(IServiceProvider serviceProvider);
 
-    protected UiControl(object Data)
-    {
-        this.Data = Data;
-        Id = GenerateId();
-    }
-
-#if DEBUG
-    private static int currentId;
-#endif
-
-    private string GenerateId()
-    {
-#if DEBUG
-        Interlocked.Increment(ref currentId);
-        var stackTrace = new StackTrace();
-        var ownerType = stackTrace.GetFrames()
-                                    .Where(x => x.HasMethod())
-                                    .Select(x => x.GetMethod()!.DeclaringType)
-                                    .FirstOrDefault(x => typeof(IMessageHub).IsAssignableFrom(x));
-        return $"{GetType().Name}#{currentId}@{ownerType?.Name ?? ""}";
-#else
-        return Guid.NewGuid().AsString();
-#endif
-    }
 
     IUiControl IUiControl.WithBuildAction(Func<IUiControl, IServiceProvider, IUiControl> buildFunction) => WithBuild(buildFunction);
 
@@ -103,7 +76,6 @@ public abstract record UiControl : IUiControl
     public bool IsClickable => ClickAction != null;
 
     internal Func<IUiActionContext, Task> ClickAction { get; init; }
-    public object Data { get; init; }
     public Task ClickAsync(IUiActionContext context) => ClickAction?.Invoke(context) ?? Task.CompletedTask;
 }
 
@@ -118,7 +90,16 @@ public abstract record UiControl<TControl, TPlugin>(string ModuleName, string Ap
 
     protected virtual MessageHubConfiguration ConfigureHub(MessageHubConfiguration configuration)
     {
-        return configuration.AddPlugin(CreatePlugin);
+        return configuration.AddPlugin(CreatePlugin)
+            .WithRoutes(forward =>
+                forward
+                    .RouteMessage<ScopePropertyChanged>(
+                        _ => new ApplicationScopeAddress(LayoutExtensions.FindLayoutHost(Address)),
+                        r => r.Message.Status == PropertyChangeStatus.Requested)
+                    .RouteMessage<ScopePropertyChanged>(
+                        _ => MessageTargets.Subscribers,
+                        r => r.Message.Status != PropertyChangeStatus.Requested)
+            );
     }
 
     protected virtual TPlugin CreatePlugin(IMessageHub hub)

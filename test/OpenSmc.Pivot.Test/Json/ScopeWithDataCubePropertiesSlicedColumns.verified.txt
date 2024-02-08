@@ -1,0 +1,431 @@
+﻿{
+  Columns: [
+    {
+      Children: [
+        {
+          Coordinates: [
+            E,
+            Value
+          ],
+          SystemName: E.Value,
+          DisplayName: Value,
+          GrouperName: ColumnName
+        }
+      ],
+      Coordinates: [
+        E
+      ],
+      SystemName: E,
+      DisplayName: Expenses,
+      GrouperName: AmountType
+    },
+    {
+      Children: [
+        {
+          Coordinates: [
+            P,
+            Value
+          ],
+          SystemName: P.Value,
+          DisplayName: Value,
+          GrouperName: ColumnName
+        }
+      ],
+      Coordinates: [
+        P
+      ],
+      SystemName: P,
+      DisplayName: Premium,
+      GrouperName: AmountType
+    },
+    {
+      Children: [
+        {
+          Coordinates: [
+            C,
+            Value
+          ],
+          SystemName: C.Value,
+          DisplayName: Value,
+          GrouperName: ColumnName
+        }
+      ],
+      Coordinates: [
+        C
+      ],
+      SystemName: C,
+      DisplayName: Cost,
+      GrouperName: AmountType
+    },
+    {
+      Children: [
+        {
+          Coordinates: [
+            B,
+            Value
+          ],
+          SystemName: B.Value,
+          DisplayName: Value,
+          GrouperName: ColumnName
+        }
+      ],
+      Coordinates: [
+        B
+      ],
+      SystemName: B,
+      DisplayName: Benefit,
+      GrouperName: AmountType
+    }
+  ],
+  Rows: [
+    {
+      RowGroup: {
+        Coordinates: [
+          BoP
+        ],
+        SystemName: BoP,
+        DisplayName: Beginning of Period,
+        GrouperName: PropertyName
+      },
+      Data: {
+        B: null,
+        C: null,
+        E: null,
+        P: null
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          BoP,
+          EUR
+        ],
+        SystemName: BoP.EUR,
+        DisplayName: Euro,
+        GrouperName: Currency
+      },
+      Data: {
+        B: {
+          Value: 384.0
+        },
+        C: {
+          Value: 384.0
+        },
+        E: {
+          Value: 384.0
+        },
+        P: {
+          Value: 384.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          BoP,
+          RUB
+        ],
+        SystemName: BoP.RUB,
+        DisplayName: Russian rouble,
+        GrouperName: Currency
+      },
+      Data: {
+        B: {
+          Value: 384.0
+        },
+        C: {
+          Value: 384.0
+        },
+        E: {
+          Value: 384.0
+        },
+        P: {
+          Value: 384.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          BoP,
+          CHF
+        ],
+        SystemName: BoP.CHF,
+        DisplayName: Swiss Franc,
+        GrouperName: Currency
+      },
+      Data: {
+        B: {
+          Value: 384.0
+        },
+        C: {
+          Value: 384.0
+        },
+        E: {
+          Value: 384.0
+        },
+        P: {
+          Value: 384.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          BoP,
+          USD
+        ],
+        SystemName: BoP.USD,
+        DisplayName: US Dollar,
+        GrouperName: Currency
+      },
+      Data: {
+        B: {
+          Value: 384.0
+        },
+        C: {
+          Value: 384.0
+        },
+        E: {
+          Value: 384.0
+        },
+        P: {
+          Value: 384.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          Delta
+        ],
+        SystemName: Delta,
+        DisplayName: Delta,
+        GrouperName: PropertyName
+      },
+      Data: {
+        B: null,
+        C: null,
+        E: null,
+        P: null
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          Delta,
+          EUR
+        ],
+        SystemName: Delta.EUR,
+        DisplayName: Euro,
+        GrouperName: Currency
+      },
+      Data: {
+        B: {
+          Value: 384.0
+        },
+        C: {
+          Value: 384.0
+        },
+        E: {
+          Value: 384.0
+        },
+        P: {
+          Value: 384.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          Delta,
+          RUB
+        ],
+        SystemName: Delta.RUB,
+        DisplayName: Russian rouble,
+        GrouperName: Currency
+      },
+      Data: {
+        B: {
+          Value: 384.0
+        },
+        C: {
+          Value: 384.0
+        },
+        E: {
+          Value: 384.0
+        },
+        P: {
+          Value: 384.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          Delta,
+          CHF
+        ],
+        SystemName: Delta.CHF,
+        DisplayName: Swiss Franc,
+        GrouperName: Currency
+      },
+      Data: {
+        B: {
+          Value: 384.0
+        },
+        C: {
+          Value: 384.0
+        },
+        E: {
+          Value: 384.0
+        },
+        P: {
+          Value: 384.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          Delta,
+          USD
+        ],
+        SystemName: Delta.USD,
+        DisplayName: US Dollar,
+        GrouperName: Currency
+      },
+      Data: {
+        B: {
+          Value: 384.0
+        },
+        C: {
+          Value: 384.0
+        },
+        E: {
+          Value: 384.0
+        },
+        P: {
+          Value: 384.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EoP
+        ],
+        SystemName: EoP,
+        DisplayName: End of Period,
+        GrouperName: PropertyName
+      },
+      Data: {
+        B: null,
+        C: null,
+        E: null,
+        P: null
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EoP,
+          EUR
+        ],
+        SystemName: EoP.EUR,
+        DisplayName: Euro,
+        GrouperName: Currency
+      },
+      Data: {
+        B: {
+          Value: 768.0
+        },
+        C: {
+          Value: 768.0
+        },
+        E: {
+          Value: 768.0
+        },
+        P: {
+          Value: 768.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EoP,
+          RUB
+        ],
+        SystemName: EoP.RUB,
+        DisplayName: Russian rouble,
+        GrouperName: Currency
+      },
+      Data: {
+        B: {
+          Value: 768.0
+        },
+        C: {
+          Value: 768.0
+        },
+        E: {
+          Value: 768.0
+        },
+        P: {
+          Value: 768.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EoP,
+          CHF
+        ],
+        SystemName: EoP.CHF,
+        DisplayName: Swiss Franc,
+        GrouperName: Currency
+      },
+      Data: {
+        B: {
+          Value: 768.0
+        },
+        C: {
+          Value: 768.0
+        },
+        E: {
+          Value: 768.0
+        },
+        P: {
+          Value: 768.0
+        }
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          EoP,
+          USD
+        ],
+        SystemName: EoP.USD,
+        DisplayName: US Dollar,
+        GrouperName: Currency
+      },
+      Data: {
+        B: {
+          Value: 768.0
+        },
+        C: {
+          Value: 768.0
+        },
+        E: {
+          Value: 768.0
+        },
+        P: {
+          Value: 768.0
+        }
+      }
+    }
+  ],
+  HasRowGrouping: true
+}

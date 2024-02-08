@@ -1,6 +1,6 @@
 import styles from './setupProject.module.scss';
-import button from "@open-smc/ui-kit/components/buttons.module.scss"
-import loader from "@open-smc/ui-kit/components/loader.module.scss";
+import button from "@open-smc/ui-kit/src/components/buttons.module.scss"
+import loader from "@open-smc/ui-kit/src/components/loader.module.scss";
 import { useForm } from 'react-hook-form';
 import { BaseSyntheticEvent, useEffect, useState } from "react";
 import { isEmpty } from "lodash";
@@ -13,8 +13,8 @@ import { EnvironmentField } from "./EnvironmentField";
 import { FormHeader } from "../../../shared/components/sideMenuComponents/FormHeader";
 import { IdEditorField } from "./IdEditorField";
 import { useSuggestId } from "./useSuggestId";
-import { Button } from "@open-smc/ui-kit/components/Button";
-import { useToast } from "@open-smc/application/useToast";
+import { Button } from "@open-smc/ui-kit/src/components/Button";
+import { useToast } from "@open-smc/application/src/notifications/useToast";
 import classNames from "classnames";
 
 type Props = {

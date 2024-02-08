@@ -1,6 +1,6 @@
-import { Sandbox } from "@open-smc/sandbox/Sandbox";
+import { Sandbox } from "@open-smc/sandbox/src/Sandbox";
 import styles from "./menuItemPage.module.scss";
-import { Textbox } from "@open-smc/sandbox/Textbox";
+import { Textbox } from "@open-smc/sandbox/src/Textbox";
 
 
 const textbox = makeTextbox();
