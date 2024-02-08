@@ -5,6 +5,8 @@ namespace OpenSmc.Import.Contract;
 
 public record ImportRequest : IRequest<ImportResult>
 {
+    public string FileName { get; init; }
+    public string Format { get; init; }
     public ImportOptions Options;
 }
 
