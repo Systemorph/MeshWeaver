@@ -8,7 +8,8 @@ public record GetDataStateRequest(WorkspaceConfiguration WorkspaceConfiguration)
 
 public class DataPersistencePlugin : MessageHubPlugin,
     IMessageHandlerAsync<GetDataStateRequest>, 
-    IMessageHandlerAsync<UpdateDataRequest>
+    IMessageHandlerAsync<UpdateDataRequest>,
+    IMessageHandlerAsync<DeleteDataRequest>
 {
     private DataPersistenceConfiguration DataPersistenceConfiguration { get; set; }
 
@@ -18,18 +19,28 @@ public class DataPersistencePlugin : MessageHubPlugin,
     }
 
     private static MethodInfo updateElementsMethod = ReflectionHelper.GetStaticMethodGeneric(() => UpdateElements<object>(null, null));
-    private static MethodInfo deleteElementsMethod = ReflectionHelper.GetMethodGeneric<DataPersistencePlugin>(x => x.DeleteElements<object>(null, null));
+    private static MethodInfo deleteElementsMethod = ReflectionHelper.GetStaticMethodGeneric(() => DeleteElements<object>(null, null));
 
-    async Task<IMessageDelivery> IMessageHandlerAsync<UpdateDataRequest>.HandleMessageAsync(IMessageDelivery<UpdateDataRequest> request)
+    Task<IMessageDelivery> IMessageHandlerAsync<UpdateDataRequest>.HandleMessageAsync(IMessageDelivery<UpdateDataRequest> request)
     {
-        foreach (var elementsByType in request.Message.Elements.GroupBy(x => x.GetType()))
+        return HandleMessageAsync(request, request.Message.Elements, updateElementsMethod);
+    }
+
+    Task<IMessageDelivery> IMessageHandlerAsync<DeleteDataRequest>.HandleMessageAsync(IMessageDelivery<DeleteDataRequest> request)
+    {
+        return HandleMessageAsync(request, request.Message.Elements, deleteElementsMethod);
+    }
+
+    async Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery request, IReadOnlyCollection<object> items, MethodInfo method)
+    {
+        foreach (var elementsByType in items.GroupBy(x => x.GetType()))
         {
             var typeConfig = DataPersistenceConfiguration.TypeConfigurations.FirstOrDefault(x =>
                     x.GetType().GetGenericArguments().First() == elementsByType.Key);  // TODO: check whether this works
 
             if (typeConfig is null) continue; // TODO: think about partial vs full update
 
-            await updateElementsMethod.MakeGenericMethod(elementsByType.Key).InvokeAsActionAsync(elementsByType, typeConfig);
+            await method.MakeGenericMethod(elementsByType.Key).InvokeAsActionAsync(elementsByType, typeConfig);
         }
 
         //Hub.Post(new DataChanged(items));      // notify all subscribers that the data has changed
@@ -37,15 +48,8 @@ public class DataPersistencePlugin : MessageHubPlugin,
         return request.Processed();
     }
 
-
-    private static Task UpdateElements<T>(IEnumerable<object> items, TypeConfiguration<T> config) where T : class => config.Save(items.Cast<T>());   // save to db
-
-    private async Task DeleteElements<T>(IMessageDelivery<DeleteBatchRequest<T>> request, TypeConfiguration<T> config) where T : class
-    {
-        var items = request.Message.Elements;
-        await config.Delete(items);
-        Hub.Post(new DataDeleted(items));
-    }
+    private static Task UpdateElements<T>(IEnumerable<object> items, TypeConfiguration<T> config) where T : class => config.Save(items.Cast<T>());
+    private static Task DeleteElements<T>(IEnumerable<object> items, TypeConfiguration<T> config) where T : class => config.Delete(items.Cast<T>());
 
     async Task<IMessageDelivery> IMessageHandlerAsync<GetDataStateRequest>.HandleMessageAsync(IMessageDelivery<GetDataStateRequest> request)
     {

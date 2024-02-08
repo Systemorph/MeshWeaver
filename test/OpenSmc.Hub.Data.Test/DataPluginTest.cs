@@ -79,15 +79,16 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var deleteResponse = await client.AwaitResponse(new DeleteDataRequest(deleteItems), o => o.WithTarget(new HostAddress()));
 
         // asserts
-        deleteResponse.Message.Should().BeEquivalentTo(deleteItems);
-        var expectedItems = new object[]
+        var expected = new DataChanged(deleteItems);
+        deleteResponse.Message.Should().BeEquivalentTo(expected);
+        var expectedItems = new MyData[]
         {
             new MyData("2", "B")
         };
         storage.Values.Should().BeEquivalentTo(expectedItems);
         
         var response = await client.AwaitResponse(new GetManyRequest<MyData>(), o => o.WithTarget(new HostAddress()));
-        response.Message.Should().BeEquivalentTo(expectedItems);
+        response.Message.Should().BeEquivalentTo(new GetManyResponse<MyData>(expectedItems.Length, expectedItems));
     }
 
     private Task<IReadOnlyCollection<MyData>> InitializeMyData()
