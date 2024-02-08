@@ -64,13 +64,13 @@ public class SerializationTest : TestBase
         var host = Router.GetHostedHub(new HostAddress(), ConfigureHost);
         var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
         var hostOut = host.AddObservable();
-        var messageTask = hostOut.ToArray().GetAwaiter();
+        var messageTask = hostOut.Where(h => h.Message is not ShutdownRequest).ToArray().GetAwaiter();
         
         client.Post(new MyEvent("Hello"), o => o.WithTarget(new HostAddress()));
 
         await Task.Delay(300);
 
-        await DisposeAsync();
+        await Router.DisposeAsync();
 
         var events = await messageTask;
         events.Should().HaveCount(1);
@@ -88,11 +88,11 @@ public class SerializationTest : TestBase
         var host = Router.GetHostedHub(new HostAddress(), ConfigureHost);
         var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
         var hostOut = host.AddObservable();
-        var messageTask = hostOut.ToArray().GetAwaiter();
+        var messageTask = hostOut.Where(h => h.Message is not ShutdownRequest).ToArray().GetAwaiter();
 
         var response = await client.AwaitResponse(new Boomerang(new MyEvent("Hello")), o => o.WithTarget(new HostAddress()));
 
-        await DisposeAsync();
+        await Router.DisposeAsync();
 
 
         var events = await messageTask;
@@ -106,11 +106,6 @@ public class SerializationTest : TestBase
     }
 
 
-    public override async Task DisposeAsync()
-    {
-        await Router.DisposeAsync();
-        await base.DisposeAsync();
-    }
 }
 
 public record Boomerang(object Object) : IRequest<object>;
