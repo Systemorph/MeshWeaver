@@ -40,18 +40,6 @@ public record RouteConfiguration(IMessageHub Hub)
             ),
         };
 
-    public RouteConfiguration RouteMessageToTarget<TMessage>(Func<IMessageDelivery<TMessage>, object> addressMap)
-        => RouteMessageToTarget(addressMap, _ => true);
-
-    public RouteConfiguration RouteMessageToTarget<TMessage>(Func<IMessageDelivery<TMessage>, object> addressMap,
-        Func<IMessageDelivery<TMessage>, bool> filter) =>
-        RouteMessage(delivery =>
-            {
-                Hub.Post(delivery.Message, o => o.WithTarget(addressMap.Invoke(delivery)));
-                return Task.FromResult(delivery.Forwarded());
-            },
-            filter);
-
     public RouteConfiguration RouteMessage<TMessage>(Func<IMessageDelivery<TMessage>, object> addressMap) =>
         RouteMessage(addressMap, _ => true);
 

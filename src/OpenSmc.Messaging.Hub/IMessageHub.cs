@@ -6,6 +6,8 @@ namespace OpenSmc.Messaging;
 
 public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDisposable
 {
+    MessageHubConfiguration Configuration { get; }
+    long Version { get; }
     internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(3);
     IMessageDelivery<TMessage> Post<TMessage>(TMessage message, Func<PostOptions, PostOptions> options = null);
     IMessageDelivery DeliverMessage(IMessageDelivery delivery);
@@ -38,12 +40,12 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
     public void Schedule(Func<Task> action);
 
 
-    void Log(Action<ILogger> log);
 
     void Set<T>(T obj, string context = "");
     T Get<T>(string context = "");
     void AddPlugin(IMessageHubPlugin plugin);
     IMessageHub GetHostedHub<TAddress1>(TAddress1 address, Func<MessageHubConfiguration, MessageHubConfiguration> config);
+
     IMessageHub WithDisposeAction(Action<IMessageHub> disposeAction);
     IMessageHub WithDisposeAction(Func<IMessageHub, Task> disposeAction);
 }

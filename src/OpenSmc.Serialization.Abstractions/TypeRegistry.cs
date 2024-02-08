@@ -2,19 +2,14 @@
 
 namespace OpenSmc.Serialization;
 
-public class EventsRegistry : IEventsRegistry
+public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
 {
-    private readonly IEventsRegistry parent;
     private readonly ConcurrentDictionary<string, Type> typeByName = new();
     private readonly ConcurrentDictionary<Type, string> nameByType = new();
 
-    public EventsRegistry(IEventsRegistry parent)
-    {
-        // TODO V10: Delegate to parent events provider when nothing is defined on this level (16.01.2024, Roland Buergi)
-        this.parent = parent;
-    }
+    // TODO V10: Delegate to parent events provider when nothing is defined on this level (16.01.2024, Roland Buergi)
 
-    public IEventsRegistry WithEvent(Type type)
+    public ITypeRegistry WithType(Type type)
     {
         var typeName = FormatType(type);
         typeByName[typeName] = type;
@@ -24,23 +19,36 @@ public class EventsRegistry : IEventsRegistry
 
     public bool TryGetType(string name, out Type type)
     {
-        return typeByName.TryGetValue(name, out type);
+        if (typeByName.TryGetValue(name, out type))
+            return true;
+        return parent?.TryGetType(name, out type) ?? false;
     }
 
-    public bool TryGetTypeName(Type type, out string typeName)
+    public string GetTypeName(Type type)
     {
-        return nameByType.TryGetValue(type, out typeName);
+        if (nameByType.TryGetValue(type, out var typeName))
+            return typeName;
+
+        // ReSharper disable once AssignNullToNotNullAttribute
+        typeByName[type.FullName] = type;
+        nameByType[type] = type.FullName;
+        return type.FullName;
     }
 
     public string GetOrAddTypeName(Type type)
     {
         if (nameByType.TryGetValue(type, out var typeName))
-        {
             return typeName;
-        }
 
-        WithEvent(type);
+        WithType(type);
         return nameByType[type];
+    }
+
+    public ITypeRegistry WithTypesFromAssembly(Type type, Func<Type, bool> filter)
+    {
+        foreach (var t in type.Assembly.GetTypes().Where(filter))
+            WithType(t);
+        return this;
     }
 
     public static string FormatType(Type mainType)

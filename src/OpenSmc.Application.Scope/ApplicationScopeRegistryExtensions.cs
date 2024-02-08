@@ -1,7 +1,10 @@
 ﻿using System.Dynamic;
+using System.Reflection;
 using AspectCore.Extensions.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
+using OpenSmc.Reflection;
 using OpenSmc.Scopes;
 using OpenSmc.Scopes.Proxy;
 using OpenSmc.Serialization;
@@ -9,56 +12,48 @@ using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Application.Scope;
 
-public class ApplicationAddressOptions
-{
-    public ApplicationAddress Address { get; set; }
-}
-
-public record ExpressionSynchronizationAddress(object Host):IHostedAddress;
 public static class ApplicationScopeRegistryExtensions
 {
-    public static MessageHubConfiguration AddExpressionSynchronization(this MessageHubConfiguration conf)
+    public static MessageHubConfiguration AddApplicationScope(this MessageHubConfiguration conf, Func<ApplicationScopeConfiguration, ApplicationScopeConfiguration> configureApplicationScope = null)
     {
-        return conf
-            .AddApplicationScope()
-            .WithRoutes
-        (
-            routes => routes
-                .RouteAddressToHostedHub<ExpressionSynchronizationAddress>
-                (
-                    c => c.AddPlugin<ExpressionSynchronizationPlugin>()
-                )
-        );
-    }
-
-
-    public static MessageHubConfiguration AddApplicationScope(this MessageHubConfiguration conf)
-    {
+        var applicationScopeConfig = configureApplicationScope?.Invoke(new ApplicationScopeConfiguration()) ?? new ApplicationScopeConfiguration();
+        var applicationScopeAddress = new ApplicationScopeAddress(conf.Address);
         return conf
             .WithServices(services => services
                 .RegisterScopes()
                 .AddSingleton<IScopeFactory, ScopeFactory>()
-                .AddSingleton(serviceProvider => serviceProvider.GetRequiredService<IScopeFactory>().ForSingleton().ToScope<IApplicationScope>()))
-            .AddSerialization(rule => rule.ForType<IScope>(typeBuilder => typeBuilder.WithTransformation(TransformScope)))
-
-                .WithHostedHub
-                    (
-                        new ApplicationScopeAddress(conf.Address), 
-                        d => d.AddPlugin<ApplicationScopePlugin>())
-                .WithRoutes
+                .AddSingleton(serviceProvider => serviceProvider.GetRequiredService<IScopeFactory>().ForSingleton()
+                    .ToScope<IApplicationScope>()))
+            .WithSerialization(rule => rule.WithTransformation<IScope>(TransformScope))
+            .WithHostedHub
+            (
+                new ApplicationScopeAddress(conf.Address),
+                d => d.AddPlugin<ApplicationScopePlugin>())
+            .WithRoutes
             (
                 forward => forward
-                    .RouteMessageToTarget<ScopePropertyChanged>(_ => new ApplicationScopeAddress(conf.Address), f => f.Message.Status == PropertyChangeStatus.Requested)
-                    .RouteMessageToTarget<ScopePropertyChangedEvent>(_ => new ApplicationScopeAddress(conf.Address), f => f.Message.Status == ScopeChangedStatus.Requested)
+                    .RouteMessage<ScopePropertyChanged>(
+                        d => d.Message.Status switch
+                        {
+                            PropertyChangeStatus.Requested => applicationScopeAddress,
+                            _ => MessageTargets.Subscribers
+                        })
+                    .RouteMessage<ScopePropertyChangedEvent>(
+                        d => d.Message.Status switch
+                        {
+                            ScopeChangedStatus.Requested => applicationScopeAddress,
+                            _ => MessageTargets.Subscribers
+                        })
             );
-            
+
     }
 
+    static readonly MethodInfo GetScopeMethod = ReflectionHelper.GetMethodGeneric<IApplicationScope>(x => x.GetScope<object>());
 
     public const string ScopeId = "$scopeId";
     public const string TypeDiscriminator = "$type";
 
-    private static object TransformScope(IScope scope, ISerializationTransformContext context)
+    private static object TransformScope(ISerializationContext context, IScope scope)
     {
         var scopeType = scope.GetScopeType();
         var properties = scopeType.GetScopeProperties().SelectMany(x => x.Properties);
@@ -78,3 +73,5 @@ public static class ApplicationScopeRegistryExtensions
     }
 
 }
+
+public record ApplicationScopeConfiguration;

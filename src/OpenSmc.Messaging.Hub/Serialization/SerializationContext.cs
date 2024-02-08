@@ -2,11 +2,12 @@
 using System.Runtime.Serialization;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using OpenSmc.Serialization;
 using OpenSmc.Utils;
 
-namespace OpenSmc.Serialization;
+namespace OpenSmc.Messaging.Serialization;
 
-public class SerializationContext : IDataBindingMutateContext, ISerializationTransformContext
+public class SerializationContext : ISerializationContext
 {
     private readonly SerializationService serializationService;
     private readonly JsonSerializer serializer;
@@ -48,29 +49,30 @@ public class SerializationContext : IDataBindingMutateContext, ISerializationTra
         resultToken = value != null ? JToken.FromObject(value, serializer) : null;
     }
 
-    object ISerializationTransformContext.TraverseProperty(object propertyValue, object parent, PropertyInfo propertyInfo)
+    public object TraverseProperty(object propertyValue, object parent, PropertyInfo propertyInfo)
     {
         var context = serializationService.CreateSerializationContext(propertyValue, null, propertyInfo, parent, Depth);
         serializationService.SerializeTraverse(context);
         return context.ResultToken;
     }
 
-    object ISerializationTransformContext.TraverseValue(object value)
+    public object TraverseValue(object value)
     {
         var context = serializationService.CreateSerializationContext(value, null, ParentProperty, Parent, Depth);
         serializationService.SerializeTraverse(context);
         return context.ResultToken;
     }
 
-    void IDataBindingMutateContext.SetProperty(string propName, object propValue)
+    public object SetProperty(string propName, object propValue)
     {
         if (ResultToken is not JObject jObject)
             throw new InvalidOperationException("Result is not an object");
 
         jObject[propName.ToCamelCase()] = JToken.FromObject(propValue, serializer);
+        return propValue;
     }
 
-    void IDataBindingMutateContext.DeleteProperty(string propName)
+    public void DeleteProperty(string propName)
     {
         if (ResultToken is JObject jObject)
             jObject.Property(propName.ToCamelCase())?.Remove();

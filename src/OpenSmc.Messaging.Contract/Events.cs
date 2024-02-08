@@ -8,27 +8,14 @@ public record DeleteHubRequest(object Address) : IRequest<HubDeleted>;
 public record HubDeleted(object Address);
 public record HubInfo(object Address);
 
-public record DisconnectHubRequest() : IRequest<HubDisconnected>;
+public record DisconnectHubRequest();
 
-public record HubDisconnected();
 
 public record GetRequest<T> : IRequest<T>
 {
     public object Options { get; init; }
 }
 
-
-public record GetManyRequest<T>() : IRequest<GetManyResponse<T>> 
-{ 
-    public int Page { get; init; }
-    public int? PageSize { get; init; } 
-    public object Options { get; init; } 
-};
-
-public record GetManyResponse<T>(int Total, IReadOnlyCollection<T> Items)
-{
-    public static GetManyResponse<T> Empty() => new(0, Array.Empty<T>());
-}
 
 public record CreateRequest<TObject>(TObject Element) : IRequest<DataChanged> { public object Options { get; init; } };
 
@@ -43,7 +30,7 @@ public record UpdateRequest<TElement>(TElement Element) : IRequest<DataChanged>
     public object Options { get; init; }
 }
 
-public record UpdateBatchRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataChanged>;
+public record UpdatePersistenceRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataChanged>;
 
 public record DataChanged(object Changes)
 {
@@ -59,9 +46,9 @@ public record DataDeleted(object Changes)
     public ActivityLog Log { get; init; }
 }
 
-public record DeleteRequest<TState>(TState State) : IRequest<ObjectDeleted> { public object Options { get; init; } };
+// public record DeleteRequest<TState>(TState State) : IRequest<ObjectDeleted> { public object Options { get; init; } };
 
-public record ObjectDeleted(object Id);
+// public record ObjectDeleted(object Id);
 
 
 

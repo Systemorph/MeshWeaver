@@ -82,6 +82,7 @@ namespace OpenSmc.Scopes
     public interface IMutableScope : IScope
     {
         event ScopePropertyChangedEventHandler ScopePropertyChanged;
+        //object Address { get; set; }
     }
 
     public interface IMutableScope<out TIdentity> : IScope<TIdentity>, IMutableScope { }

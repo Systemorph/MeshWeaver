@@ -4,9 +4,9 @@ namespace OpenSmc.Layout.LayoutClient;
 
 public static class LayoutClientExtensions
 {
-    public static  MessageHubConfiguration AddLayoutClient(this MessageHubConfiguration mhConfiguration, object refreshRequest, object refreshAddress, Func<LayoutClientConfiguration, LayoutClientConfiguration> options = null)
+    public static  MessageHubConfiguration AddLayoutClient(this MessageHubConfiguration mhConfiguration,  object refreshAddress, Func<LayoutClientConfiguration, LayoutClientConfiguration> options = null)
     {
-        var conf = new LayoutClientConfiguration(refreshRequest, refreshAddress);
+        var conf = new LayoutClientConfiguration(refreshAddress);
         if (options != null)
             conf = options(conf);
         return mhConfiguration.AddPlugin(hub => new LayoutClientPlugin(conf, hub));
