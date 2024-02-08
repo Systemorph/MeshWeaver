@@ -1,9 +1,8 @@
 ﻿using System.Collections;
 using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
-using System.Data;
-using System.Runtime.Serialization;
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
 using OpenSmc.Collections;
@@ -23,53 +22,13 @@ namespace OpenSmc.Import.Contract.Builders
     public static class ImportRegistryExtensions
     {
         public static MessageHubConfiguration AddImport(this MessageHubConfiguration configuration,
-            Func<ImportBuilder, ImportBuilder> importConfiguration)
+            Func<ImportConfiguration, ImportConfiguration> importConfiguration)
         {
-            importConfiguration.Invoke(new());
-            //var options = importConfiguration.Invoke(new);
-            //return configuration.WithServices(services => services.AddSingleton<IActivityService>())
-            //    .AddPlugin(hub => new ImportPlugin(hub, options));
-            throw new NotImplementedException();
-            //TODO: implement
+            return configuration.WithServices(services => services.AddSingleton<IActivityService>())
+                .AddPlugin(hub => new ImportPlugin(hub, importConfiguration));
         }
     }
 
-      
-
-    public class ImportBuilder
-    {
-        [Inject] private IMappingService mappingService;
-        [Inject] private IServiceProvider serviceProvider;
-        [Inject] private IActivityService activityService;
-        [Inject] private IFileReadStorage fileReadStorage;
-        [Inject] private IDataSource targetSource;
-
-
-        public ImportBuilder WithFormat(Func<IMessageDelivery<ImportRequest>, ImportConfiguration, IMessageDelivery> format)
-        {
-            throw new NotImplementedException();
-        }
-        
-        public FileReaderImportOptionsBuilder FromFile(string filePath)
-        {
-            throw new NotImplementedException();
-        }
-
-        public StringImportOptionsBuilder FromString(string content)
-        {
-            throw new NotImplementedException();
-        }
-
-        public StreamImportOptionsBuilder FromStream(Stream stream)
-        {
-            throw new NotImplementedException();
-        }
-
-        public DataSetImportOptionsBuilder FromDataSet(IDataSet dataSet)
-        {
-            throw new NotImplementedException();
-        }
-    }
     /*
      * Create a .Contract folder
      * create ImportRequest (all options for import), must be serializable
@@ -85,27 +44,75 @@ namespace OpenSmc.Import.Contract.Builders
     {
         [Inject] private IActivityService activityService;
 
-        public ImportPlugin(IMessageHub hub, Func<ImportBuilder, ImportBuilder> optionsBuilder) : base(hub)
+        public ImportPlugin(IMessageHub hub, Func<ImportConfiguration, ImportConfiguration> optionsBuilder) : base(hub)
         {
-            var importBuilder = new ImportBuilder();
+            var importBuilder = new ImportConfiguration();
             hub.ServiceProvider.Buildup(importBuilder);
-            optionsBuilder.Invoke(importBuilder);
-
+            var resBuilder = optionsBuilder.Invoke(importBuilder);
         }
 
-        config => config.AddImport(import => import.WithFormat(HandleFormat1)
-        .WithFileSource(request => filename, basepath)
-        .WithDataSource(“datasource1”, datasource1))
-       
+        protected MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+        {
+            var filename = "filename";
+            var basepath = "basepath";
+            IDataSource datasource1 = null;
+            return configuration.AddImport(import => import.WithFormat(HandleFormat1)
+                .WithFileSource(request => filename, basepath)
+                .WithDataSource("datasource1", datasource1));
+        }
+
+
+
         IMessageDelivery HandleFormat1(IMessageDelivery<ImportRequest> request, ImportConfiguration configuration)
         {
-            if (request.Format != “format1”)
-            return request;
-            var dataset = configuration.ReadDataSet(request);
-            var datasource = configuration.GetDataSource(request); //if (request.message.format == “format1”) return “datasource1”
+            if (request.Message.Format != "format1")
+                return request;
+            IImportVariable ImportVariable = null;
+
+            var dataset = configuration.ReadDataSet(request.Message);
+            var datasource = configuration.GetDataSource(request.Message);
+            //if (request.message.format == “format1”) return “datasource1”
+            ImportVariable.FromDataSet(dataset).WithTarget(datasource).ExecuteAsync();
+            
+            return request.Processed();
         }
 
         public IMessageDelivery HandleMessage(IMessageDelivery<ImportRequest> request)
+        {
+            throw new NotImplementedException();
+        }
+    }
+
+    public record ImportConfiguration
+    {
+        [Inject] private IMappingService mappingService;
+        [Inject] private IServiceProvider serviceProvider;
+        [Inject] private IActivityService activityService;
+        [Inject] private IFileReadStorage fileReadStorage;
+        [Inject] private IDataSource targetSource;
+
+
+        public ImportConfiguration WithFormat(Func<IMessageDelivery<ImportRequest>, ImportConfiguration, IMessageDelivery> format)
+        {
+            throw new NotImplementedException();
+        }
+
+        public ImportConfiguration WithFileSource(Func<object, object> func, object basepath)
+        {
+            throw new NotImplementedException();
+        }
+
+        public ImportConfiguration WithDataSource(string dataSourceName, IDataSource dataSource)
+        {
+            throw new NotImplementedException();
+        }
+
+        public IDataSet ReadDataSet(ImportRequest requestMessage)
+        {
+            throw new NotImplementedException();
+        }
+
+        public IDataSource GetDataSource(ImportRequest requestMessage)
         {
             throw new NotImplementedException();
         }
