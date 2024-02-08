@@ -47,6 +47,8 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var updateResponse = await client.AwaitResponse(new UpdateDataRequest(updateItems), o => o.WithTarget(new HostAddress()));
 
+        await Task.Delay(300);
+
         // asserts
         var expected = new DataChanged(updateItems);
         updateResponse.Message.Should().BeEquivalentTo(expected);
@@ -90,10 +92,12 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
     private Task<IReadOnlyCollection<MyData>> InitializeMyData()
     {
+        foreach (var data in initialData)
+            storage[data.Id] = data;
         return Task.FromResult<IReadOnlyCollection<MyData>>(initialData);
     }
     
-    private Task SaveMyData(IReadOnlyCollection<MyData> items)
+    private Task SaveMyData(IEnumerable<MyData> items)
     {
         foreach (var data in items)
         {
@@ -102,7 +106,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         return Task.CompletedTask;
     }
 
-    private Task DeleteMyData(IReadOnlyCollection<MyData> items)
+    private Task DeleteMyData(IEnumerable<MyData> items)
     {
         foreach (var id in items.Select(x => x.Id))
         {

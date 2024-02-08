@@ -52,7 +52,7 @@ public class DataPlugin : MessageHubPlugin<Workspace>,
         UpdateState(s => s.Update(items)); // update the state in memory (workspace)
         Hub.Post(new DataChanged(items), o => o.ResponseFor(request).WithTarget(MessageTargets.Subscribers));      // notify all subscribers that the data has changed
         if (dataPersistencyAddress != null)
-            Hub.Post(request, o => o.WithTarget(dataPersistencyAddress));
+            Hub.Post(request.Message, o => o.WithTarget(dataPersistencyAddress));
         return request.Processed();
     }
 
@@ -62,7 +62,7 @@ public class DataPlugin : MessageHubPlugin<Workspace>,
         UpdateState(s => s.Delete(items));
         Hub.Post(new DataDeleted(items), o => o.ResponseFor(request).WithTarget(MessageTargets.Subscribers));
         if (dataPersistencyAddress != null)
-            Hub.Post(request, o => o.WithTarget(dataPersistencyAddress));
+            Hub.Post(request.Message, o => o.WithTarget(dataPersistencyAddress));
         return request.Processed();
     }
 
