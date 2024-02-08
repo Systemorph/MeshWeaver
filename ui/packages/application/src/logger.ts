@@ -1,4 +1,4 @@
-import { MessageDelivery } from "./SignalrHub";
+import { MessageDelivery } from "./MessageDelivery";
 
 export const down = ["%c↓", `color: green`];
 export const up = ["%c↑", `color: red`];

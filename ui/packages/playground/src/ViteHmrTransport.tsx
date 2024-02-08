@@ -1,10 +1,10 @@
 import { PropsWithChildren, useMemo } from "react";
 import { transportContext } from "@open-smc/application/src/transportContext";
-import { ViteHmrHub } from "./ViteHmrHub.tsx";
+import { HmrClientHub } from "./HmrClientHub";
 
 export function ViteHmrTransport({children}: PropsWithChildren) {
     const value = useMemo(() => ({
-        transportHub: new ViteHmrHub(),
+        transportHub: new HmrClientHub(),
         layoutAddress: "Layout",
         uiAddress: "Ui"
     }), []);

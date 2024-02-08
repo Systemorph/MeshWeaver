@@ -51,7 +51,6 @@ export class AreaChangedEvent<TOptions = unknown> {
 @contractMessage("OpenSmc.Application.Layout.Views.ClickedEvent")
 export class ClickedEvent {
     constructor(public id: string, public payload?: unknown) {
-
     }
 }
 

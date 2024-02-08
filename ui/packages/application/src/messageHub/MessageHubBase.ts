@@ -1,12 +1,13 @@
 import { filter, first, firstValueFrom } from "rxjs";
-import { MessageDelivery } from "../SignalrHub";
-import { ClassType, getMessageType, getMessageTypeConstructor } from "../contractMessage";
+import { ClassType } from "../contractMessage";
 import { Hub } from "./Hub";
 import { withTimeout } from "@open-smc/utils/src/promiseWithTimeout";
 import { BaseEvent, ErrorEvent } from "@open-smc/application/src/application.contract";
 import { MessageHub } from "@open-smc/application/src/messageHub/MessageHub";
+import { MessageDelivery } from "./MessageDelivery";
+import { filterByMessageType } from "../filterByMessageType";
 
-export class MessageHubBase extends Hub<MessageDelivery<any>> implements MessageHub {
+export class MessageHubBase extends Hub<MessageDelivery> implements MessageHub {
     constructor() {
         super();
 
@@ -64,10 +65,6 @@ export class MessageHubBase extends Hub<MessageDelivery<any>> implements Message
         );
     }
 }
-
-const filterByMessageType = <TMessage>(messageType: ClassType<TMessage>) =>
-    filter((envelope: MessageDelivery): envelope is MessageDelivery<TMessage> =>
-        getMessageTypeConstructor(messageType) === getMessageType(envelope.message));
 
 let requestNumber = Date.now();
 
