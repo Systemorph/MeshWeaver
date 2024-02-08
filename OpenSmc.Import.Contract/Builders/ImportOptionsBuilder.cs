@@ -2,6 +2,7 @@
 using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
 using OpenSmc.Collections;
@@ -21,15 +22,13 @@ namespace OpenSmc.Import.Contract.Builders
     public static class ImportRegistryExtensions
     {
         public static MessageHubConfiguration AddImport(this MessageHubConfiguration configuration,
-            Func<ImportOptionsBuilder, ImportOptionsBuilder> importConfiguration)
+            Func<ImportConfiguration, ImportConfiguration> importConfiguration)
         {
-            //var options = importConfiguration.Invoke(new);
-            //return configuration.WithServices(services => services.AddSingleton<IActivityService>())
-            //    .AddPlugin(hub => new ImportPlugin(hub, options));
-            throw new NotImplementedException();
-            //TODO: implement
+            return configuration.WithServices(services => services.AddSingleton<IActivityService>())
+                .AddPlugin(hub => new ImportPlugin(hub, importConfiguration));
         }
     }
+
     /*
      * Create a .Contract folder
      * create ImportRequest (all options for import), must be serializable
@@ -41,13 +40,81 @@ namespace OpenSmc.Import.Contract.Builders
      *
      */
 
-    public class ImportPlugin : MessageHubPlugin
+    public class ImportPlugin : MessageHubPlugin, IMessageHandler<ImportRequest>
     {
         [Inject] private IActivityService activityService;
 
-        public ImportPlugin(IMessageHub hub, ImportOptionsBuilder options) : base(hub)
+        public ImportPlugin(IMessageHub hub, Func<ImportConfiguration, ImportConfiguration> optionsBuilder) : base(hub)
         {
+            var importBuilder = new ImportConfiguration();
+            hub.ServiceProvider.Buildup(importBuilder);
+            var resBuilder = optionsBuilder.Invoke(importBuilder);
+        }
+
+        protected MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+        {
+            var filename = "filename";
+            var basepath = "basepath";
+            IDataSource datasource1 = null;
+            return configuration.AddImport(import => import.WithFormat(HandleFormat1)
+                .WithFileSource(request => filename, basepath)
+                .WithDataSource("datasource1", datasource1));
+        }
+
+
+
+        IMessageDelivery HandleFormat1(IMessageDelivery<ImportRequest> request, ImportConfiguration configuration)
+        {
+            if (request.Message.Format != "format1")
+                return request;
+            IImportVariable ImportVariable = null;
+
+            var dataset = configuration.ReadDataSet(request.Message);
+            var datasource = configuration.GetDataSource(request.Message);
+            //if (request.message.format == “format1”) return “datasource1”
+            ImportVariable.FromDataSet(dataset).WithTarget(datasource).ExecuteAsync();
             
+            return request.Processed();
+        }
+
+        public IMessageDelivery HandleMessage(IMessageDelivery<ImportRequest> request)
+        {
+            throw new NotImplementedException();
+        }
+    }
+
+    public record ImportConfiguration
+    {
+        [Inject] private IMappingService mappingService;
+        [Inject] private IServiceProvider serviceProvider;
+        [Inject] private IActivityService activityService;
+        [Inject] private IFileReadStorage fileReadStorage;
+        [Inject] private IDataSource targetSource;
+
+
+        public ImportConfiguration WithFormat(Func<IMessageDelivery<ImportRequest>, ImportConfiguration, IMessageDelivery> format)
+        {
+            throw new NotImplementedException();
+        }
+
+        public ImportConfiguration WithFileSource(Func<object, object> func, object basepath)
+        {
+            throw new NotImplementedException();
+        }
+
+        public ImportConfiguration WithDataSource(string dataSourceName, IDataSource dataSource)
+        {
+            throw new NotImplementedException();
+        }
+
+        public IDataSet ReadDataSet(ImportRequest requestMessage)
+        {
+            throw new NotImplementedException();
+        }
+
+        public IDataSource GetDataSource(ImportRequest requestMessage)
+        {
+            throw new NotImplementedException();
         }
     }
 
