@@ -52,7 +52,7 @@ public class RoutePlugin : MessageHubPlugin<RouteConfiguration>
             return RouteAlongHostingHierarchy(delivery, hosted.Host, address);
 
 
-        if (parentHub == null || parentHub.Address.Equals(address))
+        if (parentHub == null)
             return delivery.NotFound();
 
         parentHub.DeliverMessage(delivery);
