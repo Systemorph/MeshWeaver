@@ -23,13 +23,13 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
     {
         Hub = hub;
         Address = (TAddress)hub.Address;
-        InitializeTypes(this);
 
     }
     protected internal MessageHubBase(IServiceProvider serviceProvider)
     {
         serviceProvider.Buildup(this);
         MessageService = serviceProvider.GetRequiredService<IMessageService>();
+        InitializeTypes(this);
 
         Rules = new LinkedList<AsyncDelivery>(new AsyncDelivery[]
         {

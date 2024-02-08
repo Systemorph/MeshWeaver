@@ -8,9 +8,8 @@ public record DeleteHubRequest(object Address) : IRequest<HubDeleted>;
 public record HubDeleted(object Address);
 public record HubInfo(object Address);
 
-public record DisconnectHubRequest() : IRequest<HubDisconnected>;
+public record DisconnectHubRequest();
 
-public record HubDisconnected();
 
 public record GetRequest<T> : IRequest<T>
 {
