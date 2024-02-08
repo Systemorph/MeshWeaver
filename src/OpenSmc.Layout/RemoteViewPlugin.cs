@@ -1,4 +1,5 @@
-﻿using OpenSmc.Application.Scope;
+﻿using Microsoft.Extensions.Logging;
+using OpenSmc.Application.Scope;
 using OpenSmc.Messaging;
 using OpenSmc.Scopes.Synchronization;
 using OpenSmc.ServiceProvider;
@@ -13,12 +14,11 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
 {
     [Inject] private IUiControlService uiControlService; // TODO V10: call BuildUp(this) in some base? (2023/12/20, Alexander Yolokhov)
 
-    private ExpressionSynchronizationAddress ExpressionSynchronizationAddress =>
-        LayoutExtensions.ExpressionSynchronizationAddress(Hub.Address);
-
-
 
     private const string Data = nameof(Data);
+    [Inject] private ILogger<RemoteViewPlugin> logger;
+
+    private ApplicationScopeAddress ApplicationScopeAddress => new(LayoutExtensions.FindLayoutHost(Hub.Address));
 
     public override async Task StartAsync()
     {
@@ -36,7 +36,7 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
                     var viewElement = await State.ViewDefinition(State.Options);
                     return new AreaChangedEvent(viewElement.Area, viewElement.View, viewElement.Options);
                 }),
-                o => o.WithTarget(ExpressionSynchronizationAddress));
+                o => o.WithTarget(ApplicationScopeAddress));
     }
 
     private void UpdateView(AreaChangedEvent areaChanged)
@@ -89,7 +89,7 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
                                                                                        var viewElement = await State.ViewDefinition(State.Options);
                                                                                        return new AreaChangedEvent(viewElement.Area, viewElement.View, viewElement.Options);
                                                                                    }),
-                                                                                   o => o.WithTarget(ExpressionSynchronizationAddress));
+                                                                                   o => o.WithTarget(ApplicationScopeAddress));
 
             }
             Post( State.View, o => o.ResponseFor(request));
@@ -128,7 +128,8 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
 
         if (areaChanged.View != null && areaChanged.View is not IUiControl)
             areaChanged = areaChanged with { View = uiControlService.GetUiControl(areaChanged.View) };
-        
+
+        logger.LogDebug($"Received Changed Expression in area: {areaChanged}");
         UpdateView(areaChanged);
         return request.Processed();
 
@@ -152,7 +153,7 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
     public override void Dispose()
     {
         if (State.ViewDefinition != null)
-            Post(new UnsubscribeFromEvaluationRequest(Data), o => o.WithTarget(ExpressionSynchronizationAddress));
+            Post(new UnsubscribeFromEvaluationRequest(Data), o => o.WithTarget(ApplicationScopeAddress));
         base.Dispose();
     }
 }

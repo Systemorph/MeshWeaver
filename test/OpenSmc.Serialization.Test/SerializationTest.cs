@@ -1,9 +1,11 @@
 ﻿using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
+using Newtonsoft.Json.Linq;
 using OpenSmc.Fixture;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 using OpenSmc.ServiceProvider;
 using Xunit.Abstractions;
 
@@ -23,26 +25,37 @@ public class SerializationTest : TestBase
             .WithRoutes(f => f
                 .RouteAddress<HostAddress>((routedAddress, d) =>
                     {
-                        var hostHub = f.Hub.GetHostedHub(routedAddress, ConfigureHost);
+                        var hostedHub = f.Hub.GetHostedHub(routedAddress, ConfigureHost);
                         var packagedDelivery = d.Package();
-                        hostHub.DeliverMessage(packagedDelivery);
+                        hostedHub.DeliverMessage(packagedDelivery);
                         return d.Forwarded();
                     })
-                .RouteAddressToHostedHub<ClientAddress>(ConfigureClient)
+                .RouteAddress<ClientAddress>((routedAddress, d) =>
+                {
+                    var hostedHub = f.Hub.GetHostedHub(routedAddress, ConfigureClient);
+                    var packagedDelivery = d.Package();
+                    hostedHub.DeliverMessage(packagedDelivery);
+                    return d.Forwarded();
+
+                })
             ));
     }
 
     private static MessageHubConfiguration ConfigureHost(MessageHubConfiguration c)
     {
-        return c;
+        return c.WithHandler<Boomerang>((hub, request) =>
+        {
+            hub.Post(request.Message.Object, o => o.ResponseFor(request));
+            return request.Processed();
+        });
     }
 
     private static MessageHubConfiguration ConfigureClient(MessageHubConfiguration c)
     {
         return c
-            .AddSerialization(conf =>
-                conf.ForType<MyEvent>(s =>
-                    s.WithMutation((value, context) => context.SetProperty("NewProp", "New"))));
+            .WithSerialization(conf =>
+                conf
+                    .WithMutation<MyEvent>( (context, value) => context.SetProperty("NewProp", "New")));
     }
 
     [Fact]
@@ -51,19 +64,51 @@ public class SerializationTest : TestBase
         var host = Router.GetHostedHub(new HostAddress(), ConfigureHost);
         var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
         var hostOut = host.AddObservable();
-        var messageTask = hostOut.ToArray().GetAwaiter();
+        var messageTask = hostOut.Where(h => h.Message is not ShutdownRequest).ToArray().GetAwaiter();
         
         client.Post(new MyEvent("Hello"), o => o.WithTarget(new HostAddress()));
-        await Task.Delay(200.Milliseconds());
-        hostOut.OnCompleted();
+
+        await Task.Delay(300);
+
+        await Router.DisposeAsync();
 
         var events = await messageTask;
         events.Should().HaveCount(1);
-        var rawJson = events.Single().Message.Should().BeOfType<RawJson>().Subject;
-        await VerifyJson(rawJson.Content);
+        var message = events.Single().Message;
+        var rawJson = message.Should().BeOfType<JObject>().Subject;
+        await VerifyJson(rawJson.ToString());
+
+
     }
+
+    [Fact]
+    public async Task BoomerangTest()
+    {
+        // problem 1: if we post Message instead of Message.Object ==> many events
+        var host = Router.GetHostedHub(new HostAddress(), ConfigureHost);
+        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
+        var hostOut = host.AddObservable();
+        var messageTask = hostOut.Where(h => h.Message is not ShutdownRequest).ToArray().GetAwaiter();
+
+        var response = await client.AwaitResponse(new Boomerang(new MyEvent("Hello")), o => o.WithTarget(new HostAddress()));
+
+        await Router.DisposeAsync();
+
+
+        var events = await messageTask;
+        events.Should().HaveCount(1);
+        var message = events.Single().Message;
+        var boomerang = message.Should().BeOfType<Boomerang>().Subject;
+        boomerang.Object.Should().BeOfType<JObject>();
+
+        response.Message.Should().BeOfType<MyEvent>();
+
+    }
+
+
 }
 
+public record Boomerang(object Object) : IRequest<object>;
 
 public record HostAddress();
 public record MyEvent(string Text);

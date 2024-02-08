@@ -1,15 +1,16 @@
 ﻿using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using OpenSmc.Serialization;
 
-namespace OpenSmc.Serialization;
+namespace OpenSmc.Messaging.Serialization;
 
 public class ObjectDeserializationConverter : JsonConverter
 {
-    private readonly IEventsRegistry eventsRegistry;
+    private readonly ITypeRegistry typeRegistry;
 
-    public ObjectDeserializationConverter(IEventsRegistry eventsRegistry)
+    public ObjectDeserializationConverter(ITypeRegistry typeRegistry)
     {
-        this.eventsRegistry = eventsRegistry;
+        this.typeRegistry = typeRegistry;
     }
 
     public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer1)
@@ -25,7 +26,7 @@ public class ObjectDeserializationConverter : JsonConverter
             var typeName = jObject["$type"]?.Value<string>();
             if (!string.IsNullOrEmpty(typeName))
             {
-                if (!eventsRegistry.TryGetType(typeName, out var type) && (type = GetTypeByName(typeName)) == null)
+                if (!typeRegistry.TryGetType(typeName, out var type) && (type = GetTypeByName(typeName)) == null)
                 {
                     // potentially convert to RawJson
                     return token;

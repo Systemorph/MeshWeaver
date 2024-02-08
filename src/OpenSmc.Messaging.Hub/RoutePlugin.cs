@@ -39,11 +39,11 @@ public class RoutePlugin : MessageHubPlugin<RouteConfiguration>
         if (delivery.State != MessageDeliveryState.Submitted || delivery.Target == null || Hub.Address.Equals(delivery.Target))
             return delivery;
 
-
         return RouteAlongHostingHierarchy(delivery, delivery.Target, null);
     }
     private IMessageDelivery RouteAlongHostingHierarchy(IMessageDelivery delivery, object address, object hostedSegment)
     {
+
         if (Hub.Address.Equals(address))
             // TODO V10: This works only if the hub has been instantiated before. Consider re-implementing setting hosted hub configs at config time. (31.01.2024, Roland Bürgi)
             return Hub.GetHostedHub(hostedSegment, null).DeliverMessage(delivery);

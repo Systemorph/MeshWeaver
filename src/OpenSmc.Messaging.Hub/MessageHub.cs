@@ -4,8 +4,11 @@ using Microsoft.Extensions.Logging;
 
 namespace OpenSmc.Messaging;
 
+public record ShutdownRequest(MessageHubRunLevel RunLevel, long Version);
 
-public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub<TAddress>
+public enum MessageHubRunLevel{Starting, Started, DisposeHostedHubs, HostedHubsDisposed, ShutDown, Dead }
+
+public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub<TAddress>, IMessageHandler<ShutdownRequest>
 {
     public override TAddress Address => (TAddress)MessageService.Address;
     void IMessageHub.Schedule(Func<Task> action) => MessageService.Schedule(action);
@@ -17,6 +20,9 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
     private readonly HostedHubsCollection hostedHubs;
     private readonly IDisposable deferral;
     private readonly MessageHubConnections connections;
+    public long Version { get; private set; }
+    public MessageHubRunLevel RunLevel { get; private set; }
+
     public MessageHub(IServiceProvider serviceProvider, HostedHubsCollection hostedHubs,
         MessageHubConfiguration configuration, IMessageHub parentHub) : base(serviceProvider)
     {
@@ -43,7 +49,6 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         Register(HandleCallbacks);
 
 
-
         foreach (var messageHandler in configuration.MessageHandlers)
             Register(messageHandler.MessageType, d => messageHandler.AsyncDelivery.Invoke(this, d));
 
@@ -56,6 +61,7 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
 
     public override async Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery)
     {
+        ++Version;
         delivery = await base.DeliverMessageAsync(delivery);
         return FinishDelivery(delivery);
     }
@@ -78,6 +84,7 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
 
         deferral.Dispose();
         MessageService.Start();
+        RunLevel = MessageHubRunLevel.Started;
     }
 
 
@@ -194,8 +201,7 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
     public IMessageDelivery DeliverMessage(IMessageDelivery delivery)
     {
         var ret = delivery.ChangeState(MessageDeliveryState.Submitted);
-        if (!IsDisposing)
-            MessageService.IncomingMessage(ret);
+        MessageService.IncomingMessage(ret);
         return ret;
     }
 
@@ -221,90 +227,85 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         return this;
     }
 
-    private bool IsDisposing { get;  set; }
+    private bool IsDisposing => disposingTaskCompletionSource != null;
 
-    private Task disposing;
+    private TaskCompletionSource disposingTaskCompletionSource;
 
-
-    public void Log(Action<ILogger> log)
-    {
-        log(logger);
-    }
 
     private readonly object locker = new();
 
-    public override Task DisposeAsync()
+    private static readonly TimeSpan ShutDownTimeout = TimeSpan.FromSeconds(10);
+
+    public void Dispose()
     {
         lock (locker)
         {
-            IsDisposing = true;
-            if (disposing != null)
-                return disposing;
-
-            return disposing = DoDisposeAsync();
+            if(IsDisposing)
+                return;
+            disposingTaskCompletionSource = new(new CancellationTokenSource(ShutDownTimeout).Token);
         }
+
+        Post(new DisconnectHubRequest(), o => o.WithTarget(MessageTargets.Subscriptions));
+        Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
     }
 
-
-    private async Task DoDisposeAsync()
+    IMessageDelivery IMessageHandler<ShutdownRequest>.HandleMessage(IMessageDelivery<ShutdownRequest> request)
     {
-
-        await hostedHubs.DisposeAsync();
-
-        ProperDisconnectFromSubscribers();
-
-    }
-
-    private void ProperDisconnectFromSubscribers()
-    {
-        var allSubscriptions = new HashSet<object>(connections.Subscriptions);
-        foreach (var subscription in allSubscriptions)
+        if (request.Message.Version != Version - 1)
         {
-            RegisterCallback(Post(new DisconnectHubRequest(), o => o.WithTarget(subscription)),
-                response => HandleDisconnectCallback(response, allSubscriptions));
+            Post(request.Message with { Version = Version });
+            return request.Ignored();
         }
-
         Task.Run(async () =>
         {
-            await Task.Delay(10000);
-            await ShutdownAsync();
+            switch (request.Message.RunLevel)
+            {
+                case MessageHubRunLevel.DisposeHostedHubs:
+                    RunLevel = MessageHubRunLevel.DisposeHostedHubs;
+                    await hostedHubs.DisposeAsync();
+                    Post(new ShutdownRequest(MessageHubRunLevel.ShutDown, Version));
+                    RunLevel = MessageHubRunLevel.HostedHubsDisposed;
+                    return request.Processed();
+                case MessageHubRunLevel.ShutDown:
+                    RunLevel = MessageHubRunLevel.ShutDown;
+                    await ShutdownAsync();
+                    RunLevel = MessageHubRunLevel.Dead;
+                    disposingTaskCompletionSource.SetResult();
+                    return request.Processed();
+            }
+
+            return request.Ignored();
         });
+
+        return request.Forwarded();
     }
 
-    private async Task<IMessageDelivery> HandleDisconnectCallback(IMessageDelivery response, HashSet<object> allSubscriptions)
+
+
+    public override Task DisposeAsync()
     {
-        allSubscriptions.Remove(response.Sender);
-        if (allSubscriptions.Count == 0)
-            await ShutdownAsync();
-
-        return response.Processed();
+        if(!IsDisposing)
+            Dispose();
+        return disposingTaskCompletionSource.Task;
     }
 
-    private bool isShuttingDown;
+
+
 
     private async Task ShutdownAsync()
     {
-        lock (locker)
-        {
-            if(isShuttingDown)
-                return;
-            isShuttingDown = true;
-        }
-        await MessageService.DisposeAsync();
+        await hostedHubs.DisposeAsync();
 
         foreach (var configurationDisposeAction in disposeActions)
             await configurationDisposeAction.Invoke(this);
 
+
+        await MessageService.DisposeAsync();
         await base.DisposeAsync();
     }
 
     private readonly List<Func<IMessageHub, Task>> disposeActions = new();
 
-
-    public void Dispose()
-    {
-        MessageService.Schedule(DisposeAsync);
-    }
 
 
 
@@ -354,6 +355,9 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         RegisterCallback(request, d => callback((IMessageDelivery<TResponse>)d), cancellationToken);
         return request.Forwarded();
     }
+
+    public ILogger Logger => logger;
+
 }
 
 
