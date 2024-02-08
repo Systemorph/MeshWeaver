@@ -34,22 +34,7 @@ namespace OpenSmc.Import.Contract.Builders
         }
     }
 
-    /*
-     *
-     config => config.AddImport(import => import.WithFormat(HandleFormat1)
-       						.WithFileSource(request => filename, basepath)
-       					.WithDataSource(“datasource1”, datasource1))
-       
-       IMessageDelivery HandleFormat1(IMessageDelivery<ImportRequest> request, ImportConfiguration configuration)
-       {
-       	if (request.Format != “format1”)
-       		return request;
-       	var dataset = configuration.ReadDataSet(request);
-       	var datasource = configuration.GetDataSource(request); //if (request.message.format == “format1”) return “datasource1”
-       }
-       
-     *
-     */
+      
 
     public class ImportBuilder
     {
@@ -67,58 +52,22 @@ namespace OpenSmc.Import.Contract.Builders
         
         public FileReaderImportOptionsBuilder FromFile(string filePath)
         {
-            return new(activityService, 
-                       mappingService,
-                       fileReadStorage,
-                       CancellationToken.None,
-                       defaultDomain,
-                       targetSource,
-                       serviceProvider,
-                       importFormatFunctions,
-                       defaultValidations,
-                       filePath);
+            throw new NotImplementedException();
         }
 
         public StringImportOptionsBuilder FromString(string content)
         {
-            return new(activityService,
-                       mappingService,
-                       fileReadStorage,
-                       CancellationToken.None,
-                       defaultDomain,
-                       targetSource,
-                       serviceProvider,
-                       importFormatFunctions,
-                       defaultValidations,
-                       content);
+            throw new NotImplementedException();
         }
 
         public StreamImportOptionsBuilder FromStream(Stream stream)
         {
-            return new(activityService,
-                       mappingService,
-                       fileReadStorage,
-                       CancellationToken.None,
-                       defaultDomain,
-                       targetSource,
-                       serviceProvider,
-                       importFormatFunctions,
-                       defaultValidations,
-                       stream);
+            throw new NotImplementedException();
         }
 
         public DataSetImportOptionsBuilder FromDataSet(IDataSet dataSet)
         {
-            return new(activityService,
-                       mappingService,
-                       fileReadStorage,
-                       CancellationToken.None,
-                       defaultDomain,
-                       targetSource,
-                       serviceProvider,
-                       importFormatFunctions,
-                       defaultValidations,
-                       dataSet);
+            throw new NotImplementedException();
         }
     }
     /*
@@ -132,7 +81,7 @@ namespace OpenSmc.Import.Contract.Builders
      *
      */
 
-    public class ImportPlugin : MessageHubPlugin
+    public class ImportPlugin : MessageHubPlugin, IMessageHandler<ImportRequest>
     {
         [Inject] private IActivityService activityService;
 
@@ -141,6 +90,24 @@ namespace OpenSmc.Import.Contract.Builders
             var importBuilder = new ImportBuilder();
             hub.ServiceProvider.Buildup(importBuilder);
             optionsBuilder.Invoke(importBuilder);
+
+        }
+
+        config => config.AddImport(import => import.WithFormat(HandleFormat1)
+        .WithFileSource(request => filename, basepath)
+        .WithDataSource(“datasource1”, datasource1))
+       
+        IMessageDelivery HandleFormat1(IMessageDelivery<ImportRequest> request, ImportConfiguration configuration)
+        {
+            if (request.Format != “format1”)
+            return request;
+            var dataset = configuration.ReadDataSet(request);
+            var datasource = configuration.GetDataSource(request); //if (request.message.format == “format1”) return “datasource1”
+        }
+
+        public IMessageDelivery HandleMessage(IMessageDelivery<ImportRequest> request)
+        {
+            throw new NotImplementedException();
         }
     }
 
@@ -191,18 +158,6 @@ namespace OpenSmc.Import.Contract.Builders
             ImportFormatFunctions = importFormatFunctions;
             Validations = defaultValidations;
             ServiceProvider = serviceProvider;
-        }
-
-        public ImportOptions Build()
-        {
-            var importMappings = this;
-
-            var (dataSet, format) = await GetDataSetAsync();
-            //even if format was defined we take it from file
-            if (format != null)
-                importMappings = importMappings with { Format = format };
-
-            var importOptions = importMappings.GetImportOptions();
         }
 
         public ImportOptionsBuilder WithDomain(DomainDescriptor domainDescriptor)
@@ -343,13 +298,15 @@ namespace OpenSmc.Import.Contract.Builders
             return this with { DataSetReaderOptionsBuilderFunc = readFunc };
         }
 
+        protected abstract Task<(IDataSet DataSet, string Format)> GetDataSetAsync();
+
 
         private bool SaveLog { get; init; }
         public ImportOptionsBuilder SaveLogs(bool save = true)
         {
             return this with { SaveLog = save };
         }
-        
+
         public async Task<ActivityLog> ExecuteAsync()
         {
             ActivityLog log;
@@ -357,7 +314,14 @@ namespace OpenSmc.Import.Contract.Builders
 
             try
             {
-                //get options
+                var importMappings = this;
+
+                var (dataSet, format) = await GetDataSetAsync();
+                //even if format was defined we take it from file
+                if (format != null)
+                    importMappings = importMappings with { Format = format };
+
+                var importOptions = importMappings.GetImportOptions();
 
                 // in case if import format function is defined, then we get this function and execute
                 if (importMappings.Format != null && ImportFormatFunctions.TryGetValue(importOptions.Format, out var importFunction))
@@ -385,7 +349,7 @@ namespace OpenSmc.Import.Contract.Builders
                             if (instancesPerType.Value.Count > 0 || isSnapshot)
                                 await UpdateMethod.MakeGenericMethod(instancesPerType.Key).InvokeAsActionAsync(TargetDataSource, instancesPerType.Value, isSnapshot);
                         }
-
+                       
                         await TargetDataSource.CommitAsync();
                     }
                 }
@@ -406,15 +370,13 @@ namespace OpenSmc.Import.Contract.Builders
                 log = ActivityService.Finish();
                 if (SaveLog && TargetDataSource != null)
                 {
-                    await TargetDataSource.UpdateAsync(new[] { log });
+                    await TargetDataSource.UpdateAsync(new[]{log});
                     await TargetDataSource.CommitAsync();
                 }
             }
 
             return log;
         }
-
-
 #pragma warning disable 4014
         private static readonly IGenericMethodCache UpdateMethod =
             GenericCaches.GetMethodCacheStatic(() => PerformUpdate<object>(null, null, false));
