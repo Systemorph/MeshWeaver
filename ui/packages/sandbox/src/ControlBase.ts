@@ -1,14 +1,16 @@
-import { ViewModelHub } from "./ViewModelHub";
 import { ControlDef, MessageAndAddress } from "@open-smc/application/src/ControlDef";
 import { Style } from "@open-smc/application/src/Style";
 import { v4 } from "uuid";
 import { ClickedEvent } from "@open-smc/application/src/application.contract";
 import { Builder, Constructor } from "@open-smc/utils/src/Builder";
 import { StyleBuilder } from "./StyleBuilder";
+import { SubjectHub } from "@open-smc/application/src/messageHub/SubjectHub";
+import { isOfType } from "@open-smc/application/src/isOfType";
+import { receiveMessage } from "@open-smc/application/src/messageHub/receiveMessage";
 
 export type ClickAction = <TView>(payload: unknown, control: ControlBase) => void;
 
-export abstract class ControlBase extends ViewModelHub implements ControlDef {
+export abstract class ControlBase extends SubjectHub implements ControlDef {
     readonly id: string;
     readonly moduleName: string;
     readonly apiVersion: string;
@@ -33,9 +35,13 @@ export abstract class ControlBase extends ViewModelHub implements ControlDef {
 
         this.address = this;
 
-        this.receiveMessage(ClickedEvent, ({payload}) => {
-            this.clickAction?.(payload, this);
-        });
+        receiveMessage(
+            this.input,
+            env => {
+                this.clickAction?.(env.message.payload, this);
+            },
+            isOfType(ClickedEvent)
+        );
     }
 }
 

@@ -1,6 +1,7 @@
 import { SignalrConnection } from "./makeSignalrConnection";
 import { Observable } from "rxjs";
 import { MessageHub } from "./messageHub/MessageHub";
+import { MessageDelivery } from "./MessageDelivery";
 
 export class SignalrHub extends Observable<MessageDelivery> implements MessageHub {
     constructor(private connection: SignalrConnection) {
@@ -23,13 +24,3 @@ export class SignalrHub extends Observable<MessageDelivery> implements MessageHu
     }
 }
 
-export interface MessageDelivery<TMessage = unknown> {
-    readonly id?: string;
-    readonly sender?: unknown;
-    readonly target?: unknown;
-    readonly state?: MessageDeliveryState;
-    readonly message: TMessage;
-    readonly properties?: Record<string, unknown>;
-}
-
-export type MessageDeliveryState = "Submitted" | "Accepted" | "Processed" | "NotFound" | "Error" | "Forwarded";

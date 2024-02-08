@@ -1,10 +1,10 @@
 import { createContext, PropsWithChildren, useCallback, useContext, useEffect, useMemo } from "react";
-import { MessageDelivery } from "./SignalrHub";
 import { filter, map, Subscription } from "rxjs";
 import { isEqual } from "lodash";
 import { down, makeLogger, up } from "./logger";
 import { useTransport } from "./transportContext";
 import { MessageHub } from "./messageHub/MessageHub";
+import { MessageDelivery } from "./MessageDelivery";
 
 const log = process.env.NODE_ENV === 'development';
 
@@ -21,7 +21,7 @@ export function useMessageRouter() {
     return useContext(messageRouterContext);
 }
 
-export function MessageRouter({children}: PropsWithChildren<MessageRouterProps>) {
+export function MessageRouter({children}: PropsWithChildren) {
     const {transportHub, uiAddress} = useTransport();
 
     useEffect(() => {

@@ -1,4 +1,4 @@
-import { Observer, Subscribable } from "rxjs";
-import { MessageDelivery } from "@open-smc/application/src/SignalrHub";
+import { Observable, Observer } from "rxjs";
+import { MessageDelivery } from "./MessageDelivery";
 
-export type MessageHub = Subscribable<MessageDelivery> & Observer<MessageDelivery>;
+export type MessageHub = Observable<MessageDelivery> & Observer<MessageDelivery>;
