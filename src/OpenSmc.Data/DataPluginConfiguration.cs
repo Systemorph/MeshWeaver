@@ -11,8 +11,8 @@ public record DataPersistenceConfiguration(IMessageHub Hub)
 
     public DataPersistenceConfiguration WithType<T>(
         Func<Task<IReadOnlyCollection<T>>> initialize,
-        Func<IReadOnlyCollection<T>, Task> save,
-        Func<IReadOnlyCollection<T>, Task> delete)
+        Func<IEnumerable<T>, Task> save,
+        Func<IEnumerable<T>, Task> delete)
         => this with { TypeConfigurations = TypeConfigurations.Add(new TypeConfiguration<T>(initialize, save, delete)) };
 
     public DataPersistenceConfiguration WithType<T>(IDataSource dataSource) =>
