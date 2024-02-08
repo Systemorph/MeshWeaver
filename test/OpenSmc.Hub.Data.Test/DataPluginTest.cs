@@ -48,17 +48,19 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var updateResponse = await client.AwaitResponse(new UpdateDataRequest(updateItems), o => o.WithTarget(new HostAddress()));
 
         // asserts
-        updateResponse.Message.Should().BeEquivalentTo(updateItems);
-        var expectedItems = new object[]
+        var expected = new DataChanged(updateItems);
+        updateResponse.Message.Should().BeEquivalentTo(expected);
+        var expectedItems = new MyData[]
         {
-            new MyData("1", "AAA"),
-            new MyData("2", "B"),
-            new MyData("3", "CCC")
+            new("1", "AAA"),
+            new("2", "B"),
+            new("3", "CCC")
         };
         storage.Values.Should().BeEquivalentTo(expectedItems);
         
         var response = await client.AwaitResponse(new GetManyRequest<MyData>(), o => o.WithTarget(new HostAddress()));
-        response.Message.Should().BeEquivalentTo(expectedItems);
+        var finalExpected = new GetManyResponse<MyData>(expectedItems.Length, expectedItems);
+        response.Message.Should().BeEquivalentTo(finalExpected);
     }
 
     [Fact]
