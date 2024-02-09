@@ -2,7 +2,6 @@
 using System.Collections.Concurrent;
 using System.Reflection;
 using OpenSmc.Collections;
-using OpenSmc.Data;
 using OpenSmc.DataSource.Abstractions;
 using OpenSmc.Domain.Abstractions.Attributes;
 using OpenSmc.Equality;
@@ -63,10 +62,10 @@ namespace OpenSmc.Scheduling
         }
 
         //aggregation is savesByPartition and exclusion is deletesByPartition 
-        public void AddModified(IGrouping<Type, object> group, IPartitionVariable partitionVariable, Func<UpdateOptions, UpdateOptions> options = default) =>
-            ModifyInner(savesByPartition, deletesByPartition, group, partitionVariable, options != null && options(UpdateOptions.Empty).GetOptions().SnapshotModeEnabled);
+        public void AddModified(IGrouping<Type, object> group, IPartitionVariable partitionVariable, Func<UpdateOptionsBuilder, UpdateOptionsBuilder> options = default) =>
+            ModifyInner(savesByPartition, deletesByPartition, group, partitionVariable, options != null && options(UpdateOptionsBuilder.Empty).GetOptions().SnapshotModeEnabled);
 
-        public void AddModified(IEnumerable<object> entities, IPartitionVariable partitionVariable, Func<UpdateOptions, UpdateOptions> options = default) => 
+        public void AddModified(IEnumerable<object> entities, IPartitionVariable partitionVariable, Func<UpdateOptionsBuilder, UpdateOptionsBuilder> options = default) => 
             Modify((objects, variable) => AddModified(objects, variable, options), entities, partitionVariable);
 
         //aggregation is deletesByPartition and exclusion is savesByPartition

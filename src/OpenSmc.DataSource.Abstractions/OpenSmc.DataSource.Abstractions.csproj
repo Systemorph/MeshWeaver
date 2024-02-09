@@ -1,5 +1,2 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <ItemGroup>
-    <ProjectReference Include="..\OpenSmc.Data.Contract\OpenSmc.Data.Contract.csproj" />
-  </ItemGroup>
 </Project>

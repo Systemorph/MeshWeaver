@@ -132,11 +132,11 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         return Task.CompletedTask;
     }
 
-    private Task DeleteMyData(IEnumerable<object> ids)
+    private Task DeleteMyData(IEnumerable<object> instances)
     {
-        foreach (var id in ids)
+        foreach (var instance in instances.OfType<MyData>())
         {
-            storage.Remove((string)id);
+            storage.Remove(instance.Id);
         }
         return Task.CompletedTask;
     }

@@ -35,20 +35,20 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
 {
     private readonly DataConfiguration dataConfiguration;
     public record DataPersistencyAddress(object Host) : IHostedAddress;
-    private DataPersistencyAddress dataPersistencyAddress;
+    private readonly IMessageHub persistenceHub;
 
     public DataPlugin(IMessageHub hub) : base(hub)
     {
+        var dataPersistencyAddress = new DataPersistencyAddress(Hub.Address);
         dataConfiguration = hub.Configuration.Get<DataConfiguration>() ?? new();
         Register(HandleGetRequest);              // This takes care of all Read (CRUD)
+        persistenceHub = hub.GetHostedHub(dataPersistencyAddress, conf => conf.WithPersistencePlugin(dataConfiguration));
     }
 
     public override async Task StartAsync()  // This takes care of the Create (CRUD)
     {
         await base.StartAsync();
 
-        dataPersistencyAddress = new DataPersistencyAddress(Hub.Address);
-        var persistenceHub = Hub.GetHostedHub(dataPersistencyAddress, conf => conf.WithPersistencePlugin(dataConfiguration));
         var response = await persistenceHub.AwaitResponse(new GetDataStateRequest());
         InitializeState(response.Message);
     }
@@ -62,24 +62,37 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     {
         UpdateState(s => s.Update(items, dataConfiguration)); // update the state in memory (workspace)
         Hub.Post(new DataChanged(items), o => o.ResponseFor(request).WithTarget(MessageTargets.Subscribers));      // notify all subscribers that the data has changed
-        if (dataPersistencyAddress != null)
-            Hub.Post(request.Message, o => o.WithTarget(dataPersistencyAddress));
+        persistenceHub.Post(new UpdateDataRequest(items){Options = options});
         return request?.Processed();
     }
 
     IMessageDelivery IMessageHandler<DeleteDataRequest>.HandleMessage(IMessageDelivery<DeleteDataRequest> request)
     {
         var items = request.Message.Elements;
+        return DeleteImpl(request, items);
+    }
+
+    private IMessageDelivery DeleteImpl(IMessageDelivery<DeleteDataRequest> request, IReadOnlyCollection<object> items)
+    {
         UpdateState(s => s.Delete(items, dataConfiguration));
         Hub.Post(new DataDeleted(items), o => o.ResponseFor(request).WithTarget(MessageTargets.Subscribers));
-        if (dataPersistencyAddress != null)
-            Hub.Post(request.Message, o => o.WithTarget(dataPersistencyAddress));
-        return request.Processed();
+        persistenceHub.Post(new DeleteDataRequest(items));
+        return request?.Processed();
     }
 
     IMessageDelivery IMessageHandler<DeleteByIdRequest>.HandleMessage(IMessageDelivery<DeleteByIdRequest> request)
     {
-        throw new NotImplementedException();
+        var ids = request.Message.Ids;
+        var items = ids
+            .Select(id =>
+                State.Data.TryGetValue(id.Key, out var inner)
+                    ? id.Value.Select(ii => inner.Remove(ii))
+                    : Enumerable.Empty<object>()).Aggregate((x, y) => x.Concat(y)).ToArray();
+        UpdateState(s => s.Delete(items, dataConfiguration));
+        Hub.Post(new DataDeleted(items), o => o.ResponseFor(request).WithTarget(MessageTargets.Subscribers));
+        persistenceHub.Post(new DeleteDataRequest(items));
+        return request?.Processed();
+
     }
 
     private IMessageDelivery HandleGetRequest(IMessageDelivery request)
@@ -124,7 +137,7 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
         throw new NotImplementedException();
     }
 
-    public void Commit(Func<CommitOptionsBuilder, CommitOptionsBuilder> options = null)
+    public void Commit(Func<CommitOptionsBuilder, CommitOptionsBuilder> options = default)
     {
         throw new NotImplementedException();
     }

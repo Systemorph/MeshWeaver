@@ -4,7 +4,7 @@ namespace OpenSmc.Data;
 
 public record WorkspaceState
 {
-    private ImmutableDictionary<Type, ImmutableDictionary<object, object>> Data { get; init; } =
+    public ImmutableDictionary<Type, ImmutableDictionary<object, object>> Data { get; init; } =
         ImmutableDictionary<Type, ImmutableDictionary<object, object>>.Empty;
 
     public WorkspaceState Update(IEnumerable<object> items, DataConfiguration configuration)
