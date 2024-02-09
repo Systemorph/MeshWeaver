@@ -1,7 +1,18 @@
-﻿using OpenSmc.Messaging;
+﻿using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.DataSource.Abstractions;
+using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 
 namespace OpenSmc.Data;
+
+public static class DataPluginExtensions
+{
+    public static MessageHubConfiguration AddData(this MessageHubConfiguration config, Func<DataConfiguration, DataConfiguration> dataPluginConfiguration)
+    {
+        var dataPluginConfig = config.Get<DataConfiguration>() ?? new();
+        return config.WithServices(sc => sc.AddSingleton<IWorkspace, DataPlugin>()).Set(dataPluginConfiguration(dataPluginConfig));
+    }
+}
 
 /* TODO List: 
  *  a) move code DataPlugin to opensmc -- done
@@ -12,16 +23,17 @@ namespace OpenSmc.Data;
  */
 
 public class DataPlugin : MessageHubPlugin<WorkspaceState>, 
+    IWorkspace,
     IMessageHandler<UpdateDataRequest>,
     IMessageHandler<DeleteDataRequest>
 {
-    private readonly Func<DataConfiguration, DataConfiguration> configure;
+    private readonly DataConfiguration dataConfiguration;
     public record DataPersistencyAddress(object Host) : IHostedAddress;
     private DataPersistencyAddress dataPersistencyAddress;
 
-    public DataPlugin(IMessageHub hub, Func<DataConfiguration, DataConfiguration> configure) : base(hub)
+    public DataPlugin(IMessageHub hub) : base(hub)
     {
-        this.configure = configure;
+        dataConfiguration = hub.Configuration.Get<DataConfiguration>() ?? new();
         Register(HandleGetRequest);              // This takes care of all Read (CRUD)
     }
 
@@ -29,7 +41,6 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     {
         await base.StartAsync();
 
-        var dataConfiguration = configure(new DataConfiguration());
         if (dataConfiguration.CreateSatellitePlugin != null)
         {
             dataPersistencyAddress = new DataPersistencyAddress(Hub.Address);
@@ -92,4 +103,34 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
 
     public override bool IsDeferred(IMessageDelivery delivery)
         => delivery.Message.GetType().Namespace == typeof(GetManyRequest<>).Namespace;
+
+    public void Update<T>(IEnumerable<T> instances, Func<UpdateOptionsBuilder, UpdateOptionsBuilder> options = null)
+    {
+        throw new NotImplementedException();
+    }
+
+    public void Update<T>(T instance, Func<UpdateOptionsBuilder, UpdateOptionsBuilder> options = null)
+    {
+        throw new NotImplementedException();
+    }
+
+    public void Delete<T>(IEnumerable<T> instances)
+    {
+        throw new NotImplementedException();
+    }
+
+    public void Delete<T>(T instance)
+    {
+        throw new NotImplementedException();
+    }
+
+    public void Commit(Func<CommitOptionsBuilder, CommitOptionsBuilder> options = null)
+    {
+        throw new NotImplementedException();
+    }
+
+    public IQueryable<T> Query<T>()
+    {
+        throw new NotImplementedException();
+    }
 }

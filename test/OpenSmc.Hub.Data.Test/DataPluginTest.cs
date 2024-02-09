@@ -19,9 +19,11 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
-            .AddPlugin(hub => new DataPlugin(hub, conf => conf
-                .WithWorkspace(workspace => workspace.Key<MyData>(x => x.Id))
-                .WithPersistence(persistence => persistence.WithType<MyData>(InitializeMyData, SaveMyData, DeleteMyData))));
+            .AddData(c => c.WithWorkspace(workspace => workspace.Key<MyData>(x => x.Id))
+                .WithPersistence(persistence => persistence.WithType(InitializeMyData, SaveMyData, DeleteMyData)));
+            //.AddPlugin(hub => new DataPlugin(hub, conf => conf
+            //    .WithWorkspace(workspace => workspace.Key<MyData>(x => x.Id))
+            //    .WithPersistence(persistence => persistence.WithType<MyData>(InitializeMyData, SaveMyData, DeleteMyData))));
     }
 
     [Fact]
