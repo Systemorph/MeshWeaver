@@ -14,6 +14,8 @@ public record GetManyResponse<T>(int Total, IReadOnlyCollection<T> Items)
     public static GetManyResponse<T> Empty() => new(0, Array.Empty<T>());
 }
 
+public record GetBatchRequest(params Type[] Types) : IRequest<WorkspaceState>;
+
 public record UpdateDataRequest(IReadOnlyCollection<object> Elements) : IRequest<DataChanged>;
 
 public record DeleteDataRequest(IReadOnlyCollection<object> Elements) : IRequest<DataDeleted>;
