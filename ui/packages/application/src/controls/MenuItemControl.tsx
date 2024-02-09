@@ -1,4 +1,4 @@
-import { AddHub, useMessageHub } from "../messageHub/AddHub";
+import { AddHub, useMessageHub } from "../AddHub";
 import { AreaChangedEvent } from "../application.contract";
 import { renderControl } from "../renderControl";
 import { useEffect, useState } from 'react';
@@ -15,6 +15,7 @@ import { brandeisBlue, brightGray } from "../colors";
 import { useSubscribeToAreaChanged } from "../useSubscribeToAreaChanged";
 import { ExpandableView } from "../ControlDef";
 import { useClickAction } from "../useClickAction";
+import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
 
 export type MenuItemSkin = "LargeButton" | "LargeIcon" | "Link";
 
@@ -127,12 +128,12 @@ function ExpandOverlayInner() {
     const {boundView: {expandMessage}} = useControlContext<MenuItemView>();
     const {message, area} = expandMessage;
     const [event, setEvent] = useState<AreaChangedEvent>();
-    const {sendMessage} = useMessageHub();
+    const hub = useMessageHub();
 
     useSubscribeToAreaChanged(setEvent, area);
 
     useEffect(() => {
-        sendMessage(message);
+        sendMessage(hub, message);
     }, [message]);
 
     if (!event?.view) {

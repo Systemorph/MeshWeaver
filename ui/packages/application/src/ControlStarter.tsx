@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { AreaChangedEvent, SetAreaRequest } from "./application.contract";
 import { useSubscribeToAreaChanged } from "./useSubscribeToAreaChanged";
 import { renderControl } from "./renderControl";
-import { useMessageHub } from "./messageHub/AddHub";
+import { useMessageHub } from "./AddHub";
 import { layoutHubId } from "./LayoutHub";
+import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
 
 interface ControlStarterProps {
     area: string;
@@ -13,14 +14,13 @@ interface ControlStarterProps {
 
 export function ControlStarter({area, path, options}: ControlStarterProps) {
     const [event, setEvent] = useState<AreaChangedEvent>();
-    const messageHub = useMessageHub(layoutHubId);
-    const {sendMessage} = messageHub;
+    const hub = useMessageHub(layoutHubId);
 
-    useSubscribeToAreaChanged(setEvent, area, messageHub);
+    useSubscribeToAreaChanged(setEvent, area, layoutHubId);
 
     useEffect(() => {
-        sendMessage(new SetAreaRequest(area, path, options));
-        return () => sendMessage(new SetAreaRequest(area, null));
+        sendMessage(hub, new SetAreaRequest(area, path, options));
+        return () => sendMessage(hub, new SetAreaRequest(area, null));
     }, [area, path, options, sendMessage]);
 
     if (!event?.view) {

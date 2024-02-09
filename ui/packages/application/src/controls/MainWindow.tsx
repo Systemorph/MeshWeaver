@@ -8,7 +8,8 @@ import { AreaChangedEvent, CloseModalDialogEvent } from "../application.contract
 import Dialog from "rc-dialog";
 import "@open-smc/ui-kit/src/components/dialog.scss";
 import classNames from "classnames";
-import { useMessageHub } from "../messageHub/AddHub";
+import { useMessageHub } from "../AddHub";
+import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
 
 export const mainWindowAreas = {
     main: "Main",
@@ -58,7 +59,7 @@ export function MainWindow({id, areas}: StackView) {
         setModal(areasByKey[mainWindowAreas.modal]);
     }, [areas]);
 
-    const {sendMessage} = useMessageHub();
+    const hub = useMessageHub();
 
     const modalOptions = modal?.options as ModalOptions;
 
@@ -128,7 +129,7 @@ export function MainWindow({id, areas}: StackView) {
                     className={modalClassName}
                     onClose={isClosable && (() => {
                         setModal(null);
-                        sendMessage(new CloseModalDialogEvent());
+                        sendMessage(hub, new CloseModalDialogEvent());
                     })}
                     children={renderControl(modal.view)}
                     destroyOnClose={true}

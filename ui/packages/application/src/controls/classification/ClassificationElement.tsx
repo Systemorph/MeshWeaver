@@ -4,7 +4,7 @@ import style from './classification.module.scss';
 import classNames from "classnames";
 import buttons from "@open-smc/ui-kit/src/components/buttons.module.scss";
 import { Named } from "../../application.contract";
-import {Button} from "@open-smc/ui-kit/components";
+import {Button} from "@open-smc/ui-kit/src/components/Button";
 
 interface ItemProps {
     element: Named;

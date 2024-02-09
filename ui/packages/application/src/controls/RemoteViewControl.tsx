@@ -2,9 +2,10 @@ import { renderControl } from "../renderControl";
 import { useSubscribeToAreaChanged } from "../useSubscribeToAreaChanged";
 import { useState, useEffect } from "react";
 import { AreaChangedEvent, RefreshRequest } from "../application.contract";
-import { useMessageHub } from "../messageHub/AddHub";
+import { useMessageHub } from "../AddHub";
 import { ControlView } from "../ControlDef";
 import { contractMessage } from "../contractMessage";
+import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
 
 const remoteMainArea = "Data";
 
@@ -18,14 +19,17 @@ export class RemoteViewControlDef {
 
 export default function RemoteViewControl({data}: ControlView) {
     const [areaChangeEvent, setAreaChangeEvent] = useState<AreaChangedEvent>(data as AreaChangedEvent);
-    const {sendMessage} = useMessageHub();
+    const hub = useMessageHub();
     
     useSubscribeToAreaChanged(setAreaChangeEvent, remoteMainArea);
 
     useEffect(() => {
         setAreaChangeEvent(data as AreaChangedEvent);
-        sendMessage(new RefreshRequest(remoteMainArea));
-    }, [data, sendMessage]);
+    }, [data]);
+
+    useEffect(() => {
+        sendMessage(hub, new RefreshRequest(remoteMainArea));
+    }, [hub, data]);
 
     if (!areaChangeEvent?.view) {
         return null;

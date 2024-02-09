@@ -1,4 +1,4 @@
-import { EventStatus } from "../application.contract";
+import { EventStatus } from "./application.contract";
 
 // TODO: legacy (8/10/2023, akravets)
 export function validateStatus(status: EventStatus) {

@@ -1,10 +1,11 @@
 import { renderControl } from "../renderControl";
-import { AddHub, useMessageHub } from "../messageHub/AddHub";
+import { AddHub, useMessageHub } from "../AddHub";
 import { useControlContext } from "../ControlContext";
 import { useSubscribeToAreaChanged } from "../useSubscribeToAreaChanged";
 import { useEffect, useState } from "react";
 import { AreaChangedEvent } from "../application.contract";
 import { ControlView } from "../ControlDef";
+import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
 
 export interface RedirectView extends ControlView {
     readonly message: unknown;
@@ -23,13 +24,13 @@ export default function RedirectControl({message, redirectAddress, redirectArea}
 function RedirectControlInner() {
     const {boundView: {message, redirectArea}} = useControlContext<RedirectView>();
     const [event, setEvent] = useState<AreaChangedEvent>();
-    const {sendMessage} = useMessageHub();
+    const hub = useMessageHub();
 
     useSubscribeToAreaChanged(setEvent, redirectArea);
 
     useEffect(() => {
-        sendMessage(message);
-    }, [message, sendMessage]);
+        sendMessage(hub, message);
+    }, [sendMessage, hub, message]);
 
     if (!event?.view) {
         return null;

@@ -1,12 +1,15 @@
 import { useEffect, useState, useCallback } from "react";
 import { isObjectLike } from "lodash";
 import { createScopeMonitor } from "./createScopeMonitor";
-import { useMessageHub } from "../messageHub/AddHub";
+import { useMessageHub } from "../AddHub";
 import { ScopePropertyChanged } from "./scope.contract";
+import { receiveMessage } from "@open-smc/message-hub/src/receiveMessage";
+import { ofType } from "../ofType";
+import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
 
 export function useScopeMonitor(data: unknown) {
     const [current, setCurrent] = useState(data);
-    const {sendMessage, receiveMessage} = useMessageHub();
+    const hub = useMessageHub();
 
     useEffect(() => {
         setCurrent(data);
@@ -15,7 +18,7 @@ export function useScopeMonitor(data: unknown) {
     useEffect(() => {
         if (isObjectLike(current)) {
             const setScopeProperty = createScopeMonitor<any>(current, setCurrent);
-            return receiveMessage(ScopePropertyChanged, message => {
+            return receiveMessage(hub.pipe(ofType(ScopePropertyChanged)), message => {
                 const {scopeId, property, value} = message;
                 setScopeProperty(scopeId, property, value);
             });
@@ -23,8 +26,9 @@ export function useScopeMonitor(data: unknown) {
     }, [current, receiveMessage]);
 
     const setScopeProperty = useCallback(
-        (scopeId: string, property: string, value: unknown) => sendMessage(new ScopePropertyChanged(scopeId, property, value)),
-        [sendMessage]
+        (scopeId: string, property: string, value: unknown) =>
+            sendMessage(hub, new ScopePropertyChanged(scopeId, property, value)),
+        [hub]
     );
 
     return {

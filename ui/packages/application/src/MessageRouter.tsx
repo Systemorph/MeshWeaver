@@ -3,8 +3,8 @@ import { filter, map, Subscription } from "rxjs";
 import { isEqual } from "lodash";
 import { down, makeLogger, up } from "./logger";
 import { useTransport } from "./transportContext";
-import { MessageHub } from "./messageHub/MessageHub";
-import { MessageDelivery } from "./MessageDelivery";
+import { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
+import { MessageDelivery } from "@open-smc/message-hub/src/api/MessageDelivery";
 
 const log = process.env.NODE_ENV === 'development';
 

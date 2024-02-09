@@ -1,6 +1,6 @@
 import { camelCase, isString, memoize, upperFirst } from 'lodash';
 import { DataContextProvider, useDataContext } from "./dataBinding/DataContextProvider";
-import { AddHub } from "./messageHub/AddHub";
+import { AddHub } from "./AddHub";
 import React, { ComponentType, useMemo } from "react";
 import { ControlContext } from "./ControlContext";
 import { isScope } from "./scopes/createScopeMonitor";

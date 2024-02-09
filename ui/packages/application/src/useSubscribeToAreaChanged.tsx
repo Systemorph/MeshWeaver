@@ -1,17 +1,21 @@
 import { AreaChangedEvent } from "./application.contract";
-import { useMessageHub } from "./messageHub/AddHub";
+import { useMessageHub } from "./AddHub";
 import { useEffect } from "react";
-import { MessageHub } from "./messageHub/MessageHub";
+import { receiveMessage } from "@open-smc/message-hub/src/receiveMessage";
+import { ofType } from "./ofType";
 
 export function useSubscribeToAreaChanged<TOptions = unknown>(
     handler: (event: AreaChangedEvent<TOptions>) => void,
     area?: string,
-    messageHub?: MessageHub
+    hubId?: string
 ) {
-    const defaultMessageHub = useMessageHub();
-    const {receiveMessage} = messageHub || defaultMessageHub;
+    const hub = useMessageHub(hubId);
 
     useEffect(() => {
-        return receiveMessage(AreaChangedEvent, handler, ({message}) => !area || message.area === area);
+        return receiveMessage(
+            hub.pipe(ofType(AreaChangedEvent)),
+            handler,
+            ({message}) => !area || message.area === area
+        );
     }, [receiveMessage, handler, area]);
 }
