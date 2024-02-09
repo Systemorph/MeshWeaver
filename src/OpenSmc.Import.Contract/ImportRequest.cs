@@ -1,7 +1,7 @@
-﻿using OpenSmc.Import.Contract.Options;
+﻿using OpenSmc.Import.Options;
 using OpenSmc.Messaging;
 
-namespace OpenSmc.Import.Contract;
+namespace OpenSmc.Import;
 
 public record ImportRequest : IRequest<DataChanged>
 {

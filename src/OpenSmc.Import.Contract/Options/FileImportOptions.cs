@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations;
 using OpenSmc.DataSource.Abstractions;
 using OpenSmc.FileStorage;
 
-namespace OpenSmc.Import.Contract.Options
+namespace OpenSmc.Import.Options
 {
     public record FileImportOptions : ImportOptions
     {

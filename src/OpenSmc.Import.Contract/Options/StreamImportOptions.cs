@@ -2,7 +2,6 @@
 using System.ComponentModel.DataAnnotations;
 using OpenSmc.DataSource.Abstractions;
 using OpenSmc.FileStorage;
-using OpenSmc.Import.Contract.Options;
 
 namespace OpenSmc.Import.Options
 {

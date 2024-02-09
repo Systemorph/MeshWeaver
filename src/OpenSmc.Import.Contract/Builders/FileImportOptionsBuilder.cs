@@ -5,11 +5,10 @@ using OpenSmc.DataSetReader;
 using OpenSmc.DataSource.Abstractions;
 using OpenSmc.DataStructures;
 using OpenSmc.FileStorage;
-using OpenSmc.Import.Contract.Mapping;
-using OpenSmc.Import.Contract.Options;
 using OpenSmc.Import.Mapping;
+using OpenSmc.Import.Options;
 
-namespace OpenSmc.Import.Contract.Builders
+namespace OpenSmc.Import.Builders
 {
     public record FileReaderImportOptionsBuilder : ImportOptionsBuilder
     {
