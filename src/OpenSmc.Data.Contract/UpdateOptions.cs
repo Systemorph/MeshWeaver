@@ -4,8 +4,9 @@ public record UpdateOptions
 {
     internal bool SnapshotModeEnabled { get; init; }
 
-    public UpdateOptions SnapshotMode()
+    public UpdateOptions SnapshotMode(bool snapshotModeEnabled = true)
     {
-        return this with { SnapshotModeEnabled = true };
+        return this with { SnapshotModeEnabled = snapshotModeEnabled };
     }
+
 }

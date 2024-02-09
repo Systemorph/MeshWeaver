@@ -14,7 +14,7 @@ public record DataConfiguration
         => this with { TypeConfigurations = TypeConfigurations.SetItem(typeof(T), typeConfigurator.Invoke(new TypeConfiguration<T>())) };
 
 
-    public DataConfiguration WithType<T>(Func<T, object> key, IDataSource dataSource) =>
+    public DataConfiguration WithType<T>(Func<T, object> key, IDataSource dataSource) where T : class =>
         WithType<T>(o => o.WithKey(key)
             .WithInitialization(async () => await dataSource.Query<T>().ToArrayAsync())
             .WithSave(async entities => await dataSource.UpdateAsync(entities))
