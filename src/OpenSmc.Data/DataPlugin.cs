@@ -172,7 +172,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         UpdateState(s => s with {LastSaved = s.Current, UncommittedEvents = ImmutableList<DataChangeRequest>.Empty});
     }
 
-    public IQueryable<T> Query<T>()
+    public IQueryable<T> Query<T>() where T : class
     {
         return
             (State.Current.Data.TryGetValue(typeof(T), out var inner)

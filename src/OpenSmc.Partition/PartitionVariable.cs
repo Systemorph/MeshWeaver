@@ -167,7 +167,7 @@ namespace OpenSmc.Partition
                 }
         }
 
-        private async Task<Dictionary<object, object>> LoadPartitions<T>()
+        private async Task<Dictionary<object, object>> LoadPartitions<T>() where T : class
         {
             var partitionIdSelector = PartitionHelper.PartitionIdSelectors.GetInstance(typeof(T));
             var queryable = querySource == null ? Enumerable.Empty<T>() : querySource.Value.Query<T>();

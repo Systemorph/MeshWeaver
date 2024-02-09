@@ -1,5 +1,4 @@
-﻿using DocumentFormat.OpenXml.Drawing;
-using OpenSmc.Data;
+﻿using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using FluentAssertions;
@@ -7,7 +6,6 @@ using OpenSmc.Import.Contract;
 using Xunit;
 using Xunit.Abstractions;
 using OpenSmc.ServiceProvider;
-using AngleSharp.Text;
 
 namespace OpenSmc.Hub.Data.Test;
 
@@ -95,7 +93,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         // asserts
         var expected = new DataChanged(1);
         deleteResponse.Message.Should().BeEquivalentTo(expected);
-        var expectedItems = new MyData[]
+        var expectedItems = new[]
         {
             new MyData("2", "B")
         };
@@ -128,6 +126,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var client = GetClient();
         var importResponse = await client.AwaitResponse(new ImportRequest(), o => o.WithTarget(new HostAddress()));
+        importResponse.Message.Version.Should().Be(1);
         var response = await client.AwaitResponse(new GetManyRequest<MyData>(), o => o.WithTarget(new HostAddress()));
         response.Message.Items.Should().Contain(i => i.Text == TextChange);
         await Task.Delay(100);

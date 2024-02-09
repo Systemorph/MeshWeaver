@@ -344,3 +344,4 @@ ASALocalRun/
 #local redis data
 /.redis/
 *.received.txt
+/src/OpenSmc.DataSource.EntityFramework/OpenSmc.DataSource.EntityFramework.csproj

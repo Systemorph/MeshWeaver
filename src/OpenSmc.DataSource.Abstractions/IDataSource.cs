@@ -1,17 +1,18 @@
-﻿namespace OpenSmc.DataSource.Abstractions
+﻿using OpenSmc.Data;
+
+namespace OpenSmc.DataSource.Abstractions
 {
-    public interface IDataSource : IQuerySourceWithPartition
+    public interface IDataSource : IQuerySource
     {
-        Task UpdateAsync<T>(IEnumerable<T> instances, Func<UpdateOptionsBuilder, UpdateOptionsBuilder> options = default);
-        Task UpdateAsync<T>(T instance, Func<UpdateOptionsBuilder, UpdateOptionsBuilder> options = default);
+        Task UpdateAsync<T>(IEnumerable<T> instances, UpdateOptions options);
+
+        Task UpdateAsync<T>(T instance)
+            => UpdateAsync(instance, new());
+        Task UpdateAsync<T>(T instance, UpdateOptions options)
+            => UpdateAsync<T>(new[]{instance}, options);
         Task DeleteAsync<T>(IEnumerable<T> instances);
         Task DeleteAsync<T>(T instance);
-        Task CommitAsync(Func<CommitOptionsBuilder, CommitOptionsBuilder> options = default);
-        void Reset(Func<ResetOptionsBuilder, ResetOptionsBuilder> options = default);
+        Task CommitAsync();
     }
 
-    public interface IQuerySourceWithPartition : IQuerySource
-    {
-        IPartitionVariable Partition { get; }
-    }
 }
