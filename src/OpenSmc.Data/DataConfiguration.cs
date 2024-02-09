@@ -7,9 +7,6 @@ namespace OpenSmc.Data;
 
 public record DataConfiguration
 {
-    internal Func<IMessageHub, IMessageHubPlugin> CreateSatellitePlugin { get; init; }
-
-
     internal ImmutableDictionary<Type, TypeConfiguration> TypeConfigurations { get; init; } = ImmutableDictionary<Type, TypeConfiguration>.Empty;
 
     public DataConfiguration WithType<T>(
