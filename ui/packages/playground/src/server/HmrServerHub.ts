@@ -1,7 +1,8 @@
 import { Observable } from "rxjs";
-import { MessageHub } from "@open-smc/application/src/messageHub/MessageHub";
 import { methodName } from "./playgroundServer";
 import { WebSocketClient, WebSocketCustomListener, WebSocketServer } from "vite";
+import { MessageDelivery } from "@open-smc/message-hub/src/MessageDelivery";
+import { MessageHub } from "@open-smc/message-hub/src/MessageHub";
 
 let appId = 1;
 

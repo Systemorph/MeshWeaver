@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, JSX } from "react";
 import { AreaChangedEvent } from "./application.contract";
-import { useMessageHub } from "./messageHub/AddHub";
+import { useMessageHub } from "./AddHub";
 import { renderControl } from "./renderControl";
+import { receiveMessage } from "@open-smc/message-hub/src/receiveMessage";
+import { ofType } from "./ofType";
 
 interface AreaProps {
     event: AreaChangedEvent;
@@ -10,7 +12,7 @@ interface AreaProps {
 
 export function Area({event: initialEvent, render}: AreaProps) {
     const [event, setEvent] = useState(initialEvent);
-    const {receiveMessage} = useMessageHub();
+    const hub = useMessageHub();
 
     const {area, view} = event;
 
@@ -20,11 +22,11 @@ export function Area({event: initialEvent, render}: AreaProps) {
 
     useEffect(() => {
         receiveMessage(
-            AreaChangedEvent,
+            hub.pipe(ofType(AreaChangedEvent)),
             setEvent,
             ({message}) => message.area === area
         );
-    }, [receiveMessage, area]);
+    }, [hub, area]);
 
     if (!view) {
         return null;

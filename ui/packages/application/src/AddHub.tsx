@@ -1,17 +1,17 @@
 import { createContext, PropsWithChildren, useContext, useEffect, useState } from "react";
-import { ConnectToHubRequest } from "../application.contract";
-import { useMessageRouter } from "../MessageRouter";
-import { makeProxy } from "./makeProxy";
-import { sendMessage } from "./sendMessage";
-import { MessageHub } from "./MessageHub";
+import { ConnectToHubRequest } from "./application.contract";
+import { useMessageRouter } from "./MessageRouter";
+import { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
+import { makeProxy } from "@open-smc/message-hub/src/middleware/makeProxy";
+import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
 
 const hubContext = createContext<MessageHubFinder>(null);
 
 type MessageHubFinder = (id: string) => MessageHub;
 
-export const useMessageHub = (id?: string) => {
+export function useMessageHub(id?: string) {
     return useContext(hubContext)?.(id);
-};
+}
 
 interface MessageHubProps {
     address: any;

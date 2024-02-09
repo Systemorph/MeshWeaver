@@ -1,7 +1,7 @@
 import { SignalrConnection } from "./makeSignalrConnection";
 import { Observable } from "rxjs";
-import { MessageHub } from "./messageHub/MessageHub";
-import { MessageDelivery } from "./MessageDelivery";
+import { MessageDelivery } from "@open-smc/message-hub/src/api/MessageDelivery";
+import { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
 
 export class SignalrHub extends Observable<MessageDelivery> implements MessageHub {
     constructor(private connection: SignalrConnection) {

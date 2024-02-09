@@ -1,6 +1,7 @@
 import { Observable, Subject } from "rxjs";
-import { MessageHub } from "@open-smc/application/src/messageHub/MessageHub";
 import { WebSocketClient } from "vite";
+import { MessageDelivery } from "@open-smc/message-hub/src/MessageDelivery";
+import { MessageHub } from "@open-smc/message-hub/src/MessageHub";
 
 export class UiHub extends Observable<MessageDelivery> implements MessageHub {
     private output = new Subject<MessageDelivery>();

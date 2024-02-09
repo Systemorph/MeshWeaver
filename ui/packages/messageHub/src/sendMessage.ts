@@ -1,4 +1,4 @@
-import { MessageDelivery } from "./MessageDelivery";
+import { MessageDelivery } from "./api/MessageDelivery";
 import { Observer } from "rxjs";
 
 export function sendMessage<TMessage>(

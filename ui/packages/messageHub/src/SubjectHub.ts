@@ -1,6 +1,6 @@
 import { Observable, Subject } from "rxjs";
-import { MessageHub } from "./MessageHub";
-import { MessageDelivery } from "./MessageDelivery";
+import { MessageHub } from "./api/MessageHub";
+import { MessageDelivery } from "./api/MessageDelivery";
 
 export class SubjectHub extends Observable<MessageDelivery> implements MessageHub {
     constructor(

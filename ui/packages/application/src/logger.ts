@@ -1,4 +1,4 @@
-import { MessageDelivery } from "./MessageDelivery";
+import { MessageDelivery } from "@open-smc/message-hub/src/api/MessageDelivery";
 
 export const down = ["%c↓", `color: green`];
 export const up = ["%c↑", `color: red`];

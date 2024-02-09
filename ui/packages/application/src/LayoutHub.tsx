@@ -1,5 +1,5 @@
 import { PropsWithChildren } from "react";
-import { AddHub } from "./messageHub/AddHub";
+import { AddHub } from "./AddHub";
 import { useTransport } from "@open-smc/application/src/transportContext";
 
 export const layoutHubId = "LayoutHub";

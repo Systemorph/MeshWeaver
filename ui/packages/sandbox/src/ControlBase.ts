@@ -5,7 +5,7 @@ import { ClickedEvent } from "@open-smc/application/src/application.contract";
 import { Builder, Constructor } from "@open-smc/utils/src/Builder";
 import { StyleBuilder } from "./StyleBuilder";
 import { SubjectHub } from "@open-smc/application/src/messageHub/SubjectHub";
-import { isOfType } from "@open-smc/application/src/isOfType";
+import { ofType } from "packages/application/src/ofType";
 import { receiveMessage } from "@open-smc/application/src/messageHub/receiveMessage";
 
 export type ClickAction = <TView>(payload: unknown, control: ControlBase) => void;
@@ -40,7 +40,7 @@ export abstract class ControlBase extends SubjectHub implements ControlDef {
             env => {
                 this.clickAction?.(env.message.payload, this);
             },
-            isOfType(ClickedEvent)
+            ofType(ClickedEvent)
         );
     }
 }

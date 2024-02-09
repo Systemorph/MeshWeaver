@@ -1,6 +1,6 @@
 import { Subject } from "rxjs";
-import { SubjectHub } from "./SubjectHub";
-import { MessageDelivery } from "./MessageDelivery";
+import { SubjectHub } from "../SubjectHub";
+import { MessageDelivery } from "../api/MessageDelivery";
 
 export function makeProxy() {
     const subject1 = new Subject<MessageDelivery>();

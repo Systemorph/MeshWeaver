@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import { MessageHub } from "./messageHub/MessageHub";
+import { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
 
 interface TransportContextType {
     transportHub: MessageHub;
