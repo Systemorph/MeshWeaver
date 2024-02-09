@@ -12,7 +12,7 @@ public class Workspace : IWorkspace
     private readonly IDataScheduler internalScheduler;
     private readonly IWorkspaceStorage storage;
 
-    private readonly Dictionary<Type, UpdateOptionsBuilder> preCommitAccumulatedUpdateOptions = new();
+    private readonly Dictionary<Type, UpdateOptions> preCommitAccumulatedUpdateOptions = new();
 
     public Workspace(IWorkspaceStorage workspaceStorage, IDataScheduler dataScheduler, IPartitionVariable partition)
     {
@@ -41,7 +41,7 @@ public class Workspace : IWorkspace
 
     private static readonly IGenericMethodCache UpdateEnumerableMethod = GenericCaches.GetMethodCache<IDataSource>(x => x.UpdateAsync(default(IEnumerable<object>), null));
 
-    public async Task UpdateAsync<T>(T instance, Func<UpdateOptionsBuilder, UpdateOptionsBuilder> options = default)
+    public async Task UpdateAsync<T>(T instance, Func<UpdateOptions, UpdateOptions> options = default)
     {
         var enumerableType = typeof(T).GetEnumerableElementType();
         if (enumerableType != null)
@@ -50,18 +50,18 @@ public class Workspace : IWorkspace
             await UpdateAsync(instance.RepeatOnce(), options);
     }
 
-    public async Task UpdateAsync<T>(IEnumerable<T> instances, Func<UpdateOptionsBuilder, UpdateOptionsBuilder> options = default)
+    public async Task UpdateAsync<T>(IEnumerable<T> instances, Func<UpdateOptions, UpdateOptions> options = default)
     {
         options ??= o => o;
 
         foreach (var group in instances.Cast<object>().GroupByWithDefaultIfEmpty())
         {
             if (!preCommitAccumulatedUpdateOptions.TryGetValue(group.Key, out var updateOptionsBuilder))
-                updateOptionsBuilder = UpdateOptionsBuilder.Empty;
+                updateOptionsBuilder = UpdateOptions.Empty;
             preCommitAccumulatedUpdateOptions[group.Key] = options(updateOptionsBuilder);
 
             //refresh caches of partition if it is needed
-            ((PartitionVariable)Partition).RefreshCaches(group.Key, group, null, options(UpdateOptionsBuilder.Empty).GetOptions().SnapshotModeEnabled);
+            ((PartitionVariable)Partition).RefreshCaches(group.Key, group, null, options(UpdateOptions.Empty).GetOptions().SnapshotModeEnabled);
             //put here to collect items for one commit 
             internalScheduler.AddModified(group, Partition, options);
             //put to storage and iterate over base classes
@@ -111,7 +111,7 @@ public class Workspace : IWorkspace
         
         foreach (var partitionChunk in internalScheduler.GetModified())
         {
-            Func<UpdateOptionsBuilder, UpdateOptionsBuilder> updateOptions =
+            Func<UpdateOptions, UpdateOptions> updateOptions =
                 preCommitAccumulatedUpdateOptions.TryGetValue(partitionChunk.Type, out var updateOptionsBuilder)
                     ? _ => updateOptionsBuilder
                     : null;

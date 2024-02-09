@@ -18,7 +18,6 @@ public class DataPersistencePlugin(IMessageHub hub, DataConfiguration dataConfig
     private static readonly MethodInfo UpdateElementsMethod = ReflectionHelper.GetStaticMethodGeneric(() => UpdateElements<object>(null, null));
     private static readonly MethodInfo DeleteElementsMethod = ReflectionHelper.GetStaticMethodGeneric(() => DeleteElements<object>(null, null));
 
-
     Task<IMessageDelivery> IMessageHandlerAsync<UpdateDataRequest>.HandleMessageAsync(IMessageDelivery<UpdateDataRequest> request)
     {
         return HandleMessageAsync(request, request.Message.Elements, UpdateElementsMethod);
@@ -26,7 +25,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataConfiguration dataConfig
 
     Task<IMessageDelivery> IMessageHandlerAsync<DeleteDataRequest>.HandleMessageAsync(IMessageDelivery<DeleteDataRequest> request)
     {
-        return HandleMessageAsync(request, request.Message.Elements, DeleteElementsMethod);
+        return DeleteAsync(request, request.Message.Elements);
     }
 
     async Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery request, IReadOnlyCollection<object> items, MethodInfo method)
@@ -44,10 +43,27 @@ public class DataPersistencePlugin(IMessageHub hub, DataConfiguration dataConfig
         return request.Processed();
     }
 
+    private async Task<IMessageDelivery> DeleteAsync(IMessageDelivery request, IReadOnlyCollection<object> items)
+    {
+        foreach (var elementsByType in items.GroupBy(x => x.GetType()))
+        {
+            if (!DataConfiguration.TypeConfigurations.TryGetValue(elementsByType.Key, out var typeConfig))
+                continue;
+
+            //if (typeConfig.DeleteByIds != null)
+            await DeleteElementsMethod.MakeGenericMethod(elementsByType.Key).InvokeAsActionAsync(elementsByType, typeConfig);
+        }
+
+        //Hub.Post(new DataChanged(items));      // notify all subscribers that the data has changed
+
+        return request.Processed();
+    }
+
+
     // ReSharper disable once UnusedMethodReturnValue.Local
     private static Task UpdateElements<T>(IEnumerable<object> items, TypeConfiguration<T> config) where T : class => config.Save(items.Cast<T>());
     // ReSharper disable once UnusedMethodReturnValue.Local
-    private static Task DeleteElements<T>(IEnumerable<object> items, TypeConfiguration<T> config) where T : class => config.Delete(items.Cast<T>());
+    private static Task DeleteElements<T>(IEnumerable<T> items, TypeConfiguration<T> config) where T : class => config.Delete(items.Cast<T>());
 
     async Task<IMessageDelivery> IMessageHandlerAsync<GetDataStateRequest>.HandleMessageAsync(IMessageDelivery<GetDataStateRequest> request)
     {
