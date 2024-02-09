@@ -6,15 +6,18 @@ namespace OpenSmc.Data;
 
 public record GetDataStateRequest : IRequest<WorkspaceState>;
 
-public class DataPersistencePlugin(IMessageHub hub, DataConfiguration DataConfiguration) : MessageHubPlugin(hub),
+public class DataPersistencePlugin(IMessageHub hub, DataConfiguration dataConfiguration) : MessageHubPlugin(hub),
     IMessageHandlerAsync<GetDataStateRequest>,
     IMessageHandlerAsync<UpdateDataRequest>,
     IMessageHandlerAsync<DeleteDataRequest>
 {
+    public DataConfiguration DataConfiguration { get; } = dataConfiguration;
+
     public override bool IsDeferred(IMessageDelivery delivery) => delivery.Message.GetType().Namespace == typeof(GetDataStateRequest).Namespace;
 
     private static readonly MethodInfo UpdateElementsMethod = ReflectionHelper.GetStaticMethodGeneric(() => UpdateElements<object>(null, null));
     private static readonly MethodInfo DeleteElementsMethod = ReflectionHelper.GetStaticMethodGeneric(() => DeleteElements<object>(null, null));
+
 
     Task<IMessageDelivery> IMessageHandlerAsync<UpdateDataRequest>.HandleMessageAsync(IMessageDelivery<UpdateDataRequest> request)
     {
