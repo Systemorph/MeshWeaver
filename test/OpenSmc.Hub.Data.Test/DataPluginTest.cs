@@ -1,4 +1,5 @@
-﻿using OpenSmc.Data;
+﻿using DocumentFormat.OpenXml.Drawing;
+using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using FluentAssertions;
@@ -6,26 +7,13 @@ using OpenSmc.Import.Contract;
 using Xunit;
 using Xunit.Abstractions;
 using OpenSmc.ServiceProvider;
+using AngleSharp.Text;
 
 namespace OpenSmc.Hub.Data.Test;
 
 public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    public class ImportPlugin(IMessageHub hub) : MessageHubPlugin(hub), IMessageHandler<ImportRequest>
-    {
-        [Inject] IWorkspace workspace;
-
-        IMessageDelivery IMessageHandler<ImportRequest>.HandleMessage(IMessageDelivery<ImportRequest> request)
-        {
-            // TODO V10: Mise-en-place have been done
-            var someData = workspace.Query<MyData>().ToArray();
-            var myInstance = someData.First();
-            myInstance = myInstance with { Text = "hello world" };
-            workspace.Update(myInstance);
-            workspace.Commit();
-            return request.Processed();
-        }
-    }
+    public record MyData(string Id, string Text);
 
     private readonly Dictionary<string, MyData> storage = new();
     readonly MyData[] initialData =
@@ -44,7 +32,8 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
                     .WithSave(SaveMyData)
                     .WithDelete(DeleteMyData)
                 )
-            );
+            )
+            .AddPlugin<ImportPlugin>();
     }
 
     [Fact]
@@ -116,6 +105,35 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         response.Message.Should().BeEquivalentTo(new GetManyResponse<MyData>(expectedItems.Length, expectedItems));
     }
 
+
+    public static string TextChange = nameof(TextChange);
+    public class ImportPlugin(IMessageHub hub) : MessageHubPlugin(hub), IMessageHandler<ImportRequest>
+    {
+        [Inject] IWorkspace workspace;
+        IMessageDelivery IMessageHandler<ImportRequest>.HandleMessage(IMessageDelivery<ImportRequest> request)
+        {
+            // TODO V10: Mise-en-place must be been done ==> data plugin configuration
+            var someData = workspace.Query<MyData>().ToArray();
+            var myInstance = someData.First();
+            myInstance = myInstance with { Text = TextChange };
+            workspace.Update(myInstance);
+            workspace.Commit();
+            Hub.Post(new DataChanged(Hub.Version), o => o.ResponseFor(request));
+            return request.Processed();
+        }
+    }
+
+    [Fact]
+    public async Task CheckUsagesFromWorkspaceVariable()
+    {
+        var client = GetClient();
+        var importResponse = await client.AwaitResponse(new ImportRequest(), o => o.WithTarget(new HostAddress()));
+        var response = await client.AwaitResponse(new GetManyRequest<MyData>(), o => o.WithTarget(new HostAddress()));
+        response.Message.Items.Should().Contain(i => i.Text == TextChange);
+        await Task.Delay(100);
+        storage.Values.Should().Contain(i => i.Text == TextChange);
+    }
+
     private Task<IReadOnlyCollection<MyData>> InitializeMyData()
     {
         foreach (var data in initialData)
@@ -141,5 +159,4 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         return Task.CompletedTask;
     }
 
-    public record MyData(string Id, string Text);
 }
