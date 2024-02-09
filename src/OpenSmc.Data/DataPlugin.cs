@@ -30,7 +30,8 @@ public static class DataPluginExtensions
 public class DataPlugin : MessageHubPlugin<WorkspaceState>, 
     IWorkspace,
     IMessageHandler<UpdateDataRequest>,
-    IMessageHandler<DeleteDataRequest>
+    IMessageHandler<DeleteDataRequest>,
+    IMessageHandler<DeleteByIdRequest>
 {
     private readonly DataConfiguration dataConfiguration;
     public record DataPersistencyAddress(object Host) : IHostedAddress;
@@ -54,12 +55,16 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
 
     IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(IMessageDelivery<UpdateDataRequest> request)
     {
-        var items = request.Message.Elements;
+        return UpdateImpl(request, request.Message.Elements, request.Message.Options);
+    }
+
+    private IMessageDelivery UpdateImpl(IMessageDelivery<UpdateDataRequest> request, IReadOnlyCollection<object> items, UpdateOptions options)
+    {
         UpdateState(s => s.Update(items, dataConfiguration)); // update the state in memory (workspace)
         Hub.Post(new DataChanged(items), o => o.ResponseFor(request).WithTarget(MessageTargets.Subscribers));      // notify all subscribers that the data has changed
         if (dataPersistencyAddress != null)
             Hub.Post(request.Message, o => o.WithTarget(dataPersistencyAddress));
-        return request.Processed();
+        return request?.Processed();
     }
 
     IMessageDelivery IMessageHandler<DeleteDataRequest>.HandleMessage(IMessageDelivery<DeleteDataRequest> request)
@@ -70,6 +75,11 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
         if (dataPersistencyAddress != null)
             Hub.Post(request.Message, o => o.WithTarget(dataPersistencyAddress));
         return request.Processed();
+    }
+
+    IMessageDelivery IMessageHandler<DeleteByIdRequest>.HandleMessage(IMessageDelivery<DeleteByIdRequest> request)
+    {
+        throw new NotImplementedException();
     }
 
     private IMessageDelivery HandleGetRequest(IMessageDelivery request)
@@ -99,22 +109,17 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     public override bool IsDeferred(IMessageDelivery delivery)
         => delivery.Message.GetType().Namespace == typeof(GetManyRequest<>).Namespace;
 
-    public void Update<T>(IEnumerable<T> instances, Func<UpdateOptionsBuilder, UpdateOptionsBuilder> options = null)
+    public void Update(IReadOnlyCollection<object> instances, UpdateOptions options)
+    {
+        UpdateImpl(null, instances, options);
+    }
+
+    public void Delete(IReadOnlyCollection<object> instances)
     {
         throw new NotImplementedException();
     }
 
-    public void Update<T>(T instance, Func<UpdateOptionsBuilder, UpdateOptionsBuilder> options = null)
-    {
-        throw new NotImplementedException();
-    }
-
-    public void Delete<T>(IEnumerable<T> instances)
-    {
-        throw new NotImplementedException();
-    }
-
-    public void Delete<T>(T instance)
+    public void DeleteByIds(IDictionary<Type, IEnumerable<object>> instances)
     {
         throw new NotImplementedException();
     }

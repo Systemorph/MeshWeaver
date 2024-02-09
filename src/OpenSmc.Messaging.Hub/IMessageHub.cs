@@ -8,7 +8,7 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
 {
     MessageHubConfiguration Configuration { get; }
     long Version { get; }
-    internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(3);
+    internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(300);
     IMessageDelivery<TMessage> Post<TMessage>(TMessage message, Func<PostOptions, PostOptions> options = null);
     IMessageDelivery DeliverMessage(IMessageDelivery delivery);
     object Address { get; }

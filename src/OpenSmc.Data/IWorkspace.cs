@@ -4,9 +4,14 @@ namespace OpenSmc.Data;
 
 public interface IWorkspace : IQuerySource
 {
-    void Update<T>(IEnumerable<T> instances, Func<UpdateOptionsBuilder, UpdateOptionsBuilder> options = default);
-    void Update<T>(T instance, Func<UpdateOptionsBuilder, UpdateOptionsBuilder> options = default);
-    void Delete<T>(IEnumerable<T> instances);
-    void Delete<T>(T instance);
+    void Update(IReadOnlyCollection<object> instances) => Update(instances, new());
+    void Update(IReadOnlyCollection<object> instances, UpdateOptions options);
+    void Update(object instance) => Update(new[] { instance });
+
+    void Delete(IReadOnlyCollection<object> instances);
+    void Delete(object instance) => Delete(new[] { instance });
+
+    void DeleteByIds(IDictionary<Type, IEnumerable<object>> instances);
+
     void Commit(Func<CommitOptionsBuilder, CommitOptionsBuilder> options = default);
 }
