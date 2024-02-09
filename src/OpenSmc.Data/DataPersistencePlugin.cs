@@ -4,7 +4,7 @@ using OpenSmc.Reflection;
 
 namespace OpenSmc.Data;
 
-public record GetDataStateRequest(WorkspaceConfiguration WorkspaceConfiguration) : IRequest<Workspace>;
+public record GetDataStateRequest(WorkspaceConfiguration WorkspaceConfiguration) : IRequest<WorkspaceState>;
 
 public class DataPersistencePlugin : MessageHubPlugin,
     IMessageHandlerAsync<GetDataStateRequest>, 
@@ -53,7 +53,7 @@ public class DataPersistencePlugin : MessageHubPlugin,
 
     async Task<IMessageDelivery> IMessageHandlerAsync<GetDataStateRequest>.HandleMessageAsync(IMessageDelivery<GetDataStateRequest> request)
     {
-        var workspace = new Workspace(request.Message.WorkspaceConfiguration);
+        var workspace = new WorkspaceState(request.Message.WorkspaceConfiguration);
         foreach (var typeConfiguration in DataPersistenceConfiguration.TypeConfigurations)
         {
             var items = await typeConfiguration.DoInitialize();
