@@ -2,7 +2,13 @@
 
 namespace OpenSmc.Data;
 
-public record WorkspaceState
+
+public record DataPluginState(WorkspaceState Current, WorkspaceState LastSaved)
+{
+    public ImmutableList<DataChangeRequest> UncommittedEvents { get; init; } = ImmutableList<DataChangeRequest>.Empty;
+}
+
+public record WorkspaceState(long Version)
 {
     public ImmutableDictionary<Type, ImmutableDictionary<object, object>> Data { get; init; } =
         ImmutableDictionary<Type, ImmutableDictionary<object, object>>.Empty;

@@ -146,7 +146,8 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
             UpdateView(newView);
         }
 
-        Post(new DataChanged(null), o => o.ResponseFor(request));
+        // TODO V10: Why should remote view issue data changed?! (09.02.2024, Roland Bürgi)
+        Post(new DataChanged(hub.Version), o => o.ResponseFor(request));
         return request.Processed();
     }
 

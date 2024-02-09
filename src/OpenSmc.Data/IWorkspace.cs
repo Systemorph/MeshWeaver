@@ -11,7 +11,7 @@ public interface IWorkspace : IQuerySource
     void Delete(IReadOnlyCollection<object> instances);
     void Delete(object instance) => Delete(new[] { instance });
 
-    void DeleteByIds(IDictionary<Type, IEnumerable<object>> instances);
+    void DeleteByIds(IDictionary<Type, IReadOnlyCollection<object>> instances);
 
-    void Commit(Func<CommitOptionsBuilder, CommitOptionsBuilder> options = default);
+    void Commit();
 }

@@ -14,11 +14,14 @@ public record GetManyResponse<T>(int Total, IReadOnlyCollection<T> Items)
     public static GetManyResponse<T> Empty() => new(0, Array.Empty<T>());
 }
 
-public record UpdateDataRequest(IReadOnlyCollection<object> Elements) : IRequest<DataChanged>
+public record UpdateDataRequest(IReadOnlyCollection<object> Elements) : DataChangeRequest
 {
     public UpdateOptions Options { get; init; }
 }
 
-public record DeleteDataRequest(IReadOnlyCollection<object> Elements) : IRequest<DataDeleted>;
+public record DeleteDataRequest(IReadOnlyCollection<object> Elements) : DataChangeRequest;
 
-public record DeleteByIdRequest(IDictionary<Type, IReadOnlyCollection<object>> Ids) : IRequest<DataDeleted>;
+public record DeleteByIdRequest(IDictionary<Type, IReadOnlyCollection<object>> Ids) : DataChangeRequest;
+
+
+public abstract record DataChangeRequest : IRequest<DataChanged>;
