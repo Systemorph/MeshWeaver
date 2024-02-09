@@ -2,13 +2,31 @@
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using FluentAssertions;
+using OpenSmc.Import.Contract;
 using Xunit;
 using Xunit.Abstractions;
+using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Hub.Data.Test;
 
 public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 {
+    public class ImportPlugin(IMessageHub hub) : MessageHubPlugin(hub), IMessageHandler<ImportRequest>
+    {
+        [Inject] IWorkspace workspace;
+
+        IMessageDelivery IMessageHandler<ImportRequest>.HandleMessage(IMessageDelivery<ImportRequest> request)
+        {
+            // TODO V10: Mise-en-place have been done
+            var someData = workspace.Query<MyData>().ToArray();
+            var myInstance = someData.First();
+            myInstance = myInstance with { Text = "hello world" };
+            workspace.Update(myInstance);
+            workspace.Commit();
+            return request.Processed();
+        }
+    }
+
     private readonly Dictionary<string, MyData> storage = new();
     readonly MyData[] initialData =
     [
@@ -19,11 +37,14 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
-            .AddData(c => c.WithWorkspace(workspace => workspace.Key<MyData>(x => x.Id))
-                .WithPersistence(persistence => persistence.WithType(InitializeMyData, SaveMyData, DeleteMyData)));
-            //.AddPlugin(hub => new DataPlugin(hub, conf => conf
-            //    .WithWorkspace(workspace => workspace.Key<MyData>(x => x.Id))
-            //    .WithPersistence(persistence => persistence.WithType<MyData>(InitializeMyData, SaveMyData, DeleteMyData))));
+            .AddData(c => c
+                .WithType<MyData>(data => data
+                    .WithKey(x => x.Id)
+                    .WithInitialization(InitializeMyData)
+                    .WithSave(SaveMyData)
+                    .WithDelete(DeleteMyData)
+                )
+            );
     }
 
     [Fact]
@@ -111,11 +132,11 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         return Task.CompletedTask;
     }
 
-    private Task DeleteMyData(IEnumerable<MyData> items)
+    private Task DeleteMyData(IEnumerable<object> ids)
     {
-        foreach (var id in items.Select(x => x.Id))
+        foreach (var id in ids)
         {
-            storage.Remove(id);
+            storage.Remove((string)id);
         }
         return Task.CompletedTask;
     }

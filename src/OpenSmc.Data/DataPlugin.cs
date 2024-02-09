@@ -45,22 +45,15 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
         {
             dataPersistencyAddress = new DataPersistencyAddress(Hub.Address);
             var persistenceHub = Hub.GetHostedHub(dataPersistencyAddress, conf => conf.AddPlugin(persistenceHub => dataConfiguration.CreateSatellitePlugin(persistenceHub)));
-            var workspaceConfiguration = dataConfiguration.Workspace;
-            var response = await persistenceHub.AwaitResponse(new GetDataStateRequest(workspaceConfiguration));
+            var response = await persistenceHub.AwaitResponse(new GetDataStateRequest());
             UpdateState(_ => response.Message);
-        }
-        else
-        {
-            // TODO V10: how to initialize state without satellite plugin? (05.02.2024, Alexander Yolokhov)
-            var workspaceConfiguration = dataConfiguration.Workspace;
-            UpdateState(_ => new WorkspaceState(workspaceConfiguration));
         }
     }
 
     IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(IMessageDelivery<UpdateDataRequest> request)
     {
         var items = request.Message.Elements;
-        UpdateState(s => s.Update(items)); // update the state in memory (workspace)
+        UpdateState(s => s.Update(items, dataConfiguration)); // update the state in memory (workspace)
         Hub.Post(new DataChanged(items), o => o.ResponseFor(request).WithTarget(MessageTargets.Subscribers));      // notify all subscribers that the data has changed
         if (dataPersistencyAddress != null)
             Hub.Post(request.Message, o => o.WithTarget(dataPersistencyAddress));
@@ -70,7 +63,7 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     IMessageDelivery IMessageHandler<DeleteDataRequest>.HandleMessage(IMessageDelivery<DeleteDataRequest> request)
     {
         var items = request.Message.Elements;
-        UpdateState(s => s.Delete(items));
+        UpdateState(s => s.Delete(items, dataConfiguration));
         Hub.Post(new DataDeleted(items), o => o.ResponseFor(request).WithTarget(MessageTargets.Subscribers));
         if (dataPersistencyAddress != null)
             Hub.Post(request.Message, o => o.WithTarget(dataPersistencyAddress));
