@@ -73,7 +73,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         await Task.Delay(300);
 
         // asserts
-        var expected = new DataChanged(updateItems);
+        var expected = new DataChanged(1);
         updateResponse.Message.Should().BeEquivalentTo(expected);
         var expectedItems = new MyData[]
         {
@@ -104,7 +104,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         await Task.Delay(200);
 
         // asserts
-        var expected = new DataChanged(deleteItems);
+        var expected = new DataChanged(1);
         deleteResponse.Message.Should().BeEquivalentTo(expected);
         var expectedItems = new MyData[]
         {

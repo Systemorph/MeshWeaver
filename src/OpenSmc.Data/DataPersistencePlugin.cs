@@ -6,10 +6,10 @@ namespace OpenSmc.Data;
 
 public record GetDataStateRequest : IRequest<WorkspaceState>;
 
-public class DataPersistencePlugin(IMessageHub hub, DataConfiguration dataConfiguration) : MessageHubPlugin(hub),
+public class DataPersistencePlugin(IMessageHub hub, DataConfiguration dataConfiguration) : 
+    MessageHubPlugin(hub),
     IMessageHandlerAsync<GetDataStateRequest>,
-    IMessageHandlerAsync<UpdateDataRequest>,
-    IMessageHandlerAsync<DeleteDataRequest>
+    IMessageHandlerAsync<UpdateDataStateRequest>
 {
     public DataConfiguration DataConfiguration { get; } = dataConfiguration;
 
@@ -18,17 +18,17 @@ public class DataPersistencePlugin(IMessageHub hub, DataConfiguration dataConfig
     private static readonly MethodInfo UpdateElementsMethod = ReflectionHelper.GetStaticMethodGeneric(() => UpdateElements<object>(null, null));
     private static readonly MethodInfo DeleteElementsMethod = ReflectionHelper.GetStaticMethodGeneric(() => DeleteElements<object>(null, null));
 
-    Task<IMessageDelivery> IMessageHandlerAsync<UpdateDataRequest>.HandleMessageAsync(IMessageDelivery<UpdateDataRequest> request)
+    Task HandleMessageAsync(UpdateDataRequest updateData)
     {
-        return HandleMessageAsync(request, request.Message.Elements, UpdateElementsMethod);
+        return HandleMessageAsync(updateData.Elements, UpdateElementsMethod);
     }
 
-    Task<IMessageDelivery> IMessageHandlerAsync<DeleteDataRequest>.HandleMessageAsync(IMessageDelivery<DeleteDataRequest> request)
+    Task HandleMessageAsync(DeleteDataRequest deleteData)
     {
-        return DeleteAsync(request, request.Message.Elements);
+        return DeleteAsync(deleteData.Elements);
     }
 
-    async Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery request, IReadOnlyCollection<object> items, MethodInfo method)
+    async Task HandleMessageAsync(IReadOnlyCollection<object> items, MethodInfo method)
     {
         foreach (var elementsByType in items.GroupBy(x => x.GetType()))
         {
@@ -40,10 +40,9 @@ public class DataPersistencePlugin(IMessageHub hub, DataConfiguration dataConfig
 
         //Hub.Post(new DataChanged(items));      // notify all subscribers that the data has changed
 
-        return request.Processed();
     }
 
-    private async Task<IMessageDelivery> DeleteAsync(IMessageDelivery request, IReadOnlyCollection<object> items)
+    private async Task DeleteAsync( IReadOnlyCollection<object> items)
     {
         foreach (var elementsByType in items.GroupBy(x => x.GetType()))
         {
@@ -54,9 +53,6 @@ public class DataPersistencePlugin(IMessageHub hub, DataConfiguration dataConfig
             await DeleteElementsMethod.MakeGenericMethod(elementsByType.Key).InvokeAsActionAsync(elementsByType, typeConfig);
         }
 
-        //Hub.Post(new DataChanged(items));      // notify all subscribers that the data has changed
-
-        return request.Processed();
     }
 
 
@@ -67,7 +63,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataConfiguration dataConfig
 
     async Task<IMessageDelivery> IMessageHandlerAsync<GetDataStateRequest>.HandleMessageAsync(IMessageDelivery<GetDataStateRequest> request)
     {
-        var workspace = new WorkspaceState();
+        var workspace = new WorkspaceState(Hub.Version);
         foreach (var typeConfiguration in DataConfiguration.TypeConfigurations.Values)
         {
             var items = await typeConfiguration.DoInitialize();
@@ -75,6 +71,16 @@ public class DataPersistencePlugin(IMessageHub hub, DataConfiguration dataConfig
         }
 
         Hub.Post(workspace, o => o.ResponseFor(request));
+        return request.Processed();
+    }
+
+    public async Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery<UpdateDataStateRequest> request)
+    {
+        foreach (var dataChangeRequest in request.Message.Events)
+        {
+            await HandleMessageAsync((dynamic)dataChangeRequest);
+        }
+
         return request.Processed();
     }
 }

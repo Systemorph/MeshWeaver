@@ -1,4 +1,6 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using System.Collections.Immutable;
+using AngleSharp.Io;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.DataSource.Abstractions;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
@@ -27,22 +29,21 @@ public static class DataPluginExtensions
  *  e) configure Ifrs Hubs
  */
 
-public class DataPlugin : MessageHubPlugin<WorkspaceState>, 
+public class DataPlugin : MessageHubPlugin<DataPluginState>, 
     IWorkspace,
     IMessageHandler<UpdateDataRequest>,
     IMessageHandler<DeleteDataRequest>,
     IMessageHandler<DeleteByIdRequest>
 {
     private readonly DataConfiguration dataConfiguration;
-    public record DataPersistencyAddress(object Host) : IHostedAddress;
+    public record DataPersistenceAddress(object Host) : IHostedAddress;
     private readonly IMessageHub persistenceHub;
 
     public DataPlugin(IMessageHub hub) : base(hub)
     {
-        var dataPersistencyAddress = new DataPersistencyAddress(Hub.Address);
         dataConfiguration = hub.Configuration.Get<DataConfiguration>() ?? new();
         Register(HandleGetRequest);              // This takes care of all Read (CRUD)
-        persistenceHub = hub.GetHostedHub(dataPersistencyAddress, conf => conf.WithPersistencePlugin(dataConfiguration));
+        persistenceHub = hub.GetHostedHub(new DataPersistenceAddress(hub.Address), conf => conf.WithPersistencePlugin(dataConfiguration));
     }
 
     public override async Task StartAsync()  // This takes care of the Create (CRUD)
@@ -50,50 +51,72 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
         await base.StartAsync();
 
         var response = await persistenceHub.AwaitResponse(new GetDataStateRequest());
-        InitializeState(response.Message);
+        InitializeState(new (response.Message, response.Message));
     }
 
     IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(IMessageDelivery<UpdateDataRequest> request)
     {
-        return UpdateImpl(request, request.Message.Elements, request.Message.Options);
+        UpdateImpl(request.Message.Elements, request.Message.Options);
+        Commit();
+        Hub.Post(new DataChanged(Hub.Version), o => o.ResponseFor(request));
+        return request.Processed();
     }
 
-    private IMessageDelivery UpdateImpl(IMessageDelivery<UpdateDataRequest> request, IReadOnlyCollection<object> items, UpdateOptions options)
+    private void UpdateImpl(IReadOnlyCollection<object> items, UpdateOptions options)
     {
-        UpdateState(s => s.Update(items, dataConfiguration)); // update the state in memory (workspace)
-        Hub.Post(new DataChanged(items), o => o.ResponseFor(request).WithTarget(MessageTargets.Subscribers));      // notify all subscribers that the data has changed
-        persistenceHub.Post(new UpdateDataRequest(items){Options = options});
-        return request?.Processed();
+        UpdateState(s =>
+        s with {
+            Current = s.Current.Update(items, dataConfiguration),
+            UncommittedEvents = s.UncommittedEvents.Add(new UpdateDataRequest(items) { Options = options })
+
+        }
+        ); // update the state in memory (workspace)
     }
 
     IMessageDelivery IMessageHandler<DeleteDataRequest>.HandleMessage(IMessageDelivery<DeleteDataRequest> request)
     {
-        var items = request.Message.Elements;
-        return DeleteImpl(request, items);
+        DeleteImpl(request.Message.Elements);
+        Commit();
+        Hub.Post(new DataChanged(Hub.Version), o => o.ResponseFor(request));
+        return request.Processed();
+
     }
 
-    private IMessageDelivery DeleteImpl(IMessageDelivery<DeleteDataRequest> request, IReadOnlyCollection<object> items)
+    private void DeleteImpl(IReadOnlyCollection<object> items)
     {
-        UpdateState(s => s.Delete(items, dataConfiguration));
-        Hub.Post(new DataDeleted(items), o => o.ResponseFor(request).WithTarget(MessageTargets.Subscribers));
-        persistenceHub.Post(new DeleteDataRequest(items));
-        return request?.Processed();
+        UpdateState(s =>
+            s with
+            {
+                Current = s.Current.Delete(items, dataConfiguration),
+                UncommittedEvents = s.UncommittedEvents.Add(new DeleteDataRequest(items))
+            }
+            );
+
     }
 
     IMessageDelivery IMessageHandler<DeleteByIdRequest>.HandleMessage(IMessageDelivery<DeleteByIdRequest> request)
     {
         var ids = request.Message.Ids;
-        var items = ids
-            .Select(id =>
-                State.Data.TryGetValue(id.Key, out var inner)
-                    ? id.Value.Select(ii => inner.Remove(ii))
-                    : Enumerable.Empty<object>()).Aggregate((x, y) => x.Concat(y)).ToArray();
-        UpdateState(s => s.Delete(items, dataConfiguration));
-        Hub.Post(new DataDeleted(items), o => o.ResponseFor(request).WithTarget(MessageTargets.Subscribers));
-        persistenceHub.Post(new DeleteDataRequest(items));
-        return request?.Processed();
+        DeleteByIdsImpl(ids);
+        Commit();
+        Hub.Post(new DataChanged(Hub.Version), o => o.ResponseFor(request));
+        return request.Processed();
 
     }
+
+    private object[] DeleteByIdsImpl(IDictionary<Type, IReadOnlyCollection<object>> ids)
+    {
+        var items = ids
+            .Select(id =>
+                State.Current.Data.TryGetValue(id.Key, out var inner)
+                    ? id.Value.Select(ii => inner.Remove(ii))
+                    : Enumerable.Empty<object>()).Aggregate((x, y) => x.Concat(y)).ToArray();
+        DeleteImpl(items);
+        Hub.Post(new DataChanged(Hub.Version), o => o.WithTarget(MessageTargets.Subscribers));
+
+        return items;
+    }
+
 
     private IMessageDelivery HandleGetRequest(IMessageDelivery request)
     {
@@ -107,9 +130,10 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
         return request;
     }
 
+    // ReSharper disable once UnusedMethodReturnValue.Local
     private IMessageDelivery GetElements<T>(IMessageDelivery<GetManyRequest<T>> request) where T : class
     {
-        var (items, count) = State.GetItems<T>();
+        var (items, count) = State.Current.GetItems<T>();
         var message = request.Message;
         if (message.PageSize is not null)
             items = items.Skip(message.Page * message.PageSize.Value).Take(message.PageSize.Value);
@@ -124,26 +148,40 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
 
     public void Update(IReadOnlyCollection<object> instances, UpdateOptions options)
     {
-        UpdateImpl(null, instances, options);
+        UpdateImpl(instances, options);
     }
 
     public void Delete(IReadOnlyCollection<object> instances)
     {
-        throw new NotImplementedException();
+        DeleteImpl(instances);
+
     }
 
-    public void DeleteByIds(IDictionary<Type, IEnumerable<object>> instances)
+    public void DeleteByIds(IDictionary<Type, IReadOnlyCollection<object>> instances)
     {
-        throw new NotImplementedException();
+        var items = DeleteByIdsImpl(instances);
+        Delete(items);
     }
 
-    public void Commit(Func<CommitOptionsBuilder, CommitOptionsBuilder> options = default)
+    public void Commit()
     {
-        throw new NotImplementedException();
+        if (State.UncommittedEvents.Count == 0)
+            return;
+        persistenceHub.Post(new UpdateDataStateRequest(State.UncommittedEvents));
+        Hub.Post(new DataChanged(Hub.Version), o => o.WithTarget(MessageTargets.Subscribers));
+        UpdateState(s => s with {LastSaved = s.Current, UncommittedEvents = ImmutableList<DataChangeRequest>.Empty});
     }
 
     public IQueryable<T> Query<T>()
     {
-        throw new NotImplementedException();
+        return
+            (State.Current.Data.TryGetValue(typeof(T), out var inner)
+                ? inner
+                : ImmutableDictionary<object, object>.Empty)
+            .Values
+            .Cast<T>()
+            .AsQueryable();
     }
 }
+
+public record UpdateDataStateRequest(IReadOnlyCollection<DataChangeRequest> Events);
