@@ -7,7 +7,7 @@ using Autofac.Core.Activators.Reflection;
 using OpenSmc.Collections;
 using OpenSmc.DataStructures;
 using OpenSmc.Domain.Abstractions.Attributes;
-using OpenSmc.Import.Contract.Options;
+using OpenSmc.Import.Options;
 using OpenSmc.Reflection;
 using OpenSmc.ShortGuid;
 

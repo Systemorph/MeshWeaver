@@ -2,7 +2,7 @@
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using FluentAssertions;
-using OpenSmc.Import.Contract;
+using OpenSmc.Import;
 using Xunit;
 using Xunit.Abstractions;
 using OpenSmc.ServiceProvider;

@@ -5,7 +5,7 @@ using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Collections;
 using OpenSmc.DataStructures;
-using OpenSmc.Import.Contract.Options;
+using OpenSmc.Import.Options;
 using OpenSmc.Reflection;
 
 namespace OpenSmc.Import.Mapping

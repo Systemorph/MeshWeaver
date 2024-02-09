@@ -1,7 +1,7 @@
 ﻿using System.Linq.Expressions;
 using OpenSmc.DataStructures;
 
-namespace OpenSmc.Import.Contract.Builders;
+namespace OpenSmc.Import.Builders;
 
 public interface IImportTypeOptionBuilder
 {

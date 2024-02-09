@@ -3,7 +3,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using OpenSmc.DataStructures;
 
-namespace OpenSmc.Import.Contract.Options
+namespace OpenSmc.Import.Options
 {
     public interface IRowMapping;
 
