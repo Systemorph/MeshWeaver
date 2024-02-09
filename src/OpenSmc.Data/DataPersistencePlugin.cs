@@ -4,41 +4,34 @@ using OpenSmc.Reflection;
 
 namespace OpenSmc.Data;
 
-public record GetDataStateRequest(WorkspaceConfiguration WorkspaceConfiguration) : IRequest<WorkspaceState>;
+public record GetDataStateRequest : IRequest<WorkspaceState>;
 
-public class DataPersistencePlugin : MessageHubPlugin,
-    IMessageHandlerAsync<GetDataStateRequest>, 
+public class DataPersistencePlugin(IMessageHub hub) : MessageHubPlugin(hub),
+    IMessageHandlerAsync<GetDataStateRequest>,
     IMessageHandlerAsync<UpdateDataRequest>,
     IMessageHandlerAsync<DeleteDataRequest>
 {
-    private DataPersistenceConfiguration DataPersistenceConfiguration { get; set; }
+    private DataConfiguration DataConfiguration { get; } = hub.Configuration.Get<DataConfiguration>() ?? new();
 
-    public DataPersistencePlugin(IMessageHub hub, Func<DataPersistenceConfiguration, DataPersistenceConfiguration> configure) : base(hub)
-    {
-        DataPersistenceConfiguration = configure(new DataPersistenceConfiguration(hub));
-    }
-
-    private static MethodInfo updateElementsMethod = ReflectionHelper.GetStaticMethodGeneric(() => UpdateElements<object>(null, null));
-    private static MethodInfo deleteElementsMethod = ReflectionHelper.GetStaticMethodGeneric(() => DeleteElements<object>(null, null));
+    private static readonly MethodInfo UpdateElementsMethod = ReflectionHelper.GetStaticMethodGeneric(() => UpdateElements<object>(null, null));
+    private static readonly MethodInfo DeleteElementsMethod = ReflectionHelper.GetStaticMethodGeneric(() => DeleteElements<object>(null, null));
 
     Task<IMessageDelivery> IMessageHandlerAsync<UpdateDataRequest>.HandleMessageAsync(IMessageDelivery<UpdateDataRequest> request)
     {
-        return HandleMessageAsync(request, request.Message.Elements, updateElementsMethod);
+        return HandleMessageAsync(request, request.Message.Elements, UpdateElementsMethod);
     }
 
     Task<IMessageDelivery> IMessageHandlerAsync<DeleteDataRequest>.HandleMessageAsync(IMessageDelivery<DeleteDataRequest> request)
     {
-        return HandleMessageAsync(request, request.Message.Elements, deleteElementsMethod);
+        return HandleMessageAsync(request, request.Message.Elements, DeleteElementsMethod);
     }
 
     async Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery request, IReadOnlyCollection<object> items, MethodInfo method)
     {
         foreach (var elementsByType in items.GroupBy(x => x.GetType()))
         {
-            var typeConfig = DataPersistenceConfiguration.TypeConfigurations.FirstOrDefault(x =>
-                    x.GetType().GetGenericArguments().First() == elementsByType.Key);  // TODO: check whether this works
-
-            if (typeConfig is null) continue; // TODO: think about partial vs full update
+            if (!DataConfiguration.TypeConfigurations.TryGetValue(elementsByType.Key, out var typeConfig))
+                continue;
 
             await method.MakeGenericMethod(elementsByType.Key).InvokeAsActionAsync(elementsByType, typeConfig);
         }
@@ -48,16 +41,18 @@ public class DataPersistencePlugin : MessageHubPlugin,
         return request.Processed();
     }
 
+    // ReSharper disable once UnusedMethodReturnValue.Local
     private static Task UpdateElements<T>(IEnumerable<object> items, TypeConfiguration<T> config) where T : class => config.Save(items.Cast<T>());
+    // ReSharper disable once UnusedMethodReturnValue.Local
     private static Task DeleteElements<T>(IEnumerable<object> items, TypeConfiguration<T> config) where T : class => config.Delete(items.Cast<T>());
 
     async Task<IMessageDelivery> IMessageHandlerAsync<GetDataStateRequest>.HandleMessageAsync(IMessageDelivery<GetDataStateRequest> request)
     {
-        var workspace = new WorkspaceState(request.Message.WorkspaceConfiguration);
-        foreach (var typeConfiguration in DataPersistenceConfiguration.TypeConfigurations)
+        var workspace = new WorkspaceState();
+        foreach (var typeConfiguration in DataConfiguration.TypeConfigurations.Values)
         {
             var items = await typeConfiguration.DoInitialize();
-            workspace = workspace.Update(items);
+            workspace = workspace.Update(items, DataConfiguration);
         }
 
         Hub.Post(workspace, o => o.ResponseFor(request));
