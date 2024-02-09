@@ -11,7 +11,7 @@ namespace OpenSmc.Data;
  *  e) configure Ifrs Hubs
  */
 
-public class DataPlugin : MessageHubPlugin<Workspace>,
+public class DataPlugin : MessageHubPlugin<WorkspaceState>, 
     IMessageHandler<UpdateDataRequest>,
     IMessageHandler<DeleteDataRequest>
 {
@@ -42,7 +42,7 @@ public class DataPlugin : MessageHubPlugin<Workspace>,
         {
             // TODO V10: how to initialize state without satellite plugin? (05.02.2024, Alexander Yolokhov)
             var workspaceConfiguration = dataConfiguration.Workspace;
-            UpdateState(_ => new Workspace(workspaceConfiguration));
+            UpdateState(_ => new WorkspaceState(workspaceConfiguration));
         }
     }
 

@@ -2,12 +2,12 @@
 
 namespace OpenSmc.Data;
 
-public record Workspace(WorkspaceConfiguration Configuration)
+public record WorkspaceState(WorkspaceConfiguration Configuration)
 {
     private ImmutableDictionary<Type, ImmutableDictionary<object, object>> data { get; init; } =
         ImmutableDictionary<Type, ImmutableDictionary<object, object>>.Empty;
 
-    public Workspace Update(IEnumerable<object> items)
+    public WorkspaceState Update(IEnumerable<object> items)
     {
         var newData = data;
         foreach (var g in items.GroupBy(item => item.GetType()))
@@ -32,7 +32,7 @@ public record Workspace(WorkspaceConfiguration Configuration)
     // think about message forwarding and trigger saving to DataSource
     // storage feed must be a Hub
 
-    public Workspace Delete(IEnumerable<object> items)
+    public WorkspaceState Delete(IEnumerable<object> items)
     {
         // TODO: this should create a copy of existed data, group by type, remove instances and return new clone with incremented version
         // RB: Not necessarily ==> data should be generally immutable
