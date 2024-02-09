@@ -10,8 +10,13 @@ public static class DataPluginExtensions
     public static MessageHubConfiguration AddData(this MessageHubConfiguration config, Func<DataConfiguration, DataConfiguration> dataPluginConfiguration)
     {
         var dataPluginConfig = config.Get<DataConfiguration>() ?? new();
-        return config.WithServices(sc => sc.AddSingleton<IWorkspace, DataPlugin>()).Set(dataPluginConfiguration(dataPluginConfig));
+        return config
+            .WithServices(sc => sc.AddSingleton<IWorkspace, DataPlugin>())
+            .Set(dataPluginConfiguration(dataPluginConfig))
+            .AddPlugin(hub => (DataPlugin)hub.ServiceProvider.GetRequiredService<IWorkspace>());
     }
+
+    internal static MessageHubConfiguration WithPersistencePlugin(this MessageHubConfiguration config, DataConfiguration dataConfiguration) => config.AddPlugin(hub => new DataPersistencePlugin(hub, dataConfiguration));
 }
 
 /* TODO List: 
@@ -41,13 +46,10 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     {
         await base.StartAsync();
 
-        if (dataConfiguration.CreateSatellitePlugin != null)
-        {
-            dataPersistencyAddress = new DataPersistencyAddress(Hub.Address);
-            var persistenceHub = Hub.GetHostedHub(dataPersistencyAddress, conf => conf.AddPlugin(persistenceHub => dataConfiguration.CreateSatellitePlugin(persistenceHub)));
-            var response = await persistenceHub.AwaitResponse(new GetDataStateRequest());
-            UpdateState(_ => response.Message);
-        }
+        dataPersistencyAddress = new DataPersistencyAddress(Hub.Address);
+        var persistenceHub = Hub.GetHostedHub(dataPersistencyAddress, conf => conf.WithPersistencePlugin(dataConfiguration));
+        var response = await persistenceHub.AwaitResponse(new GetDataStateRequest());
+        InitializeState(response.Message);
     }
 
     IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(IMessageDelivery<UpdateDataRequest> request)
