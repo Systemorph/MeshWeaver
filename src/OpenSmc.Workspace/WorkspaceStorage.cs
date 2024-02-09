@@ -17,10 +17,10 @@ public class WorkspaceStorage : IWorkspaceStorage
     private readonly Dictionary<Type, Dictionary<(string, object), IHashSetWrapper>> partitionedInstancesByType = new();
     private InitializeOptionsBuilder initializeOptions = InitializeOptionsBuilder.Empty;
 
-    public Task Add(IEnumerable<object> items, IPartitionVariable partitionVariable, Func<UpdateOptions, UpdateOptions> options = default)
+    public Task Add(IEnumerable<object> items, IPartitionVariable partitionVariable, Func<UpdateOptionsBuilder, UpdateOptionsBuilder> options = default)
         => ProcessItems(items, partitionVariable, (group, pv) => Add(group, pv, options));
-    public Task Add(IGrouping<Type, object> group, IPartitionVariable partitionVariable, Func<UpdateOptions, UpdateOptions> options = default) 
-        => ProcessItemsByGroup(group, partitionVariable, AddThroughPartitionsMethod, options != null && options(UpdateOptions.Empty).GetOptions().SnapshotModeEnabled);
+    public Task Add(IGrouping<Type, object> group, IPartitionVariable partitionVariable, Func<UpdateOptionsBuilder, UpdateOptionsBuilder> options = default) 
+        => ProcessItemsByGroup(group, partitionVariable, AddThroughPartitionsMethod, options != null && options(UpdateOptionsBuilder.Empty).GetOptions().SnapshotModeEnabled);
     
     public Task Delete(IEnumerable<object> items, IPartitionVariable partitionVariable)
         => ProcessItems(items, partitionVariable, Delete);

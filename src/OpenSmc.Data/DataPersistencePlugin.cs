@@ -63,7 +63,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataConfiguration dataConfig
     // ReSharper disable once UnusedMethodReturnValue.Local
     private static Task UpdateElements<T>(IEnumerable<object> items, TypeConfiguration<T> config) where T : class => config.Save(items.Cast<T>());
     // ReSharper disable once UnusedMethodReturnValue.Local
-    private static Task DeleteElements<T>(IEnumerable<T> items, TypeConfiguration<T> config) where T : class => config.Delete(items.Cast<T>());
+    private static Task DeleteElements<T>(IEnumerable<object> items, TypeConfiguration<T> config) where T : class => config.Delete(items.Cast<T>());
 
     async Task<IMessageDelivery> IMessageHandlerAsync<GetDataStateRequest>.HandleMessageAsync(IMessageDelivery<GetDataStateRequest> request)
     {
