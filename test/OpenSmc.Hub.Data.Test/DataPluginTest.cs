@@ -78,6 +78,8 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var deleteResponse = await client.AwaitResponse(new DeleteDataRequest(deleteItems), o => o.WithTarget(new HostAddress()));
 
+        await Task.Delay(200);
+
         // asserts
         var expected = new DataChanged(deleteItems);
         deleteResponse.Message.Should().BeEquivalentTo(expected);
