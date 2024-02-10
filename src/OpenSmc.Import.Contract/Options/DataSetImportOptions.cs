@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
+using OpenSmc.Data;
 using OpenSmc.DataSource.Abstractions;
 using OpenSmc.DataStructures;
 using OpenSmc.FileStorage;
@@ -12,7 +13,7 @@ namespace OpenSmc.Import.Options
 
         public DataSetImportOptions(IDataSet dataSet, 
                                     string format, 
-                                    IDataSource targetDataSource, 
+                                    IWorkspace targetDataSource, 
                                     IFileReadStorage storage,
                                     ImmutableList<Func<object, ValidationContext, Task<bool>>> validations,
                                     ImmutableDictionary<Type, TableMapping> tableMappings,

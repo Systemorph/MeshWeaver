@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using OpenSmc.Data;
 using OpenSmc.DataSource.Abstractions;
 using OpenSmc.DataStructures;
 using OpenSmc.FileStorage;
@@ -14,7 +15,7 @@ namespace OpenSmc.Import
         public StreamImportOptionsBuilder FromStream(Stream stream);
         public DataSetImportOptionsBuilder FromDataSet(IDataSet dataSet);
         public void SetDefaultFileStorage(IFileReadStorage storage);
-        public void SetDefaultTarget(IDataSource target);
+        public void SetDefaultTarget(IWorkspace target);
         public void SetDefaultValidation(Func<object, ValidationContext, Task<bool>> validationRule);
         public void SetDefaultValidation(Func<object, ValidationContext, bool> validationRule);
         void DefineFormat(string format, Func<ImportOptions, IDataSet, Task> importFunction);

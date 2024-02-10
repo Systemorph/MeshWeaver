@@ -9,7 +9,6 @@ namespace OpenSmc.Layout;
 public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteViewControl>(hub),
     IMessageHandler<DataChanged>,
     IMessageHandler<AreaChangedEvent>,
-    IMessageHandler<UpdateRequest<AreaChangedEvent>>,
     IMessageHandler<ScopeExpressionChangedEvent>
 {
     [Inject] private IUiControlService uiControlService; // TODO V10: call BuildUp(this) in some base? (2023/12/20, Alexander Yolokhov)
@@ -137,19 +136,19 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
 
 
     // TODO V10: Not sure what this is ==> should probably be removed. (31.01.2024, Roland Bürgi)
-    IMessageDelivery IMessageHandler<UpdateRequest<AreaChangedEvent>>.HandleMessage(IMessageDelivery<UpdateRequest<AreaChangedEvent>> request)
-    {
-        var oldView = State.View;
-        var newView = State.UpdateView(oldView, request.Message.Element);
-        if (newView != oldView)
-        {
-            UpdateView(newView);
-        }
+    //IMessageDelivery IMessageHandler<UpdateRequest<AreaChangedEvent>>.HandleMessage(IMessageDelivery<UpdateRequest<AreaChangedEvent>> request)
+    //{
+    //    var oldView = State.View;
+    //    var newView = State.UpdateView(oldView, request.Message.Element);
+    //    if (newView != oldView)
+    //    {
+    //        UpdateView(newView);
+    //    }
 
-        // TODO V10: Why should remote view issue data changed?! (09.02.2024, Roland Bürgi)
-        Post(new DataChanged(hub.Version), o => o.ResponseFor(request));
-        return request.Processed();
-    }
+    //    // TODO V10: Why should remote view issue data changed?! (09.02.2024, Roland Bürgi)
+    //    Post(new DataChanged(hub.Version), o => o.ResponseFor(request));
+    //    return request.Processed();
+    //}
 
     public override void Dispose()
     {

@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
+using OpenSmc.Data;
 using OpenSmc.DataSource.Abstractions;
 using OpenSmc.FileStorage;
 
@@ -8,7 +9,7 @@ namespace OpenSmc.Import.Options
     public record ImportOptions
     {
         public ImportOptions(string format,
-                             IDataSource targetDataSource, 
+                             IWorkspace targetDataSource, 
                              IFileReadStorage storage,
                              ImmutableList<Func<object, ValidationContext, Task<bool>>> validations,
                              ImmutableDictionary<Type, TableMapping> tableMappings,
@@ -29,7 +30,7 @@ namespace OpenSmc.Import.Options
         }
 
         public string Format { get; init; }
-        public IDataSource TargetDataSource { get; init; }
+        public IWorkspace TargetDataSource { get; init; }
         public IFileReadStorage Storage { get; init; }
         public bool SnapshotModeEnabled { get; init; }
         public ImmutableList<Func<object, ValidationContext, Task<bool>>> Validations { get; init; }
