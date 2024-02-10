@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using OpenSmc.Activities;
+using OpenSmc.Data;
 using OpenSmc.DataSetReader;
 using OpenSmc.DataSource.Abstractions;
 using OpenSmc.DataStructures;
@@ -18,7 +19,7 @@ namespace OpenSmc.Import
         private readonly IServiceProvider serviceProvider;
 
         private IFileReadStorage fileReadStorage;
-        private IDataSource targetSource;
+        private IWorkspace targetSource;
         private ImmutableList<Func<object, ValidationContext, Task<bool>>> defaultValidations = ImmutableList<Func<object, ValidationContext, Task<bool>>>.Empty;
         private readonly Dictionary<string, Func<ImportOptions, IDataSet, Task>> importFormatFunctions = new();
 
@@ -61,7 +62,7 @@ namespace OpenSmc.Import
             importFormatFunctions[format] = importFunction ?? throw new ArgumentNullException($"{nameof(importFunction)}");
         }
 
-        public void SetDefaultTarget(IDataSource target)
+        public void SetDefaultTarget(IWorkspace target)
         {
             targetSource = target;
         }

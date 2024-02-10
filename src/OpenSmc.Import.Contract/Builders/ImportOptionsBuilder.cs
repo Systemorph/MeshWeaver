@@ -55,7 +55,7 @@ namespace OpenSmc.Import.Builders
         {
             var filename = "filename";
             var basepath = "basepath";
-            IDataSource datasource1 = null;
+            IWorkspace datasource1 = null;
             return configuration.AddImport(import => import.WithFormat(HandleFormat1)
                 .WithFileSource(request => filename, basepath)
                 .WithDataSource("datasource1", datasource1));
@@ -89,7 +89,7 @@ namespace OpenSmc.Import.Builders
         [Inject] private IServiceProvider serviceProvider;
         [Inject] private IActivityService activityService;
         [Inject] private IFileReadStorage fileReadStorage;
-        [Inject] private IDataSource targetSource;
+        [Inject] private IWorkspace targetSource;
 
 
         public ImportConfiguration WithFormat(Func<IMessageDelivery<ImportRequest>, ImportConfiguration, IMessageDelivery> format)
@@ -102,7 +102,7 @@ namespace OpenSmc.Import.Builders
             throw new NotImplementedException();
         }
 
-        public ImportConfiguration WithDataSource(string dataSourceName, IDataSource dataSource)
+        public ImportConfiguration WithDataSource(string dataSourceName, IWorkspace dataSource)
         {
             throw new NotImplementedException();
         }
@@ -112,7 +112,7 @@ namespace OpenSmc.Import.Builders
             throw new NotImplementedException();
         }
 
-        public IDataSource GetDataSource(ImportRequest requestMessage)
+        public IWorkspace GetDataSource(ImportRequest requestMessage)
         {
             throw new NotImplementedException();
         }
@@ -130,7 +130,7 @@ namespace OpenSmc.Import.Builders
         private protected IMappingService MappingService;
 
         private protected string Format { get; private set; }
-        private protected IDataSource TargetDataSource { get; init; }
+        private protected IWorkspace TargetDataSource { get; init; }
         private protected IServiceProvider ServiceProvider { get; init; }
         private protected IFileReadStorage Storage { get; init; }
         private protected Dictionary<string, Func<ImportOptions, IDataSet, Task>> ImportFormatFunctions { get; init; }
@@ -149,7 +149,7 @@ namespace OpenSmc.Import.Builders
                                                 IMappingService mappingService,
                                                 IFileReadStorage storage,
                                                 CancellationToken cancellationToken,
-                                                IDataSource targetSource,
+                                                IWorkspace targetSource,
                                                 IServiceProvider serviceProvider,
                                                 Dictionary<string, Func<ImportOptions, IDataSet, Task>> importFormatFunctions,
                                                 ImmutableList<Func<object, ValidationContext, Task<bool>>> defaultValidations)
@@ -286,7 +286,7 @@ namespace OpenSmc.Import.Builders
             return this with { SnapshotModeEnabled = true };
         }
 
-        public ImportOptionsBuilder WithTarget(IDataSource dataSource)
+        public ImportOptionsBuilder WithTarget(IWorkspace dataSource)
         {
             return this with { TargetDataSource = dataSource };
         }
@@ -347,10 +347,10 @@ namespace OpenSmc.Import.Builders
                                              importOptions.TableMappings.TryGetValue(instancesPerType.Key, out var tableMapping) &&
                                              tableMapping.SnapshotModeEnabled;
                             if (instancesPerType.Value.Count > 0 || isSnapshot)
-                                await UpdateMethod.MakeGenericMethod(instancesPerType.Key).InvokeAsActionAsync(TargetDataSource, instancesPerType.Value, isSnapshot);
+                                UpdateMethod.MakeGenericMethod(instancesPerType.Key).InvokeAsAction(TargetDataSource, instancesPerType.Value);
                         }
                        
-                        await TargetDataSource.CommitAsync();
+                        TargetDataSource.Commit();
                     }
                 }
             }
@@ -370,8 +370,8 @@ namespace OpenSmc.Import.Builders
                 log = ActivityService.Finish();
                 if (SaveLog && TargetDataSource != null)
                 {
-                    await TargetDataSource.UpdateAsync(new[]{log});
-                    await TargetDataSource.CommitAsync();
+                    TargetDataSource.Update(new[]{log});
+                    TargetDataSource.Commit();
                 }
             }
 
@@ -379,14 +379,15 @@ namespace OpenSmc.Import.Builders
         }
 #pragma warning disable 4014
         private static readonly IGenericMethodCache UpdateMethod =
-            GenericCaches.GetMethodCacheStatic(() => PerformUpdate<object>(null, null, false));
+            GenericCaches.GetMethodCacheStatic(() => PerformUpdate<object>(null, null));
 #pragma warning disable 4014
 
-        private static async Task PerformUpdate<T>(IDataSource targetDataSource, ICollection items, bool isSnapshot)
+
+        private static void PerformUpdate<T>(IWorkspace targetDataSource, ICollection items) where T : class
         {
             var options = new UpdateOptions();
             
-            await targetDataSource.UpdateAsync(items as IEnumerable<T>, new UpdateOptions().SnapshotMode(isSnapshot));
+            targetDataSource.Update((items as IEnumerable<T>)?.ToArray());
         }
 
         public abstract ImportOptions GetImportOptions();

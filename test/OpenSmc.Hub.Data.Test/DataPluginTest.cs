@@ -23,12 +23,14 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
-            .AddData(c => c
-                .WithType<MyData>(data => data
-                    .WithKey(x => x.Id)
+            .AddData(data => data
+                .WithDataSource("ad hoc",dataSource => dataSource
+                    .WithType<MyData>(type => type
+                    .WithKey(instance => instance.Id)
                     .WithInitialization(InitializeMyData)
-                    .WithSave(SaveMyData)
+                    .WithUpdate(SaveMyData)
                     .WithDelete(DeleteMyData)
+                )
                 )
             )
             .AddPlugin<ImportPlugin>();
@@ -111,7 +113,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         IMessageDelivery IMessageHandler<ImportRequest>.HandleMessage(IMessageDelivery<ImportRequest> request)
         {
             // TODO V10: Mise-en-place must be been done ==> data plugin configuration
-            var someData = workspace.Query<MyData>().ToArray();
+            var someData = workspace.GetItems<MyData>();
             var myInstance = someData.First();
             myInstance = myInstance with { Text = TextChange };
             workspace.Update(myInstance);
@@ -140,22 +142,20 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         return Task.FromResult<IReadOnlyCollection<MyData>>(initialData);
     }
     
-    private Task SaveMyData(IEnumerable<MyData> items)
+    private void SaveMyData(IEnumerable<MyData> items)
     {
         foreach (var data in items)
         {
             storage[data.Id] = data;
         }
-        return Task.CompletedTask;
     }
 
-    private Task DeleteMyData(IEnumerable<object> instances)
+    private void DeleteMyData(IEnumerable<object> instances)
     {
         foreach (var instance in instances.OfType<MyData>())
         {
             storage.Remove(instance.Id);
         }
-        return Task.CompletedTask;
     }
 
 }

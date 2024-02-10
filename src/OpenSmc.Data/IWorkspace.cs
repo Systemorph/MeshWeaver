@@ -1,8 +1,6 @@
-﻿using OpenSmc.DataSource.Abstractions;
+﻿namespace OpenSmc.Data;
 
-namespace OpenSmc.Data;
-
-public interface IWorkspace : IQuerySource
+public interface IWorkspace 
 {
     void Update(IReadOnlyCollection<object> instances) => Update(instances, new());
     void Update(IReadOnlyCollection<object> instances, UpdateOptions options);
@@ -10,8 +8,6 @@ public interface IWorkspace : IQuerySource
 
     void Delete(IReadOnlyCollection<object> instances);
     void Delete(object instance) => Delete(new[] { instance });
-
-    void DeleteByIds(IDictionary<Type, IReadOnlyCollection<object>> instances);
-
+    IReadOnlyCollection<T> GetItems<T>()where T:class;
     void Commit();
 }

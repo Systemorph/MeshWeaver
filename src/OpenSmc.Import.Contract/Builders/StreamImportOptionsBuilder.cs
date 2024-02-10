@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using OpenSmc.Activities;
+using OpenSmc.Data;
 using OpenSmc.DataSetReader;
 using OpenSmc.DataSource.Abstractions;
 using OpenSmc.DataStructures;
@@ -18,7 +19,7 @@ namespace OpenSmc.Import.Builders
                                             IMappingService mappingService,
                                             IFileReadStorage storage,
                                             CancellationToken cancellationToken,
-                                            IDataSource targetSource,
+                                            IWorkspace targetSource,
                                             IServiceProvider serviceProvider,
                                             Dictionary<string, Func<ImportOptions, IDataSet, Task>> importFormatFunctions,
                                             ImmutableList<Func<object, ValidationContext, Task<bool>>> defaultValidations,

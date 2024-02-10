@@ -11,37 +11,24 @@ public record HubInfo(object Address);
 public record DisconnectHubRequest();
 
 
-public record GetRequest<T> : IRequest<T>
-{
-    public object Options { get; init; }
-}
 
-
-public record CreateRequest<TObject>(TObject Element) : IRequest<DataChanged> { public object Options { get; init; } };
-
-
-public enum UpdateMode
-{
-    SkipWarnings, Strict
-}
-public record UpdateRequest<TElement>(TElement Element) : IRequest<DataChanged>
-{
-    public UpdateMode Mode { get; init; }
-    public object Options { get; init; }
-}
-
-public record UpdatePersistenceRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataChanged>;
 
 public record DataChanged(long Version)
 {
     public ActivityLog Log { get; init; }
 };
 
-public record DeleteBatchRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataChanged>;
+
+public record GetRequest<T> : IRequest<T>
+{
+    public object Options { get; init; }
+}
 
 
-
-
+public interface IVersioned
+{
+    long Version { get; }
+}
 public record HeartbeatEvent(SyncDelivery Route);
 
 
