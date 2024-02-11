@@ -2,7 +2,7 @@
 
 public interface IWorkspace 
 {
-    DataConfiguration Configuration { get; }
+    DataContext Context { get; }
     void Update(IReadOnlyCollection<object> instances) => Update(instances, new());
     void Update(IReadOnlyCollection<object> instances, UpdateOptions options);
     void Update(object instance) => Update(new[] { instance });

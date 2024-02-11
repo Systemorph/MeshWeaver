@@ -4,36 +4,36 @@ using System.Collections.Immutable;
 
 namespace OpenSmc.Data;
 
-public record DataConfiguration(IMessageHub Hub)
+public record DataContext(IMessageHub Hub)
 {
 
     internal ImmutableDictionary<Type, object> DataSourcesByTypes { get; init; } = ImmutableDictionary<Type, object>.Empty;
-    internal DataConfiguration WithType<T>(object dataSourceId) => 
+    internal DataContext WithType<T>(object dataSourceId) => 
             this with { DataSourcesByTypes = DataSourcesByTypes.SetItem(typeof(T), dataSourceId) };
 
 
 
     internal ImmutableDictionary<object,DataSource> DataSources { get; init; } = ImmutableDictionary<object, DataSource>.Empty;
 
-    public DataConfiguration WithDataSource(object id, Func<DataSource, DataSource> dataSourceBuilder) 
+    public DataContext WithDataSource(object id, Func<DataSource, DataSource> dataSourceBuilder) 
         => WithDataSource(id, dataSourceBuilder.Invoke(new(id, this)));
 
-    public DataConfiguration WithDataSource(object id, Func<DataSourceWithStorage, DataSourceWithStorage> dataSourceBuilder, Func<DataSource, IDataStorage> storageFactory)
+    public DataContext WithDataSource(object id, Func<DataSourceWithStorage, DataSourceWithStorage> dataSourceBuilder, Func<DataSource, IDataStorage> storageFactory)
         => WithDataSource(id, dataSourceBuilder.Invoke(new (id, storageFactory, this)));
 
-    private DataConfiguration WithDataSource(object id, DataSource dataSource)
+    private DataContext WithDataSource(object id, DataSource dataSource)
     {
         return dataSource.Parent // could be modified during config
-            with { DataSources = DataSources.Add(id, dataSource.Initialize()) };
+            with { DataSources = DataSources.Add(id, dataSource.Build()) };
     }
 
 
-    public bool GetTypeConfiguration(Type type, out TypeConfiguration typeConfiguration)
+    public bool GetTypeConfiguration(Type type, out TypeSource typeSource)
     {
-        typeConfiguration = null;
+        typeSource = null;
         return DataSourcesByTypes.TryGetValue(type, out var dataSourceId) 
                && DataSources.TryGetValue(dataSourceId, out var dataSource)
-               && dataSource.GetTypeConfiguration(type, out typeConfiguration);
+               && dataSource.GetTypeConfiguration(type, out typeSource);
     }
 
     internal ImmutableList<Func<object, object>> InstanceToDataSourceMaps = ImmutableList<Func<object, object>>.Empty;
@@ -43,7 +43,7 @@ public record DataConfiguration(IMessageHub Hub)
         return DataSourcesByTypes.GetValueOrDefault(type);
     }
 
-    internal DataConfiguration MapInstanceToDataSource<T>(Func<T, object> dataSourceMap) => this with
+    internal DataContext MapInstanceToDataSource<T>(Func<T, object> dataSourceMap) => this with
     {
         InstanceToDataSourceMaps = InstanceToDataSourceMaps.Insert(0, o => o is T t ? dataSourceMap.Invoke(t) : default)
     };
@@ -62,31 +62,37 @@ public record DataConfiguration(IMessageHub Hub)
 }
 
 
-public record DataSourceWithStorage(object Id, Func<DataSource, IDataStorage> StorageFactory, DataConfiguration Parent) : DataSource(Id, Parent)
+public record DataSourceWithStorage(object Id, Func<DataSource, IDataStorage> StorageFactory, DataContext Parent) : DataSource(Id, Parent)
 {
-    public DataSourceWithStorage WithType<T>(Func<TypeConfigurationWithDataStorage<T>, TypeConfigurationWithDataStorage<T>> configurator)
+    public IDataStorage Storage { get; private set; }
+    public DataSourceWithStorage WithType<T>(Func<TypeSourceWithDataStorage<T>, TypeSourceWithDataStorage<T>> configurator)
         where T : class
-        => (DataSourceWithStorage)WithType(configurator.Invoke(new TypeConfigurationWithDataStorage<T>(StorageFactory)));
+        => (DataSourceWithStorage)WithType(configurator.Invoke(new TypeSourceWithDataStorage<T>()));
     public DataSourceWithStorage WithType<T>()
         where T : class
         => WithType<T>(c => c);
 
 
+    internal override DataSource Build()
+    {
+        Storage = StorageFactory(this);
+        return base.Build();
+    }
 }
-public record DataSource(object Id, DataConfiguration Parent)
+public record DataSource(object Id, DataContext Parent)
 {
 
     public DataSource WithType<T>(
-        Func<TypeConfiguration<T>, TypeConfiguration<T>> configurator)
+        Func<TypeSource<T>, TypeSource<T>> configurator)
         where T : class
-        => WithType(configurator.Invoke(new TypeConfiguration<T>()));
+        => WithType(configurator.Invoke(new TypeSource<T>()));
 
 
     public async Task<WorkspaceState> DoInitialize()
     {
         var ret = new WorkspaceState(this);
 
-        foreach (var typeConfiguration in TypeConfigurations.Values)
+        foreach (var typeConfiguration in TypeSources.Values)
         {
             var initialized = await typeConfiguration.DoInitialize();
             ret = ret.SetData(typeConfiguration.ElementType, initialized);
@@ -94,18 +100,18 @@ public record DataSource(object Id, DataConfiguration Parent)
 
         return ret;
     }
-    protected DataSource WithType<T>(TypeConfiguration<T> typeConfiguration)
+    protected DataSource WithType<T>(TypeSource<T> typeSource)
         where T : class
     {
         return this with
         {
-            TypeConfigurations = TypeConfigurations.SetItem(typeof(T), typeConfiguration),
+            TypeSources = TypeSources.SetItem(typeof(T), typeSource),
             Parent = Parent.WithType<T>(Id)
         };
     }
 
 
-    protected ImmutableDictionary<Type, TypeConfiguration> TypeConfigurations { get; init; } = ImmutableDictionary<Type, TypeConfiguration>.Empty;
+    protected ImmutableDictionary<Type, TypeSource> TypeSources { get; init; } = ImmutableDictionary<Type, TypeSource>.Empty;
 
 
     public DataSource WithTransaction(Func<Task<ITransaction>> startTransaction)
@@ -115,20 +121,17 @@ public record DataSource(object Id, DataConfiguration Parent)
     internal Func<Task<ITransaction>> StartTransactionAsync { get; init; }
         = () => Task.FromResult<ITransaction>(EmptyTransaction.Instance);
 
-    public IEnumerable<Type> MappedTypes => TypeConfigurations.Keys;
+    public IEnumerable<Type> MappedTypes => TypeSources.Keys;
 
-    public bool GetTypeConfiguration(Type type, out TypeConfiguration typeConfiguration)
+    public bool GetTypeConfiguration(Type type, out TypeSource typeSource)
     {
-        return TypeConfigurations.TryGetValue(type, out typeConfiguration);
+        return TypeSources.TryGetValue(type, out typeSource);
     }
 
-    internal DataSource Initialize() 
-        => this with
-        {
-            TypeConfigurations = TypeConfigurations
-                .Select(kvp => new KeyValuePair<Type, TypeConfiguration>(kvp.Key, kvp.Value.Initialize(this)))
-                .ToImmutableDictionary()
-        };
+    internal virtual DataSource Build()
+    {
+        return this with {TypeSources = TypeSources.ToImmutableDictionary(x => x.Key, x => x.Value.Build(this))};
+    }
 }
 
 public record EmptyTransaction : ITransaction

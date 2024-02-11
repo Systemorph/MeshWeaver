@@ -29,6 +29,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
                     .WithKey(instance => instance.Id)
                     .WithInitialization(InitializeMyData)
                     .WithUpdate(SaveMyData)
+                    .WithAdd(SaveMyData)
                     .WithDelete(DeleteMyData)
                 )
                 )
@@ -112,7 +113,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         [Inject] IWorkspace workspace;
         IMessageDelivery IMessageHandler<ImportRequest>.HandleMessage(IMessageDelivery<ImportRequest> request)
         {
-            // TODO V10: Mise-en-place must be been done ==> data plugin configuration
+            // TODO V10: Mise-en-place must be been done ==> data plugin context
             var someData = workspace.GetItems<MyData>();
             var myInstance = someData.First();
             myInstance = myInstance with { Text = TextChange };
