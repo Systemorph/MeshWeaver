@@ -4,9 +4,9 @@
 
 //public static class DataPluginExtensions
 //{
-//    public static MessageHubConfiguration AddData(this MessageHubConfiguration configuration,
-//        Func<Configuration, Configuration> configureData)
+//    public static MessageHubConfiguration AddData(this MessageHubConfiguration context,
+//        Func<Context, Context> configureData)
 //    {
-//        return configuration.AddPlugin(hub => new DataPlugin(hub, configureData));
+//        return context.AddPlugin(hub => new DataPlugin(hub, configureData));
 //    }
 //}

@@ -10,12 +10,12 @@ public record GetDataStateRequest : IRequest<CombinedWorkspaceState>;
 
 public record UpdateDataStateRequest(IReadOnlyCollection<DataChangeRequest> Events);
 
-public class DataPersistencePlugin(IMessageHub hub, DataConfiguration configuration) :
+public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
     MessageHubPlugin<CombinedWorkspaceState>(hub),
     IMessageHandler<GetDataStateRequest>,
     IMessageHandlerAsync<UpdateDataStateRequest>
 {
-    public DataConfiguration Configuration { get; } = configuration;
+    public DataContext Context { get; } = context;
 
     public override bool IsDeferred(IMessageDelivery delivery) => 
         delivery.Message.GetType().Namespace == typeof(GetDataStateRequest).Namespace;
@@ -24,7 +24,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataConfiguration configurat
     {
         await base.StartAsync();
         var loadedWorkspaces =
-            (await Configuration.DataSources
+            (await Context.DataSources
                 .Distinct()
                 .ToAsyncEnumerable()
                 .SelectAwait(async kvp =>
@@ -33,7 +33,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataConfiguration configurat
             .ToImmutableDictionary();
                 
 
-        InitializeState(new(loadedWorkspaces, Configuration));
+        InitializeState(new(loadedWorkspaces, Context));
     }
 
     IMessageDelivery IMessageHandler<GetDataStateRequest>.HandleMessage(IMessageDelivery<GetDataStateRequest> request)
@@ -56,7 +56,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataConfiguration configurat
                          {
                              Event = ev,
                              Type = instance.GetType(),
-                             DataSource = Configuration.GetDataSourceId(instance),
+                             DataSource = Context.GetDataSourceId(instance),
                              Instance = instance
                          }))
                      .GroupBy(x => x.DataSource))
@@ -64,11 +64,11 @@ public class DataPersistencePlugin(IMessageHub hub, DataConfiguration configurat
             var dataSourceId = g.Key;
             if (dataSourceId == null)
                 continue;
-            var dataSource = Configuration.GetDataSource(dataSourceId);
+            var dataSource = Context.GetDataSource(dataSourceId);
             var workspace = State.GetWorkspace(dataSource);
 
             await using var transaction = await dataSource.StartTransactionAsync();
-            var events = g.GroupBy(x => x.Instance).Distinct().ToArray();
+            var events = g.GroupBy(x => x.Event).Distinct().ToArray();
             foreach (var e in events)
             {
                 var eventType = e.Key;
@@ -78,7 +78,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataConfiguration configurat
                     if (!dataSource.GetTypeConfiguration(elementType, out var typeConfig))
                         continue;
                     var toBeUpdated = typeGroup.Select(x => x.Instance).ToDictionary(typeConfig.GetKey);
-                    workspace.Data.TryGetValue(elementType, out var existing);
+                    var existing = workspace.Data.GetValueOrDefault(elementType) ?? ImmutableDictionary<object, object>.Empty;
                     switch (eventType)
                     {
                         case UpdateDataRequest:
@@ -98,7 +98,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataConfiguration configurat
 
     }
 
-    private WorkspaceState Update(WorkspaceState workspace, TypeConfiguration typeConfig, ImmutableDictionary<object, object> existingInstances, IDictionary<object, object> toBeUpdatedInstances)
+    private WorkspaceState Update(WorkspaceState workspace, TypeSource typeConfig, ImmutableDictionary<object, object> existingInstances, IDictionary<object, object> toBeUpdatedInstances)
     {
 
         var grouped = toBeUpdatedInstances.GroupBy(e => existingInstances.ContainsKey(e.Key), e => e.Value).ToDictionary(x => x.Key, x => x.ToArray());
@@ -117,18 +117,18 @@ public class DataPersistencePlugin(IMessageHub hub, DataConfiguration configurat
 
     }
 
-    private void DoAdd(Type type, IEnumerable<object> instances, TypeConfiguration typeConfig)
+    private void DoAdd(Type type, IEnumerable<object> instances, TypeSource typeConfig)
     {
         AddElementsMethod.MakeGenericMethod(type).InvokeAsAction(instances, typeConfig);
     }
 
-    private void DoUpdate(Type type, IEnumerable<object> instances, TypeConfiguration typeConfig)
+    private void DoUpdate(Type type, IEnumerable<object> instances, TypeSource typeConfig)
     {
         UpdateElementsMethod.MakeGenericMethod(type).InvokeAsAction(instances, typeConfig);
     }
 
 
-    private WorkspaceState Delete(WorkspaceState workspace, TypeConfiguration typeConfig, ImmutableDictionary<object, object> existingInstances, IDictionary<object, object> toBeUpdatedInstances)
+    private WorkspaceState Delete(WorkspaceState workspace, TypeSource typeConfig, ImmutableDictionary<object, object> existingInstances, IDictionary<object, object> toBeUpdatedInstances)
     {
         var toBeDeleted = toBeUpdatedInstances.Select(i => existingInstances.GetValueOrDefault(i.Key)).Where(x => x !=null).ToArray();
             DeleteElementsMethod.MakeGenericMethod(typeConfig.ElementType).InvokeAsAction(toBeDeleted, typeConfig);
@@ -141,18 +141,18 @@ public class DataPersistencePlugin(IMessageHub hub, DataConfiguration configurat
 
     private static readonly MethodInfo AddElementsMethod = ReflectionHelper.GetStaticMethodGeneric(() => AddElements<object>(null, null));
     // ReSharper disable once UnusedMethodReturnValue.Local
-    private static void AddElements<T>(IEnumerable<object> items, TypeConfiguration<T> config) where T : class
+    private static void AddElements<T>(IEnumerable<object> items, TypeSource<T> config) where T : class
         => config.Add(items.Cast<T>().ToArray());
 
 
     private static readonly MethodInfo UpdateElementsMethod = ReflectionHelper.GetStaticMethodGeneric(() => UpdateElements<object>(null, null));
     // ReSharper disable once UnusedMethodReturnValue.Local
-    private static void UpdateElements<T>(IEnumerable<object> items, TypeConfiguration<T> config) where T : class
+    private static void UpdateElements<T>(IEnumerable<object> items, TypeSource<T> config) where T : class
     => config.Update(items.Cast<T>().ToArray());
 
     private static readonly MethodInfo DeleteElementsMethod = ReflectionHelper.GetStaticMethodGeneric(() => DeleteElements<object>(null, null));
     // ReSharper disable once UnusedMethodReturnValue.Local
-    private static void DeleteElements<T>(IEnumerable<object> items, TypeConfiguration<T> config) where T : class => config.Delete(items.Cast<T>().ToArray());
+    private static void DeleteElements<T>(IEnumerable<object> items, TypeSource<T> config) where T : class => config.Delete(items.Cast<T>().ToArray());
 
 }
 

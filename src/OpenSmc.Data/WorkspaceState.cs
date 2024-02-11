@@ -10,13 +10,13 @@ public record DataPluginState(CombinedWorkspaceState Current, CombinedWorkspaceS
 }
 
 
-public record CombinedWorkspaceState(ImmutableDictionary<object, WorkspaceState> WorkspacesByKey, DataConfiguration Configuration) 
+public record CombinedWorkspaceState(ImmutableDictionary<object, WorkspaceState> WorkspacesByKey, DataContext Context) 
 {
     public CombinedWorkspaceState Modify(IReadOnlyCollection<object> items, Func<WorkspaceState, IEnumerable<object>, WorkspaceState> modification)
     {
         var workspaces = WorkspacesByKey;
 
-        foreach (var g in items.GroupBy(Configuration.GetDataSourceId))
+        foreach (var g in items.GroupBy(Context.GetDataSourceId))
         {
             var dataSourceId = g.Key;
             if(dataSourceId == null)
@@ -29,7 +29,7 @@ public record CombinedWorkspaceState(ImmutableDictionary<object, WorkspaceState>
 
     public WorkspaceState GetWorkspace(object dataSourceId)
     {
-        return WorkspacesByKey.GetValueOrDefault(dataSourceId) ?? new(Configuration.GetDataSource(dataSourceId));
+        return WorkspacesByKey.GetValueOrDefault(dataSourceId) ?? new(Context.GetDataSource(dataSourceId));
     }
 
     public IReadOnlyCollection<T> GetItems<T>() where T : class
@@ -79,7 +79,7 @@ public record WorkspaceState( DataSource DataSource)
     // think about message forwarding and trigger saving to DataSource
     // storage feed must be a Hub
 
-    public virtual WorkspaceState Delete(IEnumerable<object> items, DataConfiguration configuration)
+    public virtual WorkspaceState Delete(IEnumerable<object> items, DataContext context)
     {
         // TODO: this should create a copy of existed data, group by type, remove instances and return new clone with incremented version
         // RB: Not necessarily ==> data should be generally immutable
@@ -91,7 +91,7 @@ public record WorkspaceState( DataSource DataSource)
             {
                 continue;
             }
-            if (!configuration.GetTypeConfiguration(g.Key, out var config))
+            if (!context.GetTypeConfiguration(g.Key, out var config))
                 continue;
 
             itemsOfType = itemsOfType.RemoveRange(g.Select(config.GetKey));
@@ -118,7 +118,7 @@ public record WorkspaceState( DataSource DataSource)
     // 2nd hub as Child -> DataSourceHub (reflects the state which is in DataSource, lacks behind DataHub)
     // applies lambda expression and calls Modify of DataSource
 
-    // on Initialization Hub1 will send GetManyRequest to Hub2 and Hub2 wakes up and StartAsync
+    // on Initialize Hub1 will send GetManyRequest to Hub2 and Hub2 wakes up and StartAsync
     // Hub2 uses InitializeAsync from and loads data from DB and returns result to Hub1
     // as soon as Hub 1 will receive callback from Hub 2 it will finish its startup
     // right after startup both hubs will be in Sync

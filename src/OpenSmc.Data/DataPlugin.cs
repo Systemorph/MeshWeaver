@@ -8,7 +8,7 @@ namespace OpenSmc.Data;
 
 public static class DataPluginExtensions
 {
-    public static MessageHubConfiguration AddData(this MessageHubConfiguration config, Func<DataConfiguration, DataConfiguration> dataPluginConfiguration)
+    public static MessageHubConfiguration AddData(this MessageHubConfiguration config, Func<DataContext, DataContext> dataPluginConfiguration)
     {
         var dataPluginConfig = config.GetListOfLambdas();
         return config
@@ -17,22 +17,22 @@ public static class DataPluginExtensions
             .AddPlugin(hub => (DataPlugin)hub.ServiceProvider.GetRequiredService<IWorkspace>());
     }
 
-    private static ImmutableList<Func<DataConfiguration, DataConfiguration>> GetListOfLambdas(this MessageHubConfiguration config)
+    private static ImmutableList<Func<DataContext, DataContext>> GetListOfLambdas(this MessageHubConfiguration config)
     {
-        return config.Get<ImmutableList<Func<DataConfiguration, DataConfiguration>>>() ?? ImmutableList<Func<DataConfiguration, DataConfiguration>>.Empty;
+        return config.Get<ImmutableList<Func<DataContext, DataContext>>>() ?? ImmutableList<Func<DataContext, DataContext>>.Empty;
     }
 
-    internal static DataConfiguration GetDataConfiguration(this IMessageHub hub)
+    internal static DataContext GetDataConfiguration(this IMessageHub hub)
     {
         var dataPluginConfig = hub.Configuration.GetListOfLambdas();
-        var ret = new DataConfiguration(hub);
+        var ret = new DataContext(hub);
         foreach (var func in dataPluginConfig)
             ret = func.Invoke(ret);
         return ret;
     }
 
-    internal static MessageHubConfiguration WithPersistencePlugin(this MessageHubConfiguration config, DataConfiguration dataConfiguration) => 
-        config.AddPlugin(hub => new DataPersistencePlugin(hub, dataConfiguration));
+    internal static MessageHubConfiguration WithPersistencePlugin(this MessageHubConfiguration config, DataContext dataContext) => 
+        config.AddPlugin(hub => new DataPersistencePlugin(hub, dataContext));
 }
 
 /* TODO List: 
@@ -51,13 +51,13 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     public record DataPersistenceAddress(object Host) : IHostedAddress;
     private readonly IMessageHub persistenceHub;
 
-    public DataConfiguration Configuration { get; }
+    public DataContext Context { get; }
 
     public DataPlugin(IMessageHub hub) : base(hub)
     {
-        Configuration = hub.GetDataConfiguration();
+        Context = hub.GetDataConfiguration();
         Register(HandleGetRequest);              // This takes care of all Read (CRUD)
-        persistenceHub = hub.GetHostedHub(new DataPersistenceAddress(hub.Address), conf => conf.WithPersistencePlugin(Configuration));
+        persistenceHub = hub.GetHostedHub(new DataPersistenceAddress(hub.Address), conf => conf.WithPersistencePlugin(Context));
     }
 
     public override async Task StartAsync()  // This loads the persisted state
