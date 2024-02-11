@@ -1,5 +1,5 @@
 ﻿using System.Reflection;
-using OpenSmc.DataSource.Abstractions;
+using OpenSmc.Data;
 
 namespace OpenSmc.TestDomain
 {
