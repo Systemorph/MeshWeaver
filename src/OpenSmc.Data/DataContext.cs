@@ -16,16 +16,28 @@ public record DataContext(IMessageHub Hub)
     internal ImmutableDictionary<object,DataSource> DataSources { get; init; } = ImmutableDictionary<object, DataSource>.Empty;
 
     public DataContext WithDataSource(object id, Func<DataSource, DataSource> dataSourceBuilder) 
-        => WithDataSource(id, dataSourceBuilder.Invoke(new(id, this)));
+        => WithDataSource(id, dataSourceBuilder.Invoke(new(id)));
 
     public DataContext WithDataSource(object id, Func<DataSourceWithStorage, DataSourceWithStorage> dataSourceBuilder, Func<DataSource, IDataStorage> storageFactory)
-        => WithDataSource(id, dataSourceBuilder.Invoke(new (id, storageFactory, this)));
+        => WithDataSource(id, dataSourceBuilder.Invoke(new (id, storageFactory)));
 
     private DataContext WithDataSource(object id, DataSource dataSource)
     {
-        return dataSource.Parent // could be modified during config
-            with { DataSources = DataSources.Add(id, dataSource.Build()) };
+        return this 
+            with
+            {
+                DataSources = DataSources.Add(id, dataSource),
+                // maintain mapping between data sources and types
+                DataSourcesByTypes = DataSourcesByTypes.SetItems(dataSource.MappedTypes.Select(s => new KeyValuePair<Type, object>(s,dataSource.Id)))
+            };
     }
+
+    internal DataContext Build()
+        => this with
+        {
+            DataSources = DataSources.Select(kvp => new KeyValuePair<object, DataSource>(kvp.Key, kvp.Value.Build()))
+                .ToImmutableDictionary()
+        };
 
 
     public bool GetTypeConfiguration(Type type, out TypeSource typeSource)
@@ -62,7 +74,7 @@ public record DataContext(IMessageHub Hub)
 }
 
 
-public record DataSourceWithStorage(object Id, Func<DataSource, IDataStorage> StorageFactory, DataContext Parent) : DataSource(Id, Parent)
+public record DataSourceWithStorage(object Id, Func<DataSource, IDataStorage> StorageFactory) : DataSource(Id)
 {
     public IDataStorage Storage { get; private set; }
     public DataSourceWithStorage WithType<T>(Func<TypeSourceWithDataStorage<T>, TypeSourceWithDataStorage<T>> configurator)
@@ -79,7 +91,7 @@ public record DataSourceWithStorage(object Id, Func<DataSource, IDataStorage> St
         return base.Build();
     }
 }
-public record DataSource(object Id, DataContext Parent)
+public record DataSource(object Id)
 {
 
     public DataSource WithType<T>(
@@ -105,8 +117,7 @@ public record DataSource(object Id, DataContext Parent)
     {
         return this with
         {
-            TypeSources = TypeSources.SetItem(typeof(T), typeSource),
-            Parent = Parent.WithType<T>(Id)
+            TypeSources = TypeSources.SetItem(typeof(T), typeSource)
         };
     }
 

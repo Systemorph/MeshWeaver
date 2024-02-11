@@ -28,11 +28,9 @@ public static class DataPluginExtensions
         var ret = new DataContext(hub);
         foreach (var func in dataPluginConfig)
             ret = func.Invoke(ret);
-        return ret;
+        return ret.Build();
     }
 
-    internal static MessageHubConfiguration WithPersistencePlugin(this MessageHubConfiguration config, DataContext dataContext) => 
-        config.AddPlugin(hub => new DataPersistencePlugin(hub, dataContext));
 }
 
 /* TODO List: 
@@ -57,8 +55,9 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     {
         Context = hub.GetDataConfiguration();
         Register(HandleGetRequest);              // This takes care of all Read (CRUD)
-        persistenceHub = hub.GetHostedHub(new DataPersistenceAddress(hub.Address), conf => conf.WithPersistencePlugin(Context));
+        persistenceHub = hub.GetHostedHub(new DataPersistenceAddress(hub.Address), conf => conf.AddPlugin(hub => new DataPersistencePlugin(hub, Context)));
     }
+
 
     public override async Task StartAsync()  // This loads the persisted state
     {

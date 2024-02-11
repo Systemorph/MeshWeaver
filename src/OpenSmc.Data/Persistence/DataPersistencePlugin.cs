@@ -20,6 +20,10 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
     public override bool IsDeferred(IMessageDelivery delivery) => 
         delivery.Message.GetType().Namespace == typeof(GetDataStateRequest).Namespace;
 
+    /// <summary>
+    /// Upon start, it initializes the persisted state from the DB
+    /// </summary>
+    /// <returns></returns>
     public override async Task StartAsync()
     {
         await base.StartAsync();
@@ -49,8 +53,21 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
 
     public async Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery<UpdateDataStateRequest> request)
     {
+        var events = request.Message.Events;
+        await UpdateState(events);
+        return request.Processed();
 
-        foreach (var g in request.Message.Events
+    }
+
+    /// <summary>
+    /// Here we need to group everything by data source and then by event, as the workspace might deliver
+    /// the content in arbitrary order, mixing data partitions.
+    /// </summary>
+    /// <param name="requests">Requests to be processed</param>
+    /// <returns></returns>
+    private async Task UpdateState(IReadOnlyCollection<DataChangeRequest> requests)
+    {
+        foreach (var g in requests
                      .SelectMany(ev => ev.Elements
                          .Select(instance => new
                          {
@@ -68,28 +85,33 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
             var workspace = State.GetWorkspace(dataSourceId);
 
             await using var transaction = await dataSource.StartTransactionAsync();
-            var events = g.GroupBy(x => x.Event).Distinct().ToArray();
-            foreach (var e in events)
+            foreach (var e in g.GroupBy(x => x.Event))
             {
                 var eventType = e.Key;
                 foreach (var typeGroup in e.GroupBy(x => x.Type))
-                    workspace = ProcessByElementType(typeGroup.Key, typeGroup.Select(x => x.Instance), dataSource, workspace, eventType);
+                    workspace = ProcessRequest(eventType, typeGroup.Key, typeGroup.Select(x => x.Instance), dataSource, workspace);
             }
             await transaction.CommitAsync();
             UpdateState(s => s.UpdateWorkspace(dataSourceId, workspace));
         }
-        return request.Processed();
-
     }
 
-    private WorkspaceState ProcessByElementType(Type elementType, IEnumerable<object> typeGroup, DataSource dataSource, WorkspaceState workspace,
-        DataChangeRequest eventType)
+    /// <summary>
+    /// This processes a single update or delete request request
+    /// </summary>
+    /// <param name="request">Request to be processed</param>
+    /// <param name="elementType">Type of the entities</param>
+    /// <param name="instances">Instances to be updated / deleted</param>
+    /// <param name="dataSource">The data source to which these instances belong</param>
+    /// <param name="workspace">The current state of the workspace</param>
+    /// <returns></returns>
+    private WorkspaceState ProcessRequest(DataChangeRequest request, Type elementType, IEnumerable<object> instances, DataSource dataSource, WorkspaceState workspace)
     {
         if (!dataSource.GetTypeConfiguration(elementType, out var typeConfig))
             return workspace;
-        var toBeUpdated = typeGroup.ToDictionary<object, object>(typeConfig.GetKey);
+        var toBeUpdated = instances.ToDictionary<object, object>(typeConfig.GetKey);
         var existing = workspace.Data.GetValueOrDefault(elementType) ?? ImmutableDictionary<object, object>.Empty;
-        switch (eventType)
+        switch (request)
         {
             case UpdateDataRequest:
                 workspace = Update(workspace, typeConfig, existing, toBeUpdated);
