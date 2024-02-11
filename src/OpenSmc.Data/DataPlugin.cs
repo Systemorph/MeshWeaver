@@ -51,12 +51,13 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     public record DataPersistenceAddress(object Host) : IHostedAddress;
     private readonly IMessageHub persistenceHub;
 
+    public DataConfiguration Configuration { get; }
+
     public DataPlugin(IMessageHub hub) : base(hub)
     {
-        var dataConfiguration = hub.GetDataConfiguration();
-        dataConfiguration = dataConfiguration with { Hub = hub };
+        Configuration = hub.GetDataConfiguration();
         Register(HandleGetRequest);              // This takes care of all Read (CRUD)
-        persistenceHub = hub.GetHostedHub(new DataPersistenceAddress(hub.Address), conf => conf.WithPersistencePlugin(dataConfiguration));
+        persistenceHub = hub.GetHostedHub(new DataPersistenceAddress(hub.Address), conf => conf.WithPersistencePlugin(Configuration));
     }
 
     public override async Task StartAsync()  // This loads the persisted state

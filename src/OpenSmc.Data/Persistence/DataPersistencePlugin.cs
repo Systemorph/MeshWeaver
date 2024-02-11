@@ -77,7 +77,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataConfiguration configurat
                     var elementType = typeGroup.Key;
                     if (!dataSource.GetTypeConfiguration(elementType, out var typeConfig))
                         continue;
-                    var toBeUpdated = typeGroup.ToDictionary(typeConfig.GetKey, x => x.Instance);
+                    var toBeUpdated = typeGroup.Select(x => x.Instance).ToDictionary(typeConfig.GetKey);
                     workspace.Data.TryGetValue(elementType, out var existing);
                     switch (eventType)
                     {
