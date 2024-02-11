@@ -4,7 +4,7 @@ using System.Collections.Immutable;
 namespace OpenSmc.Data;
 
 
-public record DataPluginState(CombinedWorkspaceState Current, CombinedWorkspaceState LastSaved)
+public record DataPluginState(CombinedWorkspaceState Current)
 {
     public ImmutableList<DataChangeRequest> UncommittedEvents { get; init; } = ImmutableList<DataChangeRequest>.Empty;
 }

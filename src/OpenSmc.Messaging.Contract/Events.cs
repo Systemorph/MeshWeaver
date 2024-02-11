@@ -18,6 +18,7 @@ public record DataChanged(long Version)
     public ActivityLog Log { get; init; }
 };
 
+public record PersistenceAddress(object Host) : IHostedAddress;
 
 public record GetRequest<T> : IRequest<T>
 {
