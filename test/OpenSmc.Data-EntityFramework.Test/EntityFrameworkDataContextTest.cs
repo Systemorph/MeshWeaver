@@ -48,6 +48,21 @@ namespace OpenSmc.Data_EntityFramework.Test
 
             dataChanged.Message.Version.Should().Be(1);
 
+
+            // this is code which emulates execution on server side, as we are working with physical services.
+            // when doing this, make sure you are a plugin inside the clock of the server you are accessing.
+            var workspace = GetHost().ServiceProvider.GetRequiredService<IWorkspace>();
+            var dataSource = workspace.Context.GetDataSource(SqlServer);
+            var storage = ((DataSourceWithStorage)dataSource).Storage;
+
+
+            // this is usually not to be written ==> just test code.
+            await using var transaction = await storage.StartTransactionAsync();
+            var inStorage = await storage.Query<MyDataRecord>().ToArrayAsync();
+            inStorage.Should().ContainSingle()
+                .Which.Should().Be(myDataRecord);
+
+
         }
     }
 }

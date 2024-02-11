@@ -87,4 +87,5 @@ public record TypeSourceWithDataStorage<T>
         Storage = ((DataSourceWithStorage)dataSource).Storage;
         return this;
     }
+
 }

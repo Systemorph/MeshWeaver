@@ -7,11 +7,10 @@ namespace OpenSmc.DataStorage.EntityFramework
     { 
         private EntityFrameworkContext Context { get; set; } 
 
-        private static async Task<EntityFrameworkContext> CreateContext(Action<ModelBuilder> modelBuilder, Action<DbContextOptionsBuilder> dbContextOptionsBuilder)
+        private Task CreateContext()
         {
-            var ret = new EntityFrameworkContext(modelBuilder, dbContextOptionsBuilder);
-            await ret.Database.EnsureCreatedAsync();
-            return ret;
+            Context = new EntityFrameworkContext(modelBuilder, dbContextOptionsBuilder);
+            return Context.Database.EnsureCreatedAsync();
         }
 
         public IQueryable<T> Query<T>() where T : class
@@ -38,7 +37,7 @@ namespace OpenSmc.DataStorage.EntityFramework
 
         public async Task<ITransaction> StartTransactionAsync()
         {
-            Context = await CreateContext(modelBuilder, dbContextOptionsBuilder);
+            await CreateContext();
             return new Transaction(this);
         }
 
