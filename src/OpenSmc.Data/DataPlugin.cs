@@ -101,7 +101,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         UpdateState(s =>
             s with
             {
-                Current = s.Current.Modify(items, (ws, i) => ws.Update(i)),
+                Current = s.Current.Modify(items, (ws, i) => ws.Delete(i)),
                 UncommittedEvents = s.UncommittedEvents.Add(new DeleteDataRequest(items))
             }
             );

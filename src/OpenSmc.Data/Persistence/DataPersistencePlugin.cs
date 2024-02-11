@@ -65,7 +65,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
             if (dataSourceId == null)
                 continue;
             var dataSource = Context.GetDataSource(dataSourceId);
-            var workspace = State.GetWorkspace(dataSource);
+            var workspace = State.GetWorkspace(dataSourceId);
 
             await using var transaction = await dataSource.StartTransactionAsync();
             var events = g.GroupBy(x => x.Event).Distinct().ToArray();
@@ -73,29 +73,33 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
             {
                 var eventType = e.Key;
                 foreach (var typeGroup in e.GroupBy(x => x.Type))
-                {
-                    var elementType = typeGroup.Key;
-                    if (!dataSource.GetTypeConfiguration(elementType, out var typeConfig))
-                        continue;
-                    var toBeUpdated = typeGroup.Select(x => x.Instance).ToDictionary(typeConfig.GetKey);
-                    var existing = workspace.Data.GetValueOrDefault(elementType) ?? ImmutableDictionary<object, object>.Empty;
-                    switch (eventType)
-                    {
-                        case UpdateDataRequest:
-                            workspace = Update(workspace, typeConfig, existing, toBeUpdated);
-                            break;
-                        case DeleteDataRequest:
-                            workspace = Delete(workspace, typeConfig, existing, toBeUpdated);
-                            break;
-                    }
-                }
-
+                    workspace = ProcessByElementType(typeGroup.Key, typeGroup.Select(x => x.Instance), dataSource, workspace, eventType);
             }
             await transaction.CommitAsync();
             UpdateState(s => s.UpdateWorkspace(dataSourceId, workspace));
         }
         return request.Processed();
 
+    }
+
+    private WorkspaceState ProcessByElementType(Type elementType, IEnumerable<object> typeGroup, DataSource dataSource, WorkspaceState workspace,
+        DataChangeRequest eventType)
+    {
+        if (!dataSource.GetTypeConfiguration(elementType, out var typeConfig))
+            return workspace;
+        var toBeUpdated = typeGroup.ToDictionary<object, object>(typeConfig.GetKey);
+        var existing = workspace.Data.GetValueOrDefault(elementType) ?? ImmutableDictionary<object, object>.Empty;
+        switch (eventType)
+        {
+            case UpdateDataRequest:
+                workspace = Update(workspace, typeConfig, existing, toBeUpdated);
+                break;
+            case DeleteDataRequest:
+                workspace = Delete(workspace, typeConfig, existing, toBeUpdated);
+                break;
+        }
+
+        return workspace;
     }
 
     private WorkspaceState Update(WorkspaceState workspace, TypeSource typeConfig, ImmutableDictionary<object, object> existingInstances, IDictionary<object, object> toBeUpdatedInstances)

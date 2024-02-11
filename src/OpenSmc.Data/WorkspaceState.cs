@@ -79,7 +79,7 @@ public record WorkspaceState( DataSource DataSource)
     // think about message forwarding and trigger saving to DataSource
     // storage feed must be a Hub
 
-    public virtual WorkspaceState Delete(IEnumerable<object> items, DataContext context)
+    public virtual WorkspaceState Delete(IEnumerable<object> items)
     {
         // TODO: this should create a copy of existed data, group by type, remove instances and return new clone with incremented version
         // RB: Not necessarily ==> data should be generally immutable
@@ -91,7 +91,7 @@ public record WorkspaceState( DataSource DataSource)
             {
                 continue;
             }
-            if (!context.GetTypeConfiguration(g.Key, out var config))
+            if (!DataSource.GetTypeConfiguration(g.Key, out var config))
                 continue;
 
             itemsOfType = itemsOfType.RemoveRange(g.Select(config.GetKey));
