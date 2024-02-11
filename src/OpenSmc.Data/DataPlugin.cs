@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Persistence;
 using OpenSmc.Messaging;
@@ -31,6 +32,18 @@ public static class DataPluginExtensions
         return ret.Build();
     }
 
+    public static async Task<IReadOnlyCollection<T>> GetAll<T>(this IMessageHub hub, object dataSourceId, CancellationToken cancellationToken) where T : class
+    {
+        // this is usually not to be written ==> just test code.
+        var persistenceHub = hub.GetHostedHub(new PersistenceAddress(hub.Address), null);
+        return (await persistenceHub.AwaitResponse(new GetManyRequest<T>(), cancellationToken)).Message.Items;
+    }
+
+    internal static bool IsGetRequest(this Type type) 
+        => type.IsGenericType && GetRequestTypes.Contains(type.GetGenericTypeDefinition());
+
+    private static readonly HashSet<Type> GetRequestTypes = new() { typeof(GetRequest<>), typeof(GetManyRequest<>) };
+
 }
 
 /* TODO List: 
@@ -46,7 +59,6 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     IMessageHandler<UpdateDataRequest>,
     IMessageHandler<DeleteDataRequest>
 {
-    public record DataPersistenceAddress(object Host) : IHostedAddress;
     private readonly IMessageHub persistenceHub;
 
     public DataContext Context { get; }
@@ -55,7 +67,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     {
         Context = hub.GetDataConfiguration();
         Register(HandleGetRequest);              // This takes care of all Read (CRUD)
-        persistenceHub = hub.GetHostedHub(new DataPersistenceAddress(hub.Address), conf => conf.AddPlugin(h => new DataPersistencePlugin(h, Context)));
+        persistenceHub = hub.GetHostedHub(new PersistenceAddress(hub.Address), conf => conf.AddPlugin(h => new DataPersistencePlugin(h, Context)));
     }
 
 
@@ -64,7 +76,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         await base.StartAsync();
 
         var response = await persistenceHub.AwaitResponse(new GetDataStateRequest());
-        InitializeState(new (response.Message, response.Message));
+        InitializeState(new (response.Message));
     }
 
     IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(IMessageDelivery<UpdateDataRequest> request)
@@ -115,11 +127,12 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(GetManyRequest<>))
         {
             var elementType = type.GetGenericArguments().First();
-            var getElementsMethod = ReflectionHelper.GetMethodGeneric<DataPlugin>(x => x.GetElements<object>(null));
-            return (IMessageDelivery)getElementsMethod.MakeGenericMethod(elementType).InvokeAsFunction(this, request);
+            return (IMessageDelivery)GetElementsMethod.MakeGenericMethod(elementType).InvokeAsFunction(this, request);
         }
         return request;
     }
+
+    private static readonly MethodInfo GetElementsMethod = ReflectionHelper.GetMethodGeneric<DataPlugin>(x => x.GetElements<object>(null));
 
     // ReSharper disable once UnusedMethodReturnValue.Local
     private IMessageDelivery GetElements<T>(IMessageDelivery<GetManyRequest<T>> request) where T : class
@@ -135,7 +148,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     }
 
     public override bool IsDeferred(IMessageDelivery delivery)
-        => delivery.Message.GetType().Namespace == typeof(GetManyRequest<>).Namespace;
+        => base.IsDeferred(delivery) || delivery.Message.GetType().IsGetRequest();
 
     public void Update(IReadOnlyCollection<object> instances, UpdateOptions options)
     {
@@ -155,7 +168,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
             return;
         persistenceHub.Post(new UpdateDataStateRequest(State.UncommittedEvents));
         Hub.Post(new DataChanged(Hub.Version), o => o.WithTarget(MessageTargets.Subscribers));
-        UpdateState(s => s with {LastSaved = s.Current, UncommittedEvents = ImmutableList<DataChangeRequest>.Empty});
+        UpdateState(s => s with {UncommittedEvents = ImmutableList<DataChangeRequest>.Empty});
     }
 
     public IReadOnlyCollection<T> GetItems<T>() where T : class
