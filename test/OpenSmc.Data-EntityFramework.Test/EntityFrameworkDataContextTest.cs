@@ -3,7 +3,6 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data;
-using OpenSmc.DataSource.Abstractions;
 using OpenSmc.DataStorage.EntityFramework;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
@@ -31,7 +30,7 @@ namespace OpenSmc.Data_EntityFramework.Test
                                 // if desired, we can add mapping logic between data source and data hub, please request on GitHub.
                                 .WithType<MyDataRecord>(),
                             ds =>
-                            ds.GetEntityFrameworkStorage(dataBase => dataBase.UseSqlServer(ConnectionString))
+                            ds.GetEntityFrameworkStorage(database => database.UseSqlServer(ConnectionString))
                         )
                 );
         }

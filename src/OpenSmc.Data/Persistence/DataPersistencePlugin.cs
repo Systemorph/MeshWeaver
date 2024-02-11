@@ -17,9 +17,6 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
 {
     public DataContext Context { get; } = context;
 
-    public override bool IsDeferred(IMessageDelivery delivery) => 
-        delivery.Message.GetType().Namespace == typeof(GetDataStateRequest).Namespace;
-
     /// <summary>
     /// Upon start, it initializes the persisted state from the DB
     /// </summary>
@@ -109,7 +106,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
     {
         if (!dataSource.GetTypeConfiguration(elementType, out var typeConfig))
             return workspace;
-        var toBeUpdated = instances.ToDictionary<object, object>(typeConfig.GetKey);
+        var toBeUpdated = instances.ToDictionary(typeConfig.GetKey);
         var existing = workspace.Data.GetValueOrDefault(elementType) ?? ImmutableDictionary<object, object>.Empty;
         switch (request)
         {

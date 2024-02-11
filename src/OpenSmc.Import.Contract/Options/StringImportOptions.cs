@@ -1,7 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using OpenSmc.Data;
-using OpenSmc.DataSource.Abstractions;
 using OpenSmc.FileStorage;
 
 namespace OpenSmc.Import.Options

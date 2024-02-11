@@ -1,5 +1,4 @@
-﻿using OpenSmc.DataSource.Abstractions;
-using OpenSmc.Messaging;
+﻿using OpenSmc.Messaging;
 using System.Collections.Immutable;
 
 namespace OpenSmc.Data;
@@ -18,7 +17,7 @@ public record DataContext(IMessageHub Hub)
     public DataContext WithDataSource(object id, Func<DataSource, DataSource> dataSourceBuilder) 
         => WithDataSource(id, dataSourceBuilder.Invoke(new(id)));
 
-    public DataContext WithDataSource(object id, Func<DataSourceWithStorage, DataSourceWithStorage> dataSourceBuilder, Func<DataSource, IDataStorage> storageFactory)
+    public DataContext WithDataSource(object id, Func<DataSourceWithStorage, DataSourceWithStorage> dataSourceBuilder, Func<DataSourceWithStorage, IDataStorage> storageFactory)
         => WithDataSource(id, dataSourceBuilder.Invoke(new (id, storageFactory)));
 
     private DataContext WithDataSource(object id, DataSource dataSource)
@@ -72,94 +71,3 @@ public record DataContext(IMessageHub Hub)
     }
 
 }
-
-
-public record DataSourceWithStorage(object Id, Func<DataSource, IDataStorage> StorageFactory) : DataSource(Id)
-{
-    public IDataStorage Storage { get; private set; }
-    public DataSourceWithStorage WithType<T>(Func<TypeSourceWithDataStorage<T>, TypeSourceWithDataStorage<T>> configurator)
-        where T : class
-        => (DataSourceWithStorage)WithType(configurator.Invoke(new TypeSourceWithDataStorage<T>()));
-    public DataSourceWithStorage WithType<T>()
-        where T : class
-        => WithType<T>(c => c);
-
-
-    internal override DataSource Build()
-    {
-        Storage = StorageFactory(this);
-        return base.Build();
-    }
-}
-public record DataSource(object Id)
-{
-
-    public DataSource WithType<T>(
-        Func<TypeSource<T>, TypeSource<T>> configurator)
-        where T : class
-        => WithType(configurator.Invoke(new TypeSource<T>()));
-
-
-    public async Task<WorkspaceState> DoInitialize()
-    {
-        var ret = new WorkspaceState(this);
-
-        foreach (var typeConfiguration in TypeSources.Values)
-        {
-            var initialized = await typeConfiguration.DoInitialize();
-            ret = ret.SetData(typeConfiguration.ElementType, initialized);
-        }
-
-        return ret;
-    }
-    protected DataSource WithType<T>(TypeSource<T> typeSource)
-        where T : class
-    {
-        return this with
-        {
-            TypeSources = TypeSources.SetItem(typeof(T), typeSource)
-        };
-    }
-
-
-    protected ImmutableDictionary<Type, TypeSource> TypeSources { get; init; } = ImmutableDictionary<Type, TypeSource>.Empty;
-
-
-    public DataSource WithTransaction(Func<Task<ITransaction>> startTransaction)
-        => this with { StartTransactionAsync = startTransaction };
-
-
-    internal Func<Task<ITransaction>> StartTransactionAsync { get; init; }
-        = () => Task.FromResult<ITransaction>(EmptyTransaction.Instance);
-
-    public IEnumerable<Type> MappedTypes => TypeSources.Keys;
-
-    public bool GetTypeConfiguration(Type type, out TypeSource typeSource)
-    {
-        return TypeSources.TryGetValue(type, out typeSource);
-    }
-
-    internal virtual DataSource Build()
-    {
-        return this with {TypeSources = TypeSources.ToImmutableDictionary(x => x.Key, x => x.Value.Build(this))};
-    }
-}
-
-public record EmptyTransaction : ITransaction
-{
-    private EmptyTransaction()
-    {
-    }
-
-    public static readonly EmptyTransaction Instance = new EmptyTransaction();
-
-    public ValueTask DisposeAsync()
-        => default;
-
-    public Task CommitAsync()
-        => Task.CompletedTask;
-
-    public Task RevertAsync()
-        => Task.CompletedTask;
-}
-
