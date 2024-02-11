@@ -1,4 +1,4 @@
-﻿namespace OpenSmc.DataSource.Abstractions
+﻿namespace OpenSmc.Data
 {
     public interface IQuerySource
     {

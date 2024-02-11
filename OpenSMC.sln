@@ -65,8 +65,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Equality", "src\Ope
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Scopes", "src\OpenSmc.Scopes\OpenSmc.Scopes.csproj", "{EDDAB77B-7095-42E6-88BC-C33CB005FE40}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DataSource.Abstractions", "src\OpenSmc.DataSource.Abstractions\OpenSmc.DataSource.Abstractions.csproj", "{6C596565-8B5B-495D-BD0B-1244767BFFFE}"
-EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Hierarchies", "src\OpenSmc.Hierarchies\OpenSmc.Hierarchies.csproj", "{8A7B879B-1301-4DD6-A4DD-FF5C351AA43D}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Utils", "src\OpenSmc.Utils\OpenSmc.Utils.csproj", "{29B926F4-0502-4575-819C-BE6C00D61EDE}"
@@ -237,10 +235,6 @@ Global
 		{EDDAB77B-7095-42E6-88BC-C33CB005FE40}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{EDDAB77B-7095-42E6-88BC-C33CB005FE40}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{EDDAB77B-7095-42E6-88BC-C33CB005FE40}.Release|Any CPU.Build.0 = Release|Any CPU
-		{6C596565-8B5B-495D-BD0B-1244767BFFFE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{6C596565-8B5B-495D-BD0B-1244767BFFFE}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{6C596565-8B5B-495D-BD0B-1244767BFFFE}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{6C596565-8B5B-495D-BD0B-1244767BFFFE}.Release|Any CPU.Build.0 = Release|Any CPU
 		{8A7B879B-1301-4DD6-A4DD-FF5C351AA43D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{8A7B879B-1301-4DD6-A4DD-FF5C351AA43D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8A7B879B-1301-4DD6-A4DD-FF5C351AA43D}.Release|Any CPU.ActiveCfg = Release|Any CPU
