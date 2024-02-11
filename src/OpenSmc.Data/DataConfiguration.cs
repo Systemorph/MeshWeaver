@@ -4,23 +4,22 @@ using System.Collections.Immutable;
 
 namespace OpenSmc.Data;
 
-public record DataConfiguration
+public record DataConfiguration(IMessageHub Hub)
 {
 
-    internal ImmutableDictionary<Type, DataSource> DataSourcesByTypes { get; init; } = ImmutableDictionary<Type, DataSource>.Empty;
-    internal DataConfiguration WithType<T>(DataSource config) => 
-            this with { DataSourcesByTypes = DataSourcesByTypes.SetItem(typeof(T), config) };
+    internal ImmutableDictionary<Type, object> DataSourcesByTypes { get; init; } = ImmutableDictionary<Type, object>.Empty;
+    internal DataConfiguration WithType<T>(object dataSourceId) => 
+            this with { DataSourcesByTypes = DataSourcesByTypes.SetItem(typeof(T), dataSourceId) };
 
 
 
     internal ImmutableDictionary<object,DataSource> DataSources { get; init; } = ImmutableDictionary<object, DataSource>.Empty;
-    public IMessageHub Hub { get; init; }
 
     public DataConfiguration WithDataSource(object id, Func<DataSource, DataSource> dataSourceBuilder) 
-        => WithDataSource(id, dataSourceBuilder.Invoke(new(this)));
+        => WithDataSource(id, dataSourceBuilder.Invoke(new(id, this)));
 
     public DataConfiguration WithDataSource(object id, Func<DataSourceWithStorage, DataSourceWithStorage> dataSourceBuilder, Func<DataSource, IDataStorage> storageFactory)
-        => WithDataSource(id, dataSourceBuilder.Invoke(new (storageFactory, this)));
+        => WithDataSource(id, dataSourceBuilder.Invoke(new (id, storageFactory, this)));
 
     private DataConfiguration WithDataSource(object id, DataSource dataSource)
     {
@@ -32,16 +31,16 @@ public record DataConfiguration
     public bool GetTypeConfiguration(Type type, out TypeConfiguration typeConfiguration)
     {
         typeConfiguration = null;
-        return DataSourcesByTypes.TryGetValue(type, out var dataSource) &&
-               dataSource.GetTypeConfiguration(type, out typeConfiguration);
+        return DataSourcesByTypes.TryGetValue(type, out var dataSourceId) 
+               && DataSources.TryGetValue(dataSourceId, out var dataSource)
+               && dataSource.GetTypeConfiguration(type, out typeConfiguration);
     }
 
     internal ImmutableList<Func<object, object>> InstanceToDataSourceMaps = ImmutableList<Func<object, object>>.Empty;
 
-    public DataConfiguration(IMessageHub Hub)
+    private object MapByType(Type type)
     {
-        this.Hub = Hub;
-        InstanceToDataSourceMaps = InstanceToDataSourceMaps.Add(o => DataSourcesByTypes.GetValueOrDefault(o.GetType()));
+        return DataSourcesByTypes.GetValueOrDefault(type);
     }
 
     internal DataConfiguration MapInstanceToDataSource<T>(Func<T, object> dataSourceMap) => this with
@@ -52,17 +51,18 @@ public record DataConfiguration
 
     public DataSource GetDataSource(object id)
     {
-        return id == null ? null : DataSources.GetValueOrDefault(id);
+        return DataSources.GetValueOrDefault(id);
     }
     public object GetDataSourceId(object instance)
     {
-        return InstanceToDataSourceMaps.Select(m => m(instance)).FirstOrDefault(id => id != null);
+        return InstanceToDataSourceMaps.Select(m => m(instance)).FirstOrDefault(id => id != null)
+            ?? MapByType(instance.GetType());
     }
 
 }
 
 
-public record DataSourceWithStorage(Func<DataSource, IDataStorage> StorageFactory, DataConfiguration Parent) : DataSource(Parent)
+public record DataSourceWithStorage(object Id, Func<DataSource, IDataStorage> StorageFactory, DataConfiguration Parent) : DataSource(Id, Parent)
 {
     public DataSourceWithStorage WithType<T>(Func<TypeConfigurationWithDataStorage<T>, TypeConfigurationWithDataStorage<T>> configurator)
         where T : class
@@ -73,7 +73,7 @@ public record DataSourceWithStorage(Func<DataSource, IDataStorage> StorageFactor
 
 
 }
-public record DataSource(DataConfiguration Parent)
+public record DataSource(object Id, DataConfiguration Parent)
 {
 
     public DataSource WithType<T>(
@@ -100,7 +100,7 @@ public record DataSource(DataConfiguration Parent)
         return this with
         {
             TypeConfigurations = TypeConfigurations.SetItem(typeof(T), typeConfiguration),
-            Parent = Parent.WithType<T>(this)
+            Parent = Parent.WithType<T>(Id)
         };
     }
 
