@@ -2,7 +2,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
 using OpenSmc.Collections;
-using OpenSmc.DataSource.Abstractions;
 using OpenSmc.Reflection;
 
 namespace OpenSmc.Data;
@@ -23,7 +22,7 @@ public record TypeSource<T> : TypeSource
 
     public override async Task<ImmutableDictionary<object, object>> DoInitialize()
     {
-        return (await Initialize())
+        return (await InitializeAction())
             .Select(x => new KeyValuePair<object,object>(Key(x), x))
             .ToImmutableDictionary();
     }
@@ -31,7 +30,7 @@ public record TypeSource<T> : TypeSource
     public override object GetKey(object instance)
         => Key((T)instance);
 
-    internal Func<T, object> Key { get; init; } = GetKeyFunction();
+    protected Func<T, object> Key { get; init; } = GetKeyFunction();
     private static Func<T, object> GetKeyFunction()
     {
         var keyProperty = typeof(T).GetProperties().SingleOrDefault(p => p.HasAttribute<KeyAttribute>());
@@ -47,18 +46,30 @@ public record TypeSource<T> : TypeSource
 
     public TypeSource<T> WithKey(Func<T, object> key)
         => this with { Key = key };
-    internal Func<Task<IReadOnlyCollection<T>>> Initialize { get; init; }
+
+
+    internal virtual Task<IReadOnlyCollection<T>> InitializeAsync() => InitializeAction();
+
+    protected Func<Task<IReadOnlyCollection<T>>> InitializeAction { get; init; } =
+        () => Task.FromResult<IReadOnlyCollection<T>>(Array.Empty<T>());
+
     public TypeSource<T> WithInitialization(Func<Task<IReadOnlyCollection<T>>> initialization)
-        => this with { Initialize = initialization };
-    internal Action<IReadOnlyCollection<T>> Update { get; init; }
+        => this with { InitializeAction = initialization };
 
-    public TypeSource<T> WithUpdate(Action<IReadOnlyCollection<T>> update) => this with { Update = update };
-    internal Action<IReadOnlyCollection<T>> Add { get; init; }
+    internal virtual void Update(IReadOnlyCollection<T> instances) => UpdateAction.Invoke(instances);
+    protected Action<IReadOnlyCollection<T>> UpdateAction { get; init; } = _ => { };
 
-    public TypeSource<T> WithAdd(Action<IReadOnlyCollection<T>> add) => this with { Add = add };
+    public TypeSource<T> WithUpdate(Action<IReadOnlyCollection<T>> update) => this with { UpdateAction = update };
+    protected Action<IReadOnlyCollection<T>> AddAction { get; init; } = _ => { };
 
-    internal Action<IReadOnlyCollection<T>> Delete { get; init; }
-    public TypeSource<T> WithDelete(Action<IReadOnlyCollection<T>> delete) => this with { Delete = delete };
+
+    internal virtual void Add(IReadOnlyCollection<T> instances) => AddAction.Invoke(instances);
+
+    public TypeSource<T> WithAdd(Action<IReadOnlyCollection<T>> add) => this with { AddAction = add };
+
+    protected Action<IReadOnlyCollection<T>> DeleteAction { get; init; }
+    internal virtual void Delete(IReadOnlyCollection<T> instances) => DeleteAction.Invoke(instances);
+    public TypeSource<T> WithDelete(Action<IReadOnlyCollection<T>> delete) => this with { DeleteAction = delete };
 
     public TypeSource<T> WithDeleteById(Func<IEnumerable<object>, Task> delete) => this with { DeleteByIds = delete };
 }
@@ -68,24 +79,25 @@ public record TypeSourceWithDataStorage<T>
     : TypeSource<T>
     where T : class
 {
-    public TypeSourceWithDataStorage()
-    {
-        Add = o => Storage!.Add(o);
-        Delete = o => Storage!.Add(o);
-        Update = o => Storage!.Add(o);
-        Initialize = async () =>
-        {
-            await using var transaction = await Storage!.StartTransactionAsync();
-            return await Storage.Query<T>().ToArrayAsync();
-        };
 
-    }
-    protected IDataStorage Storage { get; private set; }
+    private IDataStorage Storage { get; init; }
 
     public override TypeSource Build(DataSource dataSource)
     {
-        Storage = ((DataSourceWithStorage)dataSource).Storage;
-        return this;
+        var storage = ((DataSourceWithStorage)dataSource).Storage;
+        return this
+            with
+            {
+                Storage = storage,
+                AddAction = storage.Add,
+                UpdateAction = storage.Update,
+                DeleteAction = storage.Delete,
+                InitializeAction = async () =>
+                {
+                    await using var transaction = await storage.StartTransactionAsync();
+                    return await storage.Query<T>().ToArrayAsync();
+                }
+            };
     }
 
 }

@@ -55,7 +55,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     {
         Context = hub.GetDataConfiguration();
         Register(HandleGetRequest);              // This takes care of all Read (CRUD)
-        persistenceHub = hub.GetHostedHub(new DataPersistenceAddress(hub.Address), conf => conf.AddPlugin(hub => new DataPersistencePlugin(hub, Context)));
+        persistenceHub = hub.GetHostedHub(new DataPersistenceAddress(hub.Address), conf => conf.AddPlugin(h => new DataPersistencePlugin(h, Context)));
     }
 
 

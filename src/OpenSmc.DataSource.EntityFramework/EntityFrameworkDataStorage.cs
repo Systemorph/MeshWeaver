@@ -1,5 +1,5 @@
 ﻿using Microsoft.EntityFrameworkCore;
-using OpenSmc.DataSource.Abstractions;
+using OpenSmc.Data;
 
 namespace OpenSmc.DataStorage.EntityFramework
 {
