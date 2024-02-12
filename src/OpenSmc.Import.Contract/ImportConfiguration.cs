@@ -1,17 +1,16 @@
 ﻿using System.Collections.Immutable;
-using System.Runtime.InteropServices;
-using AngleSharp.Io;
+using OpenSmc.Data;
+using OpenSmc.DataSetReader.Abstractions;
 using OpenSmc.DataSetReader.Csv;
 using OpenSmc.DataSetReader.Excel;
-using OpenSmc.DataSetReader.Excel.Utils;
 
 namespace OpenSmc.Import;
 
-public record ImportConfiguration
+public record ImportConfiguration(DataContext DataContext)
 {
     internal ImmutableDictionary<string, ImportFormat> ImportFormats { get; init; } 
         = ImmutableDictionary<string, ImportFormat>.Empty
-            .Add(ImportFormat.Default, new ImportFormat(ImportFormat.Default));
+            .Add(ImportFormat.Default, new ImportFormat(ImportFormat.Default).WithAutoMappings(DataContext, domain => domain));
 
     public ImportConfiguration WithFormat(string format, Func<ImportFormat, ImportFormat> configuration)
         => this with
@@ -21,14 +20,15 @@ public record ImportConfiguration
         };
 
 
+
     internal ImmutableDictionary<string, DataSetReader.Abstractions.DataSetReader> DataSetReaders { get; init; } =
         ImmutableDictionary<string, DataSetReader.Abstractions.DataSetReader>.Empty
-            .Add("Csv", async (stream,options,_) => {
+            .Add(MimeTypes.Csv, async (stream,options,_) => {
                 using var reader = new StreamReader(stream);
                 return await DataSetCsvSerializer.Parse(reader, options.Delimiter, options.WithHeaderRow, options.TypeToRestoreHeadersFrom);
             })
-    .Add(ExcelExtensions.Excel10, new ExcelDataSetReader().ReadAsync)
-    .Add(ExcelExtensions.Excel03, new ExcelDataSetReaderOld().ReadAsync);
+    .Add(MimeTypes.Xlsx, new ExcelDataSetReader().ReadAsync)
+    .Add(MimeTypes.Xls, new ExcelDataSetReaderOld().ReadAsync);
 
     public ImportConfiguration WithDataSetReader(string fileType, DataSetReader.Abstractions.DataSetReader dataSetReader)
         => this with { DataSetReaders = DataSetReaders.SetItem(fileType, dataSetReader) };
@@ -37,7 +37,20 @@ public record ImportConfiguration
         => ImportFormats.GetValueOrDefault(importRequestFormat);
 
 
-    internal ImmutableDictionary<string, Func<ImportRequest, Stream>> StreamProviders { get; init; } = ImmutableDictionary<string, Func<ImportRequest, Stream>>.Empty;
+    internal ImmutableDictionary<string, Func<ImportRequest, Stream>> StreamProviders { get; init; } 
+        = ImmutableDictionary<string, Func<ImportRequest, Stream>>.Empty
+            .Add(nameof(String), CreateMemoryStream);
+
+    private static Stream CreateMemoryStream(ImportRequest request)
+    {
+        var stream = new MemoryStream();
+        var writer = new StreamWriter(stream);
+        writer.Write(request.Content);
+        writer.Flush();
+        stream.Position = 0;
+        return stream;
+    }
+
 
     public ImportConfiguration WithStreamReader(string sourceId, Func<ImportRequest, Stream> reader)
         => this with { StreamProviders = StreamProviders.SetItem(sourceId, reader) };

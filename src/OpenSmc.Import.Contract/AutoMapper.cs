@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using Autofac.Core.Activators.Reflection;
 using OpenSmc.Collections;
+using OpenSmc.Data;
 using OpenSmc.DataStructures;
 using OpenSmc.Domain.Abstractions.Attributes;
 using OpenSmc.Reflection;
@@ -14,31 +15,41 @@ using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Import
 {
+    public record AutoMapConfiguration
+    {
+        internal Func<IDataSet, IDataTable, IDataRow, IEnumerable<object>> RowMapping { get; init; }
+    }
+
     public static class AutoMapper
     {
+
+        public static ImmutableDictionary<string, TableMapping> Create(DataContext dataContext)
+        {
+            return dataContext.DataTypes
+                .Select(type => new KeyValuePair<string, TableMapping>(
+                    type.Name,
+                    new TableMapping(type.Name,
+                        (_, table) => MapTableToType(type, table))
+                ))
+                .ToImmutableDictionary();
+        }
+
+        private static IEnumerable<object> MapTableToType(Type type, IDataTable table)
+        {
+            var constructor = GetInstanceInitFunction(type,
+                table.Columns.Select((c, i) => new KeyValuePair<string, int>(c.ColumnName, i)).ToDictionary());
+            return table.Rows.Select(constructor);
+        }
+
         public const string ParameterExceptionMessage = "Constructor for type {0} can not find parameters {1}";
 
         private static readonly PropertyInfo RowIndexer = typeof(IDataRow).GetProperties()
                                                                           .First(x => x.Name == "Item" &&
                                                                                       x.GetGetMethod()?.GetParameters().First().ParameterType == typeof(int));
 
-        public static RowMapping<T> CreateAutoMapping<T>(IReadOnlyDictionary<string, int> columns)
-            where T : class
+
+        private static Func<IDataRow, object> GetInstanceInitFunction(Type type, IReadOnlyDictionary<string, int> columns)
         {
-            var rowMapping = new RowMapping<T>(null, ImmutableDictionary<PropertyInfo, Expression>.Empty);
-
-            if (rowMapping.InitializeFunction == null)
-            {
-                var func = (Func<IDataSet, IDataRow, T>)GetInstanceInitFunction(typeof(T), columns, rowMapping.CustomPropertyMappings.ToDictionary(x => x.Key.Name, x => x.Value));
-                rowMapping = rowMapping with { InitializeFunction = (ds, dsRow, _) => func(ds, dsRow) };
-            }
-
-            return rowMapping;
-        }
-
-        private static Delegate GetInstanceInitFunction(Type type, IReadOnlyDictionary<string, int> columns, Dictionary<string, Expression> customMappings)
-        {
-            var dataSetParameter = Expression.Parameter(typeof(IDataSet), "dataSet");
             var rowParameter = Expression.Parameter(typeof(IDataRow), "row");
             var columnsDict = columns.ToDictionary(x => x.Key, x => x.Value);
 
@@ -47,66 +58,59 @@ namespace OpenSmc.Import
                 throw new NoConstructorsFoundException(type, new DefaultConstructorFinder()); //TODO: implement constructor finder or use another exception
 
             var parameters = constructorInfo.GetParameters();
-            var constructorParameters = GetConstructorParameters(dataSetParameter, rowParameter, parameters, columnsDict, customMappings);
+            var constructorParameters = GetConstructorParameters(rowParameter, parameters, columnsDict);
 
-            var bindings = GetBindingParameters(dataSetParameter, rowParameter, type, parameters.Select(x => x.Name).ToArray(), columnsDict, customMappings);
-            return Expression.Lambda(Expression.MemberInit(Expression.New(constructorInfo, constructorParameters.Select(x => x.expression)), bindings), dataSetParameter, rowParameter).Compile();
+            var bindings = GetBindingParameters(rowParameter, type, parameters.Select(x => x.Name).ToArray(), columnsDict);
+            return Expression.Lambda<Func<IDataRow, object>>(
+                Expression.MemberInit(Expression.New(constructorInfo, 
+                    constructorParameters.Select(x => x.expression)), bindings), rowParameter)
+                .Compile();
         }
 
-        private static IEnumerable<(string name, Expression expression)> GetConstructorParameters(ParameterExpression dataSetParameter,
-                                                                                                  ParameterExpression rowParameter,
+        private static IEnumerable<(string name, Expression expression)> GetConstructorParameters(ParameterExpression rowParameter,
                                                                                                   ParameterInfo[] parameters,
-                                                                                                  Dictionary<string, int> columns,
-                                                                                                  Dictionary<string, Expression> customMappings)
+                                                                                                  Dictionary<string, int> columns)
         {
             foreach (var parameter in parameters)
             {
-                //if in custom mappings expression is present we take it and clear it from initial dict
-                if (customMappings.Remove(parameter.Name, out var expression))
-                    yield return new(parameter.Name, Expression.Invoke(expression, dataSetParameter, rowParameter));
+                //Here we need to specify defaults for parameters, to match parameters of ctor
+                var listElementType = parameter.ParameterType.GetListElementType();
+                if (listElementType != null)
+                {
+                    var matchedColumns = GetMatchedColumnsForList(parameter.Name, columns);
+                    foreach (var matchedColumn in matchedColumns)
+                        columns.Remove(matchedColumn
+                            .Key); // kick out parameters from columns to be processed in binding expressions
+
+                    if (matchedColumns.Length > 0)
+                        yield return new(parameter.Name,
+                            GetListPropertyExpression(rowParameter, matchedColumns, listElementType,
+                                parameter.ParameterType.IsArray));
+                    else
+                        yield return new(parameter.Name, Expression.Default(parameter.ParameterType));
+                }
                 else
                 {
-                    //Here we need to specify defaults for parameters, to match parameters of ctor
-                    var listElementType = parameter.ParameterType.GetListElementType();
-                    if (listElementType != null)
-                    {
-                        var matchedColumns = GetMatchedColumnsForList(parameter.Name, columns);
-                        foreach (var matchedColumn in matchedColumns)
-                            columns.Remove(matchedColumn.Key); // kick out parameters from columns to be processed in binding expressions
-
-                        if (matchedColumns.Length > 0)
-                            yield return new(parameter.Name, GetListPropertyExpression(rowParameter, matchedColumns, listElementType, parameter.ParameterType.IsArray));
-                        else
-                            yield return new(parameter.Name, Expression.Default(parameter.ParameterType));
-                    }
+                    var name = parameter.GetCustomAttribute<MapToAttribute>()?.PropertyName ?? parameter.Name;
+                    if (columns.Remove(name,
+                            out var matchedIndex)) // kick out parameters from columns to be processed in binding expressions
+                        yield return new(parameter.Name,
+                            GetPropertyExpression(rowParameter, matchedIndex, parameter.ParameterType));
                     else
-                    {
-                        var name = parameter.GetCustomAttribute<MapToAttribute>()?.PropertyName ?? parameter.Name;
-                        if (columns.Remove(name, out var matchedIndex))// kick out parameters from columns to be processed in binding expressions
-                            yield return new(parameter.Name, GetPropertyExpression(rowParameter, matchedIndex, parameter.ParameterType));
-                        else
-                            yield return new(parameter.Name, Expression.Default(parameter.ParameterType));
-                    }
+                        yield return new(parameter.Name, Expression.Default(parameter.ParameterType));
                 }
-
             }
+
         }
 
-        private static IEnumerable<MemberBinding> GetBindingParameters(ParameterExpression dataSetParameter,
-                                                                       ParameterExpression rowParameter,
+        private static IEnumerable<MemberBinding> GetBindingParameters(ParameterExpression rowParameter,
                                                                        Type type,
                                                                        string[] exceptProperties,
-                                                                       Dictionary<string, int> columns,
-                                                                       Dictionary<string, Expression> customMappings)
+                                                                       Dictionary<string, int> columns)
         {
             // TODO: Exclude complexProperties like reference to another instance! (2020.11.15, Armen Sirotenko)
             foreach (var propertyInfo in type.GetProperties().Where(x => x.CanWrite && !exceptProperties.Contains(x.Name)))
             {
-                //if in custom mappings expression is present we take it
-                if (customMappings.TryGetValue(propertyInfo.Name, out var expression))
-                    yield return Expression.Bind(propertyInfo, Expression.Invoke(expression, dataSetParameter, rowParameter));
-                else
-                {
                     //Here we don't need to specify defaults for properties, since they are already equal to default
                     var listElementType = propertyInfo.PropertyType.GetListElementType();
                     if (listElementType != null)
@@ -121,7 +125,6 @@ namespace OpenSmc.Import
                         if (columns.TryGetValue(propertyName, out var matchedIndex))
                             yield return Expression.Bind(propertyInfo, GetPropertyExpression(rowParameter, matchedIndex, propertyInfo.PropertyType));
                     }
-                }
 
             }
         }
@@ -224,5 +227,7 @@ namespace OpenSmc.Import
             //TODO return null if relationship
             return Convert.ChangeType(value, type, CultureInfo.InvariantCulture);
         }
+
     }
+
 }

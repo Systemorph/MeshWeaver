@@ -7,7 +7,7 @@ namespace OpenSmc.Messaging;
 
 public static class MessageHubPluginExtensions
 {
-    internal static readonly HashSet<Type> HandlerTypes = new() { typeof(IMessageHandler<>), typeof(IMessageHandlerAsync<>) };
+    internal static readonly HashSet<Type> HandlerTypes = [typeof(IMessageHandler<>), typeof(IMessageHandlerAsync<>)];
     internal static readonly MethodInfo TaskFromResultMethod = ReflectionHelper.GetStaticMethod(() => Task.FromResult<IMessageDelivery>(null));
 
     public static MessageHubConfiguration AddPlugin<TPlugin>(this MessageHubConfiguration configuration, Func<IMessageHub, Task<TPlugin>> factory)

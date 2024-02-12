@@ -1,6 +1,7 @@
 ﻿using System.Collections;
 using System.ComponentModel.DataAnnotations;
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
 using OpenSmc.Data;
@@ -11,11 +12,24 @@ using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Import;
 
-public class ImportPlugin(IMessageHub hub, ImportConfiguration importConfiguration) : MessageHubPlugin<ImportState>(hub),
+public class ImportPlugin : MessageHubPlugin<ImportState>,
     IMessageHandlerAsync<ImportRequest>
 {
     [Inject] private IActivityService activityService;
-    [Inject] private IWorkspace workspace;
+    private readonly IWorkspace workspace;
+    public ImportConfiguration Configuration;
+    public ImportPlugin(IMessageHub hub, Func<ImportConfiguration, ImportConfiguration> importConfiguration) : base(hub)
+    {
+        workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
+        Configuration = importConfiguration.Invoke(new(workspace.Context));
+    }
+
+    public override async Task StartAsync()
+    {
+        await base.StartAsync();
+        await workspace.Initialize;
+    }
+
     public async Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery<ImportRequest> request, CancellationToken cancellationToken)
     {
         ActivityLog log;
@@ -58,10 +72,10 @@ public class ImportPlugin(IMessageHub hub, ImportConfiguration importConfigurati
         return request;
     }
 
-    public async Task<(object dataSet, ImportFormat format)> ReadDataSetAsync(ImportRequest importRequest,
+    public async Task<(IDataSet dataSet, ImportFormat format)> ReadDataSetAsync(ImportRequest importRequest,
         CancellationToken cancellationToken)
     {
-        if (!importConfiguration.StreamProviders.TryGetValue(importRequest.StreamType, out var streamProvider))
+        if (!Configuration.StreamProviders.TryGetValue(importRequest.StreamType, out var streamProvider))
             throw new ImportException($"Unknown stream type: {importRequest.StreamType}");
 
 
@@ -69,15 +83,20 @@ public class ImportPlugin(IMessageHub hub, ImportConfiguration importConfigurati
 
         var stream = streamProvider.Invoke(importRequest);
         if (stream == null)
-            throw new ImportException($"Could not open stream: {importRequest.StreamType}, {importRequest.Name}");
+            throw new ImportException($"Could not open stream: {importRequest.StreamType}, {importRequest.Content}");
 
 
 
-        if (!importConfiguration.DataSetReaders.TryGetValue(importRequest.MimeType, out var reader))
+        if (!Configuration.DataSetReaders.TryGetValue(importRequest.MimeType, out var reader))
             throw new ImportException($"Cannot read mime type {importRequest.MimeType}");
 
         var (dataSet, format) = await reader.Invoke(stream, importRequest.DataSetReaderOptions, cancellationToken);
-        var importFormat = importConfiguration.GetFormat(format);
+
+        format ??= importRequest.Format;
+        if (format == null)
+            throw new ImportException("Format not specified.");
+
+        var importFormat = Configuration.GetFormat(format);
         if (importFormat == null)
             throw new ImportException($"Unknown format: {format}");
 
@@ -102,7 +121,6 @@ public class ImportPlugin(IMessageHub hub, ImportConfiguration importConfigurati
     }
 
     public static string ValidationStageFailed = "Validation stage of type {0} has failed.";
-
 
 
 
