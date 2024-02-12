@@ -81,19 +81,28 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
         if (!type.IsGenericType || !MessageHubPluginExtensions.HandlerTypes.Contains(type.GetGenericTypeDefinition()))
             return null;
         var genericArgs = type.GetGenericArguments();
-        var messageType = genericArgs.First();
-        return new(messageType, CreateAsyncDelivery(messageType, type, instance));
+
+        var cancellationToken = new CancellationTokenSource().Token; // todo: think how to handle this
+        if (type.GetGenericTypeDefinition() == typeof(IMessageHandler<>))
+            return new(genericArgs.First(), CreateDelivery(genericArgs.First(), type, instance, null));
+        if (type.GetGenericTypeDefinition() == typeof(IMessageHandlerAsync<>))
+            return new(genericArgs.First(), CreateDelivery(genericArgs.First(), type, instance, Expression.Constant(cancellationToken)));
+
+        return null;
     }
 
 
-    private AsyncDelivery CreateAsyncDelivery(Type messageType, Type interfaceType, object instance)
+    private AsyncDelivery CreateDelivery(Type messageType, Type interfaceType, object instance, Expression cancellationToken)
     {
         var deliveryType = typeof(IMessageDelivery<>).MakeGenericType(messageType);
         var prm = Expression.Parameter(typeof(IMessageDelivery));
 
+        var expressions = new List<Expression> { Expression.Convert(prm, typeof(IMessageDelivery<>).MakeGenericType(messageType)) };
+        if(cancellationToken != null)
+            expressions.Add(cancellationToken);
         var handlerCall = Expression.Call(Expression.Constant(instance, interfaceType),
             interfaceType.GetMethods(BindingFlags.Instance | BindingFlags.Public).First(),
-            Expression.Convert(prm, deliveryType)
+            expressions
         );
 
         if (interfaceType.GetGenericTypeDefinition() == typeof(IMessageHandler<>))

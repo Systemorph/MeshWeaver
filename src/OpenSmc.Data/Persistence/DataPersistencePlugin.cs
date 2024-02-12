@@ -43,7 +43,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
         return request.Processed();
     }
 
-    public async Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery<UpdateDataStateRequest> request)
+    public async Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery<UpdateDataStateRequest> request, CancellationToken cancellationToken)
     {
         var events = request.Message.Events;
         await UpdateState(events);

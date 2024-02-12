@@ -6,6 +6,7 @@ namespace OpenSmc.Data;
 
 public record DataPluginState(CombinedWorkspaceState Current)
 {
+    public CombinedWorkspaceState PreviouslySaved { get; init; } = Current;
     public ImmutableList<DataChangeRequest> UncommittedEvents { get; init; } = ImmutableList<DataChangeRequest>.Empty;
 }
 

@@ -4,14 +4,9 @@ using OpenSmc.DataStructures;
 
 namespace OpenSmc.DataSetReader.Excel
 {
-    public class ExcelDataSetReaderOld : ExcelDataSetReaderBase, IDataSetReader
+    public class ExcelDataSetReaderOld : ExcelDataSetReaderBase
     {
-        private readonly IExcelReaderFactory excelDataReaderFactory;
-
-        public ExcelDataSetReaderOld()
-        {
-            excelDataReaderFactory = new ExcelReaderFactory();
-        }
+        private readonly IExcelReaderFactory excelDataReaderFactory = new ExcelReaderFactory();
 
         public Task<(IDataSet DataSet, string Format)> ReadAsync(Stream stream, DataSetReaderOptions options, CancellationToken cancellationToken)
         {
