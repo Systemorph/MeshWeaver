@@ -1,4 +1,9 @@
 ﻿namespace OpenSmc.DataSetReader.Abstractions
 {
-    public record DataSetReaderOptions(char Delimiter, in bool WithHeaderRow, Type TypeToRestoreHeadersFrom, string ContentType);
+    public record DataSetReaderOptions
+    {
+        public char Delimiter { get; init; } = ',';
+        public bool WithHeaderRow { get; init; } = true;
+        public Type TypeToRestoreHeadersFrom { get; init; }
+    }
 }

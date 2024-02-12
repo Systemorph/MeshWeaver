@@ -1,43 +1,15 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using OpenSmc.Collections;
-using OpenSmc.DataSetReader.Csv;
-using OpenSmc.DataSetReader.Excel;
-using OpenSmc.DataSetReader.Excel.Utils;
+using OpenSmc.DataSetReader.Abstractions;
 using OpenSmc.DataStructures;
 
-namespace OpenSmc.Import.Builders;
-
-public record ImportConfiguration
-{
-    internal ImmutableDictionary<string, ImportFormat> ImportFormats { get; init; } = ImmutableDictionary<string, ImportFormat>.Empty;
-
-    public ImportConfiguration WithFormat(string format, Func<ImportFormat, ImportFormat> configuration)
-        => this with
-        {
-            ImportFormats = ImportFormats.SetItem(format,
-                configuration.Invoke(ImportFormats.GetValueOrDefault(format) ?? new ImportFormat(format)))
-        };
-
-
-    internal ImmutableDictionary<string, ReadDataSetAsync> DataSetReaders { get; init; } = 
-        ImmutableDictionary<string, ReadDataSetAsync>.Empty
-            .Add("Csv", new CsvDataSetReader().ReadAsync)
-            .Add(ExcelExtensions.Excel10, new ExcelDataSetReader().ReadAsync)
-            .Add(ExcelExtensions.Excel03, new ExcelDataSetReaderOld().ReadAsync);
-
-    public ImportConfiguration WithDataSetReader(string fileType, ReadDataSetAsync dataSetReader)
-        => this with { DataSetReaders = DataSetReaders.SetItem(fileType, dataSetReader) };
-
-}
-
+namespace OpenSmc.Import;
 
 public record ImportFormat(string Format)
 {
+    public const string Default = nameof(Default);
 
-    internal object TargetDataSource { get; init; }
-    public ImportFormat WithTargetDataSource(object dataSource) => this with { TargetDataSource = dataSource };
-    internal ImmutableDictionary<string, Action<ImportRequest, IDataSet>> DataSetReaderByFormat { get; init; } = ImmutableDictionary<string, Action<ImportRequest, IDataSet>>.Empty;
     internal ImmutableDictionary<string, TableMapping> TableMappings { get; init; } = ImmutableDictionary<string, TableMapping>.Empty;
     internal ImmutableHashSet<string> IgnoredTables { get; init; } = ImmutableHashSet<string>.Empty;
     internal ImmutableHashSet<Type> IgnoredTypes { get; init; } = ImmutableHashSet<Type>.Empty;
@@ -50,11 +22,12 @@ public record ImportFormat(string Format)
     }
 
 
+
     public ImportFormat WithType<T>()
         where T : class
         => WithType<T>(type => type);
 
-    public ImportFormat WithType<T>(Func<TableMapping<T>, TableMapping<T>> mapping)
+    public ImportFormat WithType<T>(Func<TableToTypeMapping<T>, TableToTypeMapping<T>> mapping)
         where T : class
     {
         var tableMapping = mapping.Invoke(new(typeof(T).Name));
@@ -110,8 +83,14 @@ public record ImportFormat(string Format)
         return this with { SaveLog = save };
     }
 
-    public void Import(ImportRequest import, IDataSet dataSet)
-    {
-        throw new NotImplementedException();
-    }
+
+    private ImmutableList<ImportFunction> ImportFunctions { get; init; } = ImmutableList<ImportFunction>.Empty;
+
+    public ImportFormat WithImportFunction(ImportFunction importFunction) =>
+        this with { ImportFunctions = ImportFunctions.Add(importFunction) };
+
+    public IReadOnlyCollection<object> Import(ImportRequest importRequest, object dataSet)
+        => ImportFunctions.Select(f => f.Invoke(importRequest, dataSet)).Aggregate((x,y) => x.Concat(y)).ToArray();
+
+    public delegate IEnumerable<object> ImportFunction(ImportRequest importRequest, object dataSet);
 }

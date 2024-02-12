@@ -1,5 +1,5 @@
 ﻿using OpenSmc.Hub.Fixture;
-using OpenSmc.Import.Builders;
+using OpenSmc.Import;
 using OpenSmc.Messaging;
 using Xunit.Abstractions;
 
@@ -11,7 +11,8 @@ namespace OpenSmc.Import.Test
         protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         {
             return base.ConfigureHost(configuration)
-                .AddImport(import => import.WithFileSource());
+                //.AddImport(import => import.WithFileSource())
+                ;
         }
     }
 }

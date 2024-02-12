@@ -1,9 +1,8 @@
 ﻿using OpenSmc.DataSetReader.Abstractions;
-using OpenSmc.DataStructures;
 
 namespace OpenSmc.DataSetReader
 {
-    public record DataSetReader 
+    public record DataSetReaderOptions 
     {
         internal  char Delimiter { get; init; } = DataSetReaderDefaults.DefaultDelimiter;
         internal  bool WithHeaderRowValue { get; init; } = true;
@@ -15,29 +14,28 @@ namespace OpenSmc.DataSetReader
         /// <summary>
         /// Defines delimiter for csv and strings of csv format
         /// </summary>
-        public DataSetReader WithDelimiter(char delimiter)
+        public DataSetReaderOptions WithDelimiter(char delimiter)
         {
             return this with { Delimiter = delimiter };
         }
         /// <summary>
         /// Defines whether first table of csv contains header row, by default true
         /// </summary>
-        public DataSetReader WithHeaderRow(bool withHeaderRow = true)
+        public DataSetReaderOptions WithHeaderRow(bool withHeaderRow = true)
         {
             return this with { WithHeaderRowValue = withHeaderRow };
         }
 
-        public DataSetReader WithContentType(string contentType)
+        public DataSetReaderOptions WithContentType(string contentType)
         {
             return this with { ContentType = contentType };
         }
 
-        public DataSetReader WithTypeToRestoreHeadersFrom(Type typeToRestoreHeadersFrom)
+        public DataSetReaderOptions WithTypeToRestoreHeadersFrom(Type typeToRestoreHeadersFrom)
         {
             return this with { TypeToRestoreHeadersFrom = typeToRestoreHeadersFrom };
         }
 
 
-        protected internal virtual DataSetReaderOptions GetMappings() => new(Delimiter, WithHeaderRowValue, TypeToRestoreHeadersFrom, ContentType);
     }
 }
