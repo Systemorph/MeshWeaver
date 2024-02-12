@@ -20,5 +20,5 @@ public interface IMessageHandler<in TMessage>
 }
 public interface IMessageHandlerAsync<in TMessage>
 {
-    public Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery<TMessage> request);
+    public Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery<TMessage> request, CancellationToken cancellationToken);
 }

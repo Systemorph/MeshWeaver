@@ -4,7 +4,7 @@ using OpenSmc.DataStructures;
 
 namespace OpenSmc.DataSetReader.Excel
 {
-    public class ExcelDataSetReader : ExcelDataSetReaderBase, IDataSetReader
+    public class ExcelDataSetReader : ExcelDataSetReaderBase
     {
         private readonly IExcelReaderFactory excelDataReaderFactory;
 

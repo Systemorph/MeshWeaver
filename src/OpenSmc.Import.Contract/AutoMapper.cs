@@ -7,7 +7,6 @@ using Autofac.Core.Activators.Reflection;
 using OpenSmc.Collections;
 using OpenSmc.DataStructures;
 using OpenSmc.Domain.Abstractions.Attributes;
-using OpenSmc.Import.Options;
 using OpenSmc.Reflection;
 using OpenSmc.ShortGuid;
 
@@ -23,10 +22,10 @@ namespace OpenSmc.Import
                                                                           .First(x => x.Name == "Item" &&
                                                                                       x.GetGetMethod()?.GetParameters().First().ParameterType == typeof(int));
 
-        public static RowMapping<T> AddAutoMapping<T>(RowMapping<T> rowMapping, IReadOnlyDictionary<string, int> columns)
+        public static RowMapping<T> CreateAutoMapping<T>(IReadOnlyDictionary<string, int> columns)
             where T : class
         {
-            rowMapping ??= new RowMapping<T>(null, ImmutableDictionary<PropertyInfo, Expression>.Empty);
+            var rowMapping = new RowMapping<T>(null, ImmutableDictionary<PropertyInfo, Expression>.Empty);
 
             if (rowMapping.InitializeFunction == null)
             {

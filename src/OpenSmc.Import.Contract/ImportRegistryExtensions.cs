@@ -1,9 +1,8 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Activities;
-using OpenSmc.Import.Options;
 using OpenSmc.Messaging;
 
-namespace OpenSmc.Import.Builders
+namespace OpenSmc.Import
 {
 
     public static class ImportRegistryExtensions
