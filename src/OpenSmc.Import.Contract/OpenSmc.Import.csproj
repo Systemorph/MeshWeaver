@@ -1,5 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <ProjectReference Include="..\OpenSmc.DataSetReader.Csv\OpenSmc.DataSetReader.Csv.csproj" />
+    <ProjectReference Include="..\OpenSmc.DataSetReader.Excel\OpenSmc.DataSetReader.Excel.csproj" />
     <ProjectReference Include="..\OpenSmc.DataSetReader\OpenSmc.DataSetReader.csproj" />
     <ProjectReference Include="..\OpenSmc.Data\OpenSmc.Data.csproj" />
     <ProjectReference Include="..\OpenSmc.Domain.Abstractions\OpenSmc.Domain.Abstractions.csproj" />
