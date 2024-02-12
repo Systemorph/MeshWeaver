@@ -13,7 +13,7 @@ using OpenSmc.ShortGuid;
 
 // ReSharper disable AssignNullToNotNullAttribute
 
-namespace OpenSmc.Import.Mapping
+namespace OpenSmc.Import
 {
     public static class AutoMapper
     {
@@ -23,25 +23,25 @@ namespace OpenSmc.Import.Mapping
                                                                           .First(x => x.Name == "Item" &&
                                                                                       x.GetGetMethod()?.GetParameters().First().ParameterType == typeof(int));
 
-        public static Task<RowMapping<T>> AddAutoMapping<T>(RowMapping<T> rowMapping, IReadOnlyDictionary<string, int> columns)
+        public static RowMapping<T> AddAutoMapping<T>(RowMapping<T> rowMapping, IReadOnlyDictionary<string, int> columns)
             where T : class
         {
             rowMapping ??= new RowMapping<T>(null, ImmutableDictionary<PropertyInfo, Expression>.Empty);
 
             if (rowMapping.InitializeFunction == null)
             {
-                var func = (Func<IDataSet, IDataRow, T>)GetInstanceInitFunction(typeof(T), columns, rowMapping.CustomPropertyMappings.ToDictionary(x=>x.Key.Name, x=>x.Value));
+                var func = (Func<IDataSet, IDataRow, T>)GetInstanceInitFunction(typeof(T), columns, rowMapping.CustomPropertyMappings.ToDictionary(x => x.Key.Name, x => x.Value));
                 rowMapping = rowMapping with { InitializeFunction = (ds, dsRow, _) => func(ds, dsRow) };
             }
 
-            return Task.FromResult(rowMapping);
+            return rowMapping;
         }
 
         private static Delegate GetInstanceInitFunction(Type type, IReadOnlyDictionary<string, int> columns, Dictionary<string, Expression> customMappings)
         {
             var dataSetParameter = Expression.Parameter(typeof(IDataSet), "dataSet");
             var rowParameter = Expression.Parameter(typeof(IDataRow), "row");
-            var columnsDict = columns.ToDictionary(x=>x.Key, x=>x.Value);
+            var columnsDict = columns.ToDictionary(x => x.Key, x => x.Value);
 
             var constructorInfo = type.GetConstructors().MinBy(x => x.GetParameters().Length);
             if (constructorInfo == null)
@@ -50,14 +50,14 @@ namespace OpenSmc.Import.Mapping
             var parameters = constructorInfo.GetParameters();
             var constructorParameters = GetConstructorParameters(dataSetParameter, rowParameter, parameters, columnsDict, customMappings);
 
-            var bindings = GetBindingParameters(dataSetParameter, rowParameter, type, parameters.Select(x=>x.Name).ToArray(), columnsDict, customMappings);
-            return Expression.Lambda(Expression.MemberInit(Expression.New(constructorInfo, constructorParameters.Select(x=>x.expression)), bindings), dataSetParameter, rowParameter).Compile();
+            var bindings = GetBindingParameters(dataSetParameter, rowParameter, type, parameters.Select(x => x.Name).ToArray(), columnsDict, customMappings);
+            return Expression.Lambda(Expression.MemberInit(Expression.New(constructorInfo, constructorParameters.Select(x => x.expression)), bindings), dataSetParameter, rowParameter).Compile();
         }
 
         private static IEnumerable<(string name, Expression expression)> GetConstructorParameters(ParameterExpression dataSetParameter,
-                                                                                                  ParameterExpression rowParameter, 
-                                                                                                  ParameterInfo[] parameters, 
-                                                                                                  Dictionary<string, int> columns, 
+                                                                                                  ParameterExpression rowParameter,
+                                                                                                  ParameterInfo[] parameters,
+                                                                                                  Dictionary<string, int> columns,
                                                                                                   Dictionary<string, Expression> customMappings)
         {
             foreach (var parameter in parameters)
@@ -89,15 +89,15 @@ namespace OpenSmc.Import.Mapping
                             yield return new(parameter.Name, Expression.Default(parameter.ParameterType));
                     }
                 }
-               
+
             }
         }
 
-        private static IEnumerable<MemberBinding> GetBindingParameters(ParameterExpression dataSetParameter, 
-                                                                       ParameterExpression rowParameter, 
-                                                                       Type type, 
-                                                                       string[] exceptProperties, 
-                                                                       Dictionary<string,int> columns,
+        private static IEnumerable<MemberBinding> GetBindingParameters(ParameterExpression dataSetParameter,
+                                                                       ParameterExpression rowParameter,
+                                                                       Type type,
+                                                                       string[] exceptProperties,
+                                                                       Dictionary<string, int> columns,
                                                                        Dictionary<string, Expression> customMappings)
         {
             // TODO: Exclude complexProperties like reference to another instance! (2020.11.15, Armen Sirotenko)
@@ -123,7 +123,7 @@ namespace OpenSmc.Import.Mapping
                             yield return Expression.Bind(propertyInfo, GetPropertyExpression(rowParameter, matchedIndex, propertyInfo.PropertyType));
                     }
                 }
-               
+
             }
         }
 

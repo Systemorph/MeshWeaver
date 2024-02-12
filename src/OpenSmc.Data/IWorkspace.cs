@@ -11,4 +11,5 @@ public interface IWorkspace
     void Delete(object instance) => Delete(new[] { instance });
     IReadOnlyCollection<T> GetItems<T>()where T:class;
     void Commit();
+    void Rollback();
 }

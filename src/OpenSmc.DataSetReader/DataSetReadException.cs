@@ -1,8 +1,6 @@
-﻿using System.Runtime.Serialization;
-
-namespace OpenSmc.DataSetReader
+﻿namespace OpenSmc.DataSetReader
 {
-    public class DataSetReadException : /*RuntimeException*/ Exception
+    public class DataSetReadException : Exception
     {
         public DataSetReadException()
         {
@@ -16,8 +14,5 @@ namespace OpenSmc.DataSetReader
         {
         }
 
-        public DataSetReadException(SerializationInfo info, StreamingContext context) : base(info, context)
-        {
-        }
     }
 }
