@@ -26,12 +26,12 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             .AddData(data => data
                 .WithDataSource("ad hoc",dataSource => dataSource
                     .WithType<MyData>(type => type
-                    .WithKey(instance => instance.Id)
-                    .WithInitialization(InitializeMyData)
-                    .WithUpdate(SaveMyData)
-                    .WithAdd(SaveMyData)
-                    .WithDelete(DeleteMyData)
-                )
+                        .WithKey(instance => instance.Id)
+                        .WithInitialization(InitializeMyData)
+                        .WithUpdate(SaveMyData)
+                        .WithAdd(SaveMyData)
+                        .WithDelete(DeleteMyData)
+                    )
                 )
             )
             .AddPlugin<ImportPlugin>();
