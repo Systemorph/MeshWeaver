@@ -1,0 +1,10 @@
+$$Default
+@@Cashflow,,,,,,,,,,,,,,,
+Id,AmountType,Value,ResultsKey,,,,,,,,,
+1,AmountType1,100,ResKey1,,,,,,,,,,,,,,
+2,AmountType2,,ResKey2,,,,,,,,,,
+,AmountType3,300,,,,,,,,,,,
+@@ResultsKey,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Id,Year,Period,
+ResKey1, 0, 100
+ResKey2, 1, 200

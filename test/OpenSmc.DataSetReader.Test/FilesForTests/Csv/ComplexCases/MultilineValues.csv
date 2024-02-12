@@ -1,0 +1,26 @@
+@@ReportingNodeByCurrency
+SystemName,DisplayName,Currency
+
+SimpleCase,"Simple case","Some ""currency"""
+
+MultilineCase,Multiline case,"Case 
+with ""multiple
+lines"""
+
+MultilineCaseWithSingleQuoteOnLine,Multiline case with single quote on line,"
+Multiline
+""""case""""
+"
+
+TwoMultilineValuesOnTheSameLine,"""Multiline 
+display"" name","Multiline 
+values"
+
+TwoMultilineValuesOnTheSameLineWithCommasInsideMultilines,"""Multiline,
+display"" name","Multiline,
+values"
+
+MultilineCaseWithSingleQuoteOnLine,Multiline case with single quote on line,"
+Multiline,value
+""""case,draft"",logic""
+"

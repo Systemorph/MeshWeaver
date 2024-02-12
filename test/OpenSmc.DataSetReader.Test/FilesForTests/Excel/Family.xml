@@ -1,0 +1,8 @@
+<root>
+  <Table Name="Parent">
+    <Entity SystemName="rossini" DisplayName="Gioachino Rossini" />
+  </Table>
+  <Table Name ="GrandParent">
+    <Entity SystemName="strauss" DisplayName="Johann Strauss" />
+  </Table>
+</root>
