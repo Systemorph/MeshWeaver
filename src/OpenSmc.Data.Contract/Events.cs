@@ -27,12 +27,5 @@ public abstract record DataChangeRequest(IReadOnlyCollection<object> Elements) :
 
 public record CreateRequest<TObject>(TObject Element) : IRequest<DataChanged> { public object Options { get; init; } };
 
-
-public enum UpdateMode
-{
-    SkipWarnings, Strict
-}
-
-
 public record DeleteBatchRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataChanged>;
 
