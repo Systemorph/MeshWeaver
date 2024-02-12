@@ -3,7 +3,6 @@
     <ProjectReference Include="..\OpenSmc.DataSetReader\OpenSmc.DataSetReader.csproj" />
     <ProjectReference Include="..\OpenSmc.Data\OpenSmc.Data.csproj" />
     <ProjectReference Include="..\OpenSmc.Domain.Abstractions\OpenSmc.Domain.Abstractions.csproj" />
-    <ProjectReference Include="..\OpenSmc.FileStorage.Abstractions\OpenSmc.FileStorage.Abstractions.csproj" />
     <ProjectReference Include="..\OpenSmc.Messaging.Contract\OpenSmc.Messaging.Contract.csproj" />
     <ProjectReference Include="..\OpenSmc.Messaging.Hub\OpenSmc.Messaging.Hub.csproj" />
   </ItemGroup>

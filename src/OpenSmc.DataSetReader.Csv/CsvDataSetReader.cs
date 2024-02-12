@@ -3,6 +3,9 @@ using OpenSmc.DataStructures;
 
 namespace OpenSmc.DataSetReader.Csv
 {
+
+    public delegate Task<(IDataSet DataSet, string Format)> ReadDataSetAsync(Stream stream,
+        DataSetReaderOptions options, CancellationToken cancellationToken);
     public class CsvDataSetReader : IDataSetReader
     {
         public async Task<(IDataSet DataSet, string Format)> ReadAsync(Stream stream, DataSetReaderOptions options, CancellationToken cancellationToken)

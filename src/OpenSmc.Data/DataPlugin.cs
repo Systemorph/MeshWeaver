@@ -171,6 +171,15 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         UpdateState(s => s with {UncommittedEvents = ImmutableList<DataChangeRequest>.Empty});
     }
 
+    public void Rollback()
+    {
+        UpdateState(s => s with
+        {
+            Current = s.PreviouslySaved,
+            UncommittedEvents = ImmutableList<DataChangeRequest>.Empty
+        });
+    }
+
     public IReadOnlyCollection<T> GetItems<T>() where T : class
     {
         return State.Current.GetItems<T>();
