@@ -1,5 +1,4 @@
-﻿using OpenSmc.DataSetReader.Abstractions;
-using OpenSmc.DataSetReader.Excel.Utils;
+﻿using OpenSmc.DataSetReader.Excel.Utils;
 using OpenSmc.DataStructures;
 
 namespace OpenSmc.DataSetReader.Excel
@@ -13,9 +12,9 @@ namespace OpenSmc.DataSetReader.Excel
             excelDataReaderFactory = new ExcelReaderFactory();
         }
 
-        public Task<(IDataSet DataSet, string Format)> ReadAsync(Stream stream, DataSetReaderOptions options, CancellationToken cancellationToken)
+        public (IDataSet DataSet, string Format) Read(Stream stream)
         {
-            return Task.FromResult(ReadDataSetFromFile(stream));
+            return ReadDataSetFromFile(stream);
         }
 
         protected override IExcelDataReader GetExcelDataReader(Stream stream)

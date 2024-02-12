@@ -5,6 +5,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\OpenSmc.DataSetReader.Csv\OpenSmc.DataSetReader.Csv.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.DataSetReader.Excel\OpenSmc.DataSetReader.Excel.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.DataSetReader\OpenSmc.DataSetReader.csproj" />
     <ProjectReference Include="..\OpenSmc.Fixture\OpenSmc.Fixture.csproj" />
   </ItemGroup>

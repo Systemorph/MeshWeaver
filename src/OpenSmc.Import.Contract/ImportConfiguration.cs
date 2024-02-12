@@ -1,8 +1,6 @@
 ﻿using System.Collections.Immutable;
 using OpenSmc.Data;
-using OpenSmc.DataSetReader.Abstractions;
-using OpenSmc.DataSetReader.Csv;
-using OpenSmc.DataSetReader.Excel;
+using OpenSmc.DataSetReader;
 
 namespace OpenSmc.Import;
 
@@ -21,16 +19,10 @@ public record ImportConfiguration(DataContext DataContext)
 
 
 
-    internal ImmutableDictionary<string, DataSetReader.Abstractions.DataSetReader> DataSetReaders { get; init; } =
-        ImmutableDictionary<string, DataSetReader.Abstractions.DataSetReader>.Empty
-            .Add(MimeTypes.Csv, async (stream,options,_) => {
-                using var reader = new StreamReader(stream);
-                return await DataSetCsvSerializer.Parse(reader, options.Delimiter, options.WithHeaderRow, options.TypeToRestoreHeadersFrom);
-            })
-    .Add(MimeTypes.Xlsx, new ExcelDataSetReader().ReadAsync)
-    .Add(MimeTypes.Xls, new ExcelDataSetReaderOld().ReadAsync);
+    internal ImmutableDictionary<string, ReadDataSet> DataSetReaders { get; init; } =
+        ImmutableDictionary<string, ReadDataSet>.Empty;
 
-    public ImportConfiguration WithDataSetReader(string fileType, DataSetReader.Abstractions.DataSetReader dataSetReader)
+    public ImportConfiguration WithDataSetReader(string fileType, ReadDataSet dataSetReader)
         => this with { DataSetReaders = DataSetReaders.SetItem(fileType, dataSetReader) };
 
     public ImportFormat GetFormat(string importRequestFormat)

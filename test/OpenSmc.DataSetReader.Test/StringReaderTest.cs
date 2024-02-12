@@ -1,6 +1,8 @@
 ﻿using System.Globalization;
 using System.Text;
 using FluentAssertions;
+using OpenSmc.DataSetReader.Csv;
+using OpenSmc.DataStructures;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -12,6 +14,8 @@ namespace OpenSmc.DataSetReader.Test
             : base(output)
         {
         }
+        private Task<(IDataSet DataSet, string Format)> ReadFromStream(Stream stream, DataSetReaderOptions options = null) =>
+            DataSetCsvSerializer.ReadAsync(stream, options ?? new());
 
         [Fact]
         public async Task BasicStringImportTest()
@@ -24,8 +28,8 @@ namespace OpenSmc.DataSetReader.Test
             var content = $"{doubleValue},{decimalValue},{stringValue},{dateValue},{intValue}";
             var stream = GetStreamFromString(content);
 
-            var ret = await DataSetReaderVariable.ReadFromStream(stream).WithHeaderRow(false)
-                                                 .WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithOrder)).ExecuteAsync();
+            var ret = await ReadFromStream(stream, new DataSetReaderOptions().WithHeaderRow(false)
+                                                 .WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithOrder)));
 
             ret.DataSet.Tables.Should().HaveCount(1);
             var table = ret.DataSet.Tables[0];
@@ -61,7 +65,7 @@ namespace OpenSmc.DataSetReader.Test
 {doubleValue},{decimalValue},{stringValue},{dateValue},{intValue}";
             var stream = GetStreamFromString(content);
 
-            var ret = await DataSetReaderVariable.ReadFromStream(stream).WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithOrder)).ExecuteAsync();
+            var ret = await ReadFromStream(stream, new DataSetReaderOptions().WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithOrder)));
 
             ret.DataSet.Tables.Should().HaveCount(1);
             var table = ret.DataSet.Tables[0];
@@ -87,8 +91,8 @@ namespace OpenSmc.DataSetReader.Test
             var content = $"{doubleValue};{decimalValue};{stringValue};{dateValue};{intValue}";
             var stream = GetStreamFromString(content);
 
-            var ret = await DataSetReaderVariable.ReadFromStream(stream).WithHeaderRow(false)
-                                                 .WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithOrder)).WithDelimiter(';').ExecuteAsync();
+            var ret = await ReadFromStream(stream, new DataSetReaderOptions().WithHeaderRow(false)
+                                                 .WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithOrder)).WithDelimiter(';'));
 
             ret.DataSet.Tables.Should().HaveCount(1);
             var table = ret.DataSet.Tables[0];
@@ -112,7 +116,7 @@ namespace OpenSmc.DataSetReader.Test
             var content = $"{doubleValue},{decimalValue},{stringValue}";
             var stream = GetStreamFromString(content);
 
-            var ret = await DataSetReaderVariable.ReadFromStream(stream).WithHeaderRow(false).WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithOrder)).ExecuteAsync();
+            var ret = await ReadFromStream(stream,new DataSetReaderOptions().WithHeaderRow(false).WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithOrder)));
 
             ret.DataSet.Tables.Should().HaveCount(1);
             var table = ret.DataSet.Tables[0];
@@ -139,7 +143,7 @@ namespace OpenSmc.DataSetReader.Test
 ,,{stringValue},,";
             var stream = GetStreamFromString(content);
 
-            var ret = await DataSetReaderVariable.ReadFromStream(stream).WithHeaderRow(false).WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithOrder)).ExecuteAsync();
+            var ret = await ReadFromStream(stream, new DataSetReaderOptions().WithHeaderRow(false).WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithOrder)));
 
             ret.DataSet.Tables.Should().HaveCount(1);
             var table = ret.DataSet.Tables[0];
@@ -182,7 +186,7 @@ string2,";
 , ,""{stringValue2}"", ,";
             var stream = GetStreamFromString(content);
 
-            var ret = await DataSetReaderVariable.ReadFromStream(stream).WithHeaderRow(false).WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithOrder)).ExecuteAsync();
+            var ret = await ReadFromStream(stream, new DataSetReaderOptions().WithHeaderRow(false).WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithOrder)));
 
             ret.DataSet.Tables.Should().HaveCount(1);
             var table = ret.DataSet.Tables[0];
@@ -214,7 +218,7 @@ string2,";
 {doubleValue},,,,,{stringValue}";
             var stream = GetStreamFromString(content);
 
-            var ret = await DataSetReaderVariable.ReadFromStream(stream).WithHeaderRow(false).WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithListsAndOrder)).ExecuteAsync();
+            var ret = await ReadFromStream(stream, new DataSetReaderOptions().WithHeaderRow(false).WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithListsAndOrder)));
 
             ret.DataSet.Tables.Should().HaveCount(1);
             var table = ret.DataSet.Tables[0];
@@ -254,7 +258,7 @@ string2,";
             var content = @$"{doubleValue},1,2,3,,{stringValue}";
             var stream = GetStreamFromString(content);
 
-            var ret = await DataSetReaderVariable.ReadFromStream(stream).WithHeaderRow(false).WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithListWithoutLength)).ExecuteAsync();
+            var ret = await ReadFromStream(stream, new DataSetReaderOptions().WithHeaderRow(false).WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithListWithoutLength)));
 
             ret.DataSet.Tables.Should().HaveCount(1);
             var table = ret.DataSet.Tables[0];
