@@ -1,13 +1,12 @@
 ﻿using OpenSmc.DataStructures;
 
-namespace OpenSmc.DataSetReader.Abstractions;
+namespace OpenSmc.DataSetReader;
 
 
 /// <summary>
-/// Implementations of the <see cref="DataSetReader"/> read the data from a source and returns the data
+/// Implementations of the <see cref="ReadDataSet"/> read the data from a source and returns the data
 /// in a <see cref="IDataSet"/> which then can be further processed in the import
 /// </summary>
-public delegate Task<(IDataSet DataSet, string Format)> DataSetReader (Stream stream, DataSetReaderOptions options, CancellationToken cancellationToken);
 
 public static class MimeTypes
 {

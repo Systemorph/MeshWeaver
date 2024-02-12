@@ -1,6 +1,4 @@
-﻿using OpenSmc.DataSetReader.Abstractions;
-
-namespace OpenSmc.DataSetReader.Test;
+﻿namespace OpenSmc.DataSetReader.Test;
 
 public record TestImportEntityWithOrder([property: MappingOrder(3)] DateTime DateTimeProperty,
                                         [property: MappingOrder(1)] decimal DecimalProperty,

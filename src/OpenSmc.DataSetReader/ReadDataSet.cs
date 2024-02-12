@@ -1,13 +1,15 @@
-﻿using OpenSmc.DataSetReader.Abstractions;
+﻿using OpenSmc.DataStructures;
 
 namespace OpenSmc.DataSetReader
 {
+    public delegate Task<(IDataSet DataSet, string Format)> ReadDataSet(Stream stream, DataSetReaderOptions options, CancellationToken cancellationToken);
+
     public record DataSetReaderOptions 
     {
-        internal  char Delimiter { get; init; } = DataSetReaderDefaults.DefaultDelimiter;
-        internal  bool WithHeaderRowValue { get; init; } = true;
-        internal  Type TypeToRestoreHeadersFrom { get; init; }
-        internal string ContentType { get; init; }
+        public  char Delimiter { get; init; } = ',';
+        public  bool IncludeHeaderRow { get; init; } = true;
+        public  Type TypeToRestoreHeadersFrom { get; init; }
+        public string ContentType { get; init; }
 
 
 
@@ -23,7 +25,7 @@ namespace OpenSmc.DataSetReader
         /// </summary>
         public DataSetReaderOptions WithHeaderRow(bool withHeaderRow = true)
         {
-            return this with { WithHeaderRowValue = withHeaderRow };
+            return this with { IncludeHeaderRow = withHeaderRow };
         }
 
         public DataSetReaderOptions WithContentType(string contentType)

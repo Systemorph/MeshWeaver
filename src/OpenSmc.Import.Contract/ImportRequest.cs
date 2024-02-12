@@ -1,4 +1,4 @@
-﻿using OpenSmc.DataSetReader.Abstractions;
+﻿using OpenSmc.DataSetReader;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Import;

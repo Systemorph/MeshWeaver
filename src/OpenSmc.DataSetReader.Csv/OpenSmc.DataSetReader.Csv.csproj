@@ -1,6 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
-    <ProjectReference Include="..\OpenSmc.DataSetReader.Abstractions\OpenSmc.DataSetReader.Abstractions.csproj" />
+    <ProjectReference Include="..\OpenSmc.DataSetReader\OpenSmc.DataSetReader.csproj" />
+    <ProjectReference Include="..\OpenSmc.DataStructures\OpenSmc.DataStructures.csproj" />
     <ProjectReference Include="..\OpenSmc.Reflection\OpenSmc.Reflection.csproj" />
   </ItemGroup>
 </Project>

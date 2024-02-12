@@ -77,8 +77,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DotNet.Kernel", "sr
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Layout.Test", "test\OpenSmc.Layout.Test\OpenSmc.Layout.Test.csproj", "{AF5B3E21-960D-4AEC-8E58-F211652824A5}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DataSetReader.Abstractions", "src\OpenSmc.DataSetReader.Abstractions\OpenSmc.DataSetReader.Abstractions.csproj", "{FF2A2E26-5552-476A-80E9-660D98F7D2CC}"
-EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DataStructures", "src\OpenSmc.DataStructures\OpenSmc.DataStructures.csproj", "{15F19019-986A-49C3-B7ED-BDFEBD486BA5}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DataSetReader.Excel", "src\OpenSmc.DataSetReader.Excel\OpenSmc.DataSetReader.Excel.csproj", "{B8B02215-FD3D-43DF-93F6-CB6F52B4C810}"
@@ -259,10 +257,6 @@ Global
 		{AF5B3E21-960D-4AEC-8E58-F211652824A5}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{AF5B3E21-960D-4AEC-8E58-F211652824A5}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{AF5B3E21-960D-4AEC-8E58-F211652824A5}.Release|Any CPU.Build.0 = Release|Any CPU
-		{FF2A2E26-5552-476A-80E9-660D98F7D2CC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{FF2A2E26-5552-476A-80E9-660D98F7D2CC}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{FF2A2E26-5552-476A-80E9-660D98F7D2CC}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{FF2A2E26-5552-476A-80E9-660D98F7D2CC}.Release|Any CPU.Build.0 = Release|Any CPU
 		{15F19019-986A-49C3-B7ED-BDFEBD486BA5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{15F19019-986A-49C3-B7ED-BDFEBD486BA5}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{15F19019-986A-49C3-B7ED-BDFEBD486BA5}.Release|Any CPU.ActiveCfg = Release|Any CPU

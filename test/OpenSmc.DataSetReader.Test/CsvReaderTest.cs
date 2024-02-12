@@ -1,5 +1,7 @@
 ﻿using CsvHelper;
 using FluentAssertions;
+using OpenSmc.DataSetReader.Csv;
+using OpenSmc.DataStructures;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -17,6 +19,9 @@ namespace OpenSmc.DataSetReader.Test
         private const string NamedSubject = nameof(NamedSubject);
         private const string ReportingNodeByCurrency = nameof(ReportingNodeByCurrency);
 
+        private Task<(IDataSet DataSet, string Format)> ReadFromStream(Stream stream, DataSetReaderOptions options = null) =>
+            DataSetCsvSerializer.ReadAsync(stream, options ?? new());
+
         public CsvReaderTest( ITestOutputHelper output)
             : base(output)
         {
@@ -28,7 +33,7 @@ namespace OpenSmc.DataSetReader.Test
         public async Task ReadOneEmptyTableInDataSet(string fileName)
         {
             var stream = await FileStorageService.GetStreamFromFilePath($"{CsvFilesWithComplexCases}{fileName}");
-            var ret = await DataSetReaderVariable.ReadFromStream(stream).ExecuteAsync();
+            var ret = await ReadFromStream(stream);
 
             ret.DataSet.Tables.Count.Should().Be(1);
             ret.DataSet.Tables.First().TableName.Should().Be(Cashflow);
@@ -42,7 +47,7 @@ namespace OpenSmc.DataSetReader.Test
         public async Task ReadManyEmptyTableInDataSet(string fileName)
         {
             var stream = await FileStorageService.GetStreamFromFilePath($"{CsvFilesWithComplexCases}{fileName}");
-            var ret = await DataSetReaderVariable.ReadFromStream(stream).ExecuteAsync();
+            var ret = await ReadFromStream(stream);
 
             ret.DataSet.Tables.Count.Should().Be(2);
             ret.DataSet.Tables[Cashflow].Columns.Count().Should().Be(0);
@@ -56,7 +61,7 @@ namespace OpenSmc.DataSetReader.Test
         public async Task ReadSeveralFilledTableWithCommasInDataSet()
         {
             var stream = await FileStorageService.GetStreamFromFilePath($"{CsvFilesWithComplexCases}SeveralFilledTablesWithCommas.csv");
-            var ret = await DataSetReaderVariable.ReadFromStream(stream).ExecuteAsync();
+            var ret = await ReadFromStream(stream);
 
             ret.DataSet.Tables.Count.Should().Be(2);
             ret.DataSet.Tables[Cashflow].Columns.Count().Should().Be(4);
@@ -70,7 +75,7 @@ namespace OpenSmc.DataSetReader.Test
         public async Task ReadTableWithMultilineValues()
         {
             var stream = await FileStorageService.GetStreamFromFilePath($"{CsvFilesWithComplexCases}MultilineValues.csv");
-            var ret = await DataSetReaderVariable.ReadFromStream(stream).ExecuteAsync();
+            var ret = await ReadFromStream(stream);
 
             ret.DataSet.Tables.Count.Should().Be(1);
             var table = ret.DataSet.Tables[ReportingNodeByCurrency];
@@ -101,7 +106,7 @@ namespace OpenSmc.DataSetReader.Test
         public async Task ReadSeveralFilledTableAndFewEmptyTablesWithCommasInData()
         {
             var stream = await FileStorageService.GetStreamFromFilePath($"{CsvFilesWithComplexCases}SeveralFilledAndFewEmptyTablesWithCommas.csv");
-            var ret = await DataSetReaderVariable.ReadFromStream(stream).ExecuteAsync();
+            var ret = await ReadFromStream(stream);
 
             ret.DataSet.Tables.Count.Should().Be(4);
             ret.DataSet.Tables[NamedSubject].Columns.Count().Should().Be(0);
@@ -125,7 +130,7 @@ namespace OpenSmc.DataSetReader.Test
         public async Task ReadComplexCaseWithDifferentFormat(string fileName)
         {
             var stream = await FileStorageService.GetStreamFromFilePath($"{CsvFilesWithComplexCasesDifferentFormat}{fileName}");
-            var ret = await DataSetReaderVariable.ReadFromStream(stream).ExecuteAsync();
+            var ret = await ReadFromStream(stream);
 
             ret.DataSet.Tables.Count.Should().Be(2);
             ret.DataSet.Tables[NamedSubject].Columns.Count().Should().Be(0);
@@ -142,7 +147,7 @@ namespace OpenSmc.DataSetReader.Test
         public async Task ReadFormat(string fileName, string format)
         {
             var stream = await FileStorageService.GetStreamFromFilePath($"{CsvFilesWithFormat}{fileName}");
-            var ret = await DataSetReaderVariable.ReadFromStream(stream).ExecuteAsync();
+            var ret = await ReadFromStream(stream);
 
             ret.Format.Should().Be(format);
             var table = ret.DataSet.Tables.Should().ContainSingle().Which;
@@ -154,7 +159,7 @@ namespace OpenSmc.DataSetReader.Test
         public async Task BadDataTest()
         {
             var stream = await FileStorageService.GetStreamFromFilePath($"{CsvFilesWithComplexCases}BadData.csv");
-            Func<Task> act = async () => await DataSetReaderVariable.ReadFromStream(stream).ExecuteAsync();
+            Func<Task> act = async () => await ReadFromStream(stream);
             (await act.Should().ThrowAsync<BadDataException>()).Where(x => x.Message.Contains("\"Here opening quote is started but not finished") &&
                                                                            x.Message.Contains("\"ThisQuote will be treated as closing for first line"));
         }
