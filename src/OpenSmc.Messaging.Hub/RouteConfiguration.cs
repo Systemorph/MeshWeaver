@@ -50,7 +50,12 @@ public record RouteConfiguration(IMessageHub Hub)
                 var mappedAddress = addressMap((IMessageDelivery<TMessage>)delivery);
                 if (!delivery.Sender.Equals(Hub.Address))
                     RoutedMessageAddresses.GetOrAdd(mappedAddress, _ => new()).Add(delivery.Sender);
-                Hub.Post(delivery.Message, o => o.WithProperties(delivery.Properties).WithTarget(mappedAddress));
+                var forwardedDelivery = Hub.Post(delivery.Message, o => o.WithProperties(delivery.Properties).WithTarget(mappedAddress));
+
+                if (delivery.Message is IRequest)
+                    Hub.RegisterCallback(forwardedDelivery,
+                        response => Hub.Post(response.Message,
+                            o => o.WithProperties(response.Properties).ResponseFor(delivery)));
                 return Task.FromResult(delivery.Forwarded());
             },
             filter);

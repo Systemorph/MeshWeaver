@@ -3,6 +3,7 @@
 public interface IWorkspace 
 {
     DataContext Context { get; }
+    Task Initialize { get; }
     void Update(IReadOnlyCollection<object> instances) => Update(instances, new());
     void Update(IReadOnlyCollection<object> instances, UpdateOptions options);
     void Update(object instance) => Update(new[] { instance });
@@ -11,4 +12,5 @@ public interface IWorkspace
     void Delete(object instance) => Delete(new[] { instance });
     IReadOnlyCollection<T> GetItems<T>()where T:class;
     void Commit();
+    void Rollback();
 }

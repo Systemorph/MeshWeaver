@@ -79,8 +79,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DotNet.Kernel", "sr
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Layout.Test", "test\OpenSmc.Layout.Test\OpenSmc.Layout.Test.csproj", "{AF5B3E21-960D-4AEC-8E58-F211652824A5}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.FileStorage.Abstractions", "src\OpenSmc.FileStorage.Abstractions\OpenSmc.FileStorage.Abstractions.csproj", "{B2968FB5-9B9C-480F-8968-17100023277B}"
-EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DataSetReader.Abstractions", "src\OpenSmc.DataSetReader.Abstractions\OpenSmc.DataSetReader.Abstractions.csproj", "{FF2A2E26-5552-476A-80E9-660D98F7D2CC}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DataStructures", "src\OpenSmc.DataStructures\OpenSmc.DataStructures.csproj", "{15F19019-986A-49C3-B7ED-BDFEBD486BA5}"
@@ -125,11 +123,12 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Data.Contract", "sr
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DataStorage.EntityFramework", "src\OpenSmc.DataSource.EntityFramework\OpenSmc.DataStorage.EntityFramework.csproj", "{9FB03401-450A-433B-8E3C-F11D8FB39B76}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Import.Contract", "src\OpenSmc.Import.Contract\OpenSmc.Import.Contract.csproj", "{AEECAA4C-663C-491C-8F93-FB83A8B4E0A2}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Import", "src\OpenSmc.Import.Contract\OpenSmc.Import.csproj", "{AEECAA4C-663C-491C-8F93-FB83A8B4E0A2}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Data-EntityFramework.Test", "test\OpenSmc.Data-EntityFramework.Test\OpenSmc.Data-EntityFramework.Test.csproj", "{E3FCF4CE-AEA3-49BF-ABEB-7D87CC2D6267}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DataSetReader.Test", "test\OpenSmc.DataSetReader.Test\OpenSmc.DataSetReader.Test.csproj", "{8C0B0FBF-F375-4175-8EB9-81E1EA0645A6}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Import.Test", "test\OpenSmc.Import.Test\OpenSmc.Import.Test.csproj", "{8F19A04A-325F-4EB8-BAA3-423FE39D5C3A}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -265,10 +264,6 @@ Global
 		{AF5B3E21-960D-4AEC-8E58-F211652824A5}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{AF5B3E21-960D-4AEC-8E58-F211652824A5}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{AF5B3E21-960D-4AEC-8E58-F211652824A5}.Release|Any CPU.Build.0 = Release|Any CPU
-		{B2968FB5-9B9C-480F-8968-17100023277B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{B2968FB5-9B9C-480F-8968-17100023277B}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{B2968FB5-9B9C-480F-8968-17100023277B}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{B2968FB5-9B9C-480F-8968-17100023277B}.Release|Any CPU.Build.0 = Release|Any CPU
 		{FF2A2E26-5552-476A-80E9-660D98F7D2CC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{FF2A2E26-5552-476A-80E9-660D98F7D2CC}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{FF2A2E26-5552-476A-80E9-660D98F7D2CC}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -369,6 +364,10 @@ Global
 		{8C0B0FBF-F375-4175-8EB9-81E1EA0645A6}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8C0B0FBF-F375-4175-8EB9-81E1EA0645A6}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{8C0B0FBF-F375-4175-8EB9-81E1EA0645A6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8F19A04A-325F-4EB8-BAA3-423FE39D5C3A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8F19A04A-325F-4EB8-BAA3-423FE39D5C3A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8F19A04A-325F-4EB8-BAA3-423FE39D5C3A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8F19A04A-325F-4EB8-BAA3-423FE39D5C3A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -386,6 +385,7 @@ Global
 		{AA71FF58-CF0D-467F-9FDA-2883DD73DA31} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{E3FCF4CE-AEA3-49BF-ABEB-7D87CC2D6267} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{8C0B0FBF-F375-4175-8EB9-81E1EA0645A6} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
+		{8F19A04A-325F-4EB8-BAA3-423FE39D5C3A} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {331ADDC7-02A4-4F0E-8C47-2060003082F2}

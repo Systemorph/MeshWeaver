@@ -42,7 +42,26 @@ public static class DataPluginExtensions
     internal static bool IsGetRequest(this Type type) 
         => type.IsGenericType && GetRequestTypes.Contains(type.GetGenericTypeDefinition());
 
-    private static readonly HashSet<Type> GetRequestTypes = new() { typeof(GetRequest<>), typeof(GetManyRequest<>) };
+    private static readonly HashSet<Type> GetRequestTypes = [typeof(GetRequest<>), typeof(GetManyRequest<>)];
+
+    public static TypeSource<T> WithBackingCollection<T>(this TypeSource<T> typeSource, IDictionary<object, T> backingCollection)
+        => typeSource
+            .WithInitialization(() => Task.FromResult((IReadOnlyCollection<T>)backingCollection.Values.ToArray()))
+            .WithAdd(items =>
+            {
+                foreach (var i in items)
+                    backingCollection.Add(typeSource.GetKey(i), i);
+            })
+            .WithUpdate(items =>
+            {
+                foreach (var i in items)
+                    backingCollection[typeSource.GetKey(i)] = i;
+            })
+            .WithDelete(items =>
+            {
+                foreach (var i in items)
+                    backingCollection.Remove(typeSource.GetKey(i));
+            });
 
 }
 
@@ -62,7 +81,8 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     private readonly IMessageHub persistenceHub;
 
     public DataContext Context { get; }
-
+    private readonly TaskCompletionSource initialize = new();
+    public Task Initialize => initialize.Task;
     public DataPlugin(IMessageHub hub) : base(hub)
     {
         Context = hub.GetDataConfiguration();
@@ -77,6 +97,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
 
         var response = await persistenceHub.AwaitResponse(new GetDataStateRequest());
         InitializeState(new (response.Message));
+        initialize.SetResult();
     }
 
     IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(IMessageDelivery<UpdateDataRequest> request)
@@ -169,6 +190,15 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         persistenceHub.Post(new UpdateDataStateRequest(State.UncommittedEvents));
         Hub.Post(new DataChanged(Hub.Version), o => o.WithTarget(MessageTargets.Subscribers));
         UpdateState(s => s with {UncommittedEvents = ImmutableList<DataChangeRequest>.Empty});
+    }
+
+    public void Rollback()
+    {
+        UpdateState(s => s with
+        {
+            Current = s.PreviouslySaved,
+            UncommittedEvents = ImmutableList<DataChangeRequest>.Empty
+        });
     }
 
     public IReadOnlyCollection<T> GetItems<T>() where T : class

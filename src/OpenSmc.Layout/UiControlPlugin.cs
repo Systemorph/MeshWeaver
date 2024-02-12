@@ -61,8 +61,7 @@ public class UiControlPlugin<TControl> : MessageHubPlugin<TControl>,
     }
 
 
-    async Task<IMessageDelivery> IMessageHandlerAsync<ClickedEvent>.HandleMessageAsync(
-        IMessageDelivery<ClickedEvent> delivery)
+    async Task<IMessageDelivery> IMessageHandlerAsync<ClickedEvent>.HandleMessageAsync(IMessageDelivery<ClickedEvent> delivery, CancellationToken cancellationToken)
     {
         try
         {
