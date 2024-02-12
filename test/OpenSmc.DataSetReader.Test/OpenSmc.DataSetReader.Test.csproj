@@ -6,7 +6,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\OpenSmc.DataSetReader\OpenSmc.DataSetReader.csproj" />
-    <ProjectReference Include="..\..\src\OpenSmc.FileStorage.Abstractions\OpenSmc.FileStorage.Abstractions.csproj" />
     <ProjectReference Include="..\OpenSmc.Fixture\OpenSmc.Fixture.csproj" />
   </ItemGroup>
 

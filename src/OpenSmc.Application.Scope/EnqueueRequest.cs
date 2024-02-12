@@ -1,7 +1,7 @@
 ﻿using OpenSmc.Messaging;
 using OpenSmc.ShortGuid;
 
-namespace OpenSmc.Queues;
+namespace OpenSmc.Application.Scope;
 
 public record EnqueueRequest(Func<Task> Action, string Id, int? Debounce) : IRequest<EvaluationFinished>
 {

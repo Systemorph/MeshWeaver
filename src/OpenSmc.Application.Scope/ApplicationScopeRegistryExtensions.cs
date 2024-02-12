@@ -75,3 +75,4 @@ public static class ApplicationScopeRegistryExtensions
 }
 
 public record ApplicationScopeConfiguration;
+

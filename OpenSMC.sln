@@ -69,8 +69,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Hierarchies", "src\
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Utils", "src\OpenSmc.Utils\OpenSmc.Utils.csproj", "{29B926F4-0502-4575-819C-BE6C00D61EDE}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Queues.Contract", "src\OpenSmc.Queues.Contract\OpenSmc.Queues.Contract.csproj", "{61CF8CC0-2F2D-4E7F-A410-23BD866ECE7E}"
-EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Hub.Fixture", "test\OpenSmc.Hub.Fixture\OpenSmc.Hub.Fixture.csproj", "{8440C781-A719-4B28-8CD0-9FEB606C2A0B}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Application.Styles", "src\OpenSmc.Application.Styles\OpenSmc.Application.Styles.csproj", "{191D7131-B9C9-4D2D-B89A-13F0536875E0}"
@@ -128,6 +126,7 @@ EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Data-EntityFramework.Test", "test\OpenSmc.Data-EntityFramework.Test\OpenSmc.Data-EntityFramework.Test.csproj", "{E3FCF4CE-AEA3-49BF-ABEB-7D87CC2D6267}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DataSetReader.Test", "test\OpenSmc.DataSetReader.Test\OpenSmc.DataSetReader.Test.csproj", "{8C0B0FBF-F375-4175-8EB9-81E1EA0645A6}"
+EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Import.Test", "test\OpenSmc.Import.Test\OpenSmc.Import.Test.csproj", "{8F19A04A-325F-4EB8-BAA3-423FE39D5C3A}"
 EndProject
 Global
@@ -244,10 +243,6 @@ Global
 		{29B926F4-0502-4575-819C-BE6C00D61EDE}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{29B926F4-0502-4575-819C-BE6C00D61EDE}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{29B926F4-0502-4575-819C-BE6C00D61EDE}.Release|Any CPU.Build.0 = Release|Any CPU
-		{61CF8CC0-2F2D-4E7F-A410-23BD866ECE7E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{61CF8CC0-2F2D-4E7F-A410-23BD866ECE7E}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{61CF8CC0-2F2D-4E7F-A410-23BD866ECE7E}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{61CF8CC0-2F2D-4E7F-A410-23BD866ECE7E}.Release|Any CPU.Build.0 = Release|Any CPU
 		{8440C781-A719-4B28-8CD0-9FEB606C2A0B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{8440C781-A719-4B28-8CD0-9FEB606C2A0B}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8440C781-A719-4B28-8CD0-9FEB606C2A0B}.Release|Any CPU.ActiveCfg = Release|Any CPU
