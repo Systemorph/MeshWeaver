@@ -14,7 +14,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\OpenSmc.DataSource.EntityFramework\OpenSmc.DataStorage.EntityFramework.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.DataStorage.EntityFramework\OpenSmc.DataStorage.EntityFramework.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Data\OpenSmc.Data.csproj" />
     <ProjectReference Include="..\OpenSmc.Fixture\OpenSmc.Fixture.csproj" />
     <ProjectReference Include="..\OpenSmc.Hub.Fixture\OpenSmc.Hub.Fixture.csproj" />
