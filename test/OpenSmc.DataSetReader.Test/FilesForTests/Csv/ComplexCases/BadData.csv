@@ -1,0 +1,9 @@
+@@Cashflow
+Id,AmountType,StringProperty,Value,ResultsKey
+1,AmountType1,"""Here opening quote is started but not finished"",100,ResKey
+2,AmountType2,"""ThisQuote will be treated as closing for first line"",,ResKey2
+,AmountType3,300
+@@ResultsKey
+Id,Year,Period
+ResKey1, 0, 100
+ResKey2, 1, 200
