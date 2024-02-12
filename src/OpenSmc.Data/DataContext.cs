@@ -5,7 +5,7 @@ namespace OpenSmc.Data;
 
 public record DataContext(IMessageHub Hub)
 {
-
+    public IReadOnlyCollection<Type> DataTypes => DataSourcesByTypes.Keys.ToArray();
     internal ImmutableDictionary<Type, object> DataSourcesByTypes { get; init; } = ImmutableDictionary<Type, object>.Empty;
     internal DataContext WithType<T>(object dataSourceId) => 
             this with { DataSourcesByTypes = DataSourcesByTypes.SetItem(typeof(T), dataSourceId) };

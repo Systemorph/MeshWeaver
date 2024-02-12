@@ -4,16 +4,10 @@ using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Activities
 {
-    public class ActivityService : IActivityService
+    public class ActivityService(ILogger<ActivityService> logger) : IActivityService
     {
-        private readonly ILogger<ActivityService> logger;
         private readonly ConcurrentDictionary<string, ActivityLog> parents = new();
         private ActivityLog currentActivity;
-
-        public ActivityService(ILogger<ActivityService> logger)
-        {
-            this.logger = logger;
-        }
 
         public string Start()
         {
