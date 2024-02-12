@@ -1,8 +1,7 @@
-﻿using OpenSmc.FileStorage;
-
+﻿
 namespace OpenSmc.DataSetReader.Test;
 
-public interface ITestFileStorageService : IFileReadStorage, IFileWriteStorage
+public interface ITestFileStorageService //: IFileReadStorage, IFileWriteStorage
 {
     public Task<Stream> GetStreamFromFilePath(string filePath);
 }
