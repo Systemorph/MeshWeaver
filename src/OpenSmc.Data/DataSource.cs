@@ -1,9 +1,20 @@
 ﻿using System.Collections.Immutable;
+using System.Reflection;
+using OpenSmc.Reflection;
 
 namespace OpenSmc.Data;
 
 public record DataSource(object Id)
 {
+    public DataSource WithType(Type type)
+    => (DataSource)WithTypeMethod.MakeGenericMethod(type).InvokeAsFunction(this);
+
+    private static readonly MethodInfo WithTypeMethod =
+        ReflectionHelper.GetMethodGeneric<DataSource>(x => x.WithType<object>());
+    public DataSource WithType<T>()
+        where T : class
+        => WithType<T>(d => d);
+
 
     public DataSource WithType<T>(
         Func<TypeSource<T>, TypeSource<T>> configurator)
