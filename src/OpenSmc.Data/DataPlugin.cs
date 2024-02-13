@@ -21,14 +21,14 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
 {
     private readonly IMessageHub persistenceHub;
 
-    public DataContext Context { get; }
+    public DataContext DataContext { get; }
     private readonly TaskCompletionSource initialize = new();
-    public Task Initialize => initialize.Task;
+    public Task Initializing => initialize.Task;
     public DataPlugin(IMessageHub hub) : base(hub)
     {
-        Context = hub.GetDataConfiguration();
+        DataContext = hub.GetDataConfiguration();
         Register(HandleGetRequest);              // This takes care of all Read (CRUD)
-        persistenceHub = hub.GetHostedHub(new PersistenceAddress(hub.Address), conf => conf.AddPlugin(h => new DataPersistencePlugin(h, Context)));
+        persistenceHub = hub.GetHostedHub(new PersistenceAddress(hub.Address), conf => conf.AddPlugin(h => new DataPersistencePlugin(h, DataContext)));
     }
 
 
@@ -142,7 +142,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         });
     }
 
-    public IReadOnlyCollection<T> GetItems<T>() where T : class
+    public IReadOnlyCollection<T> GetData<T>() where T : class
     {
         return State.Current.GetItems<T>();
     }

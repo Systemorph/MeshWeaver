@@ -4,13 +4,8 @@ using Xunit.Abstractions;
 
 namespace OpenSmc.Scopes.Test;
 
-public class SingleScopeTest : ScopesTestBase
+public class SingleScopeTest(ITestOutputHelper toh) : ScopesTestBase(toh)
 {
-    public SingleScopeTest(ITestOutputHelper toh)
-        : base(toh)
-    {
-    }
-
     [Fact]
     public void Calculation()
     {

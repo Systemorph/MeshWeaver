@@ -11,6 +11,7 @@ namespace OpenSmc.Import.Test;
 public static class ImportTestDomain
 {
     public record TransactionalData([property: Key] string Id, string LoB, string BusinessUnit, double Value);
+    public record ComputedData([property: Key] string Id, string LoB, string BusinessUnit, double Value);
 
     public record LineOfBusiness([property: Key] string SystemName, string DisplayName);
     public record BusinessUnit([property: Key] string SystemName, string DisplayName);
@@ -35,12 +36,24 @@ public static class ImportTestDomain
                 }
             }
         };
+    public static readonly Dictionary<Type, IEnumerable<object>> ComputedDataDomain
+        =
+        new()
+        {
+            {
+                typeof(ComputedData), new ComputedData[]
+                {
+                }
+            }
+        };
 
     public static DataSource ConfigureReferenceData(this DataSource dataSource)
         => dataSource.ConfigureCategory(ReferenceDataDomain);
 
     public static DataSource ConfigureTransactionalData(this DataSource dataSource)
         => dataSource.ConfigureCategory(TransactionalDataDomain);
+    public static DataSource ConfigureComputedData(this DataSource dataSource)
+        => dataSource.ConfigureCategory(ComputedDataDomain);
     public static DataSource ConfigureCategory(this DataSource dataSource, IDictionary<Type,IEnumerable<object>> values)
         => values.Aggregate(dataSource, (ds, t) => ds.WithType(t.Key, type => type.WithInitialData(t.Value)));
 

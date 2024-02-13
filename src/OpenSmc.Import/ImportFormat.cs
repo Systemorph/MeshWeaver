@@ -6,7 +6,7 @@ using OpenSmc.DataStructures;
 
 namespace OpenSmc.Import;
 
-public record ImportFormat(string Format)
+public record ImportFormat(string Format, IWorkspace Workspace)
 {
     public const string Default = nameof(Default);
 
@@ -18,17 +18,18 @@ public record ImportFormat(string Format)
     public ImportFormat WithImportFunction(ImportFunction importFunction) =>
         this with { ImportFunctions = ImportFunctions.Add(importFunction) };
 
-    public IReadOnlyCollection<object> Import(ImportRequest importRequest, IDataSet dataSet)
-        => ImportFunctions.Select(f => f.Invoke(importRequest, dataSet)).Aggregate((x,y) => x.Concat(y)).ToArray();
-
-    public delegate IEnumerable<object> ImportFunction(ImportRequest importRequest, IDataSet dataSet);
-
-    public ImportFormat WithAutoMappings(DataContext dataContext, Func<DomainTypeImporter, DomainTypeImporter> config)
+    public void Import(ImportRequest importRequest, IDataSet dataSet)
     {
-        return this
-            .WithImportFunction(config(new DomainTypeImporter(dataContext)).Import);
+        foreach (var importFunction in ImportFunctions)
+            Workspace.Update(importFunction(importRequest, dataSet, Workspace).ToArray());
     }
 
+    public delegate IEnumerable<object> ImportFunction(ImportRequest importRequest, IDataSet dataSet, IWorkspace workspace);
+
+    public ImportFormat WithAutoMappings()
+        => WithAutoMappings(mapping => mapping);
+    public ImportFormat WithAutoMappings(Func<DomainTypeImporter, DomainTypeImporter> config) 
+        => WithImportFunction(config(new DomainTypeImporter(Workspace.DataContext)).Import);
 }
 
 public delegate bool ValidationFunction(object instance, ValidationContext context);

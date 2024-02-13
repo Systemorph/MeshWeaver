@@ -11,7 +11,7 @@ public record DomainTypeImporter
         TableMappings = AutoMapper.Create(dataContext);
     }
 
-    public IEnumerable<object> Import(ImportRequest request, IDataSet dataset)
+    public IEnumerable<object> Import(ImportRequest request, IDataSet dataset, IWorkspace workspace)
     {
         foreach (var table in dataset.Tables)
         {

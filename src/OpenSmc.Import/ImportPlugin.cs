@@ -21,13 +21,13 @@ public class ImportPlugin : MessageHubPlugin<ImportState>,
     public ImportPlugin(IMessageHub hub, Func<ImportConfiguration, ImportConfiguration> importConfiguration) : base(hub)
     {
         workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
-        Configuration = importConfiguration.Invoke(new(workspace.Context));
+        Configuration = importConfiguration.Invoke(new(workspace));
     }
 
     public override async Task StartAsync()
     {
         await base.StartAsync();
-        await workspace.Initialize;
+        await workspace.Initializing;
     }
 
     public async Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery<ImportRequest> request, CancellationToken cancellationToken)
@@ -40,7 +40,7 @@ public class ImportPlugin : MessageHubPlugin<ImportState>,
             var importRequest = request.Message;
             var (dataSet, format) = await ReadDataSetAsync(importRequest, cancellationToken);
 
-            workspace.Update(format.Import(importRequest, dataSet));
+            format.Import(importRequest, dataSet);
 
             if (!activityService.HasErrors())
                 workspace.Commit();
