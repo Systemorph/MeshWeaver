@@ -1,5 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations;
-using FluentAssertions;
+﻿using FluentAssertions;
 using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
@@ -11,42 +10,10 @@ using Xunit.Abstractions;
 namespace OpenSmc.Import.Test;
 
 
-// this is production code!
-public static class ImportTestExtensions
-{
-    public static IEnumerable<Type> ReferenceDataDomain()
-        =>
-        [
-            typeof(ImportTest.LineOfBusiness),
-            typeof(ImportTest.BusinessUnit),
-        ];
-
-    public static IEnumerable<Type> TransactionalDataDomain()
-        =>
-        [
-            typeof(ImportTest.TransactionalData),
-        ];
-
-    public static DataSource ConfigureReferenceData(this DataSource dataSource)
-        => ReferenceDataDomain().Aggregate(dataSource, (ds, t) => ds.WithType(t));
-    public static DataSource ConfigureTransactionalData(this DataSource dataSource)
-        => TransactionalDataDomain().Aggregate(dataSource, (ds, t) => ds.WithType(t));
-
-}
-
 
 public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    public record TransactionalData([property: Key] string Id, string LoB, string BusinessUnit, double Value);
 
-    public record LineOfBusiness(string SystemName, string DisplayName);
-    public record BusinessUnit(string SystemName, string DisplayName);
-
-    private static readonly TransactionalData[] InitialTransactionalData =
-    {
-        new("1", "1", "1", 7),
-        new("2", "1", "3", 2),
-    };
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
@@ -57,10 +24,8 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
                     (
                         nameof(DataSource),
                         source => source
-                    //.ConfigureTransactionalData()
-                    .WithType<TransactionalData>(type => type
-                        .WithBackingCollection(InitialTransactionalData.ToDictionary(x => (object)x.Id))
-                    )
+                        .ConfigureTransactionalData()
+                        .ConfigureReferenceData()
                     )
                 )
                 .AddImport(import => import)
@@ -75,7 +40,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
-        var items = await client.AwaitResponse(new GetManyRequest<TransactionalData>(),
+        var items = await client.AwaitResponse(new GetManyRequest<ImportTestDomain.TransactionalData>(),
             o => o.WithTarget(new HostAddress()));
         items.Message.Items.Should().HaveCount(4)
             .And.ContainSingle(i => i.Id == "1")

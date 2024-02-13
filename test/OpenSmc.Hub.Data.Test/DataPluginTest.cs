@@ -27,7 +27,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
                 .WithDataSource("ad hoc",dataSource => dataSource
                     .WithType<MyData>(type => type
                         .WithKey(instance => instance.Id)
-                        .WithInitialization(InitializeMyData)
+                        .WithInitialData(InitializeMyData)
                         .WithUpdate(SaveMyData)
                         .WithAdd(SaveMyData)
                         .WithDelete(DeleteMyData)
