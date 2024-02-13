@@ -42,7 +42,7 @@ public record CombinedWorkspaceState(ImmutableDictionary<object, WorkspaceState>
         => this with { WorkspacesByKey = WorkspacesByKey.SetItem(dataSourceId, workspace) };
 }
 
-public record WorkspaceState( DataSource DataSource)
+public record WorkspaceState(DataSource DataSource)
 {
     public long Version { get; init; }
     public ImmutableDictionary<Type, ImmutableDictionary<object, object>> Data { get; init; } =

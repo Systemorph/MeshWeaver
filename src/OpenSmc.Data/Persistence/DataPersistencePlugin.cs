@@ -149,11 +149,11 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
     private WorkspaceState Delete(WorkspaceState workspace, TypeSource typeConfig, ImmutableDictionary<object, object> existingInstances, IDictionary<object, object> toBeUpdatedInstances)
     {
         var toBeDeleted = toBeUpdatedInstances.Select(i => existingInstances.GetValueOrDefault(i.Key)).Where(x => x !=null).ToArray();
-            DeleteElementsMethod.MakeGenericMethod(typeConfig.ElementType).InvokeAsAction(toBeDeleted, typeConfig);
-            return workspace with
-            {
-                Data = workspace.Data.SetItem(typeConfig.ElementType, existingInstances.RemoveRange(toBeUpdatedInstances.Keys))
-            };
+        DeleteElementsMethod.MakeGenericMethod(typeConfig.ElementType).InvokeAsAction(toBeDeleted, typeConfig);
+        return workspace with
+        {
+            Data = workspace.Data.SetItem(typeConfig.ElementType, existingInstances.RemoveRange(toBeUpdatedInstances.Keys))
+        };
     }
 
 
@@ -173,6 +173,3 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
     private static void DeleteElements<T>(IEnumerable<object> items, TypeSource<T> config) where T : class => config.Delete(items.Cast<T>().ToArray());
 
 }
-
-internal class PersistenceException(string message) : Exception(message);
-
