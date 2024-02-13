@@ -19,7 +19,7 @@ export function useControlContext<TView = any>() {
 export function isControlContextOfType<TView>(
     context: ControlContextType,
     componentType: ComponentType<TView>): context is ControlContextType<TView> {
-    return context.controlName === (componentType as Function).name;
+    return context?.controlName === (componentType as Function).name;
 }
 
 export function getParentContextOfType<TView>(

@@ -1,5 +1,5 @@
 import { createContext, PropsWithChildren, useContext, useEffect, useState } from "react";
-import { ConnectToHubRequest } from "./application.contract";
+import { ConnectToHubRequest } from "./contract/application.contract";
 import { useMessageRouter } from "./MessageRouter";
 import { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
 import { makeProxy } from "@open-smc/message-hub/src/middleware/makeProxy";

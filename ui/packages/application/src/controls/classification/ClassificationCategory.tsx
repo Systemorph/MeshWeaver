@@ -6,7 +6,7 @@ import style from './classification.module.scss';
 import classNames from "classnames";
 import buttons from "@open-smc/ui-kit/src/components/buttons.module.scss";
 import { Button } from "@open-smc/ui-kit/src/components/Button";
-import { Category } from "../../application.contract";
+import { Category } from "../../contract/application.contract";
 
 interface CategoryProps {
     category: Category;

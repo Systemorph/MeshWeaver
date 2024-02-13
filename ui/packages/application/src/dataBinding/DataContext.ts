@@ -10,9 +10,8 @@ export type DataContextChangedEvent = {
 }
 
 export class DataContext {
-    readonly value: unknown;
-    readonly parentContext: DataContext;
-    readonly onChange: DataContextChangeHandler;
+    constructor(private value: unknown, private parentContext: DataContext, public onChange?: DataContextChangeHandler) {
+    }
 
     resolveBinding(path: string) {
         const keys = toPath(path);

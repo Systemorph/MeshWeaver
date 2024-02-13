@@ -3,7 +3,7 @@ import type {
     StackSkin,
     StackView
 } from "@open-smc/application/src/controls/LayoutStackControl";
-import { AreaChangedEvent } from "@open-smc/application/src/application.contract";
+import { AreaChangedEvent } from "@open-smc/application/src/contract/application.contract";
 import { v4 } from "uuid";
 import { mainWindowAreas } from "@open-smc/application/src/controls/MainWindow";
 import { modalWindowAreas } from "@open-smc/application/src/controls/ModalWindow";

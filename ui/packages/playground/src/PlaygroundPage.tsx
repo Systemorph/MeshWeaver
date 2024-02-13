@@ -11,7 +11,7 @@ export function PlaygroundPage() {
             <ViteHmrTransport>
                 <MessageRouter>
                     <LayoutHub>
-                        <ControlStarter area={"app"}/>
+                        <ControlStarter area={"app"} path={"/"}/>
                     </LayoutHub>
                 </MessageRouter>
             </ViteHmrTransport>

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Area } from "../Area";
-import { AreaChangedEvent } from "../application.contract";
+import { AreaChangedEvent } from "../contract/application.contract";
 import { MainWindow } from "./MainWindow";
 import classNames from "classnames";
 import styles from "./layoutStackControl.module.scss";

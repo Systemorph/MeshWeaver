@@ -1,4 +1,4 @@
-import { contractMessage } from "../contractMessage";
+import { contractMessage } from "../contract/contractMessage";
 
 @contractMessage("OpenSmc.Application.ScopePropertyChanged")
 export class ScopePropertyChanged {

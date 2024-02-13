@@ -1,5 +1,5 @@
 import { getSelectedElements } from "./multiselect/Multiselect";
-import { Category, SelectionByCategory } from "../application.contract";
+import { Category, SelectionByCategory } from "../contract/application.contract";
 import { useControlContext } from "../ControlContext";
 import { Multiselect } from "./multiselect/Multiselect";
 import { ControlView } from "../ControlDef";

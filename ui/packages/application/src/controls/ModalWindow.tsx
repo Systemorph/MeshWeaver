@@ -4,7 +4,7 @@ import { useSubscribeToAreaChanged } from "../useSubscribeToAreaChanged";
 import styles from "./modalWindow.module.scss";
 import { StackView } from "./LayoutStackControl";
 import { keyBy } from "lodash";
-import { AreaChangedEvent } from "../application.contract";
+import { AreaChangedEvent } from "../contract/application.contract";
 import classNames from "classnames";
 
 export const modalWindowAreas = {

@@ -12,6 +12,7 @@
   "dependencies": {
     "@open-smc/application": "0.1.0",
     "@open-smc/message-hub": "0.1.0",
+    "@open-smc/playground-server": "0.0.0",
     "@open-smc/utils": "0.1.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",

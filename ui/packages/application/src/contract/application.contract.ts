@@ -1,7 +1,7 @@
 import { contractMessage } from "./contractMessage";
 import { v4 as uuid } from "uuid";
-import { ControlDef } from "./ControlDef";
-import {Style} from "./Style";
+import { ControlDef } from "../ControlDef";
+import {Style} from "../Style";
 
 @contractMessage("OpenSmc.Application.Layout.LayoutAddress")
 export class LayoutAddress {
@@ -50,7 +50,7 @@ export class AreaChangedEvent<TOptions = unknown> {
 
 @contractMessage("OpenSmc.Application.Layout.Views.ClickedEvent")
 export class ClickedEvent {
-    constructor(public id: string, public payload?: unknown) {
+    constructor(public id?: string, public payload?: unknown) {
     }
 }
 
@@ -143,4 +143,8 @@ export class ModuleErrorEvent {
 
 @contractMessage("OpenSmc.Application.CloseModalDialogEvent")
 export class CloseModalDialogEvent {
+}
+
+export class Dispose {
+
 }

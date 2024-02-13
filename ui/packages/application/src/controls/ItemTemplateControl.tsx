@@ -3,9 +3,9 @@ import { DataContextProvider, useDataContext } from "../dataBinding/DataContextP
 import { PropsWithChildren, useMemo } from "react";
 import { getStackClassNames, StackSkin } from "./LayoutStackControl";
 import { ControlDef, ControlView } from "../ControlDef";
-import { makeDataContext } from "../dataBinding/DataContextBuilder";
 import { makeBinding } from "../dataBinding/resolveBinding";
 import { useControlContext } from "../ControlContext";
+import { DataContext } from "../dataBinding/DataContext";
 
 export interface ItemTemplateView extends ControlView {
     view?: ControlDef;
@@ -18,9 +18,9 @@ export default function ItemTemplateControl({data, view, style, skin}: ItemTempl
     const {rawView} = useControlContext();
 
     const dataContext = useMemo(() =>
-        makeDataContext({items: rawView.data})
-            .withParentContext(parentContext)
-            .build(), [rawView, parentContext]);
+            new DataContext({items: rawView.data}, parentContext),
+        [rawView, parentContext]
+    );
 
     if (data?.length && !view) {
         throw 'View is missing';
@@ -52,9 +52,7 @@ function ItemContext({index, children}: PropsWithChildren & ItemContextProps) {
 
     const dataContext = useMemo(
         () => {
-            return makeDataContext({item: makeBinding(`items[${index}]`), index})
-                .withParentContext(parentContext)
-                .build();
+            return new DataContext({item: makeBinding(`items[${index}]`), index}, parentContext);
         },
         [index, parentContext]
     );

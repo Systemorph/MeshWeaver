@@ -3,7 +3,7 @@ import { forwardRef, HTMLAttributes } from "react";
 import style from './classification.module.scss';
 import classNames from "classnames";
 import buttons from "@open-smc/ui-kit/src/components/buttons.module.scss";
-import { Named } from "../../application.contract";
+import { Named } from "../../contract/application.contract";
 import {Button} from "@open-smc/ui-kit/src/components/Button";
 
 interface ItemProps {

@@ -2,7 +2,7 @@ import React, { Suspense } from "react";
 import classNames from "classnames";
 import styles from "./element.module.scss";
 import { ErrorBoundary } from "@open-smc/ui-kit/src/components/ErrorBoundary";
-import { AreaChangedEvent } from "@open-smc/application/src/application.contract";
+import { AreaChangedEvent } from "@open-smc/application/src/contract/application.contract";
 import { Area } from "@open-smc/application/src/Area";
 
 const errorFallback = <div style={{color: 'red'}}>Failed to render output</div>;

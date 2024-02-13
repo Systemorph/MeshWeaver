@@ -1,5 +1,5 @@
 import { AddHub, useMessageHub } from "../AddHub";
-import { AreaChangedEvent } from "../application.contract";
+import { AreaChangedEvent } from "../contract/application.contract";
 import { renderControl } from "../renderControl";
 import { useEffect, useState } from 'react';
 import styles from "./menuItemControl.module.scss";

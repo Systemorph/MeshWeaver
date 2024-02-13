@@ -5,7 +5,7 @@ import {
     CategoryItemsResponse,
     Named,
     SelectionByCategory
-} from "@open-smc/application/src/application.contract";
+} from "@open-smc/application/src/contract/application.contract";
 import { CategoryItemsRequestHandler } from "./CategoryItemsRequestHandler";
 import { ControlBase, ControlBuilderBase } from "./ControlBase";
 
