@@ -2,7 +2,6 @@
 using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
-using OpenSmc.Import;
 using OpenSmc.Messaging;
 using Xunit;
 using Xunit.Abstractions;

@@ -7,31 +7,24 @@ using OpenSmc.Reflection;
 
 namespace OpenSmc.Scopes.Proxy
 {
-    public class InternalScopeFactory : IInternalScopeFactory
+    public class InternalScopeFactory(
+        ILogger<IScope> logger,
+        IScopeInterceptorFactoryRegistry interceptorFactoryRegistry)
+        : IInternalScopeFactory
     {
-        private readonly IScopeInterceptorFactoryRegistry interceptorFactoryRegistry;
-        private readonly ScopeRegistry scopeRegistry;
+        private readonly ScopeRegistry scopeRegistry = new(logger);
         private readonly IProxyGenerator proxyGenerator = new ProxyGenerator();
         private readonly ProxyGenerationOptions options = new() { Selector = new InterceptorSelector() };
-        public ILogger Logger { get; }
-
-        public InternalScopeFactory(ILogger<IScope> logger, IScopeInterceptorFactoryRegistry interceptorFactoryRegistry)
-        {
-            this.interceptorFactoryRegistry = interceptorFactoryRegistry;
-            Logger = logger;
-            scopeRegistry = new(logger);
-        }
+        public ILogger Logger { get; } = logger;
 
 
         public IEnumerable<object> CreateScopes(Type tScope, IEnumerable<object> identities, object storage, IEnumerable<IScopeInterceptor> additionalInterceptors, string context, bool registerMain)
         {
-            var interceptorsUnordered = interceptorFactoryRegistry.GetFactories()
+            var interceptors = interceptorFactoryRegistry.GetFactories()
                                                                   .SelectMany(f => f.GetInterceptors(tScope, this))
                                                                   .Concat(additionalInterceptors ?? Enumerable.Empty<IScopeInterceptor>())
                                                                   .Cast<IInterceptor>()
                                                                   .ToArray();
-            var interceptors = ScopeInterceptorConventionService.Instance
-                                                                .GetElements(interceptorsUnordered, x => x.GetType(), null).ToArray();
 
             var additionalInterfaces = interceptors.OfType<IHasAdditionalInterfaces>().SelectMany(i => i.GetAdditionalInterfaces(tScope))
                                                    .Except(tScope.GetInterfaces()).ToArray();
