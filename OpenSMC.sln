@@ -117,9 +117,9 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Hub.Data.Test", "te
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Data.Contract", "src\OpenSmc.Data.Contract\OpenSmc.Data.Contract.csproj", "{1EAB617D-513E-4376-A464-530005F27ECC}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DataStorage.EntityFramework", "src\OpenSmc.DataSource.EntityFramework\OpenSmc.DataStorage.EntityFramework.csproj", "{9FB03401-450A-433B-8E3C-F11D8FB39B76}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DataStorage.EntityFramework", "src\OpenSmc.DataStorage.EntityFramework\OpenSmc.DataStorage.EntityFramework.csproj", "{9FB03401-450A-433B-8E3C-F11D8FB39B76}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Import", "src\OpenSmc.Import.Contract\OpenSmc.Import.csproj", "{AEECAA4C-663C-491C-8F93-FB83A8B4E0A2}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Import", "src\OpenSmc.Import\OpenSmc.Import.csproj", "{AEECAA4C-663C-491C-8F93-FB83A8B4E0A2}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Data-EntityFramework.Test", "test\OpenSmc.Data-EntityFramework.Test\OpenSmc.Data-EntityFramework.Test.csproj", "{E3FCF4CE-AEA3-49BF-ABEB-7D87CC2D6267}"
 EndProject
