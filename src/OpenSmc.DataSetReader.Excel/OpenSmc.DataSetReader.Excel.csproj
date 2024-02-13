@@ -1,9 +1,10 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <PackageReference Include="DocumentFormat.OpenXml" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\OpenSmc.DataSetReader.Excel.BinaryFormat\OpenSmc.DataSetReader.Excel.BinaryFormat.csproj" />
     <ProjectReference Include="..\OpenSmc.DataSetReader.Excel.OpenXmlFormat\OpenSmc.DataSetReader.Excel.OpenXmlFormat.csproj" />
-    <ProjectReference Include="..\OpenSmc.DataSetReader.Excel.Utils\OpenSmc.DataSetReader.Excel.Utils.csproj" />
     <ProjectReference Include="..\OpenSmc.DataSetReader\OpenSmc.DataSetReader.csproj" />
-    <ProjectReference Include="..\OpenSmc.DataStructures\OpenSmc.DataStructures.csproj" />
   </ItemGroup>
 </Project>
