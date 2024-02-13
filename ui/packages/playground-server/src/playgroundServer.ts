@@ -3,12 +3,12 @@ import { WebSocketClientHub } from "./WebSocketClientHub";
 import { makeProxy } from "@open-smc/message-hub/src/middleware/makeProxy";
 import { connect } from "@open-smc/message-hub/src/middleware/connect";
 import { addToContext } from "@open-smc/message-hub/src/middleware/addToContext";
-import { layoutAddress, LayoutHub } from "./LayoutHub";
+import { LayoutHub } from "./LayoutHub";
 import { SubjectHub } from "@open-smc/message-hub/src/SubjectHub";
 
-export const methodName = "deliverMessage";
-
-const uiAddress = "ui";
+import { layoutAddress, uiAddress } from "./contract.ts";
+import { Subject } from "rxjs";
+import { MessageDelivery } from "@open-smc/message-hub/src/api/MessageDelivery.ts";
 
 export function playgroundServer() {
     return {
@@ -23,12 +23,10 @@ export function playgroundServer() {
                         const [uiHub, uiHubProxy] = makeProxy();
                         connect(clientHub, uiHubProxy);
 
-                        const context = new SubjectHub();
+                        const context = new Subject<MessageDelivery>();
 
                         addToContext(context, uiHub, uiAddress);
                         addToContext(context, new LayoutHub(), layoutAddress);
-
-                        clientHub.subscribe(console.log);
                     }
                 })
             });

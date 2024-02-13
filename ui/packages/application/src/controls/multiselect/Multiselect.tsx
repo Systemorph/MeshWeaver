@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { createStore, Store } from "@open-smc/store/src/store";
 import { keyBy, keys, map, mapValues, pick } from "lodash";
-import { Category, Named, SelectionByCategory } from "../../application.contract";
+import { Category, Named, SelectionByCategory } from "../../contract/application.contract";
 import { MultiselectInner } from "./MultiselectInner";
 import { useCategoryApi } from "../../useCategoryApi";
 import { makeUseSelector } from "@open-smc/store/src/useSelector";

@@ -5,7 +5,7 @@ import { useCallback } from "react";
 import { useEvaluateElements } from "./documentStore/hooks/useEvaluateElements";
 import { useSelectNextElement } from "./documentStore/hooks/useSelectNextElement";
 import styles from "./element.module.scss";
-import { AreaChangedEvent } from "@open-smc/application/src/application.contract";
+import { AreaChangedEvent } from "@open-smc/application/src/contract/application.contract";
 import { Output } from "./Output";
 
 interface Props {

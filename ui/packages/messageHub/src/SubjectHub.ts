@@ -10,13 +10,13 @@ export class SubjectHub extends Observable<MessageDelivery> implements MessageHu
         super(subscriber => output.subscribe(subscriber));
     }
 
-    complete(): void {
+    complete() {
     }
 
-    error(err: any): void {
+    error(err: any) {
     }
 
-    next(value: MessageDelivery): void {
+    next(value: MessageDelivery) {
         this.input.next(value);
     }
 }

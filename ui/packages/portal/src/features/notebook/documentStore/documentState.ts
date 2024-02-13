@@ -10,7 +10,7 @@ import { ElementEditorApi, FocusMode } from "../ElementEditor";
 import { NotebookDto } from "../../../controls/NotebookEditorControl";
 import { NotebookElementDto, ElementEditorView } from "../../../controls/ElementEditorControl";
 import { NotebookElementChangeData } from "../notebookElement.contract";
-import { AreaChangedEvent } from "@open-smc/application/src/application.contract";
+import { AreaChangedEvent } from "@open-smc/application/src/contract/application.contract";
 import { ControlDef } from "@open-smc/application/src/ControlDef";
 
 export const CODE_COLLAPSED = 'codeCollapsed';

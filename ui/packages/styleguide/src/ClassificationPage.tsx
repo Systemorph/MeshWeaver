@@ -1,6 +1,6 @@
 import { Sandbox } from "@open-smc/sandbox/src/Sandbox";
 import { makeCategoryFactory } from "./categoryFactory";
-import { SelectionByCategory } from "@open-smc/application/src/application.contract";
+import { SelectionByCategory } from "@open-smc/application/src/contract/application.contract";
 import { makeBinding } from "@open-smc/application/src/dataBinding/resolveBinding";
 import { makeClassification } from "@open-smc/sandbox/src/Classification";
 import { makeStack } from "@open-smc/sandbox/src/LayoutStack";

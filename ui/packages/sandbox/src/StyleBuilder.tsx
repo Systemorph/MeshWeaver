@@ -14,11 +14,7 @@ import {
     Position
 } from "@open-smc/application/src/Style";
 
-export class StyleBuilder extends Builder<HtmlElement & FlexContainer & FlexElement> {
-    constructor() {
-        super();
-    }
-
+class StyleBuilder extends Builder<HtmlElement & FlexContainer & FlexElement> {
     withWidth(value: string) {
         this.data.width = value;
         return this;
@@ -138,3 +134,5 @@ export class StyleBuilder extends Builder<HtmlElement & FlexContainer & FlexElem
         return this;
     }
 }
+
+export const makeStyle = () => new Style();

@@ -5,10 +5,10 @@ import React, { ComponentType, useMemo } from "react";
 import { ControlContext } from "./ControlContext";
 import { isScope } from "./scopes/createScopeMonitor";
 import { bind, bindIteratee } from "./dataBinding/bind";
-import { makeDataContext } from "./dataBinding/DataContextBuilder";
 import { ControlDef } from "./ControlDef";
 import { useScopeMonitor } from "./scopes/useScopeMonitor";
 import { lazy, Suspense } from "react";
+import { DataContext } from "./dataBinding/DataContext";
 
 export function renderControl(control: ControlDef) {
     const {address, $type} = control;
@@ -49,14 +49,11 @@ function RenderControl({component: Component, name, control}: RenderControlProps
     const parentContext = useDataContext();
 
     const dataContext = useMemo(
-        () => makeDataContext(current)
-            .withParentContext(parentContext)
-            .withOnChange(({object, key, value}) => {
-                if (isScope(object)) {
-                    setScopeProperty(object.$scopeId, key, value);
-                }
-            })
-            .build(),
+        () => new DataContext(current, parentContext, ({object, key, value}) => {
+            if (isScope(object)) {
+                setScopeProperty(object.$scopeId, key, value);
+            }
+        }),
         [current, setScopeProperty, parentContext]
     );
 
@@ -64,9 +61,7 @@ function RenderControl({component: Component, name, control}: RenderControlProps
         [view, dataContext]);
 
     function onChange(path: string, value: unknown) {
-        const viewContext = makeDataContext(view)
-            .withParentContext(dataContext)
-            .build();
+        const viewContext = new DataContext(view, dataContext);
         viewContext.resolveBinding(path)?.set(value);
     }
 

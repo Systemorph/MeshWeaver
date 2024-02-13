@@ -1,4 +1,4 @@
-export type Constructor<T = any> = { new (...args: any[]): T };
+type Constructor<T = any> = { new (...args: any[]): T };
 
 // TODO: this needs a proper mixin support for decorators, see issue below (11/12/2021, akravets)
 // https://github.com/microsoft/TypeScript/issues/4881

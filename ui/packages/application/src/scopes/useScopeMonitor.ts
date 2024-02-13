@@ -4,8 +4,8 @@ import { createScopeMonitor } from "./createScopeMonitor";
 import { useMessageHub } from "../AddHub";
 import { ScopePropertyChanged } from "./scope.contract";
 import { receiveMessage } from "@open-smc/message-hub/src/receiveMessage";
-import { ofType } from "../ofType";
 import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
+import { ofContractType } from "../contract/ofContractType";
 
 export function useScopeMonitor(data: unknown) {
     const [current, setCurrent] = useState(data);
@@ -18,7 +18,7 @@ export function useScopeMonitor(data: unknown) {
     useEffect(() => {
         if (isObjectLike(current)) {
             const setScopeProperty = createScopeMonitor<any>(current, setCurrent);
-            return receiveMessage(hub.pipe(ofType(ScopePropertyChanged)), message => {
+            return receiveMessage(hub.pipe(ofContractType(ScopePropertyChanged)), message => {
                 const {scopeId, property, value} = message;
                 setScopeProperty(scopeId, property, value);
             });

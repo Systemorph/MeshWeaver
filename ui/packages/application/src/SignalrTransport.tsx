@@ -1,7 +1,7 @@
 import { PropsWithChildren, useMemo } from "react";
 import { SignalrConnectionProvider, useConnectionSelector } from "./SignalrConnectionProvider";
 import { SignalrHub } from "./SignalrHub";
-import { LayoutAddress, UiAddress } from "./application.contract";
+import { LayoutAddress, UiAddress } from "./contract/application.contract";
 import { transportContext } from "./transportContext";
 
 export function SignalrTransport({children}: PropsWithChildren) {

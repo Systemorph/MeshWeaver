@@ -1,122 +1,114 @@
 import { ControlDef, MessageAndAddress } from "@open-smc/application/src/ControlDef";
 import { Style } from "@open-smc/application/src/Style";
+import { SubjectHub } from "@open-smc/message-hub/src/SubjectHub";
+import { Subscription } from "rxjs";
+import { Constructor } from "@open-smc/utils/src/Constructor";
+import { MessageHandler } from "@open-smc/message-hub/src/api/MessageHandler";
+import { ofContractType } from "@open-smc/application/src/contract/ofContractType";
 import { v4 } from "uuid";
-import { ClickedEvent } from "@open-smc/application/src/application.contract";
-import { Builder, Constructor } from "@open-smc/utils/src/Builder";
-import { StyleBuilder } from "./StyleBuilder";
-import { SubjectHub } from "@open-smc/application/src/messageHub/SubjectHub";
-import { ofType } from "packages/application/src/ofType";
-import { receiveMessage } from "@open-smc/application/src/messageHub/receiveMessage";
-
-export type ClickAction = <TView>(payload: unknown, control: ControlBase) => void;
 
 export abstract class ControlBase extends SubjectHub implements ControlDef {
-    readonly id: string;
     readonly moduleName: string;
     readonly apiVersion: string;
-    readonly address: unknown;
-    readonly dataContext: unknown;
 
-    readonly clickMessage: MessageAndAddress;
-    readonly style: Style;
-    readonly className: string;
-    readonly skin: string;
-    readonly tooltip: string;
-    readonly data: unknown;
-    readonly isReadonly?: boolean;
-    readonly label?: string;
+    id: string;
+    dataContext: unknown;
 
-    readonly clickAction: ClickAction;
+    clickMessage: MessageAndAddress;
+    style: Style;
+    className: string;
+    skin: string;
+    tooltip: string;
+    data: unknown;
+    isReadonly?: boolean;
+    label?: string;
 
-    protected constructor(public $type: string) {
+    protected readonly subscription: Subscription = new Subscription();
+
+    protected constructor(public readonly $type: string, public address = `${$type}-${v4()}`) {
         super();
-
-        this.id = v4();
-
-        this.address = this;
-
-        receiveMessage(
-            this.input,
-            env => {
-                this.clickAction?.(env.message.payload, this);
-            },
-            ofType(ClickedEvent)
-        );
     }
-}
 
-export class ControlBuilderBase<TControl extends ControlBase = any> extends Builder<TControl> {
-    constructor(ctor: Constructor<TControl>) {
-        super(ctor);
+    toJSON() {
+        const {
+            subscription,
+            input,
+            output,
+            ...result
+        } = this;
+        return result;
+    }
+
+    withMessageHandler<T>(type: Constructor<T>, handler: MessageHandler<this, T>) {
+        this.subscription.add(
+            this.handleMessage(type, handler)
+        );
+        return this;
+    }
+
+    protected handleMessage<T>(type: Constructor<T>, handler: MessageHandler<this, T>) {
+        return this.input
+            .pipe(ofContractType(type))
+            .subscribe(handler.bind(this));
     }
 
     withId(id: string) {
-        this.data.id = id;
+        this.id = id;
+        return this;
+    }
+
+    withAddress(address: any) {
+        this.address = address;
         return this;
     }
 
     withData(data: unknown) {
-        this.data.data = data;
+        this.data = data;
         return this;
     }
 
     withDataContext(dataContext: unknown) {
-        this.data.dataContext = dataContext;
+        this.dataContext = dataContext;
         return this;
     }
 
-    withStyle(buildFunc: (builder: StyleBuilder) => void) {
-        const builder = new StyleBuilder();
-        buildFunc(builder);
-        this.data.style = builder.build();
-        return this;
-    }
+    // withStyle(buildFunc: (builder: Style) => void) {
+    //     this.style = buildFunc(makeStyle());
+    //     return this;
+    // }
 
     withClassName(value: string) {
-        this.data.className = value;
+        this.className = value;
         return this;
     }
 
-    withFlex(buildFunc?: (builder: StyleBuilder) => void) {
-        const builder = new StyleBuilder();
-        builder.withDisplay("flex");
-        buildFunc?.(builder);
-        this.data.style = builder.build();
-        return this;
-    }
+    // withFlex(buildFunc?: (builder: StyleBuilder) => void) {
+    //     this.data.styleBuilder = buildFunc?.(makeStyle().withDisplay("flex"))
+    //     return this;
+    // }
 
     withSkin(value: string) {
-        this.data.skin = value;
+        this.skin = value;
         return this;
     }
 
-    withClickMessage(message: MessageAndAddress) {
-        this.data.clickMessage = message;
-        return this;
-    }
-
-    withClickAction(action: ClickAction, payload?: unknown) {
-        this.data.clickMessage = {
-            message: new ClickedEvent(this.data.id, payload),
-            address: this
-        };
-
-        this.data.clickAction = action;
+    withClickMessage(message: MessageAndAddress = {address: this.address, message}) {
+        this.clickMessage = message;
         return this;
     }
 
     withTooltip(tooltip: string) {
-        this.data.tooltip = tooltip;
+        this.tooltip = tooltip;
         return this;
     }
 
     withLabel(label: string) {
-        this.data.label = label;
+        this.label = label;
         return this;
     }
 
     isReadOnly(isReadOnly: boolean) {
-        this.data.isReadonly = isReadOnly;
+        this.isReadonly = isReadOnly;
         return this;
     }
 }

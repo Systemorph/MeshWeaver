@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AreaChangedEvent, SetAreaRequest } from "./application.contract";
+import { AreaChangedEvent, SetAreaRequest } from "./contract/application.contract";
 import { useSubscribeToAreaChanged } from "./useSubscribeToAreaChanged";
 import { renderControl } from "./renderControl";
 import { useMessageHub } from "./AddHub";

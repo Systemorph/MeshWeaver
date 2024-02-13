@@ -4,7 +4,7 @@ import { useSubscribeToAreaChanged } from "../useSubscribeToAreaChanged";
 import styles from "./mainWindow.module.scss";
 import { StackView } from "./LayoutStackControl";
 import { keyBy } from "lodash";
-import { AreaChangedEvent, CloseModalDialogEvent } from "../application.contract";
+import { AreaChangedEvent, CloseModalDialogEvent } from "../contract/application.contract";
 import Dialog from "rc-dialog";
 import "@open-smc/ui-kit/src/components/dialog.scss";
 import classNames from "classnames";

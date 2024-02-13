@@ -3,7 +3,7 @@ import { AddHub, useMessageHub } from "../AddHub";
 import { useControlContext } from "../ControlContext";
 import { useSubscribeToAreaChanged } from "../useSubscribeToAreaChanged";
 import { useEffect, useState } from "react";
-import { AreaChangedEvent } from "../application.contract";
+import { AreaChangedEvent } from "../contract/application.contract";
 import { ControlView } from "../ControlDef";
 import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
 

@@ -6,7 +6,7 @@ import {
 } from "react";
 import { createStore, Store } from "@open-smc/store/src/store";
 import { flatten, keyBy, keys, map, mapValues, pick, values, without } from "lodash";
-import { Category, Named, SelectionByCategory } from "../../application.contract";
+import { Category, Named, SelectionByCategory } from "../../contract/application.contract";
 import { useCategoryApi } from "../../useCategoryApi";
 import { ClassificationInner } from "./ClassificationInner";
 import { insertAfter } from "@open-smc/utils/src/insertAfter";

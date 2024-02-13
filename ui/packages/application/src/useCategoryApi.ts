@@ -1,6 +1,6 @@
 import { useMessageHub } from "./AddHub";
 import { v4 as uuid } from "uuid";
-import { CategoryItemsRequest, CategoryItemsResponse, Named, ErrorEvent, SetSelectionRequest } from "./application.contract";
+import { CategoryItemsRequest, CategoryItemsResponse, Named, ErrorEvent, SetSelectionRequest } from "./contract/application.contract";
 import { receiveMessage } from "@open-smc/message-hub/src/receiveMessage";
 import { ofType } from "./ofType";
 import { sendMessage } from "@open-smc/message-hub/src/sendMessage";

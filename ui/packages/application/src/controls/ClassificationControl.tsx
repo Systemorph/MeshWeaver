@@ -2,7 +2,7 @@ import {
     Classification, getSelectedElements,
 } from "./classification/Classification";
 import { useControlContext } from "../ControlContext";
-import { Category, SelectionByCategory } from "../application.contract";
+import { Category, SelectionByCategory } from "../contract/application.contract";
 import { ControlView } from "../ControlDef";
 
 export interface ClassificationView extends ControlView {

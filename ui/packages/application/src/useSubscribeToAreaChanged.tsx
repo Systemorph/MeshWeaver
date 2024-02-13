@@ -1,8 +1,8 @@
-import { AreaChangedEvent } from "./application.contract";
+import { AreaChangedEvent } from "./contract/application.contract";
 import { useMessageHub } from "./AddHub";
 import { useEffect } from "react";
 import { receiveMessage } from "@open-smc/message-hub/src/receiveMessage";
-import { ofType } from "./ofType";
+import { ofContractType } from "./contract/ofContractType";
 
 export function useSubscribeToAreaChanged<TOptions = unknown>(
     handler: (event: AreaChangedEvent<TOptions>) => void,
@@ -13,7 +13,7 @@ export function useSubscribeToAreaChanged<TOptions = unknown>(
 
     useEffect(() => {
         return receiveMessage(
-            hub.pipe(ofType(AreaChangedEvent)),
+            hub.pipe(ofContractType(AreaChangedEvent)),
             handler,
             ({message}) => !area || message.area === area
         );

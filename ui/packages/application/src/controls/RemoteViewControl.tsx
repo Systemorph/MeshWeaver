@@ -1,7 +1,7 @@
 import { renderControl } from "../renderControl";
 import { useSubscribeToAreaChanged } from "../useSubscribeToAreaChanged";
 import { useState, useEffect } from "react";
-import { AreaChangedEvent, RefreshRequest } from "../application.contract";
+import { AreaChangedEvent, RefreshRequest } from "../contract/application.contract";
 import { useMessageHub } from "../AddHub";
 import { ControlView } from "../ControlDef";
 import { contractMessage } from "../contractMessage";
