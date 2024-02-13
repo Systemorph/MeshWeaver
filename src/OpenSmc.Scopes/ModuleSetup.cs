@@ -9,14 +9,11 @@ namespace OpenSmc.Scopes;
 
 public static class ModuleSetup 
 {
-    /// <remarks>this must not be a constant in order for module ordering to work properly</remarks>
-    public static readonly string VariableName = "Scopes";
-
     public static IServiceCollection RegisterScopes(this IServiceCollection services)
     {
         services.AddSingleton<IScopeFactory, ScopeFactory>();
         services.AddTransient<IInternalScopeFactory, InternalScopeFactory>();
-        services.AddSingleton<IScopeInterceptorFactoryRegistry>(_ => CreateScopeInterceptorFactoryRegistry());
+        services.AddSingleton<IScopeInterceptorFactoryRegistry, ScopeInterceptorFactoryRegistry>();
         return services;
     }
 
@@ -56,27 +53,4 @@ public static class ModuleSetup
             });
     }
 
-    private static IScopeInterceptorFactoryRegistry CreateScopeInterceptorFactoryRegistry()
-    {
-        var scopeInterceptorFactoryRegistry = new ScopeInterceptorFactoryRegistry();
-        scopeInterceptorFactoryRegistry.Register(new ApplicabilityInterceptorFactory())
-            .Register(new CachingInterceptorFactory())
-            .Register(new DelegateToInterfaceDefaultImplementationInterceptorFactory())
-            .Register(new FilterableScopeInterceptorFactory())
-            .Register(new ScopeRegistryInterceptorFactory());
-
-        ScopeInterceptorConventionService.Instance.Element(typeof(CachingInterceptor)).AtBeginning();
-        ScopeInterceptorConventionService.Instance.Element(typeof(DelegateToInterfaceDefaultImplementationInterceptor)).AtEnd();
-
-        ScopeInterceptorConventionService.Instance.Element(typeof(MutableScopeInterceptor)).AtBeginning();
-
-        ScopeInterceptorConventionService.Instance.Element(typeof(ScopeRegistryInterceptor)).AtBeginning();
-
-        ScopeInterceptorConventionService.Instance.Element(typeof(FilterableScopeInterceptor)).DependsOn(typeof(CachingInterceptor));
-        ScopeInterceptorConventionService.Instance.Element(typeof(DelegateToInterfaceDefaultImplementationInterceptor)).DependsOn(typeof(FilterableScopeInterceptor));
-
-        ScopeInterceptorConventionService.Instance.Element(typeof(FilterableScopeInterceptor.FilteringInterceptor)).DependsOn(typeof(CachingInterceptor));
-        ScopeInterceptorConventionService.Instance.Element(typeof(DelegateToInterfaceDefaultImplementationInterceptor)).DependsOn(typeof(FilterableScopeInterceptor.FilteringInterceptor));
-        return scopeInterceptorFactoryRegistry;
-    }
 }

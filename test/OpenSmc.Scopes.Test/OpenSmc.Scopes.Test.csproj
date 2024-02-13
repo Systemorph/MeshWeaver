@@ -1,0 +1,8 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OpenSmc.Application.Scope\OpenSmc.Application.Scope.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.Scopes\OpenSmc.Scopes.csproj" />
+    <ProjectReference Include="..\OpenSmc.Fixture\OpenSmc.Fixture.csproj" />
+    <ProjectReference Include="..\OpenSmc.Hub.Fixture\OpenSmc.Hub.Fixture.csproj" />
+  </ItemGroup>
+</Project>

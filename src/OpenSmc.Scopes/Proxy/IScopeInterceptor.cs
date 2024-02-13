@@ -11,13 +11,6 @@ namespace OpenSmc.Scopes.Proxy
         IEnumerable<AspectPredicate> Predicates { get; }
     }
 
-    public interface IScopeInterceptorConventionService : IConventionService<Type, object>
-    {
-    }
-
-    public class ScopeInterceptorConventionService : ConventionService<Type, object, ScopeInterceptorConventionService>, IScopeInterceptorConventionService
-    {
-    }
 
     public abstract class ScopeInterceptorBase : IScopeInterceptor
     {
