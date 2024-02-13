@@ -14,6 +14,8 @@ public abstract record TypeSource
     internal Func<IEnumerable<object>, Task> DeleteByIds { get; init; }
 
     public virtual TypeSource Build(DataSource dataSource) => this;
+
+    public abstract TypeSource WithInitialData(IEnumerable<object> initialData);
 }
 
 public record TypeSource<T> : TypeSource
@@ -29,6 +31,9 @@ public record TypeSource<T> : TypeSource
 
     public override object GetKey(object instance)
         => Key((T)instance);
+
+    public override TypeSource WithInitialData(IEnumerable<object> initialData)
+        => WithInitialData(() => Task.FromResult<IReadOnlyCollection<T>>(initialData.Cast<T>().ToArray()));
 
     protected Func<T, object> Key { get; init; } = GetKeyFunction();
     private static Func<T, object> GetKeyFunction()
@@ -53,7 +58,7 @@ public record TypeSource<T> : TypeSource
     protected Func<Task<IReadOnlyCollection<T>>> InitializeAction { get; init; } =
         () => Task.FromResult<IReadOnlyCollection<T>>(Array.Empty<T>());
 
-    public TypeSource<T> WithInitialization(Func<Task<IReadOnlyCollection<T>>> initialization)
+    public TypeSource<T> WithInitialData(Func<Task<IReadOnlyCollection<T>>> initialization)
         => this with { InitializeAction = initialization };
 
     internal virtual void Update(IReadOnlyCollection<T> instances) => UpdateAction.Invoke(instances);

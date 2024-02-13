@@ -7,14 +7,21 @@ namespace OpenSmc.Data;
 public record DataSource(object Id)
 {
     public DataSource WithType(Type type)
-    => (DataSource)WithTypeMethod.MakeGenericMethod(type).InvokeAsFunction(this);
+        => WithType(type, x => x);
+    public DataSource WithType(Type type, Func<TypeSource, TypeSource> config)
+    => (DataSource)WithTypeMethod.MakeGenericMethod(type).InvokeAsFunction(this, config);
 
     private static readonly MethodInfo WithTypeMethod =
-        ReflectionHelper.GetMethodGeneric<DataSource>(x => x.WithType<object>());
+        ReflectionHelper.GetMethodGeneric<DataSource>(x => x.WithType<object>(default(Func<TypeSource,TypeSource>)));
     public DataSource WithType<T>()
         where T : class
         => WithType<T>(d => d);
 
+    // ReSharper disable once UnusedMethodReturnValue.Local
+    private DataSource WithType<T>(
+        Func<TypeSource, TypeSource> configurator)
+        where T : class
+        => WithType<T>(x => (TypeSource<T>)configurator.Invoke(x));
 
     public DataSource WithType<T>(
         Func<TypeSource<T>, TypeSource<T>> configurator)

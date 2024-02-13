@@ -44,24 +44,7 @@ public static class DataPluginExtensions
 
     private static readonly HashSet<Type> GetRequestTypes = [typeof(GetRequest<>), typeof(GetManyRequest<>)];
 
-    public static TypeSource<T> WithBackingCollection<T>(this TypeSource<T> typeSource, IDictionary<object, T> backingCollection)
-        => typeSource
-            .WithInitialization(() => Task.FromResult((IReadOnlyCollection<T>)backingCollection.Values.ToArray()))
-            .WithAdd(items =>
-            {
-                foreach (var i in items)
-                    backingCollection.Add(typeSource.GetKey(i), i);
-            })
-            .WithUpdate(items =>
-            {
-                foreach (var i in items)
-                    backingCollection[typeSource.GetKey(i)] = i;
-            })
-            .WithDelete(items =>
-            {
-                foreach (var i in items)
-                    backingCollection.Remove(typeSource.GetKey(i));
-            });
+
 
 }
 
