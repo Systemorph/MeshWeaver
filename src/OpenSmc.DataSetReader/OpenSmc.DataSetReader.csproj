@@ -1,7 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
-    <ProjectReference Include="..\OpenSmc.Conventions\OpenSmc.Conventions.csproj" />
     <ProjectReference Include="..\OpenSmc.DataStructures\OpenSmc.DataStructures.csproj" />
-    <ProjectReference Include="..\OpenSmc.ServiceProvider\OpenSmc.ServiceProvider.csproj" />
   </ItemGroup>
 </Project>
