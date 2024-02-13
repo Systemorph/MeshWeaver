@@ -114,7 +114,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         IMessageDelivery IMessageHandler<ImportRequest>.HandleMessage(IMessageDelivery<ImportRequest> request)
         {
             // TODO V10: Mise-en-place must be been done ==> data plugin context
-            var someData = workspace.GetItems<MyData>();
+            var someData = workspace.GetData<MyData>();
             var myInstance = someData.First();
             myInstance = myInstance with { Text = TextChange };
             workspace.Update(myInstance);

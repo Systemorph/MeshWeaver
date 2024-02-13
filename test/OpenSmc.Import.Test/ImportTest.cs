@@ -1,6 +1,7 @@
 ﻿using FluentAssertions;
 using OpenSmc.Activities;
 using OpenSmc.Data;
+using OpenSmc.DataStructures;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using Xunit;
@@ -24,11 +25,21 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
                         nameof(DataSource),
                         source => source
                         .ConfigureTransactionalData()
+                        .ConfigureComputedData()
                         .ConfigureReferenceData()
                     )
                 )
-                .AddImport(import => import)
+                .AddImport(import => import
+                    .WithFormat("Cashflows",format => format
+                        .WithAutoMappings()
+                        .WithImportFunction(MapCashflows)))
             ;
+    }
+
+    private IEnumerable<object> MapCashflows(ImportRequest request, IDataSet dataset, IWorkspace workspace)
+    {
+        var importedInstance = workspace.GetData<ImportTestDomain.TransactionalData>().ToArray();
+        return importedInstance.Select(i => new ImportTestDomain.ComputedData(i.Id, i.LoB, i.BusinessUnit, 2 * i.Value));
     }
 
     [Fact]
@@ -55,4 +66,20 @@ Id,LoB,BusinessUnit,Value
 3,2,1,3
 4,2,2,4
 ";
+
+    [Fact]
+    public async Task TestCashflows()
+    {
+        var client = GetClient();
+        var importRequest = new ImportRequest(VanillaCsv){Format = "Cashflows"};
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
+        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+
+        var items = await client.AwaitResponse(new GetManyRequest<ImportTestDomain.ComputedData>(),
+            o => o.WithTarget(new HostAddress()));
+        items.Message.Items.Should().HaveCount(4)
+            .And.ContainSingle(i => i.Id == "1")
+            .Which.Value.Should().Be(2); // computed as 2*1
+    }
+
 }

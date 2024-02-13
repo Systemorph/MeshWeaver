@@ -6,17 +6,17 @@ using OpenSmc.DataSetReader.Excel;
 
 namespace OpenSmc.Import;
 
-public record ImportConfiguration(DataContext DataContext)
+public record ImportConfiguration(IWorkspace Workspace)
 {
     internal ImmutableDictionary<string, ImportFormat> ImportFormats { get; init; } 
         = ImmutableDictionary<string, ImportFormat>.Empty
-            .Add(ImportFormat.Default, new ImportFormat(ImportFormat.Default).WithAutoMappings(DataContext, domain => domain));
+            .Add(ImportFormat.Default, new ImportFormat(ImportFormat.Default, Workspace).WithAutoMappings(domain => domain));
 
     public ImportConfiguration WithFormat(string format, Func<ImportFormat, ImportFormat> configuration)
         => this with
         {
             ImportFormats = ImportFormats.SetItem(format,
-                configuration.Invoke(ImportFormats.GetValueOrDefault(format) ?? new ImportFormat(format)))
+                configuration.Invoke(ImportFormats.GetValueOrDefault(format) ?? new ImportFormat(format, Workspace)))
         };
 
 
