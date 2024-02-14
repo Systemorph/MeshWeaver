@@ -11,8 +11,8 @@ export abstract class ControlBase extends SubjectHub implements ControlDef {
     readonly moduleName: string;
     readonly apiVersion: string;
 
-    id: string;
     dataContext: unknown;
+    address: string;
 
     clickMessage: MessageAndAddress;
     style: Style;
@@ -25,8 +25,10 @@ export abstract class ControlBase extends SubjectHub implements ControlDef {
 
     protected readonly subscription: Subscription = new Subscription();
 
-    protected constructor(public readonly $type: string, public address = `${$type}-${v4()}`) {
+    protected constructor(public readonly $type: string, public id = v4()) {
         super();
+
+        this.address = `${$type}-${id}`;
     }
 
     toJSON() {

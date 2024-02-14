@@ -63,17 +63,26 @@ function addSender(sender) {
 function ofType(ctor) {
   return filter((envelope) => envelope.message instanceof ctor);
 }
-function addToContext(context, hub, address) {
-  const subscription = context.pipe(filterByTarget(address)).subscribe(hub);
-  subscription.add(hub.pipe(addSender(address)).subscribe(context));
-  subscription.add(hub.pipe(ofType(AddToContext)).subscribe(({ message: { hub: hub2, address: address2 } }) => addToContext(context, hub2, address2)));
-  return subscription;
+function sendMessage(observer, message, envelope) {
+  observer.next({
+    ...envelope ?? {},
+    message
+  });
 }
-class AddToContext {
+class AddToContextRequest {
   constructor(hub, address) {
     this.hub = hub;
     this.address = address;
   }
+}
+class AddedToContext {
+}
+function addToContext(context, hub, address) {
+  const subscription = context.pipe(filterByTarget(address)).subscribe(hub);
+  subscription.add(hub.pipe(addSender(address)).subscribe(context));
+  subscription.add(hub.pipe(ofType(AddToContextRequest)).subscribe(({ message: { hub: hub2, address: address2 } }) => addToContext(context, hub2, address2)));
+  sendMessage(hub, new AddedToContext());
+  return subscription;
 }
 function contractMessage(type) {
   return function(constructor) {
@@ -260,11 +269,12 @@ CloseModalDialogEvent = __decorateClass([
 ], CloseModalDialogEvent);
 const ofContractType = (ctor) => filter((envelope) => envelope.message.$type === ctor.$type);
 class ControlBase extends SubjectHub {
-  constructor($type, address = `${$type}-${v4()}`) {
+  constructor($type, id = v4()) {
     super();
     this.$type = $type;
-    this.address = address;
+    this.id = id;
     this.subscription = new Subscription();
+    this.address = `${$type}-${id}`;
   }
   toJSON() {
     const {
@@ -336,6 +346,90 @@ class ControlBase extends SubjectHub {
     return this;
   }
 }
+const mainWindowAreas = {
+  main: "Main",
+  toolbar: "Toolbar",
+  sideMenu: "SideMenu",
+  contextMenu: "ContextMenu",
+  modal: "Modal",
+  statusBar: "StatusBar"
+};
+class LayoutStack extends ControlBase {
+  constructor(id) {
+    super("LayoutStackControl", id);
+    this.areas = [];
+  }
+  withView(view, area = v4(), options, style) {
+    this.areas.push(new AreaChangedEvent(area, view, options, style));
+    return this;
+  }
+  withSkin(value) {
+    return super.withSkin(value);
+  }
+  withHighlightNewAreas(value) {
+    this.highlightNewAreas = value;
+    return this;
+  }
+  withColumnCount(value) {
+    this.columnCount = value;
+    return this;
+  }
+  // addView(view: ControlBase, buildFunc?: (builder: AreaChangedEventBuilder) => void) {
+  //     const are
+  //     const builder = new AreaChangedEventBuilder<StackOptions>().withView(viewBuilder);
+  //     buildFunc?.(builder);
+  //
+  //     if (!this.areas) {
+  //         this.areas = [];
+  //     }
+  //
+  //     const event = builder.build()
+  //     const {view, area, options} = event;
+  //
+  //     const insertAfterArea = options?.insertAfter;
+  //
+  //     const insertAfterEvent =
+  //         insertAfterArea ? this.areas.find(a => a.area === insertAfterArea) : null;
+  //
+  //     this.areas = insertAfter(this.areas, event, insertAfterEvent);
+  //
+  //     this.sendMessage(new AreaChangedEvent(area, view, options));
+  // }
+  //
+  // removeView(area: string) {
+  //     const index = this.areas?.findIndex(a => a.area === area);
+  //
+  //     if (index !== -1) {
+  //         this.areas.splice(index, 1);
+  //         this.setArea(area, null);
+  //     }
+  // }
+}
+class MainWindowStack extends LayoutStack {
+  constructor(id) {
+    super(id);
+    this.withSkin("MainWindow");
+  }
+  withSideMenu(view) {
+    return this.withView(view, mainWindowAreas.sideMenu);
+  }
+  withToolbar(view) {
+    return this.withView(view, mainWindowAreas.toolbar);
+  }
+  withContextMenu(view) {
+    return this.withView(view, mainWindowAreas.contextMenu);
+  }
+  withMain(view) {
+    return this.withView(view, mainWindowAreas.main);
+  }
+  withStatusBar(view) {
+    return this.withView(view, mainWindowAreas.statusBar);
+  }
+  withModal(view) {
+    return this.withView(view, mainWindowAreas.modal);
+  }
+}
+const makeStack = (id) => new LayoutStack(id);
 class ExpandableControl extends ControlBase {
   constructor($type) {
     super($type);
@@ -366,6 +460,21 @@ class MenuItem extends ExpandableControl {
   }
 }
 const makeMenuItem = () => new MenuItem();
+class PlaygroundWindow extends MainWindowStack {
+  constructor() {
+    super();
+    this.withAddress("PlaygroundWindow");
+    this.withSideMenu(this.makeSideMenu());
+    this.withMessageHandler(ClickedEvent, ({ message }) => {
+      this.sendMessage(message.payload, uiAddress);
+    });
+  }
+  makeSideMenu() {
+    return makeStack().withAddress("SideMenu").withView(
+      makeMenuItem().withAddress("MenuItemButton").withTitle("MenuItem").withClickMessage({ address: this.address, message: new ClickedEvent("1", "Hello") })
+    );
+  }
+}
 class LayoutHub extends SubjectHub {
   constructor() {
     super();
@@ -389,26 +498,22 @@ class LayoutHub extends SubjectHub {
     const address = this.controlsByArea.get(area);
     if (path) {
       if (!address) {
-        const control = this.makeControl(path, options);
+        const control = this.createControlByPath(path, options);
         this.controlsByArea.set(area, control);
-        this.sendMessage(new AddToContext(control, control.address));
+        this.sendMessage(new AddToContextRequest(control, control.address));
         this.sendMessage(new AreaChangedEvent(area, control), uiAddress);
       }
     } else {
       this.controlsByArea.delete(area);
     }
   }
-  makeControl(path, options) {
+  createControlByPath(path, options) {
     switch (path) {
+      case "/":
+        return new PlaygroundWindow();
       default:
-        return this.createLayout();
+        throw `Unknown path "${path}"`;
     }
-  }
-  createLayout() {
-    const address = "StartButton";
-    return makeMenuItem().withTitle("Say hello").withColor("#0171ff").withAddress(address).withClickMessage({ address, message: new ClickedEvent("1", "Hello") }).withMessageHandler(ClickedEvent, ({ message }) => {
-      this.sendMessage(message.payload, uiAddress);
-    });
   }
 }
 function playgroundServer() {
