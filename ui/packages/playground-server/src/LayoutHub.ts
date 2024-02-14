@@ -13,7 +13,8 @@ import { Constructor } from "@open-smc/utils/src/Constructor";
 import { MessageHandler } from "@open-smc/message-hub/src/api/MessageHandler";
 import { ofContractType } from "@open-smc/application/src/contract/ofContractType";
 import { uiAddress } from "./contract";
-import { AddToContext } from "@open-smc/message-hub/src/middleware/addToContext";
+import { PlaygroundWindow } from "./app/PlaygroundWindow";
+import { AddToContextRequest } from "@open-smc/message-hub/src/api/AddToContextRequest";
 
 export class LayoutHub extends SubjectHub {
     private readonly controlsByArea = new Map<string, ControlBase>();
@@ -47,10 +48,10 @@ export class LayoutHub extends SubjectHub {
 
         if (path) {
             if (!address) {
-                const control = this.makeControl(path, options);
+                const control = this.createControlByPath(path, options);
                 this.controlsByArea.set(area, control);
 
-                this.sendMessage(new AddToContext(control, control.address));
+                this.sendMessage(new AddToContextRequest(control, control.address));
                 this.sendMessage(new AreaChangedEvent(area, control), uiAddress);
             }
         } else {
@@ -62,23 +63,12 @@ export class LayoutHub extends SubjectHub {
         }
     }
 
-    private makeControl(path: string, options: unknown) {
+    private createControlByPath(path: string, options: unknown) {
         switch (path) {
+            case "/":
+                return new PlaygroundWindow();
             default:
-                return this.createLayout();
+                throw `Unknown path "${path}"`;
         }
-    }
-
-    private createLayout() {
-        const address = "StartButton";
-
-        return makeMenuItem()
-            .withTitle("Say hello")
-            .withColor("#0171ff")
-            .withAddress(address)
-            .withClickMessage({address, message: new ClickedEvent("1", "Hello")})
-            .withMessageHandler(ClickedEvent, ({message}) => {
-                this.sendMessage(message.payload, uiAddress);
-            });
     }
 }
