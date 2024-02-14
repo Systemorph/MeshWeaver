@@ -1,7 +1,7 @@
 import ReactDOM from 'react-dom/client'
-import './index.css'
 import { PlaygroundPage } from "./PlaygroundPage";
 import { registerControlResolver } from "@open-smc/application/src/renderControl.tsx";
+import './index.scss';
 
 registerControlResolver(name => {
     switch (name) {
