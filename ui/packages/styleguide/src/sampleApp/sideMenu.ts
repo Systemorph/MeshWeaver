@@ -1,5 +1,4 @@
 import { makeGrid } from "@open-smc/sandbox/src/Grid";
-import { mainWindowAreas } from "@open-smc/application/src/controls/MainWindow";
 import { getOrAdd } from "@open-smc/utils/src/getOrAdd";
 import { makeStack } from "@open-smc/sandbox/src/LayoutStack";
 import { makeMenuItem } from "@open-smc/sandbox/src/MenuItem";

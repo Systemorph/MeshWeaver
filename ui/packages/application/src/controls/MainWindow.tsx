@@ -1,4 +1,4 @@
-import React, { Fragment, useEffect, useRef, useState} from "react";
+import React, { Fragment, useEffect, useRef, useState } from "react";
 import { renderControl } from "../renderControl";
 import { useSubscribeToAreaChanged } from "../useSubscribeToAreaChanged";
 import styles from "./mainWindow.module.scss";
@@ -10,17 +10,7 @@ import "@open-smc/ui-kit/src/components/dialog.scss";
 import classNames from "classnames";
 import { useMessageHub } from "../AddHub";
 import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
-
-export const mainWindowAreas = {
-    main: "Main",
-    toolbar: "Toolbar",
-    sideMenu: "SideMenu",
-    contextMenu: "ContextMenu",
-    modal: "Modal",
-    statusBar: "StatusBar"
-} as const;
-
-export type MainWindowArea = typeof mainWindowAreas[keyof typeof mainWindowAreas];
+import { MainWindowArea, mainWindowAreas } from "./mainWindowApi";
 
 export type ModalOptions = {
     isClosable?: boolean;
