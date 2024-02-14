@@ -8,7 +8,7 @@ export function addToContext(context: MessageHub, hub: MessageHub, address: any)
 
     subscription.add(hub.pipe(addSender(address)).subscribe(context));
 
-    subscription.add(context.pipe(ofType(AddToContext))
+    subscription.add(hub.pipe(ofType(AddToContext))
         .subscribe(({message: {hub, address}}) => addToContext(context, hub, address)));
 
     return subscription;
