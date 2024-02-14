@@ -6,6 +6,7 @@ var __publicField = (obj, key, value) => {
 };
 import { Observable, Subject, filter, map, Subscription } from "rxjs";
 import { methodName, uiAddress, layoutAddress } from "./contract.mjs";
+import fs from "fs";
 class WebSocketClientHub extends Observable {
   constructor(webSocketClient, webSocket) {
     super((subscriber) => {
@@ -460,6 +461,7 @@ class MenuItem extends ExpandableControl {
   }
 }
 const makeMenuItem = () => new MenuItem();
+const rootDir = "./notebooks";
 class PlaygroundWindow extends MainWindowStack {
   constructor() {
     super();
@@ -470,9 +472,18 @@ class PlaygroundWindow extends MainWindowStack {
     });
   }
   makeSideMenu() {
-    return makeStack().withAddress("SideMenu").withView(
-      makeMenuItem().withAddress("MenuItemButton").withTitle("MenuItem").withClickMessage({ address: this.address, message: new ClickedEvent("1", "Hello") })
-    );
+    const sideMenu = makeStack().withAddress("SideMenu");
+    console.log(fs);
+    const files = fs.readdirSync(rootDir, { withFileTypes: true });
+    for (const file of files) {
+      sideMenu.withView(
+        makeMenuItem().withTitle(file.name).withClickMessage({
+          address: this.address,
+          message: new ClickedEvent(null, file.name)
+        })
+      );
+    }
+    return sideMenu;
   }
 }
 class LayoutHub extends SubjectHub {

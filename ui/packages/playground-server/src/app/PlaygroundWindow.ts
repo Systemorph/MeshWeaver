@@ -2,6 +2,9 @@ import { ClickedEvent } from "@open-smc/application/src/contract/application.con
 import { MainWindowStack, makeStack } from "@open-smc/sandbox/src/LayoutStack";
 import { makeMenuItem } from "@open-smc/sandbox/src/MenuItem";
 import { uiAddress } from "../contract";
+import fs from "fs";
+
+const rootDir = "./notebooks";
 
 export class PlaygroundWindow extends MainWindowStack {
     constructor() {
@@ -9,23 +12,25 @@ export class PlaygroundWindow extends MainWindowStack {
 
         this.withAddress("PlaygroundWindow");
         this.withSideMenu(this.makeSideMenu());
-
-        this.withMessageHandler(ClickedEvent, ({message}) => {
-            this.sendMessage(message.payload, uiAddress);
-        });
     }
 
     private makeSideMenu() {
-        return makeStack()
-            .withAddress("SideMenu")
-            .withView(
+        const sideMenu = makeStack()
+            .withAddress("SideMenu");
+
+        const files = fs.readdirSync(rootDir, {withFileTypes: true});
+
+        for (const file of files) {
+            sideMenu.withView(
                 makeMenuItem()
-                    .withAddress("MenuItemButton")
-                    // .withSkin("LargeIcon")
-                    .withTitle("MenuItem")
-                    // .withColor("#0171ff")
-                    // .withIcon("sm-systemorph-fill")
-                    .withClickMessage({address: this.address, message: new ClickedEvent("1", "Hello")})
-            );
+                    .withTitle(file.name)
+                    .withClickMessage()
+                    .withMessageHandler(ClickedEvent, () => {
+                        this.sendMessage(file.name, uiAddress);
+                    })
+            )
+        }
+
+        return sideMenu;
     }
 }
