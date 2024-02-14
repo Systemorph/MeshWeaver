@@ -33,9 +33,14 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
                 )
                 .AddImport(import => import
                     .WithFormat(Cashflows, format => format
-                    .WithAutoMappings()
-                    .WithImportFunction(MapCashflows)
-                ))
+                        .WithAutoMappings()
+                        .WithImportFunction(MapCashflows) 
+                    )
+                    .WithFormat("Test", format => format
+                        .WithAutoMappings()
+                        .WithImportFunction(MapCashflows)
+                    )
+                )
             ;
     }
 
@@ -45,13 +50,19 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         return importedInstance.Select(i => new ImportTestDomain.ComputedData(i.Id, i.LoB, i.BusinessUnit, 2 * i.Value));
     }
 
+    private async Task<IMessageHub> DoImport(string content)
+    {
+        var client = GetClient();
+        var importRequest = new ImportRequest(content);
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
+        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        return client;
+    }
+
     [Fact]
     public async Task TestVanilla()
     {
-        var client = GetClient();
-        var importRequest = new ImportRequest(VanillaCsv); 
-        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        var client = await DoImport(VanillaCsv);
 
         var items = await client.AwaitResponse(new GetManyRequest<ImportTestDomain.TransactionalData>(),
             o => o.WithTarget(new HostAddress()));
@@ -73,10 +84,7 @@ Id,LoB,BusinessUnit,Value
     [Fact]
     public async Task TestCashflows()
     {
-        var client = GetClient();
-        var importRequest = new ImportRequest(VanillaCsv){Format = Cashflows};
-        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        var client = await DoImport(VanillaCsv);
 
         var items = await client.AwaitResponse(new GetManyRequest<ImportTestDomain.ComputedData>(),
             o => o.WithTarget(new HostAddress()));
@@ -92,10 +100,7 @@ Id,LoB,BusinessUnit,Value
 SystemName,DisplayName,Number,StringsArray0,StringsArray1,StringsArray2,StringsList0,StringsList1,StringsList2,IntArray0,IntArray1,IntArray2,IntList0,IntList1,IntList2
 SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
 
-        var client = GetClient();
-        var importRequest = new ImportRequest(content);
-        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        var client = await DoImport(content);
 
         var ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
         o => o.WithTarget(new HostAddress()));
@@ -116,6 +121,17 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
         resRecord.IntArray[0].Should().Be(1);
         resRecord.IntList.Should().HaveCount(1);
         resRecord.IntList[0].Should().Be(1);
+    }
+
+    [Fact]
+    public async Task EmptyDataSetImportTest()
+    {
+        var client = await DoImport(string.Empty);
+
+        var ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
+            o => o.WithTarget(new HostAddress()));
+
+        ret.Message.Items.Should().BeEmpty();
     }
 
 }
