@@ -37,7 +37,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
             ;
     }
 
-    private IEnumerable<object> MapCashflows(ImportRequest request, IDataSet dataset, IWorkspace workspace)
+    private IEnumerable<object> MapCashflows(ImportRequest request, IDataSet dataSet, IMessageHub hub, IWorkspace workspace)
     {
         var importedInstance = workspace.GetData<ImportTestDomain.TransactionalData>().ToArray();
         return importedInstance.Select(i => new ImportTestDomain.ComputedData(i.Id, i.LoB, i.BusinessUnit, 2 * i.Value));
