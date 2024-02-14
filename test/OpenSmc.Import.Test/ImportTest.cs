@@ -37,23 +37,24 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
                         .WithImportFunction(MapCashflows) 
                     )
                     .WithFormat("Test", format => format
-                        .WithAutoMappings()
-                        .WithImportFunction(MapCashflows)
+                        .WithImportFunction(CustomImportFunction)
                     )
                 )
             ;
     }
 
-    private IEnumerable<object> MapCashflows(ImportRequest request, IDataSet dataSet, IMessageHub hub, IWorkspace workspace)
+    private ImportFormat.ImportFunction CustomImportFunction = MapCashflows;
+
+    private static IEnumerable<object> MapCashflows(ImportRequest request, IDataSet dataSet, IMessageHub hub, IWorkspace workspace)
     {
         var importedInstance = workspace.GetData<ImportTestDomain.TransactionalData>().ToArray();
         return importedInstance.Select(i => new ImportTestDomain.ComputedData(i.Id, i.LoB, i.BusinessUnit, 2 * i.Value));
     }
 
-    private async Task<IMessageHub> DoImport(string content)
+    private async Task<IMessageHub> DoImport(string content, string format = ImportFormat.Default)
     {
         var client = GetClient();
-        var importRequest = new ImportRequest(content);
+        var importRequest = new ImportRequest(content) { Format = format };
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
         return client;
@@ -84,7 +85,7 @@ Id,LoB,BusinessUnit,Value
     [Fact]
     public async Task TestCashflows()
     {
-        var client = await DoImport(VanillaCsv);
+        var client = await DoImport(VanillaCsv, Cashflows);
 
         var items = await client.AwaitResponse(new GetManyRequest<ImportTestDomain.ComputedData>(),
             o => o.WithTarget(new HostAddress()));
@@ -132,6 +133,49 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
             o => o.WithTarget(new HostAddress()));
 
         ret.Message.Items.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SingleTableMappingTest()
+    {
+        const string content = @"@@MyRecord
+SystemName,DisplayName
+OldName,OldName
+@@MyRecord2
+SystemName,DisplayName
+Record2SystemName,Record2DisplayName
+@@UnmappedRecord3
+SystemName,DisplayName
+Record3SystemName,Record3DisplayName";
+
+        CustomImportFunction = (request, set, hub, workspace) =>
+        {
+            return set.Tables[nameof(MyRecord)].Rows.Select(dsRow => new MyRecord()
+                {
+                    SystemName = dsRow[nameof(MyRecord.SystemName)].ToString()?.Replace("Old", "New"),
+                    DisplayName = "test"
+                }
+            );
+        };
+
+        var client = await DoImport(content, "Test");
+
+        var ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
+            o => o.WithTarget(new HostAddress()));
+
+
+        ret.Message.Items.Should().HaveCount(1);
+
+        var resRecord = ret.Message.Items.Should().ContainSingle().Which;
+
+        resRecord.Should().NotBeNull();
+        resRecord.DisplayName.Should().Contain("test");
+        resRecord.SystemName.Should().Contain("New");
+        resRecord.IntArray.Should().BeNull();
+        resRecord.IntList.Should().BeNull();
+        resRecord.StringsArray.Should().BeNull();
+        resRecord.StringsList.Should().BeNull();
+        resRecord.Number.Should().Be(0);
     }
 
 }
