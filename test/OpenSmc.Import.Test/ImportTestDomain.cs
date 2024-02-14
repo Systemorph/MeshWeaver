@@ -55,6 +55,11 @@ public static class ImportTestDomain
                 typeof(MyRecord), new MyRecord[]
                 {
                 }
+            },
+            {
+                typeof(MyRecord2), new MyRecord2[]
+                {
+                }
             }
         };
 
