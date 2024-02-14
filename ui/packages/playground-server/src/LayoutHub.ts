@@ -5,7 +5,6 @@ import {
     Dispose,
     SetAreaRequest
 } from "@open-smc/application/src/contract/application.contract";
-import { getOrAdd } from "@open-smc/utils/src/getOrAdd";
 import { ControlBase } from "@open-smc/sandbox/src/ControlBase";
 import { makeMenuItem } from "@open-smc/sandbox/src/MenuItem";
 import { Subscription } from "rxjs";
@@ -13,8 +12,8 @@ import { MessageDelivery } from "@open-smc/message-hub/src/api/MessageDelivery";
 import { Constructor } from "@open-smc/utils/src/Constructor";
 import { MessageHandler } from "@open-smc/message-hub/src/api/MessageHandler";
 import { ofContractType } from "@open-smc/application/src/contract/ofContractType";
-import { uiAddress } from "./contract.ts";
-import { AddToContext } from "@open-smc/message-hub/src/middleware/addToContext.ts";
+import { uiAddress } from "./contract";
+import { AddToContext } from "@open-smc/message-hub/src/middleware/addToContext";
 
 export class LayoutHub extends SubjectHub {
     private readonly controlsByArea = new Map<string, ControlBase>();
@@ -48,7 +47,9 @@ export class LayoutHub extends SubjectHub {
 
         if (path) {
             if (!address) {
-                const control = getOrAdd(this.controlsByArea, area, () => this.makeControl(path, options));
+                const control = this.makeControl(path, options);
+                this.controlsByArea.set(area, control);
+
                 this.sendMessage(new AddToContext(control, control.address));
                 this.sendMessage(new AreaChangedEvent(area, control), uiAddress);
             }
@@ -72,11 +73,12 @@ export class LayoutHub extends SubjectHub {
         const address = "StartButton";
 
         return makeMenuItem()
-            .withTitle("Click me")
+            .withTitle("Say hello")
+            .withColor("#0171ff")
             .withAddress(address)
             .withClickMessage({address, message: new ClickedEvent("1", "Hello")})
             .withMessageHandler(ClickedEvent, ({message}) => {
-                this.sendMessage(message.payload, "ui");
+                this.sendMessage(message.payload, uiAddress);
             });
     }
 }

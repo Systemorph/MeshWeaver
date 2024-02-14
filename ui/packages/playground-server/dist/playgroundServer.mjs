@@ -66,7 +66,7 @@ function ofType(ctor) {
 function addToContext(context, hub, address) {
   const subscription = context.pipe(filterByTarget(address)).subscribe(hub);
   subscription.add(hub.pipe(addSender(address)).subscribe(context));
-  subscription.add(context.pipe(ofType(AddToContext)).subscribe(({ message: { hub: hub2, address: address2 } }) => addToContext(context, hub2, address2)));
+  subscription.add(hub.pipe(ofType(AddToContext)).subscribe(({ message: { hub: hub2, address: address2 } }) => addToContext(context, hub2, address2)));
   return subscription;
 }
 class AddToContext {
@@ -258,12 +258,6 @@ let CloseModalDialogEvent = class {
 CloseModalDialogEvent = __decorateClass([
   contractMessage("OpenSmc.Application.CloseModalDialogEvent")
 ], CloseModalDialogEvent);
-function getOrAdd(map2, key, factory) {
-  if (!map2.has(key)) {
-    map2.set(key, factory(key));
-  }
-  return map2.get(key);
-}
 const ofContractType = (ctor) => filter((envelope) => envelope.message.$type === ctor.$type);
 class ControlBase extends SubjectHub {
   constructor($type, address = `${$type}-${v4()}`) {
@@ -286,6 +280,9 @@ class ControlBase extends SubjectHub {
       this.handleMessage(type, handler)
     );
     return this;
+  }
+  sendMessage(message, target) {
+    this.output.next({ message, target });
   }
   handleMessage(type, handler) {
     return this.input.pipe(ofContractType(type)).subscribe(handler.bind(this));
@@ -392,7 +389,8 @@ class LayoutHub extends SubjectHub {
     const address = this.controlsByArea.get(area);
     if (path) {
       if (!address) {
-        const control = getOrAdd(this.controlsByArea, area, () => this.makeControl(path, options));
+        const control = this.makeControl(path, options);
+        this.controlsByArea.set(area, control);
         this.sendMessage(new AddToContext(control, control.address));
         this.sendMessage(new AreaChangedEvent(area, control), uiAddress);
       }
@@ -408,8 +406,8 @@ class LayoutHub extends SubjectHub {
   }
   createLayout() {
     const address = "StartButton";
-    return makeMenuItem().withTitle("Click me").withAddress(address).withClickMessage({ address, message: new ClickedEvent("1", "Hello") }).withMessageHandler(ClickedEvent, ({ message }) => {
-      this.sendMessage(message.payload, "ui");
+    return makeMenuItem().withTitle("Say hello").withColor("#0171ff").withAddress(address).withClickMessage({ address, message: new ClickedEvent("1", "Hello") }).withMessageHandler(ClickedEvent, ({ message }) => {
+      this.sendMessage(message.payload, uiAddress);
     });
   }
 }

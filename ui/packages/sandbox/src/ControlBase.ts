@@ -46,6 +46,10 @@ export abstract class ControlBase extends SubjectHub implements ControlDef {
         return this;
     }
 
+    protected sendMessage<T>(message: T, target?: any) {
+        this.output.next({message, target});
+    }
+
     protected handleMessage<T>(type: Constructor<T>, handler: MessageHandler<this, T>) {
         return this.input
             .pipe(ofContractType(type))
