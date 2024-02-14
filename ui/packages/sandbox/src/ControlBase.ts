@@ -6,6 +6,8 @@ import { Constructor } from "@open-smc/utils/src/Constructor";
 import { MessageHandler } from "@open-smc/message-hub/src/api/MessageHandler";
 import { ofContractType } from "@open-smc/application/src/contract/ofContractType";
 import { v4 } from "uuid";
+import { isFunction } from "lodash";
+import { ClickedEvent } from "@open-smc/application/src/contract/application.contract";
 
 export abstract class ControlBase extends SubjectHub implements ControlDef {
     readonly moduleName: string;
@@ -98,8 +100,8 @@ export abstract class ControlBase extends SubjectHub implements ControlDef {
         return this;
     }
 
-    withClickMessage(message: MessageAndAddress = {address: this.address, message}) {
-        this.clickMessage = message;
+    withClickMessage(message: MessageAndAddress | Factory<this, MessageAndAddress> = {address: this.address, message: new ClickedEvent()}) {
+        this.clickMessage = isFunction(message) ? message.apply(this) : message;
         return this;
     }
 
@@ -118,3 +120,5 @@ export abstract class ControlBase extends SubjectHub implements ControlDef {
         return this;
     }
 }
+
+type Factory<TControl, T> = (this: TControl) => T;
