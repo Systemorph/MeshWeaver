@@ -21,7 +21,7 @@ public class ImportPlugin : MessageHubPlugin<ImportState>,
     public ImportPlugin(IMessageHub hub, Func<ImportConfiguration, ImportConfiguration> importConfiguration) : base(hub)
     {
         workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
-        Configuration = importConfiguration.Invoke(new(workspace));
+        Configuration = importConfiguration.Invoke(new(hub, workspace));
     }
 
     public override async Task StartAsync()

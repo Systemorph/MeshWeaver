@@ -1,17 +1,14 @@
-﻿using System.Collections;
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using OpenSmc.Data;
 using OpenSmc.DataStructures;
+using OpenSmc.Messaging;
 
 namespace OpenSmc.Import;
 
-public record ImportFormat(string Format, IWorkspace Workspace)
+public record ImportFormat(string Format, IMessageHub Hub, IWorkspace Workspace)
 {
     public const string Default = nameof(Default);
-
-
-
     private ImmutableList<ImportFunction> ImportFunctions { get; init; } = ImmutableList<ImportFunction>.Empty;
     public ImmutableList<ValidationFunction> Validations { get; set; }
 
@@ -21,15 +18,15 @@ public record ImportFormat(string Format, IWorkspace Workspace)
     public void Import(ImportRequest importRequest, IDataSet dataSet)
     {
         foreach (var importFunction in ImportFunctions)
-            Workspace.Update(importFunction(importRequest, dataSet, Workspace).ToArray());
+            Workspace.Update(importFunction(importRequest, dataSet, Hub, Workspace).ToArray());
     }
 
-    public delegate IEnumerable<object> ImportFunction(ImportRequest importRequest, IDataSet dataSet, IWorkspace workspace);
+    public delegate IEnumerable<object> ImportFunction(ImportRequest importRequest, IDataSet dataSet, IMessageHub hub, IWorkspace workspace);
 
     public ImportFormat WithAutoMappings()
         => WithAutoMappings(mapping => mapping);
     public ImportFormat WithAutoMappings(Func<DomainTypeImporter, DomainTypeImporter> config) 
-        => WithImportFunction(config(new DomainTypeImporter(Workspace.DataContext)).Import);
+        => WithImportFunction((_, ds, _, _) => config(new DomainTypeImporter(Workspace.DataContext)).Import(ds));
 }
 
 public delegate bool ValidationFunction(object instance, ValidationContext context);

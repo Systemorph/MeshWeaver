@@ -3,20 +3,21 @@ using OpenSmc.Data;
 using OpenSmc.DataSetReader;
 using OpenSmc.DataSetReader.Csv;
 using OpenSmc.DataSetReader.Excel;
+using OpenSmc.Messaging;
 
 namespace OpenSmc.Import;
 
-public record ImportConfiguration(IWorkspace Workspace)
+public record ImportConfiguration(IMessageHub Hub, IWorkspace Workspace)
 {
     internal ImmutableDictionary<string, ImportFormat> ImportFormats { get; init; } 
         = ImmutableDictionary<string, ImportFormat>.Empty
-            .Add(ImportFormat.Default, new ImportFormat(ImportFormat.Default, Workspace).WithAutoMappings(domain => domain));
+            .Add(ImportFormat.Default, new ImportFormat(ImportFormat.Default, Hub, Workspace).WithAutoMappings(domain => domain));
 
     public ImportConfiguration WithFormat(string format, Func<ImportFormat, ImportFormat> configuration)
         => this with
         {
             ImportFormats = ImportFormats.SetItem(format,
-                configuration.Invoke(ImportFormats.GetValueOrDefault(format) ?? new ImportFormat(format, Workspace)))
+                configuration.Invoke(ImportFormats.GetValueOrDefault(format) ?? new ImportFormat(format, Hub, Workspace)))
         };
 
 

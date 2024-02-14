@@ -11,12 +11,12 @@ public record DomainTypeImporter
         TableMappings = AutoMapper.Create(dataContext);
     }
 
-    public IEnumerable<object> Import(ImportRequest request, IDataSet dataset, IWorkspace workspace)
+    public IEnumerable<object> Import(IDataSet dataSet)
     {
-        foreach (var table in dataset.Tables)
+        foreach (var table in dataSet.Tables)
         {
             if(TableMappings.TryGetValue(table.TableName, out var mapping))
-                foreach (var instance in mapping.Map(dataset, table))
+                foreach (var instance in mapping.Map(dataSet, table))
                     yield return instance;
         }
     }
