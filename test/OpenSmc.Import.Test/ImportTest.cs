@@ -1,4 +1,5 @@
-﻿using FluentAssertions;
+﻿using DocumentFormat.OpenXml.Spreadsheet;
+using FluentAssertions;
 using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.DataStructures;
@@ -27,6 +28,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
                         .ConfigureTransactionalData()
                         .ConfigureComputedData()
                         .ConfigureReferenceData()
+                        .ConfigureCategory(ImportTestDomain.TestRecordsDomain)
                     )
                 )
                 .AddImport(import => import
@@ -81,6 +83,39 @@ Id,LoB,BusinessUnit,Value
         items.Message.Items.Should().HaveCount(4)
             .And.ContainSingle(i => i.Id == "1")
             .Which.Value.Should().Be(2); // computed as 2*1
+    }
+
+    [Fact]
+    public async Task DefaultMappingsTest()
+    {
+        const string content = @"@@MyRecord
+SystemName,DisplayName,Number,StringsArray0,StringsArray1,StringsArray2,StringsList0,StringsList1,StringsList2,IntArray0,IntArray1,IntArray2,IntList0,IntList1,IntList2
+SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
+
+        var client = GetClient();
+        var importRequest = new ImportRequest(content);
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
+        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+
+        var ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
+        o => o.WithTarget(new HostAddress()));
+
+        ret.Message.Items.Should().HaveCount(1);
+        
+        var resRecord = ret.Message.Items.Should().ContainSingle().Which;
+
+        resRecord.Should().NotBeNull();
+        resRecord.SystemName.Should().Be("SystemName");
+        resRecord.DisplayName.Should().Be("DisplayName");
+        resRecord.Number.Should().Be(2);
+        resRecord.StringsArray.Should().HaveCount(1);
+        resRecord.StringsArray[0].Should().Be("null");
+        resRecord.StringsList.Should().HaveCount(1);
+        resRecord.StringsList[0].Should().Be("null");
+        resRecord.IntArray.Should().HaveCount(1);
+        resRecord.IntArray[0].Should().Be(1);
+        resRecord.IntList.Should().HaveCount(1);
+        resRecord.IntList[0].Should().Be(1);
     }
 
 }

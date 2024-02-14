@@ -47,6 +47,17 @@ public static class ImportTestDomain
             }
         };
 
+    public static readonly Dictionary<Type, IEnumerable<object>> TestRecordsDomain
+        =
+        new()
+        {
+            {
+                typeof(MyRecord), new MyRecord[]
+                {
+                }
+            }
+        };
+
     public static DataSource ConfigureReferenceData(this DataSource dataSource)
         => dataSource.ConfigureCategory(ReferenceDataDomain);
 
