@@ -13,6 +13,7 @@ namespace OpenSmc.Arithmetics.Aggregation
     /// <conceptualLink target="3b557ccf-d392-496f-933b-08672b0e2d02#aggregate" />
     public static class AggregationFunction
     {
+        public static int Value = 4;
         private static readonly ConcurrentDictionary<Type, Delegate> AggregationFunctions = new();
 
         private static readonly ConcurrentDictionary<Type, Type> AggregationTypes = new();
