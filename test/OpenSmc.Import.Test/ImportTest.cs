@@ -9,8 +9,6 @@ using Xunit.Abstractions;
 
 namespace OpenSmc.Import.Test;
 
-
-
 public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
 {
 
@@ -31,13 +29,14 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
                 )
                 .AddImport(import => import
                     .WithFormat(Cashflows, format => format
-                    .WithAutoMappings()
-                    .WithImportFunction(MapCashflows)
-                ))
+                        .WithAutoMappings()
+                        .WithImportFunction(MapCashflows) 
+                    )
+                )
             ;
     }
 
-    private IEnumerable<object> MapCashflows(ImportRequest request, IDataSet dataSet, IMessageHub hub, IWorkspace workspace)
+    private static IEnumerable<object> MapCashflows(ImportRequest request, IDataSet dataSet, IMessageHub hub, IWorkspace workspace)
     {
         var importedInstance = workspace.GetData<ImportTestDomain.TransactionalData>().ToArray();
         return importedInstance.Select(i => new ImportTestDomain.ComputedData(i.Id, i.LoB, i.BusinessUnit, 2 * i.Value));
@@ -47,7 +46,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task TestVanilla()
     {
         var client = GetClient();
-        var importRequest = new ImportRequest(VanillaCsv); 
+        var importRequest = new ImportRequest(VanillaCsv);
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
@@ -72,15 +71,14 @@ Id,LoB,BusinessUnit,Value
     public async Task TestCashflows()
     {
         var client = GetClient();
-        var importRequest = new ImportRequest(VanillaCsv){Format = Cashflows};
+        var importRequest = new ImportRequest(VanillaCsv) { Format = Cashflows };
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
-
+        
         var items = await client.AwaitResponse(new GetManyRequest<ImportTestDomain.ComputedData>(),
             o => o.WithTarget(new HostAddress()));
         items.Message.Items.Should().HaveCount(4)
             .And.ContainSingle(i => i.Id == "1")
             .Which.Value.Should().Be(2); // computed as 2*1
     }
-
 }
