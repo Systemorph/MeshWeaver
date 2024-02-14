@@ -1,14 +1,11 @@
-﻿using Microsoft.Extensions.Logging;
-
-
-namespace OpenSmc.Messaging;
+﻿namespace OpenSmc.Messaging;
 
 
 public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDisposable
 {
     MessageHubConfiguration Configuration { get; }
     long Version { get; }
-    internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(3);
+    internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(30);
     IMessageDelivery<TMessage> Post<TMessage>(TMessage message, Func<PostOptions, PostOptions> options = null);
     IMessageDelivery DeliverMessage(IMessageDelivery delivery);
     object Address { get; }

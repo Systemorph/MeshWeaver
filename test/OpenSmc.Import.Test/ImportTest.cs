@@ -14,7 +14,7 @@ namespace OpenSmc.Import.Test;
 public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
 {
 
-
+    private const string Cashflows = nameof(Cashflows);
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
 
@@ -30,9 +30,10 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
                     )
                 )
                 .AddImport(import => import
-                    .WithFormat("Cashflows",format => format
-                        .WithAutoMappings()
-                        .WithImportFunction(MapCashflows)))
+                    .WithFormat(Cashflows, format => format
+                    .WithAutoMappings()
+                    .WithImportFunction(MapCashflows)
+                ))
             ;
     }
 
@@ -71,7 +72,7 @@ Id,LoB,BusinessUnit,Value
     public async Task TestCashflows()
     {
         var client = GetClient();
-        var importRequest = new ImportRequest(VanillaCsv){Format = "Cashflows"};
+        var importRequest = new ImportRequest(VanillaCsv){Format = Cashflows};
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
