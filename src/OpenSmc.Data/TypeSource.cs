@@ -33,7 +33,9 @@ public record TypeSource<T> : TypeSource
         => Key((T)instance);
 
     public override TypeSource WithInitialData(IEnumerable<object> initialData)
-        => WithInitialData(() => Task.FromResult<IReadOnlyCollection<T>>(initialData.Cast<T>().ToArray()));
+        => WithInitialData(initialData.Cast<T>());
+    public TypeSource<T> WithInitialData(IEnumerable<T> initialData)
+        => WithInitialData(() => Task.FromResult<IReadOnlyCollection<T>>(initialData.ToArray()));
 
     protected Func<T, object> Key { get; init; } = GetKeyFunction();
     private static Func<T, object> GetKeyFunction()
