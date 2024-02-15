@@ -17,8 +17,9 @@ public record ImportFormat(string Format, IMessageHub Hub, IWorkspace Workspace)
 
     public void Import(ImportRequest importRequest, IDataSet dataSet)
     {
+        var updateOptions = new UpdateOptions().SnapshotMode(importRequest.SnapshotMode);
         foreach (var importFunction in ImportFunctions)
-            Workspace.Update(importFunction(importRequest, dataSet, Hub, Workspace).ToArray());
+            Workspace.Update(importFunction(importRequest, dataSet, Hub, Workspace).ToArray(), updateOptions);
     }
 
     public delegate IEnumerable<object> ImportFunction(ImportRequest importRequest, IDataSet dataSet, IMessageHub hub, IWorkspace workspace);

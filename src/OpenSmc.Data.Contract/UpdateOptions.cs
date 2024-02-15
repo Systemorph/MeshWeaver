@@ -2,7 +2,7 @@
 
 public record UpdateOptions
 {
-    internal bool SnapshotModeEnabled { get; init; }
+    public bool SnapshotModeEnabled { get; init; }
 
     public UpdateOptions SnapshotMode(bool snapshotModeEnabled = true)
     {
