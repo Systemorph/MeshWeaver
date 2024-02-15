@@ -55,7 +55,7 @@ public record WorkspaceState(DataSource DataSource)
             Version = typeof(IVersioned).IsAssignableFrom(type) ? instances.Values.OfType<IVersioned>().Max(v => v.Version) : Version
         };
 
-    public virtual WorkspaceState Update(IEnumerable<object> items)
+    public virtual WorkspaceState Update(IEnumerable<object> items, bool snapshotModeEnabled)
     {
         var ret = this;
 
@@ -65,14 +65,14 @@ public record WorkspaceState(DataSource DataSource)
                 continue;
             
             ret = ret.Update(g.Key, ImmutableDictionary<object, object>.Empty
-                .SetItems(g.Select(i => new KeyValuePair<object, object>(config.GetKey(i), i))));
+                .SetItems(g.Select(i => new KeyValuePair<object, object>(config.GetKey(i), i))), snapshotModeEnabled);
         }
 
         return ret;
     }
 
-    private WorkspaceState Update(Type type, ImmutableDictionary<object, object> instances)
-        => SetData(type, GetValues(type).SetItems(instances));
+    private WorkspaceState Update(Type type, ImmutableDictionary<object, object> instances, bool snapshotModeEnabled)
+        => SetData(type, (!snapshotModeEnabled ? GetValues(type) : ImmutableDictionary<object, object>.Empty ).SetItems(instances));
 
     private ImmutableDictionary<object,object> GetValues(Type type) 
         => Data.GetValueOrDefault(type) ?? ImmutableDictionary<object, object>.Empty;

@@ -27,6 +27,10 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
                     .WithFormat("Test", format => format
                         .WithImportFunction(CustomImportFunction)
                     )
+                    .WithFormat("Test2", format => format
+                        .WithImportFunction(CustomImportFunction)
+                        .WithAutoMappings()
+                    )
                 )
             ;
     }
@@ -50,6 +54,10 @@ SystemName,DisplayName,Number,StringsArray0,StringsArray1,StringsArray2,StringsL
 SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
 
         var client = await DoImport(content);
+
+        var ret2 = await client.AwaitResponse(new GetManyRequest<MyRecord2>(),
+            o => o.WithTarget(new HostAddress()));
+        ret2.Message.Items.Should().HaveCount(0);
 
         var ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
         o => o.WithTarget(new HostAddress()));
@@ -83,10 +91,7 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
         ret.Message.Items.Should().BeEmpty();
     }
 
-    [Fact]
-    public async Task SingleTableMappingTest()
-    {
-        const string content = @"@@MyRecord
+    const string ThreeTablesContent = @"@@MyRecord
 SystemName,DisplayName
 OldName,OldName
 @@MyRecord2
@@ -95,6 +100,11 @@ Record2SystemName,Record2DisplayName
 @@UnmappedRecord3
 SystemName,DisplayName
 Record3SystemName,Record3DisplayName";
+
+
+    [Fact]
+    public async Task SingleTableMappingTest()
+    {
 
         CustomImportFunction = (request, set, hub, workspace) =>
         {
@@ -106,7 +116,50 @@ Record3SystemName,Record3DisplayName";
             );
         };
 
-        var client = await DoImport(content, "Test");
+        var client = await DoImport(ThreeTablesContent, "Test");
+
+
+        //Check that didn't appeared what we don't import 
+        var ret2 = await client.AwaitResponse(new GetManyRequest<MyRecord2>(),
+            o => o.WithTarget(new HostAddress()));
+        ret2.Message.Items.Should().HaveCount(0);
+
+        var ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
+            o => o.WithTarget(new HostAddress()));
+
+
+        ret.Message.Items.Should().HaveCount(1);
+
+        var resRecord = ret.Message.Items.Should().ContainSingle().Which;
+
+        resRecord.Should().NotBeNull();
+        resRecord.DisplayName.Should().Contain("test");
+        resRecord.SystemName.Should().Contain("New");
+        resRecord.IntArray.Should().BeNull();
+        resRecord.IntList.Should().BeNull();
+        resRecord.StringsArray.Should().BeNull();
+        resRecord.StringsList.Should().BeNull();
+        resRecord.Number.Should().Be(0);
+    }
+    [Fact]
+    public async Task TwoTablesMappingTest()
+    {
+
+        CustomImportFunction = (request, set, hub, workspace) =>
+        {
+            return set.Tables[nameof(MyRecord)].Rows.Select(dsRow => new MyRecord()
+                {
+                    SystemName = dsRow[nameof(MyRecord.SystemName)].ToString()?.Replace("Old", "New"),
+                    DisplayName = "test"
+                }
+            );
+        };
+
+        var client = await DoImport(ThreeTablesContent, "Test2");
+
+        var ret2 = await client.AwaitResponse(new GetManyRequest<MyRecord2>(),
+            o => o.WithTarget(new HostAddress()));
+        ret2.Message.Items.Should().HaveCount(1);
 
         var ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
             o => o.WithTarget(new HostAddress()));
