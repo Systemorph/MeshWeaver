@@ -1,5 +1,6 @@
 import { resolve } from 'path';
 import { defineConfig } from 'vite'
+import pkg from './package.json';
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -8,8 +9,8 @@ export default defineConfig({
         lib: {
             // Could also be a dictionary or array of multiple entry points
             entry: [
-                resolve(__dirname, 'src/playgroundServer.ts'),
-                resolve(__dirname, 'src/contract.ts')
+                './src/playgroundServer.ts',
+                './src/contract.ts'
             ],
             formats: ["es"],
             // name: 'MyLib',
@@ -20,7 +21,12 @@ export default defineConfig({
         rollupOptions: {
             // make sure to externalize deps that shouldn't be bundled
             // into your library
-            external: ['rxjs', 'fs'],
+            external: [
+                'rxjs',
+                'fs',
+                'lodash-es',
+                'uuid'
+            ],
         },
     }
 });

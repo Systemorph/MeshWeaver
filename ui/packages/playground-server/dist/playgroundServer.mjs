@@ -4,9 +4,14 @@ var __publicField = (obj, key, value) => {
   __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
   return value;
 };
-import { Observable, Subject, filter, map, Subscription } from "rxjs";
+import { Subscription, Observable, Subject, filter, map } from "rxjs";
 import { methodName, uiAddress, layoutAddress } from "./contract.mjs";
+import { v4 } from "uuid";
+import { isFunction } from "lodash-es";
 import fs from "fs";
+Subscription.prototype.toJSON = (key) => {
+  return {};
+};
 class WebSocketClientHub extends Observable {
   constructor(webSocketClient, webSocket) {
     super((subscriber) => {
@@ -77,12 +82,15 @@ class AddToContextRequest {
   }
 }
 class AddedToContext {
+  constructor(context) {
+    this.context = context;
+  }
 }
 function addToContext(context, hub, address) {
   const subscription = context.pipe(filterByTarget(address)).subscribe(hub);
   subscription.add(hub.pipe(addSender(address)).subscribe(context));
   subscription.add(hub.pipe(ofType(AddToContextRequest)).subscribe(({ message: { hub: hub2, address: address2 } }) => addToContext(context, hub2, address2)));
-  sendMessage(hub, new AddedToContext());
+  sendMessage(hub, new AddedToContext(context));
   return subscription;
 }
 function contractMessage(type) {
@@ -95,47 +103,6 @@ function contractMessage(type) {
       }
     }, _a.$type = type, _a;
   };
-}
-var getRandomValues;
-var rnds8 = new Uint8Array(16);
-function rng() {
-  if (!getRandomValues) {
-    getRandomValues = typeof crypto !== "undefined" && crypto.getRandomValues && crypto.getRandomValues.bind(crypto) || typeof msCrypto !== "undefined" && typeof msCrypto.getRandomValues === "function" && msCrypto.getRandomValues.bind(msCrypto);
-    if (!getRandomValues) {
-      throw new Error("crypto.getRandomValues() not supported. See https://github.com/uuidjs/uuid#getrandomvalues-not-supported");
-    }
-  }
-  return getRandomValues(rnds8);
-}
-const REGEX = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|00000000-0000-0000-0000-000000000000)$/i;
-function validate(uuid) {
-  return typeof uuid === "string" && REGEX.test(uuid);
-}
-var byteToHex = [];
-for (var i = 0; i < 256; ++i) {
-  byteToHex.push((i + 256).toString(16).substr(1));
-}
-function stringify(arr) {
-  var offset = arguments.length > 1 && arguments[1] !== void 0 ? arguments[1] : 0;
-  var uuid = (byteToHex[arr[offset + 0]] + byteToHex[arr[offset + 1]] + byteToHex[arr[offset + 2]] + byteToHex[arr[offset + 3]] + "-" + byteToHex[arr[offset + 4]] + byteToHex[arr[offset + 5]] + "-" + byteToHex[arr[offset + 6]] + byteToHex[arr[offset + 7]] + "-" + byteToHex[arr[offset + 8]] + byteToHex[arr[offset + 9]] + "-" + byteToHex[arr[offset + 10]] + byteToHex[arr[offset + 11]] + byteToHex[arr[offset + 12]] + byteToHex[arr[offset + 13]] + byteToHex[arr[offset + 14]] + byteToHex[arr[offset + 15]]).toLowerCase();
-  if (!validate(uuid)) {
-    throw TypeError("Stringified UUID is invalid");
-  }
-  return uuid;
-}
-function v4(options, buf, offset) {
-  options = options || {};
-  var rnds = options.random || (options.rng || rng)();
-  rnds[6] = rnds[6] & 15 | 64;
-  rnds[8] = rnds[8] & 63 | 128;
-  if (buf) {
-    offset = offset || 0;
-    for (var i = 0; i < 16; ++i) {
-      buf[offset + i] = rnds[i];
-    }
-    return buf;
-  }
-  return stringify(rnds);
 }
 var __defProp2 = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -274,14 +241,26 @@ class ControlBase extends SubjectHub {
     super();
     this.$type = $type;
     this.id = id;
+    this.children = [];
+    this.contexts = [];
     this.subscription = new Subscription();
     this.address = `${$type}-${id}`;
+    this.withMessageHandler(AddedToContext, ({ message: { context } }) => {
+      this.contexts.push(context);
+      this.children.forEach(({ hub, address }) => {
+        addToContext(context, hub, address);
+      });
+    });
   }
   toJSON() {
     const {
+      source,
+      operator,
       subscription,
       input,
       output,
+      children,
+      contexts,
       ...result
     } = this;
     return result;
@@ -291,6 +270,12 @@ class ControlBase extends SubjectHub {
       this.handleMessage(type, handler)
     );
     return this;
+  }
+  addChildHub(hub, address) {
+    this.children.push({ hub, address });
+    this.contexts.forEach((context) => {
+      addToContext(context, hub, address);
+    });
   }
   sendMessage(message, target) {
     this.output.next({ message, target });
@@ -330,8 +315,11 @@ class ControlBase extends SubjectHub {
     this.skin = value;
     return this;
   }
-  withClickMessage(message = { address: this.address, message }) {
-    this.clickMessage = message;
+  withClickMessage(message = {
+    address: this.address,
+    message: new ClickedEvent()
+  }) {
+    this.clickMessage = isFunction(message) ? message.apply(this) : message;
     return this;
   }
   withTooltip(tooltip) {
@@ -360,8 +348,9 @@ class LayoutStack extends ControlBase {
     super("LayoutStackControl", id);
     this.areas = [];
   }
-  withView(view, area = v4(), options, style) {
-    this.areas.push(new AreaChangedEvent(area, view, options, style));
+  withView(control, area = v4(), options, style) {
+    this.addChildHub(control, control.address);
+    this.areas.push(new AreaChangedEvent(area, control, options, style));
     return this;
   }
   withSkin(value) {
@@ -411,23 +400,23 @@ class MainWindowStack extends LayoutStack {
     super(id);
     this.withSkin("MainWindow");
   }
-  withSideMenu(view) {
-    return this.withView(view, mainWindowAreas.sideMenu);
+  withSideMenu(control) {
+    return this.withView(control, mainWindowAreas.sideMenu);
   }
-  withToolbar(view) {
-    return this.withView(view, mainWindowAreas.toolbar);
+  withToolbar(control) {
+    return this.withView(control, mainWindowAreas.toolbar);
   }
-  withContextMenu(view) {
-    return this.withView(view, mainWindowAreas.contextMenu);
+  withContextMenu(control) {
+    return this.withView(control, mainWindowAreas.contextMenu);
   }
-  withMain(view) {
-    return this.withView(view, mainWindowAreas.main);
+  withMain(control) {
+    return this.withView(control, mainWindowAreas.main);
   }
-  withStatusBar(view) {
-    return this.withView(view, mainWindowAreas.statusBar);
+  withStatusBar(control) {
+    return this.withView(control, mainWindowAreas.statusBar);
   }
-  withModal(view) {
-    return this.withView(view, mainWindowAreas.modal);
+  withModal(control) {
+    return this.withView(control, mainWindowAreas.modal);
   }
 }
 const makeStack = (id) => new LayoutStack(id);
@@ -467,23 +456,27 @@ class PlaygroundWindow extends MainWindowStack {
     super();
     this.withAddress("PlaygroundWindow");
     this.withSideMenu(this.makeSideMenu());
-    this.withMessageHandler(ClickedEvent, ({ message }) => {
-      this.sendMessage(message.payload, uiAddress);
-    });
   }
   makeSideMenu() {
     const sideMenu = makeStack().withAddress("SideMenu");
-    console.log(fs);
     const files = fs.readdirSync(rootDir, { withFileTypes: true });
     for (const file of files) {
       sideMenu.withView(
-        makeMenuItem().withTitle(file.name).withClickMessage({
-          address: this.address,
-          message: new ClickedEvent(null, file.name)
+        makeMenuItem().withTitle(file.name).withClickMessage().withMessageHandler(ClickedEvent, () => {
+          this.openNotebook(file);
         })
       );
     }
     return sideMenu;
+  }
+  openNotebook(file) {
+    this.sendMessage(
+      new AreaChangedEvent(
+        mainWindowAreas.main,
+        makeMenuItem().withTitle(`Notebook stub ${file.name}`)
+      ),
+      uiAddress
+    );
   }
 }
 class LayoutHub extends SubjectHub {
