@@ -54,14 +54,14 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
             o => o.WithTarget(new HostAddress()));
         items.Message.Items.Should().HaveCount(4)
             .And.ContainSingle(i => i.Id == "1")
-            .Which.Value.Should().Be(1); // we started with 7....
+            .Which.Value.Should().Be(1.5); // we started with 7....
         items.Message.Items.Should().ContainSingle(i => i.Id == "2").Which.LoB.Should().Be("1");
     }
 
     private const string VanillaCsv =
 @"@@TransactionalData
 Id,LoB,BusinessUnit,Value
-1,1,1,1
+1,1,1,1.5
 2,1,2,2
 3,2,1,3
 4,2,2,4
