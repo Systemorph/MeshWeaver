@@ -4,7 +4,6 @@ import { makeProxy } from "@open-smc/message-hub/src/middleware/makeProxy";
 import { connect } from "@open-smc/message-hub/src/middleware/connect";
 import { addToContext } from "@open-smc/message-hub/src/middleware/addToContext";
 import { LayoutHub } from "./LayoutHub";
-import { SubjectHub } from "@open-smc/message-hub/src/SubjectHub";
 
 import { layoutAddress, uiAddress } from "./contract.ts";
 import { Subject } from "rxjs";
