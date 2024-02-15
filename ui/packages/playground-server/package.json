@@ -2,15 +2,16 @@
   "name": "@open-smc/playground-server",
   "private": true,
   "version": "0.0.0",
-  "main": "dist/playground-server.mjs",
   "scripts": {
-    "build": "vite build --watch"
+    "build": "vite build",
+    "watch": "vite build --watch"
   },
   "dependencies": {
     "@open-smc/application": "0.1.0",
     "@open-smc/message-hub": "0.1.0",
     "@open-smc/utils": "0.1.0",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "lodash-es": "^4.17.21"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^6.14.0",

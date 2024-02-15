@@ -23,8 +23,9 @@ export class LayoutStack extends ControlBase implements StackView {
         super("LayoutStackControl", id);
     }
 
-    withView(view: ControlBase, area = v4(), options?: any, style?: Style) {
-        this.areas.push(new AreaChangedEvent(area, view, options, style));
+    withView(control: ControlBase, area = v4(), options?: any, style?: Style) {
+        this.addChildHub(control, control.address);
+        this.areas.push(new AreaChangedEvent(area, control, options, style));
         return this;
     }
 
@@ -109,28 +110,28 @@ export class MainWindowStack extends LayoutStack {
         this.withSkin("MainWindow");
     }
 
-    withSideMenu(view: ControlBase) {
-        return this.withView(view, mainWindowAreas.sideMenu);
+    withSideMenu(control: ControlBase) {
+        return this.withView(control, mainWindowAreas.sideMenu);
     }
 
-    withToolbar(view: ControlBase) {
-        return this.withView(view, mainWindowAreas.toolbar);
+    withToolbar(control: ControlBase) {
+        return this.withView(control, mainWindowAreas.toolbar);
     }
 
-    withContextMenu(view: ControlBase) {
-        return this.withView(view , mainWindowAreas.contextMenu);
+    withContextMenu(control: ControlBase) {
+        return this.withView(control , mainWindowAreas.contextMenu);
     }
 
-    withMain(view: ControlBase) {
-        return this.withView(view, mainWindowAreas.main);
+    withMain(control: ControlBase) {
+        return this.withView(control, mainWindowAreas.main);
     }
 
-    withStatusBar(view: ControlBase) {
-        return this.withView(view, mainWindowAreas.statusBar);
+    withStatusBar(control: ControlBase) {
+        return this.withView(control, mainWindowAreas.statusBar);
     }
 
-    withModal(view: ControlBase) {
-        return this.withView(view, mainWindowAreas.modal);
+    withModal(control: ControlBase) {
+        return this.withView(control, mainWindowAreas.modal);
     }
 }
 

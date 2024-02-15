@@ -6,8 +6,11 @@ import { Constructor } from "@open-smc/utils/src/Constructor";
 import { MessageHandler } from "@open-smc/message-hub/src/api/MessageHandler";
 import { ofContractType } from "@open-smc/application/src/contract/ofContractType";
 import { v4 } from "uuid";
-import { isFunction } from "lodash";
+import { isFunction } from "lodash-es";
 import { ClickedEvent } from "@open-smc/application/src/contract/application.contract";
+import { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
+import { AddedToContext } from "@open-smc/message-hub/src/api/AddedToContext";
+import { addToContext } from "@open-smc/message-hub/src/middleware/addToContext";
 
 export abstract class ControlBase extends SubjectHub implements ControlDef {
     readonly moduleName: string;
@@ -25,19 +28,33 @@ export abstract class ControlBase extends SubjectHub implements ControlDef {
     isReadonly?: boolean;
     label?: string;
 
+    private children: { hub: MessageHub, address: any }[] = [];
+    private contexts: MessageHub[] = [];
+
     protected readonly subscription: Subscription = new Subscription();
 
     protected constructor(public readonly $type: string, public id = v4()) {
         super();
 
         this.address = `${$type}-${id}`;
+
+        this.withMessageHandler(AddedToContext, ({message: {context}}) => {
+            this.contexts.push(context);
+            this.children.forEach(({hub, address}) => {
+                addToContext(context, hub, address);
+            })
+        });
     }
 
     toJSON() {
         const {
+            source,
+            operator,
             subscription,
             input,
             output,
+            children,
+            contexts,
             ...result
         } = this;
         return result;
@@ -48,6 +65,14 @@ export abstract class ControlBase extends SubjectHub implements ControlDef {
             this.handleMessage(type, handler)
         );
         return this;
+    }
+
+    protected addChildHub(hub: MessageHub, address: any) {
+        this.children.push({hub, address});
+
+        this.contexts.forEach(context => {
+            addToContext(context, hub, address);
+        });
     }
 
     protected sendMessage<T>(message: T, target?: any) {
@@ -100,7 +125,10 @@ export abstract class ControlBase extends SubjectHub implements ControlDef {
         return this;
     }
 
-    withClickMessage(message: MessageAndAddress | Factory<this, MessageAndAddress> = {address: this.address, message: new ClickedEvent()}) {
+    withClickMessage(message: MessageAndAddress | Factory<this, MessageAndAddress> = {
+        address: this.address,
+        message: new ClickedEvent()
+    }) {
         this.clickMessage = isFunction(message) ? message.apply(this) : message;
         return this;
     }
