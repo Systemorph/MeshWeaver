@@ -1,4 +1,4 @@
-export function folderControlsResolver(folderContext: __WebpackModuleApi.RequireContext) {
+export function webpackFolderControlsResolver(folderContext: __WebpackModuleApi.RequireContext) {
     const modulesByControlName =
         folderContext.keys()
             .reduce<Record<string, string>>((result, moduleName) => {
@@ -14,3 +14,4 @@ export function folderControlsResolver(folderContext: __WebpackModuleApi.Require
         }
     }
 }
+
