@@ -8,7 +8,6 @@ public static class MimeTypes
 
     public static string MapFileExtension(string fileName)
     {
-        if (fileName == null) return Csv;
         var split = fileName.Split('.');
         if (split.Length < 2)
             return Csv;

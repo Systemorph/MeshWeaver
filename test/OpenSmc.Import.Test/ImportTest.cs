@@ -54,7 +54,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
             o => o.WithTarget(new HostAddress()));
         items.Message.Items.Should().HaveCount(4)
             .And.ContainSingle(i => i.Id == "1")
-            .Which.Value.Should().Be(1.5); // we started with 7....
+            .Which.Value.Should().BeApproximately(1.5d, 1e-5); // we started with 7....
         items.Message.Items.Should().ContainSingle(i => i.Id == "2").Which.LoB.Should().Be("1");
     }
 
@@ -79,6 +79,6 @@ Id,LoB,BusinessUnit,Value
             o => o.WithTarget(new HostAddress()));
         items.Message.Items.Should().HaveCount(4)
             .And.ContainSingle(i => i.Id == "1")
-            .Which.Value.Should().Be(2); // computed as 2*1
+            .Which.Value.Should().BeApproximately(3.0d, 1e-5); // computed as 2*1.5
     }
 }
