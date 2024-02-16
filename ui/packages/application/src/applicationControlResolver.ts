@@ -1,5 +1,6 @@
-import { folderControlsResolver } from "./folderControlsResolver";
+import { viteFolderControlsResolver } from "./viteFolderControlsResolver";
+import { ControlModule } from "./ControlModule";
 
-const context = require.context('./controls', false, /Control\.tsx$/, "lazy");
+const modules = import.meta.glob<ControlModule>('./controls/*Control.tsx');
 
-export const applicationControlsResolver = folderControlsResolver(context);
+export const applicationControlsResolver = viteFolderControlsResolver(modules);
