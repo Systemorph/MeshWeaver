@@ -29,3 +29,12 @@ public record CreateRequest<TObject>(TObject Element) : IRequest<DataChanged> { 
 
 public record DeleteBatchRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataChanged>;
 
+public record SynchronizeEntitiesRequest(EntitiesInDataSource Entities): IRequest<EntitySynchronizationResponse>;
+
+public record EntitiesInDataSource(object Address, IReadOnlyCollection<EntityDescriptor> Entities);
+
+public record StopSynchronizationRequest: IRequest<EntitySynchronizationResponse>;
+
+public record EntitySynchronizationResponse;
+
+public record EntityDescriptor(string Id, string Type);
