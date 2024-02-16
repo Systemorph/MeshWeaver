@@ -38,7 +38,8 @@ SystemName,DisplayName,Number
 A1,A,1
 A2,A,2
 B3,B,3
-B4,B,4";
+B4,B,4
+";
 
         var client = GetClient();
         var importRequest = new ImportRequest(content);
@@ -53,6 +54,8 @@ B4,B,4";
         const string content2 = @"@@MyRecord
 SystemName,DisplayName,Number
 A5,A,5
+@@MyRecord2
+SystemName,DisplayName
 ";
 
         importRequest = new ImportRequest(content2) {SnapshotMode = true};
@@ -63,231 +66,69 @@ A5,A,5
             o => o.WithTarget(new HostAddress()));
 
         ret.Message.Items.Should().HaveCount(1);
+        ret.Message.Items.Should().ContainSingle().Which.Number.Equals(5);
     }
+
+    [Fact]
+    public async Task SnapshotImport_AndThenRegularImportTest()
+    {
+        const string content1 = @"@@MyRecord
+SystemName,DisplayName,Number
+A1,A,1
+A2,A,2
+B3,B,3
+B4,B,4
+";
+
+        var client = GetClient();
+        var importRequest = new ImportRequest(content1);
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
+        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+
+        var ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
+            o => o.WithTarget(new HostAddress()));
+
+        ret.Message.Items.Should().HaveCount(4);
+
+        const string content2 = @"@@MyRecord
+SystemName,DisplayName,Number
+A5,A,5
+@@MyRecord2
+SystemName,DisplayName
+";
+
+        //snapshot
+        importRequest = new ImportRequest(content2) { SnapshotMode = true };
+        importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
+        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+
+        ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
+            o => o.WithTarget(new HostAddress()));
+
+        ret.Message.Items.Should().HaveCount(1);
+        ret.Message.Items.Should().ContainSingle().Which.Number.Equals(5);
+
+        const string content3 = @"@@MyRecord
+SystemName,DisplayName,Number
+A6,A,6
+@@MyRecord2
+SystemName2,DisplayName2
+";
+
+        //not snapshot
+        importRequest = new ImportRequest(content3);
+        importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
+        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+
+        ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
+            o => o.WithTarget(new HostAddress()));
+
+        ret.Message.Items.Should().HaveCount(2);
+
+    }
+
 }
 
-//    [Fact]
-//        public async void SnapshotImportOnPartitionedData_SimpleTest()
-//        {
-//            //Arrange
-//            await InitialImport();
-
-//            var recordsForCompanyA = @"@@PartitionedRecordValueType
-//Value,Company
-//5,A";
-
-//            //Act
-//            await ImportVariable.FromString(recordsForCompanyA)
-//                                .WithType<PartitionedRecordValueType>()
-//                                .SnapshotMode()
-//                                .ExecuteAsync();
-
-//            //Assert
-//            await Workspace.Partition.SetAsync<string>("A", ByCompany);
-//            var ret = Workspace.GetItems<PartitionedRecordValueType>();
-//            ret.Should().ContainSingle().Which.Value.Should().Be(5);
-
-
-//            await Workspace.Partition.SetAsync<string>("B", ByCompany);
-//            ret = Workspace.GetItems<PartitionedRecordValueType>();
-//            ret.Should().HaveCount(2);
-//        }
-
-//        [Fact]
-//        public async void SnapshotImportUnPartitionedData_SimpleTest()
-//        {
-//            //Arrange
-//            var records = @"@@CompanyPartition
-//Company
-//C,
-//D";
-//            await ImportVariable.FromString(records)
-//                                .WithType<CompanyPartition>()
-//                                .ExecuteAsync();
-
-
-//            records = @"@@CompanyPartition
-//Company
-//E,
-//F";
-
-//            //Act
-//            await ImportVariable.FromString(records)
-//                                .WithType<CompanyPartition>()
-//                                .SnapshotMode()
-//                                .ExecuteAsync();
-
-//            //Assert
-//            var ret = Workspace.GetItems<CompanyPartition>();
-//            ret.Should().HaveCount(2);
-//            ret.Select(x => x.Company).Should().BeEquivalentTo("E", "F");
-//        }
-
-//        [Fact]
-//        public async void SnapshotImportOnPartitionedData_ForSpecifiedType_Test()
-//        {
-//            //Arrange
-//            await InitialImport();
-
-//            //import CompanyPartition
-//            var records = @"@@CompanyPartition
-//Company
-//C,
-//D";
-//            await ImportVariable.FromString(records)
-//                                .WithType<CompanyPartition>()
-//                                .ExecuteAsync();
-
-//            var recordsForCompanyA = @"@@PartitionedRecordValueType
-//Value,Company
-//5,A
-//@@CompanyPartition
-//Company
-//E,
-//F";
-
-//            //Act
-//            await ImportVariable.FromString(recordsForCompanyA)
-//                                .WithType<PartitionedRecordValueType>(x=>x.SnapshotMode())
-//                                .WithType<CompanyPartition>()
-//                                .ExecuteAsync();
-
-//            //Assert
-//            await Workspace.Partition.SetAsync<string>("A", ByCompany);
-//            var ret = Workspace.GetItems<PartitionedRecordValueType>();
-//            ret.Should().ContainSingle().Which.Value.Should().Be(5);
-
-
-//            await Workspace.Partition.SetAsync<string>("B", ByCompany);
-//            ret = Workspace.GetItems<PartitionedRecordValueType>();
-//            ret.Should().HaveCount(2);
-
-//            //Assert
-//            var ret2 = Workspace.GetItems<CompanyPartition>();
-//            ret2.Should().HaveCount(4);
-//            ret2.Select(x => x.Company).Should().BeEquivalentTo("C", "D", "E", "F");
-//        }
-
-//        [Fact]
-//        public async void SnapshotImportOnPartitionedData_AndThenRegularImportTest()
-//        {
-//            //Arrange
-//            await InitialImport();
-
-//            var recordsForCompanyA = @"@@PartitionedRecordValueType
-//Value,Company
-//5,A";
-
-//            var recordsForCompanyA2 = @"@@PartitionedRecordValueType
-//Value,Company
-//6,A";
-
-//            //Act
-//            //snapshot 
-//            await ImportVariable.FromString(recordsForCompanyA)
-//                                .WithType<PartitionedRecordValueType>()
-//                                .SnapshotMode()
-//                                .ExecuteAsync();
-//            //not snapshot
-//            await ImportVariable.FromString(recordsForCompanyA2)
-//                                .WithType<PartitionedRecordValueType>()
-//                                .ExecuteAsync();
-
-//            //Assert
-//            await Workspace.Partition.SetAsync<string>("A", ByCompany);
-//            var ret = Workspace.GetItems<PartitionedRecordValueType>();
-//            ret.Should().HaveCount(2);
-//            ret.Select(x => x.Value).Should().BeEquivalentTo(new[] { 5, 6 });
-
-
-//            await Workspace.Partition.SetAsync<string>("B", ByCompany);
-//            ret = Workspace.GetItems<PartitionedRecordValueType>();
-//            ret.Should().HaveCount(2);
-//        }
-
-//        [Fact]
-//        public async void SnapshotImportOnPartitionedData_ManyPartitionsTest()
-//        {
-//            await InitialImport();
-
-//            var recordsForCompanies = @"@@PartitionedRecordValueType
-//Value,Company
-//5,A
-//6,B";
-
-//            //Act
-//            await ImportVariable.FromString(recordsForCompanies)
-//                                .WithType<PartitionedRecordValueType>()
-//                                .SnapshotMode()
-//                                .ExecuteAsync();
-
-//            //Assert
-//            await Workspace.Partition.SetAsync<string>("A", ByCompany);
-//            var ret = Workspace.GetItems<PartitionedRecordValueType>();
-//            ret.Should().ContainSingle().Which.Value.Should().Be(5);
-
-
-//            await Workspace.Partition.SetAsync<string>("B", ByCompany);
-//            ret = Workspace.GetItems<PartitionedRecordValueType>();
-//            ret.Should().ContainSingle().Which.Value.Should().Be(6);
-//        }
-
-//        [Fact]
-//        public async void SnapshotImportOnPartitionedData_NoPartitionInInputTest()
-//        {
-//            await InitialImport();
-
-//            await Workspace.Partition.SetAsync<string>("A", ByCompany);
-
-//            var zeroInstances = @"@@PartitionedRecordValueType
-//Value
-//5";
-
-//            //Act
-//            await ImportVariable.FromString(zeroInstances)
-//                                .WithType<PartitionedRecordValueType>()
-//                                .SnapshotMode()
-//                                .ExecuteAsync();
-
-//            //Assert
-//            await Workspace.Partition.SetAsync<string>("A", ByCompany);
-//            var ret = Workspace.GetItems<PartitionedRecordValueType>();
-//            ret.Should().ContainSingle().Which.Value.Should().Be(5);
-
-//            await Workspace.Partition.SetAsync<string>("B", ByCompany);
-//            ret = Workspace.GetItems<PartitionedRecordValueType>();
-//            ret.Should().HaveCount(2);
-//        }
-
-//        [Fact]
-//        public async void SnapshotImportOnPartitionedData_NoPartitionInInput_NoPartitionSetTest()
-//        {
-//            await InitialImport();
-
-
-//            var zeroInstances = @"@@PartitionedRecordValueType
-//Value
-//5";
-
-//            await Workspace.Partition.SetAsync<string>(null, ByCompany);
-
-//            //Act
-//            var log = await ImportVariable.FromString(zeroInstances)
-//                                .WithType<PartitionedRecordValueType>()
-//                                .SnapshotMode()
-//                                .ExecuteAsync();
-
-//            log.Status.Should().Be(ActivityLogStatus.Failed);
-//            log.Errors().Should().ContainSingle().Which.Should().BeOfType<LogMessage>().Which.Message.Should().Contain("Partition key must be set.");
-
-//            //Assert
-//            await Workspace.Partition.SetAsync<string>("A", ByCompany);
-//            var ret = Workspace.GetItems<PartitionedRecordValueType>()t.Should().HaveCount(2);
-
-//            await Workspace.Partition.SetAsync<string>("B", ByCompany);
-//            ret = await Workspace.Query<PartitionedRecordValueType>().ToListAsync();
-//            ret.Should().HaveCount(2);
-//        }
 
 //        [Fact]
 //        public async void SnapshotImportOnPartitionedData_ZeroInstancesTest()
@@ -387,4 +228,4 @@ A5,A,5
 //            ret = await targetWorkspace.Query<PartitionedRecordValueType>().ToListAsync();
 //            ret.Should().HaveCount(2);
 //        }
-    
+
