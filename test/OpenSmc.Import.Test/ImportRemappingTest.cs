@@ -12,29 +12,25 @@ namespace OpenSmc.Import.Test;
 
 public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    private const string RemappingTest = nameof(RemappingTest);
-    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
-    {
-
-        return base.ConfigureHost(configuration)
-                .AddData(
-                    data => data.WithDataSource(nameof(DataSource),
-                        source => source
-                            .ConfigureCategory(ImportTestDomain.TestRecordsDomain)
-                    )
+    private const string RemappingTestFormat = nameof(RemappingTestFormat);
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration) 
+        => base.ConfigureHost(configuration)
+            .AddData(
+                data => data.WithDataSource(nameof(DataSource),
+                    source => source
+                        .ConfigureCategory(ImportTestDomain.TestRecordsDomain)
                 )
-                .AddImport(import => import
-
-                    //// TODO V10: There is no way to override behavior for Default format (2024/02/15, Dmitry Kalabin)
-                    //.WithFormat(ImportFormat.Default,
-                    //    format => format.WithAutoMappings(ti => ti.WithTableMapping(nameof(MyRecord), MapMyRecord))
-                    //)
-                    .WithFormat(RemappingTest,
-                        format => format.WithAutoMappings(ti => ti.WithTableMapping(nameof(MyRecord), MapMyRecord))
-                    )
+            )
+            .AddImport(import => import
+                //// TODO V10: There is no way to override behavior for Default format (2024/02/15, Dmitry Kalabin)
+                //.WithFormat(ImportFormat.Default,
+                //    format => format.WithAutoMappings(ti => ti.WithTableMapping(nameof(MyRecord), MapMyRecord))
+                //)
+                .WithFormat(RemappingTestFormat,
+                    format => format.WithAutoMappings(ti => ti.WithTableMapping(nameof(MyRecord), MapMyRecord))
                 )
-            ;
-    }
+            )
+        ;
 
     private IEnumerable<object> MapMyRecord(IDataSet set, IDataTable table)
     {
@@ -69,15 +65,6 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
         }
     }
 
-    private async Task<IMessageHub> DoImport(string content, string format = ImportFormat.Default)
-    {
-        var client = GetClient();
-        var importRequest = new ImportRequest(content) { Format = format };
-        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
-        return client;
-    }
-
     private const string Prefix = "Prefix_";
 
     [Fact]
@@ -96,7 +83,7 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
 
 
         var client = GetClient();
-        var importRequest = new ImportRequest(content) { Format = RemappingTest, };
+        var importRequest = new ImportRequest(content) { Format = RemappingTestFormat, };
 
         // act
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
