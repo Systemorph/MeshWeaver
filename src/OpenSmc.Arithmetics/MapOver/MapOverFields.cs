@@ -1,8 +1,8 @@
 ﻿using System.Collections;
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Linq.Expressions;
 using System.Reflection;
-using OpenSmc.Conventions;
 using OpenSmc.Reflection;
 
 namespace OpenSmc.Arithmetics.MapOver
@@ -23,10 +23,20 @@ namespace OpenSmc.Arithmetics.MapOver
     /// <seealso cref="DoNotCopyAttribute"/>
     public static class MapOverFields
     {
-        private static readonly ConcurrentDictionary<Type, IMapOverFunctionProvider> MapOverDelegateProviders = new();
+        static MapOverFields()
+        {
+            RegisterMapOverProvider(new IsSupportedValueTypeFunctionProvider(), x => x.IsRealType());
+            RegisterMapOverProvider(new IsDictionaryFunctionProvider(), FormulaFrameworkTypeExtensions.IsDictionary);
+            RegisterMapOverProvider(new IsClassHasParameterlessConstructorFunctionProvider(),
+             type => type.IsClass && type.HasParameterlessConstructor() && !type.ImplementEnumerable());
+            RegisterMapOverProvider(new IsArrayFunctionProvider(), type => type.IsArray);
+            RegisterMapOverProvider(new IsListFunctionProvider(), type => type.IsList());
+            RegisterMapOverProvider(new IsEnumerableFunctionProvider(), type => type != typeof(string) && type.IsEnumerable());
 
-
+        }
         private static readonly ConcurrentDictionary<ArithmeticOperation, ConcurrentDictionary<Type, Delegate>> MapOverDelegateStore = new();
+
+        private static ImmutableList<(Func<Type, bool> Filter, IMapOverFunctionProvider Provider)> MapOverDelegateProviders = ImmutableList<(Func<Type, bool> Filter, IMapOverFunctionProvider Provider)>.Empty;
 
         private static readonly MethodInfo MapOverEnumerableMethod = typeof(MapOverFields).GetMethod(nameof(MapOverEnumerable), BindingFlags.Static | BindingFlags.NonPublic);
 
@@ -60,11 +70,19 @@ namespace OpenSmc.Arithmetics.MapOver
             return func(factor, x);
         }
 
-        public static void RegisterMapOverProvider(IMapOverFunctionProvider provider, Action<MapOverDelegateConventionService, Type> conventionAction)
+        public static void RegisterMapOverProvider(IMapOverFunctionProvider provider, Func<Type, bool> filter)
         {
-            var type = provider.GetType();
-            conventionAction(MapOverDelegateConventionService.Instance, type);
-            MapOverDelegateProviders[provider.GetType()] = provider;
+            MapOverDelegateProviders = MapOverDelegateProviders.Add((filter, provider));
+        }
+        public static void RegisterMapOverProviderBefore<T>(IMapOverFunctionProvider provider, Func<Type, bool> filter)
+        {
+            var insert = MapOverDelegateProviders.FindIndex(x => x.Provider is T);
+            MapOverDelegateProviders = MapOverDelegateProviders.Insert(insert,(filter, provider));
+        }
+        public static void RegisterMapOverProviderAfter<T>(IMapOverFunctionProvider provider, Func<Type, bool> filter)
+        {
+            var insert = MapOverDelegateProviders.FindIndex(x => x.Provider is T);
+            MapOverDelegateProviders = MapOverDelegateProviders.Insert(insert+1, (filter, provider));
         }
 
 
@@ -124,7 +142,7 @@ namespace OpenSmc.Arithmetics.MapOver
 
         private static Delegate CreateMapOverDelegate(Type type, ArithmeticOperation method)
         {
-            var mapOverDelegateProvider = MapOverDelegateConventionService.Instance.Reorder(MapOverDelegateProviders.Values, type).FirstOrDefault();
+            var mapOverDelegateProvider = MapOverDelegateProviders.FirstOrDefault(x => x.Filter(type)).Provider;
 
             if (mapOverDelegateProvider != null)
                 return mapOverDelegateProvider.GetDelegate(type, method);
