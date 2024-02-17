@@ -1,5 +1,4 @@
-﻿using System.Runtime.Serialization;
-using Microsoft.CodeAnalysis;
+﻿using Microsoft.CodeAnalysis;
 
 namespace OpenSmc.CSharp.Roslyn
 {
@@ -9,9 +8,6 @@ namespace OpenSmc.CSharp.Roslyn
         {
         }
 
-        protected CSharpCompilationException(SerializationInfo info, StreamingContext context) : base(info, context)
-        {
-        }
 
         public CSharpCompilationException(string message) : base(message)
         {
