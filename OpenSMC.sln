@@ -57,8 +57,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Collections", "src\
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Application.Scope.Contract", "src\OpenSmc.Application.Scope.Contract\OpenSmc.Application.Scope.Contract.csproj", "{13B467C4-375D-4002-A683-58DE071F8668}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Conventions", "src\OpenSmc.Conventions\OpenSmc.Conventions.csproj", "{47802412-323F-46EE-ACE5-0059DA900A59}"
-EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Application.Scope", "src\OpenSmc.Application.Scope\OpenSmc.Application.Scope.csproj", "{0767636F-41AB-4569-AA05-77BDB6318FDF}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Equality", "src\OpenSmc.Equality\OpenSmc.Equality.csproj", "{CD1B76FE-031D-4448-B53D-2064AFDA7B10}"
@@ -129,9 +127,9 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Import.Test", "test
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Scopes.Test", "test\OpenSmc.Scopes.Test\OpenSmc.Scopes.Test.csproj", "{DC713E3E-90F7-42CC-B719-29B76D96EA7C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenSmc.Messaging.Orleans", "src\OpenSmc.Messaging.Orleans\OpenSmc.Messaging.Orleans.csproj", "{B6CDE776-12B4-4340-9E98-C2E4E8D75A47}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Messaging.Orleans", "src\OpenSmc.Messaging.Orleans\OpenSmc.Messaging.Orleans.csproj", "{B6CDE776-12B4-4340-9E98-C2E4E8D75A47}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenSmc.Messaging.Orleans.Test", "test\OpenSmc.Messaging.Orleans.Test\OpenSmc.Messaging.Orleans.Test.csproj", "{19C286B0-1EC4-4E08-9C05-9A57B4BD17DA}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Messaging.Orleans.Test", "test\OpenSmc.Messaging.Orleans.Test\OpenSmc.Messaging.Orleans.Test.csproj", "{19C286B0-1EC4-4E08-9C05-9A57B4BD17DA}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.CSharp.Kernel", "src\OpenSmc.CSharp.Kernel\OpenSmc.CSharp.Kernel.csproj", "{CE5F2FC3-8B56-414F-807D-906DE4DE3123}"
 EndProject
@@ -229,10 +227,6 @@ Global
 		{13B467C4-375D-4002-A683-58DE071F8668}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{13B467C4-375D-4002-A683-58DE071F8668}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{13B467C4-375D-4002-A683-58DE071F8668}.Release|Any CPU.Build.0 = Release|Any CPU
-		{47802412-323F-46EE-ACE5-0059DA900A59}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{47802412-323F-46EE-ACE5-0059DA900A59}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{47802412-323F-46EE-ACE5-0059DA900A59}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{47802412-323F-46EE-ACE5-0059DA900A59}.Release|Any CPU.Build.0 = Release|Any CPU
 		{0767636F-41AB-4569-AA05-77BDB6318FDF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{0767636F-41AB-4569-AA05-77BDB6318FDF}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{0767636F-41AB-4569-AA05-77BDB6318FDF}.Release|Any CPU.ActiveCfg = Release|Any CPU
