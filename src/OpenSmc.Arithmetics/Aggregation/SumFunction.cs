@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using OpenSmc.Arithmetics.Aggregation.Implementation;
 using OpenSmc.Conventions;
 
@@ -14,7 +15,9 @@ namespace OpenSmc.Arithmetics.Aggregation
     {
         private static readonly ConcurrentDictionary<Type, Delegate> SumDelegateStore = new();
 
-        private static readonly ConcurrentDictionary<Type, ISumFunctionProvider> SumFunctionProviders = new();
+        private static ImmutableList<(Func<Type, bool> Filter, ISumFunctionProvider Provider)> sumFunctionProviders = 
+            ImmutableList<(Func<Type, bool> Filter, ISumFunctionProvider Provider)>.Empty
+                .Add(( _ => true, new GenericSumFunctionProvider()));
 
         /// <summary>
         /// Calculates the sum of <paramref name="x"/> and <paramref name="y"/>, where the sum is applied to all properties where applicable.
@@ -60,11 +63,15 @@ namespace OpenSmc.Arithmetics.Aggregation
             return SumDelegateStore.GetOrAdd(type, t => CreateDelegate(t, p => p.CreateSumDelegate(t)));
         }
 
-        public static void RegisterSumProvider(ISumFunctionProvider provider, Action<SumFunctionConventionService, Type> conventionAction)
+        public static void RegisterSumProviderBefore<T>(ISumFunctionProvider provider, Func<Type, bool> filter)
         {
-            var type = provider.GetType();
-            conventionAction(SumFunctionConventionService.Instance, type);
-            SumFunctionProviders[provider.GetType()] = provider;
+            var insert = sumFunctionProviders.FindIndex(x => x.Provider is T);
+            sumFunctionProviders = sumFunctionProviders.Insert(insert, (filter, provider));
+        }
+        public static void RegisterSumProviderAfter<T>(ISumFunctionProvider provider, Func<Type, bool> filter)
+        {
+            var insert = sumFunctionProviders.FindIndex(x => x.Provider is T);
+            sumFunctionProviders = sumFunctionProviders.Insert(insert+1, (filter, provider));
         }
 
         /// <summary>
@@ -113,7 +120,7 @@ namespace OpenSmc.Arithmetics.Aggregation
 
         private static Delegate CreateDelegate(Type type, Func<ISumFunctionProvider,Delegate> creationFunc)
         {
-            var sumFunctionProvider = SumFunctionConventionService.Instance.Reorder(SumFunctionProviders.Values, type).FirstOrDefault();
+            var sumFunctionProvider = sumFunctionProviders.FirstOrDefault(x => x.Filter(type)).Provider;
 
             if (sumFunctionProvider != null)
                 return creationFunc(sumFunctionProvider);

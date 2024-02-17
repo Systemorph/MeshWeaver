@@ -11,46 +11,23 @@ public static class ModuleSetup
 {
     public static IServiceCollection RegisterScopes(this IServiceCollection services)
     {
+        InitializeArithmetics();
         services.AddSingleton<IScopeFactory, ScopeFactory>();
         services.AddTransient<IInternalScopeFactory, InternalScopeFactory>();
         services.AddSingleton<IScopeInterceptorFactoryRegistry, ScopeInterceptorFactoryRegistry>();
         return services;
     }
 
-    public static void Initialize(IServiceProvider serviceProvider)
-    {
-
-        InitializeArithmetics();
-
-
-    }
-
     private static void InitializeArithmetics()
     {
-        MapOverFields.RegisterMapOverProvider(new IsScopeMapOverFunctionProvider(),
-            (convention, element) =>
-            {
-                convention.Element(typeof(IsArrayFunctionProvider)).DependsOn(element);
-                convention.Element(element).AtBeginning();
-                convention.Element(element).Condition().IsFalse(type => type.IsScope())
-                    .Eliminates(element);
-            });
+        MapOverFields.RegisterMapOverProviderAfter<IsSupportedValueTypeFunctionProvider>(new IsScopeMapOverFunctionProvider(),
+type => type.IsScope());
 
-        SumFunction.RegisterSumProvider(new IsScopeSumFunctionProvider(),
-            (convention, element) =>
-            {
-                convention.Element(element).AtBeginning();
-                convention.Element(element).Condition().IsFalse(x => x.IsScope()).Eliminates(element);
-            });
+        SumFunction.RegisterSumProviderBefore<GenericSumFunctionProvider>(new IsScopeSumFunctionProvider(),
+x => x.IsScope());
 
-        AggregationFunction.RegisterAggregationProvider(new IsScopeAggregationFunctionProvider(),
-            (convention, element) =>
-            {
-                convention.Element(typeof(IsClassAggregationFunctionProvider)).DependsOn(element);
-                convention.Element(element).DependsOn(typeof(IsValueTypeAggregationFunctionProvider));
-                convention.Element(element).Condition().IsFalse(type => type.IsScope())
-                    .Eliminates(element);
-            });
+        AggregationFunction.RegisterAggregationProviderAfter<IsValueTypeAggregationFunctionProvider>(new IsScopeAggregationFunctionProvider(),
+type => type.IsScope());
     }
 
 }

@@ -47,13 +47,13 @@ public static class ServiceProviderExtensions
 
         var loadedModulesCopy = loadedModulesService.Types.ToHashSet();
 
-        // must be called before module.Initialize() to exclude double registration/initialization
+        // must be called before module.AddScopesDataCubes() to exclude double registration/initialization
         loadedModulesService.Types.UnionWith(modules.Registries.Select(x => x.GetType()));
         loadedModulesService.Types.UnionWith(modules.Initializations.Select(x => x.GetType()));
 
 
         foreach (var moduleInitialization in modules.Initializations.Where(x => !loadedModulesCopy.Contains(x.GetType())))
-            moduleInitialization.Initialize(ret);
+            moduleInitialization.AddScopesDataCubes(ret);
 
 
         return ret;

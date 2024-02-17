@@ -1,16 +1,23 @@
-﻿using OpenSmc.DataCubes;
+﻿using OpenSmc.Arithmetics.Aggregation;
+using OpenSmc.Arithmetics.MapOver;
+using OpenSmc.DataCubes;
+using OpenSmc.DataCubes.Operations;
 using OpenSmc.Scopes.Proxy;
 
 namespace OpenSmc.Scopes.DataCubes
 {
     public class DataCubeScopeInterceptorFactory : IScopeInterceptorFactory
     {
-        //static DataCubeScopeInterceptorFactory()
-        //{
-        //    AggregationFunctionConventionService.Instance.Element(typeof(IsScopeAggregationFunctionProvider)).DependsOn(typeof(DataCubes.Operations.IsDataCubeAggregationFunctionProvider));
-        //    MapOverDelegateConventionService.Instance.Element(typeof(DataCubes.Operations.IsDataCubeMapOverFunctionProvider)).DependsOn(typeof(IsScopeMapOverFunctionProvider));
+        static DataCubeScopeInterceptorFactory()
+        {
+            AggregationFunction.RegisterAggregationProviderBefore<IsDataCubeAggregationFunctionProvider>(
+                new IsDataCubeScopeAggregationFunctionProvider(),
+                type => type.IsScope() && type.IsDataCube());
 
-        //}
+            MapOverFields.RegisterMapOverProviderBefore<IsDataCubeMapOverFunctionProvider>(new IsDataCubeScopeMapOverFunctionProvider(),
+                type => type.IsDataCube());
+
+        }
 
         public IEnumerable<IScopeInterceptor> GetInterceptors(Type scopeType, IInternalScopeFactory scopeFactory)
         {
