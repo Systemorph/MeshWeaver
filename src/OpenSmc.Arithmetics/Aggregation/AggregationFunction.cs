@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Linq.Expressions;
 using OpenSmc.Arithmetics.Aggregation.Implementation;
-using OpenSmc.Conventions;
 
 namespace OpenSmc.Arithmetics.Aggregation;
 
