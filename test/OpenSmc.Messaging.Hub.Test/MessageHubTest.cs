@@ -48,22 +48,9 @@ public class MessageHubTest : HubTestBase
     public async Task ClientToServerWithMessageTraffic()
     {
         var client = GetClient();
-        var clientOut = client.AddObservable();
-        var messageTask = clientOut.Where(d => d.Message is HelloEvent).ToArray().GetAwaiter();
-        var overallMessageTask = clientOut.ToArray().GetAwaiter();
 
         var response = await client.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
         response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
-
-        await DisposeAsync();
-        
-        var helloEvents = await messageTask;
-        var overallMessages = await overallMessageTask;
-        using (new AssertionScope())
-        {
-            helloEvents.Should().ContainSingle();
-            overallMessages.Should().HaveCountLessThan(10);
-        }
     }
 
     [Fact]

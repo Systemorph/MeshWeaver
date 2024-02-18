@@ -32,7 +32,6 @@ public class ImportPlugin : MessageHubPlugin<ImportState>,
 
     public async Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery<ImportRequest> request, CancellationToken cancellationToken)
     {
-        ActivityLog log;
         activityService.Start(); 
 
         try

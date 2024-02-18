@@ -6,13 +6,13 @@ namespace OpenSmc.Scopes.Proxy;
 
 public interface IScopeInterceptorFactoryRegistry
 {
-    IScopeInterceptorFactoryRegistry Register(IScopeInterceptorFactory factory);
+    IScopeInterceptorFactoryRegistry RegisterBefore<T>(IScopeInterceptorFactory factory);
     IReadOnlyCollection<IScopeInterceptorFactory> GetFactories();
 }
 
 public class ScopeInterceptorFactoryRegistry: IScopeInterceptorFactoryRegistry
 {
-    private readonly ImmutableList<IScopeInterceptorFactory> factories = ImmutableList<IScopeInterceptorFactory>.Empty
+    private ImmutableList<IScopeInterceptorFactory> factories = ImmutableList<IScopeInterceptorFactory>.Empty
         .AddRange(new IScopeInterceptorFactory[]
         {
             new ScopeRegistryInterceptorFactory(),
@@ -22,14 +22,15 @@ public class ScopeInterceptorFactoryRegistry: IScopeInterceptorFactoryRegistry
             new DelegateToInterfaceDefaultImplementationInterceptorFactory(),
         });
 
-    public IScopeInterceptorFactoryRegistry Register(IScopeInterceptorFactory factory)
+    public IScopeInterceptorFactoryRegistry RegisterBefore<T>(IScopeInterceptorFactory factory)
     {
-        factories.Add(factory);
+        var index = factories.FindIndex(x => x is T);
+        factories = factories.Insert(index, factory);
         return this;
     }
 
     public IReadOnlyCollection<IScopeInterceptorFactory> GetFactories()
     {
-        return factories.ToArray();
+        return factories;
     }
 }

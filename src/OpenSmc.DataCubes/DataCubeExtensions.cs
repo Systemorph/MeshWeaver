@@ -1,4 +1,6 @@
 ﻿using OpenSmc.Arithmetics.Aggregation;
+using OpenSmc.Arithmetics.Aggregation.Implementation;
+using OpenSmc.Arithmetics.MapOver;
 using OpenSmc.DataCubes.Operations;
 using OpenSmc.Reflection;
 
@@ -6,6 +8,7 @@ namespace OpenSmc.DataCubes
 {
     public static class DataCubeExtensions
     {
+
         public static IDataCube<T> ToDataCube<T>(this IEnumerable<T> enumerable)
         {
             var data = enumerable as ICollection<T> ?? enumerable.ToArray();
