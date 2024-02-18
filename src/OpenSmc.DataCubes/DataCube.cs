@@ -1,7 +1,27 @@
-﻿namespace OpenSmc.DataCubes
+﻿using OpenSmc.Arithmetics.Aggregation;
+using OpenSmc.Arithmetics.Aggregation.Implementation;
+using OpenSmc.Arithmetics.MapOver;
+using OpenSmc.DataCubes.Operations;
+
+namespace OpenSmc.DataCubes
 {
     public class DataCube<T> : DataCubeBase<T>
     {
+        static DataCube()
+        {
+            AggregationFunction.RegisterAggregationProviderBefore<IsValueTypeAggregationFunctionProvider>(
+                new IsDataCubeAggregationFunctionProvider(),
+                type => type.IsDataCube());
+
+            MapOverFields.RegisterMapOverProviderBefore<IsSupportedValueTypeFunctionProvider>(
+                new IsDataCubeMapOverFunctionProvider(),
+                type => type.IsDataCube());
+
+            SumFunction.RegisterSumProviderBefore<GenericSumFunctionProvider>(new IsDataCubeSumFunctionProvider(),
+                t => t.IsDataCube());
+
+        }
+
         private readonly ICollection<T> data;
 
 

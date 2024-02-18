@@ -2,5 +2,5 @@
 
 public interface IModuleInitialization
 {
-    public void Initialize(IServiceProvider serviceProvider);
+    public void AddScopesDataCubes(IServiceProvider serviceProvider);
 }
