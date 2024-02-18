@@ -70,7 +70,4 @@ public static class ImportTestDomain
         => dataSource.ConfigureCategory(TransactionalDataDomain);
     public static DataSource ConfigureComputedData(this DataSource dataSource)
         => dataSource.ConfigureCategory(ComputedDataDomain);
-    public static DataSource ConfigureCategory(this DataSource dataSource, IDictionary<Type,IEnumerable<object>> values)
-        => values.Aggregate(dataSource, (ds, t) => ds.WithType(t.Key, type => type.WithInitialData(t.Value)));
-
 }
