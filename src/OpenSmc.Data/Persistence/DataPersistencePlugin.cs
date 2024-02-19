@@ -1,7 +1,11 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
+using OpenSmc.Serialization;
+using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Data.Persistence;
 
@@ -10,10 +14,22 @@ public record GetDataStateRequest : IRequest<CombinedWorkspaceState>;
 
 public record UpdateDataStateRequest(IReadOnlyCollection<DataChangeRequest> Events);
 
+public record DataPersistencePluginState(CombinedWorkspaceState Workspaces)
+{
+    /// <summary>
+    /// Synchronization requests by address.
+    /// </summary>
+    public ImmutableDictionary<object, ImmutableDictionary<string, SynchronizeDataRequest>> SynchronizationsByAddress { get; init; } = ImmutableDictionary<object, ImmutableDictionary<string, SynchronizeDataRequest>>.Empty;
+
+    public JToken SerializedWorkspace { get; init; }
+}
+
+
 public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
-    MessageHubPlugin<CombinedWorkspaceState>(hub),
+    MessageHubPlugin<DataPersistencePluginState>(hub),
     IMessageHandler<GetDataStateRequest>,
-    IMessageHandlerAsync<UpdateDataStateRequest>
+    IMessageHandlerAsync<UpdateDataStateRequest>,
+    IMessageHandler<SynchronizeDataRequest>
 {
     public DataContext Context { get; } = context;
 
@@ -34,7 +50,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
             .ToImmutableDictionary();
                 
 
-        InitializeState(new(loadedWorkspaces, Context));
+        InitializeState(new(new(loadedWorkspaces, Context)));
     }
 
     IMessageDelivery IMessageHandler<GetDataStateRequest>.HandleMessage(IMessageDelivery<GetDataStateRequest> request)
@@ -74,7 +90,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
             if (dataSourceId == null)
                 continue;
             var dataSource = Context.GetDataSource(dataSourceId);
-            var workspace = State.GetWorkspace(dataSourceId);
+            var workspace = State.Workspaces.GetWorkspace(dataSourceId);
 
             await using var transaction = await dataSource.StartTransactionAsync();
             foreach (var e in g.GroupBy(x => x.Event))
@@ -84,9 +100,15 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
                     workspace = ProcessRequest(eventType, typeGroup.Key, typeGroup.Select(x => x.Instance), dataSource, workspace);
             }
             await transaction.CommitAsync();
-            UpdateState(s => s.UpdateWorkspace(dataSourceId, workspace));
+            SynchronizeAndUpdate(dataSourceId, workspace);
         }
     }
+
+    private void SynchronizeAndUpdate(object dataSourceId, WorkspaceState workspace)
+    {
+        UpdateState(s => s with {Workspaces = s.Workspaces.UpdateWorkspace(dataSourceId, workspace) });
+    }
+
 
     /// <summary>
     /// This processes a single update or delete request request
@@ -130,7 +152,8 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
 
         return workspace with
         {
-            Data = workspace.Data.SetItem(typeConfig.ElementType, existingInstances.SetItems(toBeUpdatedInstances))
+            Data = workspace.Data.SetItem(typeConfig.ElementType, existingInstances.SetItems(toBeUpdatedInstances)),
+            Version = Hub.Version
         };
 
     }
@@ -152,7 +175,8 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
         DeleteElementsMethod.MakeGenericMethod(typeConfig.ElementType).InvokeAsAction(toBeDeleted, typeConfig);
         return workspace with
         {
-            Data = workspace.Data.SetItem(typeConfig.ElementType, existingInstances.RemoveRange(toBeUpdatedInstances.Keys))
+            Data = workspace.Data.SetItem(typeConfig.ElementType, existingInstances.RemoveRange(toBeUpdatedInstances.Keys)),
+            Version = Hub.Version
         };
     }
 
@@ -172,4 +196,52 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
     // ReSharper disable once UnusedMethodReturnValue.Local
     private static void DeleteElements<T>(IEnumerable<object> items, TypeSource<T> config) where T : class => config.Delete(items.Cast<T>().ToArray());
 
+    IMessageDelivery IMessageHandler<SynchronizeDataRequest>.HandleMessage(IMessageDelivery<SynchronizeDataRequest> request)
+    {
+        UpdateState(s =>
+            s with
+            {
+                SynchronizationsByAddress = s.SynchronizationsByAddress
+                    .SetItem(
+                        request.Sender,
+                        (s.SynchronizationsByAddress.GetValueOrDefault(request.Sender) ??
+                         ImmutableDictionary<string, SynchronizeDataRequest>.Empty)
+                        .SetItem(request.Message.Id, request.Message))
+            });
+
+        var serializedWorkspace = GetSerializedWorkspace();
+        if (!string.IsNullOrEmpty(request.Message.JsonPath))
+            serializedWorkspace = serializedWorkspace.SelectToken(request.Message.JsonPath);
+        Hub.Post(new DataChanged(Hub.Version) { Changes = serializedWorkspace }, o => o.ResponseFor(request));
+
+        return request.Processed();
+    }
+
+
+    [Inject] private ISerializationService serializationService;
+    private JToken GetSerializedWorkspace()
+    {
+        if (State.SerializedWorkspace != null)
+            return State.SerializedWorkspace;
+
+        var ret = State.Workspaces.WorkspacesByKey.Values.Aggregate(ImmutableDictionary<string, ImmutableList<ImmutableDictionary<string, object>>>.Empty,
+            (dict, ws) => dict.SetItems(ws.Data.Select(kvp =>
+                new KeyValuePair<string, ImmutableList<ImmutableDictionary<string, object>>>(kvp.Key.Name, SerializeEntities(kvp.Value)))));
+        var token = JToken.FromObject(ret);
+        UpdateState(s => s with { SerializedWorkspace = token });
+        return token;
+    }
+
+    private ImmutableList<ImmutableDictionary<string, object>> SerializeEntities(ImmutableDictionary<object, object> instancesByKey)
+    {
+        return instancesByKey.Select(kvp => SerializeEntity(kvp.Key, kvp.Value))
+            .ToImmutableList();
+    }
+
+    private ImmutableDictionary<string, object> SerializeEntity(object id, object instance)
+    {
+        var rawJson = serializationService.Serialize(instance);
+        var dictionary = JsonConvert.DeserializeObject<ImmutableDictionary<string, object>>(rawJson.Content);
+        return dictionary.SetItem("$id", id);
+    }
 }

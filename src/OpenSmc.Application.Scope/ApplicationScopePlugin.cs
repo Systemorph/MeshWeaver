@@ -88,7 +88,7 @@ IMessageHandler<SubscribeToEvaluationRequest>,
             return request.NotFound();
         var address = request.Sender;
         SubscribeScope(request, scope);
-        var serialized = serializationService.SerializeAsync(scope);
+        var serialized = serializationService.Serialize(scope);
         var dictionary = JsonConvert.DeserializeObject<ImmutableDictionary<string, object>>(serialized.Content);
         if (dictionary.TryGetValue("$scopeId", out var scopeId))
             UpdateState(s => s with { SynchronizedById = s.SynchronizedById.SetItem((address, scopeId.ToString()), dictionary) });

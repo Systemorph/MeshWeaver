@@ -1,8 +1,9 @@
 ﻿using OpenSmc.Messaging;
+using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Data;
 
-public record GetManyRequest<T>() : IRequest<GetManyResponse<T>>
+public record GetManyRequest<T> : IRequest<GetManyResponse<T>>
 {
     public int Page { get; init; }
     public int? PageSize { get; init; }
@@ -29,12 +30,21 @@ public record CreateRequest<TObject>(TObject Element) : IRequest<DataChanged> { 
 
 public record DeleteBatchRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataChanged>;
 
-public record SynchronizeEntitiesRequest(EntitiesInDataSource Entities): IRequest<EntitySynchronizationResponse>;
+/// <summary>
+/// Starts data synchronization with data corresponding to the JsonPath query.
+/// </summary>
+/// <param name="JsonPath"></param>
+public record SynchronizeDataRequest(string JsonPath = "") : IRequest<DataChanged>
+{
+    /// <summary>
+    /// Synchronization Id to be used in stopping.
+    /// </summary>
+    public string Id { get; init; } = Guid.NewGuid().AsString();
+}
 
-public record EntitiesInDataSource(object Address, IReadOnlyCollection<EntityDescriptor> Entities);
+/// <summary>
+/// Ids of the synchronization requests to be stopped (generated with request)
+/// </summary>
+/// <param name="Ids"></param>
+public record StopDataSynchronizationRequest(params string[] Ids);
 
-public record StopSynchronizationRequest: IRequest<EntitySynchronizationResponse>;
-
-public record EntitySynchronizationResponse;
-
-public record EntityDescriptor(string Id, string Type);

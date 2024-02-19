@@ -9,7 +9,8 @@ public record SubscribeToEvaluationRequest(string Id,
                                            Func<Task<object>> Expression,
                                            EvaluationSubscriptionOptions Options) : IRequest<ScopeExpressionChangedEvent>
 {
-    public SubscribeToEvaluationRequest(string Id, Func<Task<object>> Expression, Func<EvaluationSubscriptionOptions, EvaluationSubscriptionOptions> optionFactory)
+    public SubscribeToEvaluationRequest(string Id, Func<Task<object>> Expression, 
+        Func<EvaluationSubscriptionOptions, EvaluationSubscriptionOptions> optionFactory)
         : this(Id, Expression, optionFactory(new()))
     {
     }
@@ -20,19 +21,6 @@ public record SubscribeToEvaluationRequest(string Id,
     }
 }
 
-public record UnsubscribeFromEvaluationRequest
-{
-    public UnsubscribeFromEvaluationRequest(string Id)
-    {
-        this.Id = Id;
-    }
-
-    public string Id { get; init; }
-
-    public void Deconstruct(out string Id)
-    {
-        Id = this.Id;
-    }
-}
+public record UnsubscribeFromEvaluationRequest(string Id);
 
 public record ScopeExpressionChangedEvent(string Id, object Value, ExpressionChangedStatus Status, IReadOnlyCollection<(IMutableScope Scope, PropertyInfo Property)> Dependencies, TimeSpan ExecutionTime, Exception Exception = null);
