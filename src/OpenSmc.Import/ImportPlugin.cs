@@ -24,9 +24,9 @@ public class ImportPlugin : MessageHubPlugin<ImportState>,
         Configuration = importConfiguration.Invoke(new(hub, workspace));
     }
 
-    public override async Task StartAsync()
+    public override async Task StartAsync(CancellationToken cancellationToken)
     {
-        await base.StartAsync();
+        await base.StartAsync(cancellationToken);
         await workspace.Initializing;
     }
 

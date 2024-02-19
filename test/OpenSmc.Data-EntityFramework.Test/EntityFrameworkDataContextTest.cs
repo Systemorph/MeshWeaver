@@ -29,7 +29,7 @@ public class EntityFrameworkDataContextTest(ITestOutputHelper output) : HubTestB
                         // if desired, we can add mapping logic between data source and data hub, please request on GitHub.
                         .WithType<MyDataRecord>(),
                     ds =>
-                        ds.GetEntityFrameworkStorage(database => database.UseSqlServer(ConnectionString))
+                        ds.FromEntityFramework(database => database.UseSqlServer(ConnectionString))
                 )
             );
     }

@@ -25,11 +25,11 @@ public class MessageHubPluginTest : TestBase
 
         public ImmutableList<object> Events { get; private set; }  = ImmutableList<object>.Empty;
 
-        public override async Task StartAsync()
+        public override async Task StartAsync(CancellationToken cancellationToken)
         {
             logger.LogInformation("Starting");
             Events = Events.Add("Starting");
-            await Task.Delay(1000);
+            await Task.Delay(1000, cancellationToken);
             Events = Events.Add("Started");
             logger.LogInformation("Started");
         }

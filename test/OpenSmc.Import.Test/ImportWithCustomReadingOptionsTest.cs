@@ -2,6 +2,7 @@
 using FluentAssertions;
 using OpenSmc.Activities;
 using OpenSmc.Data;
+using OpenSmc.Data.Domain;
 using OpenSmc.DataSetReader;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
@@ -17,7 +18,7 @@ public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubT
             .AddData(
                 data => data.WithDataSource(nameof(DataSource),
                     source => source
-                        .ConfigureCategory(ImportTestDomain.TestRecordsDomain)
+                        .ConfigureCategory(TestDomain.TestRecordsDomain)
                 )
             )
             .AddImport(import => import

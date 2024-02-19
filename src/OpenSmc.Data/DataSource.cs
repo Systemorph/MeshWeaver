@@ -29,13 +29,13 @@ public record DataSource(object Id)
         => WithType(configurator.Invoke(new TypeSource<T>()));
 
 
-    public async Task<WorkspaceState> DoInitialize()
+    public async Task<WorkspaceState> DoInitialize(CancellationToken cancellationToken)
     {
         var ret = new WorkspaceState(this);
 
         foreach (var typeConfiguration in TypeSources.Values)
         {
-            var initialized = await typeConfiguration.DoInitialize();
+            var initialized = await typeConfiguration.DoInitialize(cancellationToken);
             ret = ret.SetData(typeConfiguration.ElementType, initialized);
         }
 
@@ -54,13 +54,13 @@ public record DataSource(object Id)
     protected ImmutableDictionary<Type, TypeSource> TypeSources { get; init; } = ImmutableDictionary<Type, TypeSource>.Empty;
 
 
-    public DataSource WithTransaction(Func<Task<ITransaction>> startTransaction)
+    public DataSource WithTransaction(Func<CancellationToken, Task<ITransaction>> startTransaction)
         => this with { StartTransactionAction = startTransaction };
 
 
-    internal Task<ITransaction> StartTransactionAsync() => StartTransactionAction();
-    internal Func<Task<ITransaction>> StartTransactionAction { get; init; }
-        = () => Task.FromResult<ITransaction>(EmptyTransaction.Instance);
+    internal Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken) => StartTransactionAction(cancellationToken);
+    internal Func<CancellationToken, Task<ITransaction>> StartTransactionAction { get; init; }
+        = _ => Task.FromResult<ITransaction>(EmptyTransaction.Instance);
 
     public IEnumerable<Type> MappedTypes => TypeSources.Keys;
 

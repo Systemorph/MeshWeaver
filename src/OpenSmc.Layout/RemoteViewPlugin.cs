@@ -19,9 +19,9 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
 
     private ApplicationScopeAddress ApplicationScopeAddress => new(LayoutExtensions.FindLayoutHost(Hub.Address));
 
-    public override async Task StartAsync()
+    public override async Task StartAsync(CancellationToken cancellationToken)
     {
-        await base.StartAsync();
+        await base.StartAsync(cancellationToken);
         FullRefreshFromModelHubAsync();
     }
     private void FullRefreshFromModelHubAsync()
