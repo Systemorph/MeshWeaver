@@ -1,0 +1,7 @@
+$$
+@@NamedSubject,,,,,,,,,,,,,,,,,,,
+@@Cashflow,,,,,,,,,,,,,,,
+Id,AmountType,Value,ResultsKey,,,,,,,,,
+1,AmountType1,100,ResKey1,,,,,,,,,,,,,,
+2,AmountType2,,ResKey2,,,,,,,,,,
+,AmountType3,300,,,,,,,,,,,

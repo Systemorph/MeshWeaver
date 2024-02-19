@@ -1,4 +1,5 @@
-﻿using OpenSmc.Application.Scope;
+﻿using Microsoft.Extensions.Logging;
+using OpenSmc.Application.Scope;
 using OpenSmc.Messaging;
 using OpenSmc.Scopes.Synchronization;
 using OpenSmc.ServiceProvider;
@@ -8,39 +9,33 @@ namespace OpenSmc.Layout;
 public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteViewControl>(hub),
     IMessageHandler<DataChanged>,
     IMessageHandler<AreaChangedEvent>,
-    IMessageHandler<UpdateRequest<AreaChangedEvent>>,
     IMessageHandler<ScopeExpressionChangedEvent>
 {
     [Inject] private IUiControlService uiControlService; // TODO V10: call BuildUp(this) in some base? (2023/12/20, Alexander Yolokhov)
 
-    private ExpressionSynchronizationAddress ExpressionSynchronizationAddress =>
-        LayoutExtensions.ExpressionSynchronizationAddress(Hub.Address);
-
-    public override void InitializeState(RemoteViewControl control)
-    {
-        base.InitializeState(control);
-        FullRefreshFromModelHubAsync();
-    }
-
-    private void FullRefreshFromModelHubAsync()
-    {
-        if (State.Message != null)
-            Post(State.Message, o => o.WithTarget(State.RedirectAddress));
-        if (State.ViewDefinition != null)
-            Hub.Post(new SubscribeToEvaluationRequest(nameof(Data), async () =>
-                                                                               {
-                                                                                   var viewElement = await State.ViewDefinition(State.Options);
-                                                                                   return new AreaChangedEvent(viewElement.Area, viewElement.View, viewElement.Options);
-                                                                               }),
-                o => o.WithTarget(ExpressionSynchronizationAddress));
-    }
 
     private const string Data = nameof(Data);
+    [Inject] private ILogger<RemoteViewPlugin> logger;
+
+    private ApplicationScopeAddress ApplicationScopeAddress => new(LayoutExtensions.FindLayoutHost(Hub.Address));
 
     public override async Task StartAsync()
     {
         await base.StartAsync();
-        UpdateState(s => s with {Data = new AreaChangedEvent(Data, CreateUiControlHub(Controls.Spinner()))});
+        FullRefreshFromModelHubAsync();
+    }
+    private void FullRefreshFromModelHubAsync()
+    {
+        UpdateState(s => s with { Data = new AreaChangedEvent(Data, CreateUiControlHub(Controls.Spinner())) });
+        if (State.Message != null)
+            Post(State.Message, o => o.WithTarget(State.RedirectAddress));
+        if (State.ViewDefinition != null)
+            Hub.Post(new SubscribeToEvaluationRequest(nameof(Data), async () =>
+                {
+                    var viewElement = await State.ViewDefinition(State.Options);
+                    return new AreaChangedEvent(viewElement.Area, viewElement.View, viewElement.Options);
+                }),
+                o => o.WithTarget(ApplicationScopeAddress));
     }
 
     private void UpdateView(AreaChangedEvent areaChanged)
@@ -93,15 +88,15 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
                                                                                        var viewElement = await State.ViewDefinition(State.Options);
                                                                                        return new AreaChangedEvent(viewElement.Area, viewElement.View, viewElement.Options);
                                                                                    }),
-                                                                                   o => o.WithTarget(ExpressionSynchronizationAddress));
+                                                                                   o => o.WithTarget(ApplicationScopeAddress));
 
             }
             Post( State.View, o => o.ResponseFor(request));
             return request.Processed();
         }
 
-        Post(new AreaChangedEvent(request.Message.Area, State), o => o.ResponseFor(request));
-        return request.Processed();
+
+        return base.RefreshView(request);
     }
 
     public IMessageDelivery HandleMessage(IMessageDelivery<AreaChangedEvent> request)
@@ -132,7 +127,8 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
 
         if (areaChanged.View != null && areaChanged.View is not IUiControl)
             areaChanged = areaChanged with { View = uiControlService.GetUiControl(areaChanged.View) };
-        
+
+        logger.LogDebug($"Received Changed Expression in area: {areaChanged}");
         UpdateView(areaChanged);
         return request.Processed();
 
@@ -140,23 +136,24 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
 
 
     // TODO V10: Not sure what this is ==> should probably be removed. (31.01.2024, Roland Bürgi)
-    IMessageDelivery IMessageHandler<UpdateRequest<AreaChangedEvent>>.HandleMessage(IMessageDelivery<UpdateRequest<AreaChangedEvent>> request)
-    {
-        var oldView = State.View;
-        var newView = State.UpdateView(oldView, request.Message.Element);
-        if (newView != oldView)
-        {
-            UpdateView(newView);
-        }
+    //IMessageDelivery IMessageHandler<UpdateRequest<AreaChangedEvent>>.HandleMessage(IMessageDelivery<UpdateRequest<AreaChangedEvent>> request)
+    //{
+    //    var oldView = State.View;
+    //    var newView = State.UpdateView(oldView, request.Message.Element);
+    //    if (newView != oldView)
+    //    {
+    //        UpdateView(newView);
+    //    }
 
-        Post(new DataChanged(null), o => o.ResponseFor(request));
-        return request.Processed();
-    }
+    //    // TODO V10: Why should remote view issue data changed?! (09.02.2024, Roland Bürgi)
+    //    Post(new DataChanged(hub.Version), o => o.ResponseFor(request));
+    //    return request.Processed();
+    //}
 
     public override void Dispose()
     {
         if (State.ViewDefinition != null)
-            Post(new UnsubscribeFromEvaluationRequest(Data), o => o.WithTarget(ExpressionSynchronizationAddress));
+            Post(new UnsubscribeFromEvaluationRequest(Data), o => o.WithTarget(ApplicationScopeAddress));
         base.Dispose();
     }
 }

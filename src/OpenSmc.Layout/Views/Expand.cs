@@ -9,7 +9,7 @@ public class ExpandableUiPlugin<TControl> : GenericUiControlPlugin<TControl>, IM
     where TControl : UiControl
 {
 
-    public Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery<ExpandRequest> delivery)
+    public Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery<ExpandRequest> delivery, CancellationToken cancellationToken)
     {
         return ExpandAsync(delivery);
     }

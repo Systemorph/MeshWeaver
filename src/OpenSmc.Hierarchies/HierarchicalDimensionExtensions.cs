@@ -1,4 +1,4 @@
-﻿using OpenSmc.DataSource.Abstractions;
+﻿using OpenSmc.Data;
 
 namespace OpenSmc.Hierarchies;
 

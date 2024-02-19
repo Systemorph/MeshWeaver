@@ -1,6 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\OpenSmc.DataCubes.Abstractions\OpenSmc.DataCubes.Abstractions.csproj" />
-    <ProjectReference Include="..\OpenSmc.DataSource.Abstractions\OpenSmc.DataSource.Abstractions.csproj" />
+    <ProjectReference Include="..\OpenSmc.Data\OpenSmc.Data.csproj" />
   </ItemGroup>
 </Project>

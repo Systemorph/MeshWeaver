@@ -4,16 +4,8 @@ namespace OpenSmc.Scopes.Proxy
 {
     //Scopes.ForIdentities() ==> scopeFactory.ForIdentities()
 
-    public class ScopeFactory : IScopeFactory
+    public class ScopeFactory(IServiceProvider serviceProvider) : IScopeFactory
     {
-        private readonly IServiceProvider serviceProvider;
-
-        public ScopeFactory(IServiceProvider serviceProvider)
-        {
-            this.serviceProvider = serviceProvider;
-        }
-
-
         public ScopeBuilder<TIdentity, TStorage> ForIdentities<TIdentity, TStorage>(IEnumerable<TIdentity> identities, TStorage storage)
         {
             return new(identities.Cast<object>(), storage, GetInternalScopeFactory());

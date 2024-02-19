@@ -1,5 +1,5 @@
-﻿using OpenSmc.DataCubes;
-using OpenSmc.DataSource.Abstractions;
+﻿using OpenSmc.Data;
+using OpenSmc.DataCubes;
 using OpenSmc.Domain.Abstractions;
 using OpenSmc.Reflection;
 
@@ -61,7 +61,7 @@ namespace OpenSmc.Pivot
 #pragma warning restore 4014
 
         private void Initialize<T>()
-            where T : INamed
+            where T : class, INamed
         {
             var query = querySource.Query<T>();
             if (query != null)

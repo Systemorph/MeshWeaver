@@ -3,8 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\OpenSmc.Application.Contract\OpenSmc.Application.Contract.csproj" />
     <ProjectReference Include="..\OpenSmc.Application.Scope.Contract\OpenSmc.Application.Scope.Contract.csproj" />
-    <ProjectReference Include="..\OpenSmc.Queues.Contract\OpenSmc.Queues.Contract.csproj" />
-    <ProjectReference Include="..\OpenSmc.Serialization\OpenSmc.Serialization.csproj" />
+    <ProjectReference Include="..\OpenSmc.Messaging.Hub\OpenSmc.Messaging.Hub.csproj" />
   </ItemGroup>
 
 </Project>
