@@ -136,7 +136,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         storage.Values.Should().Contain(i => i.Text == TextChange);
     }
 
-    private Task<IReadOnlyCollection<MyData>> InitializeMyData()
+    private Task<IReadOnlyCollection<MyData>> InitializeMyData(CancellationToken cancellationToken)
     {
         foreach (var data in initialData)
             storage[data.Id] = data;

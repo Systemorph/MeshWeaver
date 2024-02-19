@@ -44,9 +44,9 @@ IMessageHandler<SubscribeToEvaluationRequest>,
     }
 
 
-    public override async Task StartAsync()
+    public override async Task StartAsync(CancellationToken cancellationToken)
     {
-        await base.StartAsync();
+        await base.StartAsync(cancellationToken);
         InitializeState(new());
         scopeRegistry.InstanceRegistered += (_, scope) => TrackPropertyChanged(scope);
         foreach (var scope in scopeRegistry.Scopes)
@@ -239,7 +239,7 @@ IMessageHandler<SubscribeToEvaluationRequest>,
         {
             if ((expressionRegistryItem.Dependencies?.TryGetValue(scope, out var inner) ?? false) && inner.ContainsKey(propertyName))
             {
-                Hub.Schedule(() => Task.FromResult(EnqueueExpression(expressionRegistryItem)));
+                Hub.Schedule(_ => Task.FromResult(EnqueueExpression(expressionRegistryItem)));
             }
         }
     }
@@ -251,7 +251,7 @@ IMessageHandler<SubscribeToEvaluationRequest>,
         Hub.Post(scopeExpressionChangedEvent, o => o.ResponseFor(item.Request));
 
         logger.LogDebug("Enqueuing evaluation expression: {expression}", item);
-        var enqueueRequest = new EnqueueRequest(async () =>
+        var enqueueRequest = new EnqueueRequest(async _ =>
         {
             logger.LogDebug("Executing queue for item: {expression}", item);
             // see if anyone unregistered...

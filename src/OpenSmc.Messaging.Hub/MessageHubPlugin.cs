@@ -12,7 +12,7 @@ public class MessageHubPlugin :
     }
 
 
-    public virtual Task StartAsync() => Task.CompletedTask;
+    public virtual Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
 

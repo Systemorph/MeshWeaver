@@ -33,12 +33,12 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
 
         Rules = new LinkedList<AsyncDelivery>(new AsyncDelivery[]
         {
-            async delivery =>
+            async (delivery, cancellationToken) =>
             {
                 if (delivery?.Message == null || !registeredTypes.TryGetValue(delivery.Message.GetType(), out var registry))
                     return delivery;
                 foreach (var asyncDelivery in registry)
-                    delivery = await asyncDelivery.Invoke(delivery);
+                    delivery = await asyncDelivery.Invoke(delivery, cancellationToken);
                 return delivery;
             }
         });
@@ -94,10 +94,13 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
 
     private AsyncDelivery CreateDelivery(Type messageType, Type interfaceType, object instance, Expression cancellationToken)
     {
-        var deliveryType = typeof(IMessageDelivery<>).MakeGenericType(messageType);
         var prm = Expression.Parameter(typeof(IMessageDelivery));
-
-        var expressions = new List<Expression> { Expression.Convert(prm, typeof(IMessageDelivery<>).MakeGenericType(messageType)) };
+        var cancellationTokenPrm = Expression.Parameter(typeof(CancellationToken));
+        var expressions = new List<Expression>
+        {
+            Expression.Convert(prm, typeof(IMessageDelivery<>).MakeGenericType(messageType)),
+            cancellationTokenPrm
+        };
         if(cancellationToken != null)
             expressions.Add(cancellationToken);
         var handlerCall = Expression.Call(Expression.Constant(instance, interfaceType),
@@ -108,10 +111,10 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
         if (interfaceType.GetGenericTypeDefinition() == typeof(IMessageHandler<>))
             handlerCall = Expression.Call(null, MessageHubPluginExtensions.TaskFromResultMethod, handlerCall);
 
-        var lambda = Expression.Lambda<Func<IMessageDelivery, Task<IMessageDelivery>>>(
-            handlerCall, prm
+        var lambda = Expression.Lambda<Func<IMessageDelivery, CancellationToken, Task<IMessageDelivery>>>(
+            handlerCall, prm, cancellationTokenPrm
         ).Compile();
-        return d => lambda(d);
+        return (d, c) => lambda(d,c);
     }
 
     private record TypeAndHandler(Type Type, AsyncDelivery Action);
@@ -129,12 +132,12 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
     }
 
 
-    public virtual async Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery)
+    public virtual async Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         if (!Filter(delivery) || !Rules.Any())
             return delivery;
 
-        return await DeliverMessageAsync(delivery.Submitted(), Rules.First);
+        return await DeliverMessageAsync(delivery.Submitted(), Rules.First, cancellationToken);
     }
 
 
@@ -143,14 +146,14 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
         return registeredTypes.ContainsKey(delivery.Message.GetType());
     }
 
-    public async Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, LinkedListNode<AsyncDelivery> node)
+    public async Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, LinkedListNode<AsyncDelivery> node, CancellationToken cancellationToken)
     {
-        delivery = await node.Value.Invoke(delivery);
+        delivery = await node.Value.Invoke(delivery, cancellationToken);
 
         if (node.Next == null)
             return delivery;
 
-        return await DeliverMessageAsync(delivery, node.Next);
+        return await DeliverMessageAsync(delivery, node.Next, cancellationToken);
     }
 
 
@@ -159,17 +162,17 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
 
     public IMessageHandlerRegistry Register<TMessage>(SyncDelivery<TMessage> action, DeliveryFilter<TMessage> filter)
     {
-        return Register(d => Task.FromResult(action(d)), filter);
+        return Register((d,_) => Task.FromResult(action(d)), filter);
     }
 
     public IMessageHandlerRegistry RegisterInherited<TMessage>(AsyncDelivery<TMessage> action, DeliveryFilter<TMessage> filter = null)
     {
-        Rules.AddLast(new LinkedListNode<AsyncDelivery>(d => d is IMessageDelivery<TMessage> md && (filter?.Invoke(md) ?? true) ? action(md) : Task.FromResult(d)));
+        Rules.AddLast(new LinkedListNode<AsyncDelivery>((d, c) => d is IMessageDelivery<TMessage> md && (filter?.Invoke(md) ?? true) ? action(md,c) : Task.FromResult(d)));
         return this;
     }
 
     public IMessageHandlerRegistry Register(SyncDelivery delivery) =>
-        Register(d => Task.FromResult(delivery(d)));
+        Register((d, _) => Task.FromResult(delivery(d)));
 
     public IMessageHandlerRegistry Register(AsyncDelivery delivery)
     {
@@ -179,11 +182,11 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
 
 
     public IMessageHandlerRegistry RegisterInherited<TMessage>(SyncDelivery<TMessage> action, DeliveryFilter<TMessage> filter = null)
-        => RegisterInherited(d => Task.FromResult(action(d)), filter);
+        => RegisterInherited((d,_) => Task.FromResult(action(d)), filter);
 
     public IMessageHandlerRegistry Register<TMessage>(AsyncDelivery<TMessage> action, DeliveryFilter<TMessage> filter)
     {
-        return Register(typeof(TMessage), d => action((MessageDelivery<TMessage>)d), d => filter((IMessageDelivery<TMessage>)d));
+        return Register(typeof(TMessage), (d, c) => action((MessageDelivery<TMessage>)d,c), d => filter((IMessageDelivery<TMessage>)d));
     }
 
 
@@ -193,21 +196,22 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
     {
         TypeRegistry.WithType(tMessage);
         var list = registeredTypes.GetOrAdd(tMessage, _ => new());
-        list.Add(delivery => WrapFilter(delivery, action, filter));
+        list.Add((delivery , cancellationToken)=> WrapFilter(delivery, action, filter, cancellationToken));
         return this;
     }
 
-    private Task<IMessageDelivery> WrapFilter(IMessageDelivery delivery, AsyncDelivery action, DeliveryFilter filter)
+    private Task<IMessageDelivery> WrapFilter(IMessageDelivery delivery, AsyncDelivery action, DeliveryFilter filter,
+        CancellationToken cancellationToken)
     {
         if (filter(delivery))
-            return action(delivery);
+            return action(delivery, cancellationToken);
         return Task.FromResult(delivery);
     }
 
     public IMessageHandlerRegistry Register(Type tMessage, SyncDelivery action) => Register(tMessage, action, _ => true);
 
     public IMessageHandlerRegistry Register(Type tMessage, SyncDelivery action, DeliveryFilter filter) => Register(tMessage,
-        d =>
+        (d,_) =>
         {
             d = action(d);
             return Task.FromResult(d);

@@ -7,10 +7,10 @@ namespace OpenSmc.DataStorage.EntityFramework
     { 
         private EntityFrameworkContext Context { get; set; } 
 
-        private Task CreateContext()
+        private Task CreateContext(CancellationToken cancellationToken)
         {
             Context = new EntityFrameworkContext(modelBuilder, dbContextOptionsBuilder);
-            return Context.Database.EnsureCreatedAsync();
+            return Context.Database.EnsureCreatedAsync(cancellationToken);
         }
 
         public IQueryable<T> Query<T>() where T : class
@@ -19,8 +19,8 @@ namespace OpenSmc.DataStorage.EntityFramework
 
         private class Transaction(EntityFrameworkDataStorage dataStorage) : ITransaction
         {
-            public Task CommitAsync()
-                => dataStorage.CommitAsync();
+            public Task CommitAsync(CancellationToken cancellationToken)
+                => dataStorage.CommitAsync(cancellationToken);
 
             public Task RevertAsync()
                 => dataStorage.RevertAsync();
@@ -35,9 +35,14 @@ namespace OpenSmc.DataStorage.EntityFramework
             Context = null;
         }
 
-        public async Task<ITransaction> StartTransactionAsync()
+        public async Task<IReadOnlyCollection<T>> GetData<T>(CancellationToken cancellationToken) where T : class
         {
-            await CreateContext();
+            return await Query<T>().ToArrayAsync(cancellationToken);
+        }
+
+        public async Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken)
+        {
+            await CreateContext(cancellationToken);
             return new Transaction(this);
         }
 
@@ -60,8 +65,8 @@ namespace OpenSmc.DataStorage.EntityFramework
             dbSet.RemoveRange(instances);
         }
 
-        private Task CommitAsync() =>
-             Context.SaveChangesAsync();
+        private Task CommitAsync(CancellationToken cancellationToken) =>
+             Context.SaveChangesAsync(cancellationToken);
 
     }
 }

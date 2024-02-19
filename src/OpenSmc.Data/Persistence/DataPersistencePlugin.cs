@@ -37,16 +37,16 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
     /// Upon start, it initializes the persisted state from the DB
     /// </summary>
     /// <returns></returns>
-    public override async Task StartAsync()
+    public override async Task StartAsync(CancellationToken cancellationToken)
     {
-        await base.StartAsync();
+        await base.StartAsync(cancellationToken);
         var loadedWorkspaces =
             (await Context.DataSources
                 .Distinct()
                 .ToAsyncEnumerable()
                 .SelectAwait(async kvp =>
-                    new KeyValuePair<object, WorkspaceState>(kvp.Key, await kvp.Value.DoInitialize()))
-                .ToArrayAsync())
+                    new KeyValuePair<object, WorkspaceState>(kvp.Key, await kvp.Value.DoInitialize(cancellationToken)))
+                .ToArrayAsync(cancellationToken))
             .ToImmutableDictionary();
                 
 
@@ -62,7 +62,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
     public async Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery<UpdateDataStateRequest> request, CancellationToken cancellationToken)
     {
         var events = request.Message.Events;
-        await UpdateState(events);
+        await UpdateState(events, cancellationToken);
         return request.Processed();
 
     }
@@ -72,8 +72,9 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
     /// the content in arbitrary order, mixing data partitions.
     /// </summary>
     /// <param name="requests">Requests to be processed</param>
+    /// <param name="cancellationToken"></param>
     /// <returns></returns>
-    private async Task UpdateState(IReadOnlyCollection<DataChangeRequest> requests)
+    private async Task UpdateState(IReadOnlyCollection<DataChangeRequest> requests, CancellationToken cancellationToken)
     {
         foreach (var g in requests
                      .SelectMany(ev => ev.Elements
@@ -92,14 +93,14 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
             var dataSource = Context.GetDataSource(dataSourceId);
             var workspace = State.Workspaces.GetWorkspace(dataSourceId);
 
-            await using var transaction = await dataSource.StartTransactionAsync();
+            await using var transaction = await dataSource.StartTransactionAsync(cancellationToken);
             foreach (var e in g.GroupBy(x => x.Event))
             {
                 var eventType = e.Key;
                 foreach (var typeGroup in e.GroupBy(x => x.Type))
                     workspace = ProcessRequest(eventType, typeGroup.Key, typeGroup.Select(x => x.Instance), dataSource, workspace);
             }
-            await transaction.CommitAsync();
+            await transaction.CommitAsync(cancellationToken);
             SynchronizeAndUpdate(dataSourceId, workspace);
         }
     }

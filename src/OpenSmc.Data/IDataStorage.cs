@@ -1,8 +1,9 @@
 ﻿namespace OpenSmc.Data;
 
-public interface IDataStorage : IQuerySource
+public interface IDataStorage 
 {
-    Task<ITransaction> StartTransactionAsync();
+    Task<IReadOnlyCollection<T>> GetData<T>(CancellationToken cancellationToken) where T : class;
+    Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken);
     void Add<T>(IReadOnlyCollection<T> instances) where T : class;
     void Update<T>(IReadOnlyCollection<T> instances) where T:class;
     void Delete<T>(IReadOnlyCollection<T> instances) where T : class;
@@ -10,6 +11,6 @@ public interface IDataStorage : IQuerySource
 
 public interface ITransaction : IAsyncDisposable
 {
-    Task CommitAsync();
+    Task CommitAsync(CancellationToken cancellationToken);
     Task RevertAsync();
 }

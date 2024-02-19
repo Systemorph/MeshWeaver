@@ -32,9 +32,9 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     }
 
 
-    public override async Task StartAsync()  // This loads the persisted state
+    public override async Task StartAsync(CancellationToken cancellationToken)  // This loads the persisted state
     {
-        await base.StartAsync();
+        await base.StartAsync(cancellationToken);
 
         var response = await persistenceHub.AwaitResponse(new GetDataStateRequest());
         InitializeState(new (response.Message));
