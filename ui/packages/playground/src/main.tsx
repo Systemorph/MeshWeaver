@@ -1,12 +1,17 @@
-import ReactDOM from 'react-dom/client'
+import { createRoot } from 'react-dom/client'
 import { PlaygroundPage } from "./PlaygroundPage";
 import { registerControlResolver } from "@open-smc/application/src/renderControl";
-import './index.scss';
 import { applicationControlsResolver } from "@open-smc/application/src/applicationControlResolver";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
+import './index.scss';
 
 registerControlResolver(applicationControlsResolver);
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-    <PlaygroundPage/>
+createRoot(document.getElementById('root')!).render(
+    <BrowserRouter>
+        <Routes>
+            <Route path={"*"} element={<PlaygroundPage/>} />
+        </Routes>
+    </BrowserRouter>
 )
 
