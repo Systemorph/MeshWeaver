@@ -4,7 +4,6 @@
     <PackageReference Include="Verify.Xunit" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\src\OpenSmc.Serialization\OpenSmc.Serialization.csproj" />
     <ProjectReference Include="..\OpenSmc.Fixture\OpenSmc.Fixture.csproj" />
     <ProjectReference Include="..\OpenSmc.Hub.Fixture\OpenSmc.Hub.Fixture.csproj" />
   </ItemGroup>

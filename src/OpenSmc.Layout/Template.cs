@@ -27,9 +27,9 @@ public static class Template
             view = (TView)((IUiControl)view)
                 .WithBuildAction((c, sp) =>
                                  {
-                                     var eventsRegistry = sp.GetService<IEventsRegistry>();
+                                     var eventsRegistry = sp.GetService<ITypeRegistry>();
                                      foreach (var type in types)
-                                         eventsRegistry.WithEvent(type);
+                                         eventsRegistry.WithType(type);
                                      return c;
                                  });
         return view;
@@ -53,9 +53,9 @@ public static class Template
             ret = ret
                 .WithBuildAction((c, sp) =>
                                  {
-                                     var eventsRegistry = sp.GetService<IEventsRegistry>();
+                                     var eventsRegistry = sp.GetService<ITypeRegistry>();
                                      foreach (var type in types)
-                                         eventsRegistry.WithEvent(type);
+                                         eventsRegistry.WithType(type);
                                      return c;
                                  });
         return ret;
@@ -77,7 +77,7 @@ public record ItemTemplateControl : UiControl<ItemTemplateControl, GenericUiCont
 
     public UiControl GetUiControl(IUiControlService uiControlService, IServiceProvider serviceProvider)
     {
-        if (View is Composition.Layout stackControl)
+        if (View is Composition.LayoutStackControl stackControl)
         {
             stackControl = stackControl with
                            {

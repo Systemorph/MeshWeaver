@@ -8,7 +8,7 @@ public record MessageHubConnections
     public HashSet<object> Subscriptions { get; } = new();
 }
 
-public class SubscribersPlugin : MessageHubPlugin<SubscribersPlugin, MessageHubConnections>
+public class SubscribersPlugin : MessageHubPlugin<MessageHubConnections>
 {
 
     public SubscribersPlugin(IMessageHub hub) : base(hub)
@@ -50,13 +50,13 @@ public class SubscribersPlugin : MessageHubPlugin<SubscribersPlugin, MessageHubC
 
         if (sentToUs)
         {
-            if (!usSending && !State.Subscriptions.Contains(delivery.Sender))
+            if (!usSending)
                 State.Subscribers.Add(delivery.Sender);
 
             return delivery;
         }
 
-        if (!State.Subscribers.Contains(delivery.Target))
+        if (usSending && !State.Subscribers.Contains(delivery.Target))
             State.Subscriptions.Add(delivery.Target);
 
         return delivery;

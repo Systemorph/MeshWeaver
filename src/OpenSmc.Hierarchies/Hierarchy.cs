@@ -1,5 +1,5 @@
 ﻿using OpenSmc.Collections;
-using OpenSmc.DataSource.Abstractions;
+using OpenSmc.Data;
 using OpenSmc.Domain.Abstractions;
 
 namespace OpenSmc.Hierarchies;

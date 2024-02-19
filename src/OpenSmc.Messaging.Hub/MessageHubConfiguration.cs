@@ -2,6 +2,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using OpenSmc.Messaging.Serialization;
 using OpenSmc.Serialization;
 using OpenSmc.ServiceProvider;
 using OpenSmc.ShortGuid;
@@ -25,6 +26,16 @@ public record MessageHubConfiguration
     {
         Address = address;
         ParentServiceProvider = parentServiceProvider;
+        Properties = InitializeProperties();
+    }
+
+    private ImmutableDictionary<Type, object> InitializeProperties()
+    {
+        return ImmutableDictionary<Type, object>.Empty
+            .Add(typeof(SerializationConfiguration), ParentServiceProvider
+                .GetService<ISerializationService>()?.Configuration
+            ?? new()
+            );
     }
 
     internal Func<IServiceCollection, IServiceCollection> Services { get; init; } = x => x;
@@ -38,7 +49,6 @@ public record MessageHubConfiguration
 
     internal ImmutableList<MessageHandlerItem> MessageHandlers { get; init; } = ImmutableList<MessageHandlerItem>.Empty;
     internal Func<string> GetAccessObject { get; init; }
-    internal ImmutableList<StartConfiguration> StartConfigurations { get; init; } = ImmutableList<StartConfiguration>.Empty;
 
     protected internal ImmutableList<Func<IMessageHub, Task>> BuildupActions { get; init; } = ImmutableList<Func<IMessageHub, Task>>.Empty;
 
@@ -60,7 +70,7 @@ public record MessageHubConfiguration
     }
 
 
-    internal Func<ForwardConfiguration, ForwardConfiguration> ForwardConfigurationBuilder { get; init; }
+    internal Func<RouteConfiguration, RouteConfiguration> ForwardConfigurationBuilder { get; init; }
     public ImmutableList<Func<IMessageHub, Task<IMessageHubPlugin>>> PluginFactories { get; init; } = ImmutableList<Func<IMessageHub, Task<IMessageHubPlugin>>>.Empty;
 
 
@@ -71,7 +81,7 @@ public record MessageHubConfiguration
     public MessageHubConfiguration SynchronizeFrom(object address) => this with { SynchronizationAddress = address };
 
 
-    public MessageHubConfiguration WithForwards(Func<ForwardConfiguration, ForwardConfiguration> configuration) => this with { ForwardConfigurationBuilder = x => configuration(ForwardConfigurationBuilder?.Invoke(x) ?? x) };
+    public MessageHubConfiguration WithRoutes(Func<RouteConfiguration, RouteConfiguration> configuration) => this with { ForwardConfigurationBuilder = x => configuration(ForwardConfigurationBuilder?.Invoke(x) ?? x) };
 
 
     public MessageHubConfiguration WithAccessObject(Func<string> getAccessObject)
@@ -80,19 +90,31 @@ public record MessageHubConfiguration
     }
 
 
+    public MessageHubConfiguration WithHostedHub(object address,
+        Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
+        => WithRoutes(f => f.RouteAddress<object>((a, d) =>
+        {
+            if (!address.Equals(a))
+                return d;
+            f.Hub.GetHostedHub(a, configuration).DeliverMessage(d);
+            return d.Forwarded();
+        }));
+
+
     protected virtual ServiceCollection ConfigureServices<TAddress>(IMessageHub parent)
     {
         var services = new ServiceCollection();
         services.Replace(ServiceDescriptor.Singleton<MessageHubConnections>(_ => new()));
         services.Replace(ServiceDescriptor.Singleton<IMessageHub>(sp => new MessageHub<TAddress>(sp, sp.GetRequiredService<HostedHubsCollection>(), this, parent)));
         services.Replace(ServiceDescriptor.Singleton<HostedHubsCollection, HostedHubsCollection>());
-        services.Replace(ServiceDescriptor.Singleton(typeof(IEventsRegistry),
-            sp => new EventsRegistry(ParentServiceProvider.GetService<IEventsRegistry>())));
+        services.Replace(ServiceDescriptor.Singleton(typeof(ITypeRegistry),
+            sp => new TypeRegistry(ParentServiceProvider.GetService<ITypeRegistry>())));
         services.Replace(ServiceDescriptor.Singleton<IMessageService>(sp => new MessageService(Address,
             sp.GetService<ISerializationService>(), // HACK: GetRequiredService replaced by GetService (16.01.2024, Alexander Yolokhov)
             sp.GetRequiredService<ILogger<MessageService>>()
         )));
         services.Replace(ServiceDescriptor.Singleton(sp => new ParentMessageHub(sp.GetRequiredService<IMessageHub>())));
+        services.Replace(ServiceDescriptor.Singleton<ISerializationService>(sp => new SerializationService(sp, Get<SerializationConfiguration>())));
         Services.Invoke(services);
         return services;
     }
@@ -130,37 +152,12 @@ public record MessageHubConfiguration
         return HubInstance;
     }
 
-}
 
-public record StartConfiguration(object Address)
-{
-    internal ImmutableList<object> CreationObjects { get; init; } = ImmutableList<object>.Empty;
-    public StartConfiguration WithCreateMessage(object instance) => this with { CreationObjects = CreationObjects.Add(instance) };
-}
 
-public abstract record MessageRouteConfiguration(Func<IMessageDelivery, object> AddressMap, IMessageHub Host) : IForwardConfigurationItem
-{
-    internal const string MaskedRequest = nameof(MaskedRequest);
-    AsyncDelivery IForwardConfigurationItem.Route => d => Task.FromResult(Route(d));
+    internal ImmutableDictionary<Type, object> Properties { get; init; } = ImmutableDictionary<Type, object>.Empty;
+    public T Get<T>() => (T)Properties.GetValueOrDefault(typeof(T));
+    public MessageHubConfiguration Set<T>(T value) => this with { Properties = Properties.SetItem(typeof(T), value) };
 
-    bool IForwardConfigurationItem.Filter(IMessageDelivery delivery) => Applies(delivery);
-    protected abstract bool Applies(IMessageDelivery delivery);
-
-    private IMessageDelivery Route(IMessageDelivery delivery)
-    {
-        var posted = Host.Post(delivery.Message, d => d.WithTarget(AddressMap.Invoke(delivery)).WithProperties(d.Properties));
-
-        if (delivery.Message is IRequest)
-            Host.RegisterCallback(posted, r => HandleWayBack(delivery, r));
-
-        return delivery.Forwarded();
-    }
-
-    private IMessageDelivery HandleWayBack(IMessageDelivery request, IMessageDelivery response)
-    {
-        Host.Post(response.Message, o => o.WithTarget(request.Sender).WithProperties(response.Properties).WithRequestIdFrom(request));
-        return request.Processed();
-    }
 }
 
 

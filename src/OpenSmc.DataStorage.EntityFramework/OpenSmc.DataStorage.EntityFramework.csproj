@@ -1,0 +1,12 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenSmc.Data\OpenSmc.Data.csproj" />
+    <ProjectReference Include="..\OpenSmc.Messaging.Hub\OpenSmc.Messaging.Hub.csproj" />
+  </ItemGroup>
+
+</Project>

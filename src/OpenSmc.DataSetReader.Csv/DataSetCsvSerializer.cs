@@ -4,7 +4,6 @@ using System.Text;
 using System.Text.RegularExpressions;
 using CsvHelper;
 using CsvHelper.Configuration;
-using OpenSmc.DataSetReader.Abstractions;
 using OpenSmc.DataStructures;
 using OpenSmc.Reflection;
 
@@ -19,7 +18,7 @@ namespace OpenSmc.DataSetReader.Csv
         //Detects odd number of quotes located sequentially
         private static readonly Regex QuotesRegex = new("(?<!\")\"(\"\")*(?!\")", RegexOptions.Compiled);
 
-        public static string Serialize(IDataSet dataSet, char delimiter = DataSetReaderDefaults.DefaultDelimiter)
+        public static string Serialize(IDataSet dataSet, char delimiter)
         {
             var csvFactory = new Factory();
             var sb = new StringBuilder();
@@ -57,7 +56,7 @@ namespace OpenSmc.DataSetReader.Csv
             return sb.ToString();
         }
 
-        public static async Task<(IDataSet DataSet, string Format)> Parse(StreamReader reader, char delimiter = DataSetReaderDefaults.DefaultDelimiter, bool withHeaderRow = true, Type contentType = null)
+        public static async Task<(IDataSet DataSet, string Format)> Parse(StreamReader reader, char delimiter, bool withHeaderRow, Type contentType)
         {
             var dataSet = new DataSet();
             var content = await reader.ReadLineAsync();
@@ -208,6 +207,12 @@ namespace OpenSmc.DataSetReader.Csv
         private static string RemoveRedundantChars(this string content, string prefix)
         {
             return Regex.Match(content, $"[^{prefix}]*\\w", RegexOptions.Compiled).Value;
+        }
+
+        public static async Task<(IDataSet DataSet, string Format)> ReadAsync(Stream stream, DataSetReaderOptions options)
+        {
+            using var reader = new StreamReader(stream);
+            return await Parse(reader, options.Delimiter, options.IncludeHeaderRow, options.TypeToRestoreHeadersFrom);
         }
     }
 }

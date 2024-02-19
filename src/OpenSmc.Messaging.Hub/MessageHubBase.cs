@@ -10,7 +10,7 @@ namespace OpenSmc.Messaging;
 
 public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsyncDisposable
 {
-    [Inject]protected IEventsRegistry EventsRegistry;
+    [Inject]protected ITypeRegistry TypeRegistry;
     public virtual TAddress Address { get;  }
     protected readonly LinkedList<AsyncDelivery> Rules;
 
@@ -23,13 +23,13 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
     {
         Hub = hub;
         Address = (TAddress)hub.Address;
-        InitializeTypes(this);
 
     }
     protected internal MessageHubBase(IServiceProvider serviceProvider)
     {
         serviceProvider.Buildup(this);
         MessageService = serviceProvider.GetRequiredService<IMessageService>();
+        InitializeTypes(this);
 
         Rules = new LinkedList<AsyncDelivery>(new AsyncDelivery[]
         {
@@ -48,7 +48,7 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
 
     private void InitializeTypes(object instance)
     {
-        if (EventsRegistry == null)
+        if (TypeRegistry == null)
             return;
 
         foreach (var registry in instance.GetType().GetAllInterfaces().Select(i => GetTypeAndHandler(i, instance)).Where(x => x != null))
@@ -56,7 +56,7 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
             if (registry.Action != null)
                 Register(registry.Type, registry.Action, _ => true);
 
-            EventsRegistry.WithEvent(registry.Type);
+            TypeRegistry.WithType(registry.Type);
 
             var types = registry.Type.GetAllInterfaces()
                 .Where(x => x.IsGenericType && x.GetGenericTypeDefinition() == typeof(IRequest<>))
@@ -64,13 +64,13 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
 
             foreach (var type in types)
             {
-                EventsRegistry.WithEvent(type);
+                TypeRegistry.WithType(type);
             }
 
             if (registry.Type.IsGenericType)
             {
                 foreach (var genericType in registry.Type.GetGenericArguments())
-                    EventsRegistry.WithEvent(genericType);
+                    TypeRegistry.WithType(genericType);
             }
         }
     }
@@ -81,19 +81,28 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
         if (!type.IsGenericType || !MessageHubPluginExtensions.HandlerTypes.Contains(type.GetGenericTypeDefinition()))
             return null;
         var genericArgs = type.GetGenericArguments();
-        var messageType = genericArgs.First();
-        return new(messageType, CreateAsyncDelivery(messageType, type, instance));
+
+        var cancellationToken = new CancellationTokenSource().Token; // todo: think how to handle this
+        if (type.GetGenericTypeDefinition() == typeof(IMessageHandler<>))
+            return new(genericArgs.First(), CreateDelivery(genericArgs.First(), type, instance, null));
+        if (type.GetGenericTypeDefinition() == typeof(IMessageHandlerAsync<>))
+            return new(genericArgs.First(), CreateDelivery(genericArgs.First(), type, instance, Expression.Constant(cancellationToken)));
+
+        return null;
     }
 
 
-    private AsyncDelivery CreateAsyncDelivery(Type messageType, Type interfaceType, object instance)
+    private AsyncDelivery CreateDelivery(Type messageType, Type interfaceType, object instance, Expression cancellationToken)
     {
         var deliveryType = typeof(IMessageDelivery<>).MakeGenericType(messageType);
         var prm = Expression.Parameter(typeof(IMessageDelivery));
 
+        var expressions = new List<Expression> { Expression.Convert(prm, typeof(IMessageDelivery<>).MakeGenericType(messageType)) };
+        if(cancellationToken != null)
+            expressions.Add(cancellationToken);
         var handlerCall = Expression.Call(Expression.Constant(instance, interfaceType),
             interfaceType.GetMethods(BindingFlags.Instance | BindingFlags.Public).First(),
-            Expression.Convert(prm, deliveryType)
+            expressions
         );
 
         if (interfaceType.GetGenericTypeDefinition() == typeof(IMessageHandler<>))
@@ -182,7 +191,7 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
 
     public IMessageHandlerRegistry Register(Type tMessage, AsyncDelivery action, DeliveryFilter filter)
     {
-        EventsRegistry.WithEvent(tMessage);
+        TypeRegistry.WithType(tMessage);
         var list = registeredTypes.GetOrAdd(tMessage, _ => new());
         list.Add(delivery => WrapFilter(delivery, action, filter));
         return this;

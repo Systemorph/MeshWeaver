@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <SkipTypeGeneration>true</SkipTypeGeneration>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OpenSmc.DataSetReader.Csv\OpenSmc.DataSetReader.Csv.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.DataSetReader.Excel\OpenSmc.DataSetReader.Excel.csproj" />
+    <ProjectReference Include="..\OpenSmc.Fixture\OpenSmc.Fixture.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="**\*.csv;**\*.xlsx">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

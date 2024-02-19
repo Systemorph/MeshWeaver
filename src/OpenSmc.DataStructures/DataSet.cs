@@ -5,6 +5,7 @@ using System.Xml.Serialization;
 
 namespace OpenSmc.DataStructures
 {
+    // TODO V10: We should convert this to immutable (12.02.2024, Roland Bürgi)
     [Serializable]
     public class DataSet : IDataSet, IXmlSerializable
     {

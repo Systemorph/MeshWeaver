@@ -26,7 +26,7 @@ public class MessageHubSubscribersTest : TestBase
     {
         Services.AddSingleton<IMessageHub>(sp => sp.CreateMessageHub(new RouterAddress(),
             conf => conf
-                .WithForwards(forward => forward
+                .WithRoutes(forward => forward
                     .RouteAddressToHostedHub<HostAddress>(ConfigureHost)
                     .RouteAddressToHostedHub<ClientAddress>(ConfigureClient)
                 )));
