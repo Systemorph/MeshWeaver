@@ -54,7 +54,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         UpdateState(s =>
             s with
             {
-                Current = s.Current.Modify(items, (ws, i) => ws.Update(i, options.SnapshotModeEnabled)),
+                Current = s.Current.Modify(items, (ws, i) => ws.Update(i, options?.SnapshotModeEnabled ?? false)),
                 UncommittedEvents = s.UncommittedEvents.Add(new UpdateDataRequest(items) { Options = options })
             }
         ); // update the state in memory (workspace)
