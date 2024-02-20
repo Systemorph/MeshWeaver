@@ -13,9 +13,9 @@ public record DisconnectHubRequest();
 
 
 
-public record DataChanged(long Version)
+public record DataChangedEvent(long Version)
 {
-    public object Changes { get; init; }
+    public object Data { get; init; }
     public ActivityLog Log { get; init; }
 };
 

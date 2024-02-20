@@ -63,7 +63,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         await Task.Delay(300);
 
         // asserts
-        var expected = new DataChanged(1);
+        var expected = new DataChangedEvent(1);
         updateResponse.Message.Should().BeEquivalentTo(expected);
         var expectedItems = new MyData[]
         {
@@ -94,7 +94,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         await Task.Delay(200);
 
         // asserts
-        var expected = new DataChanged(1);
+        var expected = new DataChangedEvent(1);
         deleteResponse.Message.Should().BeEquivalentTo(expected);
         var expectedItems = new[]
         {
@@ -119,7 +119,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             myInstance = myInstance with { Text = TextChange };
             workspace.Update(myInstance);
             workspace.Commit();
-            Hub.Post(new DataChanged(Hub.Version), o => o.ResponseFor(request));
+            Hub.Post(new DataChangedEvent(Hub.Version), o => o.ResponseFor(request));
             return request.Processed();
         }
     }

@@ -19,7 +19,7 @@ public record DataPersistencePluginState(CombinedWorkspaceState Workspaces)
     /// <summary>
     /// Synchronization requests by address.
     /// </summary>
-    public ImmutableDictionary<object, ImmutableDictionary<string, SynchronizeDataRequest>> SynchronizationsByAddress { get; init; } = ImmutableDictionary<object, ImmutableDictionary<string, SynchronizeDataRequest>>.Empty;
+    public ImmutableDictionary<object, ImmutableDictionary<string, StartDataSynchronizationRequest>> SynchronizationsByAddress { get; init; } = ImmutableDictionary<object, ImmutableDictionary<string, StartDataSynchronizationRequest>>.Empty;
 
     public JToken SerializedWorkspace { get; init; }
 }
@@ -29,7 +29,8 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
     MessageHubPlugin<DataPersistencePluginState>(hub),
     IMessageHandler<GetDataStateRequest>,
     IMessageHandlerAsync<UpdateDataStateRequest>,
-    IMessageHandler<SynchronizeDataRequest>
+    IMessageHandler<StartDataSynchronizationRequest>,
+    IMessageHandler<DataChangedEvent>
 {
     public DataContext Context { get; } = context;
 
@@ -45,7 +46,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
                 .Distinct()
                 .ToAsyncEnumerable()
                 .SelectAwait(async kvp =>
-                    new KeyValuePair<object, WorkspaceState>(kvp.Key, await kvp.Value.DoInitialize(cancellationToken)))
+                    new KeyValuePair<object, WorkspaceState>(kvp.Key, await kvp.Value.InitializeAsync(Hub, cancellationToken)))
                 .ToArrayAsync(cancellationToken))
             .ToImmutableDictionary();
                 
@@ -125,7 +126,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
         if (!dataSource.GetTypeConfiguration(elementType, out var typeConfig))
             return workspace;
         var toBeUpdated = instances.ToDictionary(typeConfig.GetKey);
-        var existing = workspace.Data.GetValueOrDefault(elementType) ?? ImmutableDictionary<object, object>.Empty;
+        var existing = workspace.Data.GetValueOrDefault(typeConfig.CollectionName) ?? ImmutableDictionary<object, object>.Empty;
         switch (request)
         {
             case UpdateDataRequest:
@@ -153,7 +154,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
 
         return workspace with
         {
-            Data = workspace.Data.SetItem(typeConfig.ElementType, existingInstances.SetItems(toBeUpdatedInstances)),
+            Data = workspace.Data.SetItem(typeConfig.CollectionName, existingInstances.SetItems(toBeUpdatedInstances)),
             Version = Hub.Version
         };
 
@@ -176,7 +177,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
         DeleteElementsMethod.MakeGenericMethod(typeConfig.ElementType).InvokeAsAction(toBeDeleted, typeConfig);
         return workspace with
         {
-            Data = workspace.Data.SetItem(typeConfig.ElementType, existingInstances.RemoveRange(toBeUpdatedInstances.Keys)),
+            Data = workspace.Data.SetItem(typeConfig.CollectionName, existingInstances.RemoveRange(toBeUpdatedInstances.Keys)),
             Version = Hub.Version
         };
     }
@@ -197,7 +198,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
     // ReSharper disable once UnusedMethodReturnValue.Local
     private static void DeleteElements<T>(IEnumerable<object> items, TypeSource<T> config) where T : class => config.Delete(items.Cast<T>().ToArray());
 
-    IMessageDelivery IMessageHandler<SynchronizeDataRequest>.HandleMessage(IMessageDelivery<SynchronizeDataRequest> request)
+    IMessageDelivery IMessageHandler<StartDataSynchronizationRequest>.HandleMessage(IMessageDelivery<StartDataSynchronizationRequest> request)
     {
         UpdateState(s =>
             s with
@@ -206,14 +207,17 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
                     .SetItem(
                         request.Sender,
                         (s.SynchronizationsByAddress.GetValueOrDefault(request.Sender) ??
-                         ImmutableDictionary<string, SynchronizeDataRequest>.Empty)
+                         ImmutableDictionary<string, StartDataSynchronizationRequest>.Empty)
                         .SetItem(request.Message.Id, request.Message))
             });
 
         var serializedWorkspace = GetSerializedWorkspace();
-        if (!string.IsNullOrEmpty(request.Message.JsonPath))
-            serializedWorkspace = serializedWorkspace.SelectToken(request.Message.JsonPath);
-        Hub.Post(new DataChanged(Hub.Version) { Changes = serializedWorkspace }, o => o.ResponseFor(request));
+        var ret = new JObject();
+        foreach (var (collection, path) in request.Message.Subscriptions)
+        {
+            ret.Add(collection, serializedWorkspace.SelectToken(path));
+        }
+        Hub.Post(new DataChangedEvent(Hub.Version) { Data = new RawJson(ret.ToString()) }, o => o.ResponseFor(request));
 
         return request.Processed();
     }
@@ -227,7 +231,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
 
         var ret = State.Workspaces.WorkspacesByKey.Values.Aggregate(ImmutableDictionary<string, ImmutableList<ImmutableDictionary<string, object>>>.Empty,
             (dict, ws) => dict.SetItems(ws.Data.Select(kvp =>
-                new KeyValuePair<string, ImmutableList<ImmutableDictionary<string, object>>>(kvp.Key.Name, SerializeEntities(kvp.Value)))));
+                new KeyValuePair<string, ImmutableList<ImmutableDictionary<string, object>>>(kvp.Key, SerializeEntities(kvp.Value)))));
         var token = JToken.FromObject(ret);
         UpdateState(s => s with { SerializedWorkspace = token });
         return token;
@@ -244,5 +248,10 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
         var rawJson = serializationService.Serialize(instance);
         var dictionary = JsonConvert.DeserializeObject<ImmutableDictionary<string, object>>(rawJson.Content);
         return dictionary.SetItem("$id", id);
+    }
+
+    public IMessageDelivery HandleMessage(IMessageDelivery<DataChangedEvent> request)
+    {
+        throw new NotImplementedException();
     }
 }

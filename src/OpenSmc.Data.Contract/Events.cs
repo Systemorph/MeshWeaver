@@ -24,23 +24,25 @@ public record DeleteDataRequest(IReadOnlyCollection<object> Elements) : DataChan
 
 
 
-public abstract record DataChangeRequest(IReadOnlyCollection<object> Elements) : IRequest<DataChanged>;
+public abstract record DataChangeRequest(IReadOnlyCollection<object> Elements) : IRequest<DataChangedEvent>;
 
-public record CreateRequest<TObject>(TObject Element) : IRequest<DataChanged> { public object Options { get; init; } };
+public record CreateRequest<TObject>(TObject Element) : IRequest<DataChangedEvent> { public object Options { get; init; } };
 
-public record DeleteBatchRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataChanged>;
+public record DeleteBatchRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataChangedEvent>;
 
 /// <summary>
-/// Starts data synchronization with data corresponding to the JsonPath query.
+/// Starts data synchronization with data corresponding to the Json Path queries as specified in the constructor.
 /// </summary>
-/// <param name="JsonPath"></param>
-public record SynchronizeDataRequest(string JsonPath = "") : IRequest<DataChanged>
+/// <param name="JsonPaths">All the json paths to be synchronized. E.g. <code>"$.MyEntities"</code></param>
+public record StartDataSynchronizationRequest(params (string Collection, string JsonPath)[] Subscriptions) : IRequest<DataSynchronizationResponse>
 {
     /// <summary>
     /// Synchronization Id to be used in stopping.
     /// </summary>
     public string Id { get; init; } = Guid.NewGuid().AsString();
 }
+
+public record DataSynchronizationResponse(IReadOnlyDictionary<string, string> Data);
 
 /// <summary>
 /// Ids of the synchronization requests to be stopped (generated with request)

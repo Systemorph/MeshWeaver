@@ -17,8 +17,8 @@ public record RemoteViewControl : UiControl<RemoteViewControl, RemoteViewPlugin>
                                                                {
                                                                }
 
-    internal Action<IMessageDelivery<DataChanged>, IMessageHub> UpdateFunction { get; init; }
-    public RemoteViewControl WithViewUpdate(Action<IMessageDelivery<DataChanged>, IMessageHub> getViewUpdate, Func<AreaChangedEvent, AreaChangedEvent, AreaChangedEvent> updateView) 
+    internal Action<IMessageDelivery<DataChangedEvent>, IMessageHub> UpdateFunction { get; init; }
+    public RemoteViewControl WithViewUpdate(Action<IMessageDelivery<DataChangedEvent>, IMessageHub> getViewUpdate, Func<AreaChangedEvent, AreaChangedEvent, AreaChangedEvent> updateView) 
         => this with { UpdateFunction = getViewUpdate, UpdateView = updateView };
 
     #region Remote mode

@@ -60,7 +60,7 @@ public class ImportPlugin : MessageHubPlugin<ImportState>,
         finally
         {
             activityService.LogInformation($"Import finished.");
-            Hub.Post(new DataChanged(Hub.Version) { Log = activityService.Finish() }, o => o.ResponseFor(request));
+            Hub.Post(new DataChangedEvent(Hub.Version) { Log = activityService.Finish() }, o => o.ResponseFor(request));
         }
 
         return request.Processed();
