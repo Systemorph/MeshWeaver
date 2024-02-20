@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reflection.Emit;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
 
@@ -26,7 +27,7 @@ public static class DataPluginExtensions
         var ret = new DataContext(hub);
         foreach (var func in dataPluginConfig)
             ret = func.Invoke(ret);
-        return ret.Build();
+        return ret.Build(hub);
     }
 
     public static async Task<IReadOnlyCollection<T>> GetAll<T>(this IMessageHub hub, object dataSourceId, CancellationToken cancellationToken) where T : class
@@ -40,4 +41,47 @@ public static class DataPluginExtensions
         => type.IsGenericType && GetRequestTypes.Contains(type.GetGenericTypeDefinition());
 
     private static readonly HashSet<Type> GetRequestTypes = [typeof(GetRequest<>), typeof(GetManyRequest<>)];
+
+    public static HubDataSource FromEntityFramework(this DataSource dataSource, object address) =>
+        new(dataSource.Id, address);
+
+}
+
+public record HubDataSource(object Id, object Address) : DataSourceWithStorage<HubDataSource>(Id)
+{
+
+    public override IDataStorage CreateStorage(IMessageHub hub)
+    {
+        return new HubDataStorage(Address);
+    }
+
+
+}
+
+public record HubDataStorage(object Address) : IDataStorage
+{
+    public Task<IReadOnlyCollection<T>> GetData<T>(CancellationToken cancellationToken) where T : class
+    {
+        throw new NotImplementedException();
+    }
+
+    public Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken)
+    {
+        throw new NotImplementedException();
+    }
+
+    public void Add<T>(IReadOnlyCollection<T> instances) where T : class
+    {
+        throw new NotImplementedException();
+    }
+
+    public void Update<T>(IReadOnlyCollection<T> instances) where T : class
+    {
+        throw new NotImplementedException();
+    }
+
+    public void Delete<T>(IReadOnlyCollection<T> instances) where T : class
+    {
+        throw new NotImplementedException();
+    }
 }

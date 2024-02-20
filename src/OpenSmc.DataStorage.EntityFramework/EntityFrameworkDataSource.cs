@@ -1,12 +1,13 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using OpenSmc.Data;
+using OpenSmc.Messaging;
 
 namespace OpenSmc.DataStorage.EntityFramework;
 
 public record EntityFrameworkDataSource(object Id, Action<DbContextOptionsBuilder> Database) : DataSourceWithStorage<EntityFrameworkDataSource>(Id)
 {
 
-    public override IDataStorage CreateStorage()
+    public override IDataStorage CreateStorage(IMessageHub hub)
     {
         return new EntityFrameworkDataStorage(ModelBuilder ?? ConvertDataSourceMappings, Database);
     }
@@ -22,8 +23,4 @@ public record EntityFrameworkDataSource(object Id, Action<DbContextOptionsBuilde
             builder.Model.AddEntityType(type);
     }
 
-    protected override TypeSource<T> CreateTypeSource<T>()
-    {
-        return new TypeSourceWithDataStorage<T>();
-    }
 }
