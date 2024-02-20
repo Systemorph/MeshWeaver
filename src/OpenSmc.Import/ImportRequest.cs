@@ -1,4 +1,5 @@
-﻿using OpenSmc.DataSetReader;
+﻿using OpenSmc.Data;
+using OpenSmc.DataSetReader;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Import;

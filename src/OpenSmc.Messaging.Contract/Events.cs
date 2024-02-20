@@ -13,12 +13,6 @@ public record DisconnectHubRequest();
 
 
 
-public record DataChangedEvent(long Version)
-{
-    public object Data { get; init; }
-    public ActivityLog Log { get; init; }
-};
-
 public record PersistenceAddress(object Host) : IHostedAddress;
 
 public record GetRequest<T> : IRequest<T>

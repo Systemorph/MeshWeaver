@@ -34,7 +34,7 @@ public record TypeSource<T> : TypeSource
 
     public override string CollectionName => CollectionNameImpl;
 
-    private string CollectionNameImpl { get; init; } = typeof(T).Name;
+    private string CollectionNameImpl { get; init; } = typeof(T).FullName;
 
     public TypeSource<T> WithCollectionName(string collectionName) =>
         this with { CollectionNameImpl = collectionName };

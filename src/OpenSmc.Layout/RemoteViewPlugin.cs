@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 using OpenSmc.Application.Scope;
+using OpenSmc.Data;
 using OpenSmc.Messaging;
 using OpenSmc.Scopes.Synchronization;
 using OpenSmc.ServiceProvider;
