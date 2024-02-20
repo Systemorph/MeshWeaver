@@ -29,10 +29,10 @@ public record DataContext(IMessageHub Hub)
             };
     }
 
-    internal DataContext Build()
+    internal DataContext Build(IMessageHub hub)
         => this with
         {
-            DataSources = DataSources.Select(kvp => new KeyValuePair<object, IDataSource>(kvp.Key, kvp.Value.Build()))
+            DataSources = DataSources.Select(kvp => new KeyValuePair<object, IDataSource>(kvp.Key, kvp.Value.Build(hub)))
                 .ToImmutableDictionary()
         };
 

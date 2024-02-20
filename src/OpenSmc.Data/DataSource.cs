@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
+using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 
 namespace OpenSmc.Data;
@@ -9,9 +10,17 @@ public interface IDataSource
     bool GetTypeConfiguration(Type type, out TypeSource typeConfiguration);
     IEnumerable<Type> MappedTypes { get; }
     object Id { get; }
-    internal IDataSource Build();
     internal Task<WorkspaceState> DoInitialize(CancellationToken cancellationToken);
     internal Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Idea is to split the construction of the configuration in two parts:
+    ///
+    /// 1. Fluent builder to configure types, mappings, db settings, etc
+    /// 2. Build step where configuration is finished. This can be used to build up services, etc.
+    /// </summary>
+    /// <returns></returns>
+    IDataSource Build(IMessageHub hub);
 }
 public record DataSource<TDataSource>(object Id) : IDataSource
 where TDataSource : DataSource<TDataSource>
@@ -94,10 +103,10 @@ where TDataSource : DataSource<TDataSource>
     /// </summary>
     /// <returns></returns>
 
-    IDataSource IDataSource.Build() => Build();
-    protected virtual IDataSource Build()
+    IDataSource IDataSource.Build(IMessageHub hub) => Build(hub);
+    protected virtual IDataSource Build(IMessageHub hub)
     {
-        var builtUp = Buildup();
+        var builtUp = Buildup(hub);
         return (TDataSource)builtUp with
         {
             TypeSources = TypeSources
@@ -110,7 +119,7 @@ where TDataSource : DataSource<TDataSource>
         };
     }
 
-    protected virtual TDataSource Buildup()
+    protected virtual TDataSource Buildup(IMessageHub hub)
         => (TDataSource)this;
 }
 

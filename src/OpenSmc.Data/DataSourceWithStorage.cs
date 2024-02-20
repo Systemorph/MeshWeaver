@@ -1,4 +1,6 @@
-﻿namespace OpenSmc.Data;
+﻿using OpenSmc.Messaging;
+
+namespace OpenSmc.Data;
 
 public interface IDataSourceWithStorage
 {
@@ -10,19 +12,25 @@ public abstract record DataSourceWithStorage<TDataSource>(object Id)
     where TDataSource : DataSourceWithStorage<TDataSource>
 {
 
-    public abstract IDataStorage CreateStorage();
+    public abstract IDataStorage CreateStorage(IMessageHub hub);
 
-    protected override TDataSource Buildup()
+    protected override TDataSource Buildup(IMessageHub hub)
     {
         if(Storage != null)
-            return base.Buildup();
-        var storage = CreateStorage();
+            return base.Buildup(hub);
+        var storage = CreateStorage(hub);
         return (this with
         {
             Storage = storage,
             StartTransactionAction = storage.StartTransactionAsync
-        }).Buildup();
+        }).Buildup(hub);
     }
+
+    protected override TypeSource<T> CreateTypeSource<T>()
+    {
+        return new TypeSourceWithDataStorage<T>();
+    }
+
 
     public IDataStorage Storage { get; init; }
 }
