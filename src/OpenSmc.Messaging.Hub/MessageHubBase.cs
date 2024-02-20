@@ -96,10 +96,11 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
     {
         var prm = Expression.Parameter(typeof(IMessageDelivery));
         var cancellationTokenPrm = Expression.Parameter(typeof(CancellationToken));
+
+
         var expressions = new List<Expression>
         {
-            Expression.Convert(prm, typeof(IMessageDelivery<>).MakeGenericType(messageType)),
-            cancellationTokenPrm
+            Expression.Convert(prm, typeof(IMessageDelivery<>).MakeGenericType(messageType))
         };
         if(cancellationToken != null)
             expressions.Add(cancellationToken);

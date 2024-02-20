@@ -54,8 +54,6 @@ public record TypeSource<T> : TypeSource
         => this with { Key = key };
 
 
-    internal virtual Task<IReadOnlyCollection<T>> InitializeAsync(CancellationToken cancellationToken) => InitializeAction(cancellationToken);
-
     protected Func<CancellationToken, Task<IReadOnlyCollection<T>>> InitializeAction { get; init; } =
         _ => Task.FromResult<IReadOnlyCollection<T>>(Array.Empty<T>());
 

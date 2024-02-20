@@ -55,7 +55,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
 
     IMessageDelivery IMessageHandler<GetDataStateRequest>.HandleMessage(IMessageDelivery<GetDataStateRequest> request)
     {
-        Hub.Post(State, o => o.ResponseFor(request));
+        Hub.Post(State.Workspaces, o => o.ResponseFor(request));
         return request.Processed();
     }
 
