@@ -8,10 +8,9 @@ public static class DataPluginExtensions
 {
     public static MessageHubConfiguration AddData(this MessageHubConfiguration config, Func<DataContext, DataContext> dataPluginConfiguration)
     {
-        var dataPluginConfig = config.GetListOfLambdas();
         return config
             .WithServices(sc => sc.AddSingleton<IWorkspace, DataPlugin>())
-            .Set(dataPluginConfig.Add(dataPluginConfiguration))
+            .Set(config.GetListOfLambdas().Add(dataPluginConfiguration))
             .AddPlugin(hub => (DataPlugin)hub.ServiceProvider.GetRequiredService<IWorkspace>());
     }
 

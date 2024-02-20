@@ -33,8 +33,8 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
                 .ToArrayAsync())
             .ToImmutableDictionary();
                 
-
         InitializeState(new(loadedWorkspaces, Context));
+        Context.InMemoryInitialization(hub);
     }
 
     IMessageDelivery IMessageHandler<GetDataStateRequest>.HandleMessage(IMessageDelivery<GetDataStateRequest> request)
