@@ -8,15 +8,14 @@ public static class DataPluginExtensions
 {
     public static MessageHubConfiguration AddData(this MessageHubConfiguration config, Func<DataContext, DataContext> dataPluginConfiguration)
     {
-        var dataPluginConfig = config.GetListOfLambdas();
         return config
             .WithServices(sc => sc.AddSingleton<IWorkspace, DataPlugin>())
+            .Set(config.GetListOfLambdas().Add(dataPluginConfiguration))
             .WithRoutes(routes => routes
                 .RouteMessage<StartDataSynchronizationRequest>(_ => new PersistenceAddress(routes.Hub.Address))
                 .RouteMessage<StopDataSynchronizationRequest>(_ => new PersistenceAddress(routes.Hub.Address))
                 .RouteMessage<DataSynchronizationState>(_ => new PersistenceAddress(routes.Hub.Address))
             )
-            .Set(dataPluginConfig.Add(dataPluginConfiguration))
             .AddPlugin(hub => (DataPlugin)hub.ServiceProvider.GetRequiredService<IWorkspace>());
     }
 

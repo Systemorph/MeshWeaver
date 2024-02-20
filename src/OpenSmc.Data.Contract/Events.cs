@@ -24,8 +24,6 @@ public record UpdateDataRequest(IReadOnlyCollection<object> Elements) : DataChan
 
 public record DeleteDataRequest(IReadOnlyCollection<object> Elements) : DataChangeRequest(Elements);
 
-
-
 public abstract record DataChangeRequest(IReadOnlyCollection<object> Elements) : IRequest<DataChangedEvent>;
 
 public record CreateRequest<TObject>(TObject Element) : IRequest<DataChangedEvent> { public object Options { get; init; } };
