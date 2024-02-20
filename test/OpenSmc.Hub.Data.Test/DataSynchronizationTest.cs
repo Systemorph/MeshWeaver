@@ -3,6 +3,7 @@ using OpenSmc.Data.Domain;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using Xunit.Abstractions;
+using static OpenSmc.Data.Domain.TestDomain;
 
 namespace OpenSmc.Hub.Data.Test;
 
@@ -16,9 +17,15 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
             ));
     }
 
-    //protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
-    //{
-    //    return base.ConfigureClient(configuration)
-    //        .AddData(data => data.WithDataSource("ReferenceData", dataSource => dataSource.From));
-    //}
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureClient(configuration)
+            .AddData(
+                data => data
+                    .WithDataSource("ReferenceData",
+                        dataSource => dataSource
+                            .WithType<BusinessUnit>()
+                    )
+            );
+    }
 }
