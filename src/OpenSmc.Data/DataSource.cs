@@ -6,13 +6,15 @@ namespace OpenSmc.Data;
 
 public record DataSource(object Id)
 {
-    public DataSource WithType(Type type)
-        => WithType(type, x => x);
-    public DataSource WithType(Type type, Func<TypeSource, TypeSource> config)
-    => (DataSource)WithTypeMethod.MakeGenericMethod(type).InvokeAsFunction(this, config);
-
     private static readonly MethodInfo WithTypeMethod =
         ReflectionHelper.GetMethodGeneric<DataSource>(x => x.WithType<object>(default(Func<TypeSource,TypeSource>)));
+
+    protected ImmutableDictionary<Type, TypeSource> TypeSources { get; init; } = ImmutableDictionary<Type, TypeSource>.Empty;
+
+    internal Func<Task<ITransaction>> StartTransactionAction { get; init; } = () => Task.FromResult<ITransaction>(EmptyTransaction.Instance);
+
+    public IEnumerable<Type> MappedTypes => TypeSources.Keys;
+
     public DataSource WithType<T>()
         where T : class
         => WithType<T>(d => d);
@@ -28,6 +30,20 @@ public record DataSource(object Id)
         where T : class
         => WithType(configurator.Invoke(new TypeSource<T>()));
 
+    public DataSource WithType(Type type)
+        => WithType(type, x => x);
+
+    public DataSource WithType(Type type, Func<TypeSource, TypeSource> config)
+        => (DataSource)WithTypeMethod.MakeGenericMethod(type).InvokeAsFunction(this, config);
+
+    protected DataSource WithType<T>(TypeSource<T> typeSource)
+        where T : class
+    {
+        return this with
+        {
+            TypeSources = TypeSources.SetItem(typeof(T), typeSource)
+        };
+    }
 
     public async Task<WorkspaceState> DoInitialize()
     {
@@ -41,34 +57,13 @@ public record DataSource(object Id)
 
         return ret;
     }
-    protected DataSource WithType<T>(TypeSource<T> typeSource)
-        where T : class
-    {
-        return this with
-        {
-            TypeSources = TypeSources.SetItem(typeof(T), typeSource)
-        };
-    }
-
-
-    protected ImmutableDictionary<Type, TypeSource> TypeSources { get; init; } = ImmutableDictionary<Type, TypeSource>.Empty;
-
 
     public DataSource WithTransaction(Func<Task<ITransaction>> startTransaction)
         => this with { StartTransactionAction = startTransaction };
 
-
     internal Task<ITransaction> StartTransactionAsync() => StartTransactionAction();
-    internal Func<Task<ITransaction>> StartTransactionAction { get; init; }
-        = () => Task.FromResult<ITransaction>(EmptyTransaction.Instance);
 
-    public IEnumerable<Type> MappedTypes => TypeSources.Keys;
-
-    public bool GetTypeConfiguration(Type type, out TypeSource typeSource)
-    {
-        return TypeSources.TryGetValue(type, out typeSource);
-    }
-
+    public bool GetTypeConfiguration(Type type, out TypeSource typeSource) => TypeSources.TryGetValue(type, out typeSource);
 
     /// <summary>
     /// Idea is to split the construction of the configuration in two parts:
@@ -92,6 +87,5 @@ public record DataSource(object Id)
         };
     }
 
-    protected virtual DataSource Buildup()
-        => this;
+    protected virtual DataSource Buildup() => this;
 }
