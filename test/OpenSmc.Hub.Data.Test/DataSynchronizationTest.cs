@@ -1,7 +1,9 @@
-﻿using OpenSmc.Data;
+﻿using FluentAssertions;
+using OpenSmc.Data;
 using OpenSmc.Data.Domain;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
+using Xunit;
 using Xunit.Abstractions;
 using static OpenSmc.Data.Domain.TestDomain;
 
@@ -24,8 +26,18 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
                 data => data
                     .WithDataSource("ReferenceData",
                         dataSource => dataSource
+                            .FromHub(new HostAddress())
                             .WithType<BusinessUnit>()
+                            .WithType<LineOfBusiness>()
                     )
             );
+    }
+
+    [Fact(Timeout = 5000)]
+    public async Task TestBasicSynchronization()
+    {
+        var client = GetClient();
+        var businessUnitResponse = await client.AwaitResponse(new GetManyRequest<BusinessUnit>());
+        businessUnitResponse.Message.Items.Should().HaveCountGreaterThan(1);
     }
 }

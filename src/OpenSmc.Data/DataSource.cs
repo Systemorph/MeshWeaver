@@ -10,7 +10,7 @@ public interface IDataSource
     bool GetTypeConfiguration(Type type, out TypeSource typeConfiguration);
     IEnumerable<Type> MappedTypes { get; }
     object Id { get; }
-    internal Task<WorkspaceState> DoInitialize(CancellationToken cancellationToken);
+    internal Task<WorkspaceState> InitializeAsync(IMessageHub hub, CancellationToken cancellationToken);
     internal Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken);
 
     /// <summary>
@@ -62,7 +62,12 @@ where TDataSource : DataSource<TDataSource>
         };
     }
 
-    async Task<WorkspaceState> IDataSource.DoInitialize(CancellationToken cancellationToken)
+    async Task<WorkspaceState> IDataSource.InitializeAsync(IMessageHub hub, CancellationToken cancellationToken)
+    {
+        return await InitializeAsync(hub, cancellationToken);
+    }
+
+    protected virtual async Task<WorkspaceState> InitializeAsync(IMessageHub hub, CancellationToken cancellationToken)
     {
         var ret = new WorkspaceState(this);
 
@@ -88,6 +93,9 @@ where TDataSource : DataSource<TDataSource>
         = _ => Task.FromResult<ITransaction>(EmptyTransaction.Instance);
 
     public IEnumerable<Type> MappedTypes => TypeSources.Keys;
+
+    public TypeSource GetTypeSource(string collectionName) =>
+        TypeSources.Values.FirstOrDefault(x => x.CollectionName == collectionName);
 
     public bool GetTypeConfiguration(Type type, out TypeSource typeSource)
     {

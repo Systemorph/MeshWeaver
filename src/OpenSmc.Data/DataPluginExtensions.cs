@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
-using System.Reflection.Emit;
 using Microsoft.Extensions.DependencyInjection;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
@@ -12,6 +13,10 @@ public static class DataPluginExtensions
         var dataPluginConfig = config.GetListOfLambdas();
         return config
             .WithServices(sc => sc.AddSingleton<IWorkspace, DataPlugin>())
+            .WithRoutes(routes => routes
+                .RouteMessage<StartDataSynchronizationRequest>(d => new PersistenceAddress(routes.Hub.Address))
+                .RouteMessage<StopDataSynchronizationRequest>(d => new PersistenceAddress(routes.Hub.Address))
+            )
             .Set(dataPluginConfig.Add(dataPluginConfiguration))
             .AddPlugin(hub => (DataPlugin)hub.ServiceProvider.GetRequiredService<IWorkspace>());
     }
@@ -42,46 +47,46 @@ public static class DataPluginExtensions
 
     private static readonly HashSet<Type> GetRequestTypes = [typeof(GetRequest<>), typeof(GetManyRequest<>)];
 
-    public static HubDataSource FromEntityFramework(this DataSource dataSource, object address) =>
-        new(dataSource.Id, address);
+    public static HubDataSource FromHub(this DataSource dataSource, object address) =>
+        new(address);
 
 }
 
-public record HubDataSource(object Id, object Address) : DataSourceWithStorage<HubDataSource>(Id)
+public record HubDataSource(object Id) : DataSource<HubDataSource>(Id)
 {
-
-    public override IDataStorage CreateStorage(IMessageHub hub)
+    private static readonly JsonSerializer Serializer = JsonSerializer.CreateDefault();
+    protected override async Task<WorkspaceState> InitializeAsync(IMessageHub hub, CancellationToken cancellationToken)
     {
-        return new HubDataStorage(Address);
+        //var getRequests = TypeSources.Keys.Select(t => typeof(GetRequest<>).MakeGenericType(t)).ToHashSet();
+        //var deferral = hub.ServiceProvider.GetRequiredService<IMessageService>().Defer(d => getRequests.Contains(d.Message.GetType()));
+        var collections = TypeSources.Values.Select(ts => (ts.CollectionName, $"$.{ts.CollectionName}")).ToArray();
+        var subscribeRequest = new StartDataSynchronizationRequest(collections);
+        var response = await hub.AwaitResponse(subscribeRequest, 
+            o => o.WithTarget(Id), cancellationToken);
+        return new WorkspaceState(this)
+        {
+            Data = response.Message.Data
+                .ToImmutableDictionary(
+                    x => x.Key, 
+                    x => x.Value.Select(item => ParseInstanceAndKey(item, GetTypeSource(x.Key))).ToImmutableDictionary())
+            
+                
+                
+        };
     }
 
 
+    private KeyValuePair<object,object> ParseInstanceAndKey(JToken item, TypeSource typeSource)
+    {
+        if (item is not JObject obj)
+            return default;
+
+        var id = obj.GetValue("$id");
+        if (id == null)
+            return default;
+
+        return new KeyValuePair<object, object>(Serializer.Deserialize(new JTokenReader(id)),
+            Serializer.Deserialize(new JTokenReader(item), typeSource.ElementType));
+    }
 }
 
-public record HubDataStorage(object Address) : IDataStorage
-{
-    public Task<IReadOnlyCollection<T>> GetData<T>(CancellationToken cancellationToken) where T : class
-    {
-        throw new NotImplementedException();
-    }
-
-    public Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken)
-    {
-        throw new NotImplementedException();
-    }
-
-    public void Add<T>(IReadOnlyCollection<T> instances) where T : class
-    {
-        throw new NotImplementedException();
-    }
-
-    public void Update<T>(IReadOnlyCollection<T> instances) where T : class
-    {
-        throw new NotImplementedException();
-    }
-
-    public void Delete<T>(IReadOnlyCollection<T> instances) where T : class
-    {
-        throw new NotImplementedException();
-    }
-}

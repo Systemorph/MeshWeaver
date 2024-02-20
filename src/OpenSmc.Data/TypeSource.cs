@@ -11,9 +11,10 @@ public abstract record TypeSource
     public abstract Task<ImmutableDictionary<object, object>> DoInitialize(CancellationToken cancellationToken);
     public abstract object GetKey(object instance);
     internal Func<IEnumerable<object>, Task> DeleteByIds { get; init; }
-
+    public abstract string CollectionName { get;  } 
+    
     public virtual TypeSource Build(IDataSource dataSource) => this;
-
+    
     public abstract TypeSource WithInitialData(IEnumerable<object> initialData);
 }
 
@@ -30,6 +31,13 @@ public record TypeSource<T> : TypeSource
 
     public override object GetKey(object instance)
         => Key((T)instance);
+
+    public override string CollectionName => CollectionNameImpl;
+
+    private string CollectionNameImpl { get; init; } = typeof(T).Name;
+
+    public TypeSource<T> WithCollectionName(string collectionName) =>
+        this with { CollectionNameImpl = collectionName };
 
     public override TypeSource WithInitialData(IEnumerable<object> initialData)
         => WithInitialData(initialData.Cast<T>());

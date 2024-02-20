@@ -45,7 +45,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     {
         UpdateImpl(request.Message.Elements, request.Message.Options);
         Commit();
-        Hub.Post(new DataChanged(Hub.Version), o => o.ResponseFor(request));
+        Hub.Post(new DataChangedEvent(Hub.Version), o => o.ResponseFor(request));
         return request.Processed();
     }
 
@@ -64,7 +64,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     {
         DeleteImpl(request.Message.Elements);
         Commit();
-        Hub.Post(new DataChanged(Hub.Version), o => o.ResponseFor(request));
+        Hub.Post(new DataChangedEvent(Hub.Version), o => o.ResponseFor(request));
         return request.Processed();
 
     }
@@ -129,7 +129,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         if (State.UncommittedEvents.Count == 0)
             return;
         persistenceHub.Post(new UpdateDataStateRequest(State.UncommittedEvents));
-        Hub.Post(new DataChanged(Hub.Version), o => o.WithTarget(MessageTargets.Subscribers));
+        Hub.Post(new DataChangedEvent(Hub.Version), o => o.WithTarget(MessageTargets.Subscribers));
         UpdateState(s => s with {UncommittedEvents = ImmutableList<DataChangeRequest>.Empty});
     }
 
