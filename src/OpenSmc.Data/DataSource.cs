@@ -37,7 +37,12 @@ where TDataSource : DataSource<TDataSource>
     public TDataSource WithType<T>(
         Func<TypeSource<T>, TypeSource<T>> configurator)
         where T : class
-        => WithType(configurator.Invoke(new TypeSource<T>()));
+        => WithType(configurator.Invoke(CreateTypeSource<T>()));
+
+    protected virtual TypeSource<T> CreateTypeSource<T>() where T : class
+    {
+        return new TypeSource<T>();
+    }
 
     protected TDataSource WithType<T>(TypeSource<T> typeSource)
         where T : class

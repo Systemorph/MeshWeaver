@@ -36,7 +36,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     {
         await base.StartAsync(cancellationToken);
 
-        var response = await persistenceHub.AwaitResponse(new GetDataStateRequest());
+        var response = await persistenceHub.AwaitResponse(new GetDataStateRequest(), cancellationToken);
         InitializeState(new (response.Message));
         initialize.SetResult();
     }
