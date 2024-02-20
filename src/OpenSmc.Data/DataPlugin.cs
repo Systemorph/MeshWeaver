@@ -6,31 +6,23 @@ using OpenSmc.Reflection;
 
 namespace OpenSmc.Data;
 
-/* TODO List: 
- *  a) move code DataPlugin to opensmc -- done
- *  b) create an immutable variant of the workspace -- done
- *  c) make workspace methods fully sync -- done
- *  d) offload saves & deletes to a different hub -- done
- *  e) configure Ifrs Hubs
- */
-
 public class DataPlugin : MessageHubPlugin<DataPluginState>, 
     IWorkspace,
     IMessageHandler<UpdateDataRequest>,
     IMessageHandler<DeleteDataRequest>
 {
     private readonly IMessageHub persistenceHub;
+    private readonly TaskCompletionSource initialize = new();
 
     public DataContext DataContext { get; }
-    private readonly TaskCompletionSource initialize = new();
     public Task Initializing => initialize.Task;
+
     public DataPlugin(IMessageHub hub) : base(hub)
     {
         DataContext = hub.GetDataConfiguration();
-        Register(HandleGetRequest);              // This takes care of all Read (CRUD)
+        Register(HandleGetRequest); // This takes care of all Read (CRUD)
         persistenceHub = hub.GetHostedHub(new PersistenceAddress(hub.Address), conf => conf.AddPlugin(h => new DataPersistencePlugin(h, DataContext)));
     }
-
 
     public override async Task StartAsync(CancellationToken cancellationToken)  // This loads the persisted state
     {
@@ -81,8 +73,6 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
 
     }
 
-
-
     private IMessageDelivery HandleGetRequest(IMessageDelivery request)
     {
         var type = request.Message.GetType();
@@ -122,7 +112,6 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         DeleteImpl(instances);
 
     }
-
 
     public void Commit()
     {

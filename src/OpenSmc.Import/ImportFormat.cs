@@ -15,11 +15,26 @@ public record ImportFormat(string Format, IMessageHub Hub, IWorkspace Workspace)
     public ImportFormat WithImportFunction(ImportFunction importFunction) =>
         this with { ImportFunctions = ImportFunctions.Add(importFunction) };
 
-    public void Import(ImportRequest importRequest, IDataSet dataSet)
+    public bool Import(ImportRequest importRequest, IDataSet dataSet,
+        ImmutableList<ValidationFunction> defaultValidations, IDictionary<object, object> validationCache)
     {
         var updateOptions = new UpdateOptions().SnapshotMode(importRequest.SnapshotMode);
+        bool hasError = false;
+
         foreach (var importFunction in ImportFunctions)
-            Workspace.Update(importFunction(importRequest, dataSet, Hub, Workspace).ToArray(), updateOptions);
+        {
+            var importedInstances = importFunction(importRequest, dataSet, Hub, Workspace).ToArray();
+            foreach (var item in importedInstances)
+            {
+                if (item == null)
+                    continue;
+                foreach (var validation in defaultValidations)
+                    hasError = !validation(item, new ValidationContext(item, Hub.ServiceProvider, validationCache)) || hasError;
+            }
+            if (!hasError)
+                Workspace.Update(importedInstances, updateOptions);
+        }
+        return hasError;
     }
 
     public delegate IEnumerable<object> ImportFunction(ImportRequest importRequest, IDataSet dataSet, IMessageHub hub, IWorkspace workspace);
