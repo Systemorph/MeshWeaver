@@ -1,4 +1,5 @@
 ﻿using System.Collections;
+using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,9 +18,26 @@ public class ImportPlugin : MessageHubPlugin<ImportState>,
 {
     [Inject] private IActivityService activityService;
     private readonly IWorkspace workspace;
+    private ImmutableList<ValidationFunction> defaultValidations = ImmutableList<ValidationFunction>.Empty;
+
     public ImportConfiguration Configuration;
     public ImportPlugin(IMessageHub hub, Func<ImportConfiguration, ImportConfiguration> importConfiguration) : base(hub)
     {
+        SetDefaultValidation((instance, validationContext) =>
+        {
+            var ret = true;
+            var validationResults = new List<ValidationResult>();
+            Validator.TryValidateObject(instance, validationContext, validationResults, true);
+
+            foreach (var validation in validationResults)
+            {
+                activityService.LogError(validation.ToString());
+                ret = false;
+            }
+            return ret;
+        });
+
+
         workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
         Configuration = importConfiguration.Invoke(new(hub, workspace));
     }
@@ -39,7 +57,10 @@ public class ImportPlugin : MessageHubPlugin<ImportState>,
             var importRequest = request.Message;
             var (dataSet, format) = await ReadDataSetAsync(importRequest, cancellationToken);
 
-            format.Import(importRequest, dataSet);
+            var hasError = format.Import(importRequest, dataSet, defaultValidations, new Dictionary<object, object>());
+
+            //if (hasError)
+            //    activityService.LogError(string.Format(ValidationStageFailed, typeof(T).FullName));
 
             if (!activityService.HasErrors())
                 workspace.Commit();
@@ -117,6 +138,12 @@ public class ImportPlugin : MessageHubPlugin<ImportState>,
         var options = new UpdateOptions();
 
         targetDataSource.Update((items as IEnumerable<T>)?.ToArray());
+    }
+
+    public void SetDefaultValidation(ValidationFunction validationRule)
+    {
+        validationRule ??= (_, _) => true;
+        defaultValidations = defaultValidations.Add(validationRule);
     }
 
     public static string ValidationStageFailed = "Validation stage of type {0} has failed.";
