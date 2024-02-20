@@ -12,15 +12,13 @@ public record DataContext(IMessageHub Hub)
 
 
 
-    internal ImmutableDictionary<object,DataSource> DataSources { get; init; } = ImmutableDictionary<object, DataSource>.Empty;
+    internal ImmutableDictionary<object,IDataSource> DataSources { get; init; } = ImmutableDictionary<object, IDataSource>.Empty;
 
-    public DataContext WithDataSource(object id, Func<DataSource, DataSource> dataSourceBuilder) 
+    public DataContext WithDataSource(object id, Func<DataSource, IDataSource> dataSourceBuilder) 
         => WithDataSource(id, dataSourceBuilder.Invoke(new(id)));
 
-    public DataContext WithDataSource(object id, Func<DataSourceWithStorage, DataSourceWithStorage> dataSourceBuilder, Func<DataSourceWithStorage, IDataStorage> storageFactory)
-        => WithDataSource(id, dataSourceBuilder.Invoke(new (id, storageFactory)));
 
-    private DataContext WithDataSource(object id, DataSource dataSource)
+    private DataContext WithDataSource(object id, IDataSource dataSource)
     {
         return this 
             with
@@ -34,7 +32,7 @@ public record DataContext(IMessageHub Hub)
     internal DataContext Build()
         => this with
         {
-            DataSources = DataSources.Select(kvp => new KeyValuePair<object, DataSource>(kvp.Key, kvp.Value.Build()))
+            DataSources = DataSources.Select(kvp => new KeyValuePair<object, IDataSource>(kvp.Key, kvp.Value.Build()))
                 .ToImmutableDictionary()
         };
 
@@ -60,7 +58,7 @@ public record DataContext(IMessageHub Hub)
     };
 
 
-    public DataSource GetDataSource(object id)
+    public IDataSource GetDataSource(object id)
     {
         return DataSources.GetValueOrDefault(id);
     }

@@ -1,25 +1,26 @@
 ﻿namespace OpenSmc.Data;
 
-public record DataSourceWithStorage(object Id, Func<DataSourceWithStorage, IDataStorage> StorageFactory)
-    : DataSource(Id)
+public interface IDataSourceWithStorage
 {
-    public IDataStorage Storage { get; init; }
+    IDataStorage Storage { get; }
+}
 
-    public DataSourceWithStorage WithType<T>(Func<TypeSourceWithDataStorage<T>, TypeSourceWithDataStorage<T>> configurator)
-        where T : class
-        => (DataSourceWithStorage)WithType(configurator.Invoke(new TypeSourceWithDataStorage<T>()));
-    public new DataSourceWithStorage WithType<T>()
-        where T : class
-        => WithType<T>(c => c);
+public abstract record DataSourceWithStorage<TDataSource>(object Id)
+    : DataSource<TDataSource>(Id), IDataSourceWithStorage
+    where TDataSource : DataSourceWithStorage<TDataSource>
+{
 
+    public abstract IDataStorage CreateStorage();
 
-    protected override DataSource Buildup()
+    protected override TDataSource Buildup()
     {
-        var storage = StorageFactory(this);
-        return this with
+        var storage = CreateStorage();
+        return (TDataSource)this with
         {
             Storage = storage,
             StartTransactionAction = storage.StartTransactionAsync
         };
     }
+
+    public IDataStorage Storage { get; init; }
 }

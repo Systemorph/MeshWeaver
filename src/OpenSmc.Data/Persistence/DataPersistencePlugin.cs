@@ -120,7 +120,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
     /// <param name="dataSource">The data source to which these instances belong</param>
     /// <param name="workspace">The current state of the workspace</param>
     /// <returns></returns>
-    private WorkspaceState ProcessRequest(DataChangeRequest request, Type elementType, IEnumerable<object> instances, DataSource dataSource, WorkspaceState workspace)
+    private WorkspaceState ProcessRequest(DataChangeRequest request, Type elementType, IEnumerable<object> instances, IDataSource dataSource, WorkspaceState workspace)
     {
         if (!dataSource.GetTypeConfiguration(elementType, out var typeConfig))
             return workspace;

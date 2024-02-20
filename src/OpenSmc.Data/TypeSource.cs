@@ -12,7 +12,7 @@ public abstract record TypeSource
     public abstract object GetKey(object instance);
     internal Func<IEnumerable<object>, Task> DeleteByIds { get; init; }
 
-    public virtual TypeSource Build(DataSource dataSource) => this;
+    public virtual TypeSource Build(IDataSource dataSource) => this;
 
     public abstract TypeSource WithInitialData(IEnumerable<object> initialData);
 }
@@ -88,9 +88,9 @@ public record TypeSourceWithDataStorage<T>
 
     private IDataStorage Storage { get; init; }
 
-    public override TypeSource Build(DataSource dataSource)
+    public override TypeSource Build(IDataSource dataSource)
     {
-        var storage = ((DataSourceWithStorage)dataSource).Storage;
+        var storage = ((IDataSourceWithStorage)dataSource).Storage;
         return this
             with
             {

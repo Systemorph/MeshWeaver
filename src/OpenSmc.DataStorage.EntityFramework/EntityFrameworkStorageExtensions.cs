@@ -1,19 +1,33 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using OpenSmc.Data;
 
 namespace OpenSmc.DataStorage.EntityFramework;
 
 public static class EntityFrameworkStorageExtensions
 {
-    public static EntityFrameworkDataStorage FromEntityFramework(this Data.DataSource dataSource, Action<ModelBuilder> modelBuilder, Action<DbContextOptionsBuilder> database) =>
-        new(builder => modelBuilder.Invoke(ConvertDataSourceMappings(builder, dataSource)), database);
-    public static EntityFrameworkDataStorage FromEntityFramework(this Data.DataSource dataSource, Action<DbContextOptionsBuilder> database) =>
-        new(builder => ConvertDataSourceMappings(builder, dataSource), database);
+    public static EntityFrameworkDataSource FromEntityFramework(this Data.DataSource dataSource, Action<DbContextOptionsBuilder> database) =>
+        new(dataSource.Id, database) ;
 
-    private static ModelBuilder ConvertDataSourceMappings(ModelBuilder builder, Data.DataSource dataSource)
+
+}
+
+public record EntityFrameworkDataSource(object Id, Action<DbContextOptionsBuilder> Database) : DataSourceWithStorage<EntityFrameworkDataSource>(Id)
+{
+
+    public override IDataStorage CreateStorage()
     {
-        foreach (var type in dataSource.MappedTypes)
+        return new EntityFrameworkDataStorage(ModelBuilder ?? ConvertDataSourceMappings, Database);
+    }
+
+    public EntityFrameworkDataSource WithModel(Action<ModelBuilder> modelBuilder)
+        => this with { ModelBuilder = modelBuilder };
+
+    public Action<ModelBuilder> ModelBuilder { get; init; }
+
+    private void ConvertDataSourceMappings(ModelBuilder builder)
+    {
+        foreach (var type in MappedTypes)
             builder.Model.AddEntityType(type);
-        return builder;
     }
 
 }

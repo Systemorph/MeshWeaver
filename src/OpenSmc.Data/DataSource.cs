@@ -4,32 +4,51 @@ using OpenSmc.Reflection;
 
 namespace OpenSmc.Data;
 
-public record DataSource(object Id)
+public interface IDataSource
 {
-    public DataSource WithType(Type type)
+    bool GetTypeConfiguration(Type type, out TypeSource typeConfiguration);
+    IEnumerable<Type> MappedTypes { get; }
+    object Id { get; }
+    internal IDataSource Build();
+    internal Task<WorkspaceState> DoInitialize(CancellationToken cancellationToken);
+    internal Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken);
+}
+public record DataSource<TDataSource>(object Id) : IDataSource
+where TDataSource : DataSource<TDataSource>
+{
+    public TDataSource WithType(Type type)
         => WithType(type, x => x);
-    public DataSource WithType(Type type, Func<TypeSource, TypeSource> config)
-    => (DataSource)WithTypeMethod.MakeGenericMethod(type).InvokeAsFunction(this, config);
+
+    public TDataSource WithType(Type type, Func<TypeSource, TypeSource> config)
+        => (TDataSource)WithTypeMethod.MakeGenericMethod(type).InvokeAsFunction(this, config);
 
     private static readonly MethodInfo WithTypeMethod =
-        ReflectionHelper.GetMethodGeneric<DataSource>(x => x.WithType<object>(default(Func<TypeSource,TypeSource>)));
-    public DataSource WithType<T>()
+        ReflectionHelper.GetMethodGeneric<DataSource<TDataSource>>(x => x.WithType<object>(default(Func<TypeSource, TypeSource>)));
+    public TDataSource WithType<T>()
         where T : class
         => WithType<T>(d => d);
 
     // ReSharper disable once UnusedMethodReturnValue.Local
-    private DataSource WithType<T>(
+    private TDataSource WithType<T>(
         Func<TypeSource, TypeSource> configurator)
         where T : class
         => WithType<T>(x => (TypeSource<T>)configurator.Invoke(x));
 
-    public DataSource WithType<T>(
+    public TDataSource WithType<T>(
         Func<TypeSource<T>, TypeSource<T>> configurator)
         where T : class
         => WithType(configurator.Invoke(new TypeSource<T>()));
 
+    protected TDataSource WithType<T>(TypeSource<T> typeSource)
+        where T : class
+    {
+        return (TDataSource)this with
+        {
+            TypeSources = TypeSources.SetItem(typeof(T), typeSource)
+        };
+    }
 
-    public async Task<WorkspaceState> DoInitialize(CancellationToken cancellationToken)
+    async Task<WorkspaceState> IDataSource.DoInitialize(CancellationToken cancellationToken)
     {
         var ret = new WorkspaceState(this);
 
@@ -41,24 +60,16 @@ public record DataSource(object Id)
 
         return ret;
     }
-    protected DataSource WithType<T>(TypeSource<T> typeSource)
-        where T : class
-    {
-        return this with
-        {
-            TypeSources = TypeSources.SetItem(typeof(T), typeSource)
-        };
-    }
 
 
     protected ImmutableDictionary<Type, TypeSource> TypeSources { get; init; } = ImmutableDictionary<Type, TypeSource>.Empty;
 
 
-    public DataSource WithTransaction(Func<CancellationToken, Task<ITransaction>> startTransaction)
-        => this with { StartTransactionAction = startTransaction };
+    public TDataSource WithTransaction(Func<CancellationToken, Task<ITransaction>> startTransaction)
+        => (TDataSource)this with { StartTransactionAction = startTransaction };
 
 
-    internal Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken) => StartTransactionAction(cancellationToken);
+    Task<ITransaction> IDataSource.StartTransactionAsync(CancellationToken cancellationToken) => StartTransactionAction(cancellationToken);
     internal Func<CancellationToken, Task<ITransaction>> StartTransactionAction { get; init; }
         = _ => Task.FromResult<ITransaction>(EmptyTransaction.Instance);
 
@@ -77,10 +88,12 @@ public record DataSource(object Id)
     /// 2. Build step where configuration is finished. This can be used to build up services, etc.
     /// </summary>
     /// <returns></returns>
-    internal virtual DataSource Build()
+
+    IDataSource IDataSource.Build() => Build();
+    protected virtual IDataSource Build()
     {
         var builtUp = Buildup();
-        return builtUp with
+        return (TDataSource)builtUp with
         {
             TypeSources = TypeSources
                 .ToImmutableDictionary
@@ -92,6 +105,8 @@ public record DataSource(object Id)
         };
     }
 
-    protected virtual DataSource Buildup()
-        => this;
+    protected virtual TDataSource Buildup()
+        => (TDataSource)this;
 }
+
+public record DataSource(object Id) : DataSource<DataSource>(Id);
