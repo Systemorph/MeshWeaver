@@ -41,11 +41,11 @@ public record RouteConfiguration(IMessageHub Hub)
         };
 
     public RouteConfiguration RouteMessage<TMessage>(Func<IMessageDelivery<TMessage>, object> addressMap) =>
-        RouteMessage(addressMap, _ => true);
+        RouteMessage(addressMap, d => Hub.Address.Equals(d.Target));
 
     public RouteConfiguration RouteMessage<TMessage>(Func<IMessageDelivery<TMessage>, object> addressMap, Func<IMessageDelivery<TMessage>, bool> filter)
     {
-        return RouteMessage(delivery =>
+        return RouteMessage((delivery, cancellationToken) =>
             {
                 var mappedAddress = addressMap((IMessageDelivery<TMessage>)delivery);
                 if (!delivery.Sender.Equals(Hub.Address))
@@ -55,7 +55,7 @@ public record RouteConfiguration(IMessageHub Hub)
                 if (delivery.Message is IRequest)
                     Hub.RegisterCallback(forwardedDelivery,
                         response => Hub.Post(response.Message,
-                            o => o.WithProperties(response.Properties).ResponseFor(delivery)));
+                            o => o.WithProperties(response.Properties).ResponseFor(delivery)), cancellationToken);
                 return Task.FromResult(delivery.Forwarded());
             },
             filter);

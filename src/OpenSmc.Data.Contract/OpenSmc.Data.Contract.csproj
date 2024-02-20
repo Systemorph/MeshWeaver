@@ -2,6 +2,9 @@
   <PropertyGroup>
     <RootNamespace>OpenSmc.Data</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="JsonPatch.Net" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\OpenSmc.Messaging.Contract\OpenSmc.Messaging.Contract.csproj" />

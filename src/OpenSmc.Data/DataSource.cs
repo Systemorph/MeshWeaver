@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
+using Newtonsoft.Json.Linq;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 
@@ -67,7 +68,8 @@ where TDataSource : DataSource<TDataSource>
         return await InitializeAsync(hub, cancellationToken);
     }
 
-    protected virtual async Task<WorkspaceState> InitializeAsync(IMessageHub hub, CancellationToken cancellationToken)
+    protected virtual async Task<WorkspaceState> InitializeAsync(IMessageHub hub,
+        CancellationToken cancellationToken)
     {
         var ret = new WorkspaceState(this);
 

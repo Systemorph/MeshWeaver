@@ -1,4 +1,4 @@
-﻿using OpenSmc.Application.Scope;
+﻿using OpenSmc.Data;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
 
