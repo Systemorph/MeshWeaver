@@ -3,70 +3,46 @@ import { v4 as uuid } from "uuid";
 import { ControlDef } from "../ControlDef";
 import {Style} from "../Style";
 
-@contractMessage("OpenSmc.Application.Layout.LayoutAddress")
+// TODO: fix namespace (2/21/2024, akravets)
+@contractMessage("OpenSmc.Portal.LayoutAddress")
 export class LayoutAddress {
     constructor(public id: string) {
     }
 }
 
-// @contractMessage("OpenSmc.Application.ApplicationAddress")
-// export class ApplicationAddress {
-//     constructor(public project: string, public id: string) {
-//     }
-// }
-
-@contractMessage("OpenSmc.Messaging.ConnectToHubRequest")
-export class ConnectToHubRequest {
-    constructor(public from: any, public to: any) {
-    }
-}
-
-@contractMessage("OpenSmc.Application.UiAddress")
+// TODO: fix namespace (2/21/2024, akravets)
+@contractMessage("OpenSmc.Portal.UiAddress")
 export class UiAddress {
     constructor(public id: string) {
     }
 }
 
-// @contractMessage("OpenSmc.Application.MainLayoutAddress")
-// export class MainLayoutAddress {
-//     applicationAddress: object;
-//
-//     constructor(public id: string, public host: object) {
-//         this.applicationAddress = host;
-//     }
-// }
-
-@contractMessage("OpenSmc.Application.RefreshRequest")
+@contractMessage("OpenSmc.Layout.RefreshRequest")
 export class RefreshRequest {
-    constructor(public area: string) {
+    constructor(public area = "") {
     }
 }
 
-@contractMessage("OpenSmc.Application.AreaChangedEvent")
-export class AreaChangedEvent<TOptions = unknown> {
-    constructor(public area: string, public view?: ControlDef, public options?: TOptions, public style?: Style) {
+@contractMessage("OpenSmc.Layout.AreaChangedEvent")
+export class AreaChangedEvent {
+    constructor(public area: string, public view?: ControlDef, public options?: any, public style?: Style) {
     }
 }
 
-@contractMessage("OpenSmc.Application.Layout.Views.ClickedEvent")
+@contractMessage("OpenSmc.Layout.Views.ClickedEvent")
 export class ClickedEvent {
     constructor(public id?: string, public payload?: unknown) {
     }
 }
 
-@contractMessage("OpenSmc.Application.Layout.Views.ExpandRequest")
+@contractMessage("OpenSmc.Layout.Views.ExpandRequest")
 export class ExpandRequest {
     constructor(public id: string, public area: string, public payload?: unknown) {
 
     }
 }
 
-export interface AreaDependency {
-    readonly scopeId: string;
-    readonly property: string;
-}
-
-@contractMessage("OpenSmc.Application.SetAreaRequest")
+@contractMessage("OpenSmc.Layout.SetAreaRequest")
 export class SetAreaRequest {
     constructor(public area: string,
                 public path: string,
@@ -74,6 +50,11 @@ export class SetAreaRequest {
     }
 }
 
+@contractMessage("OpenSmc.Layout.CloseModalDialogEvent")
+export class CloseModalDialogEvent {
+}
+
+// deprecated? ----------------------------------------
 export type SelectionByCategory = Record<string, Named[]>;
 
 @contractMessage("OpenSmc.Categories.CategoryItemsRequest")
@@ -139,12 +120,4 @@ export class ModuleErrorEvent {
     public readonly sourceEvent: unknown;
     public readonly errorMessage: string;
     public readonly errorCode: string;
-}
-
-@contractMessage("OpenSmc.Application.CloseModalDialogEvent")
-export class CloseModalDialogEvent {
-}
-
-export class Dispose {
-
 }
