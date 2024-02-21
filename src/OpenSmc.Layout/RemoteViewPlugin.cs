@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 using OpenSmc.Application.Scope;
+using OpenSmc.Data;
 using OpenSmc.Messaging;
 using OpenSmc.Scopes.Synchronization;
 using OpenSmc.ServiceProvider;
@@ -7,7 +8,7 @@ using OpenSmc.ServiceProvider;
 namespace OpenSmc.Layout;
 
 public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteViewControl>(hub),
-    IMessageHandler<DataChanged>,
+    IMessageHandler<DataChangedEvent>,
     IMessageHandler<AreaChangedEvent>,
     IMessageHandler<ScopeExpressionChangedEvent>
 {
@@ -19,9 +20,9 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
 
     private ApplicationScopeAddress ApplicationScopeAddress => new(LayoutExtensions.FindLayoutHost(Hub.Address));
 
-    public override async Task StartAsync()
+    public override async Task StartAsync(CancellationToken cancellationToken)
     {
-        await base.StartAsync();
+        await base.StartAsync(cancellationToken);
         FullRefreshFromModelHubAsync();
     }
     private void FullRefreshFromModelHubAsync()
@@ -68,7 +69,7 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
         Post(State.View, o => o.WithTarget(MessageTargets.Subscribers));
     }
 
-    IMessageDelivery IMessageHandler<DataChanged>.HandleMessage(IMessageDelivery<DataChanged> request)
+    IMessageDelivery IMessageHandler<DataChangedEvent>.HandleMessage(IMessageDelivery<DataChangedEvent> request)
     {
         if (!request.Sender.Equals(State.RedirectAddress))
             return request.Ignored();
@@ -146,7 +147,7 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
     //    }
 
     //    // TODO V10: Why should remote view issue data changed?! (09.02.2024, Roland Bürgi)
-    //    Post(new DataChanged(hub.Version), o => o.ResponseFor(request));
+    //    Post(new DataChangedEvent(hub.Version), o => o.ResponseFor(request));
     //    return request.Processed();
     //}
 

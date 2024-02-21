@@ -42,16 +42,21 @@ public record CombinedWorkspaceState(ImmutableDictionary<object, WorkspaceState>
         => this with { WorkspacesByKey = WorkspacesByKey.SetItem(dataSourceId, workspace) };
 }
 
-public record WorkspaceState(DataSource DataSource)
+public record WorkspaceState(IDataSource DataSource)
 {
     public long Version { get; init; }
-    public ImmutableDictionary<Type, ImmutableDictionary<object, object>> Data { get; init; } =
-        ImmutableDictionary<Type, ImmutableDictionary<object, object>>.Empty;
+    public ImmutableDictionary<string, ImmutableDictionary<object, object>> Data { get; init; } =
+        ImmutableDictionary<string, ImmutableDictionary<object, object>>.Empty;
 
-    public virtual WorkspaceState SetData(Type type, ImmutableDictionary<object, object> instances)
+    public WorkspaceState SetData(Type type, ImmutableDictionary<object, object> instances)
+        => DataSource.GetTypeConfiguration(type, out var typeConfig)
+            ? SetData(type, typeConfig.CollectionName, instances)
+            : throw new ArgumentException($"Type {type.FullName} has not been configured", nameof(type));
+
+    public virtual WorkspaceState SetData(Type type, string collectionName, ImmutableDictionary<object, object> instances)
         => this with
         {
-            Data = Data.SetItem(type, instances),
+            Data = Data.SetItem(collectionName, instances),
             Version = typeof(IVersioned).IsAssignableFrom(type) ? instances.Values.OfType<IVersioned>().Max(v => v.Version) : Version
         };
 
@@ -74,8 +79,18 @@ public record WorkspaceState(DataSource DataSource)
     private WorkspaceState Update(Type type, ImmutableDictionary<object, object> instances, bool snapshotModeEnabled)
         => SetData(type, (!snapshotModeEnabled ? GetValues(type) : ImmutableDictionary<object, object>.Empty ).SetItems(instances));
 
-    private ImmutableDictionary<object,object> GetValues(Type type) 
-        => Data.GetValueOrDefault(type) ?? ImmutableDictionary<object, object>.Empty;
+    private ImmutableDictionary<object, object> GetValues(Type type)
+        => DataSource.GetTypeConfiguration(type, out var config)
+            ? GetValues(config.CollectionName)
+            : ThrowTypeNotConfigured(type);
+
+    private static ImmutableDictionary<object, object> ThrowTypeNotConfigured(Type type)
+    {
+        throw new ArgumentException($"Type {type.FullName} has not been configured.", nameof(type));
+    }
+
+    private ImmutableDictionary<object,object> GetValues(string collection) 
+        => Data.GetValueOrDefault(collection) ?? ImmutableDictionary<object, object>.Empty;
 
     // think about message forwarding and trigger saving to DataSource
     // storage feed must be a Hub
@@ -88,15 +103,11 @@ public record WorkspaceState(DataSource DataSource)
         var newData = Data;
         foreach (var g in items.GroupBy(item => item.GetType()))
         {
-            if (!newData.TryGetValue(g.Key, out var itemsOfType))
-            {
-                continue;
-            }
-            if (!DataSource.GetTypeConfiguration(g.Key, out var config))
+            if (!DataSource.GetTypeConfiguration(g.Key, out var typeConfiguration) || !newData.TryGetValue(typeConfiguration.CollectionName, out var itemsOfType))
                 continue;
 
-            itemsOfType = itemsOfType.RemoveRange(g.Select(config.GetKey));
-            newData = newData.SetItem(g.Key, itemsOfType);
+            itemsOfType = itemsOfType.RemoveRange(g.Select(typeConfiguration.GetKey));
+            newData = newData.SetItem(typeConfiguration.CollectionName, itemsOfType);
         }
 
         return this with { Data = newData };
@@ -104,7 +115,9 @@ public record WorkspaceState(DataSource DataSource)
 
     public virtual IReadOnlyCollection<T>  GetItems<T>()
     {
-        if (Data.TryGetValue(typeof(T), out var itemsOfType))
+        if (!DataSource.GetTypeConfiguration(typeof(T), out var typeConfig))
+            ThrowTypeNotConfigured(typeof(T));
+        if (Data.TryGetValue(typeConfig.CollectionName, out var itemsOfType))
         {
             return itemsOfType.Values.Cast<T>().ToArray();
         }
@@ -113,7 +126,7 @@ public record WorkspaceState(DataSource DataSource)
     }
 
     // 1st hub -> DataHub (unique source of truth for data)
-    // Upon save issue DataChanged(e.g new unique version of data) to Sender(ResponseFor) and to the Subscribers as well
+    // Upon save issue DataChangedEvent(e.g new unique version of data) to Sender(ResponseFor) and to the Subscribers as well
     // Post to DataSourceHub (lambda)
 
     // 2nd hub as Child -> DataSourceHub (reflects the state which is in DataSource, lacks behind DataHub)

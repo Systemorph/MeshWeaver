@@ -23,7 +23,7 @@ public class ScopePropertyChangedEventTransformation
         if (s == null)
             return Task.FromResult<object>(null);
         var property = s.GetScopeType().GetScopeProperties().SelectMany(x => x.Properties).First(x => x.Name == @event.Property);
-        var serialized = serializationService.SerializePropertyAsync(@event.Value, s, property);
+        var serialized = serializationService.SerializeProperty(@event.Value, s, property);
         return Task.FromResult<object>(new ScopePropertyChanged(@event.ScopeId.AsString(), @event.Property.ToCamelCase(), serialized, ConvertEnum(@event.Status)));
     }
 

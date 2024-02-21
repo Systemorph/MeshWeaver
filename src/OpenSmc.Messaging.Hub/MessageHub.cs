@@ -11,7 +11,7 @@ public enum MessageHubRunLevel{Starting, Started, DisposeHostedHubs, HostedHubsD
 public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub<TAddress>, IMessageHandler<ShutdownRequest>
 {
     public override TAddress Address => (TAddress)MessageService.Address;
-    void IMessageHub.Schedule(Func<Task> action) => MessageService.Schedule(action);
+    void IMessageHub.Schedule(Func<CancellationToken, Task> action) => MessageService.Schedule(action);
     public IServiceProvider ServiceProvider { get; }
     private readonly ConcurrentDictionary<string, List<AsyncDelivery>> callbacks = new();
 
@@ -50,7 +50,7 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
 
 
         foreach (var messageHandler in configuration.MessageHandlers)
-            Register(messageHandler.MessageType, d => messageHandler.AsyncDelivery.Invoke(this, d));
+            Register(messageHandler.MessageType, (d,c) => messageHandler.AsyncDelivery.Invoke(this, d,c));
 
 
         MessageService.Schedule(StartAsync);
@@ -59,10 +59,10 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
     }
 
 
-    public override async Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery)
+    public override async Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         ++Version;
-        delivery = await base.DeliverMessageAsync(delivery);
+        delivery = await base.DeliverMessageAsync(delivery, cancellationToken);
         return FinishDelivery(delivery);
     }
 
@@ -73,14 +73,14 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
     }
 
 
-    private async Task StartAsync()
+    private async Task StartAsync(CancellationToken cancellationToken)
     {
         foreach (var factory in Configuration.PluginFactories)
-            AddPlugin(await factory.Invoke(this));
+            AddPlugin(await factory.Invoke(this, cancellationToken));
 
         var actions = Configuration.BuildupActions;
         foreach (var buildup in actions)
-            await buildup(this);
+            await buildup(this, cancellationToken);
 
         deferral.Dispose();
         MessageService.Start();
@@ -115,17 +115,17 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
 
     public IMessageDelivery RegisterCallback<TMessage, TResponse>(IMessageDelivery<TMessage> request, SyncDelivery<TResponse> callback, CancellationToken cancellationToken)
         where TMessage : IRequest<TResponse>
-        => RegisterCallback<TMessage, TResponse>(request, d => Task.FromResult(callback(d)), cancellationToken);
+        => RegisterCallback<TMessage, TResponse>(request, (d,_) => Task.FromResult(callback(d)), cancellationToken);
 
     public IMessageDelivery RegisterCallback<TMessage, TResponse>(IMessageDelivery<TMessage> request, AsyncDelivery<TResponse> callback, CancellationToken cancellationToken)
         where TMessage : IRequest<TResponse>
     {
-        RegisterCallback(request, d => callback((IMessageDelivery<TResponse>)d), cancellationToken);
+        RegisterCallback(request, (d,c) => callback.Invoke((IMessageDelivery<TResponse>)d, c), cancellationToken);
         return request.Forwarded();
     }
 
     public Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, SyncDelivery callback, CancellationToken cancellationToken)
-        => RegisterCallback(delivery, d => Task.FromResult(callback(d)), cancellationToken);
+        => RegisterCallback(delivery, (d, _) => Task.FromResult(callback(d)), cancellationToken);
 
 
     // ReSharper disable once UnusedMethodReturnValue.Local
@@ -136,9 +136,9 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
     {
         var tcs = new TaskCompletionSource<IMessageDelivery>(cancellationToken);
 
-        async Task<IMessageDelivery> ResolveCallback(IMessageDelivery d)
+        async Task<IMessageDelivery> ResolveCallback(IMessageDelivery d, CancellationToken ct)
         {
-            var ret = await callback(d);
+            var ret = await callback(d, ct);
             tcs.SetResult(ret);
             return ret;
         }
@@ -148,14 +148,14 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
 
         return tcs.Task;
     }
-    private async Task<IMessageDelivery> HandleCallbacks(IMessageDelivery delivery)
+    private async Task<IMessageDelivery> HandleCallbacks(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         if (!delivery.Properties.TryGetValue(PostOptions.RequestId, out var requestId) ||
             !callbacks.TryRemove(requestId.ToString(), out var myCallbacks))
             return delivery;
 
         foreach (var callback in myCallbacks)
-            delivery = await callback(delivery);
+            delivery = await callback(delivery, cancellationToken);
 
         return delivery;
     }
@@ -331,16 +331,18 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
     public void AddPlugin(IMessageHubPlugin plugin)
     {
         var def = MessageService.Defer(plugin.IsDeferred);
-        Register(async d =>
+        Register(async (d,c) =>
         { 
-            d = await plugin.DeliverMessageAsync(d);
+            d = await plugin.DeliverMessageAsync(d,c);
             return d;
         });
         WithDisposeAction(_ => plugin.DisposeAsync());
-        MessageService.Schedule(async () =>
+        MessageService.Schedule(async c =>
         {
-            await plugin.StartAsync();
-            def.Dispose();
+            await plugin.StartAsync(c);
+#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
+            plugin.Started.ContinueWith(_ => def.Dispose(), c);
+#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
         });
     }
 

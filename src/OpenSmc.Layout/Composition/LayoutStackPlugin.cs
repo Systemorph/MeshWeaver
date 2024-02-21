@@ -22,14 +22,10 @@ public class LayoutStackPlugin(IMessageHub hub) :
     }
 
 
-    public override Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery)
-    {
-        return base.DeliverMessageAsync(delivery);
-    }
 
-    public override async Task StartAsync()
+    public override async Task StartAsync(CancellationToken cancellationToken)
     {
-        await base.StartAsync();
+        await base.StartAsync(cancellationToken);
 
         if (layoutDefinition?.InitialState == null)
             return;

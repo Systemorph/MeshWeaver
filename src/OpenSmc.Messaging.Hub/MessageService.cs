@@ -10,8 +10,8 @@ public class MessageService : IMessageService
     private readonly ISerializationService serializationService;
     private readonly ILogger<MessageService> logger;
     private bool isDisposing;
-    private readonly BufferBlock<IMessageDelivery> buffer = new();
-    private ActionBlock<IMessageDelivery> deliveryAction;
+    private readonly BufferBlock<(IMessageDelivery Delivery, CancellationToken CancellationToken)> buffer = new();
+    private ActionBlock<(IMessageDelivery Delivery, CancellationToken CancellationToken)> deliveryAction;
 
     private AsyncDelivery MessageHandler { get; set; }
 
@@ -20,7 +20,7 @@ public class MessageService : IMessageService
         MessageHandler = messageHandler;
     }
 
-    public void Schedule(Func<Task> action) => topQueue.Schedule(action);
+    public void Schedule(Func<CancellationToken,Task> action) => topQueue.Schedule(action);
     public Task<bool> FlushAsync() => topQueue.Flush();
     private readonly DeferralContainer deferralContainer;
 
@@ -44,11 +44,11 @@ public class MessageService : IMessageService
         if (isStarted)
             return;
         isStarted = true;
-        deliveryAction = new(d =>
+        deliveryAction = new(x =>
         {
             try
             {
-                return deferralContainer.DeliverAsync(d);
+                return deferralContainer.DeliverAsync(x.Delivery,x.CancellationToken);
             }
             catch (Exception e)
             {
@@ -78,7 +78,9 @@ public class MessageService : IMessageService
         if (Address.Equals(delivery.Target))
             delivery = UnpackIfNecessary(delivery);
 
-        buffer.Post(delivery);
+        // TODO V10: Here we need to inject the correct cancellation token. (19.02.2024, Roland Bürgi)
+        var cancellationToken = CancellationToken.None;
+        buffer.Post((delivery, cancellationToken));
         return delivery;
     }
 
@@ -101,9 +103,9 @@ public class MessageService : IMessageService
 
 
 
-    private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery)
+    private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
-        delivery = await MessageHandler.Invoke(delivery);
+        delivery = await MessageHandler.Invoke(delivery, cancellationToken);
         return delivery;
     }
 

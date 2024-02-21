@@ -22,12 +22,12 @@ public record RouteConfiguration(IMessageHub Hub)
         });
 
     public RouteConfiguration RouteAddress<TAddress>(SyncRouteDelivery<TAddress> handler) =>
-        RouteAddress<TAddress>((routedAddress, d) => Task.FromResult(handler(routedAddress, d)));
+        RouteAddress<TAddress>((routedAddress, d, _) => Task.FromResult(handler(routedAddress, d)));
         
     public RouteConfiguration RouteAddress<TAddress>(AsyncRouteDelivery<TAddress> handler)
         => this with
         {
-            Handlers = Handlers.Add(async delivery =>
+            Handlers = Handlers.Add(async (delivery,cancellationToken) =>
             {
                 if (delivery.State != MessageDeliveryState.Submitted || Hub.Address.Equals(delivery.Target))
                     return delivery;
@@ -35,17 +35,17 @@ public record RouteConfiguration(IMessageHub Hub)
                 if (routedAddress == null)
                     return delivery;
                 // TODO: should we take care of result from handler somehow?
-                return await handler(routedAddress, delivery);
+                return await handler(routedAddress, delivery, cancellationToken);
             }
             ),
         };
 
     public RouteConfiguration RouteMessage<TMessage>(Func<IMessageDelivery<TMessage>, object> addressMap) =>
-        RouteMessage(addressMap, _ => true);
+        RouteMessage(addressMap, d => Hub.Address.Equals(d.Target));
 
     public RouteConfiguration RouteMessage<TMessage>(Func<IMessageDelivery<TMessage>, object> addressMap, Func<IMessageDelivery<TMessage>, bool> filter)
     {
-        return RouteMessage(delivery =>
+        return RouteMessage((delivery, cancellationToken) =>
             {
                 var mappedAddress = addressMap((IMessageDelivery<TMessage>)delivery);
                 if (!delivery.Sender.Equals(Hub.Address))
@@ -55,7 +55,7 @@ public record RouteConfiguration(IMessageHub Hub)
                 if (delivery.Message is IRequest)
                     Hub.RegisterCallback(forwardedDelivery,
                         response => Hub.Post(response.Message,
-                            o => o.WithProperties(response.Properties).ResponseFor(delivery)));
+                            o => o.WithProperties(response.Properties).ResponseFor(delivery)), cancellationToken);
                 return Task.FromResult(delivery.Forwarded());
             },
             filter);
@@ -65,7 +65,7 @@ public record RouteConfiguration(IMessageHub Hub)
     private RouteConfiguration RouteMessage<TMessage>(AsyncDelivery handler, Func<IMessageDelivery<TMessage>, bool> filter)
         => this with
         {
-            Handlers = Handlers.Add(d =>
+            Handlers = Handlers.Add((d,c) =>
                 {
                     if(
                             (d.Target != null && !Hub.Address.Equals(d.Target))
@@ -75,7 +75,7 @@ public record RouteConfiguration(IMessageHub Hub)
                             )
                         return Task.FromResult(d);
 
-                    return handler(delivery);
+                    return handler(delivery, c);
                 }
             ),
         };
@@ -107,7 +107,7 @@ public record ForwardConfigurationItem<TMessage> : IForwardConfigurationItem
 {
 
 
-    AsyncDelivery IForwardConfigurationItem.Route => d => Route((IMessageDelivery<TMessage>)d);
+    AsyncDelivery IForwardConfigurationItem.Route => (d,c) => Route((IMessageDelivery<TMessage>)d, c);
 
 
     bool IForwardConfigurationItem.Filter(IMessageDelivery delivery)

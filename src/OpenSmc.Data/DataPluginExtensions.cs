@@ -8,10 +8,14 @@ public static class DataPluginExtensions
 {
     public static MessageHubConfiguration AddData(this MessageHubConfiguration config, Func<DataContext, DataContext> dataPluginConfiguration)
     {
-        var dataPluginConfig = config.GetListOfLambdas();
         return config
             .WithServices(sc => sc.AddSingleton<IWorkspace, DataPlugin>())
-            .Set(dataPluginConfig.Add(dataPluginConfiguration))
+            .Set(config.GetListOfLambdas().Add(dataPluginConfiguration))
+            .WithRoutes(routes => routes
+                .RouteMessage<StartDataSynchronizationRequest>(_ => new PersistenceAddress(routes.Hub.Address))
+                .RouteMessage<StopDataSynchronizationRequest>(_ => new PersistenceAddress(routes.Hub.Address))
+                .RouteMessage<DataSynchronizationState>(_ => new PersistenceAddress(routes.Hub.Address))
+            )
             .AddPlugin(hub => (DataPlugin)hub.ServiceProvider.GetRequiredService<IWorkspace>());
     }
 
@@ -26,7 +30,7 @@ public static class DataPluginExtensions
         var ret = new DataContext(hub);
         foreach (var func in dataPluginConfig)
             ret = func.Invoke(ret);
-        return ret.Build();
+        return ret.Build(hub);
     }
 
     public static async Task<IReadOnlyCollection<T>> GetAll<T>(this IMessageHub hub, object dataSourceId, CancellationToken cancellationToken) where T : class
@@ -40,4 +44,8 @@ public static class DataPluginExtensions
         => type.IsGenericType && GetRequestTypes.Contains(type.GetGenericTypeDefinition());
 
     private static readonly HashSet<Type> GetRequestTypes = [typeof(GetRequest<>), typeof(GetManyRequest<>)];
+
+    public static HubDataSource FromHub(this DataSource dataSource, object address) =>
+        new(address);
+
 }

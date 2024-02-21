@@ -25,11 +25,11 @@ public class EntityFrameworkDataContextTest(ITestOutputHelper output) : HubTestB
             .AddData(data => data
                 .WithDataSource(SqlServer, 
                     dataSource => dataSource
+                                .FromEntityFramework(database => database.UseSqlServer(ConnectionString))
+
                         // here, all the entity types need to be listed as exposed to framework
                         // if desired, we can add mapping logic between data source and data hub, please request on GitHub.
-                        .WithType<MyDataRecord>(),
-                    ds =>
-                        ds.GetEntityFrameworkStorage(database => database.UseSqlServer(ConnectionString))
+                        .WithType<MyDataRecord>()
                 )
             );
     }
