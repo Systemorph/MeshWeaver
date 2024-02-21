@@ -13,5 +13,4 @@ createRoot(document.getElementById('root')!).render(
             <Route path={"*"} element={<PlaygroundPage/>} />
         </Routes>
     </BrowserRouter>
-)
-
+);

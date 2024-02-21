@@ -1,20 +1,14 @@
 {
   "name": "open-smc",
   "scripts": {
-    "clean-node-modules": "rimraf node_modules",
-    "clean-all": "npm run clean-node-modules --workspaces --if-present",
-    "portal:start": "npm run start -w portal",
-    "portal:build": "npm run build -w portal"
-  },
-  "overrides": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "clean-node-modules": "npm exec --workspaces -- npx rimraf node_modules && npx rimraf node_modules"
   },
   "workspaces": [
     "packages/*"
   ],
-  "devDependencies": {
-    "rimraf": "^3.0.2",
+  "overrides": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
     "typescript": "^5.2.2"
   }
 }

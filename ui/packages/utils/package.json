@@ -1,10 +1,7 @@
 {
   "name": "@open-smc/utils",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "type": "module",
-  "scripts": {
-    "clean-node-modules": "rimraf node_modules"
-  },
   "devDependencies": {
     "@jest/globals": "^29.6.1",
     "jest": "^29.6.1",

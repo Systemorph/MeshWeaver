@@ -121,32 +121,23 @@ let LayoutAddress = class {
   }
 };
 LayoutAddress = __decorateClass([
-  contractMessage("OpenSmc.Application.Layout.LayoutAddress")
+  contractMessage("OpenSmc.Portal.LayoutAddress")
 ], LayoutAddress);
-let ConnectToHubRequest = class {
-  constructor(from, to) {
-    this.from = from;
-    this.to = to;
-  }
-};
-ConnectToHubRequest = __decorateClass([
-  contractMessage("OpenSmc.Messaging.ConnectToHubRequest")
-], ConnectToHubRequest);
 let UiAddress = class {
   constructor(id) {
     this.id = id;
   }
 };
 UiAddress = __decorateClass([
-  contractMessage("OpenSmc.Application.UiAddress")
+  contractMessage("OpenSmc.Portal.UiAddress")
 ], UiAddress);
 let RefreshRequest = class {
-  constructor(area) {
+  constructor(area = "") {
     this.area = area;
   }
 };
 RefreshRequest = __decorateClass([
-  contractMessage("OpenSmc.Application.RefreshRequest")
+  contractMessage("OpenSmc.Layout.RefreshRequest")
 ], RefreshRequest);
 let AreaChangedEvent = class {
   constructor(area, view, options, style) {
@@ -157,7 +148,7 @@ let AreaChangedEvent = class {
   }
 };
 AreaChangedEvent = __decorateClass([
-  contractMessage("OpenSmc.Application.AreaChangedEvent")
+  contractMessage("OpenSmc.Layout.AreaChangedEvent")
 ], AreaChangedEvent);
 let ClickedEvent = class {
   constructor(id, payload) {
@@ -166,7 +157,7 @@ let ClickedEvent = class {
   }
 };
 ClickedEvent = __decorateClass([
-  contractMessage("OpenSmc.Application.Layout.Views.ClickedEvent")
+  contractMessage("OpenSmc.Layout.Views.ClickedEvent")
 ], ClickedEvent);
 let ExpandRequest = class {
   constructor(id, area, payload) {
@@ -176,7 +167,7 @@ let ExpandRequest = class {
   }
 };
 ExpandRequest = __decorateClass([
-  contractMessage("OpenSmc.Application.Layout.Views.ExpandRequest")
+  contractMessage("OpenSmc.Layout.Views.ExpandRequest")
 ], ExpandRequest);
 let SetAreaRequest = class {
   constructor(area, path, options) {
@@ -186,8 +177,13 @@ let SetAreaRequest = class {
   }
 };
 SetAreaRequest = __decorateClass([
-  contractMessage("OpenSmc.Application.SetAreaRequest")
+  contractMessage("OpenSmc.Layout.SetAreaRequest")
 ], SetAreaRequest);
+let CloseModalDialogEvent = class {
+};
+CloseModalDialogEvent = __decorateClass([
+  contractMessage("OpenSmc.Layout.CloseModalDialogEvent")
+], CloseModalDialogEvent);
 let CategoryItemsRequest = class {
   constructor(categoryName, search, page, pageSize) {
     this.categoryName = categoryName;
@@ -230,11 +226,6 @@ let ModuleErrorEvent = class {
 ModuleErrorEvent = __decorateClass([
   contractMessage("OpenSmc.ModuleErrorEvent")
 ], ModuleErrorEvent);
-let CloseModalDialogEvent = class {
-};
-CloseModalDialogEvent = __decorateClass([
-  contractMessage("OpenSmc.Application.CloseModalDialogEvent")
-], CloseModalDialogEvent);
 const ofContractType = (ctor) => filter((envelope) => envelope.message.$type === ctor.$type);
 class ControlBase extends SubjectHub {
   constructor($type, id = v4()) {
