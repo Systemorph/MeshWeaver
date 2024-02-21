@@ -12,10 +12,8 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     IMessageHandler<DeleteDataRequest>
 {
     private readonly IMessageHub persistenceHub;
-    private readonly TaskCompletionSource initialize = new();
 
     public DataContext DataContext { get; }
-    public Task Initializing => initialize.Task;
 
     public DataPlugin(IMessageHub hub) : base(hub)
     {
@@ -24,13 +22,19 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         persistenceHub = hub.GetHostedHub(new PersistenceAddress(hub.Address), conf => conf.AddPlugin(h => new DataPersistencePlugin(h, DataContext)));
     }
 
+    public override Task Initialized => initializeStateTask;
+    private Task initializeStateTask;
     public override async Task StartAsync(CancellationToken cancellationToken)  // This loads the persisted state
     {
         await base.StartAsync(cancellationToken);
 
+        initializeStateTask = InitializeState(cancellationToken);
+    }
+
+    private async Task InitializeState(CancellationToken cancellationToken)
+    {
         var response = await persistenceHub.AwaitResponse(new GetDataStateRequest(), cancellationToken);
-        InitializeState(new (response.Message));
-        initialize.SetResult();
+        base.InitializeState(new (response.Message));
     }
 
     IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(IMessageDelivery<UpdateDataRequest> request)

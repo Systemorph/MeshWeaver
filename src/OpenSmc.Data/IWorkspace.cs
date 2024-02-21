@@ -3,7 +3,7 @@
 public interface IWorkspace 
 {
     DataContext DataContext { get; }
-    Task Initializing { get; }
+    Task Initialized { get; }
     void Update(IReadOnlyCollection<object> instances) => Update(instances, new());
     void Update(IReadOnlyCollection<object> instances, UpdateOptions options);
     void Update(object instance) => Update(new[] { instance });

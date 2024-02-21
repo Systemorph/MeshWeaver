@@ -14,7 +14,6 @@ public static class DataPluginExtensions
             .WithRoutes(routes => routes
                 .RouteMessage<StartDataSynchronizationRequest>(_ => new PersistenceAddress(routes.Hub.Address))
                 .RouteMessage<StopDataSynchronizationRequest>(_ => new PersistenceAddress(routes.Hub.Address))
-                .RouteMessage<DataSynchronizationState>(_ => new PersistenceAddress(routes.Hub.Address))
             )
             .AddPlugin(hub => (DataPlugin)hub.ServiceProvider.GetRequiredService<IWorkspace>());
     }
@@ -45,7 +44,11 @@ public static class DataPluginExtensions
 
     private static readonly HashSet<Type> GetRequestTypes = [typeof(GetRequest<>), typeof(GetManyRequest<>)];
 
-    public static HubDataSource FromHub(this DataSource dataSource, object address) =>
-        new(address);
+
+    public static DataContext WithDataFromHub(this DataContext dataSource, object address)
+        => WithDataFromHub(dataSource, address, ds => ds);
+
+    public static DataContext WithDataFromHub(this DataContext dataSource, object address, Func<HubDataSource, HubDataSource> configuration)
+        => dataSource.WithDataSource(address, _ => configuration.Invoke(new HubDataSource(address)));
 
 }

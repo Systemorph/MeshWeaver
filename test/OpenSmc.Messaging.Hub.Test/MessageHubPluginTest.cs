@@ -30,8 +30,8 @@ public class MessageHubPluginTest : TestBase
             logger.LogInformation("Starting");
             Events = Events.Add("Starting");
             await Task.Delay(1000, cancellationToken);
-            Events = Events.Add("Started");
-            logger.LogInformation("Started");
+            Events = Events.Add("Initialized");
+            logger.LogInformation("Initialized");
         }
 
         public IMessageDelivery HandleMessage(IMessageDelivery request)
@@ -64,7 +64,7 @@ public class MessageHubPluginTest : TestBase
     {
         await Hub.AwaitResponse(new MyEvent());
         var events = await Hub.AwaitResponse(new GetEvents());
-        events.Message.Should().BeEquivalentTo(["Starting", "Started", "Handled"], o => o.WithStrictOrdering());
+        events.Message.Should().BeEquivalentTo(["Starting", "Initialized", "Handled"], o => o.WithStrictOrdering());
     }
 
     public override async Task DisposeAsync()

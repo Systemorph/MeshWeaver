@@ -1,6 +1,4 @@
-﻿using System.Text.Json.Nodes;
-using Json.Patch;
-using OpenSmc.Activities;
+﻿using OpenSmc.Activities;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
@@ -41,8 +39,8 @@ public record DataChangedEvent(long Version)
     public ActivityLog Log { get; set; }
 }
 
-public record DataSynchronizationState(long Version, JsonNode Data): DataChangedEvent(Version);
-public record DataSynchronizationPatch(long Version,  JsonPatch Patch) : DataChangedEvent(Version);
+public record DataSynchronizationState(long Version, string Data): DataChangedEvent(Version);
+public record DataSynchronizationPatch(long Version,  string Patch) : DataChangedEvent(Version);
 
 /// <summary>
 /// Ids of the synchronization requests to be stopped (generated with request)

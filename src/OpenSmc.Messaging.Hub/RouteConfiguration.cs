@@ -48,6 +48,8 @@ public record RouteConfiguration(IMessageHub Hub)
         return RouteMessage((delivery, cancellationToken) =>
             {
                 var mappedAddress = addressMap((IMessageDelivery<TMessage>)delivery);
+                if (mappedAddress == null || mappedAddress.Equals(delivery.Target))
+                    return Task.FromResult(delivery);
                 if (!delivery.Sender.Equals(Hub.Address))
                     RoutedMessageAddresses.GetOrAdd(mappedAddress, _ => new()).Add(delivery.Sender);
                 var forwardedDelivery = Hub.Post(delivery.Message, o => o.WithProperties(delivery.Properties).WithTarget(mappedAddress));
