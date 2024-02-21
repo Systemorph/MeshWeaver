@@ -115,7 +115,7 @@ where TDataSource : DataSource<TDataSource>
     protected virtual IDataSource Build(IMessageHub hub)
     {
         var builtUp = Buildup(hub);
-        return (TDataSource)builtUp with
+        return builtUp with
         {
             TypeSources = TypeSources
                 .ToImmutableDictionary
