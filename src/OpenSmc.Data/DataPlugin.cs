@@ -1,4 +1,5 @@
-﻿using System.Collections.Immutable;
+﻿using System;
+using System.Collections.Immutable;
 using System.Reflection;
 using OpenSmc.Data.Persistence;
 using OpenSmc.Messaging;
@@ -31,6 +32,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         var response = await persistenceHub.AwaitResponse(new GetDataStateRequest(), cancellationToken);
         InitializeState(new (response.Message));
         initialize.SetResult();
+        await DataContext.InitializationAsync(Hub, cancellationToken);
     }
 
     IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(IMessageDelivery<UpdateDataRequest> request)

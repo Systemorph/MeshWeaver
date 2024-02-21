@@ -11,7 +11,7 @@ public record DataContext(IMessageHub Hub)
     
     internal ImmutableDictionary<object,IDataSource> DataSources { get; init; } = ImmutableDictionary<object, IDataSource>.Empty;
 
-    internal Action<IMessageHub> Initialization { get; init; } = hub => { };
+    internal Func<IMessageHub, CancellationToken, Task> InitializationAsync { get; init; } = (_, _) => Task.CompletedTask;
 
     public IReadOnlyCollection<Type> DataTypes => DataSourcesByTypes.Keys.ToArray();
 
@@ -22,8 +22,8 @@ public record DataContext(IMessageHub Hub)
     internal DataContext WithType<T>(object dataSourceId)
         => this with { DataSourcesByTypes = DataSourcesByTypes.SetItem(typeof(T), dataSourceId) };
 
-    public DataContext WithInMemoryInitialization(Action<IMessageHub> initialization)
-        => this with { Initialization = initialization };
+    public DataContext WithInMemoryInitialization(Func<IMessageHub, CancellationToken, Task> initialization)
+        => this with { InitializationAsync = initialization };
 
     public DataContext WithDataSource(object id, Func<DataSource, IDataSource> dataSourceBuilder) 
         => WithDataSource(id, dataSourceBuilder.Invoke(new(id)));
