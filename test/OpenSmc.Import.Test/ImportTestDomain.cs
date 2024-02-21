@@ -78,11 +78,8 @@ public static class ImportTestDomain
         =
         new()
         {
-            {
-                typeof(Contract), new Contract[]
-                {
-                }
-            }
+            { typeof(Contract), new Contract[] { } },
+            { typeof(Country), new Country[] { } },
         };
 
     public record Address
