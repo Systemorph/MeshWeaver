@@ -23,12 +23,12 @@ public record DataPersistencePluginState(CombinedWorkspaceState Workspaces)
     /// <summary>
     /// Synchronization requests by address.
     /// </summary>
-    public ImmutableDictionary<object, SynchronizationItem> SynchronizationsByAddress { get; init; } = ImmutableDictionary<object, SynchronizationItem>.Empty;
+    public ImmutableDictionary<object, DataSubscription> SubscriptionsByAddress { get; init; } = ImmutableDictionary<object, DataSubscription>.Empty;
 
     public JsonNode SerializedWorkspace { get; init; }
 }
 
-public record SynchronizationItem
+public record DataSubscription
 {
     public ImmutableDictionary<string, string> Paths { get; init; } = ImmutableDictionary<string, string>.Empty;
     public JsonNode LastSynchronized { get; init; }
@@ -134,7 +134,6 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
 
     private void UpdateAndSynchronize(object dataSourceId, WorkspaceState workspace)
     {
-        var oldSerialized = GetSerializedWorkspace();
         UpdateState(s =>
             s with
             {
@@ -142,19 +141,18 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
                 SerializedWorkspace = null
             });
 
-        //var newSerialized = GetSerializedWorkspace();
-
-
-        //foreach (var kvp in State.SynchronizationsByAddress)
-        //{
-        //    var address = kvp.Key;
-        //    foreach (var startDataSynchronizationRequest in kvp.Value)
-        //    {
-        //        var patch = Get
-        //    }
-        //}
+        UpdateSubscriptions();
     }
 
+    private void UpdateSubscriptions()
+    {
+        foreach (var (address, subscription) in State.SubscriptionsByAddress)
+        {
+            var dataChanged = UpdateSubscription(address, subscription, SynchronizationMode.Delta);
+            if (dataChanged != null)
+                Hub.Post(dataChanged, o => o.WithTarget(address));
+        }
+    }
 
     /// <summary>
     /// This processes a single update or delete request request
@@ -252,17 +250,36 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
     private void StartSynchronization(IMessageDelivery<StartDataSynchronizationRequest> request)
     {
         var address = request.Sender;
-        Hub.Post(UpdateSubscription(request, address), o => o.ResponseFor(request));
+
+        DataSubscription subscription = State.SubscriptionsByAddress.TryGetValue(address, out subscription)
+            ? subscription with
+            {
+                // add up all paths
+                Paths = subscription.Paths.SetItems(request.Message.JsonPaths)
+            }
+            : new DataSubscription()
+            {
+                Paths = request.Message.JsonPaths.ToImmutableDictionary()
+            };
+
+        UpdateState(s =>
+            s with
+            {
+                SubscriptionsByAddress =
+                s.SubscriptionsByAddress.SetItem(address,subscription)
+                    
+            });
+
+        var dataChangedEvent = UpdateSubscription(address, subscription, SynchronizationMode.Full);
+        if (dataChangedEvent != null)
+            Hub.Post(dataChangedEvent, o => o.ResponseFor(request));
+
     }
-
-    private DataChangedEvent UpdateSubscription(IMessageDelivery<StartDataSynchronizationRequest> request, object address)
+    public enum SynchronizationMode{Full, Delta}
+    private DataChangedEvent UpdateSubscription(object address, DataSubscription subscription, SynchronizationMode mode)
     {
-        var subscription =
-            State.SynchronizationsByAddress.GetValueOrDefault(address) 
-            ?? new();
-
-        var lastSynchronized = subscription?.LastSynchronized;
-        var paths = subscription.Paths.SetItems(request.Message.JsonPaths);
+        var lastSynchronized = subscription.LastSynchronized;
+        var paths = subscription.Paths;
         var synchronizedWorkspace = GetSynchronizedWorkspace(paths);
 
         subscription = subscription with
@@ -275,12 +292,12 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
         UpdateState(s =>
             s with
             {
-                SynchronizationsByAddress = s.SynchronizationsByAddress
+                SubscriptionsByAddress = s.SubscriptionsByAddress
                     .SetItem(address, subscription)
             });
 
         DataChangedEvent dataChanged =
-            lastSynchronized == null
+            lastSynchronized == null || mode == SynchronizationMode.Full
                 ? new DataSynchronizationState(Hub.Version, synchronizedWorkspace.ToString())
                 : new DataSynchronizationPatch(Hub.Version, synchronizedWorkspace.CreatePatch(lastSynchronized).ToString());
         return dataChanged;

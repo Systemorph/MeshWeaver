@@ -32,11 +32,22 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
             );
     }
 
+    private const string NewName = nameof(NewName);
+
     [HubFact]
     public async Task TestBasicSynchronization()
     {
         var client = GetClient();
         var businessUnitResponse = await client.AwaitResponse(new GetManyRequest<BusinessUnit>());
         businessUnitResponse.Message.Items.Should().HaveCountGreaterThan(1);
+
+        var businessUnit = businessUnitResponse.Message.Items.First();
+        businessUnit = businessUnit with { DisplayName = NewName };
+        client.Post(new UpdateDataRequest(businessUnit));
+        var getRequest = new GetRequest<BusinessUnit> { Id = businessUnit.SystemName };
+        var loadedInstance = await client.AwaitResponse(getRequest);
+        loadedInstance.Message.Should().Be(businessUnit);
+        loadedInstance = await client.AwaitResponse(getRequest, o => o.WithTarget(new HostAddress()));
+        loadedInstance.Message.Should().Be(businessUnit);
     }
 }

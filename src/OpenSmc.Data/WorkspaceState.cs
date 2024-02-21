@@ -37,6 +37,10 @@ public record CombinedWorkspaceState(ImmutableDictionary<object, WorkspaceState>
     {
         return WorkspacesByKey.Values.SelectMany(ws => ws.GetItems<T>()).ToArray();
     }
+    public T GetItem<T>(object id) where T : class
+    {
+        return WorkspacesByKey.Values.Select(v => v.GetItem<T>(id)).FirstOrDefault(x => x != null);
+    }
 
     public CombinedWorkspaceState UpdateWorkspace(object dataSourceId, WorkspaceState workspace)
         => this with { WorkspacesByKey = WorkspacesByKey.SetItem(dataSourceId, workspace) };
@@ -115,14 +119,16 @@ public record WorkspaceState(IDataSource DataSource)
 
     public virtual IReadOnlyCollection<T>  GetItems<T>()
     {
-        if (!DataSource.GetTypeConfiguration(typeof(T), out var typeConfig))
-            ThrowTypeNotConfigured(typeof(T));
-        if (Data.TryGetValue(typeConfig.CollectionName, out var itemsOfType))
-        {
-            return itemsOfType.Values.Cast<T>().ToArray();
-        }
+        return GetItemsByKey(typeof(T)).Values.Cast<T>().ToArray();
+    }
 
-        return Array.Empty<T>();
+    private ImmutableDictionary<object, object> GetItemsByKey(Type type)
+    {
+        if (!DataSource.GetTypeConfiguration(type, out var typeConfig))
+            ThrowTypeNotConfigured(type);
+        if (Data.TryGetValue(typeConfig.CollectionName, out var itemsOfType))
+            return itemsOfType;
+        return ImmutableDictionary<object, object>.Empty;
     }
 
     // 1st hub -> DataHub (unique source of truth for data)
@@ -136,5 +142,9 @@ public record WorkspaceState(IDataSource DataSource)
     // Hub2 uses InitializeAsync from and loads data from DB and returns result to Hub1
     // as soon as Hub 1 will receive callback from Hub 2 it will finish its startup
     // right after startup both hubs will be in Sync
+    public T GetItem<T>(object id) where T : class
+    {
+        return (T)GetItemsByKey(typeof(T)).GetValueOrDefault(id);
+    }
 }
 

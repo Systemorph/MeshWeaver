@@ -17,6 +17,7 @@ public record PersistenceAddress(object Host) : IHostedAddress;
 
 public record GetRequest<T> : IRequest<T>
 {
+    public object Id { get; init; }
     public object Options { get; init; }
 }
 

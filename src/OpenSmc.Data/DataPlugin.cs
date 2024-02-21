@@ -80,12 +80,33 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     private IMessageDelivery HandleGetRequest(IMessageDelivery request)
     {
         var type = request.Message.GetType();
-        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(GetManyRequest<>))
+        if (type.IsGenericType)
         {
-            var elementType = type.GetGenericArguments().First();
-            return (IMessageDelivery)GetElementsMethod.MakeGenericMethod(elementType).InvokeAsFunction(this, request);
+            var genericTypeDefinition = type.GetGenericTypeDefinition();
+            if (genericTypeDefinition == typeof(GetManyRequest<>))
+            {
+                var elementType = type.GetGenericArguments().First();
+                return (IMessageDelivery)GetElementsMethod.MakeGenericMethod(elementType).InvokeAsFunction(this, request);
+            }
+
+            if (genericTypeDefinition == typeof(GetRequest<>))
+            {
+                var elementType = type.GetGenericArguments().First();
+                return (IMessageDelivery)GetElementMethod.MakeGenericMethod(elementType).InvokeAsFunction(this, request);
+
+            }
         }
         return request;
+    }
+
+    private static readonly MethodInfo GetElementMethod = ReflectionHelper.GetMethodGeneric<DataPlugin>(x => x.GetElement<object>(null));
+
+    // ReSharper disable once UnusedMethodReturnValue.Local
+    private IMessageDelivery GetElement<T>(IMessageDelivery<GetRequest<T>> request) where T : class
+    {
+        var item = State.Current.GetItem<T>(request.Message.Id);
+        Hub.Post(item, o => o.ResponseFor(request));
+        return request.Processed();
     }
 
     private static readonly MethodInfo GetElementsMethod = ReflectionHelper.GetMethodGeneric<DataPlugin>(x => x.GetElements<object>(null));
