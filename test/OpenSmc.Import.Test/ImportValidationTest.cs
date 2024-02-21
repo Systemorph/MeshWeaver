@@ -1,13 +1,9 @@
-﻿using System.ComponentModel;
-using System.ComponentModel.DataAnnotations;
-using FluentAssertions;
-using Microsoft.Extensions.Logging;
+﻿using FluentAssertions;
 using OpenSmc.Activities;
 using OpenSmc.Data;
-using OpenSmc.Domain.Abstractions;
+using OpenSmc.Data.Domain;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
-using OpenSmc.ServiceProvider;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -24,7 +20,7 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
                     (
                         nameof(DataSource),
                         source => source
-                            .ConfigureCategory(ImportTestDomain.ContractDomain)
+                            .ConfigureCategory(TestDomain.ContractDomain)
                     )
                 )
                 .AddImport(import => import)
@@ -57,7 +53,7 @@ FoundationYear,ContractType
         //   .Should().BeEquivalentTo(string.Format(CategoryAttributeValidator.UnknownValueErrorMessage, nameof(ImportTestDomain.Contract.ContractType), typeof(ImportTestDomain.Contract).FullName, "Cost-Plus"),
         //                            string.Format(MappingService.ValidationStageFailed, typeof(ImportTestDomain.Contract).FullName));
 
-        var ret = await client.AwaitResponse(new GetManyRequest<ImportTestDomain.Contract>(),
+        var ret = await client.AwaitResponse(new GetManyRequest<TestDomain.Contract>(),
             o => o.WithTarget(new HostAddress()));
 
         ret.Message.Items.Should().HaveCount(0);

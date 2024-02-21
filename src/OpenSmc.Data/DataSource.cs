@@ -1,6 +1,5 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
-using Newtonsoft.Json.Linq;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 
@@ -27,18 +26,14 @@ public record DataSource<TDataSource>(object Id) : IDataSource
 where TDataSource : DataSource<TDataSource>
 {
     public TDataSource WithType(Type type)
+        => WithType(type, x => x);
 
     public TDataSource WithType(Type type, Func<TypeSource, TypeSource> config)
         => (TDataSource)WithTypeMethod.MakeGenericMethod(type).InvokeAsFunction(this, config);
+
     private static readonly MethodInfo WithTypeMethod =
         ReflectionHelper.GetMethodGeneric<DataSource<TDataSource>>(x => x.WithType<object>(default(Func<TypeSource, TypeSource>)));
-
-    protected ImmutableDictionary<Type, TypeSource> TypeSources { get; init; } = ImmutableDictionary<Type, TypeSource>.Empty;
-
-    internal Func<Task<ITransaction>> StartTransactionAction { get; init; } = () => Task.FromResult<ITransaction>(EmptyTransaction.Instance);
-
-    public IEnumerable<Type> MappedTypes => TypeSources.Keys;
-
+    public TDataSource WithType<T>()
         where T : class
         => WithType<T>(d => d);
 
@@ -53,15 +48,11 @@ where TDataSource : DataSource<TDataSource>
         where T : class
         => WithType(configurator.Invoke(CreateTypeSource<T>()));
 
-    public DataSource WithType(Type type)
-        => WithType(type, x => x);
     protected virtual TypeSource<T> CreateTypeSource<T>() where T : class
     {
         return new TypeSource<T>();
     }
 
-    public DataSource WithType(Type type, Func<TypeSource, TypeSource> config)
-        => (DataSource)WithTypeMethod.MakeGenericMethod(type).InvokeAsFunction(this, config);
     protected TDataSource WithType<T>(TypeSource<T> typeSource)
         where T : class
     {
@@ -76,34 +67,41 @@ where TDataSource : DataSource<TDataSource>
         return await InitializeAsync(hub, cancellationToken);
     }
 
-    protected virtual async Task<WorkspaceState> InitializeAsync(IMessageHub hub,
-        CancellationToken cancellationToken)
-
-
-    public async Task<WorkspaceState> DoInitialize()
+    protected virtual async Task<WorkspaceState> InitializeAsync(IMessageHub hub, CancellationToken cancellationToken)
     {
         var ret = new WorkspaceState(this);
 
         foreach (var typeConfiguration in TypeSources.Values)
         {
-            var initialized = await typeConfiguration.DoInitialize();
+            var initialized = await typeConfiguration.DoInitialize(cancellationToken);
             ret = ret.SetData(typeConfiguration.ElementType, initialized);
         }
 
         return ret;
     }
 
+
+    protected ImmutableDictionary<Type, TypeSource> TypeSources { get; init; } = ImmutableDictionary<Type, TypeSource>.Empty;
+
+
     public TDataSource WithTransaction(Func<CancellationToken, Task<ITransaction>> startTransaction)
         => (TDataSource)this with { StartTransactionAction = startTransaction };
+
 
     Task<ITransaction> IDataSource.StartTransactionAsync(CancellationToken cancellationToken) => StartTransactionAction(cancellationToken);
     internal Func<CancellationToken, Task<ITransaction>> StartTransactionAction { get; init; }
         = _ => Task.FromResult<ITransaction>(EmptyTransaction.Instance);
+
+    public IEnumerable<Type> MappedTypes => TypeSources.Keys;
+
     public TypeSource GetTypeSource(string collectionName) =>
         TypeSources.Values.FirstOrDefault(x => x.CollectionName == collectionName);
 
+    public bool GetTypeConfiguration(Type type, out TypeSource typeSource)
+    {
+        return TypeSources.TryGetValue(type, out typeSource);
+    }
 
-    public bool GetTypeConfiguration(Type type, out TypeSource typeSource) => TypeSources.TryGetValue(type, out typeSource);
 
     /// <summary>
     /// Idea is to split the construction of the configuration in two parts:
