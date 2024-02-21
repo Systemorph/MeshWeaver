@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Text.Json.Nodes;
 using Json.Patch;
 using Json.Path;
+using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
@@ -48,30 +49,35 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
     /// <returns></returns>
     ///
     private Task initializeTask;
+
+    [Inject] private ITypeRegistry typeRegistry;
     public override Task StartAsync(CancellationToken cancellationToken)
     {
-        initializeTask = InitializeStateAsync(cancellationToken);
+        foreach (var type in Context.DataTypes)
+            typeRegistry.WithType(type);
+
+        initializeTask = InitializeAllDataSources(cancellationToken);
         return Task.CompletedTask;
     }
 
-    private async Task InitializeStateAsync(CancellationToken cancellationToken)
+    public override bool IsDeferred(IMessageDelivery delivery)
     {
-        var loadedWorkspaces = 
-            await InitializeAllDataSources(cancellationToken);
-
-        InitializeState(new(new(loadedWorkspaces, Context)));
-        CompleteStart();
+        if (delivery.Message is DataSynchronizationState)
+            return false;
+        return base.IsDeferred(delivery);
     }
 
-    private async Task<ImmutableDictionary<object, WorkspaceState>> InitializeAllDataSources(CancellationToken cancellationToken)
+    public override Task Initialized => initializeTask;
+
+
+    private async Task InitializeAllDataSources(CancellationToken cancellationToken)
     {
-        return (await Context.DataSources
-                .Distinct()
-                .ToAsyncEnumerable()
+        var dict = await Context.DataSources
+            .ToAsyncEnumerable()
                 .SelectAwait(async kvp =>
                     new KeyValuePair<object, WorkspaceState>(kvp.Key, await kvp.Value.InitializeAsync(Hub, cancellationToken)))
-                .ToArrayAsync(cancellationToken))
-            .ToImmutableDictionary();
+            .ToArrayAsync(cancellationToken);
+        InitializeState(new DataPersistencePluginState(new(dict.ToImmutableDictionary(), Context)));
     }
 
     IMessageDelivery IMessageHandler<GetDataStateRequest>.HandleMessage(IMessageDelivery<GetDataStateRequest> request)
@@ -276,7 +282,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
         DataChangedEvent dataChanged =
             lastSynchronized == null
                 ? new DataSynchronizationState(Hub.Version, synchronizedWorkspace.ToString())
-                : new DataSynchronizationPatch(Hub.Version, synchronizedWorkspace.CreatePatch(lastSynchronized));
+                : new DataSynchronizationPatch(Hub.Version, synchronizedWorkspace.CreatePatch(lastSynchronized).ToString());
         return dataChanged;
     }
 
@@ -294,10 +300,13 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
 
     private static JsonNode Convert(KeyValuePair<string, string> x, JsonNode serializedWorkspace)
     {
-        var pathApplied = JsonPath.Parse(x.Value).Evaluate(serializedWorkspace).ToString();
-        if (pathApplied == null)
+        var pathApplied = JsonPath.Parse(x.Value).Evaluate(serializedWorkspace);
+        if (pathApplied.Matches == null)
             return null;
-        return JsonNode.Parse(pathApplied);
+        if (pathApplied.Matches.Count < 2)
+            return pathApplied.Matches.FirstOrDefault()?.Value;
+        // TODO V10: Here we need to make one array out of many arrays / objects (21.02.2024, Roland Bürgi)
+        throw new NotSupportedException();
     }
 
     private JsonNode GetSerializedWorkspace()
@@ -326,7 +335,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
                                 new KeyValuePair<string, ImmutableList<ImmutableDictionary<string, object>>>
                                 (
                                     kvp.Key,
-                                    SerializeEntities(kvp.Value)
+                                    SerializeEntities(kvp.Key, kvp.Value)
                                 )
                         )
                     )
@@ -338,21 +347,25 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
 
     [Inject] private ISerializationService serializationService;
 
-    private ImmutableList<ImmutableDictionary<string, object>> SerializeEntities(ImmutableDictionary<object, object> instancesByKey)
+    private ImmutableList<ImmutableDictionary<string, object>> SerializeEntities(string collection, ImmutableDictionary<object, object> instancesByKey)
     {
-        return instancesByKey.Select(kvp => SerializeEntity(kvp.Key, kvp.Value))
+        return instancesByKey.Select(kvp => SerializeEntity(collection, kvp.Key, kvp.Value))
             .ToImmutableList();
     }
 
-    private ImmutableDictionary<string, object> SerializeEntity(object id, object instance)
+    private ImmutableDictionary<string, object> SerializeEntity(string collection, object id, object instance)
     {
         var rawJson = serializationService.Serialize(instance);
         var dictionary = JsonConvert.DeserializeObject<ImmutableDictionary<string, object>>(rawJson.Content);
-        return dictionary.SetItem("$id", id);
+        return dictionary
+            .SetItem(ReservedProperties.Id, id)
+            .SetItem(ReservedProperties.Type, collection);
     }
 
     public IMessageDelivery HandleMessage(IMessageDelivery<DataSynchronizationState> request)
     {
+        if (State == null)
+            return request;
         UpdateState(s => s with
         {
             Workspaces = s.Workspaces.UpdateWorkspace(request.Sender, ConvertToWorkspace(request))
@@ -404,7 +417,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
 
     private KeyValuePair<object,object> ParseIdAndObjectOfSingleInstance(JsonObject node)
     {
-        if (node.TryGetPropertyValue("$id", out var id) && id != default)
+        if (node.TryGetPropertyValue(ReservedProperties.Id, out var id) && id != default)
             return new(serializationService.Deserialize(id.ToString()),
                 serializationService.Deserialize(node.ToString()));
         return default;

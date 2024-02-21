@@ -144,7 +144,8 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
 
     public virtual bool IsDeferred(IMessageDelivery delivery)
     {
-        return registeredTypes.ContainsKey(delivery.Message.GetType());
+        return (Hub.Address.Equals(delivery.Target) || delivery.Target == null) 
+               && registeredTypes.ContainsKey(delivery.Message.GetType());
     }
 
     public async Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, LinkedListNode<AsyncDelivery> node, CancellationToken cancellationToken)

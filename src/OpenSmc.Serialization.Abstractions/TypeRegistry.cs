@@ -51,6 +51,7 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
         return this;
     }
 
+
     public static string FormatType(Type mainType)
     {
         if (!mainType.IsGenericType)

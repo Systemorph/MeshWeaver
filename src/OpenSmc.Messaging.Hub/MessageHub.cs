@@ -341,7 +341,7 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         {
             await plugin.StartAsync(c);
 #pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
-            plugin.Started.ContinueWith(_ => def.Dispose(), c);
+            plugin.Initialized.ContinueWith(_ => def.Dispose(), c);
 #pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
         });
     }

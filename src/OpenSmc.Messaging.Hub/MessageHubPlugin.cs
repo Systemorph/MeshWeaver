@@ -14,12 +14,9 @@ public class MessageHubPlugin :
 
     public virtual Task StartAsync(CancellationToken cancellationToken)
     {
-        CompleteStart();
         return Task.CompletedTask;
     }
-    protected void CompleteStart() => startedTaskCompletionSource.SetResult();
-    private readonly TaskCompletionSource startedTaskCompletionSource = new();
-    public Task Started => startedTaskCompletionSource.Task;
+    public virtual Task Initialized => Task.CompletedTask;
 }
 
 
@@ -36,8 +33,12 @@ public class MessageHubPlugin<TState> : MessageHubPlugin
     public void InitializeState(TState state)
     {
         State = state;
+        SetInitialized();
     }
 
+    public override Task Initialized => initializedTaskCompletionSource.Task;
+    protected void SetInitialized() => initializedTaskCompletionSource.SetResult();
+    private readonly TaskCompletionSource initializedTaskCompletionSource = new();
 
 
     protected MessageHubPlugin(IMessageHub hub) : base(hub)

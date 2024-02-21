@@ -3,9 +3,15 @@
 
 public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDisposable
 {
+#if DEBUG
+    
+    internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(3000);
+#else
+    internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(30);
+
+#endif
     MessageHubConfiguration Configuration { get; }
     long Version { get; }
-    internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(30);
     IMessageDelivery<TMessage> Post<TMessage>(TMessage message, Func<PostOptions, PostOptions> options = null);
     IMessageDelivery DeliverMessage(IMessageDelivery delivery);
     object Address { get; }

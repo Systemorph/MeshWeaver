@@ -13,9 +13,7 @@ public record HubDataSource(object Id) : DataSource<HubDataSource>(Id)
     protected override Task<WorkspaceState> InitializeAsync(IMessageHub hub, CancellationToken cancellationToken)
     {
         serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
-        var getRequests = TypeSources.Keys.SelectMany(t => new[] { typeof(GetRequest<>).MakeGenericType(t), typeof(GetManyRequest<>).MakeGenericType(t) }).ToHashSet();
-        var deferral = hub.ServiceProvider.GetRequiredService<IMessageService>().Defer(d => getRequests.Contains(d.Message.GetType()));
-        var collections = TypeSources.Values.Select(ts => (ts.CollectionName, Path:$"$.{ts.CollectionName}")).ToDictionary(x => x.CollectionName, x => x.Path);
+        var collections = TypeSources.Values.Select(ts => (ts.CollectionName, Path:$"$['{ts.CollectionName}']")).ToDictionary(x => x.CollectionName, x => x.Path);
         var subscribeRequest = 
             hub.Post(new StartDataSynchronizationRequest(collections),
                 o => o.WithTarget(Id));
@@ -23,7 +21,6 @@ public record HubDataSource(object Id) : DataSource<HubDataSource>(Id)
         hub.RegisterCallback(subscribeRequest, response =>
             {
                 tcs.SetResult(ParseToWorkspace(response.Message));
-                deferral.Dispose();
                 return subscribeRequest.Processed();
             },
             cancellationToken);
@@ -35,17 +32,25 @@ public record HubDataSource(object Id) : DataSource<HubDataSource>(Id)
         var state = (DataSynchronizationState)dataChanged;
         return new(this)
         {
-            Data = System.Text.Json.JsonSerializer.Deserialize<ImmutableDictionary<string, JsonArray>>(state.Data)
-                .Select(
-                    kvp => new KeyValuePair<string, ImmutableDictionary<object, object>>
-                    (
-                        kvp.Key,
-                        ConvertToDictionary(kvp.Key, kvp.Value)
-                    )).ToImmutableDictionary()
+            Data = ConvertToDataByType(state)
         };
     }
 
-    private ImmutableDictionary<object, object> ConvertToDictionary(string collection, JsonArray array)
+    private ImmutableDictionary<string, ImmutableDictionary<object, object>> ConvertToDataByType(DataSynchronizationState state)
+    {
+        var node = JsonNode.Parse(state.Data);
+        if (node is JsonObject obj)
+            return obj.Select(x =>
+                new KeyValuePair<string, ImmutableDictionary<object, object>>
+                (
+                    x.Key,
+                    ConvertToDictionary((JsonArray)x.Value))
+                )
+                .ToImmutableDictionary();
+        return ImmutableDictionary<string, ImmutableDictionary<object, object>>.Empty;
+    }
+
+    private ImmutableDictionary<object, object> ConvertToDictionary(JsonArray array)
     {
         return array
             .Select(DeserializeArrayElements)

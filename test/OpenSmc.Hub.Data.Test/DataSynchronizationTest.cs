@@ -24,16 +24,15 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
         return base.ConfigureClient(configuration)
             .AddData(
                 data => data
-                    .WithDataSource("ReferenceData",
+                    .WithDataFromHub(new HostAddress(),
                         dataSource => dataSource
-                            .FromHub(new HostAddress())
                             .WithType<BusinessUnit>()
                             .WithType<LineOfBusiness>()
                     )
             );
     }
 
-    [Fact(Timeout = 5000)]
+    [HubFact]
     public async Task TestBasicSynchronization()
     {
         var client = GetClient();
