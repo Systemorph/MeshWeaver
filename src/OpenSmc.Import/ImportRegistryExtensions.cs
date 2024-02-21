@@ -4,7 +4,6 @@ using OpenSmc.Messaging;
 
 namespace OpenSmc.Import
 {
-    public record ImportAddress(object Host) : IHostedAddress;
     public static class ImportRegistryExtensions
     {
         public static MessageHubConfiguration AddImport(this MessageHubConfiguration configuration,
