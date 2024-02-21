@@ -1,5 +1,6 @@
 ﻿using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.Data.Domain;
@@ -36,7 +37,7 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
                     .WithValidation((instance, _) =>
                     {
                         var ret = true;
-                        if (instance is ImportTestDomain.Address address && address.Street == "Red")
+                        if (instance is TestDomain.Address address && address.Street == "Red")
                         {
                             activityService.LogError(StreetCanNotBeRed);
                             ret = false;
@@ -89,7 +90,7 @@ FoundationYear,ContractType
             .ContainSingle(x => x.LogLevel == LogLevel.Error)
             .Which.Message.Should().Be(ImportPlugin.ValidationStageFailed);
 
-        var ret = await client.AwaitResponse(new GetManyRequest<ImportTestDomain.Country>(),
+        var ret = await client.AwaitResponse(new GetManyRequest<TestDomain.Country>(),
             o => o.WithTarget(new HostAddress()));
 
         ret.Message.Items.Should().HaveCount(0);
