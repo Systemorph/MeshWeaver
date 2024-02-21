@@ -59,13 +59,16 @@ public class ImportPlugin : MessageHubPlugin<ImportState>,
 
             var hasError = format.Import(importRequest, dataSet, defaultValidations, new Dictionary<object, object>());
 
-            //if (hasError)
-            //    activityService.LogError(string.Format(ValidationStageFailed, typeof(T).FullName));
+            if (hasError)
+                activityService.LogError(ValidationStageFailed);
 
             if (!activityService.HasErrors())
                 workspace.Commit();
             else
                 workspace.Rollback();
+
+            //activityService.Finish();
+
         }
         catch (Exception e)
         {
@@ -142,11 +145,11 @@ public class ImportPlugin : MessageHubPlugin<ImportState>,
 
     public void SetDefaultValidation(ValidationFunction validationRule)
     {
-        validationRule ??= (_, _) => true;
-        defaultValidations = defaultValidations.Add(validationRule);
+        if (validationRule != null)
+            defaultValidations = defaultValidations.Add(validationRule);
     }
 
-    public static string ValidationStageFailed = "Validation stage of type {0} has failed.";
+    public static string ValidationStageFailed = "Validation stage has failed.";
 
 
 
