@@ -72,7 +72,6 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
                     new KeyValuePair<object, WorkspaceState>(kvp.Key, await kvp.Value.InitializeAsync(Hub, cancellationToken)))
                 .ToArrayAsync(cancellationToken))
             .ToImmutableDictionary();
-        Context.InMemoryInitialization(hub);
     }
 
     IMessageDelivery IMessageHandler<GetDataStateRequest>.HandleMessage(IMessageDelivery<GetDataStateRequest> request)

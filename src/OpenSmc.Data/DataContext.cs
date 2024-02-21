@@ -9,14 +9,13 @@ public record DataContext(IMessageHub Hub)
     
     internal ImmutableDictionary<Type, object> DataSourcesByTypes { get; init; } = ImmutableDictionary<Type, object>.Empty;
     
-    internal ImmutableDictionary<object,DataSource> DataSources { get; init; } = ImmutableDictionary<object, DataSource>.Empty;
+    internal ImmutableDictionary<object,IDataSource> DataSources { get; init; } = ImmutableDictionary<object, IDataSource>.Empty;
 
     internal Action<IMessageHub> InMemoryInitialization { get; init; } = hub => { };
 
-    internal ImmutableDictionary<object,IDataSource> DataSources { get; init; } = ImmutableDictionary<object, IDataSource>.Empty;
     public IReadOnlyCollection<Type> DataTypes => DataSourcesByTypes.Keys.ToArray();
 
-    public DataSource GetDataSource(object id) => DataSources.GetValueOrDefault(id);
+    public IDataSource GetDataSource(object id) => DataSources.GetValueOrDefault(id);
 
     private object MapByType(Type type) => DataSourcesByTypes.GetValueOrDefault(type);
 
@@ -44,7 +43,9 @@ public record DataContext(IMessageHub Hub)
     internal DataContext Build(IMessageHub hub)
         => this with
         {
-            DataSources = DataSources.Select(kvp => new KeyValuePair<object, IDataSource>(kvp.Key, kvp.Value.Build(hub)))
+            DataSources = DataSources
+                .Select(kvp => new KeyValuePair<object, IDataSource>(kvp.Key, kvp.Value.Build(hub)))
+                .ToImmutableDictionary()
         };
 
 
