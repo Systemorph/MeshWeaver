@@ -1,11 +1,10 @@
-import { useEffect, useState } from "react";
-import { renderControl } from "../renderControl";
-import { useSubscribeToAreaChanged } from "../useSubscribeToAreaChanged";
 import styles from "./modalWindow.module.scss";
 import { StackView } from "./LayoutStackControl";
 import { keyBy } from "lodash";
 import { AreaChangedEvent } from "../contract/application.contract";
 import classNames from "classnames";
+import { useMessageHub } from "../AddHub";
+import { Area } from "../Area";
 
 export const modalWindowAreas = {
     main: "Main",
@@ -18,39 +17,51 @@ export type ModalWindowArea = typeof modalWindowAreas[keyof typeof modalWindowAr
 export function ModalWindow({id, areas, style}: StackView) {
     const areasByKey = keyBy(areas, "area") as Record<ModalWindowArea, AreaChangedEvent>;
 
-    const [main, setMain] = useState(areasByKey[modalWindowAreas.main]);
-    const [title, setTitle] = useState(areasByKey[modalWindowAreas.header]);
-    const [footer, setFooter] = useState(areasByKey[modalWindowAreas.footer]);
+    const main = areasByKey[modalWindowAreas.main];
+    const title = areasByKey[modalWindowAreas.header];
+    const footer = areasByKey[modalWindowAreas.footer];
 
-    useSubscribeToAreaChanged(setMain, modalWindowAreas.main);
-    useSubscribeToAreaChanged(setTitle, modalWindowAreas.header);
-    useSubscribeToAreaChanged(setFooter, modalWindowAreas.footer);
-
-    useEffect(() => {
-        const areasByKey = keyBy(areas, "area") as Record<ModalWindowArea, AreaChangedEvent>;
-        setMain(areasByKey[modalWindowAreas.main]);
-        setTitle(areasByKey[modalWindowAreas.header]);
-        setFooter(areasByKey[modalWindowAreas.footer]);
-    }, [areas]);
+    const hub = useMessageHub();
 
     const className = classNames(styles.modalWindow);
 
     return (
         <div id={id} className={className} style={style}>
-            {title?.view &&
-                <div className={styles.header}>
-                    {renderControl(title.view)}
-                </div>
+            {title &&
+                <Area
+                    hub={hub}
+                    event={title}
+                    render={
+                        view =>
+                            <div className={styles.header}>
+                                {view}
+                            </div>
+                    }
+                />
             }
-            {main?.view &&
-                <div className={styles.main}>
-                    {renderControl(main.view)}
-                </div>
+            {main &&
+                <Area
+                    hub={hub}
+                    event={main}
+                    render={
+                        view =>
+                            <div className={styles.main}>
+                                {view}
+                            </div>
+                    }
+                />
             }
-            {footer?.view &&
-                <div className={styles.footer}>
-                    {renderControl(footer.view)}
-                </div>
+            {footer &&
+                <Area
+                    hub={hub}
+                    event={footer}
+                    render={
+                        view =>
+                            <div className={styles.footer}>
+                                {view}
+                            </div>
+                    }
+                />
             }
         </div>
     );

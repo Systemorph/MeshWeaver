@@ -26,11 +26,11 @@ function RedirectControlInner() {
     const [event, setEvent] = useState<AreaChangedEvent>();
     const hub = useMessageHub();
 
-    useSubscribeToAreaChanged(setEvent, redirectArea);
+    useSubscribeToAreaChanged(hub, redirectArea, setEvent);
 
     useEffect(() => {
         sendMessage(hub, message);
-    }, [sendMessage, hub, message]);
+    }, [hub, message]);
 
     if (!event?.view) {
         return null;

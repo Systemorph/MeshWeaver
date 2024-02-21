@@ -4,36 +4,29 @@ import { useState, useEffect } from "react";
 import { AreaChangedEvent, RefreshRequest } from "../contract/application.contract";
 import { useMessageHub } from "../AddHub";
 import { ControlView } from "../ControlDef";
-import { contractMessage } from "../contractMessage";
 import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
 
-const remoteMainArea = "Data";
+const areaName = "Data";
 
-@contractMessage("OpenSmc.Application.Layout.RemoteViewControl")
-export class RemoteViewControlDef {
-    constructor(
-        public readonly message: unknown,
-        public readonly address: unknown) {
-    }
+interface RemoteViewView extends ControlView {
+    data: AreaChangedEvent;
 }
 
-export default function RemoteViewControl({data}: ControlView) {
-    const [areaChangeEvent, setAreaChangeEvent] = useState<AreaChangedEvent>(data as AreaChangedEvent);
+export default function RemoteViewControl({data}: RemoteViewView) {
+    const [event, setEvent] = useState(data);
     const hub = useMessageHub();
-    
-    useSubscribeToAreaChanged(setAreaChangeEvent, remoteMainArea);
+
+    useSubscribeToAreaChanged(hub, areaName, setEvent);
+
+    useEffect(() => setEvent(data), [data]);
 
     useEffect(() => {
-        setAreaChangeEvent(data as AreaChangedEvent);
-    }, [data]);
+        sendMessage(hub, new RefreshRequest(areaName));
+    }, [hub]);
 
-    useEffect(() => {
-        sendMessage(hub, new RefreshRequest(remoteMainArea));
-    }, [hub, data]);
-
-    if (!areaChangeEvent?.view) {
+    if (!event?.view) {
         return null;
     }
 
-    return renderControl(areaChangeEvent.view);
+    return renderControl(event.view);
 }

@@ -130,11 +130,11 @@ function ExpandOverlayInner() {
     const [event, setEvent] = useState<AreaChangedEvent>();
     const hub = useMessageHub();
 
-    useSubscribeToAreaChanged(setEvent, area);
+    useSubscribeToAreaChanged(hub, area, setEvent);
 
     useEffect(() => {
         sendMessage(hub, message);
-    }, [message]);
+    }, [hub, message]);
 
     if (!event?.view) {
         return null;
