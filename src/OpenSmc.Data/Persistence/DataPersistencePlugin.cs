@@ -60,6 +60,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
             await InitializeAllDataSources(cancellationToken);
 
         InitializeState(new(new(loadedWorkspaces, Context)));
+        Context.Initialization(hub);
         CompleteStart();
     }
 
