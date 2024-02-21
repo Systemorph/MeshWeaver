@@ -9,7 +9,5 @@ export function viteFolderControlsResolver(modules: Record<string, () => Promise
                 return result;
             }, {});
 
-    console.log(modulesByControlName)
-
     return (name: string) => modulesByControlName[name]();
 }

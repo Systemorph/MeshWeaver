@@ -1,6 +1,6 @@
 @use "@open-smc/ui-kit/src/theme/icons" as *;
+@use "@open-smc/ui-kit/src/theme/fonts" as *;
 @use "@open-smc/ui-kit/src/theme/variables" as *;
-@use "./fonts" as *;
 
 * {
     box-sizing: border-box;
@@ -21,7 +21,7 @@ html {
 
 body {
     margin: 0;
-    font-family: $overpass-font;
+    font-family: $roboto-font;
     box-sizing: border-box;
     height: 100%;
     -webkit-font-smoothing: antialiased;

@@ -1,9 +1,6 @@
 {
   "name": "@open-smc/store",
-  "version": "0.1.0",
-  "scripts": {
-    "clean-node-modules": "rimraf node_modules"
-  },
+  "version": "0.0.0",
   "devDependencies": {
     "@jest/globals": "^29.6.1",
     "@types/react": "^18.0.24",

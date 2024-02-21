@@ -1,9 +1,6 @@
 {
   "name": "@open-smc/message-hub",
-  "version": "0.1.0",
-  "scripts": {
-    "clean-node-modules": "rimraf node_modules"
-  },
+  "version": "0.0.0",
   "dependencies": {
     "lodash": "^4.17.21",
     "rxjs": "^7.8.1"

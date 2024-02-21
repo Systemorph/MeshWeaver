@@ -1,6 +1,5 @@
 {
-  "name": "playground",
-  "private": true,
+  "name": "@open-smc/shell",
   "version": "0.0.0",
   "type": "module",
   "scripts": {
@@ -10,15 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@open-smc/application": "0.0.0",
-    "@open-smc/message-hub": "0.0.0",
-    "@open-smc/playground-server": "0.0.0",
-    "@open-smc/utils": "0.0.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-router-dom": "^6.2.2",
-    "rxjs": "^7.8.1",
-    "sass": "^1.70.0"
+    "@open-smc/application": "0.0.0"
   },
   "devDependencies": {
     "@types/react": "^18.2.43",
