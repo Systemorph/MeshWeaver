@@ -6,8 +6,8 @@ namespace OpenSmc.Messaging;
 public class ExecutionQueue(ILogger logger) : IAsyncDisposable
 {
     public bool NeedsFlush;
-    private BufferBlock<Func<Task>> buffer = new();
-    private ActionBlock<Func<Task>> actionBlock;
+    private BufferBlock<Func<CancellationToken, Task>> buffer = new();
+    private ActionBlock<Func<CancellationToken, Task>> actionBlock;
 
     private readonly object locker = new();
     private readonly SemaphoreSlim semaphore = new(1, 1);
@@ -19,8 +19,8 @@ public class ExecutionQueue(ILogger logger) : IAsyncDisposable
         {
 
             await semaphore.WaitAsync();
-            ActionBlock<Func<Task>> oldActionBlock;
-            BufferBlock<Func<Task>> oldBuffer;
+            ActionBlock<Func<CancellationToken, Task>> oldActionBlock;
+            BufferBlock<Func<CancellationToken, Task>> oldBuffer;
             lock (locker)
             {
                 if (actionBlock == null)
@@ -48,7 +48,7 @@ public class ExecutionQueue(ILogger logger) : IAsyncDisposable
         }
     }
 
-    public void Schedule(Func<Task> job)
+    public void Schedule(Func<CancellationToken, Task> job)
     {
         buffer.Post(job);
         NeedsFlush = true;
@@ -58,11 +58,13 @@ public class ExecutionQueue(ILogger logger) : IAsyncDisposable
     {
         lock (locker)
         {
-            actionBlock = new ActionBlock<Func<Task>>(x =>
+            actionBlock = new ActionBlock<Func<CancellationToken, Task>>((x) =>
             {
                 try
                 {
-                    return x();
+                    // TODO V10: put correct cancellationToken (19.02.2024, Roland Bürgi)
+                    var cancellationToken = CancellationToken.None;
+                    return x(cancellationToken);
                 }
                 catch (Exception e)
                 {

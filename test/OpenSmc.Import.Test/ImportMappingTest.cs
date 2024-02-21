@@ -1,6 +1,7 @@
 ﻿using FluentAssertions;
 using OpenSmc.Activities;
 using OpenSmc.Data;
+using OpenSmc.Data.Domain;
 using OpenSmc.DataStructures;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
@@ -20,7 +21,7 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
                     (
                         nameof(DataSource),
                         source => source
-                        .ConfigureCategory(ImportTestDomain.TestRecordsDomain)
+                        .ConfigureCategory(TestDomain.TestRecordsDomain)
                     )
                 )
                 .AddImport(import => import

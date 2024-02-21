@@ -1,8 +1,8 @@
 ﻿using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
 using OpenSmc.Data;
+using OpenSmc.Data.Domain;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using Xunit;
@@ -23,7 +23,7 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
                 (
                     nameof(DataSource),
                     source => source
-                        .ConfigureCategory(ImportTestDomain.ContractDomain)
+                            .ConfigureCategory(TestDomain.ContractDomain)
                 )
             )
             .AddImport(import => import
@@ -66,7 +66,7 @@ FoundationYear,ContractType
             .BeEquivalentTo("The field FoundationYear must be between 1999 and 2023.",
                 ImportPlugin.ValidationStageFailed);
 
-        var ret = await client.AwaitResponse(new GetManyRequest<ImportTestDomain.Contract>(),
+        var ret = await client.AwaitResponse(new GetManyRequest<TestDomain.Contract>(),
             o => o.WithTarget(new HostAddress()));
 
         ret.Message.Items.Should().HaveCount(0);

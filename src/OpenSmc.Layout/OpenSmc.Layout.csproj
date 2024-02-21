@@ -7,6 +7,7 @@
   <ItemGroup>
     <ProjectReference Include="..\OpenSmc.Application.Scope\OpenSmc.Application.Scope.csproj" />
     <ProjectReference Include="..\OpenSmc.Application.Styles\OpenSmc.Application.Styles.csproj" />
+    <ProjectReference Include="..\OpenSmc.Data.Contract\OpenSmc.Data.Contract.csproj" />
   </ItemGroup>
 
 </Project>

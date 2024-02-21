@@ -11,7 +11,7 @@ public record EmptyTransaction : ITransaction
     public ValueTask DisposeAsync()
         => default;
 
-    public Task CommitAsync()
+    public Task CommitAsync(CancellationToken cancellationToken)
         => Task.CompletedTask;
 
     public Task RevertAsync()

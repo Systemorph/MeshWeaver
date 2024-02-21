@@ -1,4 +1,5 @@
-﻿using OpenSmc.DataSetReader;
+﻿using OpenSmc.Data;
+using OpenSmc.DataSetReader;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Import;
@@ -9,7 +10,7 @@ namespace OpenSmc.Import;
 /// </summary>
 /// <param name="Content">Content of the source to be imported, e.g. a string (shipping the entire content) or a file name (together with StreamType = File)</param>
 /// <param name="StreamType">Type of the source to be configured in the import plugin, e.g. a file share.</param>
-public record ImportRequest(string Content, string StreamType = nameof(String)) : IRequest<DataChanged>
+public record ImportRequest(string Content, string StreamType = nameof(String)) : IRequest<DataChangedEvent>
 {
     public string MimeType { get; init; } = MimeTypes.MapFileExtension(StreamType != nameof(String) ? Content : string.Empty);
     public string Format { get; init; } = ImportFormat.Default;

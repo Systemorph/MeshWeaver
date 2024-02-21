@@ -1,7 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
-using OpenSmc.Collections;
 using OpenSmc.Reflection;
 
 namespace OpenSmc.Data;
@@ -9,12 +8,13 @@ namespace OpenSmc.Data;
 public abstract record TypeSource
 {
     public abstract Type ElementType { get; }
-    public abstract Task<ImmutableDictionary<object, object>> DoInitialize();
+    public abstract Task<ImmutableDictionary<object, object>> DoInitialize(CancellationToken cancellationToken);
     public abstract object GetKey(object instance);
     internal Func<IEnumerable<object>, Task> DeleteByIds { get; init; }
-
-    public virtual TypeSource Build(DataSource dataSource) => this;
-
+    public abstract string CollectionName { get;  } 
+    
+    public virtual TypeSource Build(IDataSource dataSource) => this;
+    
     public abstract TypeSource WithInitialData(IEnumerable<object> initialData);
 }
 
@@ -22,9 +22,9 @@ public record TypeSource<T> : TypeSource
 {
     public override Type ElementType => typeof(T);
 
-    public override async Task<ImmutableDictionary<object, object>> DoInitialize()
+    public override async Task<ImmutableDictionary<object, object>> DoInitialize(CancellationToken cancellationToken)
     {
-        return (await InitializeAction())
+        return (await InitializeAction(cancellationToken))
             .Select(x => new KeyValuePair<object,object>(Key(x), x))
             .ToImmutableDictionary();
     }
@@ -32,10 +32,17 @@ public record TypeSource<T> : TypeSource
     public override object GetKey(object instance)
         => Key((T)instance);
 
+    public override string CollectionName => CollectionNameImpl;
+
+    private string CollectionNameImpl { get; init; } = typeof(T).FullName;
+
+    public TypeSource<T> WithCollectionName(string collectionName) =>
+        this with { CollectionNameImpl = collectionName };
+
     public override TypeSource WithInitialData(IEnumerable<object> initialData)
         => WithInitialData(initialData.Cast<T>());
     public TypeSource<T> WithInitialData(IEnumerable<T> initialData)
-        => WithInitialData(() => Task.FromResult<IReadOnlyCollection<T>>(initialData.ToArray()));
+        => WithInitialData(_ => Task.FromResult<IReadOnlyCollection<T>>(initialData.ToArray()));
 
     protected Func<T, object> Key { get; init; } = GetKeyFunction();
     private static Func<T, object> GetKeyFunction()
@@ -55,12 +62,10 @@ public record TypeSource<T> : TypeSource
         => this with { Key = key };
 
 
-    internal virtual Task<IReadOnlyCollection<T>> InitializeAsync() => InitializeAction();
+    protected Func<CancellationToken, Task<IReadOnlyCollection<T>>> InitializeAction { get; init; } =
+        _ => Task.FromResult<IReadOnlyCollection<T>>(Array.Empty<T>());
 
-    protected Func<Task<IReadOnlyCollection<T>>> InitializeAction { get; init; } =
-        () => Task.FromResult<IReadOnlyCollection<T>>(Array.Empty<T>());
-
-    public TypeSource<T> WithInitialData(Func<Task<IReadOnlyCollection<T>>> initialization)
+    public TypeSource<T> WithInitialData(Func<CancellationToken, Task<IReadOnlyCollection<T>>> initialization)
         => this with { InitializeAction = initialization };
 
     internal virtual void Update(IReadOnlyCollection<T> instances) => UpdateAction.Invoke(instances);
@@ -89,9 +94,9 @@ public record TypeSourceWithDataStorage<T>
 
     private IDataStorage Storage { get; init; }
 
-    public override TypeSource Build(DataSource dataSource)
+    public override TypeSource Build(IDataSource dataSource)
     {
-        var storage = ((DataSourceWithStorage)dataSource).Storage;
+        var storage = ((IDataSourceWithStorage)dataSource).Storage;
         return this
             with
             {
@@ -99,10 +104,10 @@ public record TypeSourceWithDataStorage<T>
                 AddAction = storage.Add,
                 UpdateAction = storage.Update,
                 DeleteAction = storage.Delete,
-                InitializeAction = async () =>
+                InitializeAction = async cancellationToken =>
                 {
-                    await using var transaction = await storage.StartTransactionAsync();
-                    return await storage.Query<T>().ToArrayAsync();
+                    await using var transaction = await storage.StartTransactionAsync(cancellationToken);
+                    return await storage.GetData<T>(cancellationToken);
                 }
             };
     }

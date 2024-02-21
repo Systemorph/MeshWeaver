@@ -1,8 +1,11 @@
-﻿using OpenSmc.Messaging;
+﻿using System.Text.Json.Nodes;
+using Json.Patch;
+using OpenSmc.Activities;
+using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
 
-public record GetManyRequest<T>() : IRequest<GetManyResponse<T>>
+public record GetManyRequest<T> : IRequest<GetManyResponse<T>>
 {
     public int Page { get; init; }
     public int? PageSize { get; init; }
@@ -21,20 +24,29 @@ public record UpdateDataRequest(IReadOnlyCollection<object> Elements) : DataChan
 
 public record DeleteDataRequest(IReadOnlyCollection<object> Elements) : DataChangeRequest(Elements);
 
+public abstract record DataChangeRequest(IReadOnlyCollection<object> Elements) : IRequest<DataChangedEvent>;
 
+public record CreateRequest<TObject>(TObject Element) : IRequest<DataChangedEvent> { public object Options { get; init; } };
 
-public abstract record DataChangeRequest(IReadOnlyCollection<object> Elements) : IRequest<DataChanged>;
+public record DeleteBatchRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataChangedEvent>;
 
-public record CreateRequest<TObject>(TObject Element) : IRequest<DataChanged> { public object Options { get; init; } };
+/// <summary>
+/// Starts data synchronization with data corresponding to the Json Path queries as specified in the constructor.
+/// </summary>
+/// <param name="JsonPaths">All the json paths to be synchronized. E.g. <code>"$.MyEntities"</code></param>
+public record StartDataSynchronizationRequest(IReadOnlyDictionary<string,string> JsonPaths) : IRequest<DataChangedEvent>;
 
-public record DeleteBatchRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataChanged>;
+public record DataChangedEvent(long Version)
+{
+    public ActivityLog Log { get; set; }
+}
 
-public record SynchronizeEntitiesRequest(EntitiesInDataSource Entities): IRequest<EntitySynchronizationResponse>;
+public record DataSynchronizationState(long Version, JsonNode Data): DataChangedEvent(Version);
+public record DataSynchronizationPatch(long Version,  JsonPatch Patch) : DataChangedEvent(Version);
 
-public record EntitiesInDataSource(object Address, IReadOnlyCollection<EntityDescriptor> Entities);
+/// <summary>
+/// Ids of the synchronization requests to be stopped (generated with request)
+/// </summary>
+/// <param name="Ids"></param>
+public record StopDataSynchronizationRequest(params string[] Ids);
 
-public record StopSynchronizationRequest: IRequest<EntitySynchronizationResponse>;
-
-public record EntitySynchronizationResponse;
-
-public record EntityDescriptor(string Id, string Type);

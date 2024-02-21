@@ -8,7 +8,7 @@ public static class MessageDeliverySerializationExtension
     {
         try
         {
-            var rawJson = serializationService.SerializeAsync(delivery.Message);
+            var rawJson = serializationService.Serialize(delivery.Message);
             return delivery.WithMessage(rawJson);
         }
         catch (Exception e)

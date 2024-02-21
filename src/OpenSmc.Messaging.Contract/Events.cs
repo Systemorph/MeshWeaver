@@ -10,15 +10,9 @@ public record HubInfo(object Address);
 
 public record DisconnectHubRequest();
 
-
-
-
-public record DataChanged(long Version)
-{
-    public ActivityLog Log { get; init; }
-};
-
 public record PersistenceAddress(object Host) : IHostedAddress;
+
+public record ImportAddress(object Host) : IHostedAddress;
 
 public record GetRequest<T> : IRequest<T>
 {

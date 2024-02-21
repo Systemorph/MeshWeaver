@@ -1,17 +1,16 @@
 ﻿using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
-using OpenSmc.Data;
 using OpenSmc.Domain.Abstractions;
 using OpenSmc.Domain.Abstractions.Attributes;
 
-namespace OpenSmc.Import.Test;
+namespace OpenSmc.Data.Domain;
 
 /// <summary>
 /// This is structuring element for sub-dividing a data domain into several groups.
 /// You can perceive this as the building plan for how everyone starts.
 /// For tests, it is handy to ship initial values. Can be also hosted in separate file.
 /// </summary>
-public static class ImportTestDomain
+public static class TestDomain
 {
     public record TransactionalData([property: Key] string Id, string LoB, string BusinessUnit, double Value);
     public record ComputedData([property: Key] string Id, string LoB, string BusinessUnit, double Value);

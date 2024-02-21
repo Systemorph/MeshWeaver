@@ -29,12 +29,12 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
 
     IMessageDelivery RegisterCallback<TResponse>(IMessageDelivery<IRequest<TResponse>> request, Func<IMessageDelivery<TResponse>, IMessageDelivery> callback, CancellationToken cancellationToken = default);
     Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, SyncDelivery callback, CancellationToken cancellationToken = default)
-        => RegisterCallback(delivery, d => Task.FromResult(callback(d)), cancellationToken);
+        => RegisterCallback(delivery, (d,_) => Task.FromResult(callback(d)), cancellationToken);
 
     // ReSharper disable once UnusedMethodReturnValue.Local
     Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, AsyncDelivery callback, CancellationToken cancellationToken = default);
     Task<bool> FlushAsync();
-    public void Schedule(Func<Task> action);
+    public void Schedule(Func<CancellationToken, Task> action);
 
 
 

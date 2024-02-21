@@ -1,4 +1,5 @@
-﻿using System.Collections.Immutable;
+﻿using System;
+using System.Collections.Immutable;
 using System.Reflection;
 using OpenSmc.Data.Persistence;
 using OpenSmc.Messaging;
@@ -6,46 +7,39 @@ using OpenSmc.Reflection;
 
 namespace OpenSmc.Data;
 
-/* TODO List: 
- *  a) move code DataPlugin to opensmc -- done
- *  b) create an immutable variant of the workspace -- done
- *  c) make workspace methods fully sync -- done
- *  d) offload saves & deletes to a different hub -- done
- *  e) configure Ifrs Hubs
- */
-
 public class DataPlugin : MessageHubPlugin<DataPluginState>, 
     IWorkspace,
     IMessageHandler<UpdateDataRequest>,
     IMessageHandler<DeleteDataRequest>
 {
     private readonly IMessageHub persistenceHub;
+    private readonly TaskCompletionSource initialize = new();
 
     public DataContext DataContext { get; }
-    private readonly TaskCompletionSource initialize = new();
     public Task Initializing => initialize.Task;
+
     public DataPlugin(IMessageHub hub) : base(hub)
     {
         DataContext = hub.GetDataConfiguration();
-        Register(HandleGetRequest);              // This takes care of all Read (CRUD)
+        Register(HandleGetRequest); // This takes care of all Read (CRUD)
         persistenceHub = hub.GetHostedHub(new PersistenceAddress(hub.Address), conf => conf.AddPlugin(h => new DataPersistencePlugin(h, DataContext)));
     }
 
-
-    public override async Task StartAsync()  // This loads the persisted state
+    public override async Task StartAsync(CancellationToken cancellationToken)  // This loads the persisted state
     {
-        await base.StartAsync();
+        await base.StartAsync(cancellationToken);
 
-        var response = await persistenceHub.AwaitResponse(new GetDataStateRequest());
+        var response = await persistenceHub.AwaitResponse(new GetDataStateRequest(), cancellationToken);
         InitializeState(new (response.Message));
         initialize.SetResult();
+        await DataContext.InitializationAsync(Hub, cancellationToken);
     }
 
     IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(IMessageDelivery<UpdateDataRequest> request)
     {
         UpdateImpl(request.Message.Elements, request.Message.Options);
         Commit();
-        Hub.Post(new DataChanged(Hub.Version), o => o.ResponseFor(request));
+        Hub.Post(new DataChangedEvent(Hub.Version), o => o.ResponseFor(request));
         return request.Processed();
     }
 
@@ -64,7 +58,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     {
         DeleteImpl(request.Message.Elements);
         Commit();
-        Hub.Post(new DataChanged(Hub.Version), o => o.ResponseFor(request));
+        Hub.Post(new DataChangedEvent(Hub.Version), o => o.ResponseFor(request));
         return request.Processed();
 
     }
@@ -80,8 +74,6 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
             );
 
     }
-
-
 
     private IMessageDelivery HandleGetRequest(IMessageDelivery request)
     {
@@ -123,13 +115,12 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
 
     }
 
-
     public void Commit()
     {
         if (State.UncommittedEvents.Count == 0)
             return;
         persistenceHub.Post(new UpdateDataStateRequest(State.UncommittedEvents));
-        Hub.Post(new DataChanged(Hub.Version), o => o.WithTarget(MessageTargets.Subscribers));
+        Hub.Post(new DataChangedEvent(Hub.Version), o => o.WithTarget(MessageTargets.Subscribers));
         UpdateState(s => s with {UncommittedEvents = ImmutableList<DataChangeRequest>.Empty});
     }
 
