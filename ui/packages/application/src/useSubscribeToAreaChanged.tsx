@@ -1,21 +1,20 @@
 import { AreaChangedEvent } from "./contract/application.contract";
-import { useMessageHub } from "./AddHub";
 import { useEffect } from "react";
-import { receiveMessage } from "@open-smc/message-hub/src/receiveMessage";
 import { ofContractType } from "./contract/ofContractType";
+import { filter, map, Observable } from "rxjs";
+import { MessageDelivery } from "@open-smc/message-hub/src/api/MessageDelivery";
 
-export function useSubscribeToAreaChanged<TOptions = unknown>(
-    handler: (event: AreaChangedEvent<TOptions>) => void,
-    area?: string,
-    hubId?: string
+export function useSubscribeToAreaChanged<TObservable extends Observable<MessageDelivery>>(
+    hub: TObservable,
+    area: string,
+    handler: (message: AreaChangedEvent) => void
 ) {
-    const hub = useMessageHub(hubId);
-
     useEffect(() => {
-        return receiveMessage(
-            hub.pipe(ofContractType(AreaChangedEvent)),
-            handler,
-            ({message}) => !area || message.area === area
-        );
-    }, [receiveMessage, handler, area]);
+        const subscription =
+            hub.pipe(ofContractType(AreaChangedEvent))
+                .pipe(filter(({message}) => area === undefined || message.area === area))
+                .pipe(map(({message}) => message))
+                .subscribe(handler);
+        return () => subscription.unsubscribe();
+    }, [hub, area, handler]);
 }

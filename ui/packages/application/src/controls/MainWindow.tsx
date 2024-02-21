@@ -11,6 +11,7 @@ import classNames from "classnames";
 import { useMessageHub } from "../AddHub";
 import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
 import { MainWindowArea, mainWindowAreas } from "./mainWindowApi";
+import { Area } from "../Area";
 
 export type ModalOptions = {
     isClosable?: boolean;
@@ -22,61 +23,38 @@ type ModalSize = "S" | "M" | "L";
 export function MainWindow({id, areas}: StackView) {
     const areasByKey = keyBy(areas, "area") as Record<MainWindowArea, AreaChangedEvent>;
 
-    const [main, setMain] = useState(areasByKey[mainWindowAreas.main]);
-    const [toolbar, setToolbar] = useState(areasByKey[mainWindowAreas.toolbar]);
-    const [sideMenu, setSideMenu] = useState(areasByKey[mainWindowAreas.sideMenu]);
-    const [contextMenu, setContextMenu] = useState(areasByKey[mainWindowAreas.contextMenu]);
-    const [statusBar, setStatusBar] = useState(areasByKey[mainWindowAreas.statusBar]);
-    const [modal, setModal] = useState(areasByKey[mainWindowAreas.modal]);
-
-    useSubscribeToAreaChanged(setMain, mainWindowAreas.main);
-    useSubscribeToAreaChanged(setToolbar, mainWindowAreas.toolbar);
-    useSubscribeToAreaChanged(setSideMenu, mainWindowAreas.sideMenu);
-    useSubscribeToAreaChanged(setContextMenu, mainWindowAreas.contextMenu);
-    useSubscribeToAreaChanged(setStatusBar, mainWindowAreas.statusBar);
-    useSubscribeToAreaChanged(setModal, mainWindowAreas.modal);
-
-    const [isResizing, setIsResizing] = useState(false);
-
-    useEffect(() => {
-        const areasByKey = keyBy(areas, "area") as Record<MainWindowArea, AreaChangedEvent>;
-
-        setMain(areasByKey[mainWindowAreas.main]);
-        setToolbar(areasByKey[mainWindowAreas.toolbar]);
-        setSideMenu(areasByKey[mainWindowAreas.sideMenu]);
-        setContextMenu(areasByKey[mainWindowAreas.contextMenu]);
-        setStatusBar(areasByKey[mainWindowAreas.statusBar]);
-        setModal(areasByKey[mainWindowAreas.modal]);
-    }, [areas]);
+    const main = areasByKey[mainWindowAreas.main];
+    const toolbar = areasByKey[mainWindowAreas.toolbar];
+    const sideMenu = areasByKey[mainWindowAreas.sideMenu];
+    const contextMenu = areasByKey[mainWindowAreas.contextMenu];
+    const statusBar = areasByKey[mainWindowAreas.statusBar]
+    const modal = areasByKey[mainWindowAreas.modal];
 
     const hub = useMessageHub();
 
-    const modalOptions = modal?.options as ModalOptions;
-
-    const modalClassName = classNames('dialog-wrapper', modalOptions?.size && `size-${modalOptions.size}`);
-    const isClosable = modalOptions?.isClosable ?? true;
+    const [isResizing, setIsResizing] = useState(false);
 
     const contextPanelRef = useRef<HTMLDivElement>();
     let mPos = useRef<number>();
 
-    function resize(e: MouseEvent){
+    function resize(e: MouseEvent) {
         const dx = mPos.current - e.x;
         const offsetDx = contextPanelRef.current.getBoundingClientRect().x - mPos.current;
         mPos.current = e.x;
 
-        if(offsetDx > -5 && offsetDx < 5) {
+        if (offsetDx > -5 && offsetDx < 5) {
             contextPanelRef.current.style.width = (parseInt(getComputedStyle(contextPanelRef.current, '').width) + dx) + "px";
         }
     }
 
-    function onMouseDown(event: React.MouseEvent<HTMLDivElement>){
+    function onMouseDown(event: React.MouseEvent<HTMLDivElement>) {
         setIsResizing(true);
         mPos.current = event.nativeEvent.x;
         document.addEventListener("mousemove", resize, false);
     }
 
     useEffect(() => {
-        document.addEventListener("mouseup", function(){
+        document.addEventListener("mouseup", function () {
             setIsResizing(false);
             document.removeEventListener("mousemove", resize, false);
         }, false);
@@ -86,45 +64,80 @@ export function MainWindow({id, areas}: StackView) {
         isResizing
     });
 
+    // const modalOptions = modal?.options as ModalOptions;
+    //
+    // // const modalClassName = classNames('dialog-wrapper', modalOptions?.size && `size-${modalOptions.size}`);
+    // // const isClosable = modalOptions?.isClosable ?? true;
+
     return (
         <Fragment>
             <div id={id} className={styles.layout}>
-                {sideMenu?.view &&
-                    <div className={styles.sideMenu}>
-                        {renderControl(sideMenu.view)}
-                    </div>
+                {sideMenu &&
+                    <Area
+                        hub={hub}
+                        event={sideMenu}
+                        render={
+                            view =>
+                                <div className={styles.sideMenu}>
+                                    {view}
+                                </div>
+                        }
+                    />
                 }
-                {toolbar?.view &&
-                    <div className={styles.toolbar}>
-                        {renderControl(toolbar.view)}
-                    </div>
+                {toolbar &&
+                    <Area
+                        hub={hub}
+                        event={toolbar}
+                        render={
+                            view =>
+                                <div className={styles.toolbar}>
+                                    {view}
+                                </div>
+                        }
+                    />
+
                 }
-                {main?.view &&
-                    <div className={styles.mainContent}>
-                        {renderControl(main.view)}
-                    </div>
+                {main &&
+                    <Area
+                        hub={hub}
+                        event={main}
+                        render={
+                            view =>
+                                <div className={styles.mainContent}>
+                                    {view}
+                                </div>
+                        }
+                    />
                 }
-                {contextMenu?.view &&
-                    <div className={contextPanelClassName} ref={contextPanelRef}>
-                        {renderControl(contextMenu.view)}
-                        <div className={styles.resizer} onMouseDown={onMouseDown}/>
-                    </div>
+                {contextMenu &&
+                    <Area
+                        hub={hub}
+                        event={contextMenu}
+                        render={
+                            view =>
+                                <div className={contextPanelClassName} ref={contextPanelRef}>
+                                    {view}
+                                    <div className={styles.resizer} onMouseDown={onMouseDown}/>
+                                </div>
+                        }
+                    />
+
                 }
             </div>
-            {modal?.view &&
-                <Dialog
-                    visible={true}
-                    closable={isClosable}
-                    closeIcon={<i className='sm sm-close'/>}
-                    className={modalClassName}
-                    onClose={isClosable && (() => {
-                        setModal(null);
-                        sendMessage(hub, new CloseModalDialogEvent());
-                    })}
-                    children={renderControl(modal.view)}
-                    destroyOnClose={true}
-                />
-            }
+            {/*{modal?.view &&*/}
+            {/*    <Dialog*/}
+            {/*        visible={true}*/}
+            {/*        closable={isClosable}*/}
+            {/*        closeIcon={<i className='sm sm-close'/>}*/}
+            {/*        className={modalClassName}*/}
+            {/*        onClose={isClosable && (() => {*/}
+            {/*            setModal(null);*/}
+            {/*            sendMessage(hub, new CloseModalDialogEvent());*/}
+            {/*        })}*/}
+            {/*        children={renderControl(modal.view)}*/}
+            {/*        destroyOnClose={true}*/}
+            {/*    />*/}
+            {/*}*/}
         </Fragment>
     );
 }

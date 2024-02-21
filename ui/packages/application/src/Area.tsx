@@ -1,31 +1,25 @@
-import { useEffect, useState, JSX } from "react";
-import { AreaChangedEvent } from "./contract/application.contract";
-import { useMessageHub } from "./AddHub";
+import { JSX, useEffect, useState } from "react";
+import { AreaChangedEvent, RefreshRequest } from "./contract/application.contract";
 import { renderControl } from "./renderControl";
-import { receiveMessage } from "@open-smc/message-hub/src/receiveMessage";
-import { ofContractType } from "./contract/ofContractType";
+import { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
+import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
+import { useSubscribeToAreaChanged } from "./useSubscribeToAreaChanged";
 
 interface AreaProps {
+    hub: MessageHub;
     event: AreaChangedEvent;
     render?: (renderedView: JSX.Element) => JSX.Element;
 }
 
-export function Area({event: initialEvent, render}: AreaProps) {
-    const [event, setEvent] = useState(initialEvent);
-    const hub = useMessageHub();
+export function Area({hub, event: {area, view: initialView}, render}: AreaProps) {
+    const [view, setView] = useState(initialView);
 
-    const {area, view} = event;
+    useEffect(() => setView(initialView), [initialView]);
 
-    useEffect(() => {
-        setEvent(initialEvent);
-    }, [initialEvent]);
+    useSubscribeToAreaChanged(hub, area, ({view}) => setView(view));
 
     useEffect(() => {
-        receiveMessage(
-            hub.pipe(ofContractType(AreaChangedEvent)),
-            setEvent,
-            ({message}) => message.area === area
-        );
+        sendMessage(hub, new RefreshRequest(area));
     }, [hub, area]);
 
     if (!view) {

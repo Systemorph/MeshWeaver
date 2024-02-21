@@ -8,6 +8,7 @@ import { ModalWindow } from "./ModalWindow";
 import { ControlView } from "../ControlDef";
 import { useSubscribeToAreaChanged } from "../useSubscribeToAreaChanged";
 import { insertAfter } from "@open-smc/utils/src/insertAfter";
+import { useMessageHub } from "../AddHub";
 
 export type StackSkin = "VerticalPanel" | "HorizontalPanel" | "HorizontalPanelEqualCols" | "Toolbar" | "SideMenu" | "ContextMenu" | "MainWindow" |
     "Action" | "Modal" | "GridLayout";
@@ -44,14 +45,16 @@ export default function LayoutStackControl(props: StackView) {
 function LayoutStack({id, skin, areas: areasInit, style, highlightNewAreas, columnCount}: StackView) {
     const [areas, setAreas] = useState(areasInit);
     const [addedAreas, setAddedAreas] = useState([]);
+    const hub = useMessageHub();
 
     useEffect(() => {
         setAreas(areasInit);
         setAddedAreas([]);
     }, [areasInit]);
 
-    useSubscribeToAreaChanged<StackOptions>(event => {
-        const {area, options} = event;
+    useSubscribeToAreaChanged(hub, undefined,event => {
+        const {area} = event;
+        const options = event.options as StackOptions;
 
         if (!areas?.find(a => a.area === area)) {
             const insertAfterArea = options?.insertAfter;
@@ -74,7 +77,7 @@ function LayoutStack({id, skin, areas: areasInit, style, highlightNewAreas, colu
 
         return (
             <div style={event.style} className={className} key={area}>
-                <Area event={event}/>
+                <Area hub={hub} event={event}/>
             </div>
         );
     });

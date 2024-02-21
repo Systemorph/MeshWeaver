@@ -16,25 +16,17 @@ export function renderControl(control: ControlDef) {
     const name = getComponentName($type);
     const component = getControlComponent(name);
 
-    const renderedControl = (
-        <Suspense fallback={<div>Loading...</div>}>
-            <RenderControl
-                component={component}
-                name={name}
-                control={control}
-            />
-        </Suspense>
+    return (
+        <AddHub address={address} id={name}>
+            <Suspense fallback={<div>Loading...</div>}>
+                <RenderControl
+                    component={component}
+                    name={name}
+                    control={control}
+                />
+            </Suspense>
+        </AddHub>
     );
-
-    if (address) {
-        return (
-            <AddHub address={address} id={name}>
-                {renderedControl}
-            </AddHub>
-        );
-    }
-
-    return renderedControl;
 }
 
 interface RenderControlProps {

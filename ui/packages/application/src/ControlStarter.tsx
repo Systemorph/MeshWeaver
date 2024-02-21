@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { AreaChangedEvent, SetAreaRequest } from "./contract/application.contract";
-import { useSubscribeToAreaChanged } from "./useSubscribeToAreaChanged";
-import { renderControl } from "./renderControl";
+import { AreaChangedEvent, RefreshRequest, SetAreaRequest } from "./contract/application.contract";
 import { useMessageHub } from "./AddHub";
 import { layoutHubId } from "./LayoutHub";
 import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
+import { renderControl } from "./renderControl";
+import { useSubscribeToAreaChanged } from "./useSubscribeToAreaChanged";
 
 interface ControlStarterProps {
     area: string;
@@ -14,14 +14,20 @@ interface ControlStarterProps {
 
 export function ControlStarter({area, path, options}: ControlStarterProps) {
     const [event, setEvent] = useState<AreaChangedEvent>();
-    const hub = useMessageHub(layoutHubId);
+    const layoutHub = useMessageHub(layoutHubId);
 
-    useSubscribeToAreaChanged(setEvent, area, layoutHubId);
+    useSubscribeToAreaChanged(layoutHub, area, setEvent);
 
     useEffect(() => {
-        sendMessage(hub, new SetAreaRequest(area, path, options));
-        return () => sendMessage(hub, new SetAreaRequest(area, null));
-    }, [area, path, options, sendMessage]);
+        sendMessage(layoutHub, new SetAreaRequest(area, path, options));
+        return () => sendMessage(layoutHub, new SetAreaRequest(area, null));
+    }, [layoutHub, area, path, options]);
+
+    useEffect(() => {
+        if (event) {
+            sendMessage(layoutHub, new RefreshRequest(area));
+        }
+    }, [event]);
 
     if (!event?.view) {
         return null;
