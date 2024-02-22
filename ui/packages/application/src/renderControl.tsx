@@ -1,44 +1,63 @@
 import { camelCase, isString, memoize, upperFirst } from 'lodash';
 import { DataContextProvider, useDataContext } from "./dataBinding/DataContextProvider";
-import { AddHub } from "./AddHub";
-import React, { ComponentType, useMemo } from "react";
+import { AddHub, useMessageHub } from "./AddHub";
+import React, { ComponentType, useEffect, useMemo, useState } from "react";
 import { ControlContext } from "./ControlContext";
 import { isScope } from "./scopes/createScopeMonitor";
 import { bind, bindIteratee } from "./dataBinding/bind";
 import { ControlDef } from "./ControlDef";
 import { useScopeMonitor } from "./scopes/useScopeMonitor";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, JSX } from "react";
 import { DataContext } from "./dataBinding/DataContext";
+import { useSubscribeToAreaChanged } from "./useSubscribeToAreaChanged";
+import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
+import { RefreshRequest } from "./contract/application.contract";
 
 export function renderControl(control: ControlDef) {
-    const {address, $type} = control;
-
-    const name = getComponentName($type);
-    const component = getControlComponent(name);
+    const {address} = control;
 
     return (
-        <AddHub address={address} id={name}>
+        <AddHub address={address}>
             <Suspense fallback={<div>Loading...</div>}>
                 <RenderControl
-                    component={component}
-                    name={name}
                     control={control}
+                    render={control => <RenderControlInner control={control}/>}
                 />
             </Suspense>
         </AddHub>
     );
 }
 
+interface RootAreaProps {
+    control: ControlDef;
+    render: (control: ControlDef) => JSX.Element;
+}
+
+function RenderControl({control: initialControl, render}: RootAreaProps) {
+    const hub = useMessageHub();
+    const [control, setControl] = useState(initialControl);
+
+    useSubscribeToAreaChanged(hub, "", ({view}) => setControl(view));
+
+    useEffect(() => {
+        sendMessage(hub, new RefreshRequest());
+    }, [hub]);
+
+    return render(control);
+}
+
 interface RenderControlProps {
-    component: ComponentType;
-    name: string;
     control: ControlDef;
 }
 
-function RenderControl({component: Component, name, control}: RenderControlProps) {
-    const {current, setScopeProperty} = useScopeMonitor(control.dataContext);
+function RenderControlInner({control}: RenderControlProps) {
+    const {$type, dataContext: dataContextValue} = control;
+    const {current, setScopeProperty} = useScopeMonitor(dataContextValue);
     const view = useMemo(() => getView(control), [control]);
     const parentContext = useDataContext();
+
+    const name = getComponentName($type);
+    const Component = getControlComponent(name);
 
     const dataContext = useMemo(
         () => new DataContext(current, parentContext, ({object, key, value}) => {
@@ -70,21 +89,6 @@ function RenderControl({component: Component, name, control}: RenderControlProps
         </DataContextProvider>
     );
 }
-
-// export function getControlComponent(control: ControlDef) {
-//     const {
-//         $type,
-//         moduleName,
-//         apiVersion,
-//     } = control;
-//
-//     const componentName = getComponentName($type);
-//
-//     const Component =
-//         getRemoteComponent(`${moduleName}-${apiVersion}/controls/${componentName}`);
-//
-//     return {Component, componentName};
-// }
 
 const getControlComponent = memoize((name: string) => {
     for (const resolver of controlResolvers) {
