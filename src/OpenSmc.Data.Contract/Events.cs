@@ -20,7 +20,8 @@ public record GetManyRequest<T> : IRequest<GetManyResponse<T>>
     public object Options { get; init; }
 };
 
-public record GetManyResponse<T>(int Total, IReadOnlyCollection<T> Items)
+public abstract record GetManyResponseBase(int Total);
+public record GetManyResponse<T>(int Total, IReadOnlyCollection<T> Items) : GetManyResponseBase(Total)
 {
     public static GetManyResponse<T> Empty() => new(0, Array.Empty<T>());
 }
