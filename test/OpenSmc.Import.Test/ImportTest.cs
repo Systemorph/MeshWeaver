@@ -1,7 +1,7 @@
 ﻿using FluentAssertions;
 using OpenSmc.Activities;
 using OpenSmc.Data;
-using OpenSmc.Data.Domain;
+using OpenSmc.Data.TestDomain;
 using OpenSmc.DataStructures;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
