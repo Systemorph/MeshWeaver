@@ -5,6 +5,11 @@ using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
 
+public record GetManyRequest(IReadOnlyCollection<Type> Types)
+{
+    public object Options { get; init; }
+}
+
 public record GetManyRequest<T> : IRequest<GetManyResponse<T>>
 {
     public int Page { get; init; }
