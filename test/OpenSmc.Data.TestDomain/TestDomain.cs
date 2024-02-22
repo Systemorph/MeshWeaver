@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations;
 using OpenSmc.Domain.Abstractions;
 using OpenSmc.Domain.Abstractions.Attributes;
 
-namespace OpenSmc.Data.Domain;
+namespace OpenSmc.Data.TestDomain;
 
 /// <summary>
 /// This is structuring element for sub-dividing a data domain into several groups.
