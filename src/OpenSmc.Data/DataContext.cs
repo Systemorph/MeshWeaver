@@ -22,7 +22,7 @@ public record DataContext(IMessageHub Hub)
     internal DataContext WithType<T>(object dataSourceId)
         => this with { DataSourcesByTypes = DataSourcesByTypes.SetItem(typeof(T), dataSourceId) };
 
-    public DataContext WithInMemoryInitialization(Func<IMessageHub, CancellationToken, Task> initialization)
+    public DataContext WithInitialization(Func<IMessageHub, CancellationToken, Task> initialization)
         => this with { InitializationAsync = initialization };
 
     public DataContext WithDataSource(object id, Func<DataSource, IDataSource> dataSourceBuilder) 
