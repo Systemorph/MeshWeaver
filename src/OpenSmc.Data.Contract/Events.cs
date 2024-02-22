@@ -1,14 +1,17 @@
-﻿using System.Text.Json.Nodes;
+﻿using System.Collections.Immutable;
+using System.Text.Json.Nodes;
 using Json.Patch;
 using OpenSmc.Activities;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
 
-public record GetManyRequest(IReadOnlyCollection<Type> Types)
+public record GetManyRequest(IReadOnlyCollection<Type> Types) : IRequest<GetManyResponse>
 {
     public object Options { get; init; }
 }
+
+public record GetManyResponse(IImmutableDictionary<Type, IReadOnlyCollection<object>> ItemsByType);
 
 public record GetManyRequest<T> : IRequest<GetManyResponse<T>>
 {
