@@ -137,7 +137,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.CSharp.Roslyn", "sr
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Session", "src\OpenSmc.Session\OpenSmc.Session.csproj", "{F70F144A-C970-4EC4-8D59-3375F788E42A}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenSmc.Data.TestDomain", "test\OpenSmc.Data.Domain\OpenSmc.Data.TestDomain.csproj", "{6F344FFE-BAED-42FD-91CD-4F524A04EDA3}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Data.TestDomain", "test\OpenSmc.Data.TestDomain\OpenSmc.Data.TestDomain.csproj", "{6F344FFE-BAED-42FD-91CD-4F524A04EDA3}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
