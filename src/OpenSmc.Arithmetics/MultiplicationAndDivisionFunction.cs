@@ -12,6 +12,17 @@ namespace OpenSmc.Arithmetics
             var func = (Func<T, T, T>)GetFunction(typeof(T), Operation.Divide);
             return func(x, y);
         }
+        public static T Multiply<T>(T x, T y)
+        {
+            var func = (Func<T, T, T>)GetFunction(typeof(T), Operation.Multiply);
+            return func(x, y);
+        }
+
+        public static T Multiply<T>(T x, double y)
+        {
+            var func = (Func<T, double, T>)GetFunction(typeof(T), Operation.Multiply);
+            return func(x, y);
+        }
 
         public static void Register<T>(Operation operation, Func<T, T, T> del)
         {
