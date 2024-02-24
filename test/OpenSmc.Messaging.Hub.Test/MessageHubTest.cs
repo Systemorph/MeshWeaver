@@ -1,22 +1,16 @@
 ﻿using System.Reactive.Linq;
 using FluentAssertions;
-using FluentAssertions.Execution;
 using FluentAssertions.Extensions;
 using OpenSmc.Hub.Fixture;
 using Xunit;
 using Xunit.Abstractions;
 
 namespace OpenSmc.Messaging.Hub.Test;
-public class MessageHubTest : HubTestBase
+public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
 {
-
     record SayHelloRequest : IRequest<HelloEvent>;
     record HelloEvent;
 
-
-    public MessageHubTest(ITestOutputHelper output) : base(output)
-    {
-    }
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         => configuration

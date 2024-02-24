@@ -44,9 +44,14 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
         var collections = TypeSources
             .Values
             .Select(ts => (ts.CollectionName, Path: $"$['{ts.CollectionName}']")).ToDictionary(x => x.CollectionName, x => x.Path);
+        var startDataSynchronizationRequest = new StartDataSynchronizationRequest(collections);
+
+
+
         var subscribeRequest =
-            Hub.Post(new StartDataSynchronizationRequest(collections),
+            Hub.Post(startDataSynchronizationRequest,
                 o => o.WithTarget(Id));
+
         var tcs = new TaskCompletionSource(cancellationToken);
         Hub.RegisterCallback(subscribeRequest, response =>
             {
@@ -61,13 +66,14 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
 
 
     public IReadOnlyCollection<T> Get<T>() where T : class
-        => GetTypeSource(typeof(T)).GetData().Values.Cast<T>().ToArray();
+        => GetTypeSource(typeof(T))?.GetData()?.Values.Cast<T>().ToArray() ?? Array.Empty<T>();
     public T Get<T>(object id) where T : class
-        => (T)GetTypeSource(typeof(T)).GetData().GetValueOrDefault(id);
+        => (T)GetTypeSource(typeof(T))?.GetData()?.GetValueOrDefault(id);
 
     public void Rollback()
     {
         foreach (var typeSource in TypeSources.Values)
             typeSource.Rollback();
     }
+
 }

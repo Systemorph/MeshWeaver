@@ -3,14 +3,12 @@ using System.Text.Json.Nodes;
 using Json.Patch;
 using Json.Path;
 using OpenSmc.Messaging;
-using OpenSmc.Serialization;
-using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Data.Persistence;
 
 
 
-public record DataPersistencePluginState
+public record DataPersistencePluginState(DataContext DataContext)
 {
     /// <summary>
     /// Synchronization requests by address.
@@ -30,45 +28,23 @@ public record DataSubscriptionItem(string Path)
     public JsonNode LastSynchronized { get; init; }
 };
 
-public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
-    MessageHubPlugin<DataPersistencePluginState>(hub),
+public class DataPersistencePlugin :
+    MessageHubPlugin<DataPersistencePluginState>,
     IMessageHandler<StartDataSynchronizationRequest>,
     IMessageHandler<DataChangedEvent>,
     IMessageHandler<DataChangeRequest>
 {
-    public DataContext Context { get; } = context;
-
-    /// <summary>
-    /// Upon start, it initializes the persisted state from the DB
-    /// </summary>
-    /// <returns></returns>
-    ///
-    private Task initializeTask;
-
-    [Inject] private ITypeRegistry typeRegistry;
-    public override Task StartAsync(CancellationToken cancellationToken)
+    public DataPersistencePlugin(IMessageHub hub, DataContext context) : base(hub)
     {
-        foreach (var type in Context.DataSources.Values.SelectMany(x => x.MappedTypes))
-            typeRegistry.WithType(type);
-
-        initializeTask = InitializeAllDataSources(cancellationToken);
-        return Task.CompletedTask;
+        InitializeState(new(context));
     }
+
 
     public override bool IsDeferred(IMessageDelivery delivery)
     {
         if (delivery.Message is DataChangedEvent)
             return false;
         return base.IsDeferred(delivery);
-    }
-
-    public override Task Initialized => initializeTask;
-
-
-    private async Task InitializeAllDataSources(CancellationToken cancellationToken)
-    {
-        await Context.InitializeAsync(cancellationToken);
-        InitializeState(new DataPersistencePluginState());
     }
 
 
@@ -117,19 +93,24 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
                     
             });
 
-        UpdateSubscription(address, subscription, SynchronizationMode.Full);
+        var changes = UpdateSubscription(address, subscription, SynchronizationMode.Full);
+        Hub.Post(new DataChangedEvent(Hub.Version, changes), o => o.ResponseFor(request));
         return request.Processed();
     }
 
     private void UpdateSubscriptions()
     {
         foreach (var (address, subscription) in State.SubscriptionsByAddress)
-            UpdateSubscription(address, subscription, SynchronizationMode.Delta);
+        {
+            var changes = UpdateSubscription(address, subscription, SynchronizationMode.Delta);
+            if (changes.Any())
+                Hub.Post(new DataChangedEvent(Hub.Version, changes), o => o.WithTarget(address));
+        }
     }
 
 
     public enum SynchronizationMode{Full, Delta}
-    private void UpdateSubscription(object address, DataSubscription subscription, SynchronizationMode mode)
+    private IReadOnlyCollection<CollectionChange> UpdateSubscription(object address, DataSubscription subscription, SynchronizationMode mode)
     {
         var serializedWorkspace = GetSerializedWorkspace();
         List<CollectionChange> changes = new();
@@ -144,7 +125,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
             };
             if (match != null)
             {
-                var change = item.LastSynchronized == null
+                var change = item.LastSynchronized == null || mode == SynchronizationMode.Full
                     ? new CollectionChange(collection, match, CollectionChangeType.Full)
                     : GetPatch(collection, item, match);
                 if (change != null)
@@ -160,8 +141,6 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
             }
 
         }
-        if (changes.Any())
-            Hub.Post(new DataChangedEvent(Hub.Version, changes), o => o.WithTarget(address));
 
 
         UpdateState(s =>
@@ -171,6 +150,8 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
                     .SetItem(address, subscription)
             });
 
+
+        return changes;
     }
 
     private static CollectionChange GetPatch(string collection, DataSubscriptionItem item, JsonNode match)
@@ -195,7 +176,7 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
 
     private JsonNode CreateSynchronizedWorkspace()
         =>
-            Context.GetSerializedWorkspace();
+            State.DataContext.GetSerializedWorkspace();
 
 
 
@@ -212,11 +193,11 @@ public class DataPersistencePlugin(IMessageHub hub, DataContext context) :
 
     private IMessageDelivery UpdateState(IMessageDelivery request, object dataSourceId, DataChangedEvent @event)
     {
-        var dataSource = Context.GetDataSource(dataSourceId);
+        var dataSource = State.DataContext.GetDataSource(dataSourceId);
         if (dataSource == null)
             return request.Ignored();
         dataSource.Synchronize(@event);
-
+        UpdateSubscriptions();
 
         return request.Processed();
     }

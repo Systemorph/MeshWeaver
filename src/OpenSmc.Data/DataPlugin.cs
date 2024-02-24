@@ -8,23 +8,14 @@ namespace OpenSmc.Data;
 public class DataPlugin : MessageHubPlugin<HubDataSource>, 
     IWorkspace,
     IMessageHandler<UpdateDataRequest>,
-    IMessageHandler<DeleteDataRequest>
+    IMessageHandler<DeleteDataRequest>,
+    IMessageHandler<DataChangedEvent>
 {
     public DataPlugin(IMessageHub hub) : base(hub)
     {
-        var dataContext = hub.GetDataConfiguration();
-        var persistenceHub = hub
-            .GetHostedHub(new PersistenceAddress(hub.Address),
-                conf => conf
-                    .AddPlugin(h => new DataPersistencePlugin(h, dataContext)));
         Register(HandleGetRequest); // This takes care of GetRequest and GetManyRequest
-        InitializeState(dataContext.DataSources.Values
-            .SelectMany(ds => ds.TypeSources)
-            .Aggregate(new HubDataSource(persistenceHub.Address, persistenceHub), (ds, ts) =>
-                ds.WithType(ts.ElementType, t => t.WithKey(ts.GetKey))));
     }
 
-    public override Task Initialized => initializeStateTask;
 
     public IEnumerable<Type> MappedTypes => State.MappedTypes;
 
@@ -38,10 +29,21 @@ public class DataPlugin : MessageHubPlugin<HubDataSource>,
         throw new NotImplementedException();
     }
 
-    private Task initializeStateTask;
     public override async Task StartAsync(CancellationToken cancellationToken)  // This loads the persisted state
     {
         await base.StartAsync(cancellationToken);
+
+        var dataContext = Hub.GetDataConfiguration();
+        await dataContext.InitializeAsync(cancellationToken);
+        var persistenceHub = Hub
+            .GetHostedHub(new PersistenceAddress(Hub.Address),
+                conf => conf
+                    .AddPlugin(h => new DataPersistencePlugin(h, dataContext)));
+        InitializeState(dataContext.DataSources.Values
+            .SelectMany(ds => ds.TypeSources)
+            .Aggregate(new HubDataSource(persistenceHub.Address, Hub), (ds, ts) =>
+                ds.WithType(ts.ElementType, t => t.WithKey(ts.GetKey))));
+
         await State.InitializeAsync(cancellationToken);
     }
 
@@ -111,7 +113,14 @@ public class DataPlugin : MessageHubPlugin<HubDataSource>,
     }
 
     public override bool IsDeferred(IMessageDelivery delivery)
-        => base.IsDeferred(delivery) || delivery.Message.GetType().IsGetRequest();
+    {
+        if (delivery.Message.GetType().IsGetRequest())
+            return true;
+        if (delivery.Message is DataChangedEvent)
+            return false;
+        
+        return base.IsDeferred(delivery);
+    }
 
 
     public void Commit()
@@ -129,5 +138,12 @@ public class DataPlugin : MessageHubPlugin<HubDataSource>,
     {
         return State.Get<T>();
     }
+
+    public IMessageDelivery HandleMessage(IMessageDelivery<DataChangedEvent> request)
+    {
+        State.Synchronize(request.Message);
+        return request.Processed();
+    }
+
 }
 
