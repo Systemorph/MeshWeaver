@@ -27,7 +27,7 @@ public sealed record DataContext(IMessageHub Hub)
         };
     }
 
-    public ImmutableDictionary<object, DataSourceBuilder> DataSourceBuilders { get; set; }
+    public ImmutableDictionary<object, DataSourceBuilder> DataSourceBuilders { get; set; } = ImmutableDictionary<object, DataSourceBuilder>.Empty;
 
     public delegate IDataSource DataSourceBuilder(IMessageHub hub); 
 

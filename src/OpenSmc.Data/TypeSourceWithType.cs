@@ -34,8 +34,6 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, string Collecti
     protected ImmutableDictionary<object, object> LastSavedState { get; set; }
 
 
-    private IReadOnlyDictionary<object, object> Instances { get; set; }
-
     ITypeSource ITypeSource.WithKey(Func<object, object> key)
         => This with { Key = key };
     public virtual object GetKey(object instance)
@@ -56,7 +54,7 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, string Collecti
 
     public void SetData(IEnumerable<object> instances, bool snapshotMode = false)
     {
-        foreach (var g in instances.GroupBy(i => Instances.ContainsKey(GetKey(i))))
+        foreach (var g in instances.GroupBy(i => CurrentState.ContainsKey(GetKey(i))))
         {
             if (g.Key)
                 Update(g);
@@ -66,7 +64,7 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, string Collecti
     }
 
     public IReadOnlyDictionary<object, object> GetData()
-        => Instances;
+        => CurrentState;
 
     
     protected TTypeSource This => (TTypeSource)this;
@@ -140,7 +138,7 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, string Collecti
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
-        Instances = await GetAsync(cancellationToken);
+        LastSavedState = CurrentState = (await GetAsync(cancellationToken)).ToImmutableDictionary();
     }
 
 }
