@@ -1,70 +1,87 @@
 ﻿using OpenSmc.Messaging;
 using System.Collections.Immutable;
+using System.Text.Json.Nodes;
+using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Data.Persistence;
+using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
 
-public record DataContext(IMessageHub Hub)
+public sealed record DataContext(IMessageHub Hub)
 {
-    internal ImmutableList<Func<object, object>> InstanceToDataSourceMaps = ImmutableList<Func<object, object>>.Empty;   
-    
-    internal ImmutableDictionary<Type, object> DataSourcesByTypes { get; init; } = ImmutableDictionary<Type, object>.Empty;
-    
-    internal ImmutableDictionary<object,IDataSource> DataSources { get; init; } = ImmutableDictionary<object, IDataSource>.Empty;
+    private readonly ISerializationService serializationService =
+        Hub.ServiceProvider.GetRequiredService<ISerializationService>();
 
-    internal Action<IMessageHub> InMemoryInitialization { get; init; } = hub => { };
+    internal ImmutableDictionary<object,IDataSource> DataSources { get; private set; } = ImmutableDictionary<object, IDataSource>.Empty;
 
-    public IReadOnlyCollection<Type> DataTypes => DataSourcesByTypes.Keys.ToArray();
 
     public IDataSource GetDataSource(object id) => DataSources.GetValueOrDefault(id);
 
-    private object MapByType(Type type) => DataSourcesByTypes.GetValueOrDefault(type);
+    public IEnumerable<Type> MappedTypes => DataSources.Values.SelectMany(ds => ds.MappedTypes);
 
-    internal DataContext WithType<T>(object dataSourceId)
-        => this with { DataSourcesByTypes = DataSourcesByTypes.SetItem(typeof(T), dataSourceId) };
-
-    public DataContext WithInMemoryInitialization(Action<IMessageHub> initialization)
-        => this with { InMemoryInitialization = initialization };
-
-    public DataContext WithDataSource(object id, Func<DataSource, IDataSource> dataSourceBuilder) 
-        => WithDataSource(id, dataSourceBuilder.Invoke(new(id)));
-
-
-    private DataContext WithDataSource(object id, IDataSource dataSource)
+    public DataContext WithDataSourceBuilder(object id, DataSourceBuilder dataSourceBuilder)
     {
-        return this 
-            with
-            {
-                DataSources = DataSources.Add(id, dataSource),
-                // maintain mapping between data sources and types
-                DataSourcesByTypes = DataSourcesByTypes.SetItems(dataSource.MappedTypes.Select(s => new KeyValuePair<Type, object>(s,dataSource.Id)))
-            };
-    }
-
-    internal DataContext Build(IMessageHub hub)
-        => this with
+        return this with
         {
-            DataSources = DataSources
-                .Select(kvp => new KeyValuePair<object, IDataSource>(kvp.Key, kvp.Value.Build(hub)))
-                .ToImmutableDictionary()
+            DataSourceBuilders = DataSourceBuilders.Add(id, dataSourceBuilder),
         };
-
-
-    public bool GetTypeConfiguration(Type type, out TypeSource typeSource)
-    {
-        typeSource = null;
-        return DataSourcesByTypes.TryGetValue(type, out var dataSourceId) 
-               && DataSources.TryGetValue(dataSourceId, out var dataSource)
-               && dataSource.GetTypeConfiguration(type, out typeSource);
     }
+
+    public ImmutableDictionary<object, DataSourceBuilder> DataSourceBuilders { get; set; }
+
+    public delegate IDataSource DataSourceBuilder(IMessageHub hub); 
+
+    internal ImmutableList<Func<object, object>> InstanceToDataSourceMaps = ImmutableList<Func<object, object>>.Empty;
 
     internal DataContext MapInstanceToDataSource<T>(Func<T, object> dataSourceMap) => this with
     {
         InstanceToDataSourceMaps = InstanceToDataSourceMaps.Insert(0, o => o is T t ? dataSourceMap.Invoke(t) : default)
     };    
 
-    public object GetDataSourceId(object instance)
+    public object MapInstanceToDataSource(object instance) => DataSources.Values.FirstOrDefault(ds => ds.ContainsInstance(instance));
+
+    public async Task InitializeAsync(CancellationToken cancellationToken)
     {
-        return InstanceToDataSourceMaps.Select(m => m(instance)).FirstOrDefault(id => id != null)
-            ?? MapByType(instance.GetType());
+        DataSources = DataSourceBuilders
+            .ToImmutableDictionary(kvp => kvp.Key,
+                kvp => kvp.Value.Invoke(Hub));
+        foreach (var dataSource in DataSources.Values)
+        {
+            await dataSource.InitializeAsync(cancellationToken);
+        }
+    }
+
+    public ImmutableDictionary<string,ImmutableDictionary<object,object>> GetAllData()
+    {
+        return DataSources.Values.SelectMany(ds => ds.GetWorkspace().GetData())
+            .GroupBy(x => x.Key)
+            .ToImmutableDictionary(x => x.Key, x => x.SelectMany(y => y.Value)
+                .ToImmutableDictionary(y => y.Key, y => y.Value));
+    }
+
+    public JsonNode GetSerializedWorkspace()
+    {
+        var allData = 
+            DataSources
+            .Values
+            .SelectMany(ds => ds.GetData())
+            .GroupBy(kvp => kvp.Key)
+            .ToDictionary
+            (
+                x => x.Key,
+                x => (IReadOnlyDictionary<object,object>)x
+                    .SelectMany(y => y.Value)
+                    .ToDictionary(y => y.Key, y => y.Value)
+            );
+        return serializationService.SerializeWorkspaceData(allData);
+    }
+
+    public void Change(DataChangeRequest request)
+    {
+        foreach (var g in request.Elements.GroupBy(MapInstanceToDataSource))
+        {
+            var dataSource = GetDataSource(g.Key);
+            dataSource?.Change(request with {Elements = g.ToArray()});
+        }
     }
 }

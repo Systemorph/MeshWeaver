@@ -1,9 +1,12 @@
 ﻿using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Reflection;
+using OpenSmc.Data.Domain;
 using OpenSmc.Domain.Abstractions;
 using OpenSmc.Domain.Abstractions.Attributes;
+using OpenSmc.Reflection;
 
-namespace OpenSmc.Data.Domain;
+namespace OpenSmc.Data.TestDomain;
 
 /// <summary>
 /// This is structuring element for sub-dividing a data domain into several groups.
@@ -72,6 +75,19 @@ public static class TestDomain
         => dataSource.ConfigureCategory(TransactionalDataDomain);
     public static DataSource ConfigureComputedData(this DataSource dataSource)
         => dataSource.ConfigureCategory(ComputedDataDomain);
+
+    public static DataSource ConfigureCategory(this DataSource dataSource,
+        IDictionary<Type, IEnumerable<object>> typeAndInstance)
+        => typeAndInstance.Aggregate(dataSource,
+            (ds, kvp) =>
+                (DataSource)ConfigureCategoryMethod.MakeGenericMethod(kvp.Key).InvokeAsFunction(ds, kvp.Value));
+
+
+    private static readonly MethodInfo ConfigureCategoryMethod =
+        ReflectionHelper.GetStaticMethodGeneric(() => ConfigureCategory<object>(null, null));
+    private static DataSource ConfigureCategory<T>(DataSource dataSource, IEnumerable<object> data)
+        where T : class
+        => dataSource.WithType<T>(o => o.WithInitialData(_ => Task.FromResult(data.Cast<T>())));
 
     public static readonly Dictionary<Type, IEnumerable<object>> ContractDomain
         =

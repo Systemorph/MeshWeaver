@@ -7,30 +7,13 @@ public interface IDataSourceWithStorage
     IDataStorage Storage { get; }
 }
 
-public abstract record DataSourceWithStorage<TDataSource>(object Id)
-    : DataSource<TDataSource>(Id), IDataSourceWithStorage
+public abstract record DataSourceWithStorage<TDataSource>(object Id, IMessageHub Hub, IDataStorage Storage)
+    : DataSource<TDataSource, ITypeSource>(Id, Hub), IDataSourceWithStorage
     where TDataSource : DataSourceWithStorage<TDataSource>
 {
-
-    public abstract IDataStorage CreateStorage(IMessageHub hub);
-
-    protected override TDataSource Buildup(IMessageHub hub)
+    protected override Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken)
     {
-        if(Storage != null)
-            return base.Buildup(hub);
-        var storage = CreateStorage(hub);
-        return (this with
-        {
-            Storage = storage,
-            StartTransactionAction = storage.StartTransactionAsync
-        }).Buildup(hub);
+        return Storage.StartTransactionAsync(cancellationToken);
     }
 
-    protected override TypeSource<T> CreateTypeSource<T>()
-    {
-        return new TypeSourceWithDataStorage<T>();
-    }
-
-
-    public IDataStorage Storage { get; init; }
 }

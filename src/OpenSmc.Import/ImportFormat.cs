@@ -42,7 +42,7 @@ public record ImportFormat(string Format, IMessageHub Hub, IWorkspace Workspace)
     public ImportFormat WithAutoMappings()
         => WithAutoMappings(mapping => mapping);
     public ImportFormat WithAutoMappings(Func<DomainTypeImporter, DomainTypeImporter> config) 
-        => WithImportFunction((_, ds, _, _) => config(new DomainTypeImporter(Workspace.DataContext)).Import(ds));
+        => WithImportFunction((_, ds, _, _) => config(new DomainTypeImporter(Workspace.MappedTypes)).Import(ds));
 }
 
 public delegate bool ValidationFunction(object instance, ValidationContext context);

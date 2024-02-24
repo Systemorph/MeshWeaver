@@ -1,5 +1,6 @@
 ﻿using OpenSmc.Activities;
 using OpenSmc.Messaging;
+using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Data;
 
@@ -30,7 +31,6 @@ public abstract record DataChangeRequest(IReadOnlyCollection<object> Elements) :
 
 public record CreateRequest<TObject>(TObject Element) : IRequest<DataChangedEvent> { public object Options { get; init; } };
 
-public record DeleteBatchRequest<TElement>(IReadOnlyCollection<TElement> Elements) : IRequest<DataChangedEvent>;
 
 /// <summary>
 /// Starts data synchronization with data corresponding to the Json Path queries as specified in the constructor.
@@ -38,13 +38,15 @@ public record DeleteBatchRequest<TElement>(IReadOnlyCollection<TElement> Element
 /// <param name="JsonPaths">All the json paths to be synchronized. E.g. <code>"$.MyEntities"</code></param>
 public record StartDataSynchronizationRequest(IReadOnlyDictionary<string,string> JsonPaths) : IRequest<DataChangedEvent>;
 
-public record DataChangedEvent(long Version)
-{
-    public ActivityLog Log { get; set; }
-}
+public record DataChangedEvent(long Version, IReadOnlyCollection<CollectionChange> Changes);
 
-public record DataSynchronizationState(long Version, string Data): DataChangedEvent(Version);
-public record DataSynchronizationPatch(long Version,  string Patch) : DataChangedEvent(Version);
+
+public record CollectionChange(string Collection, object Change, CollectionChangeType Type)
+{
+    public string Id { get; } = Guid.NewGuid().AsString();
+}
+public enum CollectionChangeType{Full, Patch}
+
 
 /// <summary>
 /// Ids of the synchronization requests to be stopped (generated with request)

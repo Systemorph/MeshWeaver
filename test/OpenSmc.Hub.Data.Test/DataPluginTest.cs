@@ -63,7 +63,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         await Task.Delay(300);
 
         // asserts
-        var expected = new DataChangedEvent(1);
+        var expected = new ImportResponse(1, null);
         updateResponse.Message.Should().BeEquivalentTo(expected);
         var expectedItems = new MyData[]
         {
@@ -94,8 +94,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         await Task.Delay(200);
 
         // asserts
-        var expected = new DataChangedEvent(1);
-        deleteResponse.Message.Should().BeEquivalentTo(expected);
+        deleteResponse.Message.Version.Should().Be(1);
         var expectedItems = new[]
         {
             new MyData("2", "B")
@@ -108,10 +107,12 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
 
     public static string TextChange = nameof(TextChange);
-    public class ImportPlugin(IMessageHub hub) : MessageHubPlugin(hub), IMessageHandler<ImportRequest>
+
+    public record LocalImportRequest;
+    public class ImportPlugin(IMessageHub hub) : MessageHubPlugin(hub), IMessageHandler<LocalImportRequest>
     {
         [Inject] IWorkspace workspace;
-        IMessageDelivery IMessageHandler<ImportRequest>.HandleMessage(IMessageDelivery<ImportRequest> request)
+        IMessageDelivery IMessageHandler<LocalImportRequest>.HandleMessage(IMessageDelivery<LocalImportRequest> request)
         {
             // TODO V10: Mise-en-place must be been done ==> data plugin context
             var someData = workspace.GetData<MyData>();
@@ -119,7 +120,6 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             myInstance = myInstance with { Text = TextChange };
             workspace.Update(myInstance);
             workspace.Commit();
-            Hub.Post(new DataChangedEvent(Hub.Version), o => o.ResponseFor(request));
             return request.Processed();
         }
     }
@@ -136,11 +136,11 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         storage.Values.Should().Contain(i => i.Text == TextChange);
     }
 
-    private Task<IReadOnlyCollection<MyData>> InitializeMyData(CancellationToken cancellationToken)
+    private Task<IEnumerable<MyData>> InitializeMyData(CancellationToken cancellationToken)
     {
         foreach (var data in initialData)
             storage[data.Id] = data;
-        return Task.FromResult<IReadOnlyCollection<MyData>>(initialData);
+        return Task.FromResult<IEnumerable<MyData>>(initialData);
     }
     
     private void SaveMyData(IEnumerable<MyData> items)

@@ -7,11 +7,45 @@ namespace OpenSmc.Data;
 
 public interface IDataSource
 {
-    bool GetTypeConfiguration(Type type, out TypeSource typeConfiguration);
+    IEnumerable<ITypeSource> TypeSources { get; }
     IEnumerable<Type> MappedTypes { get; }
     object Id { get; }
-    internal Task<WorkspaceState> InitializeAsync(IMessageHub hub, CancellationToken cancellationToken);
-    internal Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken);
+    void Change(DataChangeRequest request);
+    void Synchronize(DataChangedEvent @event);
+    WorkspaceState GetWorkspace();
+    bool ContainsInstance(object instance);
+    ITypeSource GetTypeSource(Type type);
+    Task InitializeAsync(CancellationToken cancellationToken);
+    IReadOnlyDictionary<string, IReadOnlyDictionary<object, object>> GetData();
+}
+
+public abstract record DataSource<TDataSource, TTypeSource>(object Id, IMessageHub Hub) : IDataSource
+where TDataSource : DataSource<TDataSource, TTypeSource>
+where TTypeSource: ITypeSource
+{
+
+    protected virtual TDataSource This => (TDataSource)this;
+    public TDataSource WithType(Type type)
+        => WithType(type, x => x);
+
+
+
+    IEnumerable<ITypeSource> IDataSource.TypeSources => TypeSources.Values.Cast<ITypeSource>();
+
+    protected ImmutableDictionary<Type, TTypeSource> TypeSources { get; init; } = ImmutableDictionary<Type, TTypeSource>.Empty;
+
+    public TDataSource WithTypeSource(Type type, TTypeSource typeSource)
+        => This with { TypeSources = TypeSources.SetItem(type, typeSource) };
+
+
+    protected virtual Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken)
+        => Task.FromResult<ITransaction>(EmptyTransaction.Instance);
+
+    public IEnumerable<Type> MappedTypes => TypeSources.Keys;
+
+    public ITypeSource GetTypeSource(string collectionName) =>
+        TypeSources.Values.FirstOrDefault(x => x.CollectionName == collectionName);
+
 
     /// <summary>
     /// Idea is to split the construction of the configuration in two parts:
@@ -20,115 +54,103 @@ public interface IDataSource
     /// 2. Build step where configuration is finished. This can be used to build up services, etc.
     /// </summary>
     /// <returns></returns>
-    IDataSource Build(IMessageHub hub);
-}
-public record DataSource<TDataSource>(object Id) : IDataSource
-where TDataSource : DataSource<TDataSource>
-{
-    public TDataSource WithType(Type type)
-        => WithType(type, x => x);
 
-    public TDataSource WithType(Type type, Func<TypeSource, TypeSource> config)
+
+    public void Change(DataChangeRequest request)
+    {
+        foreach (var g in request.Elements.GroupBy(e => e.GetType()))
+        {
+            if (TypeSources.TryGetValue(g.Key, out var typeSource))
+                typeSource.RequestChange(request with { Elements = g.ToArray() });
+        }
+    }
+
+    public void Synchronize(DataChangedEvent state)
+    {
+        foreach (var change in state.Changes)
+        {
+            var typeSource = GetTypeSource(change.Collection);
+            if (typeSource != null)
+                typeSource.SynchronizeChange(change);
+        }
+    }
+
+    //public TDataSource WithUpdate(Func<DataChangedEvent, WorkspaceState> updateAction)
+    //    => This with { UpdateAction = updateAction };
+    //internal Func<DataChangedEvent, WorkspaceState> UpdateAction { get; init; }
+
+    //private WorkspaceState ApplyPatch(DataChangedPatchEvent patch)
+    //{
+    //    throw new NotImplementedException();
+    //}
+
+
+    //public void Update(IEnumerable<ChangeDescriptor> descriptors)
+    //{
+    //    foreach (var e in descriptors.GroupBy(x => x.Request))
+    //    {
+    //        var changeRequest = e.Key;
+    //        foreach (var typeGroup in e.GroupBy(x => x.))
+    //            ProcessRequest(changeRequest, typeGroup.Key, typeGroup.Select(x => x.Instance));
+    //    }
+    //}
+
+    public WorkspaceState GetWorkspace() 
+        => new(this);
+
+    public virtual bool ContainsInstance(object instance) => TypeSources.ContainsKey(instance.GetType());
+
+    ITypeSource IDataSource.GetTypeSource(Type type) => GetTypeSource(type);
+    protected ITypeSource GetTypeSource(Type type) => TypeSources.GetValueOrDefault(type);
+
+
+    public virtual TDataSource WithType(Type type, Func<ITypeSource, ITypeSource> config)
         => (TDataSource)WithTypeMethod.MakeGenericMethod(type).InvokeAsFunction(this, config);
 
     private static readonly MethodInfo WithTypeMethod =
-        ReflectionHelper.GetMethodGeneric<DataSource<TDataSource>>(x => x.WithType<object>(default(Func<TypeSource, TypeSource>)));
+        ReflectionHelper.GetMethodGeneric<DataSource<TDataSource, TTypeSource>>(x => x.WithType<object>(default));
     public TDataSource WithType<T>()
         where T : class
         => WithType<T>(d => d);
 
-    // ReSharper disable once UnusedMethodReturnValue.Local
-    private TDataSource WithType<T>(
-        Func<TypeSource, TypeSource> configurator)
-        where T : class
-        => WithType<T>(x => (TypeSource<T>)configurator.Invoke(x));
+    protected abstract TDataSource WithType<T>(Func<ITypeSource, ITypeSource> config) where T : class;
 
-    public TDataSource WithType<T>(
-        Func<TypeSource<T>, TypeSource<T>> configurator)
-        where T : class
-        => WithType(configurator.Invoke(CreateTypeSource<T>()));
-
-    protected virtual TypeSource<T> CreateTypeSource<T>() where T : class
+    public virtual async Task InitializeAsync( CancellationToken cancellationToken)
     {
-        return new TypeSource<T>();
+        foreach (var typeSource in TypeSources.Values)
+            await typeSource.InitializeAsync(cancellationToken);
     }
 
-    protected TDataSource WithType<T>(TypeSource<T> typeSource)
-        where T : class
-    {
-        return (TDataSource)this with
-        {
-            TypeSources = TypeSources.SetItem(typeof(T), typeSource)
-        };
-    }
+    public IReadOnlyDictionary<string, IReadOnlyDictionary<object, object>> GetData()
+        => TypeSources.Values.ToDictionary
+        (
+            x => x.CollectionName,
+            x => x.GetData()
+        );
 
-    async Task<WorkspaceState> IDataSource.InitializeAsync(IMessageHub hub, CancellationToken cancellationToken)
-    {
-        return await InitializeAsync(hub, cancellationToken);
-    }
+}
 
-    protected virtual async Task<WorkspaceState> InitializeAsync(IMessageHub hub, CancellationToken cancellationToken)
-    {
-        var ret = new WorkspaceState(this);
-
-        foreach (var typeConfiguration in TypeSources.Values)
-        {
-            var initialized = await typeConfiguration.DoInitialize(cancellationToken);
-            ret = ret.SetData(typeConfiguration.ElementType, initialized);
-        }
-
-        return ret;
-    }
-
-
-    protected ImmutableDictionary<Type, TypeSource> TypeSources { get; init; } = ImmutableDictionary<Type, TypeSource>.Empty;
-
-
-    public TDataSource WithTransaction(Func<CancellationToken, Task<ITransaction>> startTransaction)
-        => (TDataSource)this with { StartTransactionAction = startTransaction };
-
-
-    Task<ITransaction> IDataSource.StartTransactionAsync(CancellationToken cancellationToken) => StartTransactionAction(cancellationToken);
+public record DataSource(object Id, IMessageHub Hub) : DataSource<DataSource, ITypeSource>(Id, Hub)
+{
+    public DataSource WithTransaction(Func<CancellationToken, Task<ITransaction>> startTransaction)
+        => this with { StartTransactionAction = startTransaction };
     internal Func<CancellationToken, Task<ITransaction>> StartTransactionAction { get; init; }
         = _ => Task.FromResult<ITransaction>(EmptyTransaction.Instance);
 
-    public IEnumerable<Type> MappedTypes => TypeSources.Keys;
-
-    public TypeSource GetTypeSource(string collectionName) =>
-        TypeSources.Values.FirstOrDefault(x => x.CollectionName == collectionName);
-
-    public bool GetTypeConfiguration(Type type, out TypeSource typeSource)
-    {
-        return TypeSources.TryGetValue(type, out typeSource);
-    }
+    protected override Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken)
+        => StartTransactionAction(cancellationToken);
 
 
-    /// <summary>
-    /// Idea is to split the construction of the configuration in two parts:
-    ///
-    /// 1. Fluent builder to configure types, mappings, db settings, etc
-    /// 2. Build step where configuration is finished. This can be used to build up services, etc.
-    /// </summary>
-    /// <returns></returns>
+    protected override DataSource WithType<T>(Func<ITypeSource, ITypeSource> config)
+    => WithType<T>(x => (TypeSourceWithType<T>)config(x));
 
-    IDataSource IDataSource.Build(IMessageHub hub) => Build(hub);
-    protected virtual IDataSource Build(IMessageHub hub)
-    {
-        var builtUp = Buildup(hub);
-        return builtUp with
-        {
-            TypeSources = TypeSources
-                .ToImmutableDictionary
-                (
-                    x => x.Key,
-                    // here we build up the elements
-                    x => x.Value.Build(builtUp)
-                )
-        };
-    }
 
-    protected virtual TDataSource Buildup(IMessageHub hub)
-        => (TDataSource)this;
+
+    public DataSource WithType<T>(
+        Func<TypeSourceWithType<T>, TypeSourceWithType<T>> configurator)
+        where T : class
+        => WithTypeSource(typeof(T), configurator.Invoke(new(Hub)));
+
+
+
 }
-
-public record DataSource(object Id) : DataSource<DataSource>(Id);

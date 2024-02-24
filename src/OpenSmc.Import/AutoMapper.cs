@@ -5,7 +5,6 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using Autofac.Core.Activators.Reflection;
 using OpenSmc.Collections;
-using OpenSmc.Data;
 using OpenSmc.DataStructures;
 using OpenSmc.Domain.Abstractions.Attributes;
 using OpenSmc.Reflection;
@@ -23,9 +22,9 @@ namespace OpenSmc.Import
     public static class AutoMapper
     {
 
-        public static ImmutableDictionary<string, TableMapping> Create(DataContext dataContext)
+        public static ImmutableDictionary<string, TableMapping> Create(IEnumerable<Type> types)
         {
-            return dataContext.DataTypes
+            return types
                 .Select(type => new KeyValuePair<string, TableMapping>(
                     type.Name,
                     new TableMapping(type.Name,
