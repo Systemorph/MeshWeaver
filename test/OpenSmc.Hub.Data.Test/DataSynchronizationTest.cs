@@ -3,9 +3,8 @@ using OpenSmc.Data;
 using OpenSmc.Data.Domain;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
-using Xunit;
 using Xunit.Abstractions;
-using static OpenSmc.Data.Domain.TestDomain;
+using static OpenSmc.Data.TestDomain.TestDomain;
 
 namespace OpenSmc.Hub.Data.Test;
 

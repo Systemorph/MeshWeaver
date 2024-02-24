@@ -1,15 +1,19 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using OpenSmc.Data;
 using OpenSmc.Messaging;
+using OpenSmc.Reflection;
+using System.Reflection;
 
 namespace OpenSmc.DataStorage.EntityFramework;
 
-public record EntityFrameworkDataSource(object Id, Action<DbContextOptionsBuilder> Database) : DataSourceWithStorage<EntityFrameworkDataSource>(Id)
+public record EntityFrameworkDataSource(object Id, 
+    IMessageHub Hub, 
+    EntityFrameworkDataStorage EntityFrameworkDataStorage) : DataSourceWithStorage<EntityFrameworkDataSource>(Id, Hub, EntityFrameworkDataStorage)
 {
-
-    public override IDataStorage CreateStorage(IMessageHub hub)
+    public override Task InitializeAsync(CancellationToken cancellationToken)
     {
-        return new EntityFrameworkDataStorage(ModelBuilder ?? ConvertDataSourceMappings, Database);
+        EntityFrameworkDataStorage.Initialize(ModelBuilder ?? ConvertDataSourceMappings);
+        return base.InitializeAsync(cancellationToken);
     }
 
     public EntityFrameworkDataSource WithModel(Action<ModelBuilder> modelBuilder)
@@ -23,4 +27,19 @@ public record EntityFrameworkDataSource(object Id, Action<DbContextOptionsBuilde
             builder.Model.AddEntityType(type);
     }
 
+    public override EntityFrameworkDataSource WithType(Type type, Func<ITypeSource, ITypeSource> config)
+        => (EntityFrameworkDataSource)WithTypeMethod.MakeGenericMethod(type).InvokeAsFunction(config);
+
+
+    private static readonly MethodInfo WithTypeMethod =
+        ReflectionHelper.GetMethodGeneric<EntityFrameworkDataSource>(x => x.WithType<object>(null));
+
+    protected override EntityFrameworkDataSource WithType<T>(Func<ITypeSource, ITypeSource> typeSource) 
+        where T : class => WithType<T>(x 
+        => (TypeSourceWithTypeWithDataStorage<T>)typeSource.Invoke(x));
+
+
+    public EntityFrameworkDataSource WithType<T>(Func<TypeSourceWithTypeWithDataStorage<T>, TypeSourceWithTypeWithDataStorage<T>> typeSource) 
+        where T : class 
+        => this with { TypeSources = TypeSources.Add(typeof(T), typeSource.Invoke(new TypeSourceWithTypeWithDataStorage<T>(Hub, Storage))) };
 }

@@ -1,14 +1,13 @@
-﻿using OpenSmc.Data;
-using OpenSmc.DataStructures;
+﻿using OpenSmc.DataStructures;
 using System.Collections.Immutable;
 
 namespace OpenSmc.Import;
 
 public record DomainTypeImporter
 {
-    public DomainTypeImporter(DataContext dataContext)
+    public DomainTypeImporter(IEnumerable<Type> types)
     {
-        TableMappings = AutoMapper.Create(dataContext);
+        TableMappings = AutoMapper.Create(types);
     }
 
     public IEnumerable<object> Import(IDataSet dataSet)

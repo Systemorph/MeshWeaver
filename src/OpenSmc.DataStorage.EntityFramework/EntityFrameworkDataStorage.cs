@@ -3,8 +3,9 @@ using OpenSmc.Data;
 
 namespace OpenSmc.DataStorage.EntityFramework
 {
-    public class EntityFrameworkDataStorage(Action<ModelBuilder> modelBuilder, Action<DbContextOptionsBuilder> dbContextOptionsBuilder) : IDataStorage
-    { 
+    public class EntityFrameworkDataStorage(Action<DbContextOptionsBuilder> dbContextOptionsBuilder) : IDataStorage
+    {
+        private Action<ModelBuilder> modelBuilder;
         private EntityFrameworkContext Context { get; set; } 
 
         private Task CreateContext(CancellationToken cancellationToken)
@@ -16,6 +17,9 @@ namespace OpenSmc.DataStorage.EntityFramework
         public IQueryable<T> Query<T>() where T : class
             => Context.Set<T>().AsQueryable();
 
+
+        public void Initialize(Action<ModelBuilder> builder)
+            => modelBuilder = builder;
 
         private class Transaction(EntityFrameworkDataStorage dataStorage) : ITransaction
         {
@@ -35,15 +39,26 @@ namespace OpenSmc.DataStorage.EntityFramework
             Context = null;
         }
 
-        public async Task<IReadOnlyCollection<T>> GetData<T>(CancellationToken cancellationToken) where T : class
-        {
-            return await Query<T>().ToArrayAsync(cancellationToken);
-        }
 
         public async Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken)
         {
             await CreateContext(cancellationToken);
             return new Transaction(this);
+        }
+
+        public void Add<T>(IEnumerable<T> instances) where T : class
+        {
+            throw new NotImplementedException();
+        }
+
+        public void Update<T>(IEnumerable<T> instances) where T : class
+        {
+            throw new NotImplementedException();
+        }
+
+        public void Delete<T>(IEnumerable<T> instances) where T : class
+        {
+            throw new NotImplementedException();
         }
 
         public void Add<T>(IReadOnlyCollection<T> instances) where T : class

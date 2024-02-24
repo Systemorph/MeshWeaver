@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Data.Persistence;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
@@ -29,7 +30,7 @@ public static class DataPluginExtensions
         var ret = new DataContext(hub);
         foreach (var func in dataPluginConfig)
             ret = func.Invoke(ret);
-        return ret.Build(hub);
+        return ret;
     }
 
     public static async Task<IReadOnlyCollection<T>> GetAll<T>(this IMessageHub hub, object dataSourceId, CancellationToken cancellationToken) where T : class
@@ -48,7 +49,13 @@ public static class DataPluginExtensions
     public static DataContext WithDataFromHub(this DataContext dataSource, object address)
         => WithDataFromHub(dataSource, address, ds => ds);
 
-    public static DataContext WithDataFromHub(this DataContext dataSource, object address, Func<HubDataSource, HubDataSource> configuration)
-        => dataSource.WithDataSource(address, _ => configuration.Invoke(new HubDataSource(address)));
+    public static DataContext WithDataFromHub(this DataContext dataSource, object address,
+        Func<HubDataSource, HubDataSource> configuration)
+        => dataSource.WithDataSourceBuilder(address, hub => configuration.Invoke(new HubDataSource(address, hub))
+        );
+    public static DataContext WithDataSource(this DataContext dataSource, object address,
+        Func<DataSource, DataSource> configuration)
+        => dataSource.WithDataSourceBuilder(address, hub => configuration.Invoke(new DataSource(address, hub))
+        );
 
 }

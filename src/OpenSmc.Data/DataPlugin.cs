@@ -1,81 +1,67 @@
-﻿using System.Collections.Immutable;
-using System.Reflection;
+﻿using System.Reflection;
 using OpenSmc.Data.Persistence;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 
 namespace OpenSmc.Data;
 
-public class DataPlugin : MessageHubPlugin<DataPluginState>, 
+public class DataPlugin : MessageHubPlugin<HubDataSource>, 
     IWorkspace,
     IMessageHandler<UpdateDataRequest>,
     IMessageHandler<DeleteDataRequest>
 {
-    private readonly IMessageHub persistenceHub;
-
-    public DataContext DataContext { get; }
-
     public DataPlugin(IMessageHub hub) : base(hub)
     {
-        DataContext = hub.GetDataConfiguration();
-        Register(HandleGetRequest); // This takes care of all Read (CRUD)
-        persistenceHub = hub.GetHostedHub(new PersistenceAddress(hub.Address), conf => conf.AddPlugin(h => new DataPersistencePlugin(h, DataContext)));
+        var dataContext = hub.GetDataConfiguration();
+        var persistenceHub = hub
+            .GetHostedHub(new PersistenceAddress(hub.Address),
+                conf => conf
+                    .AddPlugin(h => new DataPersistencePlugin(h, dataContext)));
+        Register(HandleGetRequest); // This takes care of GetRequest and GetManyRequest
+        InitializeState(dataContext.DataSources.Values
+            .SelectMany(ds => ds.TypeSources)
+            .Aggregate(new HubDataSource(persistenceHub.Address, persistenceHub), (ds, ts) =>
+                ds.WithType(ts.ElementType, t => t.WithKey(ts.GetKey))));
     }
 
     public override Task Initialized => initializeStateTask;
+
+    public IEnumerable<Type> MappedTypes => State.MappedTypes;
+
+    public void Update(IReadOnlyCollection<object> instances, UpdateOptions options)
+    {
+        throw new NotImplementedException();
+    }
+
+    public void Delete(IReadOnlyCollection<object> instances)
+    {
+        throw new NotImplementedException();
+    }
+
     private Task initializeStateTask;
     public override async Task StartAsync(CancellationToken cancellationToken)  // This loads the persisted state
     {
         await base.StartAsync(cancellationToken);
-
-        initializeStateTask = InitializeState(cancellationToken);
+        await State.InitializeAsync(cancellationToken);
     }
 
-    private async Task InitializeState(CancellationToken cancellationToken)
-    {
-        var response = await persistenceHub.AwaitResponse(new GetDataStateRequest(), cancellationToken);
-        base.InitializeState(new (response.Message));
-    }
 
-    IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(IMessageDelivery<UpdateDataRequest> request)
+    IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(IMessageDelivery<UpdateDataRequest> request) 
+        => RequestChange(request);
+
+    private IMessageDelivery RequestChange(IMessageDelivery<DataChangeRequest> request)
     {
-        UpdateImpl(request.Message.Elements, request.Message.Options);
-        Commit();
-        Hub.Post(new DataChangedEvent(Hub.Version), o => o.ResponseFor(request));
+        State.Change(request.Message);
+        var dataChanged = State.Commit();
+        if(dataChanged != null)
+            Hub.Post(dataChanged, o => o.ResponseFor(request));
         return request.Processed();
     }
 
-    private void UpdateImpl(IReadOnlyCollection<object> items, UpdateOptions options)
-    {
-        UpdateState(s =>
-            s with
-            {
-                Current = s.Current.Modify(items, (ws, i) => ws.Update(i, options?.SnapshotModeEnabled ?? false)),
-                UncommittedEvents = s.UncommittedEvents.Add(new UpdateDataRequest(items) { Options = options })
-            }
-        ); // update the state in memory (workspace)
-    }
 
     IMessageDelivery IMessageHandler<DeleteDataRequest>.HandleMessage(IMessageDelivery<DeleteDataRequest> request)
-    {
-        DeleteImpl(request.Message.Elements);
-        Commit();
-        Hub.Post(new DataChangedEvent(Hub.Version), o => o.ResponseFor(request));
-        return request.Processed();
+        => RequestChange(request);
 
-    }
-
-    private void DeleteImpl(IReadOnlyCollection<object> items)
-    {
-        UpdateState(s =>
-            s with
-            {
-                Current = s.Current.Modify(items, (ws, i) => ws.Delete(i)),
-                UncommittedEvents = s.UncommittedEvents.Add(new DeleteDataRequest(items))
-            }
-            );
-
-    }
 
     private IMessageDelivery HandleGetRequest(IMessageDelivery request)
     {
@@ -104,7 +90,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     // ReSharper disable once UnusedMethodReturnValue.Local
     private IMessageDelivery GetElement<T>(IMessageDelivery<GetRequest<T>> request) where T : class
     {
-        var item = State.Current.GetItem<T>(request.Message.Id);
+        var item = State.Get<T>(request.Message.Id);
         Hub.Post(item, o => o.ResponseFor(request));
         return request.Processed();
     }
@@ -114,7 +100,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     // ReSharper disable once UnusedMethodReturnValue.Local
     private IMessageDelivery GetElements<T>(IMessageDelivery<GetManyRequest<T>> request) where T : class
     {
-        var items = State.Current.GetItems<T>();
+        var items = State.Get<T>();
         var message = request.Message;
         var queryResult = items;
         if (message.PageSize is not null)
@@ -127,38 +113,21 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     public override bool IsDeferred(IMessageDelivery delivery)
         => base.IsDeferred(delivery) || delivery.Message.GetType().IsGetRequest();
 
-    public void Update(IReadOnlyCollection<object> instances, UpdateOptions options)
-    {
-        UpdateImpl(instances, options);
-    }
-
-    public void Delete(IReadOnlyCollection<object> instances)
-    {
-        DeleteImpl(instances);
-
-    }
 
     public void Commit()
     {
-        if (State.UncommittedEvents.Count == 0)
-            return;
-        persistenceHub.Post(new UpdateDataStateRequest(State.UncommittedEvents));
-        Hub.Post(new DataChangedEvent(Hub.Version), o => o.WithTarget(MessageTargets.Subscribers));
-        UpdateState(s => s with {UncommittedEvents = ImmutableList<DataChangeRequest>.Empty});
+        State.Commit();
     }
 
     public void Rollback()
     {
-        UpdateState(s => s with
-        {
-            Current = s.PreviouslySaved,
-            UncommittedEvents = ImmutableList<DataChangeRequest>.Empty
-        });
+        State.Rollback();
     }
+
 
     public IReadOnlyCollection<T> GetData<T>() where T : class
     {
-        return State.Current.GetItems<T>();
+        return State.Get<T>();
     }
 }
 
