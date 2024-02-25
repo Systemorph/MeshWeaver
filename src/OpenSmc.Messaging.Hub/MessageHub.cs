@@ -351,12 +351,6 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
 
 
 
-    IMessageDelivery IMessageHub.RegisterCallback<TResponse>(IMessageDelivery<IRequest<TResponse>> request,
-        Func<IMessageDelivery<TResponse>, IMessageDelivery> callback, CancellationToken cancellationToken)
-    {
-        RegisterCallback(request, d => callback((IMessageDelivery<TResponse>)d), cancellationToken);
-        return request.Forwarded();
-    }
 
     public ILogger Logger => logger;
 

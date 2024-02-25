@@ -41,5 +41,5 @@ public record EntityFrameworkDataSource(object Id,
 
     public EntityFrameworkDataSource WithType<T>(Func<TypeSourceWithTypeWithDataStorage<T>, TypeSourceWithTypeWithDataStorage<T>> typeSource) 
         where T : class 
-        => this with { TypeSources = TypeSources.Add(typeof(T), typeSource.Invoke(new TypeSourceWithTypeWithDataStorage<T>(Hub, Storage))) };
+        => this with { TypeSources = TypeSources.Add(typeof(T), typeSource.Invoke(new TypeSourceWithTypeWithDataStorage<T>(Id, Hub, Storage))) };
 }

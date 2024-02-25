@@ -4,30 +4,32 @@ using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 
 namespace OpenSmc.Data;
-
-public class DataPlugin : MessageHubPlugin<HubDataSource>, 
+public record DataPluginState(HubDataSource Workspace, DataContext DataContext);
+public class DataPlugin : MessageHubPlugin<DataPluginState>, 
     IWorkspace,
     IMessageHandler<UpdateDataRequest>,
     IMessageHandler<DeleteDataRequest>,
-    IMessageHandler<DataChangedEvent>
+    IMessageHandler<DataChangedEvent>,
+    IMessageHandler<StartDataSynchronizationRequest>
+
 {
+    private readonly IMessageHub persistenceHub;
+
     public DataPlugin(IMessageHub hub) : base(hub)
     {
         Register(HandleGetRequest); // This takes care of GetRequest and GetManyRequest
+        persistenceHub = hub.GetHostedHub(new PersistenceAddress(hub.Address), conf => conf);
     }
 
 
-    public IEnumerable<Type> MappedTypes => State.MappedTypes;
+    public IEnumerable<Type> MappedTypes => State.Workspace.MappedTypes;
 
     public void Update(IReadOnlyCollection<object> instances, UpdateOptions options)
-    {
-        throw new NotImplementedException();
-    }
+        => Hub.Post(new UpdateDataRequest(instances, options));
 
     public void Delete(IReadOnlyCollection<object> instances)
-    {
-        throw new NotImplementedException();
-    }
+        => Hub.Post(new DeleteDataRequest(instances));
+
 
     public override async Task StartAsync(CancellationToken cancellationToken)  // This loads the persisted state
     {
@@ -35,28 +37,34 @@ public class DataPlugin : MessageHubPlugin<HubDataSource>,
 
         var dataContext = Hub.GetDataConfiguration();
         await dataContext.InitializeAsync(cancellationToken);
-        var persistenceHub = Hub
-            .GetHostedHub(new PersistenceAddress(Hub.Address),
-                conf => conf
-                    .AddPlugin(h => new DataPersistencePlugin(h, dataContext)));
-        InitializeState(dataContext.DataSources.Values
-            .SelectMany(ds => ds.TypeSources)
-            .Aggregate(new HubDataSource(persistenceHub.Address, Hub), (ds, ts) =>
-                ds.WithType(ts.ElementType, t => t.WithKey(ts.GetKey))));
 
-        await State.InitializeAsync(cancellationToken);
+        var workspace = dataContext.DataSources.Values
+            .SelectMany(ds => ds.TypeSources)
+            .Aggregate(
+                new HubDataSource(Address, Hub), 
+                (ds, ts) =>
+                    ds.WithType(ts.ElementType, t => t.WithKey(ts.GetKey).WithPartition(ts.ElementType, ts.GetPartition)));
+
+
+        workspace.Initialize(dataContext.GetEntities());
+        InitializeState(new(workspace, dataContext));
+
     }
 
 
     IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(IMessageDelivery<UpdateDataRequest> request) 
         => RequestChange(request);
 
+
     private IMessageDelivery RequestChange(IMessageDelivery<DataChangeRequest> request)
     {
-        State.Change(request.Message);
-        var dataChanged = State.Commit();
-        if(dataChanged != null)
-            Hub.Post(dataChanged, o => o.ResponseFor(request));
+        var changes = State.Workspace.Change(request.Message).ToArray();
+
+        var dataChanged = State.Workspace.Commit();
+        Hub.Post(dataChanged, o => o.ResponseFor(request));
+
+        Task CommitToDataSource(CancellationToken cancellationToken) => State.DataContext.UpdateAsync(changes, cancellationToken);
+        persistenceHub.Schedule(CommitToDataSource);
         return request.Processed();
     }
 
@@ -92,7 +100,7 @@ public class DataPlugin : MessageHubPlugin<HubDataSource>,
     // ReSharper disable once UnusedMethodReturnValue.Local
     private IMessageDelivery GetElement<T>(IMessageDelivery<GetRequest<T>> request) where T : class
     {
-        var item = State.Get<T>(request.Message.Id);
+        var item = State.Workspace.Get<T>(request.Message.Id);
         Hub.Post(item, o => o.ResponseFor(request));
         return request.Processed();
     }
@@ -102,7 +110,7 @@ public class DataPlugin : MessageHubPlugin<HubDataSource>,
     // ReSharper disable once UnusedMethodReturnValue.Local
     private IMessageDelivery GetElements<T>(IMessageDelivery<GetManyRequest<T>> request) where T : class
     {
-        var items = State.Get<T>();
+        var items = State.Workspace.Get<T>();
         var message = request.Message;
         var queryResult = items;
         if (message.PageSize is not null)
@@ -125,25 +133,46 @@ public class DataPlugin : MessageHubPlugin<HubDataSource>,
 
     public void Commit()
     {
-        State.Commit();
+        State.Workspace.Commit();
     }
 
     public void Rollback()
     {
-        State.Rollback();
+        State.Workspace.Rollback();
     }
 
 
     public IReadOnlyCollection<T> GetData<T>() where T : class
     {
-        return State.Get<T>();
+        return State.Workspace.Get<T>();
     }
 
-    public IMessageDelivery HandleMessage(IMessageDelivery<DataChangedEvent> request)
+    IMessageDelivery IMessageHandler<DataChangedEvent>.HandleMessage(IMessageDelivery<DataChangedEvent> request)
     {
-        State.Synchronize(request.Message);
+        var dataSourceId = request.Sender;
+        var @event = request.Message;
+        State.DataContext.Synchronize(@event, dataSourceId);
+        State.Workspace.UpdateWorkspace(State.DataContext.GetEntities().GroupBy(x => x.Collection).ToDictionary(x => x.Key, x => (IEnumerable<EntityDescriptor>)x));
         return request.Processed();
     }
+
+    IMessageDelivery IMessageHandler<StartDataSynchronizationRequest>.HandleMessage(IMessageDelivery<StartDataSynchronizationRequest> request)
+        => StartSynchronization(request);
+
+    private IMessageDelivery StartSynchronization(IMessageDelivery<StartDataSynchronizationRequest> request)
+    {
+        var address = request.Sender;
+
+        var changes = State.Workspace.Subscribe(request.Message, address);
+        Hub.Post(changes, o => o.ResponseFor(request));
+        return request.Processed();
+    }
+
+
+
+
+
+
 
 }
 

@@ -33,7 +33,12 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
 
     Task<TResult> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request, Func<PostOptions, PostOptions> options, Func<IMessageDelivery<TResponse>, TResult> selector, CancellationToken cancellationToken = default);
 
-    IMessageDelivery RegisterCallback<TResponse>(IMessageDelivery<IRequest<TResponse>> request, Func<IMessageDelivery<TResponse>, IMessageDelivery> callback, CancellationToken cancellationToken = default);
+    Task<IMessageDelivery> RegisterCallback<TResponse>(IMessageDelivery<IRequest<TResponse>> request,
+        AsyncDelivery<TResponse> callback, CancellationToken cancellationToken = default)
+        => RegisterCallback((IMessageDelivery)request, (r, c) => callback((IMessageDelivery<TResponse>)r, c),
+            cancellationToken);
+    IMessageDelivery RegisterCallback<TResponse>(IMessageDelivery<IRequest<TResponse>> request, SyncDelivery<TResponse> callback, CancellationToken cancellationToken = default)
+        => RegisterCallback((IMessageDelivery) request, (r, _) => Task.FromResult(callback((IMessageDelivery<TResponse>)r)), default).Result;
     Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, SyncDelivery callback, CancellationToken cancellationToken = default)
         => RegisterCallback(delivery, (d,_) => Task.FromResult(callback(d)), cancellationToken);
 
@@ -62,10 +67,3 @@ public interface IMessageHub<out TAddress> : IMessageHub
 }
 
 
-public record MessageHubModuleConfiguration
-{
-    public IMessageHub Host { get; init; }
-
-    public IMessageDelivery RegisterCallback<TResponse>(IMessageDelivery<IRequest<TResponse>> request, Func<IMessageDelivery<TResponse>, IMessageDelivery> callback, CancellationToken cancellationToken = default)
-        => Host.RegisterCallback(request, callback, cancellationToken);
-}

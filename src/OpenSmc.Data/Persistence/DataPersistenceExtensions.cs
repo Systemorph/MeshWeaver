@@ -1,67 +1,72 @@
-﻿using System.Collections.Immutable;
-using System.Text.Json.Nodes;
-using Newtonsoft.Json;
+﻿using System.Text.Json.Nodes;
 using OpenSmc.Messaging;
 using OpenSmc.Serialization;
-using JsonSerializer = System.Text.Json.JsonSerializer;
 
 namespace OpenSmc.Data.Persistence;
 
 public static class DataPersistenceExtensions
 {
-    public static JsonNode SerializeWorkspaceData(this ISerializationService serializationService, IReadOnlyDictionary<string, IReadOnlyDictionary<object, object>> data)
-        => JsonNode.Parse(JsonSerializer.Serialize(serializationService.SerializeDataToDictionary(data)));
-
-    private static ImmutableDictionary<string, JsonArray> SerializeDataToDictionary(this ISerializationService serializationService, IReadOnlyDictionary<string, IReadOnlyDictionary<object, object>> data)
-        => data.Select
-            (
-                kvp =>
-                    new KeyValuePair<string, JsonArray>
+    public static JsonObject SerializeState(this ISerializationService serializationService, IEnumerable<EntityDescriptor> data) 
+        => new(
+            data.GroupBy(e => e.Collection)
+                .Select(g => new KeyValuePair<string, JsonNode>
                     (
-                        kvp.Key,
-                        serializationService.SerializeEntities(kvp.Key, kvp.Value)
+                        g.Key,
+                        serializationService.SerializeToArray(g)
                     )
-            )
-            .ToImmutableDictionary();
+                )
+        );
+
+    public static JsonArray SerializeToArray(this ISerializationService serializationService, IEnumerable<EntityDescriptor> data) 
+        => new(data.Select(serializationService.SerializeEntity).ToArray());
 
 
-    public static JsonArray SerializeEntities(this ISerializationService serializationService, string collection,
-        IReadOnlyDictionary<object, object> instancesByKey)
-        => new(instancesByKey.Select(kvp => serializationService.SerializeEntity(collection, kvp.Key, kvp.Value)).ToArray());
-        
-
-    private static JsonNode SerializeEntity(this ISerializationService serializationService, string collection,
-        object id, object instance)
-        => JsonNode.Parse(JsonSerializer.Serialize(serializationService.SerializeEntityToDictionary(collection, id, instance)));
-
-    private static ImmutableDictionary<string, object> SerializeEntityToDictionary(this ISerializationService serializationService, string collection, object id, object instance)
-        => JsonConvert.DeserializeObject<ImmutableDictionary<string, object>>(serializationService.Serialize(instance).Content)
-            .SetItem(ReservedProperties.Id, id)
-            .SetItem(ReservedProperties.Type, collection);
-
-
-
-    public static ImmutableDictionary<object, object> ParseIdAndObject(this ISerializationService serializationService,
-        JsonNode token)
-        => ParseIdAndObjectImpl(serializationService, (dynamic)token);
-
-    private static ImmutableDictionary<object, object> ParseIdAndObjectImpl(this ISerializationService serializationService, JsonArray array) 
-        =>
-        array.OfType<JsonObject>().Select(serializationService.ParseIdAndObjectOfSingleInstance)
-            .Where(x => !Equals(x, default(KeyValuePair<object, object>)))
-            .ToImmutableDictionary();
-
-    private static ImmutableDictionary<object, object> ParseIdAndObjectImpl(this ISerializationService serializationService, JsonObject jsonObject)
+    public static JsonNode SerializeEntity(this ISerializationService serializationService, EntityDescriptor entity)
     {
-        var kvp = serializationService.ParseIdAndObjectOfSingleInstance(jsonObject);
-        return kvp.Key == null ? ImmutableDictionary<object, object>.Empty : new[]{kvp}.ToImmutableDictionary();
+        var node = (JsonObject)JsonNode.Parse(serializationService.Serialize(entity.Entity).Content);
+        node!.Add(ReservedProperties.Id, serializationService.Serialize(entity.Id).Content);
+        node.Add(ReservedProperties.DataSource, serializationService.Serialize(entity.DataSource).Content);
+        //node.Add(ReservedProperties.Type, entity.Collection);
+        return node;
     }
-    private static ImmutableDictionary<object, object> ParseIdAndObjectImpl(this ISerializationService serializationService, JsonNode token) => throw new NotSupportedException();
 
-    private static KeyValuePair<object, object> ParseIdAndObjectOfSingleInstance(this ISerializationService serializationService, JsonObject node) 
-        =>
-        node.TryGetPropertyValue(ReservedProperties.Id, out var id) && id != default
-            ? new(serializationService.Deserialize(id.ToString()),
-                serializationService.Deserialize(node.ToString()))
-            : default;
+    public static IEnumerable<EntityDescriptor> DeserializeToEntities(this ISerializationService serializationService, string collection, JsonArray array)
+    {
+        foreach (var item in array.OfType<JsonObject>())
+        {
+            if (item.TryGetPropertyValue(ReservedProperties.Id, out var id)
+                && id != null
+                && item.TryGetPropertyValue(ReservedProperties.DataSource, out var dataSource)
+                && dataSource != null)
+                yield return new(serializationService.Deserialize(dataSource.ToString()), collection,
+                    serializationService.Deserialize(id.ToString()), serializationService.Deserialize(item.ToString()));
+        }
+    }
+
+
+    public static IEnumerable<EntityDescriptor> ConvertToData(this ISerializationService serializationService, JsonArray array)
+    {
+        return array
+            .Select(serializationService.DeserializeArrayElements);
+    }
+
+    private static EntityDescriptor DeserializeArrayElements(this ISerializationService serializationService, JsonNode node)
+    {
+        if (node is not JsonObject obj
+            || !obj.TryGetPropertyValue(ReservedProperties.Id, out var id)
+            || !obj.TryGetPropertyValue(ReservedProperties.DataSource, out var dataSource)
+            || !obj.TryGetPropertyValue(ReservedProperties.Type, out var collectionName)
+            )
+            return default;
+
+        return new EntityDescriptor(
+            serializationService.Deserialize(dataSource!.ToString()),
+            collectionName!.ToString(),
+            serializationService.Deserialize(id!.ToString()),
+            serializationService.Deserialize(obj.ToString())
+        );
+    }
+
 }
+
+public record EntityDescriptor(object DataSource, string Collection, object Id, object Entity);

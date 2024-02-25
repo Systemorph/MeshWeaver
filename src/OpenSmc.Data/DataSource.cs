@@ -1,7 +1,10 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
+using Microsoft.Extensions.Logging;
+using OpenSmc.Data.Persistence;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
+using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Data;
 
@@ -10,32 +13,34 @@ public interface IDataSource
     IEnumerable<ITypeSource> TypeSources { get; }
     IEnumerable<Type> MappedTypes { get; }
     object Id { get; }
-    void Change(DataChangeRequest request);
-    void Synchronize(DataChangedEvent @event);
-    WorkspaceState GetWorkspace();
+    IEnumerable<DataSourceUpdate> Change(DataChangeRequest request);
+    //Task SynchronizeAsync(DataChangedEvent @event, CancellationToken cancellationToken);
     bool ContainsInstance(object instance);
     ITypeSource GetTypeSource(Type type);
     Task InitializeAsync(CancellationToken cancellationToken);
-    IReadOnlyDictionary<string, IReadOnlyDictionary<object, object>> GetData();
+    IReadOnlyCollection<EntityDescriptor> GetData();
+    Task UpdateAsync(IEnumerable<DataSourceUpdate> update, CancellationToken cancellationToken);
 }
 
-public abstract record DataSource<TDataSource, TTypeSource>(object Id, IMessageHub Hub) : IDataSource
-where TDataSource : DataSource<TDataSource, TTypeSource>
-where TTypeSource: ITypeSource
+public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDataSource
+where TDataSource : DataSource<TDataSource>
 {
 
     protected virtual TDataSource This => (TDataSource)this;
     public TDataSource WithType(Type type)
         => WithType(type, x => x);
 
+    [Inject] private ILogger<DataSource<TDataSource>> logger;
 
+    IEnumerable<ITypeSource> IDataSource.TypeSources => TypeSources.Values;
 
-    IEnumerable<ITypeSource> IDataSource.TypeSources => TypeSources.Values.Cast<ITypeSource>();
+    protected ImmutableDictionary<Type, ITypeSource> TypeSources { get; init; } = ImmutableDictionary<Type, ITypeSource>.Empty;
 
-    protected ImmutableDictionary<Type, TTypeSource> TypeSources { get; init; } = ImmutableDictionary<Type, TTypeSource>.Empty;
-
-    public TDataSource WithTypeSource(Type type, TTypeSource typeSource)
-        => This with { TypeSources = TypeSources.SetItem(type, typeSource) };
+    public TDataSource WithTypeSource(Type type, ITypeSource typeSource)
+        => This with
+        {
+            TypeSources = TypeSources.SetItem(type, typeSource)
+        };
 
 
     protected virtual Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken)
@@ -46,57 +51,34 @@ where TTypeSource: ITypeSource
     public ITypeSource GetTypeSource(string collectionName) =>
         TypeSources.Values.FirstOrDefault(x => x.CollectionName == collectionName);
 
-
-    /// <summary>
-    /// Idea is to split the construction of the configuration in two parts:
-    ///
-    /// 1. Fluent builder to configure types, mappings, db settings, etc
-    /// 2. Build step where configuration is finished. This can be used to build up services, etc.
-    /// </summary>
-    /// <returns></returns>
-
-
-    public void Change(DataChangeRequest request)
+    public async Task UpdateAsync(IEnumerable<DataSourceUpdate> updates, CancellationToken cancellationToken)
     {
-        foreach (var g in request.Elements.GroupBy(e => e.GetType()))
+        try
         {
-            if (TypeSources.TryGetValue(g.Key, out var typeSource))
-                typeSource.RequestChange(request with { Elements = g.ToArray() });
+            await using var transaction = await StartTransactionAsync(cancellationToken);
+            foreach (var g in updates.GroupBy(x => x.Collection))
+            {
+                var typeSource = GetTypeSource(g.Key);
+                typeSource.Update(g);
+            }
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch (Exception e)
+        {
+            logger.LogError("Error committing data transaction: {exception}", e);
         }
     }
 
-    public void Synchronize(DataChangedEvent state)
+    public IEnumerable<DataSourceUpdate> Change(DataChangeRequest request)
     {
-        foreach (var change in state.Changes)
-        {
-            var typeSource = GetTypeSource(change.Collection);
-            if (typeSource != null)
-                typeSource.SynchronizeChange(change);
-        }
+        return request.Elements.GroupBy(e => e.GetType())
+            .SelectMany(g =>
+                TypeSources.GetValueOrDefault(g.Key)?.RequestChange(request with { Elements = g.ToArray() }) 
+                ?? Enumerable.Empty<DataSourceUpdate>());
     }
 
-    //public TDataSource WithUpdate(Func<DataChangedEvent, WorkspaceState> updateAction)
-    //    => This with { UpdateAction = updateAction };
-    //internal Func<DataChangedEvent, WorkspaceState> UpdateAction { get; init; }
-
-    //private WorkspaceState ApplyPatch(DataChangedPatchEvent patch)
-    //{
-    //    throw new NotImplementedException();
-    //}
 
 
-    //public void Update(IEnumerable<ChangeDescriptor> descriptors)
-    //{
-    //    foreach (var e in descriptors.GroupBy(x => x.Request))
-    //    {
-    //        var changeRequest = e.Key;
-    //        foreach (var typeGroup in e.GroupBy(x => x.))
-    //            ProcessRequest(changeRequest, typeGroup.Key, typeGroup.Select(x => x.Instance));
-    //    }
-    //}
-
-    public WorkspaceState GetWorkspace() 
-        => new(this);
 
     public virtual bool ContainsInstance(object instance) => TypeSources.ContainsKey(instance.GetType());
 
@@ -108,7 +90,7 @@ where TTypeSource: ITypeSource
         => (TDataSource)WithTypeMethod.MakeGenericMethod(type).InvokeAsFunction(this, config);
 
     private static readonly MethodInfo WithTypeMethod =
-        ReflectionHelper.GetMethodGeneric<DataSource<TDataSource, TTypeSource>>(x => x.WithType<object>(default));
+        ReflectionHelper.GetMethodGeneric<DataSource<TDataSource>>(x => x.WithType<object>(default));
     public TDataSource WithType<T>()
         where T : class
         => WithType<T>(d => d);
@@ -121,16 +103,16 @@ where TTypeSource: ITypeSource
             await typeSource.InitializeAsync(cancellationToken);
     }
 
-    public IReadOnlyDictionary<string, IReadOnlyDictionary<object, object>> GetData()
-        => TypeSources.Values.ToDictionary
-        (
-            x => x.CollectionName,
-            x => x.GetData()
-        );
+    public IReadOnlyCollection<EntityDescriptor> GetData()
+        => TypeSources.Values.SelectMany(ts => ts.GetData()).ToArray();
 
+    public Task UpdateAsync(DataSourceUpdate update, CancellationToken cancellationToken)
+    {
+        throw new NotImplementedException();
+    }
 }
 
-public record DataSource(object Id, IMessageHub Hub) : DataSource<DataSource, ITypeSource>(Id, Hub)
+public record DataSource(object Id, IMessageHub Hub) : DataSource<DataSource>(Id, Hub)
 {
     public DataSource WithTransaction(Func<CancellationToken, Task<ITransaction>> startTransaction)
         => this with { StartTransactionAction = startTransaction };
@@ -149,8 +131,7 @@ public record DataSource(object Id, IMessageHub Hub) : DataSource<DataSource, IT
     public DataSource WithType<T>(
         Func<TypeSourceWithType<T>, TypeSourceWithType<T>> configurator)
         where T : class
-        => WithTypeSource(typeof(T), configurator.Invoke(new(Hub)));
-
+        => WithTypeSource(typeof(T), configurator.Invoke(new(Id, Hub)));
 
 
 }

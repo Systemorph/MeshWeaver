@@ -12,10 +12,6 @@ public static class DataPluginExtensions
         return config
             .WithServices(sc => sc.AddSingleton<IWorkspace, DataPlugin>())
             .Set(config.GetListOfLambdas().Add(dataPluginConfiguration))
-            .WithRoutes(routes => routes
-                .RouteMessage<StartDataSynchronizationRequest>(_ => new PersistenceAddress(routes.Hub.Address))
-                .RouteMessage<StopDataSynchronizationRequest>(_ => new PersistenceAddress(routes.Hub.Address))
-            )
             .AddPlugin(hub => (DataPlugin)hub.ServiceProvider.GetRequiredService<IWorkspace>());
     }
 
@@ -33,12 +29,6 @@ public static class DataPluginExtensions
         return ret;
     }
 
-    public static async Task<IReadOnlyCollection<T>> GetAll<T>(this IMessageHub hub, object dataSourceId, CancellationToken cancellationToken) where T : class
-    {
-        // this is usually not to be written ==> just test code.
-        var persistenceHub = hub.GetHostedHub(new PersistenceAddress(hub.Address), null);
-        return (await persistenceHub.AwaitResponse(new GetManyRequest<T>(), cancellationToken)).Message.Items;
-    }
 
     internal static bool IsGetRequest(this Type type)
         => type.IsGenericType && GetRequestTypes.Contains(type.GetGenericTypeDefinition());
