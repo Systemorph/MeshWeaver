@@ -38,13 +38,13 @@ public sealed record DataContext(IMessageHub Hub)
     }
 
 
-    public IEnumerable<EntityDescriptor> GetEntities()
+    public IReadOnlyDictionary<string, IReadOnlyCollection<EntityDescriptor>> GetEntities()
     {
-        var allData = 
-            DataSources
+        return DataSources
             .Values
-            .SelectMany(ds => ds.GetData());
-        return allData;
+            .SelectMany(ds => ds.GetData().Values.SelectMany(x => x))
+            .GroupBy(x => x.Collection)
+            .ToDictionary(x => x.Key, x => (IReadOnlyCollection<EntityDescriptor>)x.ToArray());
     }
 
 

@@ -23,8 +23,8 @@ public interface ITypeSource
     string CollectionName { get; }
     object GetKey(object instance);
     ITypeSource WithKey(Func<object, object> key);
-    IEnumerable<EntityDescriptor> GetData();
-    IEnumerable<DataSourceUpdate> RequestChange(DataChangeRequest request);
+    IReadOnlyCollection<EntityDescriptor> GetData();
+    IReadOnlyCollection<DataSourceUpdate> RequestChange(DataChangeRequest request);
     ITypeSource WithPartition<T>(Func<T, object> partition);
     ITypeSource WithPartition(Type type, Func<object, object> partition);
     object GetData(object id);
@@ -45,7 +45,6 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
 
     protected readonly ISerializationService SerializationService = Hub.ServiceProvider.GetRequiredService<ISerializationService>();
     protected ImmutableDictionary<object,ImmutableDictionary<object, object>> CurrentState { get; set; }
-    protected ImmutableDictionary<object, ImmutableDictionary<object, object>> LastSavedState { get; set; }
 
 
     ITypeSource ITypeSource.WithKey(Func<object, object> key)
@@ -67,8 +66,8 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
     }
 
 
-    public IEnumerable<EntityDescriptor> GetData()
-        => CurrentState.SelectMany(x => x.Value.Select(y => new EntityDescriptor(x.Key, CollectionName,y.Key,y.Value)));
+    public IReadOnlyCollection<EntityDescriptor> GetData()
+        => CurrentState.SelectMany(x => x.Value.Select(y => new EntityDescriptor(x.Key, CollectionName,y.Key,y.Value))).ToArray();
 
     
     protected TTypeSource This => (TTypeSource)this;
@@ -84,17 +83,17 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
     }
 
 
-    public IEnumerable<DataSourceUpdate> RequestChange(DataChangeRequest request)
+    public IReadOnlyCollection<DataSourceUpdate> RequestChange(DataChangeRequest request)
     {
         var entityDescriptors = request.Elements.Select(ParseEntityDescriptor).ToArray();
         if (request is UpdateDataRequest)
-            return Update(entityDescriptors);
+            return Update(entityDescriptors).ToArray();
         if (request is DeleteDataRequest)
-            return Delete(entityDescriptors);
+            return Delete(entityDescriptors).ToArray();
         throw new ArgumentOutOfRangeException(nameof(request), request, null);
     }
 
-    private Func<object, object> PartitionFunction { get; init; } = _ => DataSource;
+    protected Func<object, object> PartitionFunction { get; init; } = _ => DataSource;
     public ITypeSource WithPartition<T>(Func<T, object> partition)
         => WithPartition(typeof(T), o => partition.Invoke((T)o));
 
@@ -186,14 +185,13 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
 
     private object GetDataSource(object instance)
     {
-        return DataSourceMapping.Invoke(instance);
+        return PartitionFunction.Invoke(instance);
     }
 
-    protected Func<object, object> DataSourceMapping { get; init; } = _ => DataSource;
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
-        LastSavedState = CurrentState = (await GetAsync(cancellationToken))
+        CurrentState = (await GetAsync(cancellationToken))
             .GroupBy(x => x.DataSource)
             .ToImmutableDictionary(x => x.Key, x => x.ToImmutableDictionary(y => y.Id, y => y.Entity));
     }
@@ -218,7 +216,7 @@ public record TypeSourceWithType<T>(object DataSource, IMessageHub Hub) : TypeSo
 
     public TypeSourceWithType<T> WithAdd(Action<IEnumerable<T>> add) => This with { AddAction = add };
 
-    protected Action<IEnumerable<T>> DeleteAction { get; init; }
+    protected Action<IEnumerable<T>> DeleteAction { get; init; } = _ => { };
     protected override void DeleteImpl(IEnumerable<T> instances) => DeleteAction.Invoke(instances);
 
 
@@ -269,9 +267,9 @@ where TTypeSource: TypeSourceWithType<T, TTypeSource>
     protected abstract void DeleteImpl(IEnumerable<T> instances);
 
 
-
+    
     public TTypeSource WithPartition(Func<T, object> partition)
-        => This with { DataSourceMapping = o => partition.Invoke((T)o) };
+        => This with { PartitionFunction = o => partition.Invoke((T)o) };
 
 
 
