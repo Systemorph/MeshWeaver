@@ -214,7 +214,7 @@ public class LayoutStackPlugin(IMessageHub hub) :
 
 internal record ViewGenerator(Func<IMessageDelivery, bool> Filter, Func<IMessageDelivery, SetAreaOptions, object> Generator);
 
-public record LayoutDefinition(IMessageHub Hub) : MessageHubModuleConfiguration
+public record LayoutDefinition(IMessageHub Hub) 
 {
     public IApplicationScope ApplicationScope => Hub.ServiceProvider.GetRequiredService<IApplicationScope>();
     internal LayoutStackControl InitialState { get; init; }

@@ -8,7 +8,7 @@ public interface IDataSourceWithStorage
 }
 
 public abstract record DataSourceWithStorage<TDataSource>(object Id, IMessageHub Hub, IDataStorage Storage)
-    : DataSource<TDataSource, ITypeSource>(Id, Hub), IDataSourceWithStorage
+    : DataSource<TDataSource>(Id, Hub), IDataSourceWithStorage
     where TDataSource : DataSourceWithStorage<TDataSource>
 {
     protected override Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken)

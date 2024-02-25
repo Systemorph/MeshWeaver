@@ -1,6 +1,4 @@
-﻿using OpenSmc.Activities;
-using OpenSmc.Messaging;
-using OpenSmc.ShortGuid;
+﻿using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
 
@@ -38,14 +36,10 @@ public record CreateRequest<TObject>(TObject Element) : IRequest<DataChangedEven
 /// <param name="JsonPaths">All the json paths to be synchronized. E.g. <code>"$.MyEntities"</code></param>
 public record StartDataSynchronizationRequest(IReadOnlyDictionary<string,string> JsonPaths) : IRequest<DataChangedEvent>;
 
-public record DataChangedEvent(long Version, IReadOnlyCollection<CollectionChange> Changes);
+public record DataChangedEvent(long Version, object Change, ChangeType Type);
 
 
-public record CollectionChange(string Collection, object Change, CollectionChangeType Type)
-{
-    public string Id { get; } = Guid.NewGuid().AsString();
-}
-public enum CollectionChangeType{Full, Patch}
+public enum ChangeType{Full, Patch}
 
 
 /// <summary>

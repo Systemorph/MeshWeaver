@@ -57,14 +57,14 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             new MyData("3", "CCC"),
         };
 
+
         // act
         var updateResponse = await client.AwaitResponse(new UpdateDataRequest(updateItems), o => o.WithTarget(new HostAddress()));
 
         await Task.Delay(300);
 
         // asserts
-        var expected = new ImportResponse(1, null);
-        updateResponse.Message.Should().BeEquivalentTo(expected);
+        updateResponse.Message.Should().BeOfType<DataChangedEvent>();
         var expectedItems = new MyData[]
         {
             new("1", "AAA"),
