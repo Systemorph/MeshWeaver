@@ -152,7 +152,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         var dataSourceId = request.Sender;
         var @event = request.Message;
         State.DataContext.Synchronize(@event, dataSourceId);
-        State.Workspace.UpdateWorkspace(State.DataContext.GetEntities().GroupBy(x => x.Collection).ToDictionary(x => x.Key, x => (IEnumerable<EntityDescriptor>)x));
+        State.Workspace.UpdateWorkspace(State.DataContext.GetEntities());
         return request.Processed();
     }
 

@@ -160,9 +160,12 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
     }
     #endregion
 
-    public void Initialize(IEnumerable<EntityDescriptor> allData)
+    public void Initialize(IReadOnlyDictionary<string, IReadOnlyCollection<EntityDescriptor>> allData)
     {
         CurrentWorkspace = serializationService.SerializeState(allData);
+        foreach (var typeSource in TypeSources.Values)
+            typeSource.Initialize(allData.GetValueOrDefault(typeSource.CollectionName) ??
+                                  Array.Empty<EntityDescriptor>());
     }
 
     public void Synchronize(DataChangedEvent @event)
@@ -194,7 +197,7 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
         );
     }
 
-    public void UpdateWorkspace(IReadOnlyDictionary<string, IEnumerable<EntityDescriptor>> descriptors)
+    public void UpdateWorkspace(IReadOnlyDictionary<string, IReadOnlyCollection<EntityDescriptor>> descriptors)
     {
         foreach (var typeSource in TypeSources.Values)
             typeSource.Initialize(descriptors.GetValueOrDefault(typeSource.CollectionName) ?? Array.Empty<EntityDescriptor>());

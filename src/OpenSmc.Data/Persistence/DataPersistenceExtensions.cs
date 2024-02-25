@@ -6,18 +6,18 @@ namespace OpenSmc.Data.Persistence;
 
 public static class DataPersistenceExtensions
 {
-    public static JsonObject SerializeState(this ISerializationService serializationService, IEnumerable<EntityDescriptor> data) 
+    public static JsonObject SerializeState(this ISerializationService serializationService, IReadOnlyDictionary<string, IReadOnlyCollection<EntityDescriptor>> data) 
         => new(
-            data.GroupBy(e => e.Collection)
+            data
                 .Select(g => new KeyValuePair<string, JsonNode>
                     (
                         g.Key,
-                        serializationService.SerializeToArray(g)
+                        serializationService.SerializeToArray(g.Value)
                     )
                 )
         );
 
-    public static JsonArray SerializeToArray(this ISerializationService serializationService, IEnumerable<EntityDescriptor> data) 
+    public static JsonArray SerializeToArray(this ISerializationService serializationService, IReadOnlyCollection<EntityDescriptor> data) 
         => new(data.Select(serializationService.SerializeEntity).ToArray());
 
 
@@ -44,10 +44,10 @@ public static class DataPersistenceExtensions
     }
 
 
-    public static IEnumerable<EntityDescriptor> ConvertToData(this ISerializationService serializationService, JsonArray array)
+    public static IReadOnlyCollection<EntityDescriptor> ConvertToData(this ISerializationService serializationService, JsonArray array)
     {
         return array
-            .Select(serializationService.DeserializeArrayElements);
+            .Select(serializationService.DeserializeArrayElements).ToArray();
     }
 
     private static EntityDescriptor DeserializeArrayElements(this ISerializationService serializationService, JsonNode node)

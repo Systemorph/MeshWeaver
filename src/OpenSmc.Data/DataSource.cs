@@ -18,7 +18,7 @@ public interface IDataSource
     bool ContainsInstance(object instance);
     ITypeSource GetTypeSource(Type type);
     Task InitializeAsync(CancellationToken cancellationToken);
-    IReadOnlyCollection<EntityDescriptor> GetData();
+    IReadOnlyDictionary<string, IReadOnlyCollection<EntityDescriptor>> GetData();
     Task UpdateAsync(IEnumerable<DataSourceUpdate> update, CancellationToken cancellationToken);
 }
 
@@ -103,8 +103,8 @@ where TDataSource : DataSource<TDataSource>
             await typeSource.InitializeAsync(cancellationToken);
     }
 
-    public IReadOnlyCollection<EntityDescriptor> GetData()
-        => TypeSources.Values.SelectMany(ts => ts.GetData()).ToArray();
+    public IReadOnlyDictionary<string, IReadOnlyCollection<EntityDescriptor>> GetData()
+        => TypeSources.Values.ToDictionary(ts => ts.CollectionName, ts => ts.GetData());
 
     public Task UpdateAsync(DataSourceUpdate update, CancellationToken cancellationToken)
     {
