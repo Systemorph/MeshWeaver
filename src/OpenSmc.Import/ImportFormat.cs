@@ -6,20 +6,19 @@ using OpenSmc.Messaging;
 
 namespace OpenSmc.Import;
 
-public record ImportFormat(string Format, IMessageHub Hub, IWorkspace Workspace)
+public record ImportFormat(string Format, IMessageHub Hub, IWorkspace Workspace, ImmutableList<ValidationFunction> Validations)
 {
     public const string Default = nameof(Default);
     private ImmutableList<ImportFunction> ImportFunctions { get; init; } = ImmutableList<ImportFunction>.Empty;
-    public ImmutableList<ValidationFunction> Validations { get; set; } = ImmutableList<ValidationFunction>.Empty;
 
     public ImportFormat WithImportFunction(ImportFunction importFunction) =>
         this with { ImportFunctions = ImportFunctions.Add(importFunction) };
 
-    public bool Import(ImportRequest importRequest, IDataSet dataSet,
-        ImmutableList<ValidationFunction> defaultValidations, IDictionary<object, object> validationCache)
+    public bool Import(ImportRequest importRequest, IDataSet dataSet)
     {
         var updateOptions = new UpdateOptions().SnapshotMode(importRequest.SnapshotMode);
         bool hasError = false;
+        var validationCache = new Dictionary<object, object>();
 
         foreach (var importFunction in ImportFunctions)
         {
@@ -28,7 +27,7 @@ public record ImportFormat(string Format, IMessageHub Hub, IWorkspace Workspace)
             {
                 if (item == null)
                     continue;
-                foreach (var validation in defaultValidations.Concat(Validations))
+                foreach (var validation in Validations)
                     hasError = !validation(item, new ValidationContext(item, Hub.ServiceProvider, validationCache)) || hasError;
             }
             if (!hasError)

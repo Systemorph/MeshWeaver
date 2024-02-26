@@ -1,4 +1,8 @@
 ﻿using System.Collections.Immutable;
+using System.ComponentModel.DataAnnotations;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.DataSetReader;
 using OpenSmc.DataSetReader.Csv;
@@ -9,18 +13,30 @@ namespace OpenSmc.Import;
 
 public record ImportConfiguration(IMessageHub Hub, IWorkspace Workspace)
 {
+    public IActivityService ActivityService { get; } = Hub.ServiceProvider.GetRequiredService<IActivityService>();
+
     internal ImmutableDictionary<string, ImportFormat> ImportFormats { get; init; } 
-        = ImmutableDictionary<string, ImportFormat>.Empty
-            .Add(ImportFormat.Default, new ImportFormat(ImportFormat.Default, Hub, Workspace).WithAutoMappings(domain => domain));
 
     public ImportConfiguration WithFormat(string format, Func<ImportFormat, ImportFormat> configuration)
         => this with
         {
-            ImportFormats = ImportFormats.SetItem(format,
-                configuration.Invoke(ImportFormats.GetValueOrDefault(format) ?? new ImportFormat(format, Hub, Workspace)))
+            ImportFormatBuilders = ImportFormatBuilders.SetItem(format, configuration)
         };
 
+    private ImmutableDictionary<string,Func<ImportFormat, ImportFormat>> ImportFormatBuilders { get; init; }
+    = ImmutableDictionary<string, Func<ImportFormat, ImportFormat>>.Empty.Add(ImportFormat.Default, f => f.WithAutoMappings(domain => domain));
 
+    public ImportConfiguration Build() =>
+        this with
+        {
+            ImportFormats = ImportFormatBuilders
+                .ToImmutableDictionary(
+                    x => x.Key,
+                x => x.Value.Invoke
+                    (
+                        new ImportFormat(x.Key, Hub, Workspace, Validations)
+                            .WithValidation(StandardValidations)))
+        };
 
     internal ImmutableDictionary<string, ReadDataSet> DataSetReaders { get; init; } =
         ImmutableDictionary<string, ReadDataSet>.Empty.Add(MimeTypes.Csv, (stream, options, _) => DataSetCsvSerializer.ReadAsync(stream, options))
@@ -52,6 +68,23 @@ public record ImportConfiguration(IMessageHub Hub, IWorkspace Workspace)
     public ImportConfiguration WithStreamReader(string sourceId, Func<ImportRequest, Stream> reader)
         => this with { StreamProviders = StreamProviders.SetItem(sourceId, reader) };
 
+    internal ImmutableList<ValidationFunction> Validations { get; init; } = ImmutableList<ValidationFunction>.Empty;
 
+    public ImportConfiguration WithValidation(ValidationFunction validation) =>
+        this with { Validations = Validations.Add(validation) };
+
+    private bool StandardValidations(object instance, ValidationContext validationContext)
+    {
+        var ret = true;
+        var validationResults = new List<ValidationResult>();
+        Validator.TryValidateObject(instance, validationContext, validationResults, true);
+
+        foreach (var validation in validationResults)
+        {
+            ActivityService.LogError(validation.ToString());
+            ret = false;
+        }
+        return ret;
+    }
 
 }
