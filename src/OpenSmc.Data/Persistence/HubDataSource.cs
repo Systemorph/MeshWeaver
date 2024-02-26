@@ -35,10 +35,10 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
         return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, dataChanged);
     }
 
-    public override IEnumerable<DataChangeRequest> Change(DataChangeRequest request) 
+    public override IReadOnlyCollection<DataChangeRequest> Change(DataChangeRequest request) 
         => request is not ExternalDataChangeRequest externalDataChange 
             ? base.Change(request) 
-            : Change(externalDataChange);
+            : Change(externalDataChange).ToArray();
 
     private IEnumerable<DataChangeRequest> Change(ExternalDataChangeRequest request)
     {
@@ -182,7 +182,7 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
         var patch = subscription.LastSynchronized.CreatePatch(serializedSubscription);
         if (!patch.Operations.Any())
             return null;
-        return new(Hub.Version, patch, ChangeType.Patch);
+        return new(Hub.Version, JsonSerializer.Serialize(patch), ChangeType.Patch);
     }
 
 

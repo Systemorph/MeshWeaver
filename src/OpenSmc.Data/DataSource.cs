@@ -13,7 +13,7 @@ public interface IDataSource
     IEnumerable<ITypeSource> TypeSources { get; }
     IEnumerable<Type> MappedTypes { get; }
     object Id { get; }
-    IEnumerable<DataChangeRequest> Change(DataChangeRequest request);
+    IReadOnlyCollection<DataChangeRequest> Change(DataChangeRequest request);
     bool ContainsInstance(object instance);
     ITypeSource GetTypeSource(Type type);
     Task InitializeAsync(CancellationToken cancellationToken);
@@ -75,7 +75,7 @@ where TDataSource : DataSource<TDataSource>
         return null;
     }
 
-    public virtual IEnumerable<DataChangeRequest> Change(DataChangeRequest request)
+    public virtual IReadOnlyCollection<DataChangeRequest> Change(DataChangeRequest request)
     {
         if (request is DataChangeRequestWithElements requestWithElements)
             return Change(requestWithElements);
@@ -84,11 +84,11 @@ where TDataSource : DataSource<TDataSource>
     }
 
 
-    protected virtual IEnumerable<DataChangeRequest> Change(DataChangeRequestWithElements request) 
+    protected virtual IReadOnlyCollection<DataChangeRequest> Change(DataChangeRequestWithElements request) 
         => request.Elements.GroupBy(e => e.GetType())
             .SelectMany(g =>
                 TypeSources.GetValueOrDefault(g.Key)?.RequestChange(request with { Elements = g.ToArray() })
-                ?? Enumerable.Empty<DataChangeRequest>());
+                ?? Enumerable.Empty<DataChangeRequest>()).ToArray();
 
     public virtual bool ContainsInstance(object instance) => TypeSources.ContainsKey(instance.GetType());
 
