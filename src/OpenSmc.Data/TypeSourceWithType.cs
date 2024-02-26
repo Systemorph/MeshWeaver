@@ -205,9 +205,13 @@ public record TypeSourceWithType<T>(object DataSource, IMessageHub Hub) : TypeSo
 
 }
 
-public abstract record TypeSourceWithType<T, TTypeSource>(object DataSource, IMessageHub Hub) : TypeSource<TTypeSource>(typeof(T), DataSource, typeof(T).FullName, Hub )
+public abstract record TypeSourceWithType<T, TTypeSource> : TypeSource<TTypeSource>
 where TTypeSource: TypeSourceWithType<T, TTypeSource>
 {
+    protected TypeSourceWithType(object DataSource, IMessageHub Hub) : base(typeof(T), DataSource, typeof(T).FullName, Hub)
+    {
+        Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().WithType(typeof(T));
+    }
 
     public TTypeSource WithKey(Func<T, object> key)
         => This with { Key = o => key.Invoke((T)o) };
@@ -233,9 +237,9 @@ where TTypeSource: TypeSourceWithType<T, TTypeSource>
         => This with { PartitionFunction = o => partition.Invoke((T)o) };
 
 
-
-
-
-
-
+    public void Deconstruct(out object DataSource, out IMessageHub Hub)
+    {
+        DataSource = this.DataSource;
+        Hub = this.Hub;
+    }
 }

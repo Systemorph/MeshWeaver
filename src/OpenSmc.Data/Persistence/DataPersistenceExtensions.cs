@@ -60,13 +60,12 @@ public static class DataPersistenceExtensions
             )
             return default;
 
+        var deserialize = serializationService.Deserialize(obj.ToString());
         return new EntityDescriptor(
             collectionName!.ToString(),
             serializationService.Deserialize(id!.ToString()),
-            serializationService.Deserialize(obj.ToString())
+            deserialize
         );
     }
 
 }
-
-public record EntityDescriptor(string Collection, object Id, object Entity);
