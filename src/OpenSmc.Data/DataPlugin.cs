@@ -32,7 +32,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         var response = await persistenceHub.AwaitResponse(new GetDataStateRequest(), cancellationToken);
         InitializeState(new (response.Message));
         initialize.SetResult();
-        await DataContext.InitializationAsync(Hub, cancellationToken);
+        await DataContext.InitializationAsync(Hub, State.Current, cancellationToken);
     }
 
     IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(IMessageDelivery<UpdateDataRequest> request)
@@ -83,10 +83,19 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
             var elementType = type.GetGenericArguments().First();
             return (IMessageDelivery)GetElementsMethod.MakeGenericMethod(elementType).InvokeAsFunction(this, request);
         }
+        else if (type == typeof(GetManyRequest))
+        {
+            var message = request.Message as GetManyRequest;
+            var dict = message.Types.ToImmutableDictionary(type => type, type => (IReadOnlyCollection<object>)GetItemsMethod.MakeGenericMethod(type).InvokeAsFunction(State.Current));
+            Hub.Post(new GetManyResponse(dict), o => o.ResponseFor(request));
+            return request.Processed();
+        }
         return request;
     }
 
     private static readonly MethodInfo GetElementsMethod = ReflectionHelper.GetMethodGeneric<DataPlugin>(x => x.GetElements<object>(null));
+
+    private static readonly MethodInfo GetItemsMethod = ReflectionHelper.GetMethodGeneric<CombinedWorkspaceState>(x => x.GetItems<object>());
 
     // ReSharper disable once UnusedMethodReturnValue.Local
     private IMessageDelivery GetElements<T>(IMessageDelivery<GetManyRequest<T>> request) where T : class
