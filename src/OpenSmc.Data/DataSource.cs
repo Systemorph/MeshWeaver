@@ -14,7 +14,6 @@ public interface IDataSource
     IEnumerable<Type> MappedTypes { get; }
     object Id { get; }
     IEnumerable<DataSourceUpdate> Change(DataChangeRequest request);
-    //Task SynchronizeAsync(DataChangedEvent @event, CancellationToken cancellationToken);
     bool ContainsInstance(object instance);
     ITypeSource GetTypeSource(Type type);
     Task InitializeAsync(CancellationToken cancellationToken);
@@ -69,16 +68,20 @@ where TDataSource : DataSource<TDataSource>
         }
     }
 
-    public IEnumerable<DataSourceUpdate> Change(DataChangeRequest request)
+    public virtual IEnumerable<DataSourceUpdate> Change(DataChangeRequest request)
     {
-        return request.Elements.GroupBy(e => e.GetType())
-            .SelectMany(g =>
-                TypeSources.GetValueOrDefault(g.Key)?.RequestChange(request with { Elements = g.ToArray() }) 
-                ?? Enumerable.Empty<DataSourceUpdate>());
+        if (request is DataChangeRequestWithElements requestWithElements)
+            return Change(requestWithElements);
+
+        throw new ArgumentOutOfRangeException($"No implementation found for {request.GetType().FullName}");
     }
 
 
-
+    protected virtual IEnumerable<DataSourceUpdate> Change(DataChangeRequestWithElements request) 
+        => request.Elements.GroupBy(e => e.GetType())
+            .SelectMany(g =>
+                TypeSources.GetValueOrDefault(g.Key)?.RequestChange(request with { Elements = g.ToArray() })
+                ?? Enumerable.Empty<DataSourceUpdate>());
 
     public virtual bool ContainsInstance(object instance) => TypeSources.ContainsKey(instance.GetType());
 
@@ -106,10 +109,6 @@ where TDataSource : DataSource<TDataSource>
     public IReadOnlyDictionary<string, IReadOnlyCollection<EntityDescriptor>> GetData()
         => TypeSources.Values.ToDictionary(ts => ts.CollectionName, ts => ts.GetData());
 
-    public Task UpdateAsync(DataSourceUpdate update, CancellationToken cancellationToken)
-    {
-        throw new NotImplementedException();
-    }
 }
 
 public record DataSource(object Id, IMessageHub Hub) : DataSource<DataSource>(Id, Hub)

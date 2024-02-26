@@ -57,7 +57,7 @@ public record RouteConfiguration(IMessageHub Hub)
                 if (delivery.Message is IRequest)
                     Hub.RegisterCallback(forwardedDelivery,
                         response => Hub.Post(response.Message,
-                            o => o.WithProperties(response.Properties).ResponseFor(delivery)), cancellationToken);
+                            o => o.WithProperties(response.Properties).ResponseFor(delivery)));
                 return Task.FromResult(delivery.Forwarded());
             },
             filter);

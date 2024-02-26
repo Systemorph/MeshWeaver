@@ -11,26 +11,65 @@ namespace OpenSmc.Data.Persistence;
 
 public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSource>(Id, Hub)
 {
-
     protected override Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken)
     {
         return Task.FromResult<ITransaction>(new DelegateTransaction(() => Commit(), Rollback));
     }
 
-    
 
-    public DataChangedEvent Commit()
+
+
+    private readonly bool isExternalDataSource = Id.Equals(Hub.Address);
+    public DataChangeResponse Commit()
     {
         var newWorkspace = GetSerializedWorkspace();
         var dataChanged = CurrentWorkspace == null
             ? new DataChangedEvent(Hub.Version, newWorkspace, ChangeType.Full)
-            : new DataChangedEvent(Hub.Version, CurrentWorkspace.CreatePatch(newWorkspace), ChangeType.Patch);
+            : new DataChangedEvent(Hub.Version, JsonSerializer.Serialize(CurrentWorkspace.CreatePatch(newWorkspace)), ChangeType.Patch);
+
+        if (isExternalDataSource)
+            CommitTransactionExternally(dataChanged);
 
         CurrentWorkspace = newWorkspace;
         UpdateSubscriptions();
-        return dataChanged;
+        return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, dataChanged);
     }
-    
+
+    public override IEnumerable<DataSourceUpdate> Change(DataChangeRequest request) 
+        => request is not ExternalDataChangeRequest externalDataChange 
+            ? base.Change(request) 
+            : Change(externalDataChange);
+
+    private IEnumerable<DataSourceUpdate> Change(ExternalDataChangeRequest request)
+    {
+        var change = request.Change;
+        var type = change.Type;
+        CurrentWorkspace = ParseWorkspace(type, change.Change.ToString());
+
+        foreach (var (collection, node) in CurrentWorkspace)
+        {
+            var typeSource = GetTypeSource(collection);
+            foreach (var update in typeSource.Update(serializationService.ConvertToData((JsonArray)node), true))
+                yield return update;
+        }
+    }
+
+
+    private void CommitTransactionExternally(DataChangedEvent dataChanged)
+    {
+        var request = Hub.Post(new ExternalDataChangeRequest(dataChanged), o => o.WithTarget(Id));
+        Hub.RegisterCallback(request, d => HandleCommitResponse(d));
+    }
+
+    private IMessageDelivery HandleCommitResponse(IMessageDelivery<DataChangeResponse> response)
+    {
+        if (response.Message.Status == DataChangeStatus.Committed)
+            return response.Processed();
+
+        // TODO V10: Here we have to put logic to revert the state if commit has failed. (26.02.2024, Roland Bürgi)
+        return response.Ignored();
+    }
+
     private readonly ISerializationService serializationService =
         Hub.ServiceProvider.GetRequiredService<ISerializationService>();
 
@@ -175,6 +214,17 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
         if (string.IsNullOrEmpty(change))
             return;
 
+        CurrentWorkspace = ParseWorkspace(type, change);
+
+        UpdateWorkspace(CurrentWorkspace
+            .ToDictionary(
+                x => x.Key,
+                x => serializationService.ConvertToData((JsonArray)x.Value))
+        );
+    }
+
+    private JsonObject ParseWorkspace(ChangeType type, string change)
+    {
         var currentWorkspace = type switch
         {
             ChangeType.Full =>
@@ -188,13 +238,7 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
 
         if (currentWorkspace == null)
             throw new ArgumentException("Cannot deserialize workspace");
-        CurrentWorkspace = currentWorkspace;
-
-        UpdateWorkspace(CurrentWorkspace
-            .ToDictionary(
-                x => x.Key,
-                x => serializationService.ConvertToData((JsonArray)x.Value))
-        );
+        return currentWorkspace;
     }
 
     public void UpdateWorkspace(IReadOnlyDictionary<string, IReadOnlyCollection<EntityDescriptor>> descriptors)

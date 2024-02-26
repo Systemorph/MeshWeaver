@@ -11,7 +11,6 @@ namespace OpenSmc.Data;
 public record DataSourceUpdate(
     string Collection,
     object DataSource,
-    IReadOnlyCollection<object> ToBeAdded,
     IReadOnlyCollection<object> ToBeUpdated,
     IReadOnlyCollection<object> ToBeDeleted);
 
@@ -29,7 +28,7 @@ public interface ITypeSource
     ITypeSource WithPartition(Type type, Func<object, object> partition);
     object GetData(object id);
     void Update(DataSourceUpdate dataSourceUpdates);
-
+    IEnumerable<DataSourceUpdate> Update(IEnumerable<EntityDescriptor> entities, bool snapshot = false);
     void Update(IEnumerable<DataSourceUpdate> dataSourceUpdates)
     {
         foreach (var dataSourceUpdate in dataSourceUpdates)
@@ -85,13 +84,19 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
 
     public IReadOnlyCollection<DataSourceUpdate> RequestChange(DataChangeRequest request)
     {
-        var entityDescriptors = request.Elements.Select(ParseEntityDescriptor).ToArray();
-        if (request is UpdateDataRequest)
-            return Update(entityDescriptors).ToArray();
-        if (request is DeleteDataRequest)
-            return Delete(entityDescriptors).ToArray();
+        switch (request)
+        {
+            case UpdateDataRequest update:
+                return Update(update.Elements.Select(ParseEntityDescriptor)).ToArray();
+
+            case DeleteDataRequest delete:
+                return Delete(delete.Elements.Select(ParseEntityDescriptor)).ToArray();
+
+        }
         throw new ArgumentOutOfRangeException(nameof(request), request, null);
     }
+
+
 
     protected Func<object, object> PartitionFunction { get; init; } = _ => DataSource;
     public ITypeSource WithPartition<T>(Func<T, object> partition)
@@ -119,7 +124,7 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
 
 
 
-    protected IEnumerable<DataSourceUpdate> Delete(IReadOnlyCollection<EntityDescriptor> entities)
+    protected IEnumerable<DataSourceUpdate> Delete(IEnumerable<EntityDescriptor> entities)
     {
         foreach (var g in entities.GroupBy(e => e.DataSource))
         {
@@ -127,8 +132,7 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
             if (!CurrentState.TryGetValue(g.Key, out var existing))
                 continue;
             CurrentState = CurrentState.SetItem(g.Key, existing.RemoveRange(all.Select(a => a.Id)));
-            var change = new DataSourceUpdate(CollectionName, g.Key, Array.Empty<object>(), Array.Empty<object>(),
-                all.Select(a => a.Entity).ToArray());
+            var change = new DataSourceUpdate(CollectionName, g.Key,  Array.Empty<object>(), all.Select(a => a.Entity).ToArray());
             Update(change);
             yield return change;
         }
@@ -136,31 +140,28 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
 
 
     
-    public IEnumerable<DataSourceUpdate> Update(IReadOnlyCollection<EntityDescriptor> entities, bool snapshot = false)
+    public IEnumerable<DataSourceUpdate> Update(IEnumerable<EntityDescriptor> entities, bool snapshot = false)
     {
         foreach (var g in entities.GroupBy(e => e.DataSource))
         {
-            var toBeAdded = ImmutableDictionary<object, object>.Empty;
             var toBeUpdated = ImmutableDictionary<object, object>.Empty;
             var entitiesByDataSource =
                 CurrentState.GetValueOrDefault(g.Key) ?? ImmutableDictionary<object, object>.Empty;
             foreach (var entityDescriptor in g)
             {
-                if (entitiesByDataSource.TryGetValue(entityDescriptor.Id, out var existingEntity))
-                {
-                    if (!existingEntity.Equals(entityDescriptor.Entity))
-                        toBeUpdated = toBeUpdated.SetItem(entityDescriptor.Id, entityDescriptor.Entity);
-                }
+                if (entitiesByDataSource.TryGetValue(entityDescriptor.Id, out var existingEntity)
+                   && !existingEntity.Equals(entityDescriptor.Entity))
+                    toBeUpdated = toBeUpdated.SetItem(entityDescriptor.Id, entityDescriptor.Entity);
                 else
-                    toBeAdded = toBeAdded.SetItem(entityDescriptor.Id, entityDescriptor.Entity);
+                    toBeUpdated = toBeUpdated.SetItem(entityDescriptor.Id, entityDescriptor.Entity);
             }
 
             var toBeDeleted = snapshot
-                ? entitiesByDataSource.RemoveRange(entitiesByDataSource.Keys.Where(k => !toBeUpdated.ContainsKey(k) && !toBeAdded.ContainsKey(k)))
+                ? entitiesByDataSource.RemoveRange(entitiesByDataSource.Keys.Where(k => !toBeUpdated.ContainsKey(k)))
                 : ImmutableDictionary<object, object>.Empty;
 
-            CurrentState = CurrentState.SetItem(g.Key, entitiesByDataSource.RemoveRange(toBeDeleted.Keys).SetItems(toBeAdded).SetItems(toBeUpdated));
-            var dataSourceUpdate = new DataSourceUpdate(CollectionName, g.Key, toBeAdded.Values.ToArray(), toBeUpdated.Values.ToArray(),
+            CurrentState = CurrentState.SetItem(g.Key, entitiesByDataSource.RemoveRange(toBeDeleted.Keys).SetItems(toBeUpdated));
+            var dataSourceUpdate = new DataSourceUpdate(CollectionName, g.Key,  toBeUpdated.Values.ToArray(),
                 toBeDeleted.Values.ToArray());
             Update(dataSourceUpdate);
             yield return dataSourceUpdate;
@@ -170,8 +171,15 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
     }
     public void Update(DataSourceUpdate updates)
     {
-        AddImpl(updates.ToBeAdded);
-        UpdateImpl(updates.ToBeUpdated);
+        var toBeUpdated = new List<object>();
+        var toBeAdded = new List<object>();
+        foreach(var instance in updates.ToBeUpdated)
+            if (!CurrentState.ContainsKey(GetKey(instance)))
+                toBeAdded.Add(instance);
+            else toBeUpdated.Add(instance);
+
+        UpdateImpl(toBeUpdated);
+        AddImpl(toBeAdded);
         DeleteImpl(updates.ToBeDeleted);
     }
 
