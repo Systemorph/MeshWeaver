@@ -19,7 +19,7 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
 
 
 
-    private readonly bool isExternalDataSource = Id.Equals(Hub.Address);
+    private readonly bool isExternalDataSource = !Id.Equals(Hub.Address);
     public DataChangeResponse Commit()
     {
         var newWorkspace = GetSerializedWorkspace();
@@ -35,12 +35,12 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
         return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, dataChanged);
     }
 
-    public override IEnumerable<DataSourceUpdate> Change(DataChangeRequest request) 
+    public override IEnumerable<DataChangeRequest> Change(DataChangeRequest request) 
         => request is not ExternalDataChangeRequest externalDataChange 
             ? base.Change(request) 
             : Change(externalDataChange);
 
-    private IEnumerable<DataSourceUpdate> Change(ExternalDataChangeRequest request)
+    private IEnumerable<DataChangeRequest> Change(ExternalDataChangeRequest request)
     {
         var change = request.Change;
         var type = change.Type;
@@ -58,7 +58,7 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
     private void CommitTransactionExternally(DataChangedEvent dataChanged)
     {
         var request = Hub.Post(new ExternalDataChangeRequest(dataChanged), o => o.WithTarget(Id));
-        Hub.RegisterCallback(request, d => HandleCommitResponse(d));
+        Hub.RegisterCallback(request, HandleCommitResponse);
     }
 
     private IMessageDelivery HandleCommitResponse(IMessageDelivery<DataChangeResponse> response)

@@ -1,5 +1,6 @@
 ﻿using OpenSmc.Messaging;
 using System.Collections.Immutable;
+using System.Data;
 using OpenSmc.Data.Persistence;
 
 namespace OpenSmc.Data;
@@ -56,16 +57,27 @@ public sealed record DataContext(IMessageHub Hub)
     
     }
 
-    public async Task UpdateAsync(IReadOnlyCollection<DataSourceUpdate> changes, CancellationToken cancellationToken)
-    {
-        foreach (var change in changes)
-        {
-            change.ToBeUpdated.GroupBy(MapToDataSource);
-        }
-    }
 
     private object MapToDataSource(object instance)
     {
         return DataSources.Values.Select(ds => ds.MapInstanceToPartition(instance)).FirstOrDefault(x => x != null);
+    }
+
+    public async Task UpdateAsync(IReadOnlyCollection<DataChangeRequest> changes, CancellationToken cancellationToken)
+    {
+        foreach (var databaseGroup in 
+                 changes.OfType<DataChangeRequestWithElements>()
+                     .SelectMany(c =>
+                         c.Elements
+                             .GroupBy(MapToDataSource)
+                             .Select(g => new { DataSource = g.Key, Request = c with { Elements = g.ToArray() } }
+                             ))
+                     .GroupBy(x => x.DataSource))
+        {
+            if (databaseGroup.Key == null)
+                throw new DataException("Could not map entities");
+            var dataSource = GetDataSource(databaseGroup.Key);
+            await dataSource.UpdateAsync(databaseGroup.Select(x => x.Request).ToArray(), cancellationToken);
+        }
     }
 }

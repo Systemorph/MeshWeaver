@@ -13,12 +13,12 @@ public interface IDataSource
     IEnumerable<ITypeSource> TypeSources { get; }
     IEnumerable<Type> MappedTypes { get; }
     object Id { get; }
-    IEnumerable<DataSourceUpdate> Change(DataChangeRequest request);
+    IEnumerable<DataChangeRequest> Change(DataChangeRequest request);
     bool ContainsInstance(object instance);
     ITypeSource GetTypeSource(Type type);
     Task InitializeAsync(CancellationToken cancellationToken);
     IReadOnlyDictionary<string, IReadOnlyCollection<EntityDescriptor>> GetData();
-    Task UpdateAsync(IEnumerable<DataSourceUpdate> update, CancellationToken cancellationToken);
+    Task UpdateAsync(IEnumerable<DataChangeRequest> update, CancellationToken cancellationToken);
     object MapInstanceToPartition(object instance);
 }
 
@@ -51,15 +51,14 @@ where TDataSource : DataSource<TDataSource>
     public ITypeSource GetTypeSource(string collectionName) =>
         TypeSources.Values.FirstOrDefault(x => x.CollectionName == collectionName);
 
-    public async Task UpdateAsync(IEnumerable<DataSourceUpdate> updates, CancellationToken cancellationToken)
+    public async Task UpdateAsync(IEnumerable<DataChangeRequest> updates, CancellationToken cancellationToken)
     {
         try
         {
             await using var transaction = await StartTransactionAsync(cancellationToken);
-            foreach (var g in updates.GroupBy(x => x.Collection))
+            foreach (var change in updates)
             {
-                var typeSource = GetTypeSource(g.Key);
-                typeSource.Update(g);
+                Change(change);
             }
             await transaction.CommitAsync(cancellationToken);
         }
@@ -76,7 +75,7 @@ where TDataSource : DataSource<TDataSource>
         return null;
     }
 
-    public virtual IEnumerable<DataSourceUpdate> Change(DataChangeRequest request)
+    public virtual IEnumerable<DataChangeRequest> Change(DataChangeRequest request)
     {
         if (request is DataChangeRequestWithElements requestWithElements)
             return Change(requestWithElements);
@@ -85,11 +84,11 @@ where TDataSource : DataSource<TDataSource>
     }
 
 
-    protected virtual IEnumerable<DataSourceUpdate> Change(DataChangeRequestWithElements request) 
+    protected virtual IEnumerable<DataChangeRequest> Change(DataChangeRequestWithElements request) 
         => request.Elements.GroupBy(e => e.GetType())
             .SelectMany(g =>
                 TypeSources.GetValueOrDefault(g.Key)?.RequestChange(request with { Elements = g.ToArray() })
-                ?? Enumerable.Empty<DataSourceUpdate>());
+                ?? Enumerable.Empty<DataChangeRequest>());
 
     public virtual bool ContainsInstance(object instance) => TypeSources.ContainsKey(instance.GetType());
 
