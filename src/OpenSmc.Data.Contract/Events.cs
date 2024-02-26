@@ -1,7 +1,15 @@
-﻿using OpenSmc.Activities;
+﻿using System.Collections.Immutable;
+using OpenSmc.Activities;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
+
+public record GetManyRequest(IReadOnlyCollection<Type> Types) : IRequest<GetManyResponse>
+{
+    public object Options { get; init; }
+}
+
+public record GetManyResponse(IImmutableDictionary<Type, IReadOnlyCollection<object>> ItemsByType);
 
 public record GetManyRequest<T> : IRequest<GetManyResponse<T>>
 {
@@ -10,7 +18,8 @@ public record GetManyRequest<T> : IRequest<GetManyResponse<T>>
     public object Options { get; init; }
 };
 
-public record GetManyResponse<T>(int Total, IReadOnlyCollection<T> Items)
+public abstract record GetManyResponseBase(int Total);
+public record GetManyResponse<T>(int Total, IReadOnlyCollection<T> Items) : GetManyResponseBase(Total)
 {
     public static GetManyResponse<T> Empty() => new(0, Array.Empty<T>());
 }

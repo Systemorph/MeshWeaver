@@ -9,7 +9,6 @@ public sealed record DataContext(IMessageHub Hub)
 {
     internal ImmutableDictionary<object,IDataSource> DataSources { get; private set; } = ImmutableDictionary<object, IDataSource>.Empty;
 
-
     public IDataSource GetDataSource(object id) => DataSources.GetValueOrDefault(id);
 
     public IEnumerable<Type> MappedTypes => DataSources.Values.SelectMany(ds => ds.MappedTypes);
