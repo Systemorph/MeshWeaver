@@ -46,6 +46,7 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
         var getRequest = new GetRequest<BusinessUnit> { Id = businessUnit.SystemName };
         var loadedInstance = await client.AwaitResponse(getRequest);
         loadedInstance.Message.Should().Be(businessUnit);
+        await Task.Delay(100);
         loadedInstance = await client.AwaitResponse(getRequest, o => o.WithTarget(new HostAddress()));
         loadedInstance.Message.Should().Be(businessUnit);
     }

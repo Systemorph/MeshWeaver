@@ -87,7 +87,9 @@ public static class TestDomain
         ReflectionHelper.GetStaticMethodGeneric(() => ConfigureCategory<object>(null, null));
     private static DataSource ConfigureCategory<T>(DataSource dataSource, IEnumerable<object> data)
         where T : class
-        => dataSource.WithType<T>(o => o.WithInitialData(_ => Task.FromResult(data.Cast<T>())));
+        => dataSource
+            .WithType<T>(o => o
+                .WithInitialData(_ => Task.FromResult(data.Cast<T>())));
 
     public static readonly Dictionary<Type, IEnumerable<object>> ContractDomain
         =
