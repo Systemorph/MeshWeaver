@@ -1,4 +1,5 @@
-﻿using System.Text.Json.Nodes;
+﻿using System.Text.Json;
+using System.Text.Json.Nodes;
 using OpenSmc.Messaging;
 using OpenSmc.Serialization;
 
@@ -23,10 +24,12 @@ public static class DataPersistenceExtensions
 
     public static JsonNode SerializeEntity(this ISerializationService serializationService, EntityDescriptor entity)
     {
-        var node = (JsonObject)JsonNode.Parse(serializationService.Serialize(entity.Entity).Content);
-        node!.Add(ReservedProperties.Id, serializationService.Serialize(entity.Id).Content);
-        node.Add(ReservedProperties.DataSource, serializationService.Serialize(entity.DataSource).Content);
-        //node.Add(ReservedProperties.Type, entity.Collection);
+        if (entity.Entity is JsonObject node)
+            return node;
+        node = (JsonObject)JsonNode.Parse(JsonSerializer.Serialize(entity.Entity));
+        node!.TryAdd(ReservedProperties.Id, serializationService.Serialize(entity.Id).Content);
+        node.TryAdd(ReservedProperties.DataSource, serializationService.Serialize(entity.DataSource).Content);
+        node.TryAdd(ReservedProperties.Type, entity.Collection);
         return node;
     }
 

@@ -47,14 +47,14 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
         => WithTypeSource(typeof(T), typeSource.Invoke(new TypeSourceWithType<T>(Id, Hub)));
 
 
+    private readonly ITypeRegistry typeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
     public override Task InitializeAsync(CancellationToken cancellationToken)
     {
+        typeRegistry.WithTypes(TypeSources.Values.Select(t => t.ElementType));
         var collections = TypeSources
             .Values
             .Select(ts => (ts.CollectionName, Path: $"$['{ts.CollectionName}']")).ToDictionary(x => x.CollectionName, x => x.Path);
         var startDataSynchronizationRequest = new StartDataSynchronizationRequest(collections);
-
-
 
         var subscribeRequest =
             Hub.Post(startDataSynchronizationRequest,
@@ -123,7 +123,7 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
             };
             if (match != null)
             {
-                serializedSubscription.Add(collection, match);
+                serializedSubscription.Add(collection, match.DeepClone());
             }
 
         }
