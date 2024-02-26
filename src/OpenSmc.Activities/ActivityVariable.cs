@@ -1,6 +1,5 @@
 ﻿using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
-using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Activities
 {
@@ -13,18 +12,17 @@ namespace OpenSmc.Activities
 
         public string Start()
         {
-            var id = Guid.NewGuid().AsString();
-
-            if (currentActivity != null)
-            {
-                parents[id] = currentActivity;
-            }
-
 
             //need to know id before, to start scope with known id
-            currentActivity = new ActivityLog(id, DateTime.UtcNow, null);
+            var newActivity = new ActivityLog(DateTime.UtcNow, null);
+            if (currentActivity != null)
+            {
+                parents[newActivity.Id] = currentActivity;
+            }
+            currentActivity = newActivity;
+
             ChangeStatus(ActivityLogStatus.Started);
-            return currentActivity.Id;
+            return newActivity.Id;
         }
 
         public void ChangeStatus(string status)
