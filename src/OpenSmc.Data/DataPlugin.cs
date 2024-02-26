@@ -111,6 +111,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
 
     private static readonly MethodInfo GetElementsMethod = ReflectionHelper.GetMethodGeneric<DataPlugin>(x => x.GetElements<object>(null));
 
+
     // ReSharper disable once UnusedMethodReturnValue.Local
     private IMessageDelivery GetElements<T>(IMessageDelivery<GetManyRequest<T>> request) where T : class
     {

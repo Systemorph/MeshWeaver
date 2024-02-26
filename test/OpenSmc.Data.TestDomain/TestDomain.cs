@@ -1,7 +1,6 @@
 ﻿using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Reflection;
-using OpenSmc.Data.Domain;
 using OpenSmc.Domain.Abstractions;
 using OpenSmc.Domain.Abstractions.Attributes;
 using OpenSmc.Reflection;
@@ -95,11 +94,9 @@ public static class TestDomain
         =
         new()
         {
-            {
-                typeof(Contract), new Contract[]
-                {
-                }
-            }
+            { typeof(Contract), new Contract[] { } },
+            { typeof(Country), new Country[] { } },
+            { typeof(Discount), new Discount[] { } },
         };
 
     public record Address

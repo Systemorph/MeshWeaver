@@ -10,7 +10,7 @@ public record ImportFormat(string Format, IMessageHub Hub, IWorkspace Workspace)
 {
     public const string Default = nameof(Default);
     private ImmutableList<ImportFunction> ImportFunctions { get; init; } = ImmutableList<ImportFunction>.Empty;
-    public ImmutableList<ValidationFunction> Validations { get; set; }
+    public ImmutableList<ValidationFunction> Validations { get; set; } = ImmutableList<ValidationFunction>.Empty;
 
     public ImportFormat WithImportFunction(ImportFunction importFunction) =>
         this with { ImportFunctions = ImportFunctions.Add(importFunction) };
@@ -28,7 +28,7 @@ public record ImportFormat(string Format, IMessageHub Hub, IWorkspace Workspace)
             {
                 if (item == null)
                     continue;
-                foreach (var validation in defaultValidations)
+                foreach (var validation in defaultValidations.Concat(Validations))
                     hasError = !validation(item, new ValidationContext(item, Hub.ServiceProvider, validationCache)) || hasError;
             }
             if (!hasError)
@@ -43,6 +43,14 @@ public record ImportFormat(string Format, IMessageHub Hub, IWorkspace Workspace)
         => WithAutoMappings(mapping => mapping);
     public ImportFormat WithAutoMappings(Func<DomainTypeImporter, DomainTypeImporter> config) 
         => WithImportFunction((_, ds, _, _) => config(new DomainTypeImporter(Workspace.MappedTypes)).Import(ds));
+
+    public ImportFormat WithValidation(ValidationFunction validationRule)
+    {
+        if (validationRule == null)
+            return this;
+        return this with { Validations = Validations.Add(validationRule) };
+    }
+
 }
 
 public delegate bool ValidationFunction(object instance, ValidationContext context);

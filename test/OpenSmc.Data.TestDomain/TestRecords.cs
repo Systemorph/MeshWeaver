@@ -1,7 +1,7 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using OpenSmc.Domain.Abstractions.Attributes;
 
-namespace OpenSmc.Data.Domain
+namespace OpenSmc.Data.TestDomain
 {
     public record MyRecord
     {
