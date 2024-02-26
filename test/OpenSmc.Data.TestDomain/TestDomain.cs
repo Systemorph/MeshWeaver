@@ -79,6 +79,7 @@ public static class TestDomain
         {
             { typeof(Contract), new Contract[] { } },
             { typeof(Country), new Country[] { } },
+            { typeof(Discount), new Discount[] { } },
         };
 
     public record Address
