@@ -19,6 +19,7 @@ public interface IDataSource
     Task InitializeAsync(CancellationToken cancellationToken);
     IReadOnlyDictionary<string, IReadOnlyCollection<EntityDescriptor>> GetData();
     Task UpdateAsync(IEnumerable<DataSourceUpdate> update, CancellationToken cancellationToken);
+    object MapInstanceToPartition(object instance);
 }
 
 public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDataSource
@@ -66,6 +67,13 @@ where TDataSource : DataSource<TDataSource>
         {
             logger.LogError("Error committing data transaction: {exception}", e);
         }
+    }
+
+    public object MapInstanceToPartition(object instance)
+    {
+        if (MappedTypes.Contains(instance.GetType()))
+            return Id;
+        return null;
     }
 
     public virtual IEnumerable<DataSourceUpdate> Change(DataChangeRequest request)

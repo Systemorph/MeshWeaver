@@ -28,7 +28,6 @@ public static class DataPersistenceExtensions
             return node;
         node = (JsonObject)JsonNode.Parse(JsonSerializer.Serialize(entity.Entity));
         node!.TryAdd(ReservedProperties.Id, serializationService.Serialize(entity.Id).Content);
-        node.TryAdd(ReservedProperties.DataSource, serializationService.Serialize(entity.DataSource).Content);
         node.TryAdd(ReservedProperties.Type, entity.Collection);
         return node;
     }
@@ -41,7 +40,7 @@ public static class DataPersistenceExtensions
                 && id != null
                 && item.TryGetPropertyValue(ReservedProperties.DataSource, out var dataSource)
                 && dataSource != null)
-                yield return new(serializationService.Deserialize(dataSource.ToString()), collection,
+                yield return new(collection,
                     serializationService.Deserialize(id.ToString()), serializationService.Deserialize(item.ToString()));
         }
     }
@@ -57,13 +56,11 @@ public static class DataPersistenceExtensions
     {
         if (node is not JsonObject obj
             || !obj.TryGetPropertyValue(ReservedProperties.Id, out var id)
-            || !obj.TryGetPropertyValue(ReservedProperties.DataSource, out var dataSource)
             || !obj.TryGetPropertyValue(ReservedProperties.Type, out var collectionName)
             )
             return default;
 
         return new EntityDescriptor(
-            serializationService.Deserialize(dataSource!.ToString()),
             collectionName!.ToString(),
             serializationService.Deserialize(id!.ToString()),
             serializationService.Deserialize(obj.ToString())
@@ -72,4 +69,4 @@ public static class DataPersistenceExtensions
 
 }
 
-public record EntityDescriptor(object DataSource, string Collection, object Id, object Entity);
+public record EntityDescriptor(string Collection, object Id, object Entity);

@@ -29,7 +29,7 @@ public record TypeSourceWithTypeWithDataStorage<T>(object DataSource, IMessageHu
     public override async Task<IReadOnlyCollection<EntityDescriptor>> GetAsync(CancellationToken cancellationToken)
     {
         await using var transaction = await Storage.StartTransactionAsync(cancellationToken);
-        return await Storage.Query<T>().AsAsyncEnumerable().Select(e => new EntityDescriptor(DataSource, CollectionName,Key(e),e)).ToArrayAsync(cancellationToken);
+        return await Storage.Query<T>().AsAsyncEnumerable().Select(e => new EntityDescriptor(CollectionName,Key(e),e)).ToArrayAsync(cancellationToken);
     }
 
 }
