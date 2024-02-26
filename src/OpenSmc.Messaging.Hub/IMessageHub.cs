@@ -37,13 +37,15 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
         AsyncDelivery<TResponse> callback, CancellationToken cancellationToken = default)
         => RegisterCallback((IMessageDelivery)request, (r, c) => callback((IMessageDelivery<TResponse>)r, c),
             cancellationToken);
-    IMessageDelivery RegisterCallback<TResponse>(IMessageDelivery<IRequest<TResponse>> request, SyncDelivery<TResponse> callback, CancellationToken cancellationToken = default)
-        => RegisterCallback((IMessageDelivery) request, (r, _) => Task.FromResult(callback((IMessageDelivery<TResponse>)r)), default).Result;
-    Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, SyncDelivery callback, CancellationToken cancellationToken = default)
+    Task<IMessageDelivery> RegisterCallback<TResponse>(IMessageDelivery<IRequest<TResponse>> request, SyncDelivery<TResponse> callback)
+        => RegisterCallback((IMessageDelivery) request, (r, _) => Task.FromResult(callback((IMessageDelivery<TResponse>)r)), default);
+    Task<IMessageDelivery> RegisterCallback(IMessageDelivery request, SyncDelivery callback)
+        => RegisterCallback(request, (r, _) => Task.FromResult(callback(r)), default);
+    Task<IMessageDelivery> RegisterCallback<TResponse>(IMessageDelivery<IRequest<TResponse>> delivery, SyncDelivery<TResponse> callback, CancellationToken cancellationToken)
         => RegisterCallback(delivery, (d,_) => Task.FromResult(callback(d)), cancellationToken);
 
     // ReSharper disable once UnusedMethodReturnValue.Local
-    Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, AsyncDelivery callback, CancellationToken cancellationToken = default);
+    Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, AsyncDelivery callback, CancellationToken cancellationToken);
     Task<bool> FlushAsync();
     public void Schedule(Func<CancellationToken, Task> action);
 

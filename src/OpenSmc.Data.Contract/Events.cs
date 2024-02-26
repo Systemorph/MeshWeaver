@@ -1,4 +1,5 @@
-﻿using OpenSmc.Messaging;
+﻿using OpenSmc.Activities;
+using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
 
@@ -14,7 +15,7 @@ public record GetManyResponse<T>(int Total, IReadOnlyCollection<T> Items)
     public static GetManyResponse<T> Empty() => new(0, Array.Empty<T>());
 }
 
-public record UpdateDataRequest(IReadOnlyCollection<object> Elements) : DataChangeRequest(Elements)
+public record UpdateDataRequest(IReadOnlyCollection<object> Elements) : DataChangeRequestWithElements(Elements)
 {
     public UpdateDataRequest(params object[] Elements)
         : this((IReadOnlyCollection<object>)Elements)
@@ -23,9 +24,15 @@ public record UpdateDataRequest(IReadOnlyCollection<object> Elements) : DataChan
     public UpdateOptions Options { get; init; }
 }
 
-public record DeleteDataRequest(IReadOnlyCollection<object> Elements) : DataChangeRequest(Elements);
+public record DeleteDataRequest(IReadOnlyCollection<object> Elements) : DataChangeRequestWithElements(Elements);
 
-public abstract record DataChangeRequest(IReadOnlyCollection<object> Elements) : IRequest<DataChangedEvent>;
+public abstract record DataChangeRequestWithElements(IReadOnlyCollection<object> Elements) : DataChangeRequest;
+
+public abstract record DataChangeRequest : IRequest<DataChangeResponse>;
+
+public record DataChangeResponse(long Version, DataChangeStatus Status, DataChangedEvent Changes);
+
+public enum DataChangeStatus{Committed, Failed}
 
 public record CreateRequest<TObject>(TObject Element) : IRequest<DataChangedEvent> { public object Options { get; init; } };
 
@@ -48,3 +55,7 @@ public enum ChangeType{Full, Patch}
 /// <param name="Ids"></param>
 public record StopDataSynchronizationRequest(params string[] Ids);
 
+public record ExternalDataChangeRequest(DataChangedEvent Change) : DataChangeRequest
+{
+    public string Id { get; init; } = Guid.NewGuid().ToString();
+}
