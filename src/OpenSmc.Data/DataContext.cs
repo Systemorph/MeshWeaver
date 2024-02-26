@@ -56,12 +56,16 @@ public sealed record DataContext(IMessageHub Hub)
     
     }
 
-    public async Task UpdateAsync(IEnumerable<DataSourceUpdate> changes, CancellationToken cancellationToken)
+    public async Task UpdateAsync(IReadOnlyCollection<DataSourceUpdate> changes, CancellationToken cancellationToken)
     {
-        foreach (var update in changes.GroupBy(c => c.DataSource))
+        foreach (var change in changes)
         {
-            var dataSource = GetDataSource(update.Key);
-            await dataSource.UpdateAsync(update, cancellationToken);
+            change.ToBeUpdated.GroupBy(MapToDataSource);
         }
+    }
+
+    private object MapToDataSource(object instance)
+    {
+        return DataSources.Values.Select(ds => ds.MapInstanceToPartition(instance)).FirstOrDefault(x => x != null);
     }
 }
