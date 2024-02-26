@@ -11,7 +11,7 @@ public record TypeSourceWithTypeWithDataStorage<T>(object DataSource, IMessageHu
 
 
 
-    protected override void AddImpl(IEnumerable<T> instances)
+    protected virtual void AddImpl(IEnumerable<T> instances)
     {
         Storage.Add(instances);
     }

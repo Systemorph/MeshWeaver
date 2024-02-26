@@ -8,10 +8,6 @@ using OpenSmc.Reflection;
 using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
-public record DataSourceUpdate(
-    string Collection,
-    IReadOnlyCollection<object> ToBeUpdated,
-    IReadOnlyCollection<object> ToBeDeleted);
 
 public interface ITypeSource
 {
@@ -22,17 +18,11 @@ public interface ITypeSource
     object GetKey(object instance);
     ITypeSource WithKey(Func<object, object> key);
     IReadOnlyCollection<EntityDescriptor> GetData();
-    IReadOnlyCollection<DataSourceUpdate> RequestChange(DataChangeRequest request);
+    IReadOnlyCollection<DataChangeRequest> RequestChange(DataChangeRequest request);
     ITypeSource WithPartition<T>(Func<T, object> partition);
     ITypeSource WithPartition(Type type, Func<object, object> partition);
     object GetData(object id);
-    void Update(DataSourceUpdate dataSourceUpdates);
-    IEnumerable<DataSourceUpdate> Update(IReadOnlyCollection<EntityDescriptor> entities, bool snapshot = false);
-    void Update(IEnumerable<DataSourceUpdate> dataSourceUpdates)
-    {
-        foreach (var dataSourceUpdate in dataSourceUpdates)
-            Update(dataSourceUpdate);
-    }
+    IEnumerable<DataChangeRequest> Update(IReadOnlyCollection<EntityDescriptor> entities, bool snapshot = false);
 
     object GetPartition(object instance);
 }
@@ -84,7 +74,7 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
     }
 
 
-    public IReadOnlyCollection<DataSourceUpdate> RequestChange(DataChangeRequest request)
+    public IReadOnlyCollection<DataChangeRequest> RequestChange(DataChangeRequest request)
     {
         switch (request)
         {
@@ -121,44 +111,42 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
 
 
 
-    protected IEnumerable<DataSourceUpdate> Delete(IReadOnlyCollection<EntityDescriptor> entities)
+    protected IEnumerable<DataChangeRequest> Delete(IReadOnlyCollection<EntityDescriptor> entities)
     {
             CurrentState = CurrentState.RemoveRange(entities.Select(a => a.Id));
-            var change = new DataSourceUpdate(CollectionName,   Array.Empty<object>(), entities.Select(a => a.Entity).ToArray());
-            Update(change);
-            yield return change;
+            var toBeDeleted = entities.Select(a => a.Entity).ToArray();
+            DeleteImpl(toBeDeleted);
+            yield return new DeleteDataRequest(toBeDeleted);
     }
 
 
-    
-    public IEnumerable<DataSourceUpdate> Update(IReadOnlyCollection<EntityDescriptor> entities, bool snapshot = false)
+
+    public IEnumerable<DataChangeRequest> Update(IReadOnlyCollection<EntityDescriptor> entities, bool snapshot = false)
     {
-            var toBeUpdated = entities.ToImmutableDictionary(x => x.Id, x => x.Entity);
+        var toBeUpdated = entities
+            .Where(e => CurrentState.TryGetValue(e.Id, out var existing) && !existing.Equals(e.Entity))
+            .Select(e => e)
+            .ToArray();
 
-            var toBeDeleted = snapshot
-                ? CurrentState.RemoveRange(CurrentState.Keys.Where(k => !toBeUpdated.ContainsKey(k)))
-                : ImmutableDictionary<object, object>.Empty;
+        if (toBeUpdated.Any())
+        {
+            CurrentState =
+                CurrentState.SetItems(toBeUpdated.Select(x => new KeyValuePair<object, object>(x.Id, x.Entity)));
+            UpdateImpl(toBeUpdated);
+            yield return new UpdateDataRequest(toBeUpdated.Select(x => x.Entity).ToArray());
+        }
 
-            CurrentState = CurrentState.RemoveRange(toBeDeleted.Keys).SetItems(toBeUpdated);
-            var dataSourceUpdate = new DataSourceUpdate(CollectionName,  toBeUpdated.Values.ToArray(),
-                toBeDeleted.Values.ToArray());
-            Update(dataSourceUpdate);
-            yield return dataSourceUpdate;
+        var toBeDeleted = snapshot
+            ? CurrentState.RemoveRange(entities.Select(x => x.Id))
+            : ImmutableDictionary<object, object>.Empty;
+
+        if (toBeDeleted.Any())
+        {
+            CurrentState = CurrentState.RemoveRange(toBeDeleted.Keys);
+            yield return new DeleteDataRequest(toBeDeleted.Select(x => x.Value).ToArray());
+        }
 
 
-    }
-    public void Update(DataSourceUpdate updates)
-    {
-        var toBeUpdated = new List<object>();
-        var toBeAdded = new List<object>();
-        foreach(var instance in updates.ToBeUpdated)
-            if (!CurrentState.ContainsKey(GetKey(instance)))
-                toBeAdded.Add(instance);
-            else toBeUpdated.Add(instance);
-
-        UpdateImpl(toBeUpdated);
-        AddImpl(toBeAdded);
-        DeleteImpl(updates.ToBeDeleted);
     }
 
 
@@ -166,7 +154,6 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
         => PartitionFunction.Invoke(instance);
 
     protected abstract void UpdateImpl(IEnumerable<object> instances);
-    protected abstract void AddImpl(IEnumerable<object> instances);
     protected abstract void DeleteImpl(IEnumerable<object> instances);
 
 
@@ -191,7 +178,7 @@ public record TypeSourceWithType<T>(object DataSource, IMessageHub Hub) : TypeSo
     protected Action<IEnumerable<T>> AddAction { get; init; } = _ => { };
 
 
-    protected override void AddImpl(IEnumerable<T> instances) => AddAction.Invoke(instances);
+    protected virtual void AddImpl(IEnumerable<T> instances) => AddAction.Invoke(instances);
 
     public TypeSourceWithType<T> WithAdd(Action<IEnumerable<T>> add) => This with { AddAction = add };
 
@@ -228,11 +215,6 @@ where TTypeSource: TypeSourceWithType<T, TTypeSource>
     public TTypeSource WithCollectionName(string collectionName) =>
         This with { CollectionName = collectionName };
 
-    protected override void AddImpl(IEnumerable<object> instances)
-        => AddImpl(instances.Cast<T>());
-
-
-    protected abstract void AddImpl(IEnumerable<T> instances);
 
     protected override void UpdateImpl(IEnumerable<object> instances)
     => UpdateImpl(instances.Cast<T>());
