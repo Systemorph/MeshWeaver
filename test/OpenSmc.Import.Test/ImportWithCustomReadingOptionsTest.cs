@@ -8,7 +8,6 @@ using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using Xunit;
 using Xunit.Abstractions;
-using OpenSmc.Data.TestDomain;
 
 namespace OpenSmc.Import.Test;
 
