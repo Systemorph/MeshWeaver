@@ -96,6 +96,31 @@ FoundationYear,ContractType
         ret.Message.Items.Should().HaveCount(0);
     }
 
+    [Fact]
+    public async Task ImportOfPercentageTest()
+    {
+        const string content = @"@@Discount
+    DoubleValue,Country
+    0.4,14,2,0";
+
+        var client = GetClient();
+        var importRequest = new ImportRequest(content);
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
+        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Failed);
+        importResponse.Message.Log.Messages.OfType<LogMessage>()
+            .Where(x => x.LogLevel == LogLevel.Error)
+            .Select(x => x.Message).Should()
+            .BeEquivalentTo("The IntValue field must have type from these: System.Double, System.Decimal, System.Single.",
+                "The DecimalValue field value should be in interval from 10 to 20.",
+                ImportPlugin.ValidationStageFailed);
+
+        var ret = await client.AwaitResponse(new GetManyRequest<TestDomain.Discount>(),
+            o => o.WithTarget(new HostAddress()));
+
+        ret.Message.Items.Should().HaveCount(0);
+    }
+
+
     //        [Fact]
     //        public async Task ImportWithValidationRuleTest()
     //        {
@@ -224,27 +249,6 @@ FoundationYear,ContractType
     //            ret.Should().HaveCount(0);
     //            var countries = Workspace.GetItems<ImportTestDomain.Country>();
     //            countries.Should().HaveCount(0);
-    //        }
-
-
-    //        [Fact]
-    //        public async Task ImportOfPercentageTest()
-    //        {
-    //            const string content = @"@@Discount
-    //DoubleValue,Country
-    //0.4,14,2,0";
-
-    //            var log = await ImportVariable.FromString(content)
-    //                                          .WithType<ImportTestDomain.Discount>()
-    //                                          .ExecuteAsync();
-
-    //            var errors = log.Errors().Select(x => x.Message).ToArray();
-    //            errors.Should().BeEquivalentTo("The IntValue field must have type from these: System.Double, System.Decimal, System.Single.",
-    //                                           "The DecimalValue field value should be in interval from 10 to 20.", 
-    //                                           string.Format(MappingService.ValidationStageFailed, typeof(ImportTestDomain.Discount).FullName));
-
-    //            var ret = Workspace.GetItems<ImportTestDomain.Discount>();
-    //            ret.Should().HaveCount(0);
     //        }
 
 
