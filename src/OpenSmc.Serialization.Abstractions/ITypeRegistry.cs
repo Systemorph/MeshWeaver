@@ -13,4 +13,5 @@ public interface ITypeRegistry
         => WithTypesFromAssembly(typeof(T), filter);
 
     public ITypeRegistry WithTypesFromAssembly(Type type, Func<Type, bool> filter);
+    ITypeRegistry WithTypes(IEnumerable<Type> select);
 }
