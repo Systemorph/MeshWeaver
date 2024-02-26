@@ -25,10 +25,10 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     public IEnumerable<Type> MappedTypes => State.Workspace.MappedTypes;
 
     public void Update(IReadOnlyCollection<object> instances, UpdateOptions options)
-        => Hub.Post(new UpdateDataRequest(instances, options));
+        => RequestChange(null, new UpdateDataRequest(instances));
 
     public void Delete(IReadOnlyCollection<object> instances)
-        => Hub.Post(new DeleteDataRequest(instances));
+        => RequestChange(null, new DeleteDataRequest(instances));
 
 
     public override async Task StartAsync(CancellationToken cancellationToken)  // This loads the persisted state
@@ -53,24 +53,25 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
 
 
     IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(IMessageDelivery<UpdateDataRequest> request) 
-        => RequestChange(request);
+        => RequestChange(request, request.Message);
 
 
-    private IMessageDelivery RequestChange(IMessageDelivery<DataChangeRequest> request)
+    private IMessageDelivery RequestChange(IMessageDelivery request, DataChangeRequest change)
     {
-        var changes = State.Workspace.Change(request.Message).ToArray();
+        var changes = State.Workspace.Change(change).ToArray();
 
         var dataChanged = State.Workspace.Commit();
-        Hub.Post(dataChanged, o => o.ResponseFor(request));
+        if(request != null)
+            Hub.Post(dataChanged, o => o.ResponseFor(request));
 
         Task CommitToDataSource(CancellationToken cancellationToken) => State.DataContext.UpdateAsync(changes, cancellationToken);
         persistenceHub.Schedule(CommitToDataSource);
-        return request.Processed();
+        return request?.Processed();
     }
 
 
     IMessageDelivery IMessageHandler<DeleteDataRequest>.HandleMessage(IMessageDelivery<DeleteDataRequest> request)
-        => RequestChange(request);
+        => RequestChange(request, request.Message);
 
 
     private IMessageDelivery HandleGetRequest(IMessageDelivery request)

@@ -2,6 +2,7 @@
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using FluentAssertions;
+using OpenSmc.Activities;
 using OpenSmc.Import;
 using Xunit;
 using Xunit.Abstractions;
@@ -108,7 +109,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
     public static string TextChange = nameof(TextChange);
 
-    public record LocalImportRequest;
+    public record LocalImportRequest : IRequest<ActivityLog>;
     public class ImportPlugin(IMessageHub hub) : MessageHubPlugin(hub), IMessageHandler<LocalImportRequest>
     {
         [Inject] IWorkspace workspace;
@@ -120,6 +121,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             myInstance = myInstance with { Text = TextChange };
             workspace.Update(myInstance);
             workspace.Commit();
+            Hub.Post(new ActivityLog(DateTime.UtcNow, new UserInfo("User", "User")), o => o.ResponseFor(request));
             return request.Processed();
         }
     }
@@ -128,8 +130,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task CheckUsagesFromWorkspaceVariable()
     {
         var client = GetClient();
-        var importResponse = await client.AwaitResponse(new ImportRequest("MyContent"), o => o.WithTarget(new HostAddress()));
-        importResponse.Message.Version.Should().Be(1);
+        await client.AwaitResponse(new LocalImportRequest(), o => o.WithTarget(new HostAddress()));
         var response = await client.AwaitResponse(new GetManyRequest<MyData>(), o => o.WithTarget(new HostAddress()));
         response.Message.Items.Should().Contain(i => i.Text == TextChange);
         await Task.Delay(100);
