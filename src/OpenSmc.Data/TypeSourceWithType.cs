@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
+using System.Runtime.InteropServices.ComTypes;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Persistence;
 using OpenSmc.Messaging;
@@ -21,6 +22,12 @@ public interface ITypeSource
     IReadOnlyCollection<DataChangeRequest> RequestChange(DataChangeRequest request);
     ITypeSource WithPartition<T>(Func<T, object> partition);
     ITypeSource WithPartition(Type type, Func<object, object> partition);
+    ITypeSource WithInitialData(Func<CancellationToken, Task<IEnumerable<object>>> loadInstancesAsync);
+
+    ITypeSource WithInitialData(IEnumerable<object> instances)
+        => WithInitialData(() => instances);
+    ITypeSource WithInitialData(Func<IEnumerable<object>> loadInstances)
+        => WithInitialData(_ => Task.FromResult(loadInstances()));
     object GetData(object id);
     IEnumerable<DataChangeRequest> Update(IReadOnlyCollection<EntityDescriptor> entities, bool snapshot = false);
 
@@ -96,6 +103,15 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
 
     public ITypeSource WithPartition(Type type, Func<object, object> partition) 
         => this with { PartitionFunction = partition };
+
+    ITypeSource ITypeSource.WithInitialData(
+        Func<CancellationToken, Task<IEnumerable<object>>> initialization)
+        => WithInitialData(initialization);
+
+    public TTypeSource WithInitialData(Func<CancellationToken, Task<IEnumerable<object>>> initialization)
+        => This with { InitializationFunction = initialization };
+
+    protected Func<CancellationToken, Task<IEnumerable<object>>> InitializationFunction { get; init; }
 
     protected EntityDescriptor ParseEntityDescriptor(object instance)
     {
@@ -175,12 +191,6 @@ public record TypeSourceWithType<T>(object DataSource, IMessageHub Hub) : TypeSo
     protected Action<IEnumerable<T>> UpdateAction { get; init; } = _ => { };
 
     public TypeSourceWithType<T> WithUpdate(Action<IEnumerable<T>> update) => This with { UpdateAction = update };
-    protected Action<IEnumerable<T>> AddAction { get; init; } = _ => { };
-
-
-    protected virtual void AddImpl(IEnumerable<T> instances) => AddAction.Invoke(instances);
-
-    public TypeSourceWithType<T> WithAdd(Action<IEnumerable<T>> add) => This with { AddAction = add };
 
     protected Action<IEnumerable<T>> DeleteAction { get; init; } = _ => { };
     protected override void DeleteImpl(IEnumerable<T> instances) => DeleteAction.Invoke(instances);
@@ -190,18 +200,13 @@ public record TypeSourceWithType<T>(object DataSource, IMessageHub Hub) : TypeSo
 
 
     protected Func<CancellationToken, Task<IReadOnlyCollection<EntityDescriptor>>> GetAction { get; init; }
-    public TypeSourceWithType<T> WithGet(Func<CancellationToken, Task<IReadOnlyCollection<EntityDescriptor>>> getAction) => This with { GetAction = getAction };
 
     public override Task<IReadOnlyCollection<EntityDescriptor>> GetAsync(CancellationToken cancellationToken)
         => GetAction?.Invoke(cancellationToken) ??
            Task.FromResult<IReadOnlyCollection<EntityDescriptor>>(Array.Empty<EntityDescriptor>());
-    public virtual TypeSourceWithType<T> WithInitialData(Func<CancellationToken,Task<IEnumerable<T>>> initialData)
-    {
-        return this with
-        {
-            GetAction = async c => (await initialData(c)).Select(el => ParseEntityDescriptor(el)).ToArray()
-        };
-    }
+
+    public TypeSourceWithType<T> WithInitialData(Func<CancellationToken, Task<IEnumerable<T>>> initialData)
+        => WithInitialData(async  c=> (await initialData.Invoke(c)).Cast<object>());
 
 }
 
@@ -236,10 +241,4 @@ where TTypeSource: TypeSourceWithType<T, TTypeSource>
     public TTypeSource WithPartition(Func<T, object> partition)
         => This with { PartitionFunction = o => partition.Invoke((T)o) };
 
-
-    public void Deconstruct(out object DataSource, out IMessageHub Hub)
-    {
-        DataSource = this.DataSource;
-        Hub = this.Hub;
-    }
 }

@@ -27,7 +27,13 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
                             .ConfigureCategory(TestDomain.ContractDomain)
                 )
             )
-            .AddImport(import => import
+            .AddImport(
+                data => data.FromHub(
+                    configuration.Address,
+                    source => source
+                        .ConfigureCategory(TestDomain.ContractDomain)
+                    ),
+                import => import
                 .WithFormat("Test1", format => format
                     .WithAutoMappings()
                     .WithValidation((_, _) => false)

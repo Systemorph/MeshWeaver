@@ -22,7 +22,16 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
                         .ConfigureCategory(TestDomain.TestRecordsDomain)
                 )
             )
-            .AddImport(import => import
+            .AddImport(
+                data => data.FromHub(
+                    configuration.Address,
+                    source => source
+                        .ConfigureCategory(TestDomain.TestRecordsDomain)
+
+                    ),
+
+
+                import => import
                 //// TODO V10: There is no way to override behavior for Default format (2024/02/15, Dmitry Kalabin)
                 //.WithFormat(ImportFormat.Default,
                 //    format => format.WithAutoMappings(ti => ti.WithTableMapping(nameof(MyRecord), MapMyRecord))

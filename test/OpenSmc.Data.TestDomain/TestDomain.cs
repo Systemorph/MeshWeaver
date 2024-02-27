@@ -1,9 +1,7 @@
 ﻿using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
-using System.Reflection;
 using OpenSmc.Domain.Abstractions;
 using OpenSmc.Domain.Abstractions.Attributes;
-using OpenSmc.Reflection;
 
 namespace OpenSmc.Data.TestDomain;
 
@@ -67,28 +65,26 @@ public static class TestDomain
             }
         };
 
-    public static DataSource ConfigureReferenceData(this DataSource dataSource)
+    public static TDataSource ConfigureReferenceData<TDataSource>(this TDataSource dataSource) where TDataSource : DataSource<TDataSource> 
         => dataSource.ConfigureCategory(ReferenceDataDomain);
 
-    public static DataSource ConfigureTransactionalData(this DataSource dataSource)
+    public static TDataSource ConfigureTransactionalData<TDataSource>(this TDataSource dataSource) where TDataSource : DataSource<TDataSource> 
         => dataSource.ConfigureCategory(TransactionalDataDomain);
-    public static DataSource ConfigureComputedData(this DataSource dataSource)
+    public static TDataSource ConfigureComputedData<TDataSource>(this TDataSource dataSource) where TDataSource : DataSource<TDataSource> 
         => dataSource.ConfigureCategory(ComputedDataDomain);
 
-    public static DataSource ConfigureCategory(this DataSource dataSource,
-        IDictionary<Type, IEnumerable<object>> typeAndInstance)
+    public static TDataSource ConfigureTypesForImport<TDataSource>(this TDataSource dataSource) where TDataSource : DataSource<TDataSource> 
+        => dataSource.ConfigureTransactionalData()
+            .ConfigureComputedData()
+            .ConfigureReferenceData();
+
+    public static TDataSource ConfigureCategory<TDataSource>(this TDataSource dataSource, IDictionary<Type, IEnumerable<object>> typeAndInstance)
+    where TDataSource: DataSource<TDataSource>
         => typeAndInstance.Aggregate(dataSource,
             (ds, kvp) =>
-                (DataSource)ConfigureCategoryMethod.MakeGenericMethod(kvp.Key).InvokeAsFunction(ds, kvp.Value));
+                ds.WithType(kvp.Key, t => t.WithInitialData(kvp.Value)));
 
 
-    private static readonly MethodInfo ConfigureCategoryMethod =
-        ReflectionHelper.GetStaticMethodGeneric(() => ConfigureCategory<object>(null, null));
-    private static DataSource ConfigureCategory<T>(DataSource dataSource, IEnumerable<object> data)
-        where T : class
-        => dataSource
-            .WithType<T>(o => o
-                .WithInitialData(_ => Task.FromResult(data.Cast<T>())));
 
     public static readonly Dictionary<Type, IEnumerable<object>> ContractDomain
         =
