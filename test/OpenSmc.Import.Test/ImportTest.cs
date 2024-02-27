@@ -18,32 +18,31 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
     {
 
         return base.ConfigureHost(configuration)
-                .AddData(
-                    data => data.FromConfigurableDataSource
-                    (
-                        nameof(DataSource),
-                        source => source
-                            .ConfigureTypesForImport()
-                    )
-                )
-                .AddImport(
-                    data => data
-                        .FromHub(new HostAddress(), source => source
-                            .ConfigureTypesForImport()
-                        ),
-                    import => import
-                        .WithFormat(Cashflows, format => format
-                            .WithAutoMappings()
-                            .WithImportFunction(MapCashflows)
-                        )
-                )
+                .ConfigureReferenceDataModel()
+                .ConfigureTransactionalModel(2024, "1", "2")
+                .ConfigureComputedModel(2024, "1", "2")
+                .ConfigureImportHub(2024)
             ;
     }
 
     private static IEnumerable<object> MapCashflows(ImportRequest request, IDataSet dataSet, IMessageHub hub, IWorkspace workspace)
     {
-        var importedInstance = workspace.GetData<TestDomain.TransactionalData>().ToArray();
-        return importedInstance.Select(i => new TestDomain.ComputedData(i.Id, i.LoB, i.BusinessUnit, 2 * i.Value));
+        var importedInstance = workspace.GetData<TransactionalData>().ToArray();
+        return importedInstance.Select(i => new ComputedData(i.Id, 2024, i.LoB, i.BusinessUnit, 2 * i.Value));
+    }
+
+    [Fact]
+    public async Task DistributedImportTest()
+    {
+        var client = GetClient();
+        var importRequest = new ImportRequest(TestHubSetup.CashflowImportFormat);
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new ImportAddress(2024, new HostAddress())));
+        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+
+        var items = await client.AwaitResponse(new GetManyRequest<TransactionalData>(),
+            o => o.WithTarget(new ComputedDataAddress(2024, "1", new HostAddress())));
+
+        // TODO V10: complete test, ad asserts, etc. (27.02.2024, Roland Bürgi)
     }
 
     [Fact]
@@ -54,7 +53,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
-        var items = await client.AwaitResponse(new GetManyRequest<TestDomain.TransactionalData>(),
+        var items = await client.AwaitResponse(new GetManyRequest<TransactionalData>(),
             o => o.WithTarget(new HostAddress()));
         items.Message.Items.Should().HaveCount(4)
             .And.ContainSingle(i => i.Id == "1")
@@ -79,7 +78,7 @@ Id,LoB,BusinessUnit,Value
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
         
-        var items = await client.AwaitResponse(new GetManyRequest<TestDomain.ComputedData>(),
+        var items = await client.AwaitResponse(new GetManyRequest<ComputedData>(),
             o => o.WithTarget(new HostAddress()));
         items.Message.Items.Should().HaveCount(4)
             .And.ContainSingle(i => i.Id == "1")

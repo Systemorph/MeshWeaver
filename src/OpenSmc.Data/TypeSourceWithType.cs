@@ -1,7 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
-using System.Runtime.InteropServices.ComTypes;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Persistence;
 using OpenSmc.Messaging;
@@ -208,6 +207,8 @@ public record TypeSourceWithType<T>(object DataSource, IMessageHub Hub) : TypeSo
     public TypeSourceWithType<T> WithInitialData(Func<CancellationToken, Task<IEnumerable<T>>> initialData)
         => WithInitialData(async  c=> (await initialData.Invoke(c)).Cast<object>());
 
+    public TypeSourceWithType<T> WithInitialData(IEnumerable<T> initialData)
+        => WithInitialData(_ => Task.FromResult(initialData.Cast<object>()));
 }
 
 public abstract record TypeSourceWithType<T, TTypeSource> : TypeSource<TTypeSource>

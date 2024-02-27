@@ -12,12 +12,10 @@ namespace OpenSmc.Import
             Func<DataContext, DataContext> data,
             Func<ImportConfiguration, ImportConfiguration> importConfiguration)
         {
-            var importAddress = new ImportAddress(configuration.Address);
             return configuration
                     .AddData(data)
                     .WithServices(services => services.AddSingleton<IActivityService, ActivityService>())
-                    .WithRoutes(routes => routes.RouteMessage<ImportRequest>(_ => importAddress))
-                    .WithHostedHub(importAddress, c => c.AddPlugin(h => new ImportPlugin(h, importConfiguration)))
+                    .AddPlugin(h => new ImportPlugin(h, importConfiguration))
                 ;
         }
     }
