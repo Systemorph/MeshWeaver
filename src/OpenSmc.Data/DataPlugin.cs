@@ -11,7 +11,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     IMessageHandler<DeleteDataRequest>,
     IMessageHandler<DataChangedEvent>,
     IMessageHandler<StartDataSynchronizationRequest>,
-    IMessageHandler<ExternalDataChangeRequest>
+    IMessageHandler<PatchChangeRequest>
 
 {
     private readonly IMessageHub persistenceHub;
@@ -55,7 +55,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
 
     IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(IMessageDelivery<UpdateDataRequest> request)
         => RequestChange(request, request.Message);
-    IMessageDelivery IMessageHandler<ExternalDataChangeRequest>.HandleMessage(IMessageDelivery<ExternalDataChangeRequest> request)
+    IMessageDelivery IMessageHandler<PatchChangeRequest>.HandleMessage(IMessageDelivery<PatchChangeRequest> request)
         => RequestChange(request, request.Message);
 
 

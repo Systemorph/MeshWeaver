@@ -20,7 +20,7 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
         var activityService = ServiceProvider.GetService<IActivityService>();
         return base.ConfigureHost(configuration)
             .AddData(
-                data => data.WithDataSource
+                data => data.FromConfigurableDataSource
                 (
                     nameof(DataSource),
                     source => source

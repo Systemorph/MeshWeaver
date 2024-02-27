@@ -25,7 +25,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return base.ConfigureHost(configuration)
             .AddData(data => data
-                .WithDataSource("ad hoc",dataSource => dataSource
+                .FromConfigurableDataSource("ad hoc",dataSource => dataSource
                     .WithType<MyData>(type => type
                         .WithKey(instance => instance.Id)
                         .WithInitialData(InitializeMyData)

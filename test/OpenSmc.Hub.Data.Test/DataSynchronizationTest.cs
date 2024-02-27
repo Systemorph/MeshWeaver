@@ -12,7 +12,7 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
-            .AddData(data => data.WithDataSource("ReferenceData", dataSource => dataSource
+            .AddData(data => data.FromConfigurableDataSource("ReferenceData", dataSource => dataSource
                 .ConfigureReferenceData()
             ));
     }
@@ -22,7 +22,7 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
         return base.ConfigureClient(configuration)
             .AddData(
                 data => data
-                    .WithDataFromHub(new HostAddress(),
+                    .FromHub(new HostAddress(),
                         dataSource => dataSource
                             .WithType<BusinessUnit>()
                             .WithType<LineOfBusiness>()
@@ -36,17 +36,26 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
     public async Task TestBasicSynchronization()
     {
         var client = GetClient();
-        var businessUnitResponse = await client.AwaitResponse(new GetManyRequest<BusinessUnit>());
+        var businessUnitResponse = 
+            await client.AwaitResponse(new GetManyRequest<BusinessUnit>());
         businessUnitResponse.Message.Items.Should().HaveCountGreaterThan(1);
 
         var businessUnit = businessUnitResponse.Message.Items.First();
         businessUnit = businessUnit with { DisplayName = NewName };
         client.Post(new UpdateDataRequest(businessUnit));
+
+        // get the data from the client again
         var getRequest = new GetRequest<BusinessUnit> { Id = businessUnit.SystemName };
         var loadedInstance = await client.AwaitResponse(getRequest);
         loadedInstance.Message.Should().Be(businessUnit);
+
+        // data sync is happening async in order not to block the client ==> we need to give it
+        // some grace time for the sync to happen
         await Task.Delay(100);
-        loadedInstance = await client.AwaitResponse(getRequest, o => o.WithTarget(new HostAddress()));
+
+        
+        loadedInstance = await client.AwaitResponse(getRequest, 
+            o => o.WithTarget(new HostAddress())); // we query directly the host to see that data sync worked
         loadedInstance.Message.Should().Be(businessUnit);
     }
 }

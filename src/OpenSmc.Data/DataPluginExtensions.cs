@@ -36,14 +36,14 @@ public static class DataPluginExtensions
     private static readonly HashSet<Type> GetRequestTypes = [typeof(GetRequest<>), typeof(GetManyRequest<>)];
 
 
-    public static DataContext WithDataFromHub(this DataContext dataSource, object address)
-        => WithDataFromHub(dataSource, address, ds => ds);
+    public static DataContext FromHub(this DataContext dataSource, object address)
+        => FromHub(dataSource, address, ds => ds);
 
-    public static DataContext WithDataFromHub(this DataContext dataSource, object address,
+    public static DataContext FromHub(this DataContext dataSource, object address,
         Func<HubDataSource, HubDataSource> configuration)
         => dataSource.WithDataSourceBuilder(address, hub => configuration.Invoke(new HubDataSource(address, hub))
         );
-    public static DataContext WithDataSource(this DataContext dataSource, object address,
+    public static DataContext FromConfigurableDataSource(this DataContext dataSource, object address,
         Func<DataSource, DataSource> configuration)
         => dataSource.WithDataSourceBuilder(address, hub => configuration.Invoke(new DataSource(address, hub))
         );
