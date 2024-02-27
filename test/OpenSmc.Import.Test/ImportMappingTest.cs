@@ -16,7 +16,7 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
 
         return base.ConfigureHost(configuration)
                 .AddData(
-                    data => data.WithDataSource
+                    data => data.FromConfigurableDataSource
                     (
                         nameof(DataSource),
                         source => source

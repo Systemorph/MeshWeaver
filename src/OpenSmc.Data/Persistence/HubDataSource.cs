@@ -36,15 +36,14 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
     }
 
     public override IReadOnlyCollection<DataChangeRequest> Change(DataChangeRequest request) 
-        => request is not ExternalDataChangeRequest externalDataChange 
+        => request is not PatchChangeRequest patch 
             ? base.Change(request) 
-            : Change(externalDataChange).ToArray();
+            : Change(patch).ToArray();
 
-    private IEnumerable<DataChangeRequest> Change(ExternalDataChangeRequest request)
+    private IEnumerable<DataChangeRequest> Change(PatchChangeRequest patch)
     {
-        var change = request.Change;
-        var type = change.Type;
-        CurrentWorkspace = ParseWorkspace(type, change.Change.ToString());
+        var change = patch.Change;
+        CurrentWorkspace = ParseWorkspace(ChangeType.Patch, change.ToString());
 
         foreach (var (collection, node) in CurrentWorkspace)
         {
@@ -57,7 +56,7 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
 
     private void CommitTransactionExternally(DataChangedEvent dataChanged)
     {
-        var request = Hub.Post(new ExternalDataChangeRequest(dataChanged), o => o.WithTarget(Id));
+        var request = Hub.Post(new PatchChangeRequest(dataChanged.Change), o => o.WithTarget(Id));
         Hub.RegisterCallback(request, HandleCommitResponse);
     }
 

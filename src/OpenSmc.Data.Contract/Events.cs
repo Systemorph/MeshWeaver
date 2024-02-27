@@ -49,11 +49,10 @@ public record CreateRequest<TObject>(TObject Element) : IRequest<DataChangedEven
 /// <summary>
 /// Starts data synchronization with data corresponding to the Json Path queries as specified in the constructor.
 /// </summary>
-/// <param name="JsonPaths">All the json paths to be synchronized. E.g. <code>"$.MyEntities"</code></param>
+/// <param name="JsonPaths">All the json paths to be synchronized. E.g. <code>"$.['MyNamespace.MyEntity']"</code></param>
 public record StartDataSynchronizationRequest(IReadOnlyDictionary<string,string> JsonPaths) : IRequest<DataChangedEvent>;
 
 public record DataChangedEvent(long Version, object Change, ChangeType Type);
-
 
 public enum ChangeType{Full, Patch}
 
@@ -64,7 +63,7 @@ public enum ChangeType{Full, Patch}
 /// <param name="Ids"></param>
 public record StopDataSynchronizationRequest(params string[] Ids);
 
-public record ExternalDataChangeRequest(DataChangedEvent Change) : DataChangeRequest
+public record PatchChangeRequest(object Change) : DataChangeRequest
 {
     public string Id { get; init; } = Guid.NewGuid().ToString();
 }
