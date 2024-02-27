@@ -21,7 +21,9 @@ public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubT
                         .ConfigureCategory(TestDomain.TestRecordsDomain)
                 )
             )
-            .AddImport(import => import
+            .AddImport(
+                data => data.FromHub(configuration.Address, source => source.ConfigureCategory(TestDomain.TestRecordsDomain)),
+                import => import
             )
         ;
 

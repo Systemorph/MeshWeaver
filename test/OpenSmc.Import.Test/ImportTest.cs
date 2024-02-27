@@ -23,16 +23,19 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
                     (
                         nameof(DataSource),
                         source => source
-                        .ConfigureTransactionalData()
-                        .ConfigureComputedData()
-                        .ConfigureReferenceData()
+                            .ConfigureTypesForImport()
                     )
                 )
-                .AddImport(import => import
-                    .WithFormat(Cashflows, format => format
-                        .WithAutoMappings()
-                        .WithImportFunction(MapCashflows) 
-                    )
+                .AddImport(
+                    data => data
+                        .FromHub(new HostAddress(), source => source
+                            .ConfigureTypesForImport()
+                        ),
+                    import => import
+                        .WithFormat(Cashflows, format => format
+                            .WithAutoMappings()
+                            .WithImportFunction(MapCashflows)
+                        )
                 )
             ;
     }

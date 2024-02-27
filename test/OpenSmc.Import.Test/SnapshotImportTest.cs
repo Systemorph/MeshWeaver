@@ -23,7 +23,11 @@ public class SnapshotImportTest(ITestOutputHelper output) : HubTestBase(output)
                             .ConfigureCategory(TestDomain.TestRecordsDomain)
                     )
                 )
-                .AddImport(import => import
+                .AddImport(
+                    data => data.FromHub(configuration.Address,
+                        source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
+                    ),
+                    import => import
                 )
             ;
     }
