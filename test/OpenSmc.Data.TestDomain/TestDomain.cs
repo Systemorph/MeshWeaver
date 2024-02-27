@@ -5,49 +5,8 @@ using OpenSmc.Domain.Abstractions.Attributes;
 
 namespace OpenSmc.Data.TestDomain;
 
-/// <summary>
-/// This is structuring element for sub-dividing a data domain into several groups.
-/// You can perceive this as the building plan for how everyone starts.
-/// For tests, it is handy to ship initial values. Can be also hosted in separate file.
-/// </summary>
 public static class TestDomain
 {
-    public record TransactionalData([property: Key] string Id, string LoB, string BusinessUnit, double Value);
-    public record ComputedData([property: Key] string Id, string LoB, string BusinessUnit, double Value);
-
-    public record LineOfBusiness([property: Key] string SystemName, string DisplayName);
-    public record BusinessUnit([property: Key] string SystemName, string DisplayName);
-
-    public static readonly Dictionary<Type, IEnumerable<object>> ReferenceDataDomain
-        =
-        new()
-        {
-            { typeof(LineOfBusiness), new LineOfBusiness[] { new("1", "1"), new("2", "2") } },
-            { typeof(BusinessUnit), new BusinessUnit[] { new("1", "1"), new("2", "2") } }
-        };
-
-    public static readonly Dictionary<Type, IEnumerable<object>> TransactionalDataDomain
-        =
-        new()
-        {
-            {
-                typeof(TransactionalData), new TransactionalData[]
-                {
-                    new("1", "1", "1", 7),
-                    new("2", "1", "3", 2),
-                }
-            }
-        };
-    public static readonly Dictionary<Type, IEnumerable<object>> ComputedDataDomain
-        =
-        new()
-        {
-            {
-                typeof(ComputedData), new ComputedData[]
-                {
-                }
-            }
-        };
 
     public static readonly Dictionary<Type, IEnumerable<object>> TestRecordsDomain
         =
@@ -65,26 +24,11 @@ public static class TestDomain
             }
         };
 
-    public static TDataSource ConfigureReferenceData<TDataSource>(this TDataSource dataSource) where TDataSource : DataSource<TDataSource> 
-        => dataSource.ConfigureCategory(ReferenceDataDomain);
-
-    public static TDataSource ConfigureTransactionalData<TDataSource>(this TDataSource dataSource) where TDataSource : DataSource<TDataSource> 
-        => dataSource.ConfigureCategory(TransactionalDataDomain);
-    public static TDataSource ConfigureComputedData<TDataSource>(this TDataSource dataSource) where TDataSource : DataSource<TDataSource> 
-        => dataSource.ConfigureCategory(ComputedDataDomain);
-
-    public static TDataSource ConfigureTypesForImport<TDataSource>(this TDataSource dataSource) where TDataSource : DataSource<TDataSource> 
-        => dataSource.ConfigureTransactionalData()
-            .ConfigureComputedData()
-            .ConfigureReferenceData();
-
     public static TDataSource ConfigureCategory<TDataSource>(this TDataSource dataSource, IDictionary<Type, IEnumerable<object>> typeAndInstance)
-    where TDataSource: DataSource<TDataSource>
+        where TDataSource : DataSource<TDataSource>
         => typeAndInstance.Aggregate(dataSource,
             (ds, kvp) =>
                 ds.WithType(kvp.Key, t => t.WithInitialData(kvp.Value)));
-
-
 
     public static readonly Dictionary<Type, IEnumerable<object>> ContractDomain
         =

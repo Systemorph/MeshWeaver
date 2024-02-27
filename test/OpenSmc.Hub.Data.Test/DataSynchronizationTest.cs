@@ -1,9 +1,9 @@
 ﻿using FluentAssertions;
 using OpenSmc.Data;
+using OpenSmc.Data.TestDomain;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using Xunit.Abstractions;
-using static OpenSmc.Data.TestDomain.TestDomain;
 
 namespace OpenSmc.Hub.Data.Test;
 
@@ -13,8 +13,10 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
     {
         return base.ConfigureHost(configuration)
             .AddData(data => data.FromConfigurableDataSource("ReferenceData", dataSource => dataSource
-                .ConfigureReferenceData()
-            ));
+                    .WithType<LineOfBusiness>(t => t.WithInitialData(TestData.LinesOfBusiness))
+                    .WithType<BusinessUnit>(t => t.WithInitialData(TestData.BusinessUnits))
+                )
+            );
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
