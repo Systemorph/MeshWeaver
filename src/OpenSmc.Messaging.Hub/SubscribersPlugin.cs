@@ -16,9 +16,9 @@ public class SubscribersPlugin : MessageHubPlugin<MessageHubConnections>
         Register(ForwardMessage);
     }
 
-    public override async Task StartAsync()
+    public override async Task StartAsync(CancellationToken cancellationToken)
     {
-        await base.StartAsync();
+        await base.StartAsync(cancellationToken);
         InitializeState(Hub.ServiceProvider.GetRequiredService<MessageHubConnections>());
     }
 

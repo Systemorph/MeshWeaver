@@ -1,6 +1,5 @@
 ﻿using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
-using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Activities
 {
@@ -9,20 +8,21 @@ namespace OpenSmc.Activities
         private readonly ConcurrentDictionary<string, ActivityLog> parents = new();
         private ActivityLog currentActivity;
 
+
+
         public string Start()
         {
-            var id = Guid.NewGuid().AsString();
-
-            if (currentActivity != null)
-            {
-                parents[id] = currentActivity;
-            }
-
 
             //need to know id before, to start scope with known id
-            currentActivity = new ActivityLog(id, DateTime.UtcNow, null);
+            var newActivity = new ActivityLog(DateTime.UtcNow, null);
+            if (currentActivity != null)
+            {
+                parents[newActivity.Id] = currentActivity;
+            }
+            currentActivity = newActivity;
+
             ChangeStatus(ActivityLogStatus.Started);
-            return currentActivity.Id;
+            return newActivity.Id;
         }
 
         public void ChangeStatus(string status)
@@ -91,6 +91,12 @@ namespace OpenSmc.Activities
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
         {
             logger.Log(logLevel, eventId, state, exception, formatter);
+            
+            if (currentActivity == null)
+                return;
+            var item = new LogMessage(state.ToString(), logLevel, DateTime.Now, null, null);
+
+            currentActivity = currentActivity with { Messages = currentActivity.Messages.Add(item) };
         }
 
         public bool IsEnabled(LogLevel logLevel)

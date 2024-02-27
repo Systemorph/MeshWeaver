@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\OpenSmc.DataCubes\OpenSmc.DataCubes.csproj" />
     <ProjectReference Include="..\OpenSmc.DotNet.Kernel\OpenSmc.DotNet.Kernel.csproj" />
+    <ProjectReference Include="..\OpenSmc.Messaging.Hub\OpenSmc.Messaging.Hub.csproj" />
     <ProjectReference Include="..\OpenSmc.Scopes\OpenSmc.Scopes.csproj" />
   </ItemGroup>
 

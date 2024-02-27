@@ -9,9 +9,9 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
         IMessageHandler<AreaChangedEvent>,
         IMessageHandler<GetRequest<AreaChangedEvent>>
 {
-    public override async Task StartAsync()
+    public override async Task StartAsync(CancellationToken cancellationToken)
     {
-        await base.StartAsync();
+        await base.StartAsync(cancellationToken);
         InitializeState(new(configuration));
         Hub.Post(configuration.RefreshRequest, o => o.WithTarget(State.Configuration.LayoutHostAddress));
     }

@@ -50,7 +50,7 @@ public record MessageHubConfiguration
     internal ImmutableList<MessageHandlerItem> MessageHandlers { get; init; } = ImmutableList<MessageHandlerItem>.Empty;
     internal Func<string> GetAccessObject { get; init; }
 
-    protected internal ImmutableList<Func<IMessageHub, Task>> BuildupActions { get; init; } = ImmutableList<Func<IMessageHub, Task>>.Empty;
+    protected internal ImmutableList<Func<IMessageHub, CancellationToken, Task>> BuildupActions { get; init; } = ImmutableList<Func<IMessageHub, CancellationToken, Task>>.Empty;
 
     internal ImmutableList<DeliveryFilter> Deferrals { get; init; } = ImmutableList<DeliveryFilter>.Empty;
 
@@ -71,7 +71,7 @@ public record MessageHubConfiguration
 
 
     internal Func<RouteConfiguration, RouteConfiguration> ForwardConfigurationBuilder { get; init; }
-    public ImmutableList<Func<IMessageHub, Task<IMessageHubPlugin>>> PluginFactories { get; init; } = ImmutableList<Func<IMessageHub, Task<IMessageHubPlugin>>>.Empty;
+    public ImmutableList<Func<IMessageHub, CancellationToken, Task<IMessageHubPlugin>>> PluginFactories { get; init; } = ImmutableList<Func<IMessageHub, CancellationToken, Task<IMessageHubPlugin>>>.Empty;
 
 
     public MessageHubConfiguration WithServices(Func<IServiceCollection, IServiceCollection> configuration)
@@ -121,12 +121,12 @@ public record MessageHubConfiguration
 
     private record ParentMessageHub(IMessageHub Value);
 
-    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery) => WithHandler<TMessage>((h,d) => Task.FromResult(delivery.Invoke(h, d)));
-    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, Task<IMessageDelivery>> delivery) => this with {MessageHandlers = MessageHandlers.Add(new(typeof(TMessage), (h,m) => delivery.Invoke(h,(IMessageDelivery<TMessage>)m)))};
+    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery) => WithHandler<TMessage>((h,d,_) => Task.FromResult(delivery.Invoke(h, d)));
+    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, CancellationToken, Task<IMessageDelivery>> delivery) => this with {MessageHandlers = MessageHandlers.Add(new(typeof(TMessage), (h,m,c) => delivery.Invoke(h,(IMessageDelivery<TMessage>)m,c)))};
 
 
-    public MessageHubConfiguration WithBuildupAction(Action<IMessageHub> action) => this with { BuildupActions = BuildupActions.Add(hub => { action(hub); return Task.CompletedTask; }) };
-    public MessageHubConfiguration WithBuildupAction(Func<IMessageHub, Task> action) => this with { BuildupActions = BuildupActions.Add(action) };
+    public MessageHubConfiguration WithBuildupAction(Action<IMessageHub> action) => this with { BuildupActions = BuildupActions.Add((hub,_) => { action(hub); return Task.CompletedTask; }) };
+    public MessageHubConfiguration WithBuildupAction(Func<IMessageHub, CancellationToken, Task> action) => this with { BuildupActions = BuildupActions.Add(action) };
 
 
     public MessageHubConfiguration WithDeferral(DeliveryFilter deferral)
@@ -161,4 +161,4 @@ public record MessageHubConfiguration
 }
 
 
-internal record MessageHandlerItem(Type MessageType, Func<IMessageHub, IMessageDelivery, Task<IMessageDelivery>> AsyncDelivery);
+internal record MessageHandlerItem(Type MessageType, Func<IMessageHub, IMessageDelivery, CancellationToken, Task<IMessageDelivery>> AsyncDelivery);

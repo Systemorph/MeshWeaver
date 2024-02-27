@@ -27,9 +27,10 @@ jobs:
       run: dotnet build --no-restore -p:CIRun=true
     - name: Run Tests
       continue-on-error: true
-      run: dotnet test --no-build --verbosity normal -l:trx
+      run: dotnet test --no-build --verbosity normal -l:trx -- RunConfiguration.TestSessionTimeout=60000
     - name: Publish Test Results
-      uses: EnricoMi/publish-unit-test-result-action@v2.12.0
+      uses: EnricoMi/publish-unit-test-result-action/composite@v2
+      #uses: EnricoMi/publish-unit-test-result-action@v2.12.0
       if: always()
       with:
         action_fail: true

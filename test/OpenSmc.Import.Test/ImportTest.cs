@@ -1,6 +1,7 @@
 ﻿using FluentAssertions;
 using OpenSmc.Activities;
 using OpenSmc.Data;
+using OpenSmc.Data.TestDomain;
 using OpenSmc.DataStructures;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
@@ -18,7 +19,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
 
         return base.ConfigureHost(configuration)
                 .AddData(
-                    data => data.WithDataSource
+                    data => data.FromConfigurableDataSource
                     (
                         nameof(DataSource),
                         source => source
@@ -38,8 +39,8 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
 
     private static IEnumerable<object> MapCashflows(ImportRequest request, IDataSet dataSet, IMessageHub hub, IWorkspace workspace)
     {
-        var importedInstance = workspace.GetData<ImportTestDomain.TransactionalData>().ToArray();
-        return importedInstance.Select(i => new ImportTestDomain.ComputedData(i.Id, i.LoB, i.BusinessUnit, 2 * i.Value));
+        var importedInstance = workspace.GetData<TestDomain.TransactionalData>().ToArray();
+        return importedInstance.Select(i => new TestDomain.ComputedData(i.Id, i.LoB, i.BusinessUnit, 2 * i.Value));
     }
 
     [Fact]
@@ -50,7 +51,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
-        var items = await client.AwaitResponse(new GetManyRequest<ImportTestDomain.TransactionalData>(),
+        var items = await client.AwaitResponse(new GetManyRequest<TestDomain.TransactionalData>(),
             o => o.WithTarget(new HostAddress()));
         items.Message.Items.Should().HaveCount(4)
             .And.ContainSingle(i => i.Id == "1")
@@ -75,7 +76,7 @@ Id,LoB,BusinessUnit,Value
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
         
-        var items = await client.AwaitResponse(new GetManyRequest<ImportTestDomain.ComputedData>(),
+        var items = await client.AwaitResponse(new GetManyRequest<TestDomain.ComputedData>(),
             o => o.WithTarget(new HostAddress()));
         items.Message.Items.Should().HaveCount(4)
             .And.ContainSingle(i => i.Id == "1")

@@ -19,8 +19,9 @@ public class RoutePlugin : MessageHubPlugin<RouteConfiguration>
     /// Loops through forward rules in a sequence. Each forward rule either applies and returns delivery.Forwarded() or doesn't apply and returns delivery.
     /// </summary>
     /// <param name="delivery"></param>
+    /// <param name="cancellationToken"></param>
     /// <returns></returns>
-    private async Task<IMessageDelivery> RouteMessageAsync(IMessageDelivery delivery)
+    private async Task<IMessageDelivery> RouteMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         // TODO V10: This should probably also react upon disconnect. (02.02.2024, Roland Bürgi)
         if (State.RoutedMessageAddresses.TryGetValue(delivery.Sender, out var originalSenders))
@@ -34,7 +35,7 @@ public class RoutePlugin : MessageHubPlugin<RouteConfiguration>
         }
 
         foreach (var handler in State.Handlers)
-            delivery = await handler(delivery);
+            delivery = await handler(delivery, cancellationToken);
 
         if (delivery.State != MessageDeliveryState.Submitted || delivery.Target == null || Hub.Address.Equals(delivery.Target))
             return delivery;

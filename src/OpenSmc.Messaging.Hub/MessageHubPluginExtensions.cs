@@ -10,9 +10,9 @@ public static class MessageHubPluginExtensions
     internal static readonly HashSet<Type> HandlerTypes = [typeof(IMessageHandler<>), typeof(IMessageHandlerAsync<>)];
     internal static readonly MethodInfo TaskFromResultMethod = ReflectionHelper.GetStaticMethod(() => Task.FromResult<IMessageDelivery>(null));
 
-    public static MessageHubConfiguration AddPlugin<TPlugin>(this MessageHubConfiguration configuration, Func<IMessageHub, Task<TPlugin>> factory)
+    public static MessageHubConfiguration AddPlugin<TPlugin>(this MessageHubConfiguration configuration, Func<IMessageHub, CancellationToken, Task<TPlugin>> factory)
         where TPlugin : class, IMessageHubPlugin
-        => configuration with {PluginFactories = configuration.PluginFactories.Add(async h => await factory.Invoke(h))};
+        => configuration with {PluginFactories = configuration.PluginFactories.Add(async (h,c) => await factory.Invoke(h,c))};
 
     public static MessageHubConfiguration AddPlugin<TPlugin>(this MessageHubConfiguration configuration) 
         where TPlugin : class, IMessageHubPlugin 
@@ -30,6 +30,6 @@ public static class MessageHubPluginExtensions
 
     public static MessageHubConfiguration AddPlugin<TPlugin>(this MessageHubConfiguration configuration, Func<IMessageHub, TPlugin> factory) 
         where TPlugin : class, IMessageHubPlugin
-        => configuration.AddPlugin(hub => Task.FromResult(factory.Invoke(hub)));
+        => configuration.AddPlugin((hub,_) => Task.FromResult(factory.Invoke(hub)));
 
 }

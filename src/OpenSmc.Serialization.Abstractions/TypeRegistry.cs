@@ -1,4 +1,5 @@
-﻿using System.Collections.Concurrent;
+﻿using System;
+using System.Collections.Concurrent;
 
 namespace OpenSmc.Serialization;
 
@@ -45,11 +46,15 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
     }
 
     public ITypeRegistry WithTypesFromAssembly(Type type, Func<Type, bool> filter)
+        => WithTypes(type.Assembly.GetTypes().Where(filter));
+
+    public ITypeRegistry WithTypes(IEnumerable<Type> types)
     {
-        foreach (var t in type.Assembly.GetTypes().Where(filter))
+        foreach (var t in types)
             WithType(t);
         return this;
     }
+
 
     public static string FormatType(Type mainType)
     {

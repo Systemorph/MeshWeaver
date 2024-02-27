@@ -1,6 +1,7 @@
 ﻿using FluentAssertions;
 using OpenSmc.Activities;
 using OpenSmc.Data;
+using OpenSmc.Data.TestDomain;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using Xunit;
@@ -15,11 +16,11 @@ public class SnapshotImportTest(ITestOutputHelper output) : HubTestBase(output)
 
         return base.ConfigureHost(configuration)
                 .AddData(
-                    data => data.WithDataSource
+                    data => data.FromConfigurableDataSource
                     (
                         nameof(DataSource),
                         source => source
-                            .ConfigureCategory(ImportTestDomain.TestRecordsDomain)
+                            .ConfigureCategory(TestDomain.TestRecordsDomain)
                     )
                 )
                 .AddImport(import => import

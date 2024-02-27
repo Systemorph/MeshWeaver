@@ -94,7 +94,7 @@ namespace OpenSmc.DataSetReader.Csv
             }
 
             var exit = false;
-            while (!exit)
+            do
             {
                 if (string.IsNullOrWhiteSpace(content))
                 {
@@ -155,7 +155,7 @@ namespace OpenSmc.DataSetReader.Csv
                     }
                 }
                 content = await reader.ReadLineAsync();
-            }
+            } while (!exit);
             return (dataSet, format);
         }
 
