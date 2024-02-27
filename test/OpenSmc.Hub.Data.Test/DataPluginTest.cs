@@ -2,6 +2,7 @@
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using FluentAssertions;
+using OpenSmc.Activities;
 using OpenSmc.Import;
 using Xunit;
 using Xunit.Abstractions;
@@ -24,7 +25,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return base.ConfigureHost(configuration)
             .AddData(data => data
-                .WithDataSource("ad hoc",dataSource => dataSource
+                .FromConfigurableDataSource("ad hoc",dataSource => dataSource
                     .WithType<MyData>(type => type
                         .WithKey(instance => instance.Id)
                         .WithInitialData(InitializeMyData)
@@ -57,14 +58,14 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             new MyData("3", "CCC"),
         };
 
+
         // act
         var updateResponse = await client.AwaitResponse(new UpdateDataRequest(updateItems), o => o.WithTarget(new HostAddress()));
 
         await Task.Delay(300);
 
         // asserts
-        var expected = new DataChanged(1);
-        updateResponse.Message.Should().BeEquivalentTo(expected);
+        updateResponse.Message.Should().BeOfType<DataChangedEvent>();
         var expectedItems = new MyData[]
         {
             new("1", "AAA"),
@@ -94,8 +95,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         await Task.Delay(200);
 
         // asserts
-        var expected = new DataChanged(1);
-        deleteResponse.Message.Should().BeEquivalentTo(expected);
+        deleteResponse.Message.Version.Should().Be(1);
         var expectedItems = new[]
         {
             new MyData("2", "B")
@@ -108,10 +108,12 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
 
     public static string TextChange = nameof(TextChange);
-    public class ImportPlugin(IMessageHub hub) : MessageHubPlugin(hub), IMessageHandler<ImportRequest>
+
+    public record LocalImportRequest : IRequest<ActivityLog>;
+    public class ImportPlugin(IMessageHub hub) : MessageHubPlugin(hub), IMessageHandler<LocalImportRequest>
     {
         [Inject] IWorkspace workspace;
-        IMessageDelivery IMessageHandler<ImportRequest>.HandleMessage(IMessageDelivery<ImportRequest> request)
+        IMessageDelivery IMessageHandler<LocalImportRequest>.HandleMessage(IMessageDelivery<LocalImportRequest> request)
         {
             // TODO V10: Mise-en-place must be been done ==> data plugin context
             var someData = workspace.GetData<MyData>();
@@ -119,7 +121,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             myInstance = myInstance with { Text = TextChange };
             workspace.Update(myInstance);
             workspace.Commit();
-            Hub.Post(new DataChanged(Hub.Version), o => o.ResponseFor(request));
+            Hub.Post(new ActivityLog(DateTime.UtcNow, new UserInfo("User", "User")), o => o.ResponseFor(request));
             return request.Processed();
         }
     }
@@ -128,19 +130,18 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task CheckUsagesFromWorkspaceVariable()
     {
         var client = GetClient();
-        var importResponse = await client.AwaitResponse(new ImportRequest("MyContent"), o => o.WithTarget(new HostAddress()));
-        importResponse.Message.Version.Should().Be(1);
+        await client.AwaitResponse(new LocalImportRequest(), o => o.WithTarget(new HostAddress()));
         var response = await client.AwaitResponse(new GetManyRequest<MyData>(), o => o.WithTarget(new HostAddress()));
         response.Message.Items.Should().Contain(i => i.Text == TextChange);
         await Task.Delay(100);
         storage.Values.Should().Contain(i => i.Text == TextChange);
     }
 
-    private Task<IReadOnlyCollection<MyData>> InitializeMyData()
+    private Task<IEnumerable<MyData>> InitializeMyData(CancellationToken cancellationToken)
     {
         foreach (var data in initialData)
             storage[data.Id] = data;
-        return Task.FromResult<IReadOnlyCollection<MyData>>(initialData);
+        return Task.FromResult<IEnumerable<MyData>>(initialData);
     }
     
     private void SaveMyData(IEnumerable<MyData> items)

@@ -1,73 +1,82 @@
 ﻿using OpenSmc.Messaging;
 using System.Collections.Immutable;
+using System.Data;
+using OpenSmc.Data.Persistence;
 
 namespace OpenSmc.Data;
 
-public record DataContext(IMessageHub Hub)
+public sealed record DataContext(IMessageHub Hub)
 {
-    public IReadOnlyCollection<Type> DataTypes => DataSourcesByTypes.Keys.ToArray();
-    internal ImmutableDictionary<Type, object> DataSourcesByTypes { get; init; } = ImmutableDictionary<Type, object>.Empty;
-    internal DataContext WithType<T>(object dataSourceId) => 
-            this with { DataSourcesByTypes = DataSourcesByTypes.SetItem(typeof(T), dataSourceId) };
+    internal ImmutableDictionary<object,IDataSource> DataSources { get; private set; } = ImmutableDictionary<object, IDataSource>.Empty;
 
+    public IDataSource GetDataSource(object id) => DataSources.GetValueOrDefault(id);
 
+    public IEnumerable<Type> MappedTypes => DataSources.Values.SelectMany(ds => ds.MappedTypes);
 
-    internal ImmutableDictionary<object,DataSource> DataSources { get; init; } = ImmutableDictionary<object, DataSource>.Empty;
-
-    public DataContext WithDataSource(object id, Func<DataSource, DataSource> dataSourceBuilder) 
-        => WithDataSource(id, dataSourceBuilder.Invoke(new(id)));
-
-    public DataContext WithDataSource(object id, Func<DataSourceWithStorage, DataSourceWithStorage> dataSourceBuilder, Func<DataSourceWithStorage, IDataStorage> storageFactory)
-        => WithDataSource(id, dataSourceBuilder.Invoke(new (id, storageFactory)));
-
-    private DataContext WithDataSource(object id, DataSource dataSource)
+    public DataContext WithDataSourceBuilder(object id, DataSourceBuilder dataSourceBuilder)
     {
-        return this 
-            with
-            {
-                DataSources = DataSources.Add(id, dataSource),
-                // maintain mapping between data sources and types
-                DataSourcesByTypes = DataSourcesByTypes.SetItems(dataSource.MappedTypes.Select(s => new KeyValuePair<Type, object>(s,dataSource.Id)))
-            };
-    }
-
-    internal DataContext Build()
-        => this with
+        return this with
         {
-            DataSources = DataSources.Select(kvp => new KeyValuePair<object, DataSource>(kvp.Key, kvp.Value.Build()))
-                .ToImmutableDictionary()
+            DataSourceBuilders = DataSourceBuilders.Add(id, dataSourceBuilder),
         };
-
-
-    public bool GetTypeConfiguration(Type type, out TypeSource typeSource)
-    {
-        typeSource = null;
-        return DataSourcesByTypes.TryGetValue(type, out var dataSourceId) 
-               && DataSources.TryGetValue(dataSourceId, out var dataSource)
-               && dataSource.GetTypeConfiguration(type, out typeSource);
     }
 
-    internal ImmutableList<Func<object, object>> InstanceToDataSourceMaps = ImmutableList<Func<object, object>>.Empty;
+    public ImmutableDictionary<object, DataSourceBuilder> DataSourceBuilders { get; set; } = ImmutableDictionary<object, DataSourceBuilder>.Empty;
 
-    private object MapByType(Type type)
+    public delegate IDataSource DataSourceBuilder(IMessageHub hub); 
+
+
+    public async Task InitializeAsync(CancellationToken cancellationToken)
     {
-        return DataSourcesByTypes.GetValueOrDefault(type);
+        DataSources = DataSourceBuilders
+            .ToImmutableDictionary(kvp => kvp.Key,
+                kvp => kvp.Value.Invoke(Hub));
+        foreach (var dataSource in DataSources.Values)
+        {
+            await dataSource.InitializeAsync(cancellationToken);
+        }
     }
 
-    internal DataContext MapInstanceToDataSource<T>(Func<T, object> dataSourceMap) => this with
-    {
-        InstanceToDataSourceMaps = InstanceToDataSourceMaps.Insert(0, o => o is T t ? dataSourceMap.Invoke(t) : default)
-    };
 
-
-    public DataSource GetDataSource(object id)
+    public IReadOnlyDictionary<string, IReadOnlyCollection<EntityDescriptor>> GetEntities()
     {
-        return DataSources.GetValueOrDefault(id);
-    }
-    public object GetDataSourceId(object instance)
-    {
-        return InstanceToDataSourceMaps.Select(m => m(instance)).FirstOrDefault(id => id != null)
-            ?? MapByType(instance.GetType());
+        return DataSources
+            .Values
+            .SelectMany(ds => ds.GetData().Values.SelectMany(x => x))
+            .GroupBy(x => x.Collection)
+            .ToDictionary(x => x.Key, x => (IReadOnlyCollection<EntityDescriptor>)x.ToArray());
     }
 
+
+    public void Synchronize(DataChangedEvent @event, object dataSourceId)
+    {
+        // update foreign data source
+        if (GetDataSource(dataSourceId) is HubDataSource dataSource)
+            dataSource.Synchronize(@event);
+    
+    }
+
+
+    private object MapToDataSource(object instance)
+    {
+        return DataSources.Values.Select(ds => ds.MapInstanceToPartition(instance)).FirstOrDefault(x => x != null);
+    }
+
+    public async Task UpdateAsync(IReadOnlyCollection<DataChangeRequest> changes, CancellationToken cancellationToken)
+    {
+        foreach (var databaseGroup in 
+                 changes.OfType<DataChangeRequestWithElements>()
+                     .SelectMany(c =>
+                         c.Elements
+                             .GroupBy(MapToDataSource)
+                             .Select(g => new { DataSource = g.Key, Request = c with { Elements = g.ToArray() } }
+                             ))
+                     .GroupBy(x => x.DataSource))
+        {
+            if (databaseGroup.Key == null)
+                throw new DataException("Could not map entities");
+            var dataSource = GetDataSource(databaseGroup.Key);
+            await dataSource.UpdateAsync(databaseGroup.Select(x => x.Request).ToArray(), cancellationToken);
+        }
+    }
 }

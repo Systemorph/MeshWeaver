@@ -23,8 +23,8 @@ public class DeferralContainer : IAsyncDisposable
         });
     }
 
-    public Task<IMessageDelivery> DeliverAsync(IMessageDelivery delivery) =>
-        deferralChain.First!.Value.DeliverMessage(delivery);
+    public Task<IMessageDelivery> DeliverAsync(IMessageDelivery delivery, CancellationToken cancellationToken) =>
+        deferralChain.First!.Value.DeliverMessage(delivery, cancellationToken);
 
     public async ValueTask DisposeAsync()
     {

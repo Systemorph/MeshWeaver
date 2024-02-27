@@ -1,8 +1,5 @@
-﻿using System;
+﻿namespace OpenSmc.Serialization;
 
-namespace OpenSmc.Serialization;
-
-// TODO V10: Rename to ITypeRegistry? (2023/09/04, Alexander Yolokhov)
 public interface ITypeRegistry
 {
     ITypeRegistry WithType<TEvent>() => WithType(typeof(TEvent));
@@ -16,4 +13,5 @@ public interface ITypeRegistry
         => WithTypesFromAssembly(typeof(T), filter);
 
     public ITypeRegistry WithTypesFromAssembly(Type type, Func<Type, bool> filter);
+    ITypeRegistry WithTypes(IEnumerable<Type> select);
 }

@@ -7,7 +7,6 @@ using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.DataStructures;
 using OpenSmc.Messaging;
-using OpenSmc.Reflection;
 using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Import;
@@ -17,22 +16,23 @@ public class ImportPlugin : MessageHubPlugin<ImportState>,
 {
     [Inject] private IActivityService activityService;
     private readonly IWorkspace workspace;
+
     public ImportConfiguration Configuration;
     public ImportPlugin(IMessageHub hub, Func<ImportConfiguration, ImportConfiguration> importConfiguration) : base(hub)
     {
         workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
-        Configuration = importConfiguration.Invoke(new(hub, workspace));
+        Configuration = importConfiguration.Invoke(new(hub, workspace)).Build();
     }
 
-    public override async Task StartAsync()
+    public override async Task StartAsync(CancellationToken cancellationToken)
     {
-        await base.StartAsync();
-        await workspace.Initializing;
+        await base.StartAsync(cancellationToken);
+        await workspace.Initialized;
+        InitializeState(new ImportState());
     }
 
     public async Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery<ImportRequest> request, CancellationToken cancellationToken)
     {
-        ActivityLog log;
         activityService.Start(); 
 
         try
@@ -40,12 +40,18 @@ public class ImportPlugin : MessageHubPlugin<ImportState>,
             var importRequest = request.Message;
             var (dataSet, format) = await ReadDataSetAsync(importRequest, cancellationToken);
 
-            format.Import(importRequest, dataSet);
+            var hasError = format.Import(importRequest, dataSet);
+
+            if (hasError)
+                activityService.LogError(ValidationStageFailed);
 
             if (!activityService.HasErrors())
                 workspace.Commit();
             else
                 workspace.Rollback();
+
+            //activityService.Finish();
+
         }
         catch (Exception e)
         {
@@ -61,16 +67,12 @@ public class ImportPlugin : MessageHubPlugin<ImportState>,
         finally
         {
             activityService.LogInformation($"Import finished.");
-            Hub.Post(new DataChanged(Hub.Version) { Log = activityService.Finish() }, o => o.ResponseFor(request));
+            Hub.Post(new ImportResponse(Hub.Version, activityService.Finish()), o => o.ResponseFor(request));
         }
 
         return request.Processed();
     }
 
-    private IMessageDelivery FinishImport(IMessageDelivery<ImportRequest> request)
-    {
-        return request;
-    }
 
     public async Task<(IDataSet dataSet, ImportFormat format)> ReadDataSetAsync(ImportRequest importRequest,
         CancellationToken cancellationToken)
@@ -103,27 +105,13 @@ public class ImportPlugin : MessageHubPlugin<ImportState>,
         return (dataSet, importFormat);
     }
 
-    private IMessageDelivery Fail(string s)
-    {
-        throw new NotImplementedException();
-    }
-#pragma warning disable 4014
-    private static readonly IGenericMethodCache UpdateMethod =
-        GenericCaches.GetMethodCacheStatic(() => PerformUpdate<object>(null, null));
-#pragma warning disable 4014
 
 
-    private static void PerformUpdate<T>(IWorkspace targetDataSource, ICollection items) where T : class
-    {
-        var options = new UpdateOptions();
-
-        targetDataSource.Update((items as IEnumerable<T>)?.ToArray());
-    }
-
-    public static string ValidationStageFailed = "Validation stage of type {0} has failed.";
+    public static string ValidationStageFailed = "Validation stage has failed.";
 
 
 
+    // TODO V10: Is this used? Where? (26.02.2024, Roland Bürgi)
     private ICollection CreateAndValidate<T>(IDataSet dataSet, IDataTable table,  ImportFormat format, Func<IDataSet, IDataRow, int, IEnumerable<T>> initFunc)
     {
         var hasError = true;

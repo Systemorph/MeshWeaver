@@ -25,13 +25,13 @@ public class MessageHubPluginTest : TestBase
 
         public ImmutableList<object> Events { get; private set; }  = ImmutableList<object>.Empty;
 
-        public override async Task StartAsync()
+        public override async Task StartAsync(CancellationToken cancellationToken)
         {
             logger.LogInformation("Starting");
             Events = Events.Add("Starting");
-            await Task.Delay(1000);
-            Events = Events.Add("Started");
-            logger.LogInformation("Started");
+            await Task.Delay(1000, cancellationToken);
+            Events = Events.Add("Initialized");
+            logger.LogInformation("Initialized");
         }
 
         public IMessageDelivery HandleMessage(IMessageDelivery request)
@@ -64,7 +64,7 @@ public class MessageHubPluginTest : TestBase
     {
         await Hub.AwaitResponse(new MyEvent());
         var events = await Hub.AwaitResponse(new GetEvents());
-        events.Message.Should().BeEquivalentTo(["Starting", "Started", "Handled"], o => o.WithStrictOrdering());
+        events.Message.Should().BeEquivalentTo(["Starting", "Initialized", "Handled"], o => o.WithStrictOrdering());
     }
 
     public override async Task DisposeAsync()

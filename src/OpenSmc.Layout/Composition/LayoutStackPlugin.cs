@@ -22,14 +22,10 @@ public class LayoutStackPlugin(IMessageHub hub) :
     }
 
 
-    public override Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery)
-    {
-        return base.DeliverMessageAsync(delivery);
-    }
 
-    public override async Task StartAsync()
+    public override async Task StartAsync(CancellationToken cancellationToken)
     {
-        await base.StartAsync();
+        await base.StartAsync(cancellationToken);
 
         if (layoutDefinition?.InitialState == null)
             return;
@@ -218,7 +214,7 @@ public class LayoutStackPlugin(IMessageHub hub) :
 
 internal record ViewGenerator(Func<IMessageDelivery, bool> Filter, Func<IMessageDelivery, SetAreaOptions, object> Generator);
 
-public record LayoutDefinition(IMessageHub Hub) : MessageHubModuleConfiguration
+public record LayoutDefinition(IMessageHub Hub) 
 {
     public IApplicationScope ApplicationScope => Hub.ServiceProvider.GetRequiredService<IApplicationScope>();
     internal LayoutStackControl InitialState { get; init; }

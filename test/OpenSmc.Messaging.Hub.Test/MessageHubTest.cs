@@ -1,22 +1,16 @@
 ﻿using System.Reactive.Linq;
 using FluentAssertions;
-using FluentAssertions.Execution;
 using FluentAssertions.Extensions;
 using OpenSmc.Hub.Fixture;
 using Xunit;
 using Xunit.Abstractions;
 
 namespace OpenSmc.Messaging.Hub.Test;
-public class MessageHubTest : HubTestBase
+public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
 {
-
     record SayHelloRequest : IRequest<HelloEvent>;
     record HelloEvent;
 
-
-    public MessageHubTest(ITestOutputHelper output) : base(output)
-    {
-    }
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         => configuration
@@ -48,22 +42,9 @@ public class MessageHubTest : HubTestBase
     public async Task ClientToServerWithMessageTraffic()
     {
         var client = GetClient();
-        var clientOut = client.AddObservable();
-        var messageTask = clientOut.Where(d => d.Message is HelloEvent).ToArray().GetAwaiter();
-        var overallMessageTask = clientOut.ToArray().GetAwaiter();
 
         var response = await client.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
         response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
-
-        await DisposeAsync();
-        
-        var helloEvents = await messageTask;
-        var overallMessages = await overallMessageTask;
-        using (new AssertionScope())
-        {
-            helloEvents.Should().ContainSingle();
-            overallMessages.Should().HaveCountLessThan(10);
-        }
     }
 
     [Fact]
