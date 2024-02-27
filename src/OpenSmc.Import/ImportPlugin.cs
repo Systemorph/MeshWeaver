@@ -28,6 +28,7 @@ public class ImportPlugin : MessageHubPlugin<ImportState>,
     {
         await base.StartAsync(cancellationToken);
         await workspace.Initialized;
+        InitializeState(new ImportState());
     }
 
     public async Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery<ImportRequest> request, CancellationToken cancellationToken)
