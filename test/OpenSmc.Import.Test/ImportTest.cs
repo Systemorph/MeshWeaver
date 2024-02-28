@@ -39,8 +39,15 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new ImportAddress(2024, new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
-        var items = await client.AwaitResponse(new GetManyRequest<ComputedData>(),
+        var transactionalItems = await client.AwaitResponse(new GetManyRequest<TransactionalData>(),
+            o => o.WithTarget(new TransactionalDataAddress(2024, "1", new HostAddress())));
+        var computedItems = await client.AwaitResponse(new GetManyRequest<ComputedData>(),
             o => o.WithTarget(new ComputedDataAddress(2024, "1", new HostAddress())));
+
+
+        transactionalItems.Message.Total.Should().Be(2);
+        computedItems.Message.Total.Should().Be(2);
+        computedItems.Message.Items.First().Value.Should().Be(2*transactionalItems.Message.Items.First().Value);
 
         // TODO V10: complete test, add asserts, etc. (27.02.2024, Roland Bürgi)
     }
