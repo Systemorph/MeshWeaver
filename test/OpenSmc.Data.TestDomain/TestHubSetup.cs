@@ -14,7 +14,9 @@ public static class TestHubSetup
                     .FromConfigurableDataSource
                     (
                         "reference",
-                        dataSource => dataSource.WithType<LineOfBusiness>(t => t.WithInitialData(TestData.LinesOfBusiness))
+                        dataSource => dataSource
+                        .WithType<LineOfBusiness>(t => t.WithInitialData(TestData.LinesOfBusiness))
+                        .WithType<BusinessUnit>(t => t.WithInitialData(TestData.BusinessUnits))
                     )
                 )
         );
@@ -28,9 +30,11 @@ public static class TestHubSetup
                     .FromConfigurableDataSource
                     (
                         "transactional",
-                        dataSource => dataSource.WithType<TransactionalData>(t =>
-                            t.WithInitialData(TestData.TransactionalData.Where(v =>
-                                v.BusinessUnit == businessUnit && v.Year == year)))
+                        dataSource => dataSource
+                            .WithType<TransactionalData>(t =>
+                            t
+                                //.WithPartition(i => new TransactionalDataAddress(i.Year, i.BusinessUnit, parent.Address))
+                                .WithInitialData(TestData.TransactionalData.Where(v => v.BusinessUnit == businessUnit && v.Year == year)))
                     )
                 )
         ));
@@ -44,7 +48,11 @@ public static class TestHubSetup
                     .FromConfigurableDataSource
                     (
                         "computed",
-                        dataSource => dataSource.WithType<ComputedData>(t => t)
+                        dataSource => 
+                            dataSource.WithType<ComputedData>(t => 
+                                t
+                                    //.WithPartition(i => new ComputedDataAddress(i.Year, i.BusinessUnit, parent.Address))
+                            )
                     )
                 )
         ));
@@ -69,7 +77,9 @@ public static class TestHubSetup
                                     .WithType<BusinessUnit>()
                                     .WithType<LineOfBusiness>()
                             ),
-                    import => import.WithFormat(CashflowImportFormat, format => format.WithImportFunction(ImportFunction))
+                    import => import.WithFormat(CashflowImportFormat, format => format
+                        .WithAutoMappings()
+                        .WithImportFunction(ImportFunction))
                 ));
 
     private static IEnumerable<object> ImportFunction(ImportRequest request, IDataSet dataSet, IMessageHub hub, IWorkspace workspace)

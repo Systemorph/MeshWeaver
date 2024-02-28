@@ -21,7 +21,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
                 .ConfigureReferenceDataModel()
                 .ConfigureTransactionalModel(2024, "1", "2")
                 .ConfigureComputedModel(2024, "1", "2")
-                .ConfigureImportHub(2024)
+                .ConfigureImportHub(2024, "1", "2")
             ;
     }
 

@@ -27,11 +27,11 @@ public class ImportPlugin : MessageHubPlugin<ImportState>,
     public override async Task StartAsync(CancellationToken cancellationToken)
     {
         await base.StartAsync(cancellationToken);
-        initializeTask = InitializeAsync();
+        await InitializeAsync();
     }
 
-    private Task initializeTask;
-    public override Task Initialized => initializeTask;
+    //private Task initializeTask;
+    //public override Task Initialized => initializeTask;
 
     private async Task InitializeAsync()
     {
