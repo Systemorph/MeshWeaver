@@ -35,15 +35,24 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task DistributedImportTest()
     {
         var client = GetClient();
-        var importRequest = new ImportRequest(TestHubSetup.CashflowImportFormat);
+        var importRequest = new ImportRequest(VanillaDistributedCsv) { Format = TestHubSetup.CashflowImportFormat, };
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new ImportAddress(2024, new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
-        var items = await client.AwaitResponse(new GetManyRequest<TransactionalData>(),
+        var items = await client.AwaitResponse(new GetManyRequest<ComputedData>(),
             o => o.WithTarget(new ComputedDataAddress(2024, "1", new HostAddress())));
 
         // TODO V10: complete test, ad asserts, etc. (27.02.2024, Roland Bürgi)
     }
+
+    private const string VanillaDistributedCsv =
+@"@@TransactionalData
+Id,Year,LoB,BusinessUnit,Value
+1,2024,1,1,1.5
+2,2024,1,2,2
+3,2024,2,1,3
+4,2024,2,2,4
+";
 
     [Fact]
     public async Task TestVanilla()
