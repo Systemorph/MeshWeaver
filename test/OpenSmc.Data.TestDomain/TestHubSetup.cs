@@ -59,12 +59,12 @@ public static class TestHubSetup
                 .AddImport(data1 =>
                         businessUnits.Aggregate(data1, (data, bu) =>
                                 data
-                                    .FromHub(new TransactionalDataAddress(year, bu, parent), c => c
+                                    .FromHub(new TransactionalDataAddress(year, bu, parent.Address), c => c
                                         .WithType<TransactionalData>()
                                     )
-                                    .FromHub(new ComputedDataAddress(year, bu, parent), c => c
+                                    .FromHub(new ComputedDataAddress(year, bu, parent.Address), c => c
                                         .WithType<ComputedData>()))
-                            .FromHub(new ReferenceDataAddress(parent),
+                            .FromHub(new ReferenceDataAddress(parent.Address),
                                 dataSource => dataSource
                                     .WithType<BusinessUnit>()
                                     .WithType<LineOfBusiness>()
