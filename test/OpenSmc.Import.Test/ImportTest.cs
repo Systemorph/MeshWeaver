@@ -42,7 +42,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         var items = await client.AwaitResponse(new GetManyRequest<ComputedData>(),
             o => o.WithTarget(new ComputedDataAddress(2024, "1", new HostAddress())));
 
-        // TODO V10: complete test, ad asserts, etc. (27.02.2024, Roland Bürgi)
+        // TODO V10: complete test, add asserts, etc. (27.02.2024, Roland Bürgi)
     }
 
     private const string VanillaDistributedCsv =
