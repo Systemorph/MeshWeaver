@@ -37,7 +37,7 @@
     "hastscript": "^7.1.0",
     "lodash": "^4.17.21",
     "mime": "^3.0.0",
-    "monaco-editor": "^0.32.1",
+    "monaco-editor": "^0.45.0",
     "number-format.js": "^2.0.9",
     "p-debounce": "^4.0.0",
     "path-browserify": "^1.0.1",
