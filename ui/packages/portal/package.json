@@ -26,7 +26,7 @@
     "ag-grid-community": "^30.2.1",
     "ag-grid-enterprise": "^30.2.1",
     "ag-grid-react": "^30.2.1",
-    "axios": "^0.25.0",
+    "axios": "^0.27.2",
     "classnames": "^2.3.2",
     "date-fns": "^2.28.0",
     "event-emitter": "^0.3.5",
