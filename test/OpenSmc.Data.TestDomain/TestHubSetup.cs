@@ -60,7 +60,7 @@ public static class TestHubSetup
                         businessUnits.Aggregate(data1, (data, bu) =>
                                 data
                                     .FromHub(new TransactionalDataAddress(year, bu, parent), c => c
-                                        .WithType<TransactionalDataAddress>()
+                                        .WithType<TransactionalData>()
                                     )
                                     .FromHub(new ComputedDataAddress(year, bu, parent), c => c
                                         .WithType<ComputedData>()))
