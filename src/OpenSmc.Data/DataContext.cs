@@ -59,7 +59,9 @@ public sealed record DataContext(IMessageHub Hub)
 
     private object MapToDataSource(object instance)
     {
-        return DataSources.Values.Select(ds => ds.MapInstanceToPartition(instance)).FirstOrDefault(x => x != null);
+        return DataSources
+            .Values
+            .Select(ds => ds.MapInstanceToPartition(instance)).FirstOrDefault(x => x != null);
     }
 
     public async Task UpdateAsync(IReadOnlyCollection<DataChangeRequest> changes, CancellationToken cancellationToken)
