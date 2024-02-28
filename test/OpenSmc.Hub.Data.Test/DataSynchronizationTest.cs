@@ -44,7 +44,7 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
 
         var businessUnit = businessUnitResponse.Message.Items.First();
         businessUnit = businessUnit with { DisplayName = NewName };
-        client.Post(new UpdateDataRequest(businessUnit));
+        client.Post(new UpdateDataRequest(new []{ businessUnit }));
 
         // get the data from the client again
         var getRequest = new GetRequest<BusinessUnit> { Id = businessUnit.SystemName };

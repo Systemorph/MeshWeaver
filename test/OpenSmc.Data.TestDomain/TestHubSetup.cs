@@ -33,7 +33,6 @@ public static class TestHubSetup
                         dataSource => dataSource
                             .WithType<TransactionalData>(t =>
                             t
-                                .WithPartition(i => new TransactionalDataAddress(i.Year, i.BusinessUnit, parent.Address))
                                 .WithInitialData(TestData.TransactionalData.Where(v => v.BusinessUnit == businessUnit && v.Year == year)))
                     )
                 )
@@ -51,7 +50,6 @@ public static class TestHubSetup
                         dataSource => 
                             dataSource.WithType<ComputedData>(t => 
                                 t
-                                    .WithPartition(i => new ComputedDataAddress(i.Year, i.BusinessUnit, parent.Address))
                             )
                     )
                 )
@@ -69,11 +67,12 @@ public static class TestHubSetup
                                 data
                                     .FromHub(new TransactionalDataAddress(year, bu, parent.Address), c => c
                                         .WithType<TransactionalData>(t =>t
-                                        .WithPartition(i => new TransactionalDataAddress(i.Year, i.BusinessUnit, parent.Address))
+                                            .WithPartition(i => new TransactionalDataAddress(i.Year, i.BusinessUnit, parent.Address))
                                             )
                                     )
                                     .FromHub(new ComputedDataAddress(year, bu, parent.Address), c => c
-                                        .WithType<ComputedData>(t => t.WithPartition(i => new ComputedDataAddress(i.Year, i.BusinessUnit, parent.Address)))))
+                                        .WithType<ComputedData>(t => t
+                                            .WithPartition(i => new ComputedDataAddress(i.Year, i.BusinessUnit, parent.Address)))))
                             .FromHub(new ReferenceDataAddress(parent.Address),
                                 dataSource => dataSource
                                     .WithType<BusinessUnit>()
