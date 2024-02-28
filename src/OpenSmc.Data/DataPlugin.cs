@@ -25,22 +25,22 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
 
     public IEnumerable<Type> MappedTypes => State.Workspace.MappedTypes;
 
-    public void Update(IReadOnlyCollection<object> instances, UpdateOptions options)
-        => RequestChange(null, new UpdateDataRequest(instances));
+    public void Update(IEnumerable<object> instances, UpdateOptions options)
+        => RequestChange(null, new UpdateDataRequest(instances.ToArray()));
 
-    public void Delete(IReadOnlyCollection<object> instances)
-        => RequestChange(null, new DeleteDataRequest(instances));
+    public void Delete(IEnumerable<object> instances)
+        => RequestChange(null, new DeleteDataRequest(instances.ToArray()));
 
 
-    private Task initializeTask;
-    public override Task Initialized => initializeTask;
+    //private Task initializeTask;
+    //public override Task Initialized => initializeTask;
 
     public override async Task StartAsync(CancellationToken cancellationToken)  // This loads the persisted state
     {
         await base.StartAsync(cancellationToken);
 
         var dataContext = Hub.GetDataConfiguration();
-        initializeTask = InitializeAsync(cancellationToken, dataContext); 
+        await InitializeAsync(cancellationToken, dataContext); 
     }
 
     private async Task InitializeAsync(CancellationToken cancellationToken, DataContext dataContext)

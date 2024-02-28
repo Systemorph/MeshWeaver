@@ -135,7 +135,8 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
     public IEnumerable<DataChangeRequest> Update(IReadOnlyCollection<EntityDescriptor> entities, bool snapshot = false)
     {
         var toBeUpdated = entities
-            .Where(e => CurrentState.TryGetValue(e.Id, out var existing) && !existing.Equals(e.Entity))
+            .Where(e => 
+                !CurrentState.TryGetValue(e.Id, out var existing) || !existing.Equals(e.Entity))
             .Select(e => e)
             .ToArray();
 

@@ -26,9 +26,6 @@ public record GetManyResponse<T>(int Total, IReadOnlyCollection<T> Items) : GetM
 
 public record UpdateDataRequest(IReadOnlyCollection<object> Elements) : DataChangeRequestWithElements(Elements)
 {
-    public UpdateDataRequest(params object[] Elements)
-        : this((IReadOnlyCollection<object>)Elements)
-    {}
 
     public UpdateOptions Options { get; init; }
 }
