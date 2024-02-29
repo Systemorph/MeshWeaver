@@ -1,4 +1,6 @@
 ﻿using FluentAssertions;
+using FluentAssertions.Equivalency;
+using FluentAssertions.Execution;
 using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.Data.TestDomain;
@@ -12,7 +14,6 @@ namespace OpenSmc.Import.Test;
 
 public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
 {
-
     private const string Cashflows = nameof(Cashflows);
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
@@ -34,22 +35,38 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public async Task DistributedImportTest()
     {
+        // arrange
         var client = GetClient();
         var importRequest = new ImportRequest(VanillaDistributedCsv) { Format = TestHubSetup.CashflowImportFormat, };
+
+        // act
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new ImportAddress(2024, new HostAddress())));
+
+        // assert
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
-        var transactionalItems = await client.AwaitResponse(new GetManyRequest<TransactionalData>(),
+        var transactionalItems1 = await client.AwaitResponse(new GetManyRequest<TransactionalData>(),
             o => o.WithTarget(new TransactionalDataAddress(2024, "1", new HostAddress())));
-        var computedItems = await client.AwaitResponse(new GetManyRequest<ComputedData>(),
+        var computedItems1 = await client.AwaitResponse(new GetManyRequest<ComputedData>(),
             o => o.WithTarget(new ComputedDataAddress(2024, "1", new HostAddress())));
+        var transactionalItems2 = await client.AwaitResponse(new GetManyRequest<TransactionalData>(),
+            o => o.WithTarget(new TransactionalDataAddress(2024, "2", new HostAddress())));
+        var computedItems2 = await client.AwaitResponse(new GetManyRequest<ComputedData>(),
+            o => o.WithTarget(new ComputedDataAddress(2024, "2", new HostAddress())));
 
+        using (new AssertionScope())
+        {
+            transactionalItems1.Message.Total.Should().Be(2);
+            var expectedComputedItems1 = transactionalItems1.Message.Items.Select(x => new ComputedData("", 2024, x.LoB, "1", 2 * x.Value));
+            computedItems1.Message.Total.Should().Be(2);
+            computedItems1.Message.Items.Select(x => x.Value).Should().BeEquivalentTo(expectedComputedItems1.Select(x => x.Value));
+            computedItems1.Message.Items.Should().HaveCount(2).And.BeEquivalentTo(expectedComputedItems1, c => c.WithoutId());
 
-        transactionalItems.Message.Total.Should().Be(2);
-        computedItems.Message.Total.Should().Be(2);
-        computedItems.Message.Items.First().Value.Should().Be(2*transactionalItems.Message.Items.First().Value);
-
-        // TODO V10: complete test, add asserts, etc. (27.02.2024, Roland Bürgi)
+            transactionalItems2.Message.Total.Should().Be(2);
+            var expectedComputedItems2 = transactionalItems2.Message.Items.Select(x => new ComputedData("", 2024, x.LoB, "2", 2 * x.Value));
+            computedItems2.Message.Total.Should().Be(2);
+            computedItems2.Message.Items.Should().HaveCount(2).And.BeEquivalentTo(expectedComputedItems2, c => c.WithoutId());
+        }
     }
 
     private const string VanillaDistributedCsv =
@@ -100,4 +117,8 @@ Id,LoB,BusinessUnit,Value
             .And.ContainSingle(i => i.Id == "1")
             .Which.Value.Should().BeApproximately(3.0d, 1e-5); // computed as 2*1.5
     }
+}
+public static class ComputedDataEquivalencyExtensions
+{
+    public static EquivalencyAssertionOptions<ComputedData> WithoutId(this EquivalencyAssertionOptions<ComputedData> options) => options.Excluding(x => x.Id);
 }
