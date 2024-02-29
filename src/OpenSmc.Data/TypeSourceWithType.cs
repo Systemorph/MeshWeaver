@@ -144,7 +144,7 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
         {
             CurrentState =
                 CurrentState.SetItems(toBeUpdated.Select(x => new KeyValuePair<object, object>(x.Id, x.Entity)));
-            UpdateImpl(toBeUpdated);
+            UpdateImpl(toBeUpdated.Select(x => x.Entity));
             yield return new UpdateDataRequest(toBeUpdated.Select(x => x.Entity).ToArray());
         }
 

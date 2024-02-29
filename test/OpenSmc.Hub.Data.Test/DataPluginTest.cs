@@ -3,7 +3,6 @@ using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using FluentAssertions;
 using OpenSmc.Activities;
-using OpenSmc.Import;
 using Xunit;
 using Xunit.Abstractions;
 using OpenSmc.ServiceProvider;
@@ -64,7 +63,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         await Task.Delay(300);
 
         // asserts
-        updateResponse.Message.Should().BeOfType<DataChangedEvent>();
+        updateResponse.Message.Should().BeOfType<DataChangeResponse>();
         var expectedItems = new MyData[]
         {
             new("1", "AAA"),
