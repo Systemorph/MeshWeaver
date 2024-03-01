@@ -2,11 +2,13 @@
 using System.ComponentModel.DataAnnotations;
 using OpenSmc.Domain.Abstractions;
 using OpenSmc.Domain.Abstractions.Attributes;
+using OpenSmc.Messaging;
 
 namespace OpenSmc.Data.TestDomain;
 
 public static class TestDomain
 {
+    public record ImportAddress(object Host) : IHostedAddress;
 
     public static readonly Dictionary<Type, IEnumerable<object>> TestRecordsDomain
         =
