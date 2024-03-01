@@ -27,31 +27,34 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
                             .ConfigureCategory(TestDomain.ContractDomain)
                 )
             )
-            .AddImport(
-                data => data.FromHub(
-                    configuration.Address,
-                    source => source
-                        .ConfigureCategory(TestDomain.ContractDomain)
-                    ),
-                import => import
-                .WithFormat("Test1", format => format
-                    .WithAutoMappings()
-                    .WithValidation((_, _) => false)
-                )
-                .WithFormat("Test2", format => format
-                    .WithAutoMappings()
-                    .WithValidation((instance, _) =>
-                    {
-                        var ret = true;
-                        if (instance is TestDomain.Address address && address.Street == "Red")
-                        {
-                            activityService.LogError(StreetCanNotBeRed);
-                            ret = false;
-                        }
+            .WithHostedHub(new TestDomain.ImportAddress(configuration.Address),
+                config => config
+                    .AddImport(
+                        data => data.FromHub(
+                            configuration.Address,
+                            source => source
+                                .ConfigureCategory(TestDomain.ContractDomain)
+                            ),
+                        import => import
+                        .WithFormat("Test1", format => format
+                            .WithAutoMappings()
+                            .WithValidation((_, _) => false)
+                        )
+                        .WithFormat("Test2", format => format
+                            .WithAutoMappings()
+                            .WithValidation((instance, _) =>
+                            {
+                                var ret = true;
+                                if (instance is TestDomain.Address address && address.Street == "Red")
+                                {
+                                    activityService.LogError(StreetCanNotBeRed);
+                                    ret = false;
+                                }
 
-                        return ret;
-                    })
-                )
+                                return ret;
+                            })
+                        )
+                    )
             );
     }
 
@@ -65,7 +68,7 @@ FoundationYear,ContractType
 
         var client = GetClient();
         var importRequest = new ImportRequest(content);
-        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Failed);
         importResponse.Message.Log.Messages.OfType<LogMessage>()
             .Where(x => x.LogLevel == LogLevel.Error)
@@ -89,7 +92,7 @@ FoundationYear,ContractType
 
         var client = GetClient();
         var importRequest = new ImportRequest(content) {Format = "Test1"};
-        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Failed);
 
         importResponse.Message.Log.Messages.OfType<LogMessage>().Should()
@@ -111,7 +114,7 @@ FoundationYear,ContractType
 
         var client = GetClient();
         var importRequest = new ImportRequest(content);
-        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Failed);
         importResponse.Message.Log.Messages.OfType<LogMessage>()
             .Where(x => x.LogLevel == LogLevel.Error)
