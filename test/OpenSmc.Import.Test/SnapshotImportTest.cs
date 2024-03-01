@@ -11,26 +11,26 @@ namespace OpenSmc.Import.Test;
 
 public class SnapshotImportTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
-    {
-
-        return base.ConfigureHost(configuration)
-                .AddData(
-                    data => data.FromConfigurableDataSource
-                    (
-                        nameof(DataSource),
-                        source => source
-                            .ConfigureCategory(TestDomain.TestRecordsDomain)
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration) 
+        => base.ConfigureHost(configuration)
+            .AddData(
+                data => data.FromConfigurableDataSource
+                (
+                    nameof(DataSource),
+                    source => source
+                        .ConfigureCategory(TestDomain.TestRecordsDomain)
+                )
+            )
+            .WithHostedHub(new TestDomain.ImportAddress(configuration.Address),
+                config => config
+                    .AddImport(
+                        data => data.FromHub(configuration.Address,
+                            source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
+                        ),
+                        import => import
                     )
-                )
-                .AddImport(
-                    data => data.FromHub(configuration.Address,
-                        source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
-                    ),
-                    import => import
-                )
-            ;
-    }
+            )
+        ;
 
     [Fact]
     public async Task SnapshotImport_SimpleTest()
@@ -45,7 +45,7 @@ B4,B,4
 
         var client = GetClient();
         var importRequest = new ImportRequest(content);
-        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
         var ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
@@ -61,7 +61,7 @@ SystemName,DisplayName
 ";
 
         importRequest = new ImportRequest(content2) {SnapshotMode = true};
-        importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
+        importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
         ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
@@ -84,7 +84,7 @@ B4,B,4
 
         var client = GetClient();
         var importRequest = new ImportRequest(content1);
-        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
         var ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
@@ -101,7 +101,7 @@ SystemName,DisplayName
 
         //snapshot
         importRequest = new ImportRequest(content2) { SnapshotMode = true };
-        importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
+        importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
         ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
@@ -119,7 +119,7 @@ SystemName2,DisplayName2
 
         //not snapshot
         importRequest = new ImportRequest(content3);
-        importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
+        importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
         ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
@@ -142,7 +142,7 @@ B4,B,4
 
         var client = GetClient();
         var importRequest = new ImportRequest(content);
-        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
         var ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
@@ -155,7 +155,7 @@ SystemName,DisplayName,Number
 ";
 
         importRequest = new ImportRequest(content2) { SnapshotMode = true };
-        importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
+        importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
         ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
