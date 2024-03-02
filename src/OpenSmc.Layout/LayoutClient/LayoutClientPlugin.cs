@@ -1,4 +1,8 @@
-﻿using System.Diagnostics;
+﻿using System.Collections.Immutable;
+using System.Diagnostics;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using OpenSmc.Data;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
 
@@ -83,7 +87,6 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
         return request.Processed();
     }
 
-
     private AreaChangedEvent CheckInArea(object parentAddress, AreaChangedEvent areaChanged)
     {
         var control = areaChanged.View as IUiControl;
@@ -91,16 +94,79 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
             return areaChanged;
 
         areaChanged = areaChanged with { View = CheckInDynamic((dynamic)control) };
+
+        var subscriptions = ParseDataSubscriptions(control)
+            .Select(x => new KeyValuePair<(string Collection, string Id), 
+                ImmutableList<string>>(x, (State.Subscriptions.GetValueOrDefault(x) ?? ImmutableList<string>.Empty)
+                .Add(areaChanged.Area)))
+            .ToArray();
+
         UpdateState(s =>
             s with
             {
                 ControlAddressByParentArea = s.ControlAddressByParentArea.SetItem((parentAddress, areaChanged.Area), control.Address),
                 ParentsByAddress = s.ParentsByAddress.SetItem(control.Address, (parentAddress, areaChanged.Area)),
                 AreasByControlAddress = s.AreasByControlAddress.SetItem(control.Address, areaChanged),
-                AreasByControlId = s.AreasByControlId.SetItem(control.Id, areaChanged)
+                AreasByControlId = s.AreasByControlId.SetItem(control.Id, areaChanged),
+                Subscriptions = s.Subscriptions.SetItems(subscriptions)
             });
+
         Hub.Post(new RefreshRequest(), o => o.WithTarget(control.Address));
         return areaChanged;
+    }
+
+    private IEnumerable<(string Collection, string Id)> ParseDataSubscriptions(IUiControl control)
+    {
+        var dataEntities = FindDataEntities((control as UiControl)?.DataContext)
+            .ToImmutableDictionary(x => (x.Collection, x.Id), x => x.Instance);
+        
+        if (!dataEntities.Any())
+            return Enumerable.Empty<(string Collection, string Id)>();
+
+        var dataHost = FindDataHost(control.Address);
+        if(!State.Workspaces.TryGetValue(dataHost, out var workspace))
+            UpdateState(s => s with{Workspaces = s.Workspaces.Add(dataHost, workspace = new())});
+
+
+        var missingSubscriptions = new Dictionary<string,string>();
+        foreach (var ( (collection, id), instance) in dataEntities)
+        {
+            var key = $"{collection}:{id}";
+            if (workspace.TryAdd(key, instance))
+                missingSubscriptions.Add(key, $"$.['{collection}'][?(@['{ReservedProperties.Id}'] == '{id}')]");
+        }
+
+        if (missingSubscriptions.Any())
+            Hub.Post(new SubscribeDataRequest(missingSubscriptions), o => o.WithTarget(dataHost));
+
+        return dataEntities.Keys;
+    }
+
+    private object FindDataHost(object address)
+    {
+        return address is UiControlAddress uiControlAddress 
+            ? FindDataHost(uiControlAddress.Host) 
+            : address;
+    }
+
+    private record EntityDescriptor(string Id, string Collection, JsonObject Instance);
+
+    private IEnumerable<EntityDescriptor> FindDataEntities(object dataContext)
+    {
+        if(dataContext == null)
+            return Enumerable.Empty<EntityDescriptor>();
+
+        var dataContextSerialized = (JsonObject)JsonNode.Parse(JsonSerializer.Serialize(dataContext));
+            return FindDataEntities(dataContextSerialized);
+    }
+
+    private IEnumerable<EntityDescriptor> FindDataEntities(JsonObject jObject)
+    {
+        if (jObject.TryGetPropertyValue(ReservedProperties.Id, out var id) && jObject.TryGetPropertyValue(ReservedProperties.Type, out var type))
+            yield return new(id!.ToString(), type!.ToString(), jObject);
+        foreach (var child in jObject.Select(x => x.Value).OfType<JsonObject>())
+                foreach (var entityDescriptor in FindDataEntities(child))
+                    yield return entityDescriptor;
     }
 
     private void UpdateParents(object parentAddress, AreaChangedEvent areaChanged)
