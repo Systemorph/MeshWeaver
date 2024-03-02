@@ -1,7 +1,5 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
-using Microsoft.Extensions.DependencyInjection;
-using OpenSmc.Application.Scope;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 using OpenSmc.ServiceProvider;
@@ -216,7 +214,6 @@ internal record ViewGenerator(Func<IMessageDelivery, bool> Filter, Func<IMessage
 
 public record LayoutDefinition(IMessageHub Hub) 
 {
-    public IApplicationScope ApplicationScope => Hub.ServiceProvider.GetRequiredService<IApplicationScope>();
     internal LayoutStackControl InitialState { get; init; }
     internal ImmutableList<ViewGenerator> ViewGenerators { get; init; } = ImmutableList<ViewGenerator>.Empty;
     public LayoutDefinition WithInitialState(LayoutStackControl initialState) => this with { InitialState = initialState };

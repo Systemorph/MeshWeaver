@@ -1,4 +1,6 @@
 ﻿using System.Collections.Immutable;
+using System.Text.Json.Nodes;
+using Newtonsoft.Json.Linq;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
 
@@ -12,6 +14,9 @@ public record LayoutClientState(LayoutClientConfiguration Configuration)
     internal ImmutableDictionary<string, AreaChangedEvent> AreasByControlId { get; init; } = ImmutableDictionary<string, AreaChangedEvent>.Empty;
     internal ImmutableDictionary<object, AreaChangedEvent> AreasByControlAddress { get; init; } = ImmutableDictionary<object, AreaChangedEvent>.Empty;
     internal ImmutableList<(Func<LayoutClientState, AreaChangedEvent> Selector, IMessageDelivery Request)> PendingRequests { get; init; } = ImmutableList<(Func<LayoutClientState, AreaChangedEvent> Selector, IMessageDelivery Request)>.Empty;
+    public ImmutableDictionary<(string Id, string Collection), object> DataEntities { get; init; } = ImmutableDictionary<(string Id, string Collection), object>.Empty;
+    public ImmutableDictionary<(string Id, string Collection), ImmutableList<string>> Subscriptions { get; init; } = ImmutableDictionary<(string Id, string Collection), ImmutableList<string>>.Empty;
+    public ImmutableDictionary<object, JsonObject> Workspaces { get; init; }
 
     public AreaChangedEvent GetById(string controlId)
         => AreasByControlId.GetValueOrDefault(controlId);

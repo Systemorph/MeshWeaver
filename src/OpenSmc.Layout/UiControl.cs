@@ -4,7 +4,6 @@ using Newtonsoft.Json;
 using OpenSmc.Application.Scope;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
-using OpenSmc.Scopes.Proxy;
 using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Layout;
