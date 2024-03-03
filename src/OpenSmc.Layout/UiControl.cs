@@ -115,24 +115,13 @@ public abstract record UiControl<TControl, TPlugin>(string ModuleName, string Ap
     {
         return This with { Label = label };
     }
+
     public override bool IsUpToDate(object other)
-    {
-        if (other is not TControl control)
-            return false;
-
-
-        var ret = (this with { Id = null }).Equals(control with { Id = null });
-        return ret;
-    }
+        => Equals(other);
 
     protected bool IsUpToDate(AreaChangedEvent a, AreaChangedEvent b)
-    {
-        if (a.View == null)
-            return b.View == null;
-        if (a.View is IUiControl ctrl)
-            return ctrl.IsUpToDate(b.View);
-        return a.View.Equals(b.View);
-    }
+        => a.Equals(b);
+
     public TControl WithStyle(Func<StyleBuilder, StyleBuilder> styleBuilder) => This with { Style = styleBuilder(new StyleBuilder()).Build() };
     public TControl WithSkin(string skin) => This with { Skin = skin };
 
@@ -214,7 +203,7 @@ public interface IExpandableUiControl<out TControl> : IUiControl<TControl>
     TControl WithExpandAction<TPayload>(TPayload payload, Func<object, Task<object>> expandFunction);
 }
 
-public abstract record ExpandableUiControl<TControl, TPlugin>(string ModuleName, string ApiVersion) : UiControl<TControl, TPlugin>(ModuleName, ApiVersion, null), IExpandableUiControl
+public abstract record ExpandableUiControl<TControl, TPlugin>(string ModuleName, string ApiVersion, object Data) : UiControl<TControl, TPlugin>(ModuleName, ApiVersion, Data), IExpandableUiControl
     where TControl : ExpandableUiControl<TControl, TPlugin>
     where TPlugin : UiControlPlugin<TControl>
 {

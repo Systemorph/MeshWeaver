@@ -67,18 +67,18 @@ public record RemoteViewControl : UiControl<RemoteViewControl, RemoteViewPlugin>
         return this with { Data = areaChanged };
     }
 
-    public override bool IsUpToDate(object other)
-    {
-        if (Data == null)
-            return base.IsUpToDate(other);
+    //public override bool IsUpToDate(object other)
+    //{
+    //    if (Data == null)
+    //        return base.IsUpToDate(other);
 
-        if (other is not RemoteViewControl remoteView)
-            return false;
+    //    if (other is not RemoteViewControl remoteView)
+    //        return false;
 
-        return (this with { Data = null }).IsUpToDate(remoteView with { Data = null })
-            && IsUpToDate(View, remoteView.View);
+    //    return (this with { Data = null }).IsUpToDate(remoteView with { Data = null })
+    //        && IsUpToDate(View, remoteView.View);
 
-    }
+    //}
 
     internal Func<AreaChangedEvent, AreaChangedEvent, AreaChangedEvent> UpdateView
     {

@@ -9,7 +9,7 @@ using OpenSmc.Scopes;
 
 namespace OpenSmc.Layout.Test;
 public record ChangeDataRecordRequest;
-public class TestLayout(IMessageHub hub) : MessageHubPlugin(hub),
+public class TestLayoutPlugin(IMessageHub hub) : MessageHubPlugin(hub),
     IMessageHandler<ChangeDataRecordRequest>
 {
 
@@ -38,7 +38,7 @@ public class TestLayout(IMessageHub hub) : MessageHubPlugin(hub),
     public LayoutDefinition Configure(LayoutDefinition layout)
         => layout
             .WithInitialState(Controls.Stack()
-                .WithId(TestLayout.MainStackId)
+                .WithId(MainStackId)
                 .WithClickAction(context =>
                 {
                     context.Hub.Post(new SetAreaRequest(new SetAreaOptions(TestAreas.NewArea),
@@ -56,10 +56,21 @@ public class TestLayout(IMessageHub hub) : MessageHubPlugin(hub),
             // this tests proper updating in the case of MVP
             .WithView(DataBoundView, (_, _) =>
                 Template.Bind(workspace.GetData<DataRecord>().First(),
-                    record => Controls.Menu(record.DisplayName)
-                        .WithClickMessage(new ChangeDataRecordRequest(), Hub.Address))
-                );
+                    record =>
+                        Controls
+                            .Menu(record.DisplayName)
+                            .WithClickMessage(new ChangeDataRecordRequest(), Hub.Address)
+                            .WithId(DataBoundView)
+                        )
+            )
+            .WithInitialization(() => workspace.Initialized);
 
+
+    public override async Task StartAsync(CancellationToken cancellationToken)
+    {
+        await workspace.Initialized;
+        await base.StartAsync(cancellationToken);
+    }
 
     public string DataBindClicked;
 
