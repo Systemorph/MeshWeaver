@@ -37,16 +37,16 @@ public static class LayoutExtensions
 
 
     internal static IServiceCollection AddAllControlHubs(this IServiceCollection services)
-        => typeof(LayoutStackPlugin).Assembly.GetTypes().Where(t => typeof(IMessageHubPlugin).IsAssignableFrom(t))
+        => typeof(LayoutPlugin).Assembly.GetTypes().Where(t => typeof(IMessageHubPlugin).IsAssignableFrom(t))
             .Aggregate(services, (s, t) => s.AddTransient(t));
 
-    internal static LayoutStackPlugin CreateLayoutPlugin(this IMessageHub hub, Func<LayoutDefinition, LayoutDefinition> layoutDefinition)
+    internal static LayoutPlugin CreateLayoutPlugin(this IMessageHub hub, Func<LayoutDefinition, LayoutDefinition> layoutDefinition)
     {
         var ld = new LayoutDefinition(hub);
         if (layoutDefinition != null)
             ld = layoutDefinition(ld);
 
-        return new LayoutStackPlugin(ld);
+        return new LayoutPlugin(ld);
     }
 
 

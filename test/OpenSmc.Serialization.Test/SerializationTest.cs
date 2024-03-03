@@ -1,6 +1,5 @@
 ﻿using System.Reactive.Linq;
 using FluentAssertions;
-using FluentAssertions.Extensions;
 using Newtonsoft.Json.Linq;
 using OpenSmc.Fixture;
 using OpenSmc.Hub.Fixture;
@@ -53,9 +52,7 @@ public class SerializationTest : TestBase
     private static MessageHubConfiguration ConfigureClient(MessageHubConfiguration c)
     {
         return c
-            .WithSerialization(conf =>
-                conf
-                    .WithMutation<MyEvent>( (context, value) => context.SetProperty("NewProp", "New")));
+            .WithSerialization(conf => conf.WithMutation<MyEvent> ( (context, _) => context.SetProperty("NewProp", "New")));
     }
 
     [Fact]

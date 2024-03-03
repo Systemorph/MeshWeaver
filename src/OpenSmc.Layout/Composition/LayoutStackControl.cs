@@ -4,7 +4,7 @@ using OpenSmc.ShortGuid;
 namespace OpenSmc.Layout.Composition;
 
 
-public record LayoutStackControl() : UiControl<LayoutStackControl, LayoutStackPlugin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null), IUiControlWithSubAreas
+public record LayoutStackControl() : UiControl<LayoutStackControl, LayoutPlugin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null), IUiControlWithSubAreas
 {
     public record AreaChangedOptions(string InsertAfter = null);
     private readonly ImmutableList<AreaChangedEvent> areasImpl = ImmutableList<AreaChangedEvent>.Empty;

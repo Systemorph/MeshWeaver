@@ -16,7 +16,7 @@ namespace OpenSmc.Layout.Views;
 /// <param name="Options">Control</param>
 public record ActivityControl(object User, object Title, object Summary, object View, string Color, DateTime Date, ImmutableList<MenuItemControl> Menu, ImmutableList<MenuItemControl> Options) : UiControl<ActivityControl, GenericUiControlPlugin<ActivityControl>>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null);
 
-public record MenuItemControl(object Title, object Icon) : ExpandableUiControl<MenuItemControl, ExpandableUiPlugin<MenuItemControl>>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
+public record MenuItemControl(object Title, object Icon) : ExpandableUiControl<MenuItemControl, ExpandableUiPlugin<MenuItemControl>>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
 {
     public string Description { get; init; }
 
