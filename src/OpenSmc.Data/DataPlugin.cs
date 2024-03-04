@@ -1,7 +1,9 @@
 ﻿using System.Reflection;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Persistence;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
+using OpenSmc.Scopes.Proxy;
 
 namespace OpenSmc.Data;
 public record DataPluginState(HubDataSource Workspace, DataContext DataContext);
@@ -16,10 +18,13 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
 {
     private readonly IMessageHub persistenceHub;
 
-    public DataPlugin(IMessageHub hub) : base(hub)
+    private readonly ScopeFactory scopeFactory;
+
+    public DataPlugin(IMessageHub hub, ScopeFactory serviceScopeFactory) : base(hub)
     {
         Register(HandleGetRequest); // This takes care of GetRequest and GetManyRequest
         persistenceHub = hub.GetHostedHub(new PersistenceAddress(hub.Address), conf => conf);
+        scopeFactory = serviceScopeFactory;
     }
 
 
@@ -57,6 +62,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
 
         workspace.Initialize(dataContext.GetEntities());
         InitializeState(new(workspace, dataContext));
+        dataContext.CustomInitialization.Invoke(State.Workspace, scopeFactory);
     }
 
 
@@ -76,6 +82,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
 
         Task CommitToDataSource(CancellationToken cancellationToken) => State.DataContext.UpdateAsync(changes, cancellationToken);
         persistenceHub.Schedule(CommitToDataSource);
+        Hub.GetDataConfiguration().CustomInitialization.Invoke(State.Workspace, scopeFactory);
         return request?.Processed();
     }
 
