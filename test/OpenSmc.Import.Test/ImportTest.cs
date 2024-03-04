@@ -4,7 +4,6 @@ using FluentAssertions.Execution;
 using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.Data.TestDomain;
-using OpenSmc.DataStructures;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using Xunit;
@@ -14,22 +13,14 @@ namespace OpenSmc.Import.Test;
 
 public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    private const string Cashflows = nameof(Cashflows);
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
-
         return base.ConfigureHost(configuration)
                 .ConfigureReferenceDataModel()
                 .ConfigureTransactionalModel(2024, "1", "2")
                 .ConfigureComputedModel(2024, "1", "2")
                 .ConfigureImportHub(2024, "1", "2")
             ;
-    }
-
-    private static IEnumerable<object> MapCashflows(ImportRequest request, IDataSet dataSet, IMessageHub hub, IWorkspace workspace)
-    {
-        var importedInstance = workspace.GetData<TransactionalData>().ToArray();
-        return importedInstance.Select(i => new ComputedData(i.Id, 2024, i.LoB, i.BusinessUnit, 2 * i.Value));
     }
 
     [Fact]
@@ -83,40 +74,26 @@ Id,Year,LoB,BusinessUnit,Value
     {
         var client = GetClient();
         var importRequest = new ImportRequest(VanillaCsv);
-        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new ImportAddress(2024, new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
-        var items = await client.AwaitResponse(new GetManyRequest<TransactionalData>(),
-            o => o.WithTarget(new HostAddress()));
-        items.Message.Items.Should().HaveCount(4)
-            .And.ContainSingle(i => i.Id == "1")
-            .Which.Value.Should().BeApproximately(1.5d, 1e-5); // we started with 7....
-        items.Message.Items.Should().ContainSingle(i => i.Id == "2").Which.LoB.Should().Be("1");
+        var items = await client.AwaitResponse(new GetManyRequest<LineOfBusiness>(),
+            o => o.WithTarget(new ReferenceDataAddress(new HostAddress())));
+        var expectedLoBs = new[] 
+        { 
+            new LineOfBusiness("1", "LoB_one"),
+            new LineOfBusiness("2", "LoB_two"),
+        };
+
+        items.Message.Items.Should().HaveCount(2).And.BeEquivalentTo(expectedLoBs);
     }
 
     private const string VanillaCsv =
-@"@@TransactionalData
-Id,LoB,BusinessUnit,Value
-1,1,1,1.5
-2,1,2,2
-3,2,1,3
-4,2,2,4
+@"@@LineOfBusiness
+SystemName,DisplayName
+1,LoB_one
+2,LoB_two
 ";
-
-    [Fact]
-    public async Task TestCashflows()
-    {
-        var client = GetClient();
-        var importRequest = new ImportRequest(VanillaCsv) { Format = Cashflows };
-        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
-        
-        var items = await client.AwaitResponse(new GetManyRequest<ComputedData>(),
-            o => o.WithTarget(new HostAddress()));
-        items.Message.Items.Should().HaveCount(4)
-            .And.ContainSingle(i => i.Id == "1")
-            .Which.Value.Should().BeApproximately(3.0d, 1e-5); // computed as 2*1.5
-    }
 }
 public static class ComputedDataEquivalencyExtensions
 {
