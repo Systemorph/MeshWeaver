@@ -62,7 +62,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
 
         workspace.Initialize(dataContext.GetEntities());
         InitializeState(new(workspace, dataContext));
-        dataContext.CustomInitialization.Invoke(State.Workspace, scopeFactory);
+        State.DataContext.CustomInitialization?.Invoke(State.Workspace, scopeFactory);
     }
 
 
@@ -171,7 +171,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         var @event = request.Message;
         State.DataContext.Synchronize(@event, dataSourceId);
         State.Workspace.UpdateWorkspace(State.DataContext.GetEntities());
-        State.DataContext.CustomInitialization.Invoke(State.Workspace, scopeFactory);
+        State.DataContext.CustomInitialization?.Invoke(State.Workspace, scopeFactory);
         return request.Processed();
     }
 
