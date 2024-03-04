@@ -2,8 +2,6 @@
 using System.Collections.Immutable;
 using System.Data;
 using OpenSmc.Data.Persistence;
-using Microsoft.Extensions.DependencyInjection;
-using OpenSmc.Scopes.Proxy;
 
 namespace OpenSmc.Data;
 
@@ -11,7 +9,6 @@ public sealed record DataContext(IMessageHub Hub)
 {
     internal ImmutableDictionary<object,IDataSource> DataSources { get; private set; } = ImmutableDictionary<object, IDataSource>.Empty;
 
-    internal Action<HubDataSource, ScopeFactory> CustomInitialization { get; private set; }
 
     public IDataSource GetDataSource(object id) => DataSources.GetValueOrDefault(id);
 
@@ -20,11 +17,6 @@ public sealed record DataContext(IMessageHub Hub)
     public DataContext WithDataSourceBuilder(object id, DataSourceBuilder dataSourceBuilder) => this with
     {
         DataSourceBuilders = DataSourceBuilders.Add(id, dataSourceBuilder),
-    };
-
-    public DataContext AddCustomInitialization(Action<HubDataSource, ScopeFactory> init) => this with
-    {
-        CustomInitialization = init,
     };
 
     public ImmutableDictionary<object, DataSourceBuilder> DataSourceBuilders { get; set; } = ImmutableDictionary<object, DataSourceBuilder>.Empty;
