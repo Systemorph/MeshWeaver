@@ -2,6 +2,8 @@
 using System.Collections.Immutable;
 using System.Data;
 using OpenSmc.Data.Persistence;
+using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Scopes.Proxy;
 
 namespace OpenSmc.Data;
 
@@ -9,22 +11,25 @@ public sealed record DataContext(IMessageHub Hub)
 {
     internal ImmutableDictionary<object,IDataSource> DataSources { get; private set; } = ImmutableDictionary<object, IDataSource>.Empty;
 
+    internal Action<HubDataSource, ScopeFactory> CustomInitialization { get; private set; }
+
     public IDataSource GetDataSource(object id) => DataSources.GetValueOrDefault(id);
 
     public IEnumerable<Type> MappedTypes => DataSources.Values.SelectMany(ds => ds.MappedTypes);
 
-    public DataContext WithDataSourceBuilder(object id, DataSourceBuilder dataSourceBuilder)
+    public DataContext WithDataSourceBuilder(object id, DataSourceBuilder dataSourceBuilder) => this with
     {
-        return this with
-        {
-            DataSourceBuilders = DataSourceBuilders.Add(id, dataSourceBuilder),
-        };
-    }
+        DataSourceBuilders = DataSourceBuilders.Add(id, dataSourceBuilder),
+    };
+
+    public DataContext AddCustomInitialization(Action<HubDataSource, ScopeFactory> init) => this with
+    {
+        CustomInitialization = init,
+    };
 
     public ImmutableDictionary<object, DataSourceBuilder> DataSourceBuilders { get; set; } = ImmutableDictionary<object, DataSourceBuilder>.Empty;
 
     public delegate IDataSource DataSourceBuilder(IMessageHub hub); 
-
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
@@ -37,7 +42,6 @@ public sealed record DataContext(IMessageHub Hub)
         }
     }
 
-
     public IReadOnlyDictionary<string, IReadOnlyCollection<EntityDescriptor>> GetEntities()
     {
         return DataSources
@@ -47,7 +51,6 @@ public sealed record DataContext(IMessageHub Hub)
             .ToDictionary(x => x.Key, x => (IReadOnlyCollection<EntityDescriptor>)x.ToArray());
     }
 
-
     public void Synchronize(DataChangedEvent @event, object dataSourceId)
     {
         // update foreign data source
@@ -55,7 +58,6 @@ public sealed record DataContext(IMessageHub Hub)
             dataSource.Synchronize(@event);
     
     }
-
 
     private object MapToDataSource(object instance)
     {
