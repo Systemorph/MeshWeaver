@@ -37,11 +37,6 @@ public class PivotTest : TestBase //HubTestBase
         Services.RegisterScopes();
     }
 
-    static PivotTest()
-    {
-        Scopes.DataCubes.ModuleSetup.InitializeArithmetics();
-    }
-
     public override void Initialize()
     {
         base.Initialize();
