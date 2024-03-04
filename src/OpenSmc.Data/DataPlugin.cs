@@ -82,7 +82,6 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
 
         Task CommitToDataSource(CancellationToken cancellationToken) => State.DataContext.UpdateAsync(changes, cancellationToken);
         persistenceHub.Schedule(CommitToDataSource);
-        Hub.GetDataConfiguration().CustomInitialization.Invoke(State.Workspace, scopeFactory);
         return request?.Processed();
     }
 
@@ -172,6 +171,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         var @event = request.Message;
         State.DataContext.Synchronize(@event, dataSourceId);
         State.Workspace.UpdateWorkspace(State.DataContext.GetEntities());
+        State.DataContext.CustomInitialization.Invoke(State.Workspace, scopeFactory);
         return request.Processed();
     }
 
