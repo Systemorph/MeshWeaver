@@ -92,7 +92,7 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
         var collections = TypeSources
             .Values
             .Select(ts => (ts.CollectionName, Path: $"$['{ts.CollectionName}']")).ToDictionary(x => x.CollectionName, x => x.Path);
-        var startDataSynchronizationRequest = new StartDataSynchronizationRequest(collections);
+        var startDataSynchronizationRequest = new SubscribeDataRequest(collections);
 
         var subscribeRequest =
             Hub.Post(startDataSynchronizationRequest,
@@ -123,7 +123,7 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
     /// </summary>
     public ImmutableDictionary<object, DataSubscription> SubscriptionsByAddress { get; set; } = ImmutableDictionary<object, DataSubscription>.Empty;
 
-    public DataChangedEvent Subscribe(StartDataSynchronizationRequest request, object address)
+    public DataChangedEvent Subscribe(SubscribeDataRequest request, object address)
     {
         DataSubscription subscription = (SubscriptionsByAddress.TryGetValue(address, out subscription)
             ? subscription

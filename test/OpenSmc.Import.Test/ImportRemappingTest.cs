@@ -22,14 +22,23 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
                         .ConfigureCategory(TestDomain.TestRecordsDomain)
                 )
             )
-            .AddImport(import => import
-                //// TODO V10: There is no way to override behavior for Default format (2024/02/15, Dmitry Kalabin)
-                //.WithFormat(ImportFormat.Default,
-                //    format => format.WithAutoMappings(ti => ti.WithTableMapping(nameof(MyRecord), MapMyRecord))
-                //)
-                .WithFormat(RemappingTestFormat,
-                    format => format.WithAutoMappings(ti => ti.WithTableMapping(nameof(MyRecord), MapMyRecord))
-                )
+            .WithHostedHub(new TestDomain.ImportAddress(configuration.Address),
+                config => config
+                    .AddImport(
+                        data => data.FromHub(
+                            configuration.Address,
+                            source => source
+                                .ConfigureCategory(TestDomain.TestRecordsDomain)
+                            ),
+                        import => import
+                            //// TODO V10: There is no way to override behavior for Default format (2024/02/15, Dmitry Kalabin)
+                            //.WithFormat(ImportFormat.Default,
+                            //    format => format.WithAutoMappings(ti => ti.WithTableMapping(nameof(MyRecord), MapMyRecord))
+                            //)
+                            .WithFormat(RemappingTestFormat,
+                                format => format.WithAutoMappings(ti => ti.WithTableMapping(nameof(MyRecord), MapMyRecord))
+                        )
+                    )
             )
         ;
 
@@ -87,7 +96,7 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
         var importRequest = new ImportRequest(content) { Format = RemappingTestFormat, };
 
         // act
-        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
 
         // assert
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);

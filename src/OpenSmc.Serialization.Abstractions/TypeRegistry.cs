@@ -8,8 +8,6 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
     private readonly ConcurrentDictionary<string, Type> typeByName = new();
     private readonly ConcurrentDictionary<Type, string> nameByType = new();
 
-    // TODO V10: Delegate to parent events provider when nothing is defined on this level (16.01.2024, Roland Buergi)
-
     public ITypeRegistry WithType(Type type)
     {
         var typeName = FormatType(type);

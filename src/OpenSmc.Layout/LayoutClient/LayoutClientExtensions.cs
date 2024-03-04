@@ -1,15 +1,19 @@
 ﻿using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 
 namespace OpenSmc.Layout.LayoutClient;
 
 public static class LayoutClientExtensions
 {
-    public static  MessageHubConfiguration AddLayoutClient(this MessageHubConfiguration mhConfiguration,  object refreshAddress, Func<LayoutClientConfiguration, LayoutClientConfiguration> options = null)
+    public static  MessageHubConfiguration AddLayoutClient(this MessageHubConfiguration configuration,  object refreshAddress, Func<LayoutClientConfiguration, LayoutClientConfiguration> options = null)
     {
         var conf = new LayoutClientConfiguration(refreshAddress);
         if (options != null)
             conf = options(conf);
-        return mhConfiguration.AddPlugin(hub => new LayoutClientPlugin(conf, hub));
+        return configuration
+            .AddPlugin(hub => new LayoutClientPlugin(conf, hub))
+            .AddLayoutTypes()
+;
     }
 
     public static async Task<AreaChangedEvent> GetAreaAsync(this IMessageHub layoutClient, Func<LayoutClientState, AreaChangedEvent> selector)

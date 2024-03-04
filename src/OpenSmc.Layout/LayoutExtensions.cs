@@ -2,6 +2,7 @@
 using OpenSmc.Application.Scope;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 
 namespace OpenSmc.Layout;
 
@@ -20,14 +21,27 @@ public static class LayoutExtensions
                 .AddAllControlHubs()
             )
             .AddApplicationScope()
-            .WithRoutes(forward => forward
-                .RouteMessage<RefreshRequest>(_ => mainLayoutAddress)
-                .RouteMessage<SetAreaRequest>(_ => mainLayoutAddress)
-            )
+            .RouteLayoutMessages(mainLayoutAddress)
+            .AddLayoutTypes()
             .WithHostedHub(mainLayoutAddress, c => MainLayoutConfiguration(c, layoutDefinition))
             ;
     }
 
+    public static MessageHubConfiguration RouteLayoutMessages(this MessageHubConfiguration configuration, object mainLayoutAddress)
+        => configuration
+            .WithRoutes(forward => forward
+                .RouteMessage<RefreshRequest>(_ => mainLayoutAddress)
+                .RouteMessage<SetAreaRequest>(_ => mainLayoutAddress)
+                .RouteMessage<AreaChangedEvent>(_ => MessageTargets.Subscribers)
+            );
+
+
+    public static MessageHubConfiguration AddLayoutTypes(this MessageHubConfiguration configuration)
+        => configuration
+            .WithTypes(typeof(UiControl).Assembly.GetTypes()
+                .Where(t => typeof(IUiControl).IsAssignableFrom(t) && !t.IsAbstract))
+            .WithTypes(typeof(MessageAndAddress), typeof(UiControlAddress))
+        ;
 
     private static MessageHubConfiguration MainLayoutConfiguration(MessageHubConfiguration configuration,
         Func<LayoutDefinition, LayoutDefinition> layoutDefinition)
@@ -37,16 +51,16 @@ public static class LayoutExtensions
 
 
     internal static IServiceCollection AddAllControlHubs(this IServiceCollection services)
-        => typeof(LayoutStackPlugin).Assembly.GetTypes().Where(t => typeof(IMessageHubPlugin).IsAssignableFrom(t))
+        => typeof(LayoutPlugin).Assembly.GetTypes().Where(t => typeof(IMessageHubPlugin).IsAssignableFrom(t))
             .Aggregate(services, (s, t) => s.AddTransient(t));
 
-    internal static LayoutStackPlugin CreateLayoutPlugin(this IMessageHub hub, Func<LayoutDefinition, LayoutDefinition> layoutDefinition)
+    internal static LayoutPlugin CreateLayoutPlugin(this IMessageHub hub, Func<LayoutDefinition, LayoutDefinition> layoutDefinition)
     {
         var ld = new LayoutDefinition(hub);
         if (layoutDefinition != null)
             ld = layoutDefinition(ld);
 
-        return new LayoutStackPlugin(ld);
+        return new LayoutPlugin(ld);
     }
 
 

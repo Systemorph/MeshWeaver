@@ -12,7 +12,6 @@ public record DisconnectHubRequest();
 
 public record PersistenceAddress(object Host) : IHostedAddress;
 
-public record ImportAddress(object Host) : IHostedAddress;
 
 public record GetRequest<T> : IRequest<T>
 {

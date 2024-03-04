@@ -2,5 +2,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\OpenSmc.Data\OpenSmc.Data.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Domain.Abstractions\OpenSmc.Domain.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.Import\OpenSmc.Import.csproj" />
   </ItemGroup>
 </Project>

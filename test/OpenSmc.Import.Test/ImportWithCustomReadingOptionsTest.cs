@@ -21,7 +21,12 @@ public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubT
                         .ConfigureCategory(TestDomain.TestRecordsDomain)
                 )
             )
-            .AddImport(import => import
+            .WithHostedHub(new TestDomain.ImportAddress(configuration.Address),
+                config => config
+                    .AddImport(
+                        data => data.FromHub(configuration.Address, source => source.ConfigureCategory(TestDomain.TestRecordsDomain)),
+                        import => import
+                    )
             )
         ;
 
@@ -47,7 +52,7 @@ public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubT
         var importRequest = new ImportRequest(content) { DataSetReaderOptions = new DataSetReaderOptions().WithDelimiter(CustomDelimiter), };
 
         // act
-        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
 
         // assert
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);

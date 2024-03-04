@@ -1,14 +1,12 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
-using Microsoft.Extensions.DependencyInjection;
-using OpenSmc.Application.Scope;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Layout.Composition;
 
-public class LayoutStackPlugin(IMessageHub hub) :
+public class LayoutPlugin(IMessageHub hub) :
     UiControlPlugin<LayoutStackControl>(hub),
     IMessageHandler<SetAreaRequest>
 
@@ -16,7 +14,7 @@ public class LayoutStackPlugin(IMessageHub hub) :
     [Inject] private IUiControlService uiControlService;
     private readonly LayoutDefinition layoutDefinition;
 
-    public LayoutStackPlugin(LayoutDefinition layoutDefinition) : this(layoutDefinition.Hub)
+    public LayoutPlugin(LayoutDefinition layoutDefinition) : this(layoutDefinition.Hub)
     {
         this.layoutDefinition = layoutDefinition;
     }
@@ -48,7 +46,7 @@ public class LayoutStackPlugin(IMessageHub hub) :
 
         control = control with { Areas = areas };
         InitializeState(control);
-
+        await Task.WhenAll(layoutDefinition.Initializations.Select(i => i.Invoke()));
     }
 
     private AreaChangedEvent GetArea(string area)
@@ -84,7 +82,6 @@ public class LayoutStackPlugin(IMessageHub hub) :
         Hub.ConnectTo(control.Hub);
         var ret = new AreaChangedEvent(area, control, options.AreaViewOptions);
         UpdateState(state => state.SetAreaToState(ret));
-        //Post(ret, x => x.WithTarget(MessageTargets.Subscribers));
 
         return ret;
     }
@@ -216,7 +213,6 @@ internal record ViewGenerator(Func<IMessageDelivery, bool> Filter, Func<IMessage
 
 public record LayoutDefinition(IMessageHub Hub) 
 {
-    public IApplicationScope ApplicationScope => Hub.ServiceProvider.GetRequiredService<IApplicationScope>();
     internal LayoutStackControl InitialState { get; init; }
     internal ImmutableList<ViewGenerator> ViewGenerators { get; init; } = ImmutableList<ViewGenerator>.Empty;
     public LayoutDefinition WithInitialState(LayoutStackControl initialState) => this with { InitialState = initialState };
@@ -225,4 +221,9 @@ public record LayoutDefinition(IMessageHub Hub)
     public LayoutDefinition WithView(string area, Func<IMessageDelivery, SetAreaOptions, object> generator) =>
         WithGenerator(r => r.Message is IRequestWithArea requestWithArea && requestWithArea.Area == area, generator);
 
+
+    internal ImmutableList<Func<Task>> Initializations { get; init; } = ImmutableList<Func<Task>>.Empty;
+
+    public LayoutDefinition WithInitialization(Func<Task> func)
+        => this with { Initializations = Initializations.Add(func) };
 }

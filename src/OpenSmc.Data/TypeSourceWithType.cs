@@ -21,6 +21,12 @@ public interface ITypeSource
     IReadOnlyCollection<DataChangeRequest> RequestChange(DataChangeRequest request);
     ITypeSource WithPartition<T>(Func<T, object> partition);
     ITypeSource WithPartition(Type type, Func<object, object> partition);
+    ITypeSource WithInitialData(Func<CancellationToken, Task<IEnumerable<object>>> loadInstancesAsync);
+
+    ITypeSource WithInitialData(IEnumerable<object> instances)
+        => WithInitialData(() => instances);
+    ITypeSource WithInitialData(Func<IEnumerable<object>> loadInstances)
+        => WithInitialData(_ => Task.FromResult(loadInstances()));
     object GetData(object id);
     IEnumerable<DataChangeRequest> Update(IReadOnlyCollection<EntityDescriptor> entities, bool snapshot = false);
 
@@ -32,7 +38,7 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
 {
 
     protected readonly ISerializationService SerializationService = Hub.ServiceProvider.GetRequiredService<ISerializationService>();
-    protected ImmutableDictionary<object, object> CurrentState { get; set; }
+    protected ImmutableDictionary<object, object> CurrentState { get; set; } = ImmutableDictionary<object, object>.Empty;
 
 
     ITypeSource ITypeSource.WithKey(Func<object, object> key)
@@ -68,11 +74,6 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
 
 
 
-    public virtual Task<IReadOnlyCollection<EntityDescriptor>> GetAsync(CancellationToken cancellationToken)
-    {
-        return Task.FromResult<IReadOnlyCollection<EntityDescriptor>>(null);
-    }
-
 
     public IReadOnlyCollection<DataChangeRequest> RequestChange(DataChangeRequest request)
     {
@@ -97,6 +98,16 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
     public ITypeSource WithPartition(Type type, Func<object, object> partition) 
         => this with { PartitionFunction = partition };
 
+    ITypeSource ITypeSource.WithInitialData(
+        Func<CancellationToken, Task<IEnumerable<object>>> initialization)
+        => WithInitialData(initialization);
+
+    public TTypeSource WithInitialData(Func<CancellationToken, Task<IEnumerable<object>>> initialization)
+        => This with { InitializationFunction = initialization };
+
+
+    protected Func<CancellationToken, Task<IEnumerable<object>>> InitializationFunction { get; init; }
+        = _ => Task.FromResult(Enumerable.Empty<object>());
     protected EntityDescriptor ParseEntityDescriptor(object instance)
     {
         var id = GetKey(instance);
@@ -124,7 +135,8 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
     public IEnumerable<DataChangeRequest> Update(IReadOnlyCollection<EntityDescriptor> entities, bool snapshot = false)
     {
         var toBeUpdated = entities
-            .Where(e => CurrentState.TryGetValue(e.Id, out var existing) && !existing.Equals(e.Entity))
+            .Where(e => 
+                !CurrentState.TryGetValue(e.Id, out var existing) || !existing.Equals(e.Entity))
             .Select(e => e)
             .ToArray();
 
@@ -132,7 +144,7 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
         {
             CurrentState =
                 CurrentState.SetItems(toBeUpdated.Select(x => new KeyValuePair<object, object>(x.Id, x.Entity)));
-            UpdateImpl(toBeUpdated);
+            UpdateImpl(toBeUpdated.Select(x => x.Entity));
             yield return new UpdateDataRequest(toBeUpdated.Select(x => x.Entity).ToArray());
         }
 
@@ -157,10 +169,17 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
     protected abstract void DeleteImpl(IEnumerable<object> instances);
 
 
-    public async Task InitializeAsync(CancellationToken cancellationToken)
+    public virtual async Task InitializeAsync(CancellationToken cancellationToken)
     {
-        Initialize(await GetAsync(cancellationToken));
+        var initialData = await InitializeDataAsync(cancellationToken);
+        Initialize(initialData.Select(ParseToEntityDescriptor));
     }
+
+    private Task<IEnumerable<object>> InitializeDataAsync(CancellationToken cancellationToken) 
+        => InitializationFunction(cancellationToken);
+
+    protected EntityDescriptor ParseToEntityDescriptor(object instance) 
+        => new(CollectionName, GetKey(instance), instance);
 
     public void Initialize(IEnumerable<EntityDescriptor> entities)
     {
@@ -175,12 +194,6 @@ public record TypeSourceWithType<T>(object DataSource, IMessageHub Hub) : TypeSo
     protected Action<IEnumerable<T>> UpdateAction { get; init; } = _ => { };
 
     public TypeSourceWithType<T> WithUpdate(Action<IEnumerable<T>> update) => This with { UpdateAction = update };
-    protected Action<IEnumerable<T>> AddAction { get; init; } = _ => { };
-
-
-    protected virtual void AddImpl(IEnumerable<T> instances) => AddAction.Invoke(instances);
-
-    public TypeSourceWithType<T> WithAdd(Action<IEnumerable<T>> add) => This with { AddAction = add };
 
     protected Action<IEnumerable<T>> DeleteAction { get; init; } = _ => { };
     protected override void DeleteImpl(IEnumerable<T> instances) => DeleteAction.Invoke(instances);
@@ -189,20 +202,12 @@ public record TypeSourceWithType<T>(object DataSource, IMessageHub Hub) : TypeSo
     public TypeSourceWithType<T> WithDelete(Action<IEnumerable<T>> delete) => This with { DeleteAction = delete };
 
 
-    protected Func<CancellationToken, Task<IReadOnlyCollection<EntityDescriptor>>> GetAction { get; init; }
-    public TypeSourceWithType<T> WithGet(Func<CancellationToken, Task<IReadOnlyCollection<EntityDescriptor>>> getAction) => This with { GetAction = getAction };
 
-    public override Task<IReadOnlyCollection<EntityDescriptor>> GetAsync(CancellationToken cancellationToken)
-        => GetAction?.Invoke(cancellationToken) ??
-           Task.FromResult<IReadOnlyCollection<EntityDescriptor>>(Array.Empty<EntityDescriptor>());
-    public virtual TypeSourceWithType<T> WithInitialData(Func<CancellationToken,Task<IEnumerable<T>>> initialData)
-    {
-        return this with
-        {
-            GetAction = async c => (await initialData(c)).Select(el => ParseEntityDescriptor(el)).ToArray()
-        };
-    }
+    public TypeSourceWithType<T> WithInitialData(Func<CancellationToken, Task<IEnumerable<T>>> initialData)
+        => WithInitialData(async  c=> (await initialData.Invoke(c)).Cast<object>());
 
+    public TypeSourceWithType<T> WithInitialData(IEnumerable<T> initialData)
+        => WithInitialData(_ => Task.FromResult(initialData.Cast<object>()));
 }
 
 public abstract record TypeSourceWithType<T, TTypeSource> : TypeSource<TTypeSource>
@@ -236,10 +241,4 @@ where TTypeSource: TypeSourceWithType<T, TTypeSource>
     public TTypeSource WithPartition(Func<T, object> partition)
         => This with { PartitionFunction = o => partition.Invoke((T)o) };
 
-
-    public void Deconstruct(out object DataSource, out IMessageHub Hub)
-    {
-        DataSource = this.DataSource;
-        Hub = this.Hub;
-    }
 }

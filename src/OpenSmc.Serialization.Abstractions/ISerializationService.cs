@@ -37,6 +37,15 @@ public record SerializationConfiguration
                 instance is T t ? transformation.Invoke(context, t) : instance)
         };
 
+    public SerializationConfiguration WithMutation(Action<ISerializationContext, object> action)
+        => this with
+        {
+            Mutations = Mutations.Add((context, instance) =>
+            {
+                action.Invoke(context, action);
+            })
+        };
+
     public SerializationConfiguration WithMutation<T>(Action<ISerializationContext, T> action)
         => this with
         {
