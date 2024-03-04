@@ -2,6 +2,6 @@
 
 public interface IUiControlWithSubAreas : IUiControl
 {
-    IReadOnlyCollection<AreaChangedEvent> SubAreas { get; }
-    IUiControlWithSubAreas SetArea(AreaChangedEvent areaChanged);
+    IReadOnlyCollection<LayoutArea> SubAreas { get; }
+    IUiControlWithSubAreas SetArea(LayoutArea areaChanged);
 }

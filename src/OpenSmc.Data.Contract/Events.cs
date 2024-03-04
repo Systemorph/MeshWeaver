@@ -1,5 +1,4 @@
 ﻿using System.Collections.Immutable;
-using OpenSmc.Activities;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
@@ -64,3 +63,5 @@ public record PatchChangeRequest(object Change) : DataChangeRequest
 {
     public string Id { get; init; } = Guid.NewGuid().ToString();
 }
+
+public record WorkspaceReference(object Address, string Path);

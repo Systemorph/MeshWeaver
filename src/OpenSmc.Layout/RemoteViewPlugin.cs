@@ -9,7 +9,7 @@ namespace OpenSmc.Layout;
 
 public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteViewControl>(hub),
     IMessageHandler<DataChangedEvent>,
-    IMessageHandler<AreaChangedEvent>,
+    IMessageHandler<LayoutArea>,
     IMessageHandler<ScopeExpressionChangedEvent>
 {
     [Inject] private IUiControlService uiControlService; // TODO V10: call BuildUp(this) in some base? (2023/12/20, Alexander Yolokhov)
@@ -27,19 +27,19 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
     }
     private void FullRefreshFromModelHubAsync()
     {
-        UpdateState(s => s with { Data = new AreaChangedEvent(Data, CreateUiControlHub(Controls.Spinner())) });
+        UpdateState(s => s with { Data = new LayoutArea(Data, CreateUiControlHub(Controls.Spinner())) });
         if (State.Message != null)
             Post(State.Message, o => o.WithTarget(State.RedirectAddress));
         if (State.ViewDefinition != null)
             Hub.Post(new SubscribeToEvaluationRequest(nameof(Data), async () =>
                 {
                     var viewElement = await State.ViewDefinition(State.Options);
-                    return new AreaChangedEvent(viewElement.Area, viewElement.View, viewElement.Options);
+                    return new LayoutArea(viewElement.Area, viewElement.View, viewElement.Options);
                 }),
                 o => o.WithTarget(ApplicationScopeAddress));
     }
 
-    private void UpdateView(AreaChangedEvent areaChanged)
+    private void UpdateView(LayoutArea areaChanged)
     {
         var oldView = State.View;
 
@@ -87,7 +87,7 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
                 Hub.Post(new SubscribeToEvaluationRequest(nameof(Data), async () =>
                                                                                    {
                                                                                        var viewElement = await State.ViewDefinition(State.Options);
-                                                                                       return new AreaChangedEvent(viewElement.Area, viewElement.View, viewElement.Options);
+                                                                                       return new LayoutArea(viewElement.Area, viewElement.View, viewElement.Options);
                                                                                    }),
                                                                                    o => o.WithTarget(ApplicationScopeAddress));
 
@@ -100,7 +100,7 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
         return base.RefreshView(request);
     }
 
-    public IMessageDelivery HandleMessage(IMessageDelivery<AreaChangedEvent> request)
+    public IMessageDelivery HandleMessage(IMessageDelivery<LayoutArea> request)
     {
         if (request.Sender.Equals(State.RedirectAddress) && request.Message.Area == State.RedirectArea)
             UpdateView(request.Message);
@@ -122,9 +122,9 @@ public class RemoteViewPlugin(IMessageHub hub) : GenericUiControlPlugin<RemoteVi
 
     IMessageDelivery IMessageHandler<ScopeExpressionChangedEvent>.HandleMessage(IMessageDelivery<ScopeExpressionChangedEvent> request)
     {
-        var areaChanged = request.Message.Value is AreaChangedEvent ae
+        var areaChanged = request.Message.Value is LayoutArea ae
                               ? ae with { Area = Data }
-                              : new AreaChangedEvent(Data, request.Message.Status == ExpressionChangedStatus.Evaluating ? CreateUiControlHub(Controls.Spinner()) : request.Message.Value);
+                              : new LayoutArea(Data, request.Message.Status == ExpressionChangedStatus.Evaluating ? CreateUiControlHub(Controls.Spinner()) : request.Message.Value);
 
         if (areaChanged.View != null && areaChanged.View is not IUiControl)
             areaChanged = areaChanged with { View = uiControlService.GetUiControl(areaChanged.View) };

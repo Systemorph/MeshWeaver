@@ -82,7 +82,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         await client.ClickAsync(_ => area);
 
-        AreaChangedEvent IsUpdatedView(LayoutClientState layoutClientState)
+        LayoutArea IsUpdatedView(LayoutClientState layoutClientState)
         {
             var ret = layoutClientState.GetById(TestLayoutPlugin.UpdatingView);
             if (ret?.View is TextBoxControl { Data: not TestLayoutPlugin.SomeString })

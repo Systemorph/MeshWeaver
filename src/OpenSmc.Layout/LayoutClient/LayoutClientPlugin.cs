@@ -10,8 +10,8 @@ namespace OpenSmc.Layout.LayoutClient;
 
 public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessageHub hub)
     : MessageHubPlugin<LayoutClientState>(hub),
-        IMessageHandler<AreaChangedEvent>,
-        IMessageHandler<GetRequest<AreaChangedEvent>>
+        IMessageHandler<LayoutArea>,
+        IMessageHandler<GetRequest<LayoutArea>>
 {
     public override bool IsDeferred(IMessageDelivery delivery) 
         => delivery.Message is RefreshRequest
@@ -25,12 +25,12 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
     }
 
 
-    IMessageDelivery IMessageHandler<AreaChangedEvent>.HandleMessage(IMessageDelivery<AreaChangedEvent> request)
+    IMessageDelivery IMessageHandler<LayoutArea>.HandleMessage(IMessageDelivery<LayoutArea> request)
     {
         return UpdateArea(request);
     }
 
-    private IMessageDelivery UpdateArea(IMessageDelivery<AreaChangedEvent> request)
+    private IMessageDelivery UpdateArea(IMessageDelivery<LayoutArea> request)
     {
         var sender = request.Sender;
         if (sender.Equals(Hub.Address))
@@ -95,7 +95,7 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
         return request.Processed();
     }
 
-    private AreaChangedEvent CheckInArea(object parentAddress, AreaChangedEvent areaChanged)
+    private LayoutArea CheckInArea(object parentAddress, LayoutArea areaChanged)
     {
         var control = areaChanged.View as IUiControl;
         if (control == null)
@@ -177,7 +177,7 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
                     yield return entityDescriptor;
     }
 
-    private void UpdateParents(object parentAddress, AreaChangedEvent areaChanged)
+    private void UpdateParents(object parentAddress, LayoutArea areaChanged)
     {
         if (State.AreasByControlAddress.TryGetValue(parentAddress, out var parentArea))
         {
@@ -201,7 +201,7 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
         }
     }
 
-    private bool IsUpToDate(AreaChangedEvent areaChanged, AreaChangedEvent existing)
+    private bool IsUpToDate(LayoutArea areaChanged, LayoutArea existing)
     {
         if (areaChanged.View == null)
             return existing.View == null;
@@ -211,7 +211,7 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
     }
 
 
-    private void CheckOutArea(AreaChangedEvent area)
+    private void CheckOutArea(LayoutArea area)
     {
         if (area == null)
             return;
@@ -238,7 +238,7 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
 
     }
 
-    private void RemoveAreaFromParent( AreaChangedEvent area)
+    private void RemoveAreaFromParent( LayoutArea area)
     {
         if (State.ParentsByAddress.TryGetValue(area, out var parent)
             && State.AreasByControlAddress.TryGetValue(parent.Address, out var parentArea))
@@ -264,21 +264,21 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
     private object CheckInDynamic(RemoteViewControl remoteView)
     {
         return remoteView.Data == null ? remoteView :
-            remoteView with { Data = CheckInArea(remoteView.Address, (AreaChangedEvent)remoteView.Data) };
+            remoteView with { Data = CheckInArea(remoteView.Address, (LayoutArea)remoteView.Data) };
     }
 
     private object CheckInDynamic(RedirectControl redirect)
     {
         Hub.Post(redirect.Message, o => o.WithTarget(redirect.RedirectAddress));
-        if (redirect.Data is AreaChangedEvent area)
+        if (redirect.Data is LayoutArea area)
             return redirect with { Data = CheckInArea(redirect.Address, area) };
         return redirect;
     }
 
 
-    IMessageDelivery IMessageHandler<GetRequest<AreaChangedEvent>>.HandleMessage(IMessageDelivery<GetRequest<AreaChangedEvent>> request)
+    IMessageDelivery IMessageHandler<GetRequest<LayoutArea>>.HandleMessage(IMessageDelivery<GetRequest<LayoutArea>> request)
     {
-        if (request.Message.Options is not Func<LayoutClientState, AreaChangedEvent> selector)
+        if (request.Message.Options is not Func<LayoutClientState, LayoutArea> selector)
         {
             throw new NotSupportedException();
         }

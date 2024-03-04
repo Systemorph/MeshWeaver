@@ -152,7 +152,8 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
 
         foreach (var (collection, path) in subscription.Collections.ToArray())
         {
-            var evaluated = JsonPath.Parse(path).Evaluate(CurrentWorkspace);
+            var jsonPath = JsonPath.Parse(path);
+            var evaluated = jsonPath.Evaluate(CurrentWorkspace);
             var match = evaluated.Matches switch
             {
                 { Count: 1 } => evaluated.Matches[0].Value,

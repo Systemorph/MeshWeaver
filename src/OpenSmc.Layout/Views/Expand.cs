@@ -22,7 +22,7 @@ public class ExpandableUiPlugin<TControl>(IMessageHub hub)
         if (expandableUiControl.ExpandFunc == null)
             return delivery.Ignored();
         var view = await expandableUiControl.ExpandFunc.Invoke(new UiActionContext(delivery.Message.Payload, Hub));
-        var response = new AreaChangedEvent(delivery.Message.Area, view);
+        var response = new LayoutArea(delivery.Message.Area, view);
         Post(response, o => o.ResponseFor(delivery));
         return delivery.Processed();
     }

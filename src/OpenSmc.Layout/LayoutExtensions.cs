@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Application.Scope;
+using OpenSmc.Data;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
@@ -21,6 +22,8 @@ public static class LayoutExtensions
                 .AddAllControlHubs()
             )
             .AddApplicationScope()
+            .AddData(data => data.FromConfigurableDataSource("Layout", dataSource => dataSource
+                .WithType<LayoutArea>(type => type.WithQuery())))
             .RouteLayoutMessages(mainLayoutAddress)
             .AddLayoutTypes()
             .WithHostedHub(mainLayoutAddress, c => MainLayoutConfiguration(c, layoutDefinition))
@@ -32,7 +35,7 @@ public static class LayoutExtensions
             .WithRoutes(forward => forward
                 .RouteMessage<RefreshRequest>(_ => mainLayoutAddress)
                 .RouteMessage<SetAreaRequest>(_ => mainLayoutAddress)
-                .RouteMessage<AreaChangedEvent>(_ => MessageTargets.Subscribers)
+                .RouteMessage<LayoutArea>(_ => MessageTargets.Subscribers)
             );
 
 
