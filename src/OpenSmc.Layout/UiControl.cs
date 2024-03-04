@@ -89,8 +89,7 @@ public abstract record UiControl<TControl, TPlugin>(string ModuleName, string Ap
 
     protected virtual MessageHubConfiguration ConfigureHub(MessageHubConfiguration configuration)
     {
-        return configuration.AddPlugin(CreatePlugin)
-            .WithRoutes(routes => routes.RouteMessage<AreaChangedEvent>(_ => MessageTargets.Subscribers));
+        return configuration.AddPlugin(CreatePlugin);
     }
 
     protected virtual TPlugin CreatePlugin(IMessageHub hub)

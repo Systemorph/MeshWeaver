@@ -141,7 +141,7 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
         {
             var key = $"{collection}:{id}";
             if (workspace.TryAdd(key, instance))
-                missingSubscriptions.Add(key, $"$.['{collection}'][?(@['{ReservedProperties.Id}'] == '{id}')]");
+                missingSubscriptions.Add(key, $"$['{collection}'][?(@['{ReservedProperties.Id}'] == '{id}')]");
         }
 
         if (missingSubscriptions.Any())
