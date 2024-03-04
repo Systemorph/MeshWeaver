@@ -70,8 +70,8 @@ where TDataSource : DataSource<TDataSource>
 
     public object MapInstanceToPartition(object instance)
     {
-        if (MappedTypes.Contains(instance.GetType()))
-            return Id;
+        if(TypeSources.TryGetValue(instance.GetType(), out var typeSource))
+            return typeSource.GetPartition(instance);
         return null;
     }
 

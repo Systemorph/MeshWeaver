@@ -1,55 +1,14 @@
 ﻿using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
-using System.Reflection;
 using OpenSmc.Domain.Abstractions;
 using OpenSmc.Domain.Abstractions.Attributes;
-using OpenSmc.Reflection;
+using OpenSmc.Messaging;
 
 namespace OpenSmc.Data.TestDomain;
 
-/// <summary>
-/// This is structuring element for sub-dividing a data domain into several groups.
-/// You can perceive this as the building plan for how everyone starts.
-/// For tests, it is handy to ship initial values. Can be also hosted in separate file.
-/// </summary>
 public static class TestDomain
 {
-    public record TransactionalData([property: Key] string Id, string LoB, string BusinessUnit, double Value);
-    public record ComputedData([property: Key] string Id, string LoB, string BusinessUnit, double Value);
-
-    public record LineOfBusiness([property: Key] string SystemName, string DisplayName);
-    public record BusinessUnit([property: Key] string SystemName, string DisplayName);
-
-    public static readonly Dictionary<Type, IEnumerable<object>> ReferenceDataDomain
-        =
-        new()
-        {
-            { typeof(LineOfBusiness), new LineOfBusiness[] { new("1", "1"), new("2", "2") } },
-            { typeof(BusinessUnit), new BusinessUnit[] { new("1", "1"), new("2", "2") } }
-        };
-
-    public static readonly Dictionary<Type, IEnumerable<object>> TransactionalDataDomain
-        =
-        new()
-        {
-            {
-                typeof(TransactionalData), new TransactionalData[]
-                {
-                    new("1", "1", "1", 7),
-                    new("2", "1", "3", 2),
-                }
-            }
-        };
-    public static readonly Dictionary<Type, IEnumerable<object>> ComputedDataDomain
-        =
-        new()
-        {
-            {
-                typeof(ComputedData), new ComputedData[]
-                {
-                }
-            }
-        };
+    public record ImportAddress(object Host) : IHostedAddress;
 
     public static readonly Dictionary<Type, IEnumerable<object>> TestRecordsDomain
         =
@@ -67,28 +26,11 @@ public static class TestDomain
             }
         };
 
-    public static DataSource ConfigureReferenceData(this DataSource dataSource)
-        => dataSource.ConfigureCategory(ReferenceDataDomain);
-
-    public static DataSource ConfigureTransactionalData(this DataSource dataSource)
-        => dataSource.ConfigureCategory(TransactionalDataDomain);
-    public static DataSource ConfigureComputedData(this DataSource dataSource)
-        => dataSource.ConfigureCategory(ComputedDataDomain);
-
-    public static DataSource ConfigureCategory(this DataSource dataSource,
-        IDictionary<Type, IEnumerable<object>> typeAndInstance)
+    public static TDataSource ConfigureCategory<TDataSource>(this TDataSource dataSource, IDictionary<Type, IEnumerable<object>> typeAndInstance)
+        where TDataSource : DataSource<TDataSource>
         => typeAndInstance.Aggregate(dataSource,
             (ds, kvp) =>
-                (DataSource)ConfigureCategoryMethod.MakeGenericMethod(kvp.Key).InvokeAsFunction(ds, kvp.Value));
-
-
-    private static readonly MethodInfo ConfigureCategoryMethod =
-        ReflectionHelper.GetStaticMethodGeneric(() => ConfigureCategory<object>(null, null));
-    private static DataSource ConfigureCategory<T>(DataSource dataSource, IEnumerable<object> data)
-        where T : class
-        => dataSource
-            .WithType<T>(o => o
-                .WithInitialData(_ => Task.FromResult(data.Cast<T>())));
+                ds.WithType(kvp.Key, t => t.WithInitialData(kvp.Value)));
 
     public static readonly Dictionary<Type, IEnumerable<object>> ContractDomain
         =

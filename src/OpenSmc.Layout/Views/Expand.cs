@@ -3,9 +3,10 @@
 namespace OpenSmc.Layout.Views;
 
 //not relevant for MVP
-public record ExpandControl(object Collapsed) : ExpandableUiControl<ExpandControl, ExpandableUiPlugin<ExpandControl>>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion);
+public record ExpandControl(object Data) : ExpandableUiControl<ExpandControl, ExpandableUiPlugin<ExpandControl>>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);
 
-public class ExpandableUiPlugin<TControl> : GenericUiControlPlugin<TControl>, IMessageHandlerAsync<ExpandRequest>
+public class ExpandableUiPlugin<TControl>(IMessageHub hub)
+    : GenericUiControlPlugin<TControl>(hub), IMessageHandlerAsync<ExpandRequest>
     where TControl : UiControl
 {
 
@@ -24,9 +25,5 @@ public class ExpandableUiPlugin<TControl> : GenericUiControlPlugin<TControl>, IM
         var response = new AreaChangedEvent(delivery.Message.Area, view);
         Post(response, o => o.ResponseFor(delivery));
         return delivery.Processed();
-    }
-
-    protected ExpandableUiPlugin(IMessageHub hub) : base(hub)
-    {
     }
 }

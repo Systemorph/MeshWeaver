@@ -9,16 +9,20 @@ public record TypeSourceWithTypeWithDataStorage<T>(object DataSource, IMessageHu
     where T : class
 {
 
-
-
-    protected virtual void AddImpl(IEnumerable<T> instances)
-    {
-        Storage.Add(instances);
-    }
-
     protected override void UpdateImpl(IEnumerable<T> instances)
     {
-        Storage.Update(instances);
+        var adds = new List<T>();
+        var updates = new List<T>();
+        foreach (var instance in instances)
+        {
+            if(CurrentState.ContainsKey(GetKey(instance)))
+                updates.Add(instance);
+            else
+                adds.Add(instance);
+        }
+        Storage.Add(adds);
+        Storage.Update(updates);
+
     }
 
     protected override void DeleteImpl(IEnumerable<T> instances)
@@ -26,7 +30,12 @@ public record TypeSourceWithTypeWithDataStorage<T>(object DataSource, IMessageHu
         Storage.Delete(instances);
     }
 
-    public override async Task<IReadOnlyCollection<EntityDescriptor>> GetAsync(CancellationToken cancellationToken)
+    public override async Task InitializeAsync(CancellationToken cancellationToken)
+    {
+        Initialize(await GetAsync(cancellationToken));
+    }
+
+    public async Task<IReadOnlyCollection<EntityDescriptor>> GetAsync(CancellationToken cancellationToken)
     {
         await using var transaction = await Storage.StartTransactionAsync(cancellationToken);
         return await Storage.Query<T>().AsAsyncEnumerable().Select(e => new EntityDescriptor(CollectionName,Key(e),e)).ToArrayAsync(cancellationToken);

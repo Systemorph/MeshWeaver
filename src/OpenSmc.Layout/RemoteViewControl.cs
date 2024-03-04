@@ -21,6 +21,7 @@ public record RemoteViewControl : UiControl<RemoteViewControl, RemoteViewPlugin>
     public RemoteViewControl WithViewUpdate(Action<IMessageDelivery<DataChangedEvent>, IMessageHub> getViewUpdate, Func<AreaChangedEvent, AreaChangedEvent, AreaChangedEvent> updateView) 
         => this with { UpdateFunction = getViewUpdate, UpdateView = updateView };
 
+
     #region Remote mode
     public RemoteViewControl(object Message, object RedirectAddress, string RedirectArea)
         : this()
@@ -65,19 +66,6 @@ public record RemoteViewControl : UiControl<RemoteViewControl, RemoteViewPlugin>
         if (areaChanged.Area != nameof(Data))
             return this;
         return this with { Data = areaChanged };
-    }
-
-    public override bool IsUpToDate(object other)
-    {
-        if (Data == null)
-            return base.IsUpToDate(other);
-
-        if (other is not RemoteViewControl remoteView)
-            return false;
-
-        return (this with { Data = null }).IsUpToDate(remoteView with { Data = null })
-            && IsUpToDate(View, remoteView.View);
-
     }
 
     internal Func<AreaChangedEvent, AreaChangedEvent, AreaChangedEvent> UpdateView

@@ -11,29 +11,34 @@ namespace OpenSmc.Import.Test;
 
 public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
-    {
-
-        return base.ConfigureHost(configuration)
-                .AddData(
-                    data => data.FromConfigurableDataSource
-                    (
-                        nameof(DataSource),
-                        source => source
-                        .ConfigureCategory(TestDomain.TestRecordsDomain)
-                    )
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration) 
+        => base.ConfigureHost(configuration)
+            .AddData(
+                data => data.FromConfigurableDataSource
+                (
+                    nameof(DataSource),
+                    source => source
+                    .ConfigureCategory(TestDomain.TestRecordsDomain)
                 )
-                .AddImport(import => import
-                    .WithFormat("Test", format => format
-                        .WithImportFunction(CustomImportFunction)
+            )
+            .WithHostedHub(new TestDomain.ImportAddress(configuration.Address),
+                config => config
+                    .AddImport(
+                        data => data.FromHub(configuration.Address,
+                            source => source
+                                .ConfigureCategory(TestDomain.TestRecordsDomain)
+                        ),
+                        import => import
+                        .WithFormat("Test", format => format
+                            .WithImportFunction(CustomImportFunction)
+                        )
+                        .WithFormat("Test2", format => format
+                            .WithImportFunction(CustomImportFunction)
+                            .WithAutoMappings()
+                        )
                     )
-                    .WithFormat("Test2", format => format
-                        .WithImportFunction(CustomImportFunction)
-                        .WithAutoMappings()
-                    )
-                )
-            ;
-    }
+            )
+        ;
 
     private ImportFormat.ImportFunction CustomImportFunction = null;
 
@@ -41,7 +46,7 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var client = GetClient();
         var importRequest = new ImportRequest(content) { Format = format };
-        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new HostAddress()));
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
         return client;
     }

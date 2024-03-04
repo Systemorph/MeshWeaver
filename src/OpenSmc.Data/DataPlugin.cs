@@ -10,7 +10,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     IMessageHandler<UpdateDataRequest>,
     IMessageHandler<DeleteDataRequest>,
     IMessageHandler<DataChangedEvent>,
-    IMessageHandler<StartDataSynchronizationRequest>,
+    IMessageHandler<SubscribeDataRequest>,
     IMessageHandler<PatchChangeRequest>
 
 {
@@ -25,18 +25,26 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
 
     public IEnumerable<Type> MappedTypes => State.Workspace.MappedTypes;
 
-    public void Update(IReadOnlyCollection<object> instances, UpdateOptions options)
-        => RequestChange(null, new UpdateDataRequest(instances));
+    public void Update(IEnumerable<object> instances, UpdateOptions options)
+        => RequestChange(null, new UpdateDataRequest(instances.ToArray()));
 
-    public void Delete(IReadOnlyCollection<object> instances)
-        => RequestChange(null, new DeleteDataRequest(instances));
+    public void Delete(IEnumerable<object> instances)
+        => RequestChange(null, new DeleteDataRequest(instances.ToArray()));
 
+
+    //private Task initializeTask;
+    //public override Task Initialized => initializeTask;
 
     public override async Task StartAsync(CancellationToken cancellationToken)  // This loads the persisted state
     {
         await base.StartAsync(cancellationToken);
 
         var dataContext = Hub.GetDataConfiguration();
+        await InitializeAsync(cancellationToken, dataContext); 
+    }
+
+    private async Task InitializeAsync(CancellationToken cancellationToken, DataContext dataContext)
+    {
         await dataContext.InitializeAsync(cancellationToken);
 
         var workspace = dataContext.DataSources.Values
@@ -49,7 +57,6 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
 
         workspace.Initialize(dataContext.GetEntities());
         InitializeState(new(workspace, dataContext));
-
     }
 
 
@@ -161,10 +168,10 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         return request.Processed();
     }
 
-    IMessageDelivery IMessageHandler<StartDataSynchronizationRequest>.HandleMessage(IMessageDelivery<StartDataSynchronizationRequest> request)
+    IMessageDelivery IMessageHandler<SubscribeDataRequest>.HandleMessage(IMessageDelivery<SubscribeDataRequest> request)
         => StartSynchronization(request);
 
-    private IMessageDelivery StartSynchronization(IMessageDelivery<StartDataSynchronizationRequest> request)
+    private IMessageDelivery StartSynchronization(IMessageDelivery<SubscribeDataRequest> request)
     {
         var address = request.Sender;
 
