@@ -110,7 +110,7 @@ public abstract record UiControl<TControl, TPlugin>(string ModuleName, string Ap
     public override bool IsUpToDate(object other)
         => Equals(other);
 
-    protected bool IsUpToDate(AreaChangedEvent a, AreaChangedEvent b)
+    protected bool IsUpToDate(LayoutArea a, LayoutArea b)
         => a.Equals(b);
 
     public TControl WithStyle(Func<StyleBuilder, StyleBuilder> styleBuilder) => This with { Style = styleBuilder(new StyleBuilder()).Build() };
@@ -213,7 +213,7 @@ public abstract record ExpandableUiControl<TControl, TPlugin>(string ModuleName,
     }
 
     internal Func<IUiActionContext, Task<object>> ExpandFunc { get; init; }
-    public AreaChangedEvent Expanded { get; init; }
+    public LayoutArea Expanded { get; init; }
     public TControl WithExpand(object message, object target, object area) => This with { ExpandMessage = new(message, target, area) };
 
     public TControl WithExpand(object payload, Func<IUiActionContext, Task<object>> expand)

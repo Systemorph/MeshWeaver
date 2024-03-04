@@ -7,31 +7,31 @@ namespace OpenSmc.Layout.Composition;
 public record LayoutStackControl() : UiControl<LayoutStackControl, LayoutPlugin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null), IUiControlWithSubAreas
 {
     public record AreaChangedOptions(string InsertAfter = null);
-    private readonly ImmutableList<AreaChangedEvent> areasImpl = ImmutableList<AreaChangedEvent>.Empty;
+    private readonly ImmutableList<LayoutArea> areasImpl = ImmutableList<LayoutArea>.Empty;
     internal const string Root = "";
 
     internal ImmutableList<ViewElement> ViewElements { get; init; } = ImmutableList<ViewElement>.Empty; //definition of views
 
-    public IReadOnlyCollection<AreaChangedEvent> Areas
+    public IReadOnlyCollection<LayoutArea> Areas
     {
         get => AreasImpl;
         init => AreasImpl = value?.ToImmutableList();
     }
 
-    internal ImmutableList<AreaChangedEvent> AreasImpl
+    internal ImmutableList<LayoutArea> AreasImpl
     {
         get => areasImpl;
         init => areasImpl = value?.Where(x => x is { View: not null }).ToImmutableList();
     }
 
-    IReadOnlyCollection<AreaChangedEvent> IUiControlWithSubAreas.SubAreas => Areas;
-    IUiControlWithSubAreas IUiControlWithSubAreas.SetArea(AreaChangedEvent areaChanged)
+    IReadOnlyCollection<LayoutArea> IUiControlWithSubAreas.SubAreas => Areas;
+    IUiControlWithSubAreas IUiControlWithSubAreas.SetArea(LayoutArea areaChanged)
     {
         return SetAreaToState(areaChanged);
     }
 
 
-    internal LayoutStackControl SetAreaToState(AreaChangedEvent area)
+    internal LayoutStackControl SetAreaToState(LayoutArea area)
     {
         var insertAfter = (area.Options as AreaChangedOptions)?.InsertAfter;
         var toBeReplaced = AreasImpl.FirstOrDefault(x => x.Area == area.Area);
@@ -90,7 +90,7 @@ public LayoutStackControl WithView(object value) => WithView(value, null);
 
     public int ColumnCount { get; init; }
 
-    public LayoutStackControl UpdateArea(AreaChangedEvent areaChangedEvent)
+    public LayoutStackControl UpdateArea(LayoutArea areaChangedEvent)
     {
         var old = AreasImpl.Find(x => x.Area == areaChangedEvent.Area);
         var areas = areaChangedEvent.View == null ? AreasImpl.RemoveAll(x => x.Area == areaChangedEvent.Area) : old != null ? AreasImpl.Replace(old, areaChangedEvent) : AreasImpl.Add(areaChangedEvent);

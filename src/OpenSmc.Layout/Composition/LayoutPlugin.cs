@@ -39,7 +39,7 @@ public class LayoutPlugin(IMessageHub hub) :
                         :
                         a is ViewElementWithPath vp
                             ? SetAreaImpl(null, null, null, vp.Path, vp.Options)
-                            : new AreaChangedEvent(a.Area, null)
+                            : new LayoutArea(a.Area, null)
 
             )
             .ToArray();
@@ -49,12 +49,12 @@ public class LayoutPlugin(IMessageHub hub) :
         await Task.WhenAll(layoutDefinition.Initializations.Select(i => i.Invoke()));
     }
 
-    private AreaChangedEvent GetArea(string area)
+    private LayoutArea GetArea(string area)
     {
         return Control.Areas.FirstOrDefault(x => x.Area == area);
     }
 
-    protected AreaChangedEvent SetAreaImpl(IMessageDelivery request, object view, ViewDefinition viewDefinition, string path, SetAreaOptions options)
+    protected LayoutArea SetAreaImpl(IMessageDelivery request, object view, ViewDefinition viewDefinition, string path, SetAreaOptions options)
     {
         var area = options.Area;
         var deleteView = view == null && viewDefinition == null && path == null;
@@ -80,7 +80,7 @@ public class LayoutPlugin(IMessageHub hub) :
 
         control = CreateUiControlHub(control);
         Hub.ConnectTo(control.Hub);
-        var ret = new AreaChangedEvent(area, control, options.AreaViewOptions);
+        var ret = new LayoutArea(area, control, options.AreaViewOptions);
         UpdateState(state => state.SetAreaToState(ret));
 
         return ret;
@@ -104,14 +104,14 @@ public class LayoutPlugin(IMessageHub hub) :
         SetAreaOptions options)
     {
         var areaChanged = SetAreaImpl(request, view, viewDefinition, path, options);
-        Post(areaChanged ?? new AreaChangedEvent(area, null), o => o.ResponseFor(request ?? request).WithTarget(MessageTargets.Subscribers));
+        Post(areaChanged ?? new LayoutArea(area, null), o => o.ResponseFor(request ?? request).WithTarget(MessageTargets.Subscribers));
         return request.Processed();
     }
 
     protected override IMessageDelivery RefreshView(IMessageDelivery<RefreshRequest> request)
     {
         var areaChanged = string.IsNullOrWhiteSpace(request.Message.Area)
-                              ? new AreaChangedEvent(request.Message.Area, State)
+                              ? new LayoutArea(request.Message.Area, State)
                               : State.Areas.FirstOrDefault(x => x.Area == request.Message.Area);
 
         if (areaChanged == null)
@@ -119,7 +119,7 @@ public class LayoutPlugin(IMessageHub hub) :
             var view = GetViewDefinition(request);
             if (view == null)
             {
-                Post(new AreaChangedEvent(request.Message.Area, null), o => o.ResponseFor(request));
+                Post(new LayoutArea(request.Message.Area, null), o => o.ResponseFor(request));
                 return request.Processed();
             }
 

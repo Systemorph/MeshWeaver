@@ -25,7 +25,7 @@ public record OpenModalDialogEvent(object View, Func<ModalDialogOptions, ModalDi
 public record CloseModalDialogEvent;
 
 
-public record SetAreaRequest : IRequest<AreaChangedEvent>, IRequestWithArea
+public record SetAreaRequest : IRequest<LayoutArea>, IRequestWithArea
 {
     public SetAreaRequest(string area, string Path)
     {
@@ -63,30 +63,12 @@ public record SetAreaRequest : IRequest<AreaChangedEvent>, IRequestWithArea
     public IMessageDelivery ForwardedRequest { get; init; }
 }
 
-[method: Newtonsoft.Json.JsonConstructor]
-public record AreaChangedEvent(
-    string Area,
-    object View,
-    object Options,
-    IReadOnlyCollection<ViewDependency> Dependencies)
-{
-    public AreaChangedEvent(string area, object view)
-        : this(area, view, null, null)
-    {
-    }
-    public AreaChangedEvent(string area, object view, object Options)
-        : this(area, view, Options, null)
-    {
-    }
-}
-
-public record ViewDependency(string ScopeId, string Property);
 
 public interface IRequestWithArea
 {
     string Area { get; }
 }
-public record RefreshRequest(string Area = "") : IRequest<AreaChangedEvent>, IRequestWithArea
+public record RefreshRequest(string Area = "") : IRequest<LayoutArea>, IRequestWithArea
 {
     // TODO SMCv2: consider making this Dictionary<string, object> (2023-10-18, Andrei Sirotenko)
     public object Options { get; init; }

@@ -208,6 +208,8 @@ public record TypeSourceWithType<T>(object DataSource, IMessageHub Hub) : TypeSo
 
     public TypeSourceWithType<T> WithInitialData(IEnumerable<T> initialData)
         => WithInitialData(_ => Task.FromResult(initialData.Cast<object>()));
+
+
 }
 
 public abstract record TypeSourceWithType<T, TTypeSource> : TypeSource<TTypeSource>
@@ -240,5 +242,11 @@ where TTypeSource: TypeSourceWithType<T, TTypeSource>
     
     public TTypeSource WithPartition(Func<T, object> partition)
         => This with { PartitionFunction = o => partition.Invoke((T)o) };
+
+
+    public TTypeSource WithQuery(Func<string, T> query)
+        => This with { QueryFunction = query };
+
+    protected Func<string, T> QueryFunction { get; init; }
 
 }

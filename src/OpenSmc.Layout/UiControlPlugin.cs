@@ -37,7 +37,7 @@ public class UiControlPlugin<TControl> : MessageHubPlugin<TControl>,
     {
         if (string.IsNullOrWhiteSpace(request.Message.Area))
         {
-            Post(new AreaChangedEvent(request.Message.Area, State), o => o.ResponseFor(request));
+            Post(new LayoutArea(request.Message.Area, State), o => o.ResponseFor(request));
             return request.Processed();
         }
 

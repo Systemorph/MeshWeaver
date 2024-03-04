@@ -18,7 +18,7 @@ public record RemoteViewControl : UiControl<RemoteViewControl, RemoteViewPlugin>
                                                                }
 
     internal Action<IMessageDelivery<DataChangedEvent>, IMessageHub> UpdateFunction { get; init; }
-    public RemoteViewControl WithViewUpdate(Action<IMessageDelivery<DataChangedEvent>, IMessageHub> getViewUpdate, Func<AreaChangedEvent, AreaChangedEvent, AreaChangedEvent> updateView) 
+    public RemoteViewControl WithViewUpdate(Action<IMessageDelivery<DataChangedEvent>, IMessageHub> getViewUpdate, Func<LayoutArea, LayoutArea, LayoutArea> updateView) 
         => this with { UpdateFunction = getViewUpdate, UpdateView = updateView };
 
 
@@ -53,22 +53,22 @@ public record RemoteViewControl : UiControl<RemoteViewControl, RemoteViewPlugin>
     internal SetAreaOptions Options { get; init; }
     #endregion
 
-    internal AreaChangedEvent View
+    internal LayoutArea View
     {
-        get => (AreaChangedEvent)Data;
+        get => (LayoutArea)Data;
         init => Data = value;
     }
 
-    IReadOnlyCollection<AreaChangedEvent> IUiControlWithSubAreas.SubAreas => new[] { View };
+    IReadOnlyCollection<LayoutArea> IUiControlWithSubAreas.SubAreas => new[] { View };
 
-    IUiControlWithSubAreas IUiControlWithSubAreas.SetArea(AreaChangedEvent areaChanged)
+    IUiControlWithSubAreas IUiControlWithSubAreas.SetArea(LayoutArea areaChanged)
     {
         if (areaChanged.Area != nameof(Data))
             return this;
         return this with { Data = areaChanged };
     }
 
-    internal Func<AreaChangedEvent, AreaChangedEvent, AreaChangedEvent> UpdateView
+    internal Func<LayoutArea, LayoutArea, LayoutArea> UpdateView
     {
         get;
         init;
