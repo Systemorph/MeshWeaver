@@ -90,15 +90,7 @@ public abstract record UiControl<TControl, TPlugin>(string ModuleName, string Ap
     protected virtual MessageHubConfiguration ConfigureHub(MessageHubConfiguration configuration)
     {
         return configuration.AddPlugin(CreatePlugin)
-            .WithRoutes(forward =>
-                forward
-                    .RouteMessage<ScopePropertyChanged>(
-                        _ => new ApplicationScopeAddress(LayoutExtensions.FindLayoutHost(Address)),
-                        r => r.Message.Status == PropertyChangeStatus.Requested)
-                    .RouteMessage<ScopePropertyChanged>(
-                        _ => MessageTargets.Subscribers,
-                        r => r.Message.Status != PropertyChangeStatus.Requested)
-            );
+            .WithRoutes(routes => routes.RouteMessage<AreaChangedEvent>(_ => MessageTargets.Subscribers));
     }
 
     protected virtual TPlugin CreatePlugin(IMessageHub hub)

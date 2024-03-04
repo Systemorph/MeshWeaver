@@ -9,6 +9,11 @@ public record SpinnerControl()
         return other != null;
     }
 
+    public override bool IsUpToDate(object other)
+    {
+        return other is SpinnerControl;
+    }
+
     public override int GetHashCode()
     {
         return 1;

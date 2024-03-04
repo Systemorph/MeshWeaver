@@ -22,11 +22,13 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
+            .WithRoutes(r => r.RouteAddress<ClientAddress>((a,d)=>d.Package()))
             .AddData(data => data.FromConfigurableDataSource("Local", 
                 ds => ds
                     .WithType<TestLayoutPlugin.DataRecord>(t => t.WithInitialData([new("Hello", "World")]))))
             .AddPlugin<TestLayoutPlugin>()    
             .AddLayout(layout => layout.Hub.ServiceProvider.GetRequiredService<TestLayoutPlugin>().Configure(layout));
+            
 
     }
 

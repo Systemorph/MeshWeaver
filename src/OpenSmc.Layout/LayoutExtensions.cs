@@ -2,6 +2,7 @@
 using OpenSmc.Application.Scope;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 
 namespace OpenSmc.Layout;
 
@@ -20,14 +21,27 @@ public static class LayoutExtensions
                 .AddAllControlHubs()
             )
             .AddApplicationScope()
-            .WithRoutes(forward => forward
-                .RouteMessage<RefreshRequest>(_ => mainLayoutAddress)
-                .RouteMessage<SetAreaRequest>(_ => mainLayoutAddress)
-            )
+            .RouteLayoutMessages(mainLayoutAddress)
+            .AddLayoutTypes()
             .WithHostedHub(mainLayoutAddress, c => MainLayoutConfiguration(c, layoutDefinition))
             ;
     }
 
+    public static MessageHubConfiguration RouteLayoutMessages(this MessageHubConfiguration configuration, object mainLayoutAddress)
+        => configuration
+            .WithRoutes(forward => forward
+                .RouteMessage<RefreshRequest>(_ => mainLayoutAddress)
+                .RouteMessage<SetAreaRequest>(_ => mainLayoutAddress)
+                .RouteMessage<AreaChangedEvent>(_ => MessageTargets.Subscribers)
+            );
+
+
+    public static MessageHubConfiguration AddLayoutTypes(this MessageHubConfiguration configuration)
+        => configuration
+            .WithTypes(typeof(UiControl).Assembly.GetTypes()
+                .Where(t => typeof(IUiControl).IsAssignableFrom(t) && !t.IsAbstract))
+            .WithTypes(typeof(MessageAndAddress), typeof(UiControlAddress))
+        ;
 
     private static MessageHubConfiguration MainLayoutConfiguration(MessageHubConfiguration configuration,
         Func<LayoutDefinition, LayoutDefinition> layoutDefinition)
