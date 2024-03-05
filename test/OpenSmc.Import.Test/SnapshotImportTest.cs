@@ -64,6 +64,8 @@ SystemName,DisplayName
         importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
+        await Task.Delay(100);
+
         ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
             o => o.WithTarget(new HostAddress()));
 
@@ -103,6 +105,8 @@ SystemName,DisplayName
         importRequest = new ImportRequest(content2) { SnapshotMode = true };
         importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+
+        await Task.Delay(100);
 
         ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
             o => o.WithTarget(new HostAddress()));
@@ -157,7 +161,9 @@ SystemName,DisplayName,Number
         importRequest = new ImportRequest(content2) { SnapshotMode = true };
         importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
-
+        
+        await Task.Delay(100);
+        
         ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
             o => o.WithTarget(new HostAddress()));
 
