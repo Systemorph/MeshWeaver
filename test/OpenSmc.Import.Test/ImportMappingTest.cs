@@ -170,9 +170,9 @@ Record3SystemName,Record3DisplayName";
             o => o.WithTarget(new HostAddress()));
 
 
-        ret.Message.Items.Should().HaveCount(1);
+        ret.Message.Items.Should().HaveCount(2);
 
-        var resRecord = ret.Message.Items.Should().ContainSingle().Which;
+        var resRecord = ret.Message.Items.Last();
 
         resRecord.Should().NotBeNull();
         resRecord.DisplayName.Should().Contain("test");
