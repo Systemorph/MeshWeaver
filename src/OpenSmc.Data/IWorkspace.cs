@@ -10,7 +10,8 @@ public interface IWorkspace
 
     void Delete(IEnumerable<object> instances);
     void Delete(object instance) => Delete(new[] { instance });
-    IReadOnlyCollection<T> GetData<T>()where T:class;
+    IReadOnlyCollection<T> GetData<T>() where T : class;
+    T GetData<T>(object id) where T : class;
     void Commit();
     void Rollback();
 }

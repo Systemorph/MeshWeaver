@@ -143,6 +143,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     }
 
 
+
     public void Commit()
     {
         State.Workspace.Commit();
@@ -157,6 +158,10 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     public IReadOnlyCollection<T> GetData<T>() where T : class
     {
         return State.Workspace.Get<T>();
+    }
+    public T GetData<T>(object id) where T : class
+    {
+        return State.Workspace.Get<T>(id);
     }
 
     IMessageDelivery IMessageHandler<DataChangedEvent>.HandleMessage(IMessageDelivery<DataChangedEvent> request)
