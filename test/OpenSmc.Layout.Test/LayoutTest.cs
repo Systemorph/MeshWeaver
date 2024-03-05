@@ -39,7 +39,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
 
-    [Fact]
+    [Fact(Timeout = 5000)]
     public async Task LayoutStackUpdateTest()
     {
         var client = GetClient();
@@ -52,7 +52,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         area.View.Should().BeOfType<Composition.LayoutStackControl>().Which.Areas.Should().HaveCount(1);
 
     }
-    [Fact]
+    
+    [Fact(Timeout = 5000)]
     public async Task GetPredefinedArea()
     {
         var client = GetClient();
@@ -69,7 +70,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
 
 
-    [Fact]
+    [Fact(Timeout = 5000)]
     public async Task UpdatingView()
     {
 
@@ -99,7 +100,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
 
     }
-    [Fact]
+    [Fact(Timeout = 5000)]
     public async Task DataBoundView()
     {
 
