@@ -11,7 +11,8 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     IMessageHandler<DeleteDataRequest>,
     IMessageHandler<DataChangedEvent>,
     IMessageHandler<SubscribeDataRequest>,
-    IMessageHandler<PatchChangeRequest>
+    IMessageHandler<PatchChangeRequest>,
+    IMessageHandler<ReplaceDataRequest>
 
 {
     private readonly IMessageHub persistenceHub;
@@ -26,7 +27,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     public IEnumerable<Type> MappedTypes => State.Workspace.MappedTypes;
 
     public void Update(IEnumerable<object> instances, UpdateOptions options)
-        => RequestChange(null, new UpdateDataRequest(instances.ToArray()));
+        => RequestChange(null, options.SnapshotModeEnabled ? new ReplaceDataRequest(instances.ToArray()) : new UpdateDataRequest(instances.ToArray()));
 
     public void Delete(IEnumerable<object> instances)
         => RequestChange(null, new DeleteDataRequest(instances.ToArray()));
@@ -63,6 +64,8 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(IMessageDelivery<UpdateDataRequest> request)
         => RequestChange(request, request.Message);
     IMessageDelivery IMessageHandler<PatchChangeRequest>.HandleMessage(IMessageDelivery<PatchChangeRequest> request)
+        => RequestChange(request, request.Message);
+    IMessageDelivery IMessageHandler<ReplaceDataRequest>.HandleMessage(IMessageDelivery<ReplaceDataRequest> request)
         => RequestChange(request, request.Message);
 
 
