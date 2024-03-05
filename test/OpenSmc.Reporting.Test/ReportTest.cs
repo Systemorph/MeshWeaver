@@ -1,13 +1,11 @@
 ﻿using OpenSmc.Collections;
 using OpenSmc.DataCubes;
 using OpenSmc.Fixture;
-using OpenSmc.GridModel;
 using OpenSmc.Pivot.Builder;
 using OpenSmc.Reporting.Builder;
 using OpenSmc.TestDomain;
 using OpenSmc.TestDomain.Cubes;
 using OpenSmc.TestDomain.SimpleData;
-using Xunit;
 using Xunit.Abstractions;
 
 namespace OpenSmc.Reporting.Test
@@ -66,6 +64,7 @@ namespace OpenSmc.Reporting.Test
                 .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
                 .ToTable()
                 .WithOptions(rm => rm.HideRowValuesForDimension("DimA", x => x.ForLevel(1)))
+                .WithOptions(o => o.AutoHeight())
                 .Execute();
 
             await gridOptions.Verify("HierarchicalDimensionHideAggregation.json");
