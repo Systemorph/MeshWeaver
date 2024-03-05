@@ -6,6 +6,7 @@ using OpenSmc.Messaging;
 using OpenSmc.Data;
 using OpenSmc.Data.TestDomain;
 using OpenSmc.Activities;
+using OpenSmc.Scopes.DataCubes;
 
 namespace OpenSmc.Reporting.Test;
 
@@ -65,6 +66,7 @@ public class ReportTestWithHubs(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
+                .AddScopesDataCubes()
                 .ConfigureDataForReport()
                 .ConfigureReportingHub()
             ;
