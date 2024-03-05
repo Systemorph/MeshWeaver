@@ -13,6 +13,10 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
         IMessageHandler<AreaChangedEvent>,
         IMessageHandler<GetRequest<AreaChangedEvent>>
 {
+    public override bool IsDeferred(IMessageDelivery delivery) 
+        => delivery.Message is RefreshRequest
+            || base.IsDeferred(delivery);
+
     public override async Task StartAsync(CancellationToken cancellationToken)
     {
         await base.StartAsync(cancellationToken);
@@ -48,7 +52,11 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
         if (areaChanged.View is IUiControl control)
         {
             var area = areaChanged;
-            UpdateState(s =>s with{ControlAddressByParentArea = s.ControlAddressByParentArea.SetItem((sender, area.Area), control.Address)}) ;
+            UpdateState(s =>
+                s with
+                {
+                    ControlAddressByParentArea = s.ControlAddressByParentArea.SetItem((sender, area.Area), control.Address)
+                }) ;
 
             // the parent address might differ from sender, as the sender could be the top level logical hub,
             // which will forward the messages to the appropriate control
@@ -133,7 +141,7 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
         {
             var key = $"{collection}:{id}";
             if (workspace.TryAdd(key, instance))
-                missingSubscriptions.Add(key, $"$.['{collection}'][?(@['{ReservedProperties.Id}'] == '{id}')]");
+                missingSubscriptions.Add(key, $"$['{collection}'][?(@['{ReservedProperties.Id}'] == '{id}')]");
         }
 
         if (missingSubscriptions.Any())
@@ -250,9 +258,13 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
 
     private object CheckInDynamic(LayoutStackControl stack)
     {
-        //Post(new RefreshRequest(), o => o.WithTarget(stack.Address));
         var areas = stack.Areas.Select(a => CheckInArea(stack.Address, a)).ToArray();
         return stack with { Areas = areas };
+    }
+    private object CheckInDynamic(RemoteViewControl remoteView)
+    {
+        return remoteView.Data == null ? remoteView :
+            remoteView with { Data = CheckInArea(remoteView.Address, (AreaChangedEvent)remoteView.Data) };
     }
 
     private object CheckInDynamic(RedirectControl redirect)

@@ -125,7 +125,7 @@ public record MessageHubConfiguration
     public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, CancellationToken, Task<IMessageDelivery>> delivery) => this with {MessageHandlers = MessageHandlers.Add(new(typeof(TMessage), (h,m,c) => delivery.Invoke(h,(IMessageDelivery<TMessage>)m,c)))};
 
 
-    public MessageHubConfiguration WithBuildupAction(Action<IMessageHub> action) => this with { BuildupActions = BuildupActions.Add((hub,_) => { action(hub); return Task.CompletedTask; }) };
+    public MessageHubConfiguration WithInitialization(Action<IMessageHub> action) => this with { BuildupActions = BuildupActions.Add((hub,_) => { action(hub); return Task.CompletedTask; }) };
     public MessageHubConfiguration WithBuildupAction(Func<IMessageHub, CancellationToken, Task> action) => this with { BuildupActions = BuildupActions.Add(action) };
 
 

@@ -85,6 +85,8 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
             case DeleteDataRequest delete:
                 return Delete(delete.Elements.Select(ParseEntityDescriptor).ToArray()).ToArray();
 
+            case ReplaceDataRequest replace:
+                return Update(replace.Elements.Select(ParseEntityDescriptor).ToArray(), true).ToArray();
         }
         throw new ArgumentOutOfRangeException(nameof(request), request, null);
     }

@@ -16,7 +16,7 @@ public record LayoutClientState(LayoutClientConfiguration Configuration)
     internal ImmutableList<(Func<LayoutClientState, AreaChangedEvent> Selector, IMessageDelivery Request)> PendingRequests { get; init; } = ImmutableList<(Func<LayoutClientState, AreaChangedEvent> Selector, IMessageDelivery Request)>.Empty;
     public ImmutableDictionary<(string Id, string Collection), object> DataEntities { get; init; } = ImmutableDictionary<(string Id, string Collection), object>.Empty;
     public ImmutableDictionary<(string Id, string Collection), ImmutableList<string>> Subscriptions { get; init; } = ImmutableDictionary<(string Id, string Collection), ImmutableList<string>>.Empty;
-    public ImmutableDictionary<object, JsonObject> Workspaces { get; init; }
+    public ImmutableDictionary<object, JsonObject> Workspaces { get; init; } = ImmutableDictionary<object, JsonObject>.Empty;
 
     public AreaChangedEvent GetById(string controlId)
         => AreasByControlId.GetValueOrDefault(controlId);
