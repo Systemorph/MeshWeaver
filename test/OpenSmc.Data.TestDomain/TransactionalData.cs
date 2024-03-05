@@ -20,6 +20,7 @@ public record BusinessUnit([property: Key] string SystemName, string DisplayName
 
 public record ImportAddress(int Year, object Host) : IHostedAddress;
 public record ReportDataAddress(object Host) : IHostedAddress;
+public record ReportingAddress(object Host) : IHostedAddress;
 public record ReferenceDataAddress(object Host) : IHostedAddress;
 public record ComputedDataAddress(int Year, string BusinessUnit, object Host) : IHostedAddress;
 public record TransactionalDataAddress(int Year, string BusinessUnit, object Host) : IHostedAddress;

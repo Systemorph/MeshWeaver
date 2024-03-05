@@ -5,7 +5,6 @@ using Xunit.Abstractions;
 using OpenSmc.Messaging;
 using OpenSmc.Data;
 using OpenSmc.Data.TestDomain;
-using OpenSmc.Activities;
 using OpenSmc.Scopes;
 using OpenSmc.Scopes.DataCubes;
 
@@ -33,9 +32,6 @@ namespace OpenSmc.Reporting.Test;
 
 public static class DataExtensions
 {
-    public static DataSource WithInitialData<T>(this DataSource dataSource, IEnumerable<T> data) where T : class =>
-        dataSource.WithType<T>(t => t.WithInitialData(data));
-
     public static MessageHubConfiguration ConfigureDataForReport(this MessageHubConfiguration parent)
         => parent.WithHostedHub(
             new ReportDataAddress(parent.Address),
@@ -44,13 +40,20 @@ public static class DataExtensions
                     .FromConfigurableDataSource
                     (
                         "DataForReport",
-                        dataSource => dataSource.WithInitialData(ValueWithHierarchicalDimension.Data)
+                        dataSource => dataSource
+                            .WithType<ValueWithHierarchicalDimension>(t => t
+                                .WithKey(x => x.DimA)
+                                .WithInitialData(ValueWithHierarchicalDimension.Data)
+                            )
                     )
                 )
         );
-
+    
+    // TODO V10: think of moving scopes and data cubes registration to reporting plugin (05.03.2024, Ekaterina Mishina)
     public static MessageHubConfiguration ConfigureReportingHub(this MessageHubConfiguration parent)
-        => parent.WithHostedHub(new ReportingAddress(), config => config
+        => parent.WithHostedHub(new ReportingAddress(parent.Address), config => config
+            .WithServices(services => services.RegisterScopes())
+            .AddScopesDataCubes()
             .AddReporting(data => data
                     .FromHub(new ReportDataAddress(parent.Address),
                         dataSource => dataSource
@@ -60,16 +63,11 @@ public static class DataExtensions
             ));
 }
 
-public record ReportingAddress;
-
 public class ReportTestWithHubs(ITestOutputHelper output) : HubTestBase(output)
 {
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
-        // TODO V10: think of moving scopes and data cubes registration to reporting plugin (05.03.2024, Ekaterina Mishina)
         return base.ConfigureHost(configuration)
-                .WithServices(services => services.RegisterScopes())
-                .AddScopesDataCubes()
                 .ConfigureDataForReport()
                 .ConfigureReportingHub()
             ;
@@ -82,10 +80,10 @@ public class ReportTestWithHubs(ITestOutputHelper output) : HubTestBase(output)
         var reportRequest = new ReportRequest();
 
         // act
-        var reportResponse = await client.AwaitResponse(reportRequest, o => o.WithTarget(new ReportingAddress()));
+        var reportResponse = await client.AwaitResponse(reportRequest, o => o.WithTarget(new ReportingAddress(new HostAddress())));
 
         // assert
-        reportResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        reportResponse.Message.GridOptions.Should().NotBeNull();
 
         //var data = ValueWithHierarchicalDimension.Data.ToDataCube().RepeatOnce();
         // TODO V10: move this to report config (configure report hub) (05.03.2024, Ekaterina Mishina)
