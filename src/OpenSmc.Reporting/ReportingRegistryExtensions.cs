@@ -1,5 +1,6 @@
 ﻿using OpenSmc.Data;
 using OpenSmc.Messaging;
+using OpenSmc.Scopes;
 
 namespace OpenSmc.Reporting;
 
@@ -11,7 +12,7 @@ public static class ReportingRegistryExtensions
         Func<ReportConfiguration, ReportConfiguration> reportConfiguration)
     {
         return configuration
-                .WithServices(services => services)
+                .WithServices(services => services.RegisterScopes())
                 .AddData(data)
                 .AddPlugin(h => new ReportingPlugin(h, reportConfiguration))
             ;
