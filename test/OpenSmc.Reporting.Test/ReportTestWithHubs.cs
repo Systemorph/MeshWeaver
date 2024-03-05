@@ -6,6 +6,7 @@ using OpenSmc.Messaging;
 using OpenSmc.Data;
 using OpenSmc.Data.TestDomain;
 using OpenSmc.Activities;
+using OpenSmc.Scopes;
 using OpenSmc.Scopes.DataCubes;
 
 namespace OpenSmc.Reporting.Test;
@@ -65,7 +66,9 @@ public class ReportTestWithHubs(ITestOutputHelper output) : HubTestBase(output)
 {
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
+        // TODO V10: think of moving scopes and data cubes registration to reporting plugin (05.03.2024, Ekaterina Mishina)
         return base.ConfigureHost(configuration)
+                .WithServices(services => services.RegisterScopes())
                 .AddScopesDataCubes()
                 .ConfigureDataForReport()
                 .ConfigureReportingHub()
