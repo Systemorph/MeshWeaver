@@ -9,7 +9,6 @@
     <ProjectReference Include="..\OpenSmc.Activities\OpenSmc.Activities.csproj" />
     <ProjectReference Include="..\OpenSmc.Data.Contract\OpenSmc.Data.Contract.csproj" />
     <ProjectReference Include="..\OpenSmc.Messaging.Hub\OpenSmc.Messaging.Hub.csproj" />
-    <ProjectReference Include="..\OpenSmc.Scopes\OpenSmc.Scopes.csproj" />
   </ItemGroup>
 
 </Project>

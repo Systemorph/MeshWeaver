@@ -8,7 +8,7 @@ public static class ModuleSetup
 {
     public static MessageHubConfiguration AddScopesDataCubes(this MessageHubConfiguration configuration)
     {
-        return configuration.WithBuildupAction(hub =>
+        return configuration.WithInitialization(hub =>
             hub.ServiceProvider.InitializeDataCubesInterceptor());
     }
 

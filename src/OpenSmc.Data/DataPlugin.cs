@@ -1,9 +1,7 @@
 ﻿using System.Reflection;
-using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Persistence;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
-using OpenSmc.Scopes.Proxy;
 
 namespace OpenSmc.Data;
 public record DataPluginState(HubDataSource Workspace, DataContext DataContext);
@@ -13,25 +11,23 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     IMessageHandler<DeleteDataRequest>,
     IMessageHandler<DataChangedEvent>,
     IMessageHandler<SubscribeDataRequest>,
-    IMessageHandler<PatchChangeRequest>
+    IMessageHandler<PatchChangeRequest>,
+    IMessageHandler<ReplaceDataRequest>
 
 {
     private readonly IMessageHub persistenceHub;
 
-    private readonly ScopeFactory scopeFactory;
-
-    public DataPlugin(IMessageHub hub, ScopeFactory serviceScopeFactory) : base(hub)
+    public DataPlugin(IMessageHub hub) : base(hub)
     {
         Register(HandleGetRequest); // This takes care of GetRequest and GetManyRequest
         persistenceHub = hub.GetHostedHub(new PersistenceAddress(hub.Address), conf => conf);
-        scopeFactory = serviceScopeFactory;
     }
 
 
     public IEnumerable<Type> MappedTypes => State.Workspace.MappedTypes;
 
     public void Update(IEnumerable<object> instances, UpdateOptions options)
-        => RequestChange(null, new UpdateDataRequest(instances.ToArray()));
+        => RequestChange(null, options.SnapshotModeEnabled ? new ReplaceDataRequest(instances.ToArray()) : new UpdateDataRequest(instances.ToArray()));
 
     public void Delete(IEnumerable<object> instances)
         => RequestChange(null, new DeleteDataRequest(instances.ToArray()));
@@ -62,13 +58,14 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
 
         workspace.Initialize(dataContext.GetEntities());
         InitializeState(new(workspace, dataContext));
-        State.DataContext.CustomInitialization?.Invoke(State.Workspace, scopeFactory);
     }
 
 
     IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(IMessageDelivery<UpdateDataRequest> request)
         => RequestChange(request, request.Message);
     IMessageDelivery IMessageHandler<PatchChangeRequest>.HandleMessage(IMessageDelivery<PatchChangeRequest> request)
+        => RequestChange(request, request.Message);
+    IMessageDelivery IMessageHandler<ReplaceDataRequest>.HandleMessage(IMessageDelivery<ReplaceDataRequest> request)
         => RequestChange(request, request.Message);
 
 
@@ -171,7 +168,6 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         var @event = request.Message;
         State.DataContext.Synchronize(@event, dataSourceId);
         State.Workspace.UpdateWorkspace(State.DataContext.GetEntities());
-        State.DataContext.CustomInitialization?.Invoke(State.Workspace, scopeFactory);
         return request.Processed();
     }
 

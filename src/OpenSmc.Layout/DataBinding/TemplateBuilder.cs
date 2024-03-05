@@ -33,7 +33,6 @@ public static class TemplateBuilder
         }
 
 
-        private const string Root = "";
         private static readonly ConstructorInfo BindingConstructor = typeof(Binding).GetConstructor(BindingFlags.Public | BindingFlags.Instance, new[] { typeof(string) });
         internal readonly List<Type> DataBoundTypes = new();
         private Expression GetBinding(string path, Type type)
@@ -48,10 +47,8 @@ public static class TemplateBuilder
 
         private IEnumerable<Type> GetTypes(Type type)
         {
-            if(type.IsPrimitive || type.IsScope() || included.Contains(type))
+            if(type.IsPrimitive || type == typeof(string) || type.IsScope() || !included.Add(type))
                 yield break;
-
-            included.Add(type);
 
             yield return type;
             foreach (var property in type.GetProperties())
@@ -74,10 +71,10 @@ public static class TemplateBuilder
                                                                         {
                                                                             {
                                                                                 ReflectionHelper.GetStaticMethodGeneric(() => Template.Bind<object, UiControl>((object)null, default)),
-                                                                                ReflectionHelper.GetStaticMethodGeneric(() => Template.BindObject<object, UiControl>(default(object), default))
+                                                                                ReflectionHelper.GetStaticMethodGeneric(() => Template.BindObject<object, UiControl>(default, default))
                                                                             },
                                                                             {
-                                                                                ReflectionHelper.GetStaticMethodGeneric(() => Template.Bind<object, UiControl>((IEnumerable<object>) null, default)),
+                                                                                ReflectionHelper.GetStaticMethodGeneric(() => Template.Bind<object, UiControl>(null, default)),
                                                                                 ReflectionHelper.GetStaticMethodGeneric(() => Template.BindEnumerable<object, UiControl>(default, default))
                                                                             },
 
@@ -99,7 +96,7 @@ public static class TemplateBuilder
         private MethodInfo TrySubstituteMethod(MethodInfo method, Type[] types)
         {
             foreach (var m
-                     in method.ReflectedType
+                     in method.ReflectedType!
                                                  .GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
             {
                 if (m.Name != method.Name)
