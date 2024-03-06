@@ -56,15 +56,15 @@ public static class DataExtensions
     // TODO V10: think of moving scopes and data cubes registration to reporting plugin (05.03.2024, Ekaterina Mishina)
     public static MessageHubConfiguration ConfigureReportingHub(this MessageHubConfiguration parent)
         => parent.WithHostedHub(new ReportingAddress(parent.Address), config => config
-            .WithServices(services => services.RegisterScopes())
-            .AddScopesDataCubes()
+            //.WithServices(services => services.RegisterScopes())
+            //.AddScopesDataCubes()
             .AddReporting(data => data
                     .FromHub(new ReportDataAddress(parent.Address),
                         dataSource => dataSource
                             .WithType<ValueWithHierarchicalDimension>()
                     ),
                 reportConfig => reportConfig.WithDataCubeOn(
-                    ws => ws.GetData<ValueWithHierarchicalDimension>(), 
+                    (ws, sf) => ws.GetData<ValueWithHierarchicalDimension>(), 
                     b => b
                         .WithQuerySource(new StaticDataFieldQuerySource())
                         .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
@@ -96,21 +96,22 @@ public class ReportTestWithHubs(ITestOutputHelper output) : HubTestBase(output)
         var reportResponse = await client.AwaitResponse(reportRequest, o => o.WithTarget(new ReportingAddress(new HostAddress())));
 
         // assert
-        reportResponse.Message.GridOptions.Should().NotBeNull();
+        var gridOptions = reportResponse.Message.GridOptions;
+        gridOptions.Should().NotBeNull();
 
-        var data = ValueWithHierarchicalDimension.Data.ToDataCube().RepeatOnce();
-        // TODO V10: move this to report config (configure report hub) (05.03.2024, Ekaterina Mishina)
-        DataCubePivotBuilder<IDataCube<ValueWithHierarchicalDimension>, ValueWithHierarchicalDimension, ValueWithHierarchicalDimension, ValueWithHierarchicalDimension> dataCubePivotBuilder = PivotFactory.ForDataCubes(data);
-        var dataCubeReportBuilder = dataCubePivotBuilder
-            .WithQuerySource(new StaticDataFieldQuerySource())
-            .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
-            .ToTable()
-            .WithOptions(rm => rm.HideRowValuesForDimension("DimA", x => x.ForLevel(1)))
-            .WithOptions(o => o.AutoHeight());
-        var gridOptions = dataCubeReportBuilder
-            .Execute();
+        //var data = ValueWithHierarchicalDimension.Data.ToDataCube().RepeatOnce();
+        //// TODO V10: move this to report config (configure report hub) (05.03.2024, Ekaterina Mishina)
+        //DataCubePivotBuilder<IDataCube<ValueWithHierarchicalDimension>, ValueWithHierarchicalDimension, ValueWithHierarchicalDimension, ValueWithHierarchicalDimension> dataCubePivotBuilder = PivotFactory.ForDataCubes(data);
+        //var dataCubeReportBuilder = dataCubePivotBuilder
+        //    .WithQuerySource(new StaticDataFieldQuerySource())
+        //    .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
+        //    .ToTable()
+        //    .WithOptions(rm => rm.HideRowValuesForDimension("DimA", x => x.ForLevel(1)))
+        //    .WithOptions(o => o.AutoHeight());
+        //var gridOptions = dataCubeReportBuilder
+        //    .Execute();
 
-        //await gridOptions.Verify("HierarchicalDimensionHideAggregation.json");
+        await gridOptions.Verify("HierarchicalDimensionHideAggregation.json");
     }
     
 }
