@@ -1,12 +1,16 @@
 ﻿using FluentAssertions;
+using OpenSmc.Collections;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.TestDomain.SimpleData;
 using Xunit.Abstractions;
 using OpenSmc.Messaging;
 using OpenSmc.Data;
 using OpenSmc.Data.TestDomain;
+using OpenSmc.DataCubes;
+using OpenSmc.Pivot.Builder;
 using OpenSmc.Scopes;
 using OpenSmc.Scopes.DataCubes;
+using OpenSmc.TestDomain;
 
 namespace OpenSmc.Reporting.Test;
 
@@ -60,6 +64,13 @@ public static class DataExtensions
                             .WithType<ValueWithHierarchicalDimension>()
                     ),
                 reportConfig => reportConfig
+                    .WithType<ValueWithHierarchicalDimension>(t => t
+                        .WithData(w => w.GetData<ValueWithHierarchicalDimension>().ToDataCube().RepeatOnce())
+                        .WithOptions(b => b.WithQuerySource(new StaticDataFieldQuerySource())
+                            .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
+                            .ToTable()
+                            .WithOptions(rm => rm.HideRowValuesForDimension("DimA", x => x.ForLevel(1)))
+                            .WithOptions(o => o.AutoHeight())))
             ));
 }
 
@@ -76,6 +87,7 @@ public class ReportTestWithHubs(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public async Task SimpleReport()
     {
+        // currency conversion on the fly according to exchange rate => AddData(raw values, exchange rates), scopes factory register scopes factory, resolve in plugin, x => x (raw data => data cube), slice options
         var client = GetClient();
         var reportRequest = new ReportRequest();
 
@@ -85,15 +97,17 @@ public class ReportTestWithHubs(ITestOutputHelper output) : HubTestBase(output)
         // assert
         reportResponse.Message.GridOptions.Should().NotBeNull();
 
-        //var data = ValueWithHierarchicalDimension.Data.ToDataCube().RepeatOnce();
+        var data = ValueWithHierarchicalDimension.Data.ToDataCube().RepeatOnce();
         // TODO V10: move this to report config (configure report hub) (05.03.2024, Ekaterina Mishina)
-        //var gridOptions = PivotFactory.ForDataCubes(data)
-        //    .WithQuerySource(new StaticDataFieldQuerySource())
-        //    .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
-        //    .ToTable()
-        //    .WithOptions(rm => rm.HideRowValuesForDimension("DimA", x => x.ForLevel(1)))
-        //    .WithOptions(o => o.AutoHeight())
-        //    .Execute();
+        DataCubePivotBuilder<IDataCube<ValueWithHierarchicalDimension>, ValueWithHierarchicalDimension, ValueWithHierarchicalDimension, ValueWithHierarchicalDimension> dataCubePivotBuilder = PivotFactory.ForDataCubes(data);
+        var dataCubeReportBuilder = dataCubePivotBuilder
+            .WithQuerySource(new StaticDataFieldQuerySource())
+            .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
+            .ToTable()
+            .WithOptions(rm => rm.HideRowValuesForDimension("DimA", x => x.ForLevel(1)))
+            .WithOptions(o => o.AutoHeight());
+        var gridOptions = dataCubeReportBuilder
+            .Execute();
 
         //await gridOptions.Verify("HierarchicalDimensionHideAggregation.json");
     }

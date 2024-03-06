@@ -1,11 +1,24 @@
-﻿using OpenSmc.GridModel;
+﻿using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Data;
+using OpenSmc.DataCubes;
+using OpenSmc.GridModel;
 using OpenSmc.Messaging;
+using OpenSmc.Pivot.Builder;
+using OpenSmc.Reporting.Builder;
 
 namespace OpenSmc.Reporting;
 
-public class ReportingPlugin(IMessageHub hub, Func<ReportConfiguration, ReportConfiguration> reportConfiguration) : MessageHubPlugin(hub), IMessageHandler<ReportRequest>
+public class ReportingPlugin : MessageHubPlugin, IMessageHandler<ReportRequest>
 {
-    public IMessageHub MessageHub { get; init; } = hub;
+    // TODO V10: inject scope factory (06.03.2024, Ekaterina Mishina)
+    private readonly IWorkspace workspace;
+
+    public ReportConfiguration Configuration;
+    public ReportingPlugin(IMessageHub hub, Func<ReportConfiguration, ReportConfiguration> importConfiguration) : base(hub)
+    {
+        workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
+        Configuration = importConfiguration.Invoke(new(hub, workspace)).Build();
+    }
 
     public IMessageDelivery HandleMessage(IMessageDelivery<ReportRequest> request)
     {
@@ -27,7 +40,29 @@ public class ReportingPlugin(IMessageHub hub, Func<ReportConfiguration, ReportCo
     }
 }
 
-public record ReportConfiguration;
+public record ReportConfiguration(IMessageHub Hub, IWorkspace Workspace)
+{
+    public ReportConfiguration Build() => this;
+
+    public ReportConfiguration WithType<T>(Func<ReportTypeConfiguration<T>, ReportTypeConfiguration<T>> func)
+    {
+        throw new NotImplementedException();
+    }
+}
+
+public record ReportTypeConfiguration<T>
+{
+    public ReportTypeConfiguration<T> WithData(Func<IWorkspace, IEnumerable<IDataCube<T>>> getDataCubesFunc)
+    {
+        return this;
+    }
+
+    public ReportTypeConfiguration<T> WithOptions(Func<DataCubePivotBuilder<IDataCube<T>, T, T, T>, DataCubeReportBuilder<IDataCube<T>, T, T, T>> reportBuilderFunc)
+    {
+        return this;
+    }
+}
+
 public record ReportRequest : IRequest<ReportResponse>;
 
 public record ReportResponse(long Version, GridOptions GridOptions);
