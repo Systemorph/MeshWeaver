@@ -6,12 +6,14 @@ using OpenSmc.GridModel;
 using OpenSmc.Messaging;
 using OpenSmc.Pivot.Builder;
 using OpenSmc.Reporting.Builder;
+using OpenSmc.Scopes.Proxy;
 
 namespace OpenSmc.Reporting;
 
 public class ReportingPlugin(IMessageHub hub, Func<ReportConfiguration, ReportConfiguration> reportConfiguration) : MessageHubPlugin(hub), IMessageHandler<ReportRequest>
 {
     private readonly IWorkspace workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
+    private readonly IScopeFactory scopeFactory = null; // hub.ServiceProvider.GetRequiredService<IScopeFactory>();
 
     private ReportConfiguration Configuration = reportConfiguration(new());
 
@@ -20,7 +22,7 @@ public class ReportingPlugin(IMessageHub hub, Func<ReportConfiguration, ReportCo
         GridOptions gridOptions = null;
         try
         {
-            gridOptions = Configuration.dataCubeConfig.GetGridOptions(workspace);
+            gridOptions = Configuration.dataCubeConfig.GetGridOptions(workspace, scopeFactory);
             //IEnumerable<object> data;
             //var grid = PivotFactory.ForDataCube(data).ToTable().Execute();
         }
@@ -40,20 +42,20 @@ public class ReportingPlugin(IMessageHub hub, Func<ReportConfiguration, ReportCo
 public record ReportConfiguration
 {
     internal ReportDataCubeConfiguration dataCubeConfig;
-    public ReportConfiguration WithDataCubeOn<T>(Func<IWorkspace, IEnumerable<T>> dataFunc, Func<DataCubePivotBuilder<IDataCube<T>, T, T, T>, DataCubeReportBuilder<IDataCube<T>, T, T, T>> reportFunc) 
+    public ReportConfiguration WithDataCubeOn<T>(Func<IWorkspace, IScopeFactory, IEnumerable<T>> dataFunc, Func<DataCubePivotBuilder<IDataCube<T>, T, T, T>, DataCubeReportBuilder<IDataCube<T>, T, T, T>> reportFunc) 
         => this with { dataCubeConfig = new ReportDataCubeConfiguration<T>(dataFunc, reportFunc), };
 }
 
 public abstract record ReportDataCubeConfiguration
 {
-    internal abstract GridOptions GetGridOptions(IWorkspace workspace);
+    internal abstract GridOptions GetGridOptions(IWorkspace workspace, IScopeFactory scopeFactory);
 }
 
-public record ReportDataCubeConfiguration<T>(Func<IWorkspace, IEnumerable<T>> dataFunc, Func<DataCubePivotBuilder<IDataCube<T>, T, T, T>, DataCubeReportBuilder<IDataCube<T>, T, T, T>> reportFunc) : ReportDataCubeConfiguration
+public record ReportDataCubeConfiguration<T>(Func<IWorkspace, IScopeFactory, IEnumerable<T>> dataFunc, Func<DataCubePivotBuilder<IDataCube<T>, T, T, T>, DataCubeReportBuilder<IDataCube<T>, T, T, T>> reportFunc) : ReportDataCubeConfiguration
 {
-    internal override GridOptions GetGridOptions(IWorkspace workspace)
+    internal override GridOptions GetGridOptions(IWorkspace workspace, IScopeFactory scopeFactory)
     {
-        var data = dataFunc(workspace).ToDataCube().RepeatOnce();
+        var data = dataFunc(workspace, scopeFactory).ToDataCube().RepeatOnce();
         var result = reportFunc(PivotFactory.ForDataCubes(data)).Execute();
         return result;
     }
