@@ -44,7 +44,7 @@ public record ReportConfiguration(IMessageHub Hub, IWorkspace Workspace)
 {
     public ReportConfiguration Build() => this;
 
-    public ReportConfiguration WithType<T>(
+    public ReportConfiguration Set<T>(
         Func<ReportConfiguration<T>, ReportConfiguration<T>> reportTypeConfigFunc) =>
         this;// with { ReportTypeConfigFunc = reportTypeConfigFunc };
 
