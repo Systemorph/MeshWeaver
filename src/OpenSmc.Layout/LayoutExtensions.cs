@@ -23,7 +23,8 @@ public static class LayoutExtensions
             )
             .AddApplicationScope()
             .AddData(data => data.FromConfigurableDataSource("Layout", dataSource => dataSource
-                .WithType<LayoutArea>(type => type.WithQuery())))
+                //.WithType<LayoutArea>(type => type.WithQuery())
+            ))
             .RouteLayoutMessages(mainLayoutAddress)
             .AddLayoutTypes()
             .WithHostedHub(mainLayoutAddress, c => MainLayoutConfiguration(c, layoutDefinition))
@@ -34,8 +35,7 @@ public static class LayoutExtensions
         => configuration
             .WithRoutes(forward => forward
                 .RouteMessage<RefreshRequest>(_ => mainLayoutAddress)
-                .RouteMessage<SetAreaRequest>(_ => mainLayoutAddress)
-                .RouteMessage<LayoutArea>(_ => MessageTargets.Subscribers)
+                //.RouteMessage<SetAreaRequest>(_ => mainLayoutAddress) // // TODO V10: Not sure yet if we need this... (04.03.2024, Roland Bürgi)
             );
 
 

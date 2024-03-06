@@ -13,3 +13,5 @@ public static class DependenciesExtensions
     }
 
 }
+
+public record ViewDependency(object Id, string Property);

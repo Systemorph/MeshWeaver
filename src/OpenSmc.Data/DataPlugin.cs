@@ -154,6 +154,27 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         State.Workspace.Rollback();
     }
 
+    public IReadOnlyCollection<EntityReference> GetReferences(IEnumerable<object> objects)
+        => objects.GroupBy(o => o.GetType())
+            .SelectMany(g =>
+            {
+                var typeSource = State.Workspace.GetTypeSource(g.Key);
+                if (typeSource == null)
+                    return Enumerable.Empty<EntityReference>();
+                return g.Select(x => new EntityReference(Hub.Address, typeSource.CollectionName, typeSource.GetKey(x)));
+            })
+            .ToArray();
+
+    public EntityReference GetReference(object obj)
+    {
+        var ts = State.Workspace.GetTypeSource(obj.GetType());
+        return ts == null ? null : new EntityReference(Hub.Address, ts.CollectionName, ts.GetKey(obj));
+    }
+
+    public void DeleteById(Type type, params object[] ids)
+    {
+        State.Workspace.DeleteById(type, ids);
+    }
 
     public IReadOnlyCollection<T> GetData<T>() where T : class
     {

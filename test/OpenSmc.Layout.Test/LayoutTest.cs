@@ -44,12 +44,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var client = GetClient();
         var area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.MainStackId));
-        area.View.Should().BeOfType<Composition.LayoutStackControl>().Which.Areas.Should().BeEmpty();
+        area.Control.Should().BeOfType<Composition.LayoutStackControl>().Which.Areas.Should().BeEmpty();
         await client.ClickAsync(_ => area);
 
         await client.GetAreaAsync(state => state.GetById("HelloId"));
         area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.MainStackId));
-        area.View.Should().BeOfType<Composition.LayoutStackControl>().Which.Areas.Should().HaveCount(1);
+        area.Control.Should().BeOfType<Composition.LayoutStackControl>().Which.Areas.Should().HaveCount(1);
 
     }
     [Fact]
@@ -58,12 +58,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
         client.Post(new RefreshRequest { Area = TestLayoutPlugin.NamedArea }, o => o.WithTarget(new HostAddress()));
         var area = await client.GetAreaAsync(state => state.GetByIdAndArea(TestLayoutPlugin.MainStackId, TestLayoutPlugin.NamedArea));
-        area.View.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(TestLayoutPlugin.NamedArea);
+        area.Control.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(TestLayoutPlugin.NamedArea);
         area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.NamedArea));
-        area.View.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(TestLayoutPlugin.NamedArea);
-        var address = ((IUiControl)area.View).Address;
+        area.Control.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(TestLayoutPlugin.NamedArea);
+        var address = ((IUiControl)area.Control).Address;
         area = await client.GetAreaAsync(state => state.GetByAddress(address));
-        area.View.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(TestLayoutPlugin.NamedArea);
+        area.Control.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(TestLayoutPlugin.NamedArea);
 
     }
 
@@ -76,7 +76,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
         client.Post(new RefreshRequest { Area = TestLayoutPlugin.UpdatingView }, o => o.WithTarget(new HostAddress()));
         var area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.UpdatingView));
-        area.View
+        area.Control
             .Should().BeOfType<TextBoxControl>()
             .Which.Data.Should().Be(TestLayoutPlugin.SomeString);
 
@@ -85,15 +85,15 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         LayoutArea IsUpdatedView(LayoutClientState layoutClientState)
         {
             var ret = layoutClientState.GetById(TestLayoutPlugin.UpdatingView);
-            if (ret?.View is TextBoxControl { Data: not TestLayoutPlugin.SomeString })
+            if (ret?.Control is TextBoxControl { Data: not TestLayoutPlugin.SomeString })
                 return ret;
 
-            logger.LogInformation($"Found view: {ret?.View}");
+            logger.LogInformation($"Found view: {ret?.Control}");
             return null;
         }
 
         var changedArea = await client.GetAreaAsync(IsUpdatedView);
-        changedArea.View
+        changedArea.Control
             .Should().BeOfType<TextBoxControl>()
             .Which.Data.Should().Be(TestLayoutPlugin.NewString);
 
@@ -107,7 +107,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var observer = client.AddObservable();
         client.Post(new RefreshRequest { Area = TestLayoutPlugin.DataBoundView }, o => o.WithTarget(new HostAddress()));
         var area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.DataBoundView));
-        area.View
+        area.Control
             .Should().BeOfType<MenuItemControl>()
             .Which.Title.Should().BeOfType<Binding>()
             .Which.Path.Should().Be(nameof(TestLayoutPlugin.DataRecord.DisplayName).ToCamelCase());

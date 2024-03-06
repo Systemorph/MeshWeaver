@@ -31,6 +31,7 @@ public interface ITypeSource
     IEnumerable<DataChangeRequest> Update(IReadOnlyCollection<EntityDescriptor> entities, bool snapshot = false);
 
     object GetPartition(object instance);
+    void DeleteByIds(IReadOnlyCollection<object> ids);
 }
 
 public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSource, string CollectionName, IMessageHub Hub) : ITypeSource
@@ -164,6 +165,11 @@ public abstract record TypeSource<TTypeSource>(Type ElementType, object DataSour
 
     public object GetPartition(object instance)
         => PartitionFunction.Invoke(instance);
+
+    public void DeleteByIds(IReadOnlyCollection<object> ids)
+    {
+        CurrentState = CurrentState.RemoveRange(ids);
+    }
 
     protected abstract void UpdateImpl(IEnumerable<object> instances);
     protected abstract void DeleteImpl(IEnumerable<object> instances);

@@ -45,11 +45,10 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
                 return request.Ignored();
 
             CheckOutArea(areaChanged);
-            RemoveAreaFromParent(areaChanged);
 
         }
 
-        if (areaChanged.View is IUiControl control)
+        if (areaChanged.Control is IUiControl control)
         {
             var area = areaChanged;
             UpdateState(s =>
@@ -71,8 +70,6 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
 
             areaChanged = CheckInArea(parentAddress, areaChanged);
 
-            if (parentAddress != null)
-                UpdateParents(parentAddress, areaChanged);
 
         }
 
@@ -97,11 +94,11 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
 
     private LayoutArea CheckInArea(object parentAddress, LayoutArea areaChanged)
     {
-        var control = areaChanged.View as IUiControl;
+        var control = areaChanged.Control as IUiControl;
         if (control == null)
             return areaChanged;
 
-        areaChanged = areaChanged with { View = CheckInDynamic((dynamic)control) };
+        areaChanged = areaChanged with { Control = CheckInDynamic((dynamic)control) };
 
         var subscriptions = ParseDataSubscriptions(control)
             .Select(x => new KeyValuePair<(string Collection, string Id), 
@@ -177,37 +174,14 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
                     yield return entityDescriptor;
     }
 
-    private void UpdateParents(object parentAddress, LayoutArea areaChanged)
-    {
-        if (State.AreasByControlAddress.TryGetValue(parentAddress, out var parentArea))
-        {
-            if (parentArea.View is IUiControlWithSubAreas controlWithSubAreas)
-            {
-                controlWithSubAreas = controlWithSubAreas.SetArea(areaChanged);
-                parentArea = parentArea with { View = controlWithSubAreas };
-                State.ParentsByAddress.TryGetValue(controlWithSubAreas.Address, out var parentOfParent);
-                UpdateState(s =>
-                    s with
-                    {
-                        AreasByControlAddress = s.AreasByControlAddress.SetItem(controlWithSubAreas.Address, parentArea),
-                        AreasByControlId = s.AreasByControlId.SetItem(controlWithSubAreas.Id, parentArea)
-                    });
-                UpdateParents(parentOfParent, parentArea);
-            }
-            else
-            {
-                Debug.Fail(areaChanged.ToString());
-            }
-        }
-    }
 
     private bool IsUpToDate(LayoutArea areaChanged, LayoutArea existing)
     {
-        if (areaChanged.View == null)
-            return existing.View == null;
+        if (areaChanged.Control == null)
+            return existing.Control == null;
 
-        if (areaChanged.View is IUiControl ctrl) return ctrl.IsUpToDate(existing.View);
-        return areaChanged.View.Equals(existing.View);
+        if (areaChanged.Control is IUiControl ctrl) return ctrl.IsUpToDate(existing.Control);
+        return areaChanged.Control.Equals(existing.Control);
     }
 
 
@@ -215,18 +189,10 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
     {
         if (area == null)
             return;
-        RemoveAreaFromParent(area);
 
-        if (area.View is not IUiControl existingControl)
+        if (area.Control is not IUiControl existingControl)
             return;
 
-
-        
-        if (existingControl is IUiControlWithSubAreas controlWithSubAreas)
-        {
-            foreach (var subArea in controlWithSubAreas.SubAreas)
-                CheckOutArea(subArea);
-        }
 
 
         UpdateState(s => s with
@@ -238,34 +204,10 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
 
     }
 
-    private void RemoveAreaFromParent( LayoutArea area)
-    {
-        if (State.ParentsByAddress.TryGetValue(area, out var parent)
-            && State.AreasByControlAddress.TryGetValue(parent.Address, out var parentArea))
-        {
-            if (parentArea.View is IUiControlWithSubAreas controlWithSubAreas)
-            {
-                controlWithSubAreas = controlWithSubAreas.SetArea(area);
-                UpdateParents(parent.Address, parentArea with { View = controlWithSubAreas });
-            }
-        }
-
-    }
-
 
     // ReSharper disable once UnusedParameter.Local
     private object CheckInDynamic(UiControl control) => control;
 
-    private object CheckInDynamic(LayoutStackControl stack)
-    {
-        var areas = stack.Areas.Select(a => CheckInArea(stack.Address, a)).ToArray();
-        return stack with { Areas = areas };
-    }
-    private object CheckInDynamic(RemoteViewControl remoteView)
-    {
-        return remoteView.Data == null ? remoteView :
-            remoteView with { Data = CheckInArea(remoteView.Address, (LayoutArea)remoteView.Data) };
-    }
 
     private object CheckInDynamic(RedirectControl redirect)
     {
