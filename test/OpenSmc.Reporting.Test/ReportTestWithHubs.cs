@@ -66,7 +66,7 @@ public static class DataExtensions
                 reportConfig => reportConfig
                     .WithType<ValueWithHierarchicalDimension>(t => t
                         .WithData(w => w.GetData<ValueWithHierarchicalDimension>().ToDataCube().RepeatOnce())
-                        .WithOptions(b => b.WithQuerySource(new StaticDataFieldQuerySource())
+                        .WithReportBuilder(b => b.WithQuerySource(new StaticDataFieldQuerySource())
                             .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
                             .ToTable()
                             .WithOptions(rm => rm.HideRowValuesForDimension("DimA", x => x.ForLevel(1)))
