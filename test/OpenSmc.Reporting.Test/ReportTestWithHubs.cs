@@ -63,14 +63,15 @@ public static class DataExtensions
                         dataSource => dataSource
                             .WithType<ValueWithHierarchicalDimension>()
                     ),
-                reportConfig => reportConfig
-                    .Set<ValueWithHierarchicalDimension>(t => t
-                        .WithData(w => w.GetData<ValueWithHierarchicalDimension>().ToDataCube().RepeatOnce())
-                        .WithReportBuilder(b => b.WithQuerySource(new StaticDataFieldQuerySource())
-                            .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
-                            .ToTable()
-                            .WithOptions(rm => rm.HideRowValuesForDimension("DimA", x => x.ForLevel(1)))
-                            .WithOptions(o => o.AutoHeight())))
+                reportConfig => reportConfig.WithDataCubeOn(
+                    ws => ws.GetData<ValueWithHierarchicalDimension>(), 
+                    b => b
+                        .WithQuerySource(new StaticDataFieldQuerySource())
+                        .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
+                        .ToTable()
+                        .WithOptions(rm => rm.HideRowValuesForDimension("DimA", x => x.ForLevel(1)))
+                        .WithOptions(o => o.AutoHeight())
+                    )
             ));
 }
 
