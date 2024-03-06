@@ -16,6 +16,7 @@ public interface IDataSource
     IReadOnlyCollection<DataChangeRequest> Change(DataChangeRequest request);
     bool ContainsInstance(object instance);
     ITypeSource GetTypeSource(Type type);
+    ITypeSource GetTypeSource(string collectionName);
     Task InitializeAsync(CancellationToken cancellationToken);
     IReadOnlyDictionary<string, IReadOnlyCollection<EntityDescriptor>> GetData();
     Task UpdateAsync(IEnumerable<DataChangeRequest> update, CancellationToken cancellationToken);
@@ -92,8 +93,7 @@ where TDataSource : DataSource<TDataSource>
 
     public virtual bool ContainsInstance(object instance) => TypeSources.ContainsKey(instance.GetType());
 
-    ITypeSource IDataSource.GetTypeSource(Type type) => GetTypeSource(type);
-    protected ITypeSource GetTypeSource(Type type) => TypeSources.GetValueOrDefault(type);
+    public ITypeSource GetTypeSource(Type type) => TypeSources.GetValueOrDefault(type);
 
 
     public virtual TDataSource WithType(Type type, Func<ITypeSource, ITypeSource> config)

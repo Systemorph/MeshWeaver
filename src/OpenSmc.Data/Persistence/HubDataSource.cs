@@ -251,4 +251,11 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
     public void Rollback()
     {
     }
+
+    public void DeleteById(Type type, object[] ids)
+    {
+        if (!TypeSources.TryGetValue(type, out var ts))
+            throw new ArgumentException($"Type {type.FullName} is not mapped in data source {Id}", nameof(type));
+        ts.DeleteByIds(ids);
+    }
 }

@@ -46,19 +46,6 @@ public class UiControlPlugin<TControl> : MessageHubPlugin<TControl>,
 
 
 
-    public TControl2 CreateUiControlHub<TControl2>(TControl2 control)
-        where TControl2 : UiControl
-    {
-        if (control == null)
-            return null;
-        var address = new UiControlAddress(control.Id, Hub.Address);
-        control = control with { Address = address };
-
-
-        var hub = control.CreateHub(Hub.ServiceProvider);
-
-        return control with { Hub = hub, Address = address };
-    }
 
 
     async Task<IMessageDelivery> IMessageHandlerAsync<ClickedEvent>.HandleMessageAsync(IMessageDelivery<ClickedEvent> delivery, CancellationToken cancellationToken)

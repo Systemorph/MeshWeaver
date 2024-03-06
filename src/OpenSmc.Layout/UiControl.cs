@@ -182,7 +182,7 @@ public abstract record UiControl<TControl, TPlugin>(string ModuleName, string Ap
 
 internal interface IExpandableUiControl : IUiControl
 {
-    internal Func<IUiActionContext, Task<object>> ExpandFunc { get; init; }
+    internal Func<IUiActionContext, Task<UiControl>> ExpandFunc { get; init; }
     public ViewRequest ExpandMessage { get; }
 
 }
@@ -206,17 +206,17 @@ public abstract record ExpandableUiControl<TControl, TPlugin>(string ModuleName,
     public TControl WithCloseAction(Action<object> closeAction)
         => (TControl)(this with { CloseAction = closeAction });
 
-    Func<IUiActionContext, Task<object>> IExpandableUiControl.ExpandFunc
+    Func<IUiActionContext, Task<UiControl>> IExpandableUiControl.ExpandFunc
     {
         get => ExpandFunc;
         init => ExpandFunc = value;
     }
 
-    internal Func<IUiActionContext, Task<object>> ExpandFunc { get; init; }
+    internal Func<IUiActionContext, Task<UiControl>> ExpandFunc { get; init; }
     public LayoutArea Expanded { get; init; }
     public TControl WithExpand(object message, object target, object area) => This with { ExpandMessage = new(message, target, area) };
 
-    public TControl WithExpand(object payload, Func<IUiActionContext, Task<object>> expand)
+    public TControl WithExpand(object payload, Func<IUiActionContext, Task<UiControl>> expand)
     {
         return This with
         {
@@ -224,7 +224,7 @@ public abstract record ExpandableUiControl<TControl, TPlugin>(string ModuleName,
             ExpandMessage = new(new ExpandRequest(Expand) { Payload = payload }, Address, Expand),
         };
     }
-    public TControl WithExpand(Func<IUiActionContext, Task<object>> expand)
+    public TControl WithExpand(Func<IUiActionContext, Task<UiControl>> expand)
     {
         return WithExpand(null, expand);
     }

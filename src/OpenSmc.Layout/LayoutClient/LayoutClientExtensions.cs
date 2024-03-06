@@ -30,7 +30,7 @@ public static class LayoutClientExtensions
 
     public static void Click(this IMessageHub layoutClient, LayoutArea areaChanged)
     {
-        if (areaChanged.View is not UiControl ctrl || ctrl.ClickMessage == null)
+        if (areaChanged.Control is not UiControl ctrl || ctrl.ClickMessage == null)
             throw new NotSupportedException("No click message specified.");
         layoutClient.Post(ctrl.ClickMessage.Message, o => o.WithTarget(ctrl.ClickMessage.Address));
     }

@@ -80,7 +80,7 @@ public record ItemTemplateControl : UiControl<ItemTemplateControl, GenericUiCont
             stackControl = stackControl with
                            {
                                Areas = stackControl.ViewElements
-                                                   .Select(x => new LayoutArea(x.Area, x is ViewElementWithView { View: not null } d ? d.View : null))
+                                                   .Select(x => new LayoutArea(x.Area, uiControlService.GetUiControl(x is ViewElementWithView { View: not null } d ? d.View : null)))
                                                    .ToImmutableList()
                            };
             return uiControlService.GetUiControl(stackControl);

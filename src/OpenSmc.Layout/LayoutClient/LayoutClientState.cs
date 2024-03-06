@@ -25,7 +25,7 @@ public record LayoutClientState(LayoutClientConfiguration Configuration)
 
     public LayoutArea GetByIdAndArea(string id, string areaName)
         => AreasByControlId.TryGetValue(id, out var area) 
-           && area.View is IUiControl control
+           && area.Control is IUiControl control
             ? GetByAddressAndArea(control.Address, areaName)
             : null;
 
@@ -35,10 +35,8 @@ public record LayoutClientState(LayoutClientConfiguration Configuration)
             || !AreasByControlAddress.TryGetValue(controlAddress, out var ret))
             return null;
 
-        if (ret?.View is RemoteViewControl remoteView)
-            ret = remoteView.Data as LayoutArea;
 
-        if (ret?.View is SpinnerControl)
+        if (ret?.Control is SpinnerControl)
             return null;
 
         return ret;
