@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Collections;
 using OpenSmc.Data;
 using OpenSmc.DataCubes;
 using OpenSmc.GridModel;
@@ -8,22 +9,18 @@ using OpenSmc.Reporting.Builder;
 
 namespace OpenSmc.Reporting;
 
-public class ReportingPlugin : MessageHubPlugin, IMessageHandler<ReportRequest>
+public class ReportingPlugin(IMessageHub hub, Func<ReportConfiguration, ReportConfiguration> reportConfiguration) : MessageHubPlugin(hub), IMessageHandler<ReportRequest>
 {
-    // TODO V10: inject scope factory (06.03.2024, Ekaterina Mishina)
-    private readonly IWorkspace workspace;
+    private readonly IWorkspace workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
 
-    public ReportConfiguration Configuration;
-    public ReportingPlugin(IMessageHub hub, Func<ReportConfiguration, ReportConfiguration> importConfiguration) : base(hub)
-    {
-        workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
-        Configuration = importConfiguration.Invoke(new(hub, workspace)).Build();
-    }
+    private ReportConfiguration Configuration = reportConfiguration(new());
 
     public IMessageDelivery HandleMessage(IMessageDelivery<ReportRequest> request)
     {
+        GridOptions gridOptions = null;
         try
         {
+            gridOptions = Configuration.dataCubeConfig.GetGridOptions(workspace);
             //IEnumerable<object> data;
             //var grid = PivotFactory.ForDataCube(data).ToTable().Execute();
         }
@@ -33,36 +30,33 @@ public class ReportingPlugin : MessageHubPlugin, IMessageHandler<ReportRequest>
         }
         finally
         {
-            Hub.Post(new ReportResponse(Hub.Version, new GridOptions()), o => o.ResponseFor(request));
+            Hub.Post(new ReportResponse(Hub.Version, gridOptions ?? new GridOptions()), o => o.ResponseFor(request));
         }
 
         return request.Processed();
     }
 }
 
-public record ReportConfiguration(IMessageHub Hub, IWorkspace Workspace)
+public record ReportConfiguration
 {
-    public ReportConfiguration Build() => this;
-
-    public ReportConfiguration Set<T>(
-        Func<ReportConfiguration<T>, ReportConfiguration<T>> reportTypeConfigFunc) =>
-        this;// with { ReportTypeConfigFunc = reportTypeConfigFunc };
-
-    //public Func<ReportConfiguration<object>, ReportConfiguration<object>> ReportTypeConfigFunc { get; set; }
+    internal ReportDataCubeConfiguration dataCubeConfig;
+    public ReportConfiguration WithDataCubeOn<T>(Func<IWorkspace, IEnumerable<T>> dataFunc, Func<DataCubePivotBuilder<IDataCube<T>, T, T, T>, DataCubeReportBuilder<IDataCube<T>, T, T, T>> reportFunc) 
+        => this with { dataCubeConfig = new ReportDataCubeConfiguration<T>(dataFunc, reportFunc), };
 }
 
-public record ReportConfiguration<T>
+public abstract record ReportDataCubeConfiguration
 {
-    public Func<IWorkspace, IEnumerable<IDataCube<T>>> GetDataCubesFunc { get; set; }
-    public Func<DataCubePivotBuilder<IDataCube<T>, T, T, T>, DataCubeReportBuilder<IDataCube<T>, T, T, T>> ReportBuilderFunc { get; set; }
+    internal abstract GridOptions GetGridOptions(IWorkspace workspace);
+}
 
-    public ReportConfiguration<T> WithData(Func<IWorkspace, IEnumerable<IDataCube<T>>> getDataCubesFunc) =>
-        this with { GetDataCubesFunc = getDataCubesFunc };
-
-    public ReportConfiguration<T> WithReportBuilder(
-        Func<DataCubePivotBuilder<IDataCube<T>, T, T, T>, DataCubeReportBuilder<IDataCube<T>, T, T, T>>
-            reportBuilderFunc) =>
-        this with { ReportBuilderFunc = reportBuilderFunc };
+public record ReportDataCubeConfiguration<T>(Func<IWorkspace, IEnumerable<T>> dataFunc, Func<DataCubePivotBuilder<IDataCube<T>, T, T, T>, DataCubeReportBuilder<IDataCube<T>, T, T, T>> reportFunc) : ReportDataCubeConfiguration
+{
+    internal override GridOptions GetGridOptions(IWorkspace workspace)
+    {
+        var data = dataFunc(workspace).ToDataCube().RepeatOnce();
+        var result = reportFunc(PivotFactory.ForDataCubes(data)).Execute();
+        return result;
+    }
 }
 
 public record ReportRequest : IRequest<ReportResponse>;

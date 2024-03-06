@@ -1,6 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
-    <ProjectReference Include="..\OpenSmc.DataCubes.Abstractions\OpenSmc.DataCubes.Abstractions.csproj" />
+    <ProjectReference Include="..\OpenSmc.DataCubes\OpenSmc.DataCubes.csproj" />
     <ProjectReference Include="..\OpenSmc.GridModel\OpenSmc.GridModel.csproj" />
     <ProjectReference Include="..\OpenSmc.Pivot\OpenSmc.Pivot.csproj" />
     <ProjectReference Include="..\OpenSmc.Utils\OpenSmc.Utils.csproj" />
