@@ -44,23 +44,25 @@ public record ReportConfiguration(IMessageHub Hub, IWorkspace Workspace)
 {
     public ReportConfiguration Build() => this;
 
-    public ReportConfiguration WithType<T>(Func<ReportTypeConfiguration<T>, ReportTypeConfiguration<T>> func)
-    {
-        throw new NotImplementedException();
-    }
+    public ReportConfiguration WithType<T>(
+        Func<ReportConfiguration<T>, ReportConfiguration<T>> reportTypeConfigFunc) =>
+        this;// with { ReportTypeConfigFunc = reportTypeConfigFunc };
+
+    //public Func<ReportConfiguration<object>, ReportConfiguration<object>> ReportTypeConfigFunc { get; set; }
 }
 
-public record ReportTypeConfiguration<T>
+public record ReportConfiguration<T>
 {
-    public ReportTypeConfiguration<T> WithData(Func<IWorkspace, IEnumerable<IDataCube<T>>> getDataCubesFunc)
-    {
-        return this;
-    }
+    public Func<IWorkspace, IEnumerable<IDataCube<T>>> GetDataCubesFunc { get; set; }
+    public Func<DataCubePivotBuilder<IDataCube<T>, T, T, T>, DataCubeReportBuilder<IDataCube<T>, T, T, T>> ReportBuilderFunc { get; set; }
 
-    public ReportTypeConfiguration<T> WithOptions(Func<DataCubePivotBuilder<IDataCube<T>, T, T, T>, DataCubeReportBuilder<IDataCube<T>, T, T, T>> reportBuilderFunc)
-    {
-        return this;
-    }
+    public ReportConfiguration<T> WithData(Func<IWorkspace, IEnumerable<IDataCube<T>>> getDataCubesFunc) =>
+        this with { GetDataCubesFunc = getDataCubesFunc };
+
+    public ReportConfiguration<T> WithReportBuilder(
+        Func<DataCubePivotBuilder<IDataCube<T>, T, T, T>, DataCubeReportBuilder<IDataCube<T>, T, T, T>>
+            reportBuilderFunc) =>
+        this with { ReportBuilderFunc = reportBuilderFunc };
 }
 
 public record ReportRequest : IRequest<ReportResponse>;
