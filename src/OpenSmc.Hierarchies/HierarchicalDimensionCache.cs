@@ -29,27 +29,27 @@ public class HierarchicalDimensionCache : IHierarchicalDimensionCache
         return (IHierarchy<T>)inner;
     }
 
-    public async Task InitializeAsync(params DimensionDescriptor[] dimensionDescriptors)
+    public void Initialize(params DimensionDescriptor[] dimensionDescriptors)
     {
         foreach (var type in dimensionDescriptors.Where(d => d.Type != null).Select(d => d.Type))
         {
             if (typeof(IHierarchicalDimension).IsAssignableFrom(type))
-                await InitializeAsyncMethod.MakeGenericMethod(type).InvokeAsActionAsync(this);
+                InitializeMethod.MakeGenericMethod(type).InvokeAsAction(this);
         }
     }
 
-    private static readonly IGenericMethodCache InitializeAsyncMethod =
+    private static readonly IGenericMethodCache InitializeMethod =
 #pragma warning disable 4014
-        GenericCaches.GetMethodCache<HierarchicalDimensionCache>(x => x.InitializeAsync<IHierarchicalDimension>());
+        GenericCaches.GetMethodCache<HierarchicalDimensionCache>(x => x.Initialize<IHierarchicalDimension>());
 #pragma warning restore 4014
 
-    public async Task InitializeAsync<T>()
+    public void Initialize<T>()
         where T : class, IHierarchicalDimension
     {
         if (querySource != null && !cachedDimensions.TryGetValue(typeof(T), out _))
         {
             var hierarchy = new Hierarchy<T>(querySource);
-            await hierarchy.InitializeAsync();
+            hierarchy.Initialize();
             cachedDimensions[typeof(T)] = hierarchy;
         }
     }

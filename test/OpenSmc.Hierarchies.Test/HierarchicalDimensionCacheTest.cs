@@ -9,7 +9,7 @@ namespace OpenSmc.Hierarchies.Test;
 public class HierarchicalDimensionCacheTest
 {
     [Fact]
-    public async Task InitializationTest()
+    public void InitializationTest()
     {
         var querySource = new StaticDataFieldQuerySource();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
@@ -18,7 +18,7 @@ public class HierarchicalDimensionCacheTest
             hierarchies.Get<TestHierarchicalDimensionA>().Should().BeNull();
             hierarchies.Get<TestHierarchicalDimensionA>("A111").Should().BeNull();
         }
-        await hierarchies.InitializeAsync<TestHierarchicalDimensionA>();
+        hierarchies.Initialize<TestHierarchicalDimensionA>();
         using (new AssertionScope())
         {
             hierarchies.Get<TestHierarchicalDimensionA>().Should().NotBeNull();
@@ -29,12 +29,12 @@ public class HierarchicalDimensionCacheTest
     }
 
     [Fact]
-    public async Task LeafLevelTest()
+    public void LeafLevelTest()
     {
         var querySource = new StaticDataFieldQuerySource();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
-        await hierarchies.InitializeAsync<TestHierarchicalDimensionA>();
-        await hierarchies.InitializeAsync<TestHierarchicalDimensionB>();
+        hierarchies.Initialize<TestHierarchicalDimensionA>();
+        hierarchies.Initialize<TestHierarchicalDimensionB>();
         using (new AssertionScope())
         {
             hierarchies.Get<TestHierarchicalDimensionA>("A111").Parent().SystemName.Should().Be("A11");
@@ -48,11 +48,11 @@ public class HierarchicalDimensionCacheTest
     }
 
     [Fact]
-    public async Task IntermediateLevelTest()
+    public void IntermediateLevelTest()
     {
         var querySource = new StaticDataFieldQuerySource();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
-        await hierarchies.InitializeAsync<TestHierarchicalDimensionA>();
+        hierarchies.Initialize<TestHierarchicalDimensionA>();
         using (new AssertionScope())
         {
             hierarchies.Get<TestHierarchicalDimensionA>("A11").Parent().SystemName.Should().Be("A1");
@@ -65,11 +65,11 @@ public class HierarchicalDimensionCacheTest
     }
 
     [Fact]
-    public async Task RootLevelTest()
+    public void RootLevelTest()
     {
         var querySource = new StaticDataFieldQuerySource();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
-        await hierarchies.InitializeAsync<TestHierarchicalDimensionA>();
+        hierarchies.Initialize<TestHierarchicalDimensionA>();
         using (new AssertionScope())
         {
             hierarchies.Get<TestHierarchicalDimensionA>("A1").Parent().Should().BeNull();
@@ -84,11 +84,11 @@ public class HierarchicalDimensionCacheTest
     }
 
     [Fact]
-    public async Task LevelTest()
+    public void LevelTest()
     {
         var querySource = new StaticDataFieldQuerySource();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
-        await hierarchies.InitializeAsync<TestHierarchicalDimensionA>();
+        hierarchies.Initialize<TestHierarchicalDimensionA>();
         using (new AssertionScope())
         {
             hierarchies.Get<TestHierarchicalDimensionA>("A1").Level().Should().Be(0);
@@ -100,12 +100,12 @@ public class HierarchicalDimensionCacheTest
     }
 
     [Fact]
-    public async Task SeveralDimensionsLevelTest()
+    public void SeveralDimensionsLevelTest()
     {
         var querySource = new StaticDataFieldQuerySource();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
-        await hierarchies.InitializeAsync<TestHierarchicalDimensionA>();
-        await hierarchies.InitializeAsync<TestHierarchicalDimensionB>();
+        hierarchies.Initialize<TestHierarchicalDimensionA>();
+        hierarchies.Initialize<TestHierarchicalDimensionB>();
         using (new AssertionScope())
         {
             hierarchies.Get<TestHierarchicalDimensionA>("A1").Level().Should().Be(0);
@@ -118,11 +118,11 @@ public class HierarchicalDimensionCacheTest
     }
 
     [Fact]
-    public async Task AncestorsTest()
+    public void AncestorsTest()
     {
         var querySource = new StaticDataFieldQuerySource();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
-        await hierarchies.InitializeAsync<TestHierarchicalDimensionA>();
+        hierarchies.Initialize<TestHierarchicalDimensionA>();
         using (new AssertionScope())
         {
             hierarchies.Get<TestHierarchicalDimensionA>("A112").Ancestors().Select(x => x.SystemName).Should()
@@ -135,11 +135,11 @@ public class HierarchicalDimensionCacheTest
     }
 
     [Fact]
-    public async Task DescendantsTest()
+    public void DescendantsTest()
     {
         var querySource = new StaticDataFieldQuerySource();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
-        await hierarchies.InitializeAsync<TestHierarchicalDimensionA>();
+        hierarchies.Initialize<TestHierarchicalDimensionA>();
         using (new AssertionScope())
         {
             hierarchies.Get<TestHierarchicalDimensionA>("A112").Descendants().Select(x => x.SystemName).Should()
@@ -152,11 +152,11 @@ public class HierarchicalDimensionCacheTest
     }
 
     [Fact]
-    public async Task DescendantsAtLevelTest()
+    public void DescendantsAtLevelTest()
     {
         var querySource = new StaticDataFieldQuerySource();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
-        await hierarchies.InitializeAsync<TestHierarchicalDimensionA>();
+        hierarchies.Initialize<TestHierarchicalDimensionA>();
         using (new AssertionScope())
         {
             hierarchies.Get<TestHierarchicalDimensionA>("A1").DescendantsAtLevel(2).Select(x => x.SystemName).Should()
@@ -168,11 +168,11 @@ public class HierarchicalDimensionCacheTest
     }
     
     [Fact]
-    public async Task SiblingsTest()
+    public void SiblingsTest()
     {
         var querySource = new StaticDataFieldQuerySource();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
-        await hierarchies.InitializeAsync<TestHierarchicalDimensionA>();
+        hierarchies.Initialize<TestHierarchicalDimensionA>();
         using (new AssertionScope())
         {
             hierarchies.Get<TestHierarchicalDimensionA>("A112").Siblings().Select(x => x.SystemName).Should()
@@ -183,11 +183,11 @@ public class HierarchicalDimensionCacheTest
     }
 
     [Fact]
-    public async Task HierarchyApiTest()
+    public void HierarchyApiTest()
     {
         var querySource = new StaticDataFieldQuerySource();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
-        await hierarchies.InitializeAsync<TestHierarchicalDimensionA>();
+        hierarchies.Initialize<TestHierarchicalDimensionA>();
         var hierarchyA = hierarchies.Get<TestHierarchicalDimensionA>();
         hierarchyA.Get("A11").Parent.Should().Be(hierarchyA.Get("A12").Parent);
     }
