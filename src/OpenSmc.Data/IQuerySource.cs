@@ -4,5 +4,4 @@
     {
         IReadOnlyCollection<T> GetData<T>() where T : class;
     }
-
 }
