@@ -63,7 +63,7 @@ namespace OpenSmc.Pivot
         private void Initialize<T>()
             where T : class, INamed
         {
-            var query = querySource.Query<T>();
+            var query = querySource.GetData<T>();
             if (query != null)
             {
                 cachedDimensions[typeof(T)] = new DimensionTypeCache<T>(query.ToDictionary(x => x.SystemName));

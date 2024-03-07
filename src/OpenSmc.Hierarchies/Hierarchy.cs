@@ -21,7 +21,7 @@ public class Hierarchy<T> : IHierarchy<T>
 
     public void Initialize()
     {
-        elementsBySystemName = querySource.Query<T>().ToDictionary(x => x.SystemName);
+        elementsBySystemName = querySource.GetData<T>().ToDictionary(x => x.SystemName);
         AddChildren(0, GetPairs());
     }
 
