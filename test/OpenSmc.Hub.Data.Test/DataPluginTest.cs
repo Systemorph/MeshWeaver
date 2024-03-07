@@ -41,7 +41,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var client = GetClient();
         var response = await client.AwaitResponse(new GetManyRequest<MyData>(), o => o.WithTarget(new HostAddress()));
-        var expected = new GetManyResponse<MyData>(initialData.Length, initialData);
+        var expected = new GetResponse<MyData>(initialData.Length, initialData);
         response.Message.Should().BeEquivalentTo(expected);
     }
 
@@ -73,7 +73,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         storage.Values.Should().BeEquivalentTo(expectedItems);
         
         var response = await client.AwaitResponse(new GetManyRequest<MyData>(), o => o.WithTarget(new HostAddress()));
-        var finalExpected = new GetManyResponse<MyData>(expectedItems.Length, expectedItems);
+        var finalExpected = new GetResponse<MyData>(expectedItems.Length, expectedItems);
         response.Message.Should().BeEquivalentTo(finalExpected);
     }
 
@@ -101,7 +101,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         storage.Values.Should().BeEquivalentTo(expectedItems);
         
         var response = await client.AwaitResponse(new GetManyRequest<MyData>(), o => o.WithTarget(new HostAddress()));
-        response.Message.Should().BeEquivalentTo(new GetManyResponse<MyData>(expectedItems.Length, expectedItems));
+        response.Message.Should().BeEquivalentTo(new GetResponse<MyData>(expectedItems.Length, expectedItems));
     }
 
 

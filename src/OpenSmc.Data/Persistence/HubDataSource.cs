@@ -24,8 +24,8 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
     {
         var newWorkspace = GetSerializedWorkspace();
         var dataChanged = CurrentWorkspace == null
-            ? new DataChangedEvent(Hub.Version, newWorkspace, ChangeType.Full)
-            : new DataChangedEvent(Hub.Version, JsonSerializer.Serialize(CurrentWorkspace.CreatePatch(newWorkspace)), ChangeType.Patch);
+            ? new DataChangedEvent(Hub.Version, new(newWorkspace.ToJsonString()), ChangeType.Full)
+            : new DataChangedEvent(Hub.Version, new(JsonSerializer.Serialize(CurrentWorkspace.CreatePatch(newWorkspace))), ChangeType.Patch);
 
         if (isExternalDataSource)
             CommitTransactionExternally(dataChanged);
@@ -162,7 +162,7 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
             : AssembleWorkspace(subscription);
 
         var change = subscription.LastSynchronized == null || mode == ChangeType.Full
-            ? new DataChangedEvent(Hub.Version, serializedSubscription, ChangeType.Full)
+            ? new DataChangedEvent(Hub.Version, new(serializedSubscription.ToJsonString()), ChangeType.Full)
             : CreatePatch(subscription, serializedSubscription);
 
 
@@ -200,7 +200,7 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
         var patch = subscription.LastSynchronized.CreatePatch(serializedSubscription);
         if (!patch.Operations.Any())
             return null;
-        return new(Hub.Version, JsonSerializer.Serialize(patch), ChangeType.Patch);
+        return new(Hub.Version, new(JsonSerializer.Serialize(patch)), ChangeType.Patch);
     }
 
 
@@ -227,7 +227,7 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
 
     public void Synchronize(DataChangedEvent @event)
     {
-        var change = @event.Change?.ToString();
+        var change = @event.Change?.Content;
         var type = @event.Type;
         if (string.IsNullOrEmpty(change))
             return;
