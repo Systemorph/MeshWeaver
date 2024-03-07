@@ -17,12 +17,4 @@ public static class MessageDeliverySerializationExtension
         }
     }
 
-    public static IMessageDelivery DeserializeDelivery(this ISerializationService serializationService, IMessageDelivery delivery)
-    {
-        if (delivery.Message is not RawJson rawJson)
-            return delivery;
-
-        var deserializedMessage = serializationService.Deserialize(rawJson.Content);
-        return delivery.WithMessage(deserializedMessage);
-    }
 }

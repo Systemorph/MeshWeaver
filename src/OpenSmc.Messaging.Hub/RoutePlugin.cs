@@ -1,9 +1,13 @@
-﻿namespace OpenSmc.Messaging;
+﻿using Microsoft.Extensions.Logging;
+using OpenSmc.ServiceProvider;
+
+namespace OpenSmc.Messaging;
 
 public class RoutePlugin : MessageHubPlugin<RouteConfiguration>
 {
     private readonly IMessageHub parentHub;
 
+    [Inject] private ILogger<RoutePlugin> logger;
 
     public RoutePlugin(IMessageHub hub, RouteConfiguration routeConfiguration, IMessageHub parentHub) : base(hub)
     {
@@ -23,11 +27,13 @@ public class RoutePlugin : MessageHubPlugin<RouteConfiguration>
     /// <returns></returns>
     private async Task<IMessageDelivery> RouteMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
+
         // TODO V10: This should probably also react upon disconnect. (02.02.2024, Roland Bürgi)
         if (State.RoutedMessageAddresses.TryGetValue(delivery.Sender, out var originalSenders))
         {
             foreach (var originalSender in originalSenders)
             {
+                logger.LogDebug("Routing message {id} of type {type} from address {sender} to address {target} to original address {originalSender}", delivery.Id, delivery.Message.GetType().Name, delivery.Sender,  delivery.Target, originalSender);
                 var delivery1 = delivery;
                 Hub.Post(delivery.Message, o => o.WithTarget(originalSender).WithProperties(delivery1.Properties));
             }
@@ -50,12 +56,16 @@ public class RoutePlugin : MessageHubPlugin<RouteConfiguration>
             return Hub.GetHostedHub(hostedSegment, null).DeliverMessage(delivery);
 
         if (address is IHostedAddress hosted)
+        {
+            logger.LogDebug("Routing delivery {id} of type {type} to host with address {target}", delivery.Id, delivery.Message.GetType().Name, hosted.Host);
             return RouteAlongHostingHierarchy(delivery, hosted.Host, address);
+        }
 
 
         if (parentHub == null)
             return delivery.NotFound();
 
+        logger.LogDebug("Routing delivery {id} of type {type} to parent {target}", delivery.Id, delivery.Message.GetType().Name, parentHub.Address);
         parentHub.DeliverMessage(delivery);
         return delivery.Forwarded();
     }

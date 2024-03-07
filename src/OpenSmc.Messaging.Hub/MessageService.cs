@@ -78,6 +78,7 @@ public class MessageService : IMessageService
         if (Address.Equals(delivery.Target))
             delivery = UnpackIfNecessary(delivery);
 
+
         // TODO V10: Here we need to inject the correct cancellation token. (19.02.2024, Roland Bürgi)
         var cancellationToken = CancellationToken.None;
         buffer.Post((delivery, cancellationToken));
@@ -89,8 +90,7 @@ public class MessageService : IMessageService
     {
         try
         {
-            if (serializationService != null)
-                delivery = serializationService.DeserializeDelivery(delivery);
+            delivery = DeserializeDelivery(delivery);
         }
         catch
         {
@@ -101,6 +101,15 @@ public class MessageService : IMessageService
         return delivery;
     }
 
+    public IMessageDelivery DeserializeDelivery(IMessageDelivery delivery)
+    {
+        if (delivery.Message is not RawJson rawJson)
+            return delivery;
+        logger.LogDebug("Deserializing message {id} from sender {sender} to target {target}", delivery.Id, delivery.Sender, delivery.Target);
+        var deserializedMessage = serializationService.Deserialize(rawJson.Content);
+        logger.LogDebug("Deserialized message {id} to Type {type}", delivery.Id, deserializedMessage.GetType().Name);
+        return delivery.WithMessage(deserializedMessage);
+    }
 
 
     private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
