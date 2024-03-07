@@ -1,17 +1,19 @@
-﻿using OpenSmc.Messaging;
+﻿using OpenSmc.Data;
+using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
 
 namespace OpenSmc.Layout.LayoutClient;
 
 public static class LayoutClientExtensions
 {
-    public static  MessageHubConfiguration AddLayoutClient(this MessageHubConfiguration configuration,  object refreshAddress, Func<LayoutClientConfiguration, LayoutClientConfiguration> options = null)
+    public static  MessageHubConfiguration AddLayoutClient(this MessageHubConfiguration configuration,  object layoutHost, Func<LayoutClientConfiguration, LayoutClientConfiguration> options = null)
     {
-        var conf = new LayoutClientConfiguration(refreshAddress);
+        var conf = new LayoutClientConfiguration(layoutHost);
         if (options != null)
             conf = options(conf);
         return configuration
-            .AddPlugin(hub => new LayoutClientPlugin(conf, hub))
+                .AddData(data => data.FromHub(layoutHost))
+            .AddPlugin<LayoutClientPlugin>(plugin => plugin.WithFactory(() => new LayoutClientPlugin(conf, plugin.Hub)))
             .AddLayoutTypes()
 ;
     }

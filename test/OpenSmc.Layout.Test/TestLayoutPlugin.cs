@@ -53,7 +53,7 @@ public class TestLayoutPlugin(IMessageHub hub) : MessageHubPlugin(hub),
             )
             // this tests proper updating in the case of MVP
             .WithView(UpdatingView, _ => ModelViewPresenterTestCase())
-            // this tests proper updating in the case of MVP
+            // this tests proper updating in the case of MVVM
             .WithView(DataBoundView, _ =>
                 Template.Bind(workspace.GetData<DataRecord>().First(),
                     record =>

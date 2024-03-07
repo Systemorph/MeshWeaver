@@ -75,8 +75,8 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
 
     private async Task StartAsync(CancellationToken cancellationToken)
     {
-        foreach (var factory in Configuration.PluginFactories)
-            AddPlugin(await factory.Invoke(this, cancellationToken));
+        foreach (var (_,factory) in Configuration.PluginFactories)
+            AddPlugin(factory.Invoke(this));
 
         var actions = Configuration.BuildupActions;
         foreach (var buildup in actions)

@@ -1,7 +1,6 @@
 ﻿using System.Collections.Immutable;
 using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json;
-using OpenSmc.Application.Scope;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
 using OpenSmc.ShortGuid;
@@ -89,7 +88,7 @@ public abstract record UiControl<TControl, TPlugin>(string ModuleName, string Ap
 
     protected virtual MessageHubConfiguration ConfigureHub(MessageHubConfiguration configuration)
     {
-        return configuration.AddPlugin(CreatePlugin);
+        return configuration.AddPlugin<TPlugin>(plugin => plugin.WithFactory(() => CreatePlugin(plugin.Hub)));
     }
 
     protected virtual TPlugin CreatePlugin(IMessageHub hub)

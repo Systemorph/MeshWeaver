@@ -90,12 +90,17 @@ public class LayoutPlugin(IMessageHub hub) :
         return control;
     }
 
+    IMessageDelivery IMessageHandler<RefreshRequest>.HandleMessage(IMessageDelivery<RefreshRequest> request)
+        => RefreshView(request);
 
 
 
 
     protected IMessageDelivery RefreshView(IMessageDelivery<RefreshRequest> request)
     {
+        if (string.IsNullOrWhiteSpace(request.Message.Area))
+            return request.Ignored();
+
         var area = request.Message.Area;
 
         DisposeArea(area);
@@ -110,10 +115,6 @@ public class LayoutPlugin(IMessageHub hub) :
         return request.Processed();
     }
 
-    private object RenterViewElement(ViewElement ve, string area)
-    {
-        throw new NotImplementedException();
-    }
 
     private void DisposeArea(string area)
     {
@@ -130,10 +131,6 @@ public class LayoutPlugin(IMessageHub hub) :
     }
 
 
-    public IMessageDelivery HandleMessage(IMessageDelivery<RefreshRequest> request)
-    {
-        throw new NotImplementedException();
-    }
 }
 
 internal record ViewGenerator(Func<RefreshRequest, bool> Filter, ViewDefinition Generator);

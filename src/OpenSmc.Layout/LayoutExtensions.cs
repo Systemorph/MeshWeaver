@@ -49,7 +49,7 @@ public static class LayoutExtensions
     private static MessageHubConfiguration MainLayoutConfiguration(MessageHubConfiguration configuration,
         Func<LayoutDefinition, LayoutDefinition> layoutDefinition)
     {
-        return configuration.AddPlugin(hub => CreateLayoutPlugin(hub, layoutDefinition));
+        return configuration.AddPlugin<LayoutPlugin>(plugin => plugin.WithFactory(() => CreateLayoutPlugin(plugin.Hub, layoutDefinition)));
     }
 
 
