@@ -13,7 +13,7 @@ namespace OpenSmc.Reporting;
 public class ReportingPlugin(IMessageHub hub, Func<ReportConfiguration, ReportConfiguration> reportConfiguration) : MessageHubPlugin(hub), IMessageHandler<ReportRequest>
 {
     private readonly IWorkspace workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
-    private readonly IScopeFactory scopeFactory = null; // hub.ServiceProvider.GetRequiredService<IScopeFactory>();
+    private readonly IScopeFactory scopeFactory = hub.ServiceProvider.GetRequiredService<IScopeFactory>();
 
     private ReportConfiguration Configuration = reportConfiguration(new());
 

@@ -9,9 +9,14 @@ namespace OpenSmc.Scopes;
 
 public static class ModuleSetup 
 {
-    public static IServiceCollection RegisterScopes(this IServiceCollection services)
+    public static IServiceCollection RegisterScopesAndArithmetics(this IServiceCollection services)
     {
         InitializeArithmetics();
+        return services.RegisterScopes();
+    }
+
+    public static IServiceCollection RegisterScopes(this IServiceCollection services)
+    {
         services.AddSingleton<IScopeFactory, ScopeFactory>();
         services.AddTransient<IInternalScopeFactory, InternalScopeFactory>();
         services.AddSingleton<IScopeInterceptorFactoryRegistry, ScopeInterceptorFactoryRegistry>();
