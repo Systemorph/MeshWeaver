@@ -89,7 +89,10 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
     public override Task InitializeAsync(CancellationToken cancellationToken)
     {
         typeRegistry.WithTypes(TypeSources.Values.Select(t => t.ElementType));
-        var collections = TypeSources
+        var collections = 
+            SyncAll ? null
+                :
+            TypeSources
             .Values
             .Select(ts => (ts.CollectionName, Path: $"$['{ts.CollectionName}']")).ToDictionary(x => x.CollectionName, x => x.Path);
         var startDataSynchronizationRequest = new SubscribeDataRequest(collections);
@@ -129,15 +132,19 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
             ? subscription
             : new());
 
-        subscription = subscription
-            with
-        {
-            // add up all items
-            Collections = subscription.Collections.SetItems
-                (
-                    request.JsonPaths
-                )
-        };
+        if (request.JsonPaths == null)
+            subscription = subscription with { Collections = null };
+
+        else
+            subscription = subscription
+                with
+                {
+                    // add up all items
+                    Collections = subscription.Collections?.SetItems
+                    (
+                        request.JsonPaths
+                    )
+                };
 
         SubscriptionsByAddress = SubscriptionsByAddress.SetItem(address, subscription);
 
@@ -147,6 +154,24 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
     }
 
     private DataChangedEvent UpdateSubscription(DataSubscription subscription, ChangeType mode)
+    {
+
+        var serializedSubscription =
+            subscription.Collections == null || subscription.Collections.Count == 0
+            ? CurrentWorkspace
+            : AssembleWorkspace(subscription);
+
+        var change = subscription.LastSynchronized == null || mode == ChangeType.Full
+            ? new DataChangedEvent(Hub.Version, serializedSubscription, ChangeType.Full)
+            : CreatePatch(subscription, serializedSubscription);
+
+
+        subscription.LastSynchronized = serializedSubscription;
+
+        return change;
+    }
+
+    private JsonObject AssembleWorkspace(DataSubscription subscription)
     {
         var serializedSubscription = new JsonObject();
 
@@ -167,14 +192,7 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
 
         }
 
-        var change = subscription.LastSynchronized == null || mode == ChangeType.Full
-            ? new DataChangedEvent(Hub.Version, serializedSubscription, ChangeType.Full)
-            : CreatePatch(subscription, serializedSubscription);
-
-
-        subscription.LastSynchronized = serializedSubscription;
-
-        return change;
+        return serializedSubscription;
     }
 
     private DataChangedEvent CreatePatch(DataSubscription subscription, JsonObject serializedSubscription)
@@ -258,4 +276,9 @@ public record HubDataSource(object Id, IMessageHub Hub) : DataSource<HubDataSour
             throw new ArgumentException($"Type {type.FullName} is not mapped in data source {Id}", nameof(type));
         ts.DeleteByIds(ids);
     }
+
+    internal bool SyncAll { get; init; }
+
+    public HubDataSource SynchronizeAll(bool synchronizeAll = true)
+        => this with { SyncAll = synchronizeAll };
 }

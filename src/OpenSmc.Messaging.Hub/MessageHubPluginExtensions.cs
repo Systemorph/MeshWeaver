@@ -1,35 +1,46 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using OpenSmc.Reflection;
 using System.Reflection;
 
 namespace OpenSmc.Messaging;
 
+public record PluginOptions<TPlugin>(IMessageHub Hub)
+where TPlugin : IMessageHubPlugin
+{
+    internal Func<TPlugin> Factory { get; init; } = () => Hub.ServiceProvider.GetRequiredService<TPlugin>();
+
+    public PluginOptions<TPlugin> WithFactory(Func<TPlugin> factory)
+        => this with { Factory = factory };
+}
 public static class MessageHubPluginExtensions
 {
     internal static readonly HashSet<Type> HandlerTypes = [typeof(IMessageHandler<>), typeof(IMessageHandlerAsync<>)];
     internal static readonly MethodInfo TaskFromResultMethod = ReflectionHelper.GetStaticMethod(() => Task.FromResult<IMessageDelivery>(null));
 
-    public static MessageHubConfiguration AddPlugin<TPlugin>(this MessageHubConfiguration configuration, Func<IMessageHub, CancellationToken, Task<TPlugin>> factory)
+    public static MessageHubConfiguration AddPlugin<TPlugin>(this MessageHubConfiguration configuration,
+        Func<PluginOptions<TPlugin>, PluginOptions<TPlugin>> options)
         where TPlugin : class, IMessageHubPlugin
-        => configuration with {PluginFactories = configuration.PluginFactories.Add(async (h,c) => await factory.Invoke(h,c))};
-
-    public static MessageHubConfiguration AddPlugin<TPlugin>(this MessageHubConfiguration configuration) 
-        where TPlugin : class, IMessageHubPlugin 
-        => configuration
-            .WithServices(s =>
-            {
-                s.TryAdd(ServiceDescriptor.Transient<TPlugin, TPlugin>());
-                return s;
-            })
-            .AddPlugin(hub =>
+    {
+        if (configuration.PluginFactories.Any(x => x.Type == typeof(TPlugin)))
+            return configuration;
+        return configuration 
+            .WithServices(services => services.AddScoped<TPlugin>())
+                with
         {
-            var ret = hub.ServiceProvider.GetRequiredService<TPlugin>();
-            return ret;
-        });
+            PluginFactories =
+            configuration.PluginFactories.Add(
+                (
+                    typeof(TPlugin), 
+                    h => options.Invoke(new(h)).Factory())
+                )
+        }
+        ;
 
-    public static MessageHubConfiguration AddPlugin<TPlugin>(this MessageHubConfiguration configuration, Func<IMessageHub, TPlugin> factory) 
+    }
+
+    public static MessageHubConfiguration AddPlugin<TPlugin>(this MessageHubConfiguration configuration)
         where TPlugin : class, IMessageHubPlugin
-        => configuration.AddPlugin((hub,_) => Task.FromResult(factory.Invoke(hub)));
+        => AddPlugin<TPlugin>(configuration, x => x);
 
 }
+

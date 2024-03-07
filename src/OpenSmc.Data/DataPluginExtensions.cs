@@ -12,7 +12,7 @@ public static class DataPluginExtensions
         return config
             .WithServices(sc => sc.AddSingleton<IWorkspace, DataPlugin>())
             .Set(config.GetListOfLambdas().Add(dataPluginConfiguration))
-            .AddPlugin(hub => (DataPlugin)hub.ServiceProvider.GetRequiredService<IWorkspace>());
+            .AddPlugin<DataPlugin>(plugin => plugin.WithFactory(() => (DataPlugin)plugin.Hub.ServiceProvider.GetRequiredService<IWorkspace>()));
     }
 
     public static ImmutableList<Func<DataContext, DataContext>> GetListOfLambdas(this MessageHubConfiguration config)
@@ -37,7 +37,7 @@ public static class DataPluginExtensions
 
 
     public static DataContext FromHub(this DataContext dataSource, object address)
-        => FromHub(dataSource, address, ds => ds);
+        => FromHub(dataSource, address, ds => ds.SynchronizeAll());
 
     public static DataContext FromHub(this DataContext dataSource, object address,
         Func<HubDataSource, HubDataSource> configuration)

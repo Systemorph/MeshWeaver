@@ -134,7 +134,7 @@ public class JsonEquivalency : IEquivalencyStep
             DefaultValueHandling = DefaultValueHandling.Ignore,
             ContractResolver = new CamelCasePropertyNamesContractResolver(),
             MetadataPropertyHandling = MetadataPropertyHandling.ReadAhead,
-            Converters = new List<JsonConverter> { new StringEnumConverter(), new RawJsonNewtonsoftConverter() },
+            Converters = new List<JsonConverter> { new StringEnumConverter(), new RawJsonNewtonsoftConverter(), new JsonNodeNewtonsoftConverter() },
             SerializationBinder = new BenchmarkSerializationBinder()
         };
     }
