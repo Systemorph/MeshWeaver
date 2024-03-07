@@ -85,7 +85,7 @@ namespace OpenSmc.Pivot.Grouping
                 return;
             }
 
-            HierarchicalDimensionCache.InitializeAsync(DimensionDescriptor);
+            HierarchicalDimensionCache.Initialize(DimensionDescriptor);
             minLevel = hierarchicalDimensionOptions.GetLevelMin<TDimension>();
             maxLevel = hierarchicalDimensionOptions.GetLevelMax<TDimension>();
             flat = hierarchicalDimensionOptions.IsFlat<TDimension>();

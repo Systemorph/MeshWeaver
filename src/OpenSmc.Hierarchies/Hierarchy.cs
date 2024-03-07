@@ -19,9 +19,9 @@ public class Hierarchy<T> : IHierarchy<T>
         elementsBySystemNameAndLevels = new Dictionary<string, IDictionary<int, string>>();
     }
 
-    public async Task InitializeAsync()
+    public void Initialize()
     {
-        elementsBySystemName = await querySource.Query<T>().ToAsyncEnumerable().ToDictionaryAsync(x => x.SystemName);
+        elementsBySystemName = querySource.Query<T>().ToDictionary(x => x.SystemName);
         AddChildren(0, GetPairs());
     }
 
