@@ -56,7 +56,7 @@ public record ReportDataCubeConfiguration<T>(Func<IWorkspace, IScopeFactory, IEn
     internal override GridOptions GetGridOptions(IWorkspace workspace, IScopeFactory scopeFactory)
     {
         var data = dataFunc(workspace, scopeFactory).ToDataCube();
-        var result = reportFunc(PivotFactory.ForDataCube(data)).Execute();
+        var result = reportFunc(PivotFactory.ForDataCube(data).WithQuerySource(workspace)).Execute();
         return result;
     }
 }
