@@ -52,7 +52,24 @@ public static class DataExtensions
                     )
                 )
         );
-    
+
+    public static MessageHubConfiguration ConfigureReferenceDataForReport(this MessageHubConfiguration parent)
+        => parent.WithHostedHub(
+            new ReferenceDataAddress(parent.Address),
+            configuration => configuration
+                .AddData(data => data
+                    .FromConfigurableDataSource
+                    (
+                        "Dimensions",
+                        dataSource => dataSource
+                            .WithType<TestHierarchicalDimensionA>(t => t
+                                .WithKey(x => x.SystemName)
+                                .WithInitialData(TestHierarchicalDimensionA.Data)
+                            )
+                    )
+                )
+        );
+
     // TODO V10: think of moving scopes and data cubes registration to reporting plugin (05.03.2024, Ekaterina Mishina)
     public static MessageHubConfiguration ConfigureReportingHub(this MessageHubConfiguration parent)
         => parent.WithHostedHub(new ReportingAddress(parent.Address), config => config
@@ -62,6 +79,10 @@ public static class DataExtensions
                     .FromHub(new ReportDataAddress(parent.Address),
                         dataSource => dataSource
                             .WithType<ValueWithHierarchicalDimension>()
+                    )
+                    .FromHub(new ReferenceDataAddress(parent.Address),
+                        dataSource => dataSource
+                            .WithType<TestHierarchicalDimensionA>()
                     ),
                 reportConfig => reportConfig.WithDataCubeOn(
                     (ws, sf) => ws.GetData<ValueWithHierarchicalDimension>(), 
@@ -80,6 +101,7 @@ public class ReportTestWithHubs(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
+                .ConfigureReferenceDataForReport()
                 .ConfigureDataForReport()
                 .ConfigureReportingHub()
             ;
