@@ -20,7 +20,7 @@ namespace OpenSmc.Reporting.Test;
 //    {
 //        return conf.WithServices(services => services
 //            .AddArithmetics()
-//            .RegisterScopes());
+//            .RegisterScopesAndArithmetics());
 //    }
 
 //    // TODO V10: move to pivot project (08.02.2024, Ekaterina Mishina)
@@ -73,7 +73,7 @@ public static class DataExtensions
     // TODO V10: think of moving scopes and data cubes registration to reporting plugin (05.03.2024, Ekaterina Mishina)
     public static MessageHubConfiguration ConfigureReportingHub(this MessageHubConfiguration parent)
         => parent.WithHostedHub(new ReportingAddress(parent.Address), config => config
-            //.WithServices(services => services.RegisterScopes())
+            .WithServices(services => services.RegisterScopes())
             //.AddScopesDataCubes()
             .AddReporting(data => data
                     .FromHub(new ReportDataAddress(parent.Address),
