@@ -67,7 +67,7 @@ namespace OpenSmc.Reporting.Test
                 .WithOptions(o => o.AutoHeight())
                 .Execute();
 
-            await gridOptions.Verify("HierarchicalDimensionHideAggregation.json");
+            await gridOptions.Verify("HierarchicalDimensionHideAggregation0.json");
         }
 
         public static IEnumerable<object[]> ReportDataCubeCases()
