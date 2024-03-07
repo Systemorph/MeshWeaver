@@ -5,6 +5,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\OpenSmc.Messaging.Contract\OpenSmc.Messaging.Contract.csproj" />
+    <ProjectReference Include="..\OpenSmc.Serialization.Abstractions\OpenSmc.Serialization.Abstractions.csproj" />
     <ProjectReference Include="..\OpenSmc.ShortGuid\OpenSmc.ShortGuid.csproj" />
   </ItemGroup>
 </Project>

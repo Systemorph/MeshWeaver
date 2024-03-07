@@ -127,7 +127,7 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         var queryResult = items;
         if (message.PageSize is not null)
             queryResult = queryResult.Skip(message.Page * message.PageSize.Value).Take(message.PageSize.Value).ToArray();
-        var response = new GetManyResponse<T>(items.Count, queryResult);
+        var response = new GetResponse<T>(items.Count, queryResult);
         Hub.Post(response, o => o.ResponseFor(request));
         return request.Processed();
     }
