@@ -19,22 +19,10 @@ public class Hierarchy<T> : IHierarchy<T>
         elementsBySystemNameAndLevels = new Dictionary<string, IDictionary<int, string>>();
     }
 
-    public Hierarchy(IDictionary<string, T> outerElementsBySystemName)
-    {
-        elementsBySystemName = outerElementsBySystemName;
-        dimensionsByLevel = new Dictionary<int, IList<string>>();
-        elementsBySystemNameAndLevels = new Dictionary<string, IDictionary<int, string>>();
-    }
-
     public async Task InitializeAsync()
     {
         elementsBySystemName = await querySource.Query<T>().ToAsyncEnumerable().ToDictionaryAsync(x => x.SystemName);
         AddChildren(0, GetPairs());
-    }
-
-    public void Initialize()
-    {
-        if(elementsBySystemName != null) AddChildren(0, GetPairs());
     }
 
     private IEnumerable<ChildParent> GetPairs()

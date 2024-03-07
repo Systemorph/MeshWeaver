@@ -10,8 +10,6 @@ public class HierarchicalDimensionCache : IHierarchicalDimensionCache
     private readonly IQuerySource querySource;
     private readonly Dictionary<Type, IHierarchy> cachedDimensions = new();
 
-    public HierarchicalDimensionCache() {}
-
     public HierarchicalDimensionCache(IQuerySource querySource)
     {
         this.querySource = querySource;
@@ -52,17 +50,6 @@ public class HierarchicalDimensionCache : IHierarchicalDimensionCache
         {
             var hierarchy = new Hierarchy<T>(querySource);
             await hierarchy.InitializeAsync();
-            cachedDimensions[typeof(T)] = hierarchy;
-        }
-    }
-
-    public void Initialize<T>(IDictionary<string, T> outerElementsBySystemName)
-        where T : class, IHierarchicalDimension
-    {
-        if (outerElementsBySystemName != null && !cachedDimensions.TryGetValue(typeof(T), out _))
-        {
-            var hierarchy = new Hierarchy<T>(outerElementsBySystemName);
-            hierarchy.Initialize();
             cachedDimensions[typeof(T)] = hierarchy;
         }
     }
