@@ -23,7 +23,7 @@ public static class DataPluginExtensions
     internal static DataContext GetDataConfiguration(this IMessageHub hub)
     {
         var dataPluginConfig = hub.Configuration.GetListOfLambdas();
-        var ret = new DataContext(hub);
+        var ret = new DataContext(hub, hub.ServiceProvider.GetRequiredService<IWorkspace>());
         foreach (var func in dataPluginConfig)
             ret = func.Invoke(ret);
         return ret;
@@ -41,7 +41,7 @@ public static class DataPluginExtensions
 
     public static DataContext FromHub(this DataContext dataSource, object address,
         Func<HubDataSource, HubDataSource> configuration)
-        => dataSource.WithDataSourceBuilder(address, hub => configuration.Invoke(new HubDataSource(address, hub))
+        => dataSource.WithDataSourceBuilder(address, hub => configuration.Invoke(new HubDataSource(address, hub, dataSource.Workspace))
         );
     public static DataContext FromConfigurableDataSource(this DataContext dataSource, object address,
         Func<DataSource, DataSource> configuration)

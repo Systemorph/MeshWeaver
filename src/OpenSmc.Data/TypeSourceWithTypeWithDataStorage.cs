@@ -1,44 +1,39 @@
-﻿using OpenSmc.Collections;
-using OpenSmc.Data.Persistence;
-using OpenSmc.Messaging;
+﻿using System.Collections.Immutable;
+using OpenSmc.Collections;
 
 namespace OpenSmc.Data;
 
-public record TypeSourceWithTypeWithDataStorage<T>(object DataSource, IMessageHub Hub, IDataStorage Storage)
-    : TypeSourceWithType<T, TypeSourceWithTypeWithDataStorage<T>>(DataSource, Hub)
+public record TypeSourceWithTypeWithDataStorage<T> : TypeSourceWithType<T, TypeSourceWithTypeWithDataStorage<T>>
     where T : class
 {
 
-    protected override void UpdateImpl(IEnumerable<T> instances)
+    public TypeSourceWithTypeWithDataStorage(object DataSource, IServiceProvider serviceProvider, IDataStorage Storage) : base(DataSource, serviceProvider)
     {
-        var adds = new List<T>();
-        var updates = new List<T>();
-        foreach (var instance in instances)
-        {
-            if(CurrentState.ContainsKey(GetKey(instance)))
-                updates.Add(instance);
-            else
-                adds.Add(instance);
-        }
+        this.Storage = Storage;
+    }
+
+    private ImmutableDictionary<object,object> LastSaved { get; set; }
+
+    public override void UpdateImpl(InstancesInCollection instances)
+    {
+        var adds = instances.Instances.Where(x => !LastSaved.ContainsKey(x.Key)).Select(x => x.Value).ToArray();
+        var updates = instances.Instances.Where(x => LastSaved.TryGetValue(x.Key, out var existing) && ! existing.Equals(x.Value)).Select(x => x.Value).ToArray();
+        var deletes = LastSaved.Where(x => instances.Instances.ContainsKey(x)).Select(x => x.Value).ToArray();
+
         Storage.Add(adds);
         Storage.Update(updates);
+        Storage.Delete(deletes);
 
+        LastSaved = instances.Instances;
     }
 
-    protected override void DeleteImpl(IEnumerable<T> instances)
-    {
-        Storage.Delete(instances);
-    }
 
-    public override async Task InitializeAsync(CancellationToken cancellationToken)
-    {
-        Initialize(await GetAsync(cancellationToken));
-    }
-
-    public async Task<IReadOnlyCollection<EntityDescriptor>> GetAsync(CancellationToken cancellationToken)
+    public override async Task<ImmutableDictionary<object, object>> InitializeAsync(CancellationToken cancellationToken)
     {
         await using var transaction = await Storage.StartTransactionAsync(cancellationToken);
-        return await Storage.Query<T>().AsAsyncEnumerable().Select(e => new EntityDescriptor(CollectionName,Key(e),e)).ToArrayAsync(cancellationToken);
+        return LastSaved = (await Storage.Query<T>().ToDictionaryAsync(GetKey, x => (object)x, cancellationToken)).ToImmutableDictionary();
     }
+
+    public IDataStorage Storage { get; init; }
 
 }

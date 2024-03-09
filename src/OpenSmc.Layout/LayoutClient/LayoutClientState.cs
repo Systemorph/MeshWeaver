@@ -23,11 +23,11 @@ public record LayoutClientState(LayoutClientConfiguration Configuration)
     public LayoutArea GetByAddress(object address)
         => AreasByControlAddress.GetValueOrDefault(address);
 
-    public LayoutArea GetByIdAndArea(string id, string areaName)
-        => AreasByControlId.TryGetValue(id, out var area) 
-           && area.Control is IUiControl control
-            ? GetByAddressAndArea(control.Address, areaName)
-            : null;
+    //public LayoutArea GetByIdAndArea(string id, string areaName)
+    //    => AreasByControlId.TryGetValue(id, out var area) 
+    //       && area.Control is IUiControl control
+    //        ? GetByAddressAndArea(control.Address, areaName)
+    //        : null;
 
     public LayoutArea GetByAddressAndArea(object address, string areaName)
     {

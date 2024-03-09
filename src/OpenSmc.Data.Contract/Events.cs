@@ -35,14 +35,9 @@ public enum DataChangeStatus{Committed, Failed}
 public record CreateRequest<TObject>(TObject Element) : IRequest<DataChangedEvent> { public object Options { get; init; } };
 
 
-/// <summary>
-/// Starts data synchronization with data corresponding to the Json Path queries as specified in the constructor.
-/// </summary>
-/// <param name="JsonPaths">All the json paths to be synchronized. E.g. <code>"$.['MyNamespace.MyEntity']"</code></param>
-public record SubscribeDataRequest(IReadOnlyDictionary<string,string> JsonPaths) : IRequest<DataChangedEvent>;
+public record SubscribeDataRequest(string Id, WorkspaceReference Reference) : IRequest<DataChangedEvent>;
 
 public record DataChangedEvent(long Version, RawJson Change, ChangeType Type);
-
 public enum ChangeType{Full, Patch}
 
 
@@ -57,5 +52,3 @@ public record PatchChangeRequest(object Change) : DataChangeRequest
     public string Id { get; init; } = Guid.NewGuid().ToString();
 }
 
-public abstract record WorkspaceReference(object Address);
-public record EntityReference(object Address, string Collection, object Id) : WorkspaceReference(Address);
