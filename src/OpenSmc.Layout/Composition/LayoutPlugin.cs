@@ -6,18 +6,13 @@ using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Layout.Composition;
 
-public class LayoutPlugin(IMessageHub hub) :
-    MessageHubPlugin(hub),
+public class LayoutPlugin(LayoutDefinition layoutDefinition) :
+    MessageHubPlugin(layoutDefinition.Hub),
     IMessageHandler<RefreshRequest>
 {
     [Inject] private IUiControlService uiControlService;
     private readonly LayoutDefinition layoutDefinition;
-    private readonly IWorkspace workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
-
-    public LayoutPlugin(LayoutDefinition layoutDefinition) : this(layoutDefinition.Hub)
-    {
-        this.layoutDefinition = layoutDefinition;
-    }
+    private readonly IWorkspace workspace = layoutDefinition.Hub.ServiceProvider.GetRequiredService<IWorkspace>();
 
 
 

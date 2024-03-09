@@ -11,10 +11,8 @@ namespace OpenSmc.Layout;
 public static class LayoutExtensions
 {
 
-    public static MessageHubConfiguration AddLayout(this MessageHubConfiguration conf,
-                                                     Func<LayoutDefinition, LayoutDefinition> layoutDefinition = null)
+    public static MessageHubConfiguration AddLayout(this MessageHubConfiguration conf, Func<LayoutDefinition, LayoutDefinition> layoutDefinition)
     {
-        var mainLayoutAddress = new UiControlAddress("Main", conf.Address);
         return conf
             .WithDeferral(d => d.Message is RefreshRequest or SetAreaRequest)
             .WithServices(
@@ -25,9 +23,8 @@ public static class LayoutExtensions
             .AddData(data => data.FromConfigurableDataSource("Layout", dataSource => dataSource
                 //.WithType<LayoutArea>(type => type.WithQuery())
             ))
-            .RouteLayoutMessages(mainLayoutAddress)
             .AddLayoutTypes()
-            .WithHostedHub(mainLayoutAddress, c => MainLayoutConfiguration(c, layoutDefinition))
+            .AddPlugin<LayoutPlugin>(plugin => plugin.WithFactory(() => new LayoutPlugin(layoutDefinition.Invoke(new LayoutDefinition(plugin.Hub)))))
             ;
     }
 
@@ -43,7 +40,7 @@ public static class LayoutExtensions
         => configuration
             .WithTypes(typeof(UiControl).Assembly.GetTypes()
                 .Where(t => typeof(IUiControl).IsAssignableFrom(t) && !t.IsAbstract))
-            .WithTypes(typeof(MessageAndAddress), typeof(UiControlAddress))
+            .WithTypes(typeof(MessageAndAddress))
         ;
 
     private static MessageHubConfiguration MainLayoutConfiguration(MessageHubConfiguration configuration,
@@ -65,15 +62,6 @@ public static class LayoutExtensions
 
         return new LayoutPlugin(ld);
     }
-
-
-    public static object FindLayoutHost(object address)
-    {
-        if (address is UiControlAddress uiControlAddress)
-            return FindLayoutHost(uiControlAddress.Host);
-        return address;
-    }
-
 
 
 

@@ -67,7 +67,6 @@ public record RefreshRequest(string Area = "") : IRequest<RefreshResponse>
 
 public record RefreshResponse(EntityReference Reference);
 
-public record UiControlAddress(string Id, object Host) : IHostedAddress;
 
 public delegate object ViewDefinition(RefreshRequest request);
 

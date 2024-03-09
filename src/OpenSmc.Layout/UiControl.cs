@@ -56,8 +56,6 @@ public abstract record UiControl(object Data) : IUiControl
     public Task ClickAsync(IUiActionContext context) => ClickAction?.Invoke(context) ?? Task.CompletedTask;
 }
 
-public class GenericUiControlPlugin<TControl>(IMessageHub hub) : UiControlPlugin<TControl>(hub)
-    where TControl : UiControl;
 
 public abstract record UiControl<TControl>(string ModuleName, string ApiVersion, object Data) : UiControl(Data), IUiControl<TControl>
     where TControl : UiControl<TControl>, IUiControl<TControl>
