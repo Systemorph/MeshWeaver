@@ -1,7 +1,5 @@
 ﻿using System.Collections.Immutable;
-using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json;
-using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
 using OpenSmc.ShortGuid;
 
@@ -13,10 +11,6 @@ public interface IUiControl : IDisposable
     //object Data { get; init; }
     IUiControl WithBuildAction(Func<IUiControl, IServiceProvider, IUiControl> buildFunction);
     bool IsClickable { get; }
-
-    IMessageHub Hub { get; }
-
-    object Address { get; }
 
     bool IsUpToDate(object other);
 }
@@ -35,16 +29,12 @@ public abstract record UiControl(object Data) : IUiControl
 {
     public string Id { get; init; } = Guid.NewGuid().AsString();
 
-    public abstract IMessageHub CreateHub(IServiceProvider serviceProvider);
-
 
     IUiControl IUiControl.WithBuildAction(Func<IUiControl, IServiceProvider, IUiControl> buildFunction) => WithBuild(buildFunction);
 
     void IDisposable.Dispose() => Dispose();
     protected abstract IUiControl WithBuild(Func<IUiControl, IServiceProvider, IUiControl> buildFunction);
     protected abstract void Dispose();
-    [JsonIgnore]
-    public IMessageHub Hub { get; init; }
     public object Style { get; init; } //depends on control, we need to give proper style here!
     public object Skin { get; init; }
 
@@ -55,20 +45,9 @@ public abstract record UiControl(object Data) : IUiControl
     public object DataContext { get; init; }
 
     public object Label { get; init; }
-    public object Address { get; init; }
     public abstract bool IsUpToDate(object other);
 
-    private readonly MessageAndAddress clickMessage;
-    public MessageAndAddress ClickMessage
-    {
-        get
-        {
-            if (clickMessage == null || clickMessage.Address != null)
-                return clickMessage;
-            return clickMessage with { Address = Address };
-        }
-        init => clickMessage = value;
-    }
+    public MessageAndAddress ClickMessage { get; init; }
 
     // ReSharper disable once IdentifierTypo
     public bool IsClickable => ClickAction != null;
@@ -80,23 +59,10 @@ public abstract record UiControl(object Data) : IUiControl
 public class GenericUiControlPlugin<TControl>(IMessageHub hub) : UiControlPlugin<TControl>(hub)
     where TControl : UiControl;
 
-public abstract record UiControl<TControl, TPlugin>(string ModuleName, string ApiVersion, object Data) : UiControl(Data), IUiControl<TControl>
-    where TControl : UiControl<TControl, TPlugin>, IUiControl<TControl>
-    where TPlugin : UiControlPlugin<TControl>
+public abstract record UiControl<TControl>(string ModuleName, string ApiVersion, object Data) : UiControl(Data), IUiControl<TControl>
+    where TControl : UiControl<TControl>, IUiControl<TControl>
 {
-    public override IMessageHub CreateHub(IServiceProvider serviceProvider) => serviceProvider.CreateMessageHub(Address, ConfigureHub);
 
-    protected virtual MessageHubConfiguration ConfigureHub(MessageHubConfiguration configuration)
-    {
-        return configuration.AddPlugin<TPlugin>(plugin => plugin.WithFactory(() => CreatePlugin(plugin.Hub)));
-    }
-
-    protected virtual TPlugin CreatePlugin(IMessageHub hub)
-    {
-        var ret = hub.ServiceProvider.GetRequiredService<TPlugin>();
-        ret.InitializeState((TControl)this);
-        return ret;
-    }
 
     protected TControl This => (TControl)this;
 
@@ -115,14 +81,11 @@ public abstract record UiControl<TControl, TPlugin>(string ModuleName, string Ap
     public TControl WithStyle(Func<StyleBuilder, StyleBuilder> styleBuilder) => This with { Style = styleBuilder(new StyleBuilder()).Build() };
     public TControl WithSkin(string skin) => This with { Skin = skin };
 
-    public TControl WithAddress(object address) => This with { Address = address };
-
     public TControl WithClickAction(object payload, Func<IUiActionContext, Task> onClick)
     {
         return This with
         {
             ClickAction = onClick,
-            ClickMessage = new(new ClickedEvent { Payload = payload }, Address),
         };
     }
     public TControl WithClickMessage(object message, object target)
@@ -193,9 +156,8 @@ public interface IExpandableUiControl<out TControl> : IUiControl<TControl>
     TControl WithExpandAction<TPayload>(TPayload payload, Func<object, Task<object>> expandFunction);
 }
 
-public abstract record ExpandableUiControl<TControl, TPlugin>(string ModuleName, string ApiVersion, object Data) : UiControl<TControl, TPlugin>(ModuleName, ApiVersion, Data), IExpandableUiControl
-    where TControl : ExpandableUiControl<TControl, TPlugin>
-    where TPlugin : UiControlPlugin<TControl>
+public abstract record ExpandableUiControl<TControl>(string ModuleName, string ApiVersion, object Data) : UiControl<TControl>(ModuleName, ApiVersion, Data), IExpandableUiControl
+    where TControl : ExpandableUiControl<TControl>
 {
     public const string Expand = nameof(Expand);
     public bool IsExpandable => ExpandFunc != null;
@@ -220,7 +182,6 @@ public abstract record ExpandableUiControl<TControl, TPlugin>(string ModuleName,
         return This with
         {
             ExpandFunc = expand,
-            ExpandMessage = new(new ExpandRequest(Expand) { Payload = payload }, Address, Expand),
         };
     }
     public TControl WithExpand(Func<IUiActionContext, Task<UiControl>> expand)

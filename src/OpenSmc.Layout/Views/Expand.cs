@@ -3,7 +3,7 @@
 namespace OpenSmc.Layout.Views;
 
 //not relevant for MVP
-public record ExpandControl(object Data) : ExpandableUiControl<ExpandControl, ExpandableUiPlugin<ExpandControl>>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);
+public record ExpandControl(object Data) : ExpandableUiControl<ExpandControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);
 
 public class ExpandableUiPlugin<TControl>(IMessageHub hub)
     : GenericUiControlPlugin<TControl>(hub), IMessageHandlerAsync<ExpandRequest>

@@ -85,7 +85,7 @@ public static class TestHubSetup
 
     private static IEnumerable<object> ImportFunction(ImportRequest request, IDataSet dataSet, IMessageHub hub, IWorkspace workspace)
     {
-        var transactionalData = workspace.GetData<TransactionalData>();
+        var transactionalData = workspace.State.GetData<TransactionalData>();
         return transactionalData.Select(t => new ComputedData(t.Id, 2024, t.LoB, t.BusinessUnit, t.Value * 2));
     }
 }

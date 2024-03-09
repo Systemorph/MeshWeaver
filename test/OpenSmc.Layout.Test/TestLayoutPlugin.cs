@@ -55,7 +55,7 @@ public class TestLayoutPlugin(IMessageHub hub) : MessageHubPlugin(hub),
             .WithView(UpdatingView, _ => ModelViewPresenterTestCase())
             // this tests proper updating in the case of MVVM
             .WithView(DataBoundView, _ =>
-                Template.Bind(workspace.GetData<DataRecord>().First(),
+                Template.Bind(workspace.State.GetData<DataRecord>().First(),
                     record =>
                         Controls
                             .Menu(record.DisplayName)
@@ -83,7 +83,7 @@ public class TestLayoutPlugin(IMessageHub hub) : MessageHubPlugin(hub),
 
     public IMessageDelivery HandleMessage(IMessageDelivery<ChangeDataRecordRequest> request)
     {
-        workspace.Update(workspace.GetData<DataRecord>().First() with {DisplayName = NewString});
+        workspace.Update(workspace.State.GetData<DataRecord>().First() with {DisplayName = NewString});
         workspace.Commit();
         return request.Processed();
     }

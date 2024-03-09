@@ -1,11 +1,10 @@
 ﻿using OpenSmc.Messaging;
 using System.Collections.Immutable;
 using System.Data;
-using OpenSmc.Data.Persistence;
 
 namespace OpenSmc.Data;
 
-public sealed record DataContext(IMessageHub Hub)
+public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace)
 {
     internal ImmutableDictionary<object,IDataSource> DataSources { get; private set; } = ImmutableDictionary<object, IDataSource>.Empty;
 
@@ -23,33 +22,21 @@ public sealed record DataContext(IMessageHub Hub)
 
     public delegate IDataSource DataSourceBuilder(IMessageHub hub); 
 
-    public async Task InitializeAsync(CancellationToken cancellationToken)
+    public async Task<WorkspaceState> InitializeAsync(CancellationToken cancellationToken)
     {
         DataSources = DataSourceBuilders
             .ToImmutableDictionary(kvp => kvp.Key,
                 kvp => kvp.Value.Invoke(Hub));
-        foreach (var dataSource in DataSources.Values)
-        {
-            await dataSource.InitializeAsync(cancellationToken);
-        }
-    }
 
-    public IReadOnlyDictionary<string, IReadOnlyCollection<EntityDescriptor>> GetEntities()
-    {
-        return DataSources
+        return await DataSources
             .Values
-            .SelectMany(ds => ds.GetData().Values.SelectMany(x => x))
-            .GroupBy(x => x.Collection)
-            .ToDictionary(x => x.Key, x => (IReadOnlyCollection<EntityDescriptor>)x.ToArray());
+            .ToAsyncEnumerable()
+            .SelectAwait(async ds => await ds.InitializeAsync(cancellationToken))
+            .AggregateAsync((ws1, ws2) => ws1.Merge(ws2), cancellationToken: cancellationToken);
+
     }
 
-    public void Synchronize(DataChangedEvent @event, object dataSourceId)
-    {
-        // update foreign data source
-        if (GetDataSource(dataSourceId) is HubDataSource dataSource)
-            dataSource.Synchronize(@event);
-    
-    }
+
 
     private object MapToDataSource(object instance)
     {

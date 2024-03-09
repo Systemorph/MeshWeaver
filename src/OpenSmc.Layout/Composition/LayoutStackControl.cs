@@ -1,10 +1,9 @@
 ﻿using System.Collections.Immutable;
-using OpenSmc.Data;
 
 namespace OpenSmc.Layout.Composition;
 
 
-public record LayoutStackControl() : UiControl<LayoutStackControl, GenericUiControlPlugin<LayoutStackControl>>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
+public record LayoutStackControl() : UiControl<LayoutStackControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
 {
     public record AreaChangedOptions(string InsertAfter = null);
     private readonly ImmutableList<LayoutArea> areasImpl = ImmutableList<LayoutArea>.Empty;
@@ -62,5 +61,6 @@ public record LayoutStackControl() : UiControl<LayoutStackControl, GenericUiCont
     {
         return this with { HighlightNewAreas = true };
     }
+
 }
 

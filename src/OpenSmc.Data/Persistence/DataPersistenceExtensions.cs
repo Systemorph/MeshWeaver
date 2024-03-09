@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Collections.Immutable;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using OpenSmc.Messaging;
 using OpenSmc.Serialization;
@@ -7,28 +8,27 @@ namespace OpenSmc.Data.Persistence;
 
 public static class DataPersistenceExtensions
 {
-    public static JsonObject SerializeState(this ISerializationService serializationService, IReadOnlyDictionary<string, IReadOnlyCollection<EntityDescriptor>> data) 
+    public static JsonObject SerializeState(this ISerializationService serializationService, IReadOnlyDictionary<string, InstancesInCollection> data) 
         => new(
             data
                 .Select(g => new KeyValuePair<string, JsonNode>
                     (
                         g.Key,
-                        serializationService.SerializeToArray(g.Value)
+                        serializationService.SerializeToArray(g.Value.Instances)
                     )
                 )
         );
 
-    public static JsonArray SerializeToArray(this ISerializationService serializationService, IReadOnlyCollection<EntityDescriptor> data) 
+    public static JsonArray SerializeToArray(this ISerializationService serializationService, ImmutableDictionary<object, object> data) 
         => new(data.Select(serializationService.SerializeEntity).ToArray());
 
 
-    public static JsonNode SerializeEntity(this ISerializationService serializationService, EntityDescriptor entity)
+    public static JsonNode SerializeEntity(this ISerializationService serializationService, KeyValuePair<object,object> kvp)
     {
-        if (entity.Entity is JsonObject node)
+        if (kvp.Value is JsonObject node)
             return node;
-        node = (JsonObject)JsonNode.Parse(JsonSerializer.Serialize(entity.Entity));
-        node!.TryAdd(ReservedProperties.Id, serializationService.Serialize(entity.Id).Content);
-        node.TryAdd(ReservedProperties.Type, entity.Collection);
+        node = (JsonObject)JsonNode.Parse(JsonSerializer.Serialize(kvp.Value));
+        node!.TryAdd(ReservedProperties.Id, serializationService.SerializeToString(kvp.Key));
         return node;
     }
 
@@ -40,8 +40,7 @@ public static class DataPersistenceExtensions
                 && id != null
                 && item.TryGetPropertyValue(ReservedProperties.DataSource, out var dataSource)
                 && dataSource != null)
-                yield return new(collection,
-                    serializationService.Deserialize(id.ToString()), serializationService.Deserialize(item.ToString()));
+                yield return new(collection,                    serializationService.Deserialize(id.ToString()), serializationService.Deserialize(item.ToString()));
         }
     }
 

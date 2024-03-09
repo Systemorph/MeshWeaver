@@ -13,9 +13,9 @@ namespace OpenSmc.Layout.Views;
 /// <param name="View">Control of main body</param>
 /// <param name="Menu">Control</param>
 /// <param name="Options">Control</param>
-public record ActivityControl(object User, object Title, object Summary, object View, string Color, DateTime Date, ImmutableList<MenuItemControl> Menu, ImmutableList<MenuItemControl> Options) : UiControl<ActivityControl, GenericUiControlPlugin<ActivityControl>>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null);
+public record ActivityControl(object User, object Title, object Summary, object View, string Color, DateTime Date, ImmutableList<MenuItemControl> Menu, ImmutableList<MenuItemControl> Options) : UiControl<ActivityControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null);
 
-public record MenuItemControl(object Title, object Icon) : ExpandableUiControl<MenuItemControl, ExpandableUiPlugin<MenuItemControl>>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
+public record MenuItemControl(object Title, object Icon) : ExpandableUiControl<MenuItemControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
 {
     public string Description { get; init; }
 
@@ -72,7 +72,7 @@ public record MenuItemControl(object Title, object Icon) : ExpandableUiControl<M
         return this with
                {
                    ExpandFunc = p => ExpandSubMenu(p, view),
-                   ExpandMessage = new(new ExpandRequest(Expand){Payload = payload}, Address, Expand)
+                   //ExpandMessage = new(new ExpandRequest(Expand){Payload = payload}, Address, Expand)
                };
     }
 

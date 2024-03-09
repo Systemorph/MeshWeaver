@@ -1,29 +1,22 @@
-﻿using System.Reflection;
+﻿using System.Collections.Concurrent;
+using System.Reactive.Subjects;
 using OpenSmc.Data.Persistence;
 using OpenSmc.Messaging;
-using OpenSmc.Reflection;
 
 namespace OpenSmc.Data;
-public record DataPluginState(HubDataSource Workspace, DataContext DataContext);
-public class DataPlugin : MessageHubPlugin<DataPluginState>, 
+public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub),
     IWorkspace,
     IMessageHandler<UpdateDataRequest>,
     IMessageHandler<DeleteDataRequest>,
     IMessageHandler<DataChangedEvent>,
     IMessageHandler<SubscribeDataRequest>,
+    IMessageHandler<UnsubscribeDataRequest>,
     IMessageHandler<PatchChangeRequest>
 
 {
-    private readonly IMessageHub persistenceHub;
+    private readonly Subject<WorkspaceState> subject = new();
 
-    public DataPlugin(IMessageHub hub) : base(hub)
-    {
-        Register(HandleGetRequest); // This takes care of GetRequest and GetManyRequest
-        persistenceHub = hub.GetHostedHub(new PersistenceAddress(hub.Address), conf => conf);
-    }
-
-
-    public IEnumerable<Type> MappedTypes => State.Workspace.MappedTypes;
+    public IEnumerable<Type> MappedTypes => State.MappedTypes;
 
     public void Update(IEnumerable<object> instances, UpdateOptions options)
         => RequestChange(null, new UpdateDataRequest(instances.ToArray()));
@@ -45,18 +38,18 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
 
     private async Task InitializeAsync(CancellationToken cancellationToken, DataContext dataContext)
     {
-        await dataContext.InitializeAsync(cancellationToken);
+        var workspace = await dataContext.InitializeAsync(cancellationToken);
 
-        var workspace = dataContext.DataSources.Values
+        var dataSource = dataContext.DataSources.Values
             .SelectMany(ds => ds.TypeSources)
             .Aggregate(
-                new HubDataSource(Address, Hub), 
+                new HubDataSource(Address, Hub, this), 
                 (ds, ts) =>
                     ds.WithType(ts.ElementType, t => t.WithKey(ts.GetKey).WithPartition(ts.ElementType, ts.GetPartition)));
 
 
-        workspace.Initialize(dataContext.GetEntities());
-        InitializeState(new(workspace, dataContext));
+        var ws = await dataSource.InitializeAsync(cancellationToken);
+        InitializeState(ws);
     }
 
 
@@ -68,14 +61,8 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
 
     private IMessageDelivery RequestChange(IMessageDelivery request, DataChangeRequest change)
     {
-        var changes = State.Workspace.Change(change).ToArray();
-
-        var dataChanged = State.Workspace.Commit();
-        if(request != null)
-            Hub.Post(dataChanged, o => o.ResponseFor(request));
-
-        Task CommitToDataSource(CancellationToken cancellationToken) => State.DataContext.UpdateAsync(changes, cancellationToken);
-        persistenceHub.Schedule(CommitToDataSource);
+        UpdateState(s => s.Change(change));
+        Commit();
         return request?.Processed();
     }
 
@@ -84,53 +71,10 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         => RequestChange(request, request.Message);
 
 
-    private IMessageDelivery HandleGetRequest(IMessageDelivery request)
-    {
-        var type = request.Message.GetType();
-        if (type.IsGenericType)
-        {
-            var genericTypeDefinition = type.GetGenericTypeDefinition();
-            if (genericTypeDefinition == typeof(GetManyRequest<>))
-            {
-                var elementType = type.GetGenericArguments().First();
-                return (IMessageDelivery)GetElementsMethod.MakeGenericMethod(elementType).InvokeAsFunction(this, request);
-            }
-
-            if (genericTypeDefinition == typeof(GetRequest<>))
-            {
-                var elementType = type.GetGenericArguments().First();
-                return (IMessageDelivery)GetElementMethod.MakeGenericMethod(elementType).InvokeAsFunction(this, request);
-
-            }
-        }
-        return request;
-    }
-
-    private static readonly MethodInfo GetElementMethod = ReflectionHelper.GetMethodGeneric<DataPlugin>(x => x.GetElement<object>(null));
-
-    // ReSharper disable once UnusedMethodReturnValue.Local
-    private IMessageDelivery GetElement<T>(IMessageDelivery<GetRequest<T>> request) where T : class
-    {
-        var item = State.Workspace.Get<T>(request.Message.Id);
-        Hub.Post(item, o => o.ResponseFor(request));
-        return request.Processed();
-    }
-
-    private static readonly MethodInfo GetElementsMethod = ReflectionHelper.GetMethodGeneric<DataPlugin>(x => x.GetElements<object>(null));
 
 
-    // ReSharper disable once UnusedMethodReturnValue.Local
-    private IMessageDelivery GetElements<T>(IMessageDelivery<GetManyRequest<T>> request) where T : class
-    {
-        var items = State.Workspace.Get<T>();
-        var message = request.Message;
-        var queryResult = items;
-        if (message.PageSize is not null)
-            queryResult = queryResult.Skip(message.Page * message.PageSize.Value).Take(message.PageSize.Value).ToArray();
-        var response = new GetResponse<T>(items.Count, queryResult);
-        Hub.Post(response, o => o.ResponseFor(request));
-        return request.Processed();
-    }
+
+
 
     public override bool IsDeferred(IMessageDelivery delivery)
     {
@@ -143,69 +87,61 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
     }
 
 
-
     public void Commit()
     {
-        State.Workspace.Commit();
+        subject.OnNext(State);
     }
 
     public void Rollback()
     {
-        State.Workspace.Rollback();
+        State.Rollback();
     }
 
-    public IReadOnlyCollection<EntityReference> GetReferences(IEnumerable<object> objects)
-        => objects.GroupBy(o => o.GetType())
-            .SelectMany(g =>
-            {
-                var typeSource = State.Workspace.GetTypeSource(g.Key);
-                if (typeSource == null)
-                    return Enumerable.Empty<EntityReference>();
-                return g.Select(x => new EntityReference(Hub.Address, typeSource.CollectionName, typeSource.GetKey(x)));
-            })
-            .ToArray();
-
-    public EntityReference GetReference(object obj)
+    public IObservable<TReference> Get<TReference>(WorkspaceReference<TReference> reference)
     {
-        var ts = State.Workspace.GetTypeSource(obj.GetType());
-        return ts == null ? null : new EntityReference(Hub.Address, ts.CollectionName, ts.GetKey(obj));
+        throw new NotImplementedException();
     }
 
-    public void DeleteById(Type type, params object[] ids)
+    public EntityReference GetReference(object entity)
     {
-        State.Workspace.DeleteById(type, ids);
+        throw new NotImplementedException();
     }
 
-    public IReadOnlyCollection<T> GetData<T>() where T : class
-    {
-        return State.Workspace.Get<T>();
-    }
-    public T GetData<T>(object id) where T : class
-    {
-        return State.Workspace.Get<T>(id);
-    }
 
     IMessageDelivery IMessageHandler<DataChangedEvent>.HandleMessage(IMessageDelivery<DataChangedEvent> request)
     {
-        var dataSourceId = request.Sender;
         var @event = request.Message;
-        State.DataContext.Synchronize(@event, dataSourceId);
-        State.Workspace.UpdateWorkspace(State.DataContext.GetEntities());
+        UpdateState(s => s.Synchronize(@event));
         return request.Processed();
     }
 
     IMessageDelivery IMessageHandler<SubscribeDataRequest>.HandleMessage(IMessageDelivery<SubscribeDataRequest> request)
         => StartSynchronization(request);
 
+    private readonly ConcurrentDictionary<(object Address, string Id),IDisposable> subscriptions = new();
     private IMessageDelivery StartSynchronization(IMessageDelivery<SubscribeDataRequest> request)
     {
-        var address = request.Sender;
+        var key = (request.Message, request.Message.Id);
+        if(subscriptions.TryRemove(key, out var existing))
+            existing.Dispose();
 
-        var changes = State.Workspace.Subscribe(request.Message, address);
-        Hub.Post(changes, o => o.ResponseFor(request));
+        subscriptions[key] = new DataSubscription(Hub, request, subject, State);
+
         return request.Processed();
     }
 
+    IMessageDelivery IMessageHandler<UnsubscribeDataRequest>.HandleMessage(
+        IMessageDelivery<UnsubscribeDataRequest> request)
+    {
+        foreach (var id in request.Message.Ids)
+        {
+            if (subscriptions.TryRemove((request.Message, id), out var existing))
+                existing.Dispose();
+
+        }
+
+        return request.Processed();
+    }
 
 }
 

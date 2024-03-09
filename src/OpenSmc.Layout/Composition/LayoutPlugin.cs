@@ -42,13 +42,12 @@ public class LayoutPlugin(IMessageHub hub) :
             return null;
 
         if (control is LayoutStackControl stack)
-            stack = stack with
+            control = stack with
             {
                 Areas = stack.ViewElements
                     .Select(ve => RenderControl($"{area}/{ve.Area}", ParseControl(request, ve), request)).ToArray()
             };
 
-        control = CreateUiControlHub(control);
         var layoutArea = new LayoutArea(area, control);
         workspace.Update(layoutArea);
         return workspace.GetReference(layoutArea);
@@ -62,31 +61,13 @@ public class LayoutPlugin(IMessageHub hub) :
             _ => throw new NotSupportedException()
         };
 
-    public TControl2 CreateUiControlHub<TControl2>(TControl2 control)
-        where TControl2 : UiControl
-    {
-        if (control == null)
-            return null;
-        var address = new UiControlAddress(control.Id, Hub.Address);
-        control = control with { Address = address };
-
-
-        var hub = control.CreateHub(Hub.ServiceProvider);
-
-        return control with { Hub = hub, Address = address };
-    }
-
-    private LayoutArea GetArea(string area)
-    {
-        return workspace.GetData<LayoutArea>(area);
-    }
 
     private UiControl GetControl(RefreshRequest request)
     {
         var generator = layoutDefinition.ViewGenerators.FirstOrDefault(g => g.Filter(request));
         if (generator == null)
             return null;
-        var control = uiControlService.GetUiControl(generator?.Generator.Invoke(request));
+        var control = uiControlService.GetUiControl(generator.Generator.Invoke(request));
         return control;
     }
 
@@ -115,22 +96,11 @@ public class LayoutPlugin(IMessageHub hub) :
         return request.Processed();
     }
 
-
     private void DisposeArea(string area)
     {
-        var existingViews = workspace
-            .GetData<LayoutArea>()
-            .Where(a => a.Area.StartsWith(area))
-            .ToArray();
-        if (existingViews.Any())
-        {
-            workspace.Delete(existingViews);
-            foreach (var existingView in existingViews)
-                existingView.Control.Hub.Dispose();
-        }
+        var areas = workspace.State.GetData<LayoutArea>().Where(a => a.Area.StartsWith(area)).ToArray();
+        workspace.Delete(areas);
     }
-
-
 }
 
 internal record ViewGenerator(Func<RefreshRequest, bool> Filter, ViewDefinition Generator);
