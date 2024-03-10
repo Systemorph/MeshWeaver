@@ -1,8 +1,10 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Activities;
 using Xunit;
 using Xunit.Abstractions;
@@ -39,11 +41,12 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public async Task InitializeTest()
     {
-        var client = GetClient();
-        var response = await client.AwaitResponse(new GetManyRequest<MyData>(), o => o.WithTarget(new HostAddress()));
-        var expected = new GetResponse<MyData>(initialData.Length, initialData);
-        response.Message.Should().BeEquivalentTo(expected);
+        var workspace = GetWorkspace(GetHost());
+        var response = await workspace.GetObservable<MyData>().FirstOrDefaultAsync();
+        response.Should().BeEquivalentTo(initialData);
     }
+
+    private IWorkspace GetWorkspace(IMessageHub hub) => hub.ServiceProvider.GetRequiredService<IWorkspace>();
 
     [Fact]
     public async Task Update()

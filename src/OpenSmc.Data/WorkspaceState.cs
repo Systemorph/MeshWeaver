@@ -64,7 +64,6 @@ public record WorkspaceState
 
     public long Version { get; init; }
     private object Current { get; init; }
-
     public object Reduce(WorkspaceReference reference)
         => ReduceImpl((dynamic)reference);
     public TReference Reduce<TReference>(WorkspaceReference<TReference> reference)
@@ -197,6 +196,7 @@ public record WorkspaceState
             this with
             {
                 Instances = Instances.SetItems(GetChanges(request.Elements)),
+                Current = null,
                 Version = Hub.Version
             };
 

@@ -1,4 +1,6 @@
-﻿namespace OpenSmc.Data;
+﻿using System.Reactive.Linq;
+
+namespace OpenSmc.Data;
 
 public static class WorkspaceExtensions
 {
@@ -10,4 +12,24 @@ public static class WorkspaceExtensions
         => (T)state.Reduce(new EntityReference(typeof(T).FullName, id));
     public static T GetData<T>(this IWorkspace workspace, object id)
         => workspace.State.GetData<T>(id);
+    public static IObservable<T> GetObservable<T>(this IWorkspace workspace, object id)
+        => workspace.Stream.Select(ws => ws.GetData<T>(id));
+    public static IObservable<IReadOnlyCollection<T>> GetObservable<T>(this IWorkspace workspace)
+        => workspace.Stream.Select(ws => ws.GetData<T>()).Replay(1).RefCount();
+
+    public static WorkspaceReference Observe(this IWorkspace workspace, WorkspaceReference reference)
+        => ObserveImpl(workspace, (dynamic)reference);
+
+    private static WorkspaceReference<TReference> ObserveImpl<TReference>(this IWorkspace workspace, WorkspaceReference<TReference> reference)
+    {
+        return reference with
+        {
+            Stream = workspace.Stream
+                .Select(ws => ws.Reduce(reference))
+                .DistinctUntilChanged()
+                .Replay(1)
+                .RefCount()
+        };
+
+    }
 }
