@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
+using System.Reactive.Linq;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Persistence;
 using OpenSmc.Reflection;
@@ -42,7 +43,11 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
         Key = GetKeyFunction(ElementType);
         PartitionFunction = _ => DataSource;
         var workspace = serviceProvider.GetRequiredService<IWorkspace>();
-        subscription = workspace.Get(new CollectionReference(CollectionName)).Subscribe(UpdateImpl);
+        subscription = workspace
+            .Stream
+            .Select(ws => ws.Reduce(new CollectionReference(CollectionName)))
+            .DistinctUntilChanged()
+            .Subscribe(UpdateImpl);
 
     }
 
@@ -115,7 +120,7 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
 
     public void Dispose()
     {
-        subscription?.Dispose();
+        subscription.Dispose();
     }
 }
 
