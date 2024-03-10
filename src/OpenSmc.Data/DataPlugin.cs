@@ -1,10 +1,11 @@
 ﻿using System.Collections.Concurrent;
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using OpenSmc.Data.Persistence;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
-public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub),
+public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     IWorkspace,
     IMessageHandler<UpdateDataRequest>,
     IMessageHandler<DeleteDataRequest>,
@@ -15,6 +16,14 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
 
 {
     private readonly Subject<WorkspaceState> subject = new();
+
+    public IObservable<WorkspaceState> Stream { get; }
+    public DataPlugin(IMessageHub hub) : base(hub)
+    {
+        Stream = subject
+            .Replay(1)
+            .RefCount();
+    }
 
     public IEnumerable<Type> MappedTypes => State.MappedTypes;
 
@@ -97,10 +106,6 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
         State.Rollback();
     }
 
-    public IObservable<TReference> Get<TReference>(WorkspaceReference<TReference> reference)
-    {
-        throw new NotImplementedException();
-    }
 
     public EntityReference GetReference(object entity)
     {
@@ -119,6 +124,8 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
         => StartSynchronization(request);
 
     private readonly ConcurrentDictionary<(object Address, string Id),IDisposable> subscriptions = new();
+
+
     private IMessageDelivery StartSynchronization(IMessageDelivery<SubscribeDataRequest> request)
     {
         var key = (request.Message, request.Message.Id);

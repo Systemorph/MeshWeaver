@@ -1,7 +1,8 @@
 ﻿namespace OpenSmc.Data;
 
-public interface IWorkspace 
+public interface IWorkspace
 {
+    IObservable<WorkspaceState> Stream { get; }
     WorkspaceState State { get; }
     Task Initialized { get; }
     IEnumerable<Type> MappedTypes { get;  }
@@ -13,6 +14,5 @@ public interface IWorkspace
 
     void Commit();
     void Rollback();
-    IObservable<TReference> Get<TReference>(WorkspaceReference<TReference> reference);
     EntityReference GetReference(object entity);
 }
