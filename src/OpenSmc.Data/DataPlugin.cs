@@ -1,8 +1,12 @@
 ﻿using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using OpenSmc.Data.Persistence;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Json.Patch;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
+using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
 public class DataPlugin : MessageHubPlugin<WorkspaceState>,
@@ -20,6 +24,7 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     public IObservable<WorkspaceState> Stream { get; }
     public DataPlugin(IMessageHub hub) : base(hub)
     {
+        serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
         Stream = subject
             .Replay(1)
             .RefCount();
@@ -48,17 +53,8 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     private async Task InitializeAsync(CancellationToken cancellationToken, DataContext dataContext)
     {
         var workspace = await dataContext.InitializeAsync(cancellationToken);
-
-        var dataSource = dataContext.DataSources.Values
-            .SelectMany(ds => ds.TypeSources)
-            .Aggregate(
-                new HubDataSource(Address, Hub, this), 
-                (ds, ts) =>
-                    ds.WithType(ts.ElementType, t => t.WithKey(ts.GetKey).WithPartition(ts.ElementType, ts.GetPartition)));
-
-
-        var ws = await dataSource.InitializeAsync(cancellationToken);
-        InitializeState(ws);
+        InitializeState(workspace);
+        subject.OnNext(workspace);
     }
 
 
@@ -125,17 +121,51 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
 
     private readonly ConcurrentDictionary<(object Address, string Id),IDisposable> subscriptions = new();
 
-
+    private readonly ISerializationService serializationService;
     private IMessageDelivery StartSynchronization(IMessageDelivery<SubscribeDataRequest> request)
     {
         var key = (request.Message, request.Message.Id);
-        if(subscriptions.TryRemove(key, out var existing))
-            existing.Dispose();
+        if (subscriptions.ContainsKey(key))
+            return request.Ignored();
 
-        subscriptions[key] = new DataSubscription(Hub, request, subject, State);
+        subscriptions[key] = this
+            .Observe(request.Message.Reference)
+            .Subscribe(new PatchSubscriber<object>(Hub, request, serializationService));
 
         return request.Processed();
     }
+
+    private class PatchSubscriber<T>(IMessageHub hub, IMessageDelivery request, ISerializationService serializationService) : IObserver<T>
+    {
+        private JsonNode LastSynchronized { get; set; }
+
+        public void OnCompleted()
+        {
+        }
+
+        public void OnError(Exception error)
+        {
+        }
+
+        public void OnNext(T value)
+        {
+            if (value == null)
+                return;
+
+            var node = value as JsonNode
+                       ?? JsonNode.Parse(serializationService.SerializeToString(value));
+
+
+            var dataChanged = LastSynchronized == null
+                ? new DataChangedEvent(hub.Version, new(node.ToJsonString()), ChangeType.Full)
+                : new DataChangedEvent(hub.Version, new (JsonSerializer.Serialize(LastSynchronized.CreatePatch(node))), ChangeType.Patch);
+
+            hub.Post(dataChanged, o => o.ResponseFor(request));
+            LastSynchronized = node;
+
+        }
+    }
+
 
     IMessageDelivery IMessageHandler<UnsubscribeDataRequest>.HandleMessage(
         IMessageDelivery<UnsubscribeDataRequest> request)
@@ -150,5 +180,29 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
         return request.Processed();
     }
 
+}
+
+public class DataSubscription<T> :IDisposable
+{
+    private readonly IDisposable subscription;
+    private IObservable<T> Stream { get; }
+    public DataSubscription(IObservable<WorkspaceState> stateStream, 
+        WorkspaceReference reference, 
+        Action<T> action)
+    {
+        Stream = stateStream
+            .Select(ws => (T)ws.Reduce(reference))
+            .DistinctUntilChanged()
+            .Replay(1)
+            .RefCount();
+
+        subscription = Stream.Subscribe(action);
+
+    }
+
+    public void Dispose()
+    {
+        subscription.Dispose();
+    }
 }
 
