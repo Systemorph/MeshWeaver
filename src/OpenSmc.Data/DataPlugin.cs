@@ -35,7 +35,7 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     public IEnumerable<Type> MappedTypes => State.MappedTypes;
 
     public void Update(IEnumerable<object> instances, UpdateOptions options)
-        => RequestChange(null, new UpdateDataRequest(instances.ToArray()));
+        => RequestChange(null,  new UpdateDataRequest(instances.ToArray()){Options = options});
 
     public void Delete(IEnumerable<object> instances)
         => RequestChange(null, new DeleteDataRequest(instances.ToArray()));

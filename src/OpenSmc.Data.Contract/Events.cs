@@ -23,6 +23,7 @@ public record UpdateDataRequest(IReadOnlyCollection<object> Elements) : DataChan
 
 public record DeleteDataRequest(IReadOnlyCollection<object> Elements) : DataChangeRequestWithElements(Elements);
 
+
 public abstract record DataChangeRequestWithElements(IReadOnlyCollection<object> Elements) : DataChangeRequest;
 
 public abstract record DataChangeRequest : IRequest<DataChangeResponse>;
