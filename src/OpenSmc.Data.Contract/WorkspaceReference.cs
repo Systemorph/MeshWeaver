@@ -17,8 +17,9 @@ public abstract record WorkspaceReference<TReference> : WorkspaceReference
         => Stream.Subscribe((IObserver<TReference>)observer);
 
 }
+public record EntityStore(ImmutableDictionary<string, InstancesInCollection> Instances);
 
-public record EntireWorkspace : WorkspaceReference<object>
+public record EntireWorkspace : WorkspaceReference<EntityStore>
 {
     public override string ToString() => nameof(EntireWorkspace);
 }
@@ -44,12 +45,13 @@ public record EntityReference<T>(object Id) : WorkspaceReference<T>
 public record CollectionReference(string Collection) : WorkspaceReference<InstancesInCollection>
 {
     public override string ToString() => $"Collection : {Collection}";
+    public Func<InstancesInCollection, InstancesInCollection> Transformation { get; init; } = x => x;
 
 }
 
 public record CollectionsReference(IReadOnlyCollection<string> Collections)
-    : WorkspaceReference<ImmutableDictionary<string, InstancesInCollection>>
+    : WorkspaceReference<EntityStore>
 {
-    public override string ToString() => $"Collections : {Collections.Aggregate((x,y) => $"{x},{y}")}";
+    public override string ToString() => $"Collections : {Collections.Aggregate(string.Empty, (x,y) => $"{x},{y}")}";
 
 }

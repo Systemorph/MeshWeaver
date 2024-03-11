@@ -1,23 +1,21 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
-using System.Reactive.Linq;
 using Microsoft.Extensions.DependencyInjection;
-using OpenSmc.Data.Persistence;
 using OpenSmc.Reflection;
 using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
 
-public interface ITypeSource : IDisposable
+public interface ITypeSource 
 {
     Task<ImmutableDictionary<object, object>> InitializeAsync(CancellationToken cancellationToken);
     Type ElementType { get; }
     string CollectionName { get; }
     object GetKey(object instance);
     ITypeSource WithKey(Func<object, object> key);
-    ITypeSource WithPartition<T>(Func<T, object> partition);
-    ITypeSource WithPartition(Type type, Func<object, object> partition);
+    ITypeSource WithPartition<T>(Func<T, object> partitionFunction, object partition);
+    ITypeSource WithPartition(Func<object, object> partitionFunction, object partition);
     ITypeSource WithInitialData(Func<CancellationToken, Task<IEnumerable<object>>> loadInstancesAsync);
 
     ITypeSource WithInitialData(IEnumerable<object> instances)
@@ -26,29 +24,18 @@ public interface ITypeSource : IDisposable
         => WithInitialData(_ => Task.FromResult(loadInstances()));
 
     object GetPartition(object instance);
+    void Update(WorkspaceState workspace);
 }
 
 public abstract record TypeSource<TTypeSource> : ITypeSource
     where TTypeSource : TypeSource<TTypeSource>
 {
-
-
-    private readonly IDisposable subscription;
-
-    protected TypeSource(Type ElementType, object DataSource, string CollectionName, IServiceProvider serviceProvider)
+    protected TypeSource(Type ElementType, object DataSource, string CollectionName)
     {
         this.ElementType = ElementType;
         this.DataSource = DataSource;
         this.CollectionName = CollectionName;
         Key = GetKeyFunction(ElementType);
-        PartitionFunction = _ => DataSource;
-        var workspace = serviceProvider.GetRequiredService<IWorkspace>();
-        subscription = workspace
-            .Stream
-            .Select(ws => ws.Reduce(new CollectionReference(CollectionName)))
-            .DistinctUntilChanged()
-            .Subscribe(UpdateImpl);
-
     }
 
     ITypeSource ITypeSource.WithKey(Func<object, object> key)
@@ -77,14 +64,46 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
 
     
     protected Func<object, object> PartitionFunction { get; init; }
-    public ITypeSource WithPartition<T>(Func<T, object> partition)
-        => WithPartition(typeof(T), o => partition.Invoke((T)o));
+    public ITypeSource WithPartition<T>(Func<T, object> partitionFunction, object partition)
+        => WithPartition(o => partitionFunction.Invoke((T)o), partition);
 
-    public ITypeSource WithPartition(Type type, Func<object, object> partition)
-        => this with { PartitionFunction = partition };
+    public ITypeSource WithPartition(Func<object, object> partitionFunction, object partition)
+        => this with
+        {
+            PartitionFunction = partitionFunction,
+            Partition = partition
+        };
+
+    internal object Partition { get; set; }
 
     public object GetPartition(object instance)
         => PartitionFunction.Invoke(instance);
+
+    public virtual void Update(WorkspaceState workspace)
+    {
+        var myCollection = workspace.Reduce(new CollectionReference(CollectionName)
+        {
+            Transformation = GetTransformation()
+        });
+        UpdateImpl(myCollection);
+    }
+
+    protected virtual void UpdateImpl(InstancesInCollection myCollection)
+    {
+    }
+
+    private Func<InstancesInCollection, InstancesInCollection> GetTransformation()
+    {
+        if (PartitionFunction == null)
+            return x => x;
+        return x => x with
+        {
+            Instances = x.Instances
+                .Where(y => PartitionFunction.Invoke(y.Value).Equals(Partition))
+                .ToImmutableDictionary()
+        };
+    }
+
     ITypeSource ITypeSource.WithInitialData(
         Func<CancellationToken, Task<IEnumerable<object>>> initialization)
         => WithInitialData(initialization);
@@ -100,10 +119,6 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
     public string CollectionName { get; init; }
 
 
-    public virtual void UpdateImpl(InstancesInCollection instances)
-    {
-    }
-
 
     public virtual async Task<ImmutableDictionary<object, object>> InitializeAsync(CancellationToken cancellationToken)
     {
@@ -114,23 +129,11 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
     private Task<IEnumerable<object>> InitializeDataAsync(CancellationToken cancellationToken) 
         => InitializationFunction(cancellationToken);
 
-    protected EntityDescriptor ParseToEntityDescriptor(object instance) 
-        => new(CollectionName, GetKey(instance), instance);
-
-
-    public void Dispose()
-    {
-        subscription.Dispose();
-    }
 }
 
-public record DataChange(
-    Type Type,
-    IReadOnlyDictionary<object, object> Updates,
-    IReadOnlyDictionary<object, object> Deletions);
 public record TypeSourceWithType<T>(object DataSource, IServiceProvider ServiceProvider) : TypeSourceWithType<T, TypeSourceWithType<T>>(DataSource, ServiceProvider)
 {
-    public override void UpdateImpl(InstancesInCollection instances)
+    protected override void UpdateImpl(InstancesInCollection instances)
         => UpdateAction.Invoke(instances);
 
     protected Action<InstancesInCollection> UpdateAction { get; init; } = _ => { };
@@ -144,13 +147,12 @@ public record TypeSourceWithType<T>(object DataSource, IServiceProvider ServiceP
     public TypeSourceWithType<T> WithInitialData(IEnumerable<T> initialData)
         => WithInitialData(_ => Task.FromResult(initialData.Cast<object>()));
 
-
 }
 
 public abstract record TypeSourceWithType<T, TTypeSource> : TypeSource<TTypeSource>
 where TTypeSource: TypeSourceWithType<T, TTypeSource>
 {
-    protected TypeSourceWithType(object DataSource, IServiceProvider  serviceProvider) : base(typeof(T), DataSource, typeof(T).FullName, serviceProvider)
+    protected TypeSourceWithType(object DataSource, IServiceProvider  serviceProvider) : base(typeof(T), DataSource, typeof(T).FullName)
     {
         serviceProvider.GetRequiredService<ITypeRegistry>().WithType(typeof(T));
     }

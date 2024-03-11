@@ -1,7 +1,7 @@
 ﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
@@ -25,7 +25,9 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     public DataPlugin(IMessageHub hub) : base(hub)
     {
         serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
+        InitializeState(new WorkspaceState(hub, new EntityStore(ImmutableDictionary<string, InstancesInCollection>.Empty), ImmutableDictionary<Type, ITypeSource>.Empty));
         Stream = subject
+            .StartWith(State)
             .Replay(1)
             .RefCount();
     }
@@ -53,8 +55,9 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     private async Task InitializeAsync(CancellationToken cancellationToken, DataContext dataContext)
     {
         var workspace = await dataContext.InitializeAsync(cancellationToken);
-        InitializeState(workspace);
+        UpdateState(ws => ws.Merge(workspace) with { Version = Hub.Version });
         subject.OnNext(State);
+        subject.DistinctUntilChanged().Subscribe(dataContext.Update);
     }
 
 
@@ -66,7 +69,7 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
 
     private IMessageDelivery RequestChange(IMessageDelivery request, DataChangeRequest change)
     {
-        UpdateState(s => s.Change(change));
+        UpdateState(s => s.Change(change) with{Version = Hub.Version});
         Commit();
         Hub.Post(new DataChangeResponse(Hub.Version, DataChangeStatus.Committed), o => o.ResponseFor(request));
         return request?.Processed();
@@ -114,6 +117,7 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     {
         var @event = request.Message;
         UpdateState(s => s.Synchronize(@event));
+        Commit();
         return request.Processed();
     }
 
@@ -129,8 +133,8 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
         if (subscriptions.ContainsKey(key))
             return request.Ignored();
 
-        subscriptions[key] = this
-            .Observe(request.Message.Reference)
+        subscriptions[key] = Stream
+            .StartWith(State)
             .Subscribe(new PatchSubscriber<object>(Hub, request, serializationService));
 
         return request.Processed();
@@ -159,9 +163,9 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
 
             var dataChanged = LastSynchronized == null
                 ? new DataChangedEvent(hub.Version, value)
-                : new DataChangedEvent(hub.Version, JsonSerializer.Serialize(LastSynchronized.CreatePatch(node)));
+                : new DataChangedEvent(hub.Version, LastSynchronized.CreatePatch(node));
 
-            hub.Post(dataChanged, o => o.ResponseFor(request));
+            hub.Post(dataChanged, o => o.WithTarget(request.Sender));
             LastSynchronized = node;
 
         }

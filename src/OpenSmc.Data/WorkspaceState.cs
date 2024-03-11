@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,15 +18,15 @@ public record WorkspaceState
     public WorkspaceState
         (
             IMessageHub hub,     
-            ImmutableDictionary<string, InstancesInCollection> Instances, 
+            EntityStore Store, 
             IReadOnlyDictionary<Type, ITypeSource> typeSources
             )
         :this(hub, typeSources)
     {
         Hub = hub;
-        this.Instances = Instances;
+        this.Store = Store;
         TypeSourcesByType = typeSources.ToImmutableDictionary();
-        CollectionsByType = Instances.Where(x => x.Value.ElementType != null).ToImmutableDictionary(x => x.Value.ElementType, x => x.Key);
+        CollectionsByType = this.Store.Instances.Where(x => x.Value.ElementType != null).ToImmutableDictionary(x => x.Value.ElementType, x => x.Key);
         TypeSourcesByCollection = CollectionsByType.ToImmutableDictionary(x => x.Value, x => x.Key);
     }
 
@@ -42,7 +43,7 @@ public record WorkspaceState
 
     public WorkspaceState(IMessageHub hub, DataChangedEvent dataChanged,
         IReadOnlyDictionary<Type, ITypeSource> typeSources)
-        : this(hub, ((WorkspaceState)dataChanged.Change).Instances, typeSources)
+        : this(hub, (EntityStore)dataChanged.Change, typeSources)
     {
         LastSynchronized = this;
     }
@@ -51,23 +52,25 @@ public record WorkspaceState
 
 
     #region Instances
-    private ImmutableDictionary<string, InstancesInCollection> Instances { get; init; }
+    public EntityStore Store { get; init; }
 
-    public InstancesInCollection GetCollection(string collection) => Instances.GetValueOrDefault(collection);
+    public InstancesInCollection GetCollection(string collection) => Store.Instances.GetValueOrDefault(collection);
 
-    public WorkspaceState SetItems(IEnumerable<KeyValuePair<string, InstancesInCollection>> changes)
+    public WorkspaceState SetItems(EntityStore store)
     {
         return this with
         {
-            Instances = Instances.SetItems
-            (
-                changes.Select
+            Store = new EntityStore(Instances: Store.Instances
+                .SetItems
                 (
-                    change =>
-                        new KeyValuePair<string, InstancesInCollection>
-                        (
-                            change.Key, change.Value.Merge(Instances.GetValueOrDefault(change.Key))
-                        )))
+                    store.Instances.Select
+                    (
+                        change =>
+                            new KeyValuePair<string, InstancesInCollection>
+                            (
+                                change.Key, change.Value.Merge(Store.Instances.GetValueOrDefault(change.Key))
+                            ))))
+
         };
     }
 
@@ -105,7 +108,7 @@ public record WorkspaceState
     //}
 
     private object ReduceImpl(EntityReference reference) => GetCollection(reference.Collection)?.GetData(reference.Id);
-    private object ReduceImpl(EntireWorkspace _) => this;
+    private object ReduceImpl(EntireWorkspace _) => Store;
 
     private object ReduceImpl<T>(EntityReference<T> reference)
     {
@@ -113,14 +116,15 @@ public record WorkspaceState
             return null;
         return GetCollection(collection)?.GetData(reference.Id);
     }
-    private InstancesInCollection ReduceImpl(CollectionReference reference) => GetCollection(reference.Collection);
+    private InstancesInCollection ReduceImpl(CollectionReference reference) => 
+        reference.Transformation(GetCollection(reference.Collection));
 
-    private ImmutableDictionary<string,InstancesInCollection> ReduceImpl(CollectionsReference reference) =>
-        reference
+    private EntityStore ReduceImpl(CollectionsReference reference) =>
+        new(reference
             .Collections
             .Select(c => new KeyValuePair<string,InstancesInCollection>(c, GetCollection(c)))
             .Where(x => x.Value != null)
-            .ToImmutableDictionary();
+            .ToImmutableDictionary());
 
 
 
@@ -152,13 +156,14 @@ public record WorkspaceState
             {
                 WorkspaceState store => store,
                 JsonPatch patch => ApplyPatch(patch),
+                JsonNode o => ApplyPatch(o.Deserialize<JsonPatch>()),
                 _ => throw new NotSupportedException()
             };
 
         return this with
         {
             Version = Hub.Version,
-            Instances = newInstances.Instances,
+            Store = newInstances.Store,
             LastSynchronized = newInstances.LastSynchronized
         };
     }
@@ -167,14 +172,14 @@ public record WorkspaceState
 
     private WorkspaceState ApplyPatch(JsonPatch patch)
     {
-        var current = JsonNode.Parse(serializationService.SerializeToString(this));
+        var current = JsonNode.Parse(serializationService.SerializeToString(Store));
         var result = patch.Apply(current);
         if (result.IsSuccess && result.Result != null)
         {
             var newStore = (WorkspaceState)serializationService.Deserialize(result.Result.ToJsonString());
             return this with
             {
-                Instances = newStore.Instances,
+                Store = newStore.Store,
                 LastSynchronized = newStore
             };
         }
@@ -191,30 +196,29 @@ public record WorkspaceState
         if (request.Elements == null)
             return null;
 
-        var newElements = Merge(request)
-            .ToImmutableDictionary();
+        var newElements = Merge(request);
 
         // TODO V10: It's easier to split data away from state (11.03.2024, Roland Bürgi)
         var ret = this with
         {
-            Instances = newElements
+            Store = newElements
         };
         return ret with
         {
-            Instances = newElements,
+            Store = newElements,
             LastSynchronized = ret
         };
 
     }
 
-    private IEnumerable<KeyValuePair<string,InstancesInCollection>> Merge(DataChangeRequestWithElements request)
+    private EntityStore Merge(DataChangeRequestWithElements request)
     {
         switch (request)
         {
             case UpdateDataRequest update:
-                return MergeUpdate(update);
+                return new(MergeUpdate(update).ToImmutableDictionary());
             case DeleteDataRequest delete:
-                return MergeDelete(delete);
+                return new(MergeDelete(delete).ToImmutableDictionary());
         }
 
         throw new NotSupportedException();
@@ -267,9 +271,8 @@ public record WorkspaceState
 
 
     public WorkspaceState Merge(WorkspaceState other)
-        => SetItems(other.Instances) with
+        => SetItems(other.Store) with
         {
-            Version = Math.Max(Version, other.Version),
             TypeSourcesByType = TypeSourcesByType.SetItems(other.TypeSourcesByType),
             TypeSourcesByCollection = TypeSourcesByCollection.SetItems(other.TypeSourcesByCollection),
             CollectionsByType = CollectionsByType.SetItems(other.CollectionsByType),

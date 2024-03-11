@@ -1,4 +1,6 @@
-﻿using OpenSmc.Messaging;
+﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
 
@@ -11,9 +13,32 @@ public abstract record DataSourceWithStorage<TDataSource>(object Id, IMessageHub
     : DataSource<TDataSource>(Id, Hub), IDataSourceWithStorage
     where TDataSource : DataSourceWithStorage<TDataSource>
 {
-    protected override Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken)
+    private readonly IMessageHub persistenceHub =
+        Hub.ServiceProvider.CreateMessageHub(new PersistenceAddress(Hub.Address), c => c);
+
+    private readonly ILogger logger = Hub.ServiceProvider.GetRequiredService<ILogger<TDataSource>>();
+    protected virtual Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken)
     {
         return Storage.StartTransactionAsync(cancellationToken);
     }
 
+    protected virtual async Task UpdateAsync(WorkspaceState workspace, CancellationToken cancellationToken)
+    {
+        await using ITransaction transaction = await StartTransactionAsync(cancellationToken);
+        try
+        {
+            base.Update(workspace);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning("Transaction failed: {exception}", ex);
+            await transaction.RevertAsync();
+        }
+    }
+
+    public override void Update(WorkspaceState workspace)
+    {
+        persistenceHub.Schedule(c => UpdateAsync(workspace, c));
+    }
 }

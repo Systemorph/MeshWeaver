@@ -7,13 +7,6 @@ namespace OpenSmc.Data.Persistence;
 
 public record HubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : DataSource<HubDataSource>(Id, Hub)
 {
-    protected override Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken)
-    {
-        return Task.FromResult<ITransaction>(new DelegateTransaction(() => Commit(), Rollback));
-    }
-
-
-
 
     private readonly bool isExternalDataSource = !Id.Equals(Hub.Address);
     public DataChangeResponse Commit()
@@ -60,7 +53,7 @@ public record HubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : 
 
 
     private readonly ITypeRegistry typeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
-    private static readonly Type[] DataTypes = [typeof(WorkspaceState), typeof(JsonPatch)];
+    private static readonly Type[] DataTypes = [typeof(EntityStore), typeof(JsonPatch)];
     public override Task<WorkspaceState> InitializeAsync(CancellationToken cancellationToken)
     {
         typeRegistry.WithTypes(TypeSources.Values.Select(t => t.ElementType));

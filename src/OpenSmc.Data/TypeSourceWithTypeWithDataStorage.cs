@@ -14,7 +14,7 @@ public record TypeSourceWithTypeWithDataStorage<T> : TypeSourceWithType<T, TypeS
 
     private ImmutableDictionary<object,object> LastSaved { get; set; }
 
-    public override void UpdateImpl(InstancesInCollection instances)
+    protected override void UpdateImpl(InstancesInCollection instances)
     {
         var adds = instances.Instances.Where(x => !LastSaved.ContainsKey(x.Key)).Select(x => x.Value).ToArray();
         var updates = instances.Instances.Where(x => LastSaved.TryGetValue(x.Key, out var existing) && ! existing.Equals(x.Value)).Select(x => x.Value).ToArray();
