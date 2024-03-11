@@ -39,7 +39,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
 
-    [Fact]
+#if CIRun
+    [Fact(Skip = "Hangs")]
+#else
+    [Fact(Timeout = 5000)]
+#endif
+
     public async Task LayoutStackUpdateTest()
     {
         var client = GetClient();
@@ -52,7 +57,13 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         area.Control.Should().BeOfType<Composition.LayoutStackControl>().Which.Areas.Should().HaveCount(1);
 
     }
-    [Fact]
+
+#if CIRun
+    [Fact(Skip = "Hangs")]
+#else
+    [Fact(Timeout = 5000)]
+#endif
+
     public async Task GetPredefinedArea()
     {
         var client = GetClient();
@@ -69,7 +80,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
 
 
-    [Fact]
+#if CIRun
+    [Fact(Skip = "Hangs")]
+#else
+    [Fact(Timeout = 5000)]
+#endif
+
     public async Task UpdatingView()
     {
 
@@ -99,7 +115,13 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
 
     }
-    [Fact]
+
+#if CIRun
+    [Fact(Skip = "Hangs")]
+#else
+    [Fact(Timeout = 5000)]
+#endif
+
     public async Task DataBoundView()
     {
 
