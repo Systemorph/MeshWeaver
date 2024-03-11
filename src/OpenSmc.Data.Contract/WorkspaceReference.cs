@@ -18,7 +18,7 @@ public abstract record WorkspaceReference<TReference> : WorkspaceReference
 
 }
 
-public record EntireWorkspace : WorkspaceReference<ImmutableDictionary<string, InstancesInCollection>>
+public record EntireWorkspace : WorkspaceReference<object>
 {
     public override string ToString() => nameof(EntireWorkspace);
 }

@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using Json.Patch;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
 using OpenSmc.Serialization;
 
@@ -50,10 +51,6 @@ public record HubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : 
         return response.Ignored();
     }
 
-    private readonly ISerializationService serializationService =
-        Hub.ServiceProvider.GetRequiredService<ISerializationService>();
-
-
 
     protected override HubDataSource WithType<T>(Func<ITypeSource, ITypeSource> typeSource)
         => WithType<T>(x => (TypeSourceWithType<T>)typeSource.Invoke(x));
@@ -63,9 +60,11 @@ public record HubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : 
 
 
     private readonly ITypeRegistry typeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
+    private static readonly Type[] DataTypes = [typeof(WorkspaceState), typeof(JsonPatch)];
     public override Task<WorkspaceState> InitializeAsync(CancellationToken cancellationToken)
     {
         typeRegistry.WithTypes(TypeSources.Values.Select(t => t.ElementType));
+        typeRegistry.WithTypes(DataTypes);
         WorkspaceReference collections =
             SyncAll
                 ? new EntireWorkspace()

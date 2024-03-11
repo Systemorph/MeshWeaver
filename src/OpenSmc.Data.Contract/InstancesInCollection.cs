@@ -66,4 +66,14 @@ public record InstancesInCollection(ImmutableDictionary<object, object> Instance
                 Instances = Instances.SetItems(entities)
             };
     }
+
+    public InstancesInCollection Merge(InstancesInCollection other)
+    {
+        if (other == null)
+            return this;
+        return this with
+        {
+            Instances = Instances.SetItems(other.Instances)
+        };
+    }
 }
