@@ -10,18 +10,18 @@ public class Hierarchy<T> : IHierarchy<T>
     private IDictionary<string, T> elementsBySystemName;
     private readonly IDictionary<string, IDictionary<int, string>> elementsBySystemNameAndLevels;
     private readonly IDictionary<int, IList<string>> dimensionsByLevel;
-    private readonly IQuerySource querySource;
+    private readonly IReadOnlyWorkspace readOnlyWorkspace;
 
-    public Hierarchy(IQuerySource querySource)
+    public Hierarchy(IReadOnlyWorkspace readOnlyWorkspace)
     {
-        this.querySource = querySource;
+        this.readOnlyWorkspace = readOnlyWorkspace;
         dimensionsByLevel = new Dictionary<int, IList<string>>();
         elementsBySystemNameAndLevels = new Dictionary<string, IDictionary<int, string>>();
     }
 
     public void Initialize()
     {
-        elementsBySystemName = querySource.GetData<T>().ToDictionary(x => x.SystemName);
+        elementsBySystemName = readOnlyWorkspace.GetData<T>().ToDictionary(x => x.SystemName);
         AddChildren(0, GetPairs());
     }
 

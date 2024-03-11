@@ -1,6 +1,6 @@
 ﻿namespace OpenSmc.Data;
 
-public interface IWorkspace : IQuerySource
+public interface IWorkspace : IReadOnlyWorkspace
 {
     Task Initialized { get; }
     IEnumerable<Type> MappedTypes { get;  }

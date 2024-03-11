@@ -32,7 +32,7 @@ namespace OpenSmc.Reporting.Test
         public async Task ReportWithGridOptions<T>(string fileName, IEnumerable<T> data, Func<PivotBuilder<T, T, T>, ReportBuilder<T, T, T>> toReportBuilder)
         {
             var initialPivotBuilder = PivotFactory.ForObjects(data)
-                                       .WithQuerySource(new StaticDataFieldQuerySource());
+                                       .WithQuerySource(new StaticDataFieldReadOnlyWorkspace());
 
             var reportBuilder = toReportBuilder(initialPivotBuilder);
 
@@ -46,7 +46,7 @@ namespace OpenSmc.Reporting.Test
         public async Task ReportDataCubeWithGridOptions<T>(string fileName, IEnumerable<IDataCube<T>> data, Func<DataCubePivotBuilder<IDataCube<T>, T, T, T>, DataCubeReportBuilder<IDataCube<T>, T, T, T>> toReportBuilder)
         {
             var initialPivotBuilder = PivotFactory.ForDataCubes(data)
-                                             .WithQuerySource(new StaticDataFieldQuerySource());
+                                             .WithQuerySource(new StaticDataFieldReadOnlyWorkspace());
 
             var reportBuilder = toReportBuilder(initialPivotBuilder);
 
@@ -60,7 +60,7 @@ namespace OpenSmc.Reporting.Test
             var data = ValueWithHierarchicalDimension.Data.ToDataCube().RepeatOnce();
 
             var gridOptions = PivotFactory.ForDataCubes(data)
-                .WithQuerySource(new StaticDataFieldQuerySource())
+                .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
                 .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
                 .ToTable()
                 .WithOptions(rm => rm.HideRowValuesForDimension("DimA", x => x.ForLevel(1)))

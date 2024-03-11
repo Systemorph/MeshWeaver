@@ -49,7 +49,7 @@ public class PivotTest : TestBase //HubTestBase
     public async Task Reports<T, TAggregate>(string fileName, IEnumerable<T> data, Func<PivotBuilder<T, T, T>, PivotBuilder<T, TAggregate, TAggregate>> builder)
     {
         var initial = PivotFactory.ForObjects(data)
-            .WithQuerySource(new StaticDataFieldQuerySource());
+            .WithQuerySource(new StaticDataFieldReadOnlyWorkspace());
 
         var pivotBuilder = builder(initial);
 
@@ -62,7 +62,7 @@ public class PivotTest : TestBase //HubTestBase
     public async Task ReportsCounts<T>(string fileName, IEnumerable<T> data, Func<PivotBuilder<T, T, T>, PivotBuilder<T, int, int>> builder)
     {
         var initial = PivotFactory.ForObjects(data)
-            .WithQuerySource(new StaticDataFieldQuerySource());
+            .WithQuerySource(new StaticDataFieldReadOnlyWorkspace());
 
         var pivotBuilder = builder(initial);
 
@@ -688,7 +688,7 @@ public class PivotTest : TestBase //HubTestBase
     {
         var initial = PivotFactory
             .ForDataCubes(data)
-            .WithQuerySource(new StaticDataFieldQuerySource());
+            .WithQuerySource(new StaticDataFieldReadOnlyWorkspace());
 
         var pivotBuilder = builder(initial);
 
@@ -700,7 +700,7 @@ public class PivotTest : TestBase //HubTestBase
     {
         var initial = PivotFactory
             .ForDataCubes(data)
-            .WithQuerySource(new StaticDataFieldQuerySource());
+            .WithQuerySource(new StaticDataFieldReadOnlyWorkspace());
 
         var pivotBuilder = builder(initial);
 
@@ -712,7 +712,7 @@ public class PivotTest : TestBase //HubTestBase
     {
         var initial = PivotFactory
             .ForDataCubes(data)
-            .WithQuerySource(new StaticDataFieldQuerySource());
+            .WithQuerySource(new StaticDataFieldReadOnlyWorkspace());
 
         var pivotBuilder = builder(initial);
 

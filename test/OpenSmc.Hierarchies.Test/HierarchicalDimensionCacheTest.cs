@@ -11,7 +11,7 @@ public class HierarchicalDimensionCacheTest
     [Fact]
     public void InitializationTest()
     {
-        var querySource = new StaticDataFieldQuerySource();
+        var querySource = new StaticDataFieldReadOnlyWorkspace();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
         using (new AssertionScope())
         {
@@ -31,7 +31,7 @@ public class HierarchicalDimensionCacheTest
     [Fact]
     public void LeafLevelTest()
     {
-        var querySource = new StaticDataFieldQuerySource();
+        var querySource = new StaticDataFieldReadOnlyWorkspace();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
         hierarchies.Initialize<TestHierarchicalDimensionA>();
         hierarchies.Initialize<TestHierarchicalDimensionB>();
@@ -50,7 +50,7 @@ public class HierarchicalDimensionCacheTest
     [Fact]
     public void IntermediateLevelTest()
     {
-        var querySource = new StaticDataFieldQuerySource();
+        var querySource = new StaticDataFieldReadOnlyWorkspace();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
         hierarchies.Initialize<TestHierarchicalDimensionA>();
         using (new AssertionScope())
@@ -67,7 +67,7 @@ public class HierarchicalDimensionCacheTest
     [Fact]
     public void RootLevelTest()
     {
-        var querySource = new StaticDataFieldQuerySource();
+        var querySource = new StaticDataFieldReadOnlyWorkspace();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
         hierarchies.Initialize<TestHierarchicalDimensionA>();
         using (new AssertionScope())
@@ -86,7 +86,7 @@ public class HierarchicalDimensionCacheTest
     [Fact]
     public void LevelTest()
     {
-        var querySource = new StaticDataFieldQuerySource();
+        var querySource = new StaticDataFieldReadOnlyWorkspace();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
         hierarchies.Initialize<TestHierarchicalDimensionA>();
         using (new AssertionScope())
@@ -102,7 +102,7 @@ public class HierarchicalDimensionCacheTest
     [Fact]
     public void SeveralDimensionsLevelTest()
     {
-        var querySource = new StaticDataFieldQuerySource();
+        var querySource = new StaticDataFieldReadOnlyWorkspace();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
         hierarchies.Initialize<TestHierarchicalDimensionA>();
         hierarchies.Initialize<TestHierarchicalDimensionB>();
@@ -120,7 +120,7 @@ public class HierarchicalDimensionCacheTest
     [Fact]
     public void AncestorsTest()
     {
-        var querySource = new StaticDataFieldQuerySource();
+        var querySource = new StaticDataFieldReadOnlyWorkspace();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
         hierarchies.Initialize<TestHierarchicalDimensionA>();
         using (new AssertionScope())
@@ -137,7 +137,7 @@ public class HierarchicalDimensionCacheTest
     [Fact]
     public void DescendantsTest()
     {
-        var querySource = new StaticDataFieldQuerySource();
+        var querySource = new StaticDataFieldReadOnlyWorkspace();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
         hierarchies.Initialize<TestHierarchicalDimensionA>();
         using (new AssertionScope())
@@ -154,7 +154,7 @@ public class HierarchicalDimensionCacheTest
     [Fact]
     public void DescendantsAtLevelTest()
     {
-        var querySource = new StaticDataFieldQuerySource();
+        var querySource = new StaticDataFieldReadOnlyWorkspace();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
         hierarchies.Initialize<TestHierarchicalDimensionA>();
         using (new AssertionScope())
@@ -170,7 +170,7 @@ public class HierarchicalDimensionCacheTest
     [Fact]
     public void SiblingsTest()
     {
-        var querySource = new StaticDataFieldQuerySource();
+        var querySource = new StaticDataFieldReadOnlyWorkspace();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
         hierarchies.Initialize<TestHierarchicalDimensionA>();
         using (new AssertionScope())
@@ -185,7 +185,7 @@ public class HierarchicalDimensionCacheTest
     [Fact]
     public void HierarchyApiTest()
     {
-        var querySource = new StaticDataFieldQuerySource();
+        var querySource = new StaticDataFieldReadOnlyWorkspace();
         var hierarchies = querySource.ToHierarchicalDimensionCache();
         hierarchies.Initialize<TestHierarchicalDimensionA>();
         var hierarchyA = hierarchies.Get<TestHierarchicalDimensionA>();

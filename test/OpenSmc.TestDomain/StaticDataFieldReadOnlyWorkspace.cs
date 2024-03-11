@@ -3,7 +3,7 @@ using OpenSmc.Data;
 
 namespace OpenSmc.TestDomain
 {
-    public class StaticDataFieldQuerySource : IQuerySource
+    public class StaticDataFieldReadOnlyWorkspace : IReadOnlyWorkspace
     {
         public IReadOnlyCollection<T> GetData<T>() where T : class
         {

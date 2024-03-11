@@ -124,7 +124,7 @@ public class ReportTestWithHubs(ITestOutputHelper output) : HubTestBase(output)
         //// TODO V10: move this to report config (configure report hub) (05.03.2024, Ekaterina Mishina)
         //DataCubePivotBuilder<IDataCube<ValueWithHierarchicalDimension>, ValueWithHierarchicalDimension, ValueWithHierarchicalDimension, ValueWithHierarchicalDimension> dataCubePivotBuilder = PivotFactory.ForDataCubes(data);
         //var dataCubeReportBuilder = dataCubePivotBuilder
-        //    .WithQuerySource(new StaticDataFieldQuerySource())
+        //    .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
         //    .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
         //    .ToTable()
         //    .WithOptions(rm => rm.HideRowValuesForDimension("DimA", x => x.ForLevel(1)))
