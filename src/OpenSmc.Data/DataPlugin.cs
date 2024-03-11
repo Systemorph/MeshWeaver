@@ -68,6 +68,7 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     {
         UpdateState(s => s.Change(change));
         Commit();
+        Hub.Post(new DataChangeResponse(Hub.Version, DataChangeStatus.Committed), o => o.ResponseFor(request));
         return request?.Processed();
     }
 
@@ -157,8 +158,8 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
 
 
             var dataChanged = LastSynchronized == null
-                ? new DataChangedEvent(hub.Version, new(node.ToJsonString()), ChangeType.Full)
-                : new DataChangedEvent(hub.Version, new (JsonSerializer.Serialize(LastSynchronized.CreatePatch(node))), ChangeType.Patch);
+                ? new DataChangedEvent(hub.Version, value)
+                : new DataChangedEvent(hub.Version, JsonSerializer.Serialize(LastSynchronized.CreatePatch(node)));
 
             hub.Post(dataChanged, o => o.ResponseFor(request));
             LastSynchronized = node;

@@ -18,7 +18,6 @@ public record GetResponse<T>(int Total, IReadOnlyCollection<T> Items) : GetManyR
 
 public record UpdateDataRequest(IReadOnlyCollection<object> Elements) : DataChangeRequestWithElements(Elements)
 {
-
     public UpdateOptions Options { get; init; }
 }
 
@@ -28,7 +27,7 @@ public abstract record DataChangeRequestWithElements(IReadOnlyCollection<object>
 
 public abstract record DataChangeRequest : IRequest<DataChangeResponse>;
 
-public record DataChangeResponse(long Version, DataChangeStatus Status, DataChangedEvent Changes);
+public record DataChangeResponse(long Version, DataChangeStatus Status);
 
 public enum DataChangeStatus{Committed, Failed}
 
@@ -37,8 +36,7 @@ public record CreateRequest<TObject>(TObject Element) : IRequest<DataChangedEven
 
 public record SubscribeDataRequest(string Id, WorkspaceReference Reference) : IRequest<DataChangedEvent>;
 
-public record DataChangedEvent(long Version, RawJson Change, ChangeType Type);
-public enum ChangeType{Full, Patch}
+public record DataChangedEvent(long Version, object Change);
 
 
 /// <summary>

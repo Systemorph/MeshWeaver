@@ -32,7 +32,18 @@ public static class DataPersistenceExtensions
         return node;
     }
 
-    public static IEnumerable<EntityDescriptor> DeserializeToEntities(this ISerializationService serializationService, string collection, JsonArray array)
+    public static InstancesInCollection DeserializeToEntities(this ISerializationService serializationService, object obj)
+    {
+        if (obj is InstancesInCollection instances)
+            return instances;
+
+        if (obj is not JsonArray array)
+            throw new ArgumentException(nameof(array));
+
+        return new(DeserializeEntities(serializationService, array).ToImmutableDictionary());
+    }
+
+    private static IEnumerable<KeyValuePair<object,object>> DeserializeEntities(ISerializationService serializationService, JsonArray array)
     {
         foreach (var item in array.OfType<JsonObject>())
         {
@@ -40,7 +51,7 @@ public static class DataPersistenceExtensions
                 && id != null
                 && item.TryGetPropertyValue(ReservedProperties.DataSource, out var dataSource)
                 && dataSource != null)
-                yield return new(collection,                    serializationService.Deserialize(id.ToString()), serializationService.Deserialize(item.ToString()));
+                yield return new(serializationService.Deserialize(id.ToString()), serializationService.Deserialize(item.ToString()));
         }
     }
 

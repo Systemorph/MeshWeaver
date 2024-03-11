@@ -38,6 +38,12 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             .AddPlugin<ImportPlugin>();
     }
 
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureClient(configuration)
+            .AddData(data => data.FromHub(new HostAddress()));
+    }
+
     [Fact]
     public async Task InitializeTest()
     {
@@ -63,8 +69,6 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var updateResponse = await client.AwaitResponse(new UpdateDataRequest(updateItems), o => o.WithTarget(new HostAddress()));
 
-        await Task.Delay(300);
-
         // asserts
         updateResponse.Message.Should().BeOfType<DataChangeResponse>();
         var expectedItems = new MyData[]
@@ -73,11 +77,13 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             new("2", "B"),
             new("3", "CCC")
         };
+
+        var workspace = GetWorkspace(client);
+        var data = workspace.GetObservable<MyData>().FirstOrDefaultAsync(x => x.Count == 3);
+
+        data.Should().BeEquivalentTo(expectedItems);
         storage.Values.Should().BeEquivalentTo(expectedItems);
         
-        var response = await client.AwaitResponse(new GetManyRequest<MyData>(), o => o.WithTarget(new HostAddress()));
-        var finalExpected = new GetResponse<MyData>(expectedItems.Length, expectedItems);
-        response.Message.Should().BeEquivalentTo(finalExpected);
     }
 
     [Fact]
