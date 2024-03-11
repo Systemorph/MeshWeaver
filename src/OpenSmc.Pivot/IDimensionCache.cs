@@ -18,13 +18,13 @@ namespace OpenSmc.Pivot
 
     public class DimensionCache : IDimensionCache
     {
-        private readonly IQuerySource querySource;
+        private readonly IReadOnlyWorkspace readOnlyWorkspace;
         private readonly Dictionary<Type, IDimensionTypeCache> cachedDimensions = new();
         private Dictionary<string, DimensionDescriptor> knownDimensions = new();
 
-        public DimensionCache(IQuerySource querySource)
+        public DimensionCache(IReadOnlyWorkspace readOnlyWorkspace)
         {
-            this.querySource = querySource;
+            this.readOnlyWorkspace = readOnlyWorkspace;
         }
 
         public T Get<T>(string systemName)
@@ -63,7 +63,7 @@ namespace OpenSmc.Pivot
         private void Initialize<T>()
             where T : class, INamed
         {
-            var query = querySource.GetData<T>();
+            var query = readOnlyWorkspace.GetData<T>();
             if (query != null)
             {
                 cachedDimensions[typeof(T)] = new DimensionTypeCache<T>(query.ToDictionary(x => x.SystemName));

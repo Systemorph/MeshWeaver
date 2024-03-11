@@ -7,12 +7,12 @@ namespace OpenSmc.Hierarchies;
 
 public class HierarchicalDimensionCache : IHierarchicalDimensionCache
 {
-    private readonly IQuerySource querySource;
+    private readonly IReadOnlyWorkspace readOnlyWorkspace;
     private readonly Dictionary<Type, IHierarchy> cachedDimensions = new();
 
-    public HierarchicalDimensionCache(IQuerySource querySource)
+    public HierarchicalDimensionCache(IReadOnlyWorkspace readOnlyWorkspace)
     {
-        this.querySource = querySource;
+        this.readOnlyWorkspace = readOnlyWorkspace;
     }
 
     public IHierarchyNode<T> Get<T>(string systemName)
@@ -46,9 +46,9 @@ public class HierarchicalDimensionCache : IHierarchicalDimensionCache
     public void Initialize<T>()
         where T : class, IHierarchicalDimension
     {
-        if (querySource != null && !cachedDimensions.TryGetValue(typeof(T), out _))
+        if (readOnlyWorkspace != null && !cachedDimensions.TryGetValue(typeof(T), out _))
         {
-            var hierarchy = new Hierarchy<T>(querySource);
+            var hierarchy = new Hierarchy<T>(readOnlyWorkspace);
             hierarchy.Initialize();
             cachedDimensions[typeof(T)] = hierarchy;
         }
