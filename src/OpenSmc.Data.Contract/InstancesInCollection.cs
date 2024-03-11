@@ -73,7 +73,7 @@ public record InstancesInCollection(ImmutableDictionary<object, object> Instance
             return this;
         return this with
         {
-            Instances = Instances.SetItems(other.Instances)
+            Instances = other.Instances.SetItems(Instances)
         };
     }
 }

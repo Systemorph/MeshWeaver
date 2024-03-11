@@ -1,9 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
-using Microsoft.Extensions.Logging;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
-using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Data;
 
@@ -14,7 +12,7 @@ public interface IDataSource : IDisposable
     object Id { get; }
     IReadOnlyCollection<DataChangeRequest> Change(DataChangeRequest request);
     Task<WorkspaceState> InitializeAsync(CancellationToken cancellationToken);
-    Task UpdateAsync(IEnumerable<DataChangeRequest> update, CancellationToken cancellationToken);
+    void Update(WorkspaceState state);
     object MapInstanceToPartition(object instance);
 }
 
@@ -24,7 +22,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
     public TDataSource WithType(Type type)
         => WithType(type, x => x);
 
-    [Inject] private ILogger<DataSource<TDataSource>> logger;
+    //[Inject] private ILogger<DataSource<TDataSource>> logger;
 
     IEnumerable<ITypeSource> IDataSource.TypeSources => TypeSources.Values;
 
@@ -37,8 +35,6 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
         };
 
 
-    protected virtual Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken)
-        => Task.FromResult<ITransaction>(EmptyTransaction.Instance);
 
     public IEnumerable<Type> MappedTypes => TypeSources.Keys;
 
@@ -46,21 +42,10 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
         TypeSources.Values.FirstOrDefault(x => x.CollectionName == collectionName);
 
 
-    public async Task UpdateAsync(IEnumerable<DataChangeRequest> updates, CancellationToken cancellationToken)
+    public virtual void Update(WorkspaceState workspace)
     {
-        try
-        {
-            await using var transaction = await StartTransactionAsync(cancellationToken);
-            foreach (var change in updates)
-            {
-                Change(change);
-            }
-            await transaction.CommitAsync(cancellationToken);
-        }
-        catch (Exception e)
-        {
-            logger.LogError("Error committing data transaction: {exception}", e);
-        }
+        foreach (var typeSource in TypeSources.Values)
+            typeSource.Update(workspace);
     }
 
     public object MapInstanceToPartition(object instance)
@@ -97,13 +82,13 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
     public virtual async Task<WorkspaceState> InitializeAsync( CancellationToken cancellationToken)
     {
         return new WorkspaceState(Hub,
-            (await TypeSources
+            new EntityStore((await TypeSources
             .Values
             .ToAsyncEnumerable()
             .SelectAwait(async ts => new { TypeSource = ts, Instances = await ts.InitializeAsync(cancellationToken) })
             .ToArrayAsync(cancellationToken: cancellationToken))
             .ToImmutableDictionary(x => x.TypeSource.CollectionName,
-                x => new InstancesInCollection(x.Instances))
+                x => new InstancesInCollection(x.Instances)))
             ,
             TypeSources
             );
@@ -120,15 +105,10 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
     }
 }
 
+
 public record DataSource(object Id, IMessageHub Hub) : DataSource<DataSource>(Id, Hub)
 {
-    public DataSource WithTransaction(Func<CancellationToken, Task<ITransaction>> startTransaction)
-        => this with { StartTransactionAction = startTransaction };
-    internal Func<CancellationToken, Task<ITransaction>> StartTransactionAction { get; init; }
-        = _ => Task.FromResult<ITransaction>(EmptyTransaction.Instance);
 
-    protected override Task<ITransaction> StartTransactionAsync(CancellationToken cancellationToken)
-        => StartTransactionAction(cancellationToken);
 
 
     protected override DataSource WithType<T>(Func<ITypeSource, ITypeSource> config)

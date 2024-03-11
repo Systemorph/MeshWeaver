@@ -79,7 +79,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         };
 
         var workspace = GetWorkspace(client);
-        var data = await workspace.GetObservable<MyData>().FirstOrDefaultAsync(x => x.Count == 3);
+        var data = await workspace.GetObservable<MyData>().FirstOrDefaultAsync(x => x?.Count == 3);
 
         data.Should().BeEquivalentTo(expectedItems);
         storage.Values.Should().BeEquivalentTo(expectedItems);

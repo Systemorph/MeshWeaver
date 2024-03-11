@@ -1,6 +1,5 @@
 ﻿using OpenSmc.Messaging;
 using System.Collections.Immutable;
-using System.Data;
 
 namespace OpenSmc.Data;
 
@@ -28,38 +27,20 @@ public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace)
             .ToImmutableDictionary(kvp => kvp.Key,
                 kvp => kvp.Value.Invoke(Hub));
 
-        return await DataSources
+        var workspace = await DataSources
             .Values
             .ToAsyncEnumerable()
             .SelectAwait(async ds => await ds.InitializeAsync(cancellationToken))
             .AggregateAsync((ws1, ws2) => ws1.Merge(ws2), cancellationToken: cancellationToken);
 
+        return workspace;
     }
 
 
 
-    private object MapToDataSource(object instance)
+    public void Update(WorkspaceState ws)
     {
-        return DataSources
-            .Values
-            .Select(ds => ds.MapInstanceToPartition(instance)).FirstOrDefault(x => x != null);
-    }
-
-    public async Task UpdateAsync(IReadOnlyCollection<DataChangeRequest> changes, CancellationToken cancellationToken)
-    {
-        foreach (var databaseGroup in 
-                 changes.OfType<DataChangeRequestWithElements>()
-                     .SelectMany(c =>
-                         c.Elements
-                             .GroupBy(MapToDataSource)
-                             .Select(g => new { DataSource = g.Key, Request = c with { Elements = g.ToArray() } }
-                             ))
-                     .GroupBy(x => x.DataSource))
-        {
-            if (databaseGroup.Key == null)
-                throw new DataException("Could not map entities");
-            var dataSource = GetDataSource(databaseGroup.Key);
-            await dataSource.UpdateAsync(databaseGroup.Select(x => x.Request).ToArray(), cancellationToken);
-        }
+        foreach (var dataSource in DataSources.Values)
+            dataSource.Update(ws);
     }
 }
