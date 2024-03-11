@@ -54,7 +54,7 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     {
         var workspace = await dataContext.InitializeAsync(cancellationToken);
         InitializeState(workspace);
-        subject.OnNext(workspace);
+        subject.OnNext(State);
     }
 
 
