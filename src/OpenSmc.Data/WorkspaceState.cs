@@ -105,7 +105,7 @@ public record WorkspaceState
     //}
 
     private object ReduceImpl(EntityReference reference) => GetCollection(reference.Collection)?.GetData(reference.Id);
-    private object ReduceImpl(EntireWorkspace reference) => this;
+    private object ReduceImpl(EntireWorkspace _) => this;
 
     private object ReduceImpl<T>(EntityReference<T> reference)
     {
@@ -187,11 +187,64 @@ public record WorkspaceState
 
 
     protected virtual WorkspaceState Change(DataChangeRequestWithElements request)
-        =>
-            SetItems(GetChanges(request.Elements)) with
-            {
-                Version = Hub.Version
-            };
+    {
+        if (request.Elements == null)
+            return null;
+
+        var newElements = Merge(request)
+            .ToImmutableDictionary();
+
+        // TODO V10: It's easier to split data away from state (11.03.2024, Roland Bürgi)
+        var ret = this with
+        {
+            Instances = newElements
+        };
+        return ret with
+        {
+            Instances = newElements,
+            LastSynchronized = ret
+        };
+
+    }
+
+    private IEnumerable<KeyValuePair<string,InstancesInCollection>> Merge(DataChangeRequestWithElements request)
+    {
+        switch (request)
+        {
+            case UpdateDataRequest update:
+                return MergeUpdate(update);
+            case DeleteDataRequest delete:
+                return MergeDelete(delete);
+        }
+
+        throw new NotSupportedException();
+    }
+
+    private IEnumerable<KeyValuePair<string, InstancesInCollection>> MergeDelete(DeleteDataRequest update)
+    {
+        var instances = GetChanges(update.Elements);
+        foreach (var kvp in instances)
+        {
+            var collection = kvp.Key;
+            var existing = GetCollection(collection);
+            if (existing != null)
+               yield return new(kvp.Key, kvp.Value with{Instances = existing.Instances.Remove(kvp.Value.Instances.Keys)});
+        }
+    }
+
+    private IEnumerable<KeyValuePair<string, InstancesInCollection>> MergeUpdate(UpdateDataRequest update)
+    {
+        var instances = GetChanges(update.Elements);
+        foreach (var kvp in instances)
+        {
+            var collection = kvp.Key;
+            var existing = GetCollection(collection);
+            bool snapshotMode = update.Options?.Snapshot ?? false;
+            if (existing == null || snapshotMode)
+                yield return kvp;
+            else yield return new(kvp.Key, kvp.Value.Merge(existing));
+        }
+    }
 
     private IEnumerable<KeyValuePair<string, InstancesInCollection>> GetChanges(IReadOnlyCollection<object> instances)
     {
@@ -199,11 +252,8 @@ public record WorkspaceState
         {
             var typeProvider = TypeSourcesByType.GetValueOrDefault(g.Key);
             if (typeProvider != null)
-                yield return new KeyValuePair<string, InstancesInCollection>
-                (
-                    typeProvider.CollectionName,
-                    new(g.ToImmutableDictionary(typeProvider.GetKey, x => x))
-                );
+                yield return new(typeProvider.CollectionName, new(instances.ToImmutableDictionary(typeProvider.GetKey)));
+            
         }
     }
 
