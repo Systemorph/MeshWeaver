@@ -8,8 +8,6 @@ namespace OpenSmc.Activities
         private readonly ConcurrentDictionary<string, ActivityLog> parents = new();
         private ActivityLog currentActivity;
 
-
-
         public string Start()
         {
 
@@ -86,6 +84,11 @@ namespace OpenSmc.Activities
                 currentActivity = null;
 
             return ret;
+        }
+
+        public ActivityLog GetCurrentActivityLog()
+        {
+            return currentActivity;
         }
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)

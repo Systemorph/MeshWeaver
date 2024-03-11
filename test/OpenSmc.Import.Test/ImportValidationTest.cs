@@ -25,6 +25,7 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
                     nameof(DataSource),
                     source => source
                             .ConfigureCategory(TestDomain.ContractDomain)
+                            .WithType<ActivityLog>()
                 )
             )
             .WithHostedHub(new TestDomain.ImportAddress(configuration.Address),
@@ -34,11 +35,13 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
                             configuration.Address,
                             source => source
                                 .ConfigureCategory(TestDomain.ContractDomain)
+                                .WithType<ActivityLog>()
                             ),
                         import => import
                         .WithFormat("Test1", format => format
                             .WithAutoMappings()
                             .WithValidation((_, _) => false)
+                            .SaveLogs()
                         )
                         .WithFormat("Test2", format => format
                             .WithAutoMappings()
@@ -130,43 +133,6 @@ FoundationYear,ContractType
     }
 
 
-    //        [Fact]
-    //        public async Task ImportWithValidationRuleTest()
-    //        {
-    //            const string content = @"@@Address
-    //Street,Country
-    //Red,RU
-    //Blue,FR";
-    //            var streetCanNotBeRed = "Street can not be Red";
-
-    //            CategoryService.Configure(nameof(Country), b => b.WithDisplayName(nameof(Country))
-    //                                                             .WithCompleteCategoryQuery(() => new[]
-    //                                                                                              {
-    //                                                                                                  new ImportTestDomain.Country { DisplayName = "FR", SystemName = "FR" },
-    //                                                                                                  new ImportTestDomain.Country { DisplayName = "RU", SystemName = "RU" }
-    //                                                                                              }));
-
-    //            var log = await ImportVariable.FromString(content)
-    //                                          .WithType<ImportTestDomain.Address>()
-    //                                          .WithValidation((instance, _) =>
-    //                                                          {
-    //                                                              var ret = true;
-    //                                                              if (instance is ImportTestDomain.Address address && address.Street == "Red")
-    //                                                              {
-    //                                                                  ActivityService.LogError(streetCanNotBeRed);
-    //                                                                  ret = false;
-    //                                                              }
-    //                                                              return ret;
-    //                                                          })
-    //                                          .ExecuteAsync();
-
-    //            log.Messages.Select(x => x.Message).Should().BeEquivalentTo(streetCanNotBeRed, string.Format(MappingService.ValidationStageFailed, typeof(ImportTestDomain.Address).FullName));
-
-    //            var ret = Workspace.GetItems<ImportTestDomain.Address>();
-    //            ret.Should().HaveCount(0);
-    //            var countries = Workspace.GetItems<ImportTestDomain.Country>();
-    //            countries.Should().HaveCount(0);
-    //        }
 
     //        [Fact]
     //        public async Task ImportWithDefaultValidationRuleTest()
@@ -261,34 +227,29 @@ FoundationYear,ContractType
     //        }
 
 
-    //        [Fact]
-    //        public async Task ImportWithSaveLogTest()
-    //        {
-    //            const string content = @"@@Country
-    //SystemName,DisplayName
-    //A,B";
+    [Fact]
+    public async Task ImportWithSaveLogTest()
+    {
+        const string content = @"@@Country
+    SystemName,DisplayName
+    A,B";
 
-    //            var log1 = await ImportVariable.FromString(content)
-    //                                          .WithType<ImportTestDomain.Country>()
-    //                                          .SaveLogs()
-    //                                          .ExecuteAsync();
+        var client = GetClient();
+        var importRequest = new ImportRequest(content) { Format = "Test1" };
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
+        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Failed);
 
-    //            log1.Status.Should().Be(ActivityLogStatus.Succeeded);
-    //            Workspace.GetItems<ActivityLog>().Should().ContainSingle().Which.Should().Be(log1);
+        importResponse.Message.Log.Messages.OfType<LogMessage>().Should()
+            .ContainSingle(x => x.LogLevel == LogLevel.Error)
+            .Which.Message.Should().Be(ImportPlugin.ValidationStageFailed);
 
-    //            //save failed log
-    //            var log2 = await ImportVariable.FromString(content)
-    //                                          .WithType<ImportTestDomain.Country>()
-    //                                          .WithValidation((_,_)=>
-    //                                                          {
-    //                                                              ActivityService.LogError("someError");
-    //                                                              return false;
-    //                                                          })
-    //                                          .SaveLogs()
-    //                                          .ExecuteAsync();
+        await Task.Delay(300);
 
-    //            log2.Status.Should().Be(ActivityLogStatus.Failed);
-    //            Workspace.GetItems<ActivityLog>().Should().HaveCount(2);
-    //            Workspace.GetItems<ActivityLog>().Where(x=>x.Status == ActivityLogStatus.Failed).Should().ContainSingle().Which.Should().Be(log2);
-    //        }
+        var ret = await client.AwaitResponse(new GetManyRequest<ActivityLog>(),
+            o => o.WithTarget(new HostAddress()));
+
+        ret.Message.Items.Should().HaveCount(1);
+        //var log = ret.Message.Items.First();
+        //log.Status.Should().Be(ActivityLogStatus.Failed);
+    }
 }
