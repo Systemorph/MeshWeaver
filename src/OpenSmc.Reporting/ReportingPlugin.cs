@@ -9,12 +9,10 @@ using OpenSmc.Scopes.Proxy;
 
 namespace OpenSmc.Reporting;
 
-public class ReportingPlugin(IMessageHub hub, Func<ReportConfiguration, ReportConfiguration> reportConfiguration) : MessageHubPlugin(hub), IMessageHandler<ReportRequest>
+public class ReportingPlugin(IMessageHub hub, ReportConfiguration Configuration) : MessageHubPlugin(hub), IMessageHandler<ReportRequest>
 {
     private readonly IWorkspace workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
     private readonly IScopeFactory scopeFactory = hub.ServiceProvider.GetService<IScopeFactory>();
-
-    private ReportConfiguration Configuration = reportConfiguration(new());
 
     public IMessageDelivery HandleMessage(IMessageDelivery<ReportRequest> request)
     {
@@ -41,7 +39,13 @@ public class ReportingPlugin(IMessageHub hub, Func<ReportConfiguration, ReportCo
 public record ReportConfiguration
 {
     internal ReportDataCubeConfiguration dataCubeConfig;
-    public ReportConfiguration WithDataCubeOn<T>(Func<IWorkspace, IScopeFactory, ReportRequest, IEnumerable<T>> dataFunc, Func<DataCubePivotBuilder<IDataCube<T>, T, T, T>, ReportRequest, DataCubeReportBuilder<IDataCube<T>, T, T, T>> reportFunc) 
+    public ReportConfiguration WithDataCubeOn<T>(Func<IWorkspace, ReportRequest, IEnumerable<T>> dataFunc, Func<DataCubePivotBuilder<IDataCube<T>, T, T, T>, ReportRequest, DataCubeReportBuilder<IDataCube<T>, T, T, T>> reportFunc)
+        => this with { dataCubeConfig = new ReportDataCubeConfiguration<T>((ws, sf, req) => dataFunc(ws, req), reportFunc), };
+}
+
+public record ReportConfigurationWithScopes : ReportConfiguration
+{
+    public ReportConfigurationWithScopes WithDataCubeOn<T>(Func<IWorkspace, IScopeFactory, ReportRequest, IEnumerable<T>> dataFunc, Func<DataCubePivotBuilder<IDataCube<T>, T, T, T>, ReportRequest, DataCubeReportBuilder<IDataCube<T>, T, T, T>> reportFunc) 
         => this with { dataCubeConfig = new ReportDataCubeConfiguration<T>(dataFunc, reportFunc), };
 }
 
