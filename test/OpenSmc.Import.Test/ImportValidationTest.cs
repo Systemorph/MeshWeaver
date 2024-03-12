@@ -25,6 +25,7 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
                     nameof(DataSource),
                     source => source
                             .ConfigureCategory(TestDomain.ContractDomain)
+                            .WithType<ActivityLog>()
                 )
             )
             .WithHostedHub(new TestDomain.ImportAddress(configuration.Address),
@@ -34,11 +35,13 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
                             configuration.Address,
                             source => source
                                 .ConfigureCategory(TestDomain.ContractDomain)
+                                .WithType<ActivityLog>()
                             ),
                         import => import
                         .WithFormat("Test1", format => format
                             .WithAutoMappings()
                             .WithValidation((_, _) => false)
+                            .SaveLogs()
                         )
                         .WithFormat("Test2", format => format
                             .WithAutoMappings()
@@ -129,166 +132,29 @@ FoundationYear,ContractType
         ret.Message.Items.Should().HaveCount(0);
     }
 
+    [Fact]
+    public async Task ImportWithSaveLogTest()
+    {
+        const string content = @"@@Country
+    SystemName,DisplayName
+    A,B";
 
-    //        [Fact]
-    //        public async Task ImportWithValidationRuleTest()
-    //        {
-    //            const string content = @"@@Address
-    //Street,Country
-    //Red,RU
-    //Blue,FR";
-    //            var streetCanNotBeRed = "Street can not be Red";
+        var client = GetClient();
+        var importRequest = new ImportRequest(content) { Format = "Test1" };
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
+        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Failed);
 
-    //            CategoryService.Configure(nameof(Country), b => b.WithDisplayName(nameof(Country))
-    //                                                             .WithCompleteCategoryQuery(() => new[]
-    //                                                                                              {
-    //                                                                                                  new ImportTestDomain.Country { DisplayName = "FR", SystemName = "FR" },
-    //                                                                                                  new ImportTestDomain.Country { DisplayName = "RU", SystemName = "RU" }
-    //                                                                                              }));
+        importResponse.Message.Log.Messages.OfType<LogMessage>().Should()
+            .ContainSingle(x => x.LogLevel == LogLevel.Error)
+            .Which.Message.Should().Be(ImportPlugin.ValidationStageFailed);
 
-    //            var log = await ImportVariable.FromString(content)
-    //                                          .WithType<ImportTestDomain.Address>()
-    //                                          .WithValidation((instance, _) =>
-    //                                                          {
-    //                                                              var ret = true;
-    //                                                              if (instance is ImportTestDomain.Address address && address.Street == "Red")
-    //                                                              {
-    //                                                                  ActivityService.LogError(streetCanNotBeRed);
-    //                                                                  ret = false;
-    //                                                              }
-    //                                                              return ret;
-    //                                                          })
-    //                                          .ExecuteAsync();
+        await Task.Delay(300);
 
-    //            log.Messages.Select(x => x.Message).Should().BeEquivalentTo(streetCanNotBeRed, string.Format(MappingService.ValidationStageFailed, typeof(ImportTestDomain.Address).FullName));
+        var ret = await client.AwaitResponse(new GetManyRequest<ActivityLog>(),
+            o => o.WithTarget(new HostAddress()));
 
-    //            var ret = Workspace.GetItems<ImportTestDomain.Address>();
-    //            ret.Should().HaveCount(0);
-    //            var countries = Workspace.GetItems<ImportTestDomain.Country>();
-    //            countries.Should().HaveCount(0);
-    //        }
-
-    //        [Fact]
-    //        public async Task ImportWithDefaultValidationRuleTest()
-    //        {
-    //            const string content = @"@@Address
-    //Street,Country
-    //Red,RU
-    //Blue,FR";
-    //            var streetCanNotBeRed = "Street can not be Red";
-
-    //            CategoryService.Configure(nameof(Country), b => b.WithDisplayName(nameof(Country))
-    //                                                             .WithCompleteCategoryQuery(() => new[]
-    //                                                                                              {
-    //                                                                                                  new ImportTestDomain.Country { DisplayName = "FR", SystemName = "FR" },
-    //                                                                                                  new ImportTestDomain.Country { DisplayName = "RU", SystemName = "RU" }
-    //                                                                                              }));
-
-    //            ImportVariable.SetDefaultValidation((instance, _) =>
-    //                                                {
-    //                                                    var ret = true;
-
-    //                                                    if (instance is ImportTestDomain.Address address && address.Street == "Red")
-    //                                                    {
-    //                                                        ActivityService.LogError(streetCanNotBeRed);
-    //                                                        ret = false;
-    //                                                    }
-    //                                                    return ret;
-    //                                                });
-
-    //            var log = await ImportVariable.FromString(content).WithType<ImportTestDomain.Address>().ExecuteAsync();
-
-    //            log.Messages.Select(x=>x.Message).Should().BeEquivalentTo(streetCanNotBeRed, string.Format(MappingService.ValidationStageFailed, typeof(ImportTestDomain.Address).FullName));
-
-    //            var ret = Workspace.GetItems<ImportTestDomain.Address>();
-    //            ret.Should().HaveCount(0);
-    //            var countries = Workspace.GetItems<ImportTestDomain.Country>();
-    //            countries.Should().HaveCount(0);
-    //        }
-
-    //        [Fact]
-    //        public async Task ImportWithValidationAndDefaultValidationRulesTest()
-    //        {
-    //            const string content = @"@@Address
-    //Street,Country
-    //Red,RU
-    //Blue,FR";
-    //            var streetCanNotBeRed = "Street can not be Red";
-    //            var streetCanNotBeBlue = "Street can not be Red";
-
-    //            CategoryService.Configure(nameof(Country), b => b.WithDisplayName(nameof(Country))
-    //                                                             .WithCompleteCategoryQuery(() => new[]
-    //                                                                                              {
-    //                                                                                                  new ImportTestDomain.Country { DisplayName = "FR", SystemName = "FR" },
-    //                                                                                                  new ImportTestDomain.Country { DisplayName = "RU", SystemName = "RU" }
-    //                                                                                              }));
-
-    //            ImportVariable.SetDefaultValidation((instance, _) =>
-    //                                                {
-    //                                                    var ret = true;
-
-    //                                                    if (instance is ImportTestDomain.Address address && address.Street == "Blue")
-    //                                                    {
-    //                                                        ActivityService.LogError(streetCanNotBeBlue);
-    //                                                        ret = false;
-    //                                                    }
-    //                                                    return ret;
-    //                                                });
-
-    //            var log = await ImportVariable.FromString(content)
-    //                                          .WithType<ImportTestDomain.Address>()
-    //                                          .WithValidation((instance, _) =>
-    //                                                          {
-    //                                                              var ret = true;
-
-    //                                                              if (instance is ImportTestDomain.Address address && address.Street == "Red")
-    //                                                              {
-    //                                                                  ActivityService.LogError(streetCanNotBeRed);
-    //                                                                  ret = false;
-    //                                                              }
-    //                                                              return ret;
-    //                                                          })
-    //                                          .ExecuteAsync();
-
-    //            var errors = log.Messages.ToArray();
-    //            errors.Should().HaveCount(3);
-    //            errors.Select(x => x.Message).Should().BeEquivalentTo(streetCanNotBeBlue, streetCanNotBeRed, string.Format(MappingService.ValidationStageFailed, typeof(ImportTestDomain.Address).FullName));
-
-    //            var ret = Workspace.GetItems<ImportTestDomain.Address>();
-    //            ret.Should().HaveCount(0);
-    //            var countries = Workspace.GetItems<ImportTestDomain.Country>();
-    //            countries.Should().HaveCount(0);
-    //        }
-
-
-    //        [Fact]
-    //        public async Task ImportWithSaveLogTest()
-    //        {
-    //            const string content = @"@@Country
-    //SystemName,DisplayName
-    //A,B";
-
-    //            var log1 = await ImportVariable.FromString(content)
-    //                                          .WithType<ImportTestDomain.Country>()
-    //                                          .SaveLogs()
-    //                                          .ExecuteAsync();
-
-    //            log1.Status.Should().Be(ActivityLogStatus.Succeeded);
-    //            Workspace.GetItems<ActivityLog>().Should().ContainSingle().Which.Should().Be(log1);
-
-    //            //save failed log
-    //            var log2 = await ImportVariable.FromString(content)
-    //                                          .WithType<ImportTestDomain.Country>()
-    //                                          .WithValidation((_,_)=>
-    //                                                          {
-    //                                                              ActivityService.LogError("someError");
-    //                                                              return false;
-    //                                                          })
-    //                                          .SaveLogs()
-    //                                          .ExecuteAsync();
-
-    //            log2.Status.Should().Be(ActivityLogStatus.Failed);
-    //            Workspace.GetItems<ActivityLog>().Should().HaveCount(2);
-    //            Workspace.GetItems<ActivityLog>().Where(x=>x.Status == ActivityLogStatus.Failed).Should().ContainSingle().Which.Should().Be(log2);
-    //        }
+        ret.Message.Items.Should().HaveCount(1);
+        //var log = ret.Message.Items.First();
+        //log.Status.Should().Be(ActivityLogStatus.Failed);
+    }
 }
