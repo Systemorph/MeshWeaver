@@ -50,6 +50,11 @@ public record ImportFormat(string Format, IMessageHub Hub, IWorkspace Workspace,
         return this with { Validations = Validations.Add(validationRule) };
     }
 
+    public bool SaveLog { get; init; }
+    public ImportFormat SaveLogs(bool save = true)
+    {
+        return this with { SaveLog = save };
+    }
 }
 
 public delegate bool ValidationFunction(object instance, ValidationContext context);
