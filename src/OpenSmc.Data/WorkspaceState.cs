@@ -110,7 +110,7 @@ public record WorkspaceState
     private object ReduceImpl(EntityReference reference) => GetCollection(reference.Collection)?.GetData(reference.Id);
     private object ReduceImpl(EntireWorkspace _) => Store;
 
-    private object ReduceImpl<T>(EntityReference<T> reference)
+    private object ReduceImpl<T>(EntityReference reference)
     {
         if (!CollectionsByType.TryGetValue(typeof(T), out var collection))
             return null;
