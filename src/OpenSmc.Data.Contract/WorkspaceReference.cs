@@ -21,30 +21,27 @@ public record EntityStore(ImmutableDictionary<string, InstancesInCollection> Ins
 
 public record EntireWorkspace : WorkspaceReference<EntityStore>
 {
-    public override string ToString() => nameof(EntireWorkspace);
+    public string Path => "$";
+    public override string ToString() => Path;
 }
 
 public record JsonPathReference(string Path) : WorkspaceReference<JsonNode>
 {
-    public override string ToString() => $"Path:{Path}";
-
+    public override string ToString() => $"{Path}";
 }
 
 public record EntityReference(string Collection, object Id) : WorkspaceReference<object>
 {
-    public override string ToString() => $"{Collection} : {Id}";
+    public string Path => $"$['{Collection}']['{Id}']";
+    public override string ToString() => Path;
 
 }
 
-public record EntityReference<T>(object Id) : WorkspaceReference<T>
-{
-    public override string ToString() => $"{typeof(T).FullName} : {Id}";
-
-}
 
 public record CollectionReference(string Collection) : WorkspaceReference<InstancesInCollection>
 {
-    public override string ToString() => $"Collection : {Collection}";
+    public string Path => $"$['{Collection}']";
+    public override string ToString() => Path;
     public Func<InstancesInCollection, InstancesInCollection> Transformation { get; init; } = x => x;
 
 }
@@ -52,6 +49,7 @@ public record CollectionReference(string Collection) : WorkspaceReference<Instan
 public record CollectionsReference(IReadOnlyCollection<string> Collections)
     : WorkspaceReference<EntityStore>
 {
-    public override string ToString() => $"Collections : {Collections.Aggregate(string.Empty, (x,y) => $"{x},{y}")}";
+    public string Path => $"$[{Collections.Select(c => $"'{c}'").Aggregate((x,y) => $"{x},{y}")}]";
+    public override string ToString() => Path;
 
 }
