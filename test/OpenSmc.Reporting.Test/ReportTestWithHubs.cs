@@ -85,7 +85,7 @@ public static class DataExtensions
                             .WithType<TestHierarchicalDimensionA>()
                     ),
                 reportConfig => reportConfig.WithDataCubeOn(
-                    (ws, sf) => ws.GetData<ValueWithHierarchicalDimension>(), 
+                    (ws, sf, _) => ws.GetData<ValueWithHierarchicalDimension>(),
                     b => b
                         .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
                         .ToTable()
