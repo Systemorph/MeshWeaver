@@ -41,7 +41,7 @@ public class ReportingPlugin(IMessageHub hub, Func<ReportConfiguration, ReportCo
 public record ReportConfiguration
 {
     internal ReportDataCubeConfiguration dataCubeConfig;
-    public ReportConfiguration WithDataCubeOn<T>(Func<IWorkspace, IScopeFactory, ReportRequest, IEnumerable<T>> dataFunc, Func<DataCubePivotBuilder<IDataCube<T>, T, T, T>, DataCubeReportBuilder<IDataCube<T>, T, T, T>> reportFunc) 
+    public ReportConfiguration WithDataCubeOn<T>(Func<IWorkspace, IScopeFactory, ReportRequest, IEnumerable<T>> dataFunc, Func<DataCubePivotBuilder<IDataCube<T>, T, T, T>, ReportRequest, DataCubeReportBuilder<IDataCube<T>, T, T, T>> reportFunc) 
         => this with { dataCubeConfig = new ReportDataCubeConfiguration<T>(dataFunc, reportFunc), };
 }
 
@@ -50,12 +50,12 @@ public abstract record ReportDataCubeConfiguration
     internal abstract GridOptions GetGridOptions(IWorkspace workspace, IScopeFactory scopeFactory, ReportRequest request);
 }
 
-public record ReportDataCubeConfiguration<T>(Func<IWorkspace, IScopeFactory, ReportRequest, IEnumerable<T>> DataFunc, Func<DataCubePivotBuilder<IDataCube<T>, T, T, T>, DataCubeReportBuilder<IDataCube<T>, T, T, T>> ReportFunc) : ReportDataCubeConfiguration
+public record ReportDataCubeConfiguration<T>(Func<IWorkspace, IScopeFactory, ReportRequest, IEnumerable<T>> DataFunc, Func<DataCubePivotBuilder<IDataCube<T>, T, T, T>, ReportRequest, DataCubeReportBuilder<IDataCube<T>, T, T, T>> ReportFunc) : ReportDataCubeConfiguration
 {
     internal override GridOptions GetGridOptions(IWorkspace workspace, IScopeFactory scopeFactory, ReportRequest request)
     {
         var data = DataFunc(workspace, scopeFactory, request).ToDataCube();
-        var result = ReportFunc(PivotFactory.ForDataCube(data).WithQuerySource(workspace)).Execute();
+        var result = ReportFunc(PivotFactory.ForDataCube(data).WithQuerySource(workspace), request).Execute();
         return result;
     }
 }
