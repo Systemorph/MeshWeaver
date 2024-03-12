@@ -1,32 +1,41 @@
-﻿using System.Reflection;
-using OpenSmc.Data.Persistence;
+﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using System.Text.Json.Nodes;
+using Json.Patch;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
-using OpenSmc.Reflection;
+using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
-public record DataPluginState(HubDataSource Workspace, DataContext DataContext);
-public class DataPlugin : MessageHubPlugin<DataPluginState>, 
+public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     IWorkspace,
     IMessageHandler<UpdateDataRequest>,
     IMessageHandler<DeleteDataRequest>,
     IMessageHandler<DataChangedEvent>,
     IMessageHandler<SubscribeDataRequest>,
+    IMessageHandler<UnsubscribeDataRequest>,
     IMessageHandler<PatchChangeRequest>
 
 {
-    private readonly IMessageHub persistenceHub;
+    private readonly Subject<WorkspaceState> subject = new();
 
+    public IObservable<WorkspaceState> Stream { get; }
     public DataPlugin(IMessageHub hub) : base(hub)
     {
-        Register(HandleGetRequest); // This takes care of GetRequest and GetManyRequest
-        persistenceHub = hub.GetHostedHub(new PersistenceAddress(hub.Address), conf => conf);
+        serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
+        InitializeState(new WorkspaceState(hub, new EntityStore(ImmutableDictionary<string, InstancesInCollection>.Empty), ImmutableDictionary<Type, ITypeSource>.Empty));
+        Stream = subject
+            .StartWith(State)
+            .Replay(1)
+            .RefCount();
     }
 
-
-    public IEnumerable<Type> MappedTypes => State.Workspace.MappedTypes;
+    public IEnumerable<Type> MappedTypes => State.MappedTypes;
 
     public void Update(IEnumerable<object> instances, UpdateOptions options)
-        => RequestChange(null, new UpdateDataRequest(instances.ToArray()));
+        => RequestChange(null,  new UpdateDataRequest(instances.ToArray()){Options = options});
 
     public void Delete(IEnumerable<object> instances)
         => RequestChange(null, new DeleteDataRequest(instances.ToArray()));
@@ -45,18 +54,10 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
 
     private async Task InitializeAsync(CancellationToken cancellationToken, DataContext dataContext)
     {
-        await dataContext.InitializeAsync(cancellationToken);
-
-        var workspace = dataContext.DataSources.Values
-            .SelectMany(ds => ds.TypeSources)
-            .Aggregate(
-                new HubDataSource(Address, Hub), 
-                (ds, ts) =>
-                    ds.WithType(ts.ElementType, t => t.WithKey(ts.GetKey).WithPartition(ts.ElementType, ts.GetPartition)));
-
-
-        workspace.Initialize(dataContext.GetEntities());
-        InitializeState(new(workspace, dataContext));
+        var workspace = await dataContext.InitializeAsync(cancellationToken);
+        UpdateState(ws => ws.Merge(workspace) with { Version = Hub.Version });
+        subject.OnNext(State);
+        subject.DistinctUntilChanged().Subscribe(dataContext.Update);
     }
 
 
@@ -68,14 +69,9 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
 
     private IMessageDelivery RequestChange(IMessageDelivery request, DataChangeRequest change)
     {
-        var changes = State.Workspace.Change(change).ToArray();
-
-        var dataChanged = State.Workspace.Commit();
-        if(request != null)
-            Hub.Post(dataChanged, o => o.ResponseFor(request));
-
-        Task CommitToDataSource(CancellationToken cancellationToken) => State.DataContext.UpdateAsync(changes, cancellationToken);
-        persistenceHub.Schedule(CommitToDataSource);
+        UpdateState(s => s.Change(change) with{Version = Hub.Version});
+        Commit();
+        Hub.Post(new DataChangeResponse(Hub.Version, DataChangeStatus.Committed), o => o.ResponseFor(request));
         return request?.Processed();
     }
 
@@ -84,53 +80,10 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
         => RequestChange(request, request.Message);
 
 
-    private IMessageDelivery HandleGetRequest(IMessageDelivery request)
-    {
-        var type = request.Message.GetType();
-        if (type.IsGenericType)
-        {
-            var genericTypeDefinition = type.GetGenericTypeDefinition();
-            if (genericTypeDefinition == typeof(GetManyRequest<>))
-            {
-                var elementType = type.GetGenericArguments().First();
-                return (IMessageDelivery)GetElementsMethod.MakeGenericMethod(elementType).InvokeAsFunction(this, request);
-            }
-
-            if (genericTypeDefinition == typeof(GetRequest<>))
-            {
-                var elementType = type.GetGenericArguments().First();
-                return (IMessageDelivery)GetElementMethod.MakeGenericMethod(elementType).InvokeAsFunction(this, request);
-
-            }
-        }
-        return request;
-    }
-
-    private static readonly MethodInfo GetElementMethod = ReflectionHelper.GetMethodGeneric<DataPlugin>(x => x.GetElement<object>(null));
-
-    // ReSharper disable once UnusedMethodReturnValue.Local
-    private IMessageDelivery GetElement<T>(IMessageDelivery<GetRequest<T>> request) where T : class
-    {
-        var item = State.Workspace.Get<T>(request.Message.Id);
-        Hub.Post(item, o => o.ResponseFor(request));
-        return request.Processed();
-    }
-
-    private static readonly MethodInfo GetElementsMethod = ReflectionHelper.GetMethodGeneric<DataPlugin>(x => x.GetElements<object>(null));
 
 
-    // ReSharper disable once UnusedMethodReturnValue.Local
-    private IMessageDelivery GetElements<T>(IMessageDelivery<GetManyRequest<T>> request) where T : class
-    {
-        var items = State.Workspace.Get<T>();
-        var message = request.Message;
-        var queryResult = items;
-        if (message.PageSize is not null)
-            queryResult = queryResult.Skip(message.Page * message.PageSize.Value).Take(message.PageSize.Value).ToArray();
-        var response = new GetManyResponse<T>(items.Count, queryResult);
-        Hub.Post(response, o => o.ResponseFor(request));
-        return request.Processed();
-    }
+
+
 
     public override bool IsDeferred(IMessageDelivery delivery)
     {
@@ -145,41 +98,116 @@ public class DataPlugin : MessageHubPlugin<DataPluginState>,
 
     public void Commit()
     {
-        State.Workspace.Commit();
+        subject.OnNext(State);
     }
 
     public void Rollback()
     {
-        State.Workspace.Rollback();
+        State.Rollback();
     }
 
 
-    public IReadOnlyCollection<T> GetData<T>() where T : class
+    public EntityReference GetReference(object entity)
     {
-        return State.Workspace.Get<T>();
+        throw new NotImplementedException();
     }
+
 
     IMessageDelivery IMessageHandler<DataChangedEvent>.HandleMessage(IMessageDelivery<DataChangedEvent> request)
     {
-        var dataSourceId = request.Sender;
         var @event = request.Message;
-        State.DataContext.Synchronize(@event, dataSourceId);
-        State.Workspace.UpdateWorkspace(State.DataContext.GetEntities());
+        UpdateState(s => s.Synchronize(@event));
+        Commit();
         return request.Processed();
     }
 
     IMessageDelivery IMessageHandler<SubscribeDataRequest>.HandleMessage(IMessageDelivery<SubscribeDataRequest> request)
         => StartSynchronization(request);
 
+    private readonly ConcurrentDictionary<(object Address, string Id),IDisposable> subscriptions = new();
+
+    private readonly ISerializationService serializationService;
     private IMessageDelivery StartSynchronization(IMessageDelivery<SubscribeDataRequest> request)
     {
-        var address = request.Sender;
+        var key = (request.Message, request.Message.Id);
+        if (subscriptions.ContainsKey(key))
+            return request.Ignored();
 
-        var changes = State.Workspace.Subscribe(request.Message, address);
-        Hub.Post(changes, o => o.ResponseFor(request));
+        subscriptions[key] = Stream
+            .StartWith(State)
+            .Subscribe(new PatchSubscriber<object>(Hub, request, serializationService));
+
         return request.Processed();
     }
 
+    private class PatchSubscriber<T>(IMessageHub hub, IMessageDelivery request, ISerializationService serializationService) : IObserver<T>
+    {
+        private JsonNode LastSynchronized { get; set; }
 
+        public void OnCompleted()
+        {
+        }
+
+        public void OnError(Exception error)
+        {
+        }
+
+        public void OnNext(T value)
+        {
+            if (value == null)
+                return;
+
+            var node = value as JsonNode
+                       ?? JsonNode.Parse(serializationService.SerializeToString(value));
+
+
+            var dataChanged = LastSynchronized == null
+                ? new DataChangedEvent(hub.Version, value)
+                : new DataChangedEvent(hub.Version, LastSynchronized.CreatePatch(node));
+
+            hub.Post(dataChanged, o => o.WithTarget(request.Sender));
+            LastSynchronized = node;
+
+        }
+    }
+
+
+    IMessageDelivery IMessageHandler<UnsubscribeDataRequest>.HandleMessage(
+        IMessageDelivery<UnsubscribeDataRequest> request)
+    {
+        foreach (var id in request.Message.Ids)
+        {
+            if (subscriptions.TryRemove((request.Message, id), out var existing))
+                existing.Dispose();
+
+        }
+
+        return request.Processed();
+    }
+
+}
+
+public class DataSubscription<T> :IDisposable
+{
+    private readonly IDisposable subscription;
+    private IObservable<T> Stream { get; }
+    public DataSubscription(IObservable<WorkspaceState> stateStream, 
+        WorkspaceReference reference, 
+        Action<T> action)
+    {
+        Stream = stateStream
+            .Select(ws => (T)ws.Reduce(reference))
+            .DistinctUntilChanged()
+            .Replay(1)
+            .RefCount();
+
+        subscription = Stream.Subscribe(action);
+
+    }
+
+    public void Dispose()
+    {
+        subscription.Dispose();
+    }
 }
 

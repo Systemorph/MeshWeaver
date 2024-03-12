@@ -27,7 +27,9 @@ public class SerializationService : ISerializationService
         var typeRegistry = serviceProvider.GetRequiredService<ITypeRegistry>();
         var converters = new List<JsonConverter>
         {
-            new StringEnumConverter(), new RawJsonNewtonsoftConverter(),
+            new StringEnumConverter(), 
+            new RawJsonNewtonsoftConverter(),
+            new JsonNodeNewtonsoftConverter(),
             new ObjectDeserializationConverter(typeRegistry)
         };
         converters.AddRange(configuration.TypeFactories.Select(t => new FactoryConverter(t)));

@@ -15,7 +15,7 @@ namespace OpenSmc.Import
             return configuration
                     .WithServices(services => services.AddSingleton<IActivityService, ActivityService>())
                     .AddData(data)
-                    .AddPlugin(h => new ImportPlugin(h, importConfiguration))
+                    .AddPlugin<ImportPlugin>(plugin => plugin.WithFactory(() => new (plugin.Hub, importConfiguration)))
                 ;
         }
     }

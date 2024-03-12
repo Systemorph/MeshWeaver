@@ -87,19 +87,19 @@ namespace OpenSmc.DataSetReader.Test
             table.Rows[0][2].Should().Be("Some \"currency\"");
             table.Rows[1][0].Should().Be("MultilineCase");
             table.Rows[1][1].Should().Be("Multiline case");
-            table.Rows[1][2].Should().Be("Case \r\nwith \"multiple\r\nlines\"");
+            table.Rows[1][2].Should().Be($"Case {Environment.NewLine}with \"multiple{Environment.NewLine}lines\"");
             table.Rows[2][0].Should().Be("MultilineCaseWithSingleQuoteOnLine");
             table.Rows[2][1].Should().Be("Multiline case with single quote on line");
-            table.Rows[2][2].Should().Be("\r\nMultiline\r\n\"\"case\"\"\r\n");
+            table.Rows[2][2].Should().Be($"{Environment.NewLine}Multiline{Environment.NewLine}\"\"case\"\"{Environment.NewLine}");
             table.Rows[3][0].Should().Be("TwoMultilineValuesOnTheSameLine");
-            table.Rows[3][1].Should().Be("\"Multiline \r\ndisplay\" name");
-            table.Rows[3][2].Should().Be("Multiline \r\nvalues");
+            table.Rows[3][1].Should().Be($"\"Multiline {Environment.NewLine}display\" name");
+            table.Rows[3][2].Should().Be($"Multiline {Environment.NewLine}values");
             table.Rows[4][0].Should().Be("TwoMultilineValuesOnTheSameLineWithCommasInsideMultilines");
-            table.Rows[4][1].Should().Be("\"Multiline,\r\ndisplay\" name");
-            table.Rows[4][2].Should().Be("Multiline,\r\nvalues");
+            table.Rows[4][1].Should().Be($"\"Multiline,{Environment.NewLine}display\" name");
+            table.Rows[4][2].Should().Be($"Multiline,{Environment.NewLine}values");
             table.Rows[5][0].Should().Be("MultilineCaseWithSingleQuoteOnLine");
             table.Rows[5][1].Should().Be("Multiline case with single quote on line");
-            table.Rows[5][2].Should().Be("\r\nMultiline,value\r\n\"\"case,draft\",logic\"\r\n");
+            table.Rows[5][2].Should().Be($"{Environment.NewLine}Multiline,value{Environment.NewLine}\"\"case,draft\",logic\"{Environment.NewLine}");
         }
 
         [Fact]

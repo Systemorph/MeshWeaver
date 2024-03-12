@@ -41,21 +41,21 @@ public class TestLayoutPlugin(IMessageHub hub) : MessageHubPlugin(hub),
                 .WithId(MainStackId)
                 .WithClickAction(context =>
                 {
-                    context.Hub.Post(new SetAreaRequest(new SetAreaOptions(TestAreas.NewArea),
+                    context.Hub.Post(new SetAreaRequest(TestAreas.NewArea,
                         Controls.TextBox("Hello")
                             .WithId("HelloId")));
                     return Task.CompletedTask;
                 })
             )
-            .WithView(NamedArea, (_, _) =>
+            .WithView(NamedArea, _ =>
                 Controls.TextBox(NamedArea)
                     .WithId(NamedArea)
             )
             // this tests proper updating in the case of MVP
-            .WithView(UpdatingView, (_, _) => ModelViewPresenterTestCase())
-            // this tests proper updating in the case of MVP
-            .WithView(DataBoundView, (_, _) =>
-                Template.Bind(workspace.GetData<DataRecord>().First(),
+            .WithView(UpdatingView, _ => ModelViewPresenterTestCase())
+            // this tests proper updating in the case of MVVM
+            .WithView(DataBoundView, _ =>
+                Template.Bind(workspace.State.GetData<DataRecord>().First(),
                     record =>
                         Controls
                             .Menu(record.DisplayName)
@@ -63,7 +63,7 @@ public class TestLayoutPlugin(IMessageHub hub) : MessageHubPlugin(hub),
                             .WithId(DataBoundView)
                         )
             )
-            .WithInitialization(() => workspace.Initialized);
+            .WithInitialization(_ => workspace.Initialized);
 
 
     public override async Task StartAsync(CancellationToken cancellationToken)
@@ -83,7 +83,7 @@ public class TestLayoutPlugin(IMessageHub hub) : MessageHubPlugin(hub),
 
     public IMessageDelivery HandleMessage(IMessageDelivery<ChangeDataRecordRequest> request)
     {
-        workspace.Update(workspace.GetData<DataRecord>().First() with {DisplayName = NewString});
+        workspace.Update(workspace.State.GetData<DataRecord>().First() with {DisplayName = NewString});
         workspace.Commit();
         return request.Processed();
     }

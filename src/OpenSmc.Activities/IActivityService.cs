@@ -12,4 +12,5 @@ public interface IActivityService : ILogger
     bool HasWarnings();
     void AddSubLog(ActivityLog subLog);
     ActivityLog Finish();
+    ActivityLog GetCurrentActivityLog();
 }

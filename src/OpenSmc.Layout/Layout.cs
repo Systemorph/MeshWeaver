@@ -1,4 +1,5 @@
 ﻿using System.Text.Json.Serialization;
+using OpenSmc.Data;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Layout;
@@ -25,34 +26,28 @@ public record OpenModalDialogEvent(object View, Func<ModalDialogOptions, ModalDi
 public record CloseModalDialogEvent;
 
 
-public record SetAreaRequest : IRequest<AreaChangedEvent>, IRequestWithArea
+public record SetAreaRequest(string Area) : IRequest<LayoutArea>
 {
-    public SetAreaRequest(string area, string Path)
+    public SetAreaRequest(string Area, string Path)
+    :this(Area)
     {
         this.Path = Path;
-        Options = new(area);
     }
 
-    public string Area => Options.Area;
 
     public string Path { get; init; }
 
-    public SetAreaRequest(SetAreaOptions Options, object View)
+    public SetAreaRequest(string Area, object View)
+    :this(Area)
     {
         this.View = View;
-        this.Options = Options;
     }
 
-    public SetAreaRequest()
-    {
-    }
 
-    public SetAreaOptions Options { get; init; }
-
-    public SetAreaRequest(SetAreaOptions Options, ViewDefinition ViewDefinition)
+    public SetAreaRequest(string Area, ViewDefinition ViewDefinition)
+    :this(Area)
     {
         this.ViewDefinition = ViewDefinition;
-        this.Options = Options;
     }
 
     [JsonIgnore]
@@ -63,54 +58,22 @@ public record SetAreaRequest : IRequest<AreaChangedEvent>, IRequestWithArea
     public IMessageDelivery ForwardedRequest { get; init; }
 }
 
-[method: Newtonsoft.Json.JsonConstructor]
-public record AreaChangedEvent(
-    string Area,
-    object View,
-    object Options,
-    IReadOnlyCollection<ViewDependency> Dependencies)
-{
-    public AreaChangedEvent(string area, object view)
-        : this(area, view, null, null)
-    {
-    }
-    public AreaChangedEvent(string area, object view, object Options)
-        : this(area, view, Options, null)
-    {
-    }
-}
 
-public record ViewDependency(string ScopeId, string Property);
-
-public interface IRequestWithArea
-{
-    string Area { get; }
-}
-public record RefreshRequest(string Area = "") : IRequest<AreaChangedEvent>, IRequestWithArea
+public record RefreshRequest(string Area = "") : IRequest<RefreshResponse>
 {
     // TODO SMCv2: consider making this Dictionary<string, object> (2023-10-18, Andrei Sirotenko)
     public object Options { get; init; }
-    public string Path { get; init; }
-}
-public record SetAreaOptions(string Area)
-{
-    public object AreaViewOptions { get; init; }
-
 }
 
-public record UiControlAddress(string Id, object Host) : IHostedAddress;
+public record RefreshResponse(EntityReference Reference);
 
-public delegate Task<ViewElementWithView> ViewDefinition(SetAreaOptions options);
-public delegate object SyncViewDefinition();
 
-public abstract record ViewElement(SetAreaOptions Options)
-{
-    public string Area => Options.Area;
-}
+public delegate object ViewDefinition(RefreshRequest request);
 
-public record ViewElementWithViewDefinition(ViewDefinition ViewDefinition, SetAreaOptions Options) : ViewElement(Options);
-public record ViewElementWithView(object View, SetAreaOptions Options) : ViewElement(Options);
-public record ViewElementWithPath(string Path, SetAreaOptions Options) : ViewElement(Options);
+public abstract record ViewElement(string Area);
+
+public record ViewElementWithViewDefinition(string Area, ViewDefinition ViewDefinition) : ViewElement(Area);
+public record ViewElementWithView(string Area, object View) : ViewElement(Area);
 
 
 

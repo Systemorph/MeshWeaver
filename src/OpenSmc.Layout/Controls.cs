@@ -38,9 +38,6 @@ public static class Controls
 
     public static RedirectControl Redirect(object message, object address, object area) => new(message, address, area);
     public static RedirectControl Redirect(RefreshRequest message, object address) => new(message, address, message.Area);
-    public static RemoteViewControl RemoteView(object message, object address, string area) => new(message, address, area);
-    public static RemoteViewControl RemoteView(RefreshRequest message, object address) => new(message, address, message.Area);
-    public static RemoteViewControl RemoteView(ViewDefinition viewDefinition, SetAreaOptions options) => new(viewDefinition, options);
     public static Composition.LayoutStackControl ApplicationWindow() => Stack().WithSkin(Skin.MainWindow); 
 
     public static Composition.LayoutStackControl SideMenu() => Stack().WithSkin(Skin.SideMenu);

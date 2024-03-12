@@ -1,4 +1,6 @@
 ﻿using System.Collections.Immutable;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using OpenSmc.Collections;
 
 namespace OpenSmc.Messaging;
@@ -6,7 +8,7 @@ namespace OpenSmc.Messaging;
 
 public record RouteConfiguration(IMessageHub Hub)
 {
-
+    private readonly ILogger logger = Hub.ServiceProvider.GetRequiredService<ILogger<RouteConfiguration>>();
 
     internal ImmutableList<AsyncDelivery> Handlers { get; init; } = ImmutableList<AsyncDelivery>.Empty;
 
@@ -35,6 +37,9 @@ public record RouteConfiguration(IMessageHub Hub)
                 if (routedAddress == null)
                     return delivery;
                 // TODO: should we take care of result from handler somehow?
+                logger.LogDebug("Forwarding delivery {id} of type {type} from {sender} with original target {target} to routed address {routedAddress}", delivery.Id, delivery.Message.GetType().Name
+                ,delivery.Sender, delivery.Target, routedAddress);
+
                 return await handler(routedAddress, delivery, cancellationToken);
             }
             ),
@@ -53,11 +58,15 @@ public record RouteConfiguration(IMessageHub Hub)
                 if (!delivery.Sender.Equals(Hub.Address))
                     RoutedMessageAddresses.GetOrAdd(mappedAddress, _ => new()).Add(delivery.Sender);
                 var forwardedDelivery = Hub.Post(delivery.Message, o => o.WithProperties(delivery.Properties).WithTarget(mappedAddress));
-
+                logger.LogDebug("Forwarding delivery {id}  of type {type} from {sender} with original target {target} to mapped address {routedAddress}", delivery.Id, delivery.Message.GetType().Name, delivery.Sender, delivery.Target, mappedAddress);
                 if (delivery.Message is IRequest)
                     Hub.RegisterCallback(forwardedDelivery,
-                        response => Hub.Post(response.Message,
-                            o => o.WithProperties(response.Properties).ResponseFor(delivery)));
+                        response =>
+                        {
+                            logger.LogDebug("Forwarding response {id} of type {type} from {sender} with original target {target} to original sender {originalSender}", response.Id, delivery.Message.GetType().Name, response.Sender, response.Target, delivery.Sender);
+                            return Hub.Post(response.Message,
+                                o => o.WithProperties(response.Properties).ResponseFor(delivery));
+                        });
                 return Task.FromResult(delivery.Forwarded());
             },
             filter);

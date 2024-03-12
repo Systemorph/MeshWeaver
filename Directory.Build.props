@@ -8,8 +8,8 @@
   </PropertyGroup>
   <PropertyGroup>
     <NoWarn>649;CA2255;$(NoWarn)</NoWarn>
+    <DefineConstants Condition=" '$(CIRun)' == 'true' ">$(DefineConstants);CIRun</DefineConstants>
   </PropertyGroup>
-
   <ItemGroup>
     <filesToDelete Include="bin\**\*.*" /> 
   </ItemGroup>

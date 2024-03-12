@@ -24,10 +24,8 @@ public class ApplicationScopePlugin : MessageHubPlugin<ApplicationScopeState>,
                                         IMessageHandler<DisposeScopeRequest>,
                                         IMessageHandler<ScopePropertyChanged>,
                                         IMessageHandler<ScopePropertyChangedEvent>,
-                                        IMessageHandler<GetRequest<IApplicationScope>>,
-
-IMessageHandler<SubscribeToEvaluationRequest>,
-    IMessageHandler<UnsubscribeFromEvaluationRequest>
+                                        IMessageHandler<SubscribeToEvaluationRequest>,
+                                        IMessageHandler<UnsubscribeFromEvaluationRequest>
 
 {
     [Inject] private ILogger<ApplicationScopePlugin> logger;
@@ -342,11 +340,6 @@ IMessageHandler<SubscribeToEvaluationRequest>,
         return request.Processed();
     }
 
-    IMessageDelivery IMessageHandler<GetRequest<IApplicationScope>>.HandleMessage(IMessageDelivery<GetRequest<IApplicationScope>> request)
-    {
-        Hub.Post(applicationScope, o => o.ResponseFor(request));
-        return request.Processed();
-    }
 
     IMessageDelivery IMessageHandler<DisposeScopeRequest>.HandleMessage(IMessageDelivery<DisposeScopeRequest> request)
     {
