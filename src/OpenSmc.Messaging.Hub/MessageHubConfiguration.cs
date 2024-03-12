@@ -71,7 +71,7 @@ public record MessageHubConfiguration
 
 
     internal Func<RouteConfiguration, RouteConfiguration> ForwardConfigurationBuilder { get; init; }
-    public ImmutableList<Func<IMessageHub, CancellationToken, Task<IMessageHubPlugin>>> PluginFactories { get; init; } = ImmutableList<Func<IMessageHub, CancellationToken, Task<IMessageHubPlugin>>>.Empty;
+    internal ImmutableList<(Type Type,Func<IMessageHub,IMessageHubPlugin> Factory)> PluginFactories { get; init; } = ImmutableList<(Type Type, Func<IMessageHub, IMessageHubPlugin> Factory)>.Empty;
 
 
     public MessageHubConfiguration WithServices(Func<IServiceCollection, IServiceCollection> configuration)

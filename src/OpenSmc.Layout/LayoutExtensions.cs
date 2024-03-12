@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Application.Scope;
+using OpenSmc.Data;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
@@ -10,10 +11,8 @@ namespace OpenSmc.Layout;
 public static class LayoutExtensions
 {
 
-    public static MessageHubConfiguration AddLayout(this MessageHubConfiguration conf,
-                                                     Func<LayoutDefinition, LayoutDefinition> layoutDefinition = null)
+    public static MessageHubConfiguration AddLayout(this MessageHubConfiguration conf, Func<LayoutDefinition, LayoutDefinition> layoutDefinition)
     {
-        var mainLayoutAddress = new UiControlAddress("Main", conf.Address);
         return conf
             .WithDeferral(d => d.Message is RefreshRequest or SetAreaRequest)
             .WithServices(
@@ -21,9 +20,11 @@ public static class LayoutExtensions
                 .AddAllControlHubs()
             )
             .AddApplicationScope()
-            .RouteLayoutMessages(mainLayoutAddress)
+            .AddData(data => data.FromConfigurableDataSource("Layout", dataSource => dataSource
+                //.WithType<LayoutArea>(type => type.WithQuery())
+            ))
             .AddLayoutTypes()
-            .WithHostedHub(mainLayoutAddress, c => MainLayoutConfiguration(c, layoutDefinition))
+            .AddPlugin<LayoutPlugin>(plugin => plugin.WithFactory(() => new LayoutPlugin(layoutDefinition.Invoke(new LayoutDefinition(plugin.Hub)))))
             ;
     }
 
@@ -31,8 +32,7 @@ public static class LayoutExtensions
         => configuration
             .WithRoutes(forward => forward
                 .RouteMessage<RefreshRequest>(_ => mainLayoutAddress)
-                .RouteMessage<SetAreaRequest>(_ => mainLayoutAddress)
-                .RouteMessage<AreaChangedEvent>(_ => MessageTargets.Subscribers)
+                //.RouteMessage<SetAreaRequest>(_ => mainLayoutAddress) // // TODO V10: Not sure yet if we need this... (04.03.2024, Roland Bürgi)
             );
 
 
@@ -40,13 +40,13 @@ public static class LayoutExtensions
         => configuration
             .WithTypes(typeof(UiControl).Assembly.GetTypes()
                 .Where(t => typeof(IUiControl).IsAssignableFrom(t) && !t.IsAbstract))
-            .WithTypes(typeof(MessageAndAddress), typeof(UiControlAddress))
+            .WithTypes(typeof(MessageAndAddress))
         ;
 
     private static MessageHubConfiguration MainLayoutConfiguration(MessageHubConfiguration configuration,
         Func<LayoutDefinition, LayoutDefinition> layoutDefinition)
     {
-        return configuration.AddPlugin(hub => CreateLayoutPlugin(hub, layoutDefinition));
+        return configuration.AddPlugin<LayoutPlugin>(plugin => plugin.WithFactory(() => CreateLayoutPlugin(plugin.Hub, layoutDefinition)));
     }
 
 
@@ -62,15 +62,6 @@ public static class LayoutExtensions
 
         return new LayoutPlugin(ld);
     }
-
-
-    public static object FindLayoutHost(object address)
-    {
-        if (address is UiControlAddress uiControlAddress)
-            return FindLayoutHost(uiControlAddress.Host);
-        return address;
-    }
-
 
 
 

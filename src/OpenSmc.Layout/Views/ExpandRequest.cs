@@ -2,7 +2,7 @@
 
 namespace OpenSmc.Layout.Views;
 
-public record ExpandRequest(string Area) :  IRequest<AreaChangedEvent>
+public record ExpandRequest(string Area) :  IRequest<LayoutArea>
 {
     public object Payload { get; init; }
 }

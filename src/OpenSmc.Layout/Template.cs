@@ -1,9 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Linq.Expressions;
-using Microsoft.Extensions.DependencyInjection;
-using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.DataBinding;
-using OpenSmc.Serialization;
 
 namespace OpenSmc.Layout;
 
@@ -47,15 +44,6 @@ public static class Template
                       ? new ItemTemplateControl(view, data)
                       : new ItemTemplateControl(view, new Binding("")){ DataContext = data };
 
-        if (types.Any())
-            ret = ret
-                .WithBuildAction((c, sp) =>
-                                 {
-                                     var eventsRegistry = sp.GetService<ITypeRegistry>();
-                                     foreach (var type in types)
-                                         eventsRegistry.WithType(type);
-                                     return c;
-                                 });
         return ret;
 
     }
@@ -64,7 +52,7 @@ public static class Template
 }
 
 //result into ui control with DataBinding set
-public record ItemTemplateControl : UiControl<ItemTemplateControl, GenericUiControlPlugin<ItemTemplateControl>>, IObjectWithUiControl
+public record ItemTemplateControl : UiControl<ItemTemplateControl>, IObjectWithUiControl
 {
     public ItemTemplateControl(object view, object data)
         : base(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
@@ -80,7 +68,7 @@ public record ItemTemplateControl : UiControl<ItemTemplateControl, GenericUiCont
             stackControl = stackControl with
                            {
                                Areas = stackControl.ViewElements
-                                                   .Select(x => new AreaChangedEvent(x.Area, x is ViewElementWithView { View: not null } d ? d.View : null))
+                                                   .Select(x => new LayoutArea(x.Area, uiControlService.GetUiControl(x is ViewElementWithView { View: not null } d ? d.View : null)))
                                                    .ToImmutableList()
                            };
             return uiControlService.GetUiControl(stackControl);

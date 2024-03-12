@@ -1,7 +1,10 @@
-﻿using OpenSmc.Data;
+﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
+using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Activities;
 using Xunit;
 using Xunit.Abstractions;
@@ -13,7 +16,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 {
     public record MyData(string Id, string Text);
 
-    private readonly Dictionary<string, MyData> storage = new();
+    private ImmutableDictionary<object, object> storage = ImmutableDictionary<object, object>.Empty;
     readonly MyData[] initialData =
     [
         new ("1", "A"),
@@ -29,21 +32,27 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
                         .WithKey(instance => instance.Id)
                         .WithInitialData(InitializeMyData)
                         .WithUpdate(SaveMyData)
-                        .WithDelete(DeleteMyData)
                     )
                 )
             )
             .AddPlugin<ImportPlugin>();
     }
 
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureClient(configuration)
+            .AddData(data => data.FromHub(new HostAddress()));
+    }
+
     [Fact]
     public async Task InitializeTest()
     {
-        var client = GetClient();
-        var response = await client.AwaitResponse(new GetManyRequest<MyData>(), o => o.WithTarget(new HostAddress()));
-        var expected = new GetManyResponse<MyData>(initialData.Length, initialData);
-        response.Message.Should().BeEquivalentTo(expected);
+        var workspace = GetWorkspace(GetHost());
+        var response = await workspace.GetObservable<MyData>().FirstOrDefaultAsync();
+        response.Should().BeEquivalentTo(initialData);
     }
+
+    private IWorkspace GetWorkspace(IMessageHub hub) => hub.ServiceProvider.GetRequiredService<IWorkspace>();
 
     [Fact]
     public async Task Update()
@@ -60,8 +69,6 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var updateResponse = await client.AwaitResponse(new UpdateDataRequest(updateItems), o => o.WithTarget(new HostAddress()));
 
-        await Task.Delay(300);
-
         // asserts
         updateResponse.Message.Should().BeOfType<DataChangeResponse>();
         var expectedItems = new MyData[]
@@ -70,11 +77,13 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             new("2", "B"),
             new("3", "CCC")
         };
+
+        var workspace = GetWorkspace(client);
+        var data = await workspace.GetObservable<MyData>().FirstOrDefaultAsync(x => x?.Count == 3);
+
+        data.Should().BeEquivalentTo(expectedItems);
         storage.Values.Should().BeEquivalentTo(expectedItems);
         
-        var response = await client.AwaitResponse(new GetManyRequest<MyData>(), o => o.WithTarget(new HostAddress()));
-        var finalExpected = new GetManyResponse<MyData>(expectedItems.Length, expectedItems);
-        response.Message.Should().BeEquivalentTo(finalExpected);
     }
 
     [Fact]
@@ -101,7 +110,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         storage.Values.Should().BeEquivalentTo(expectedItems);
         
         var response = await client.AwaitResponse(new GetManyRequest<MyData>(), o => o.WithTarget(new HostAddress()));
-        response.Message.Should().BeEquivalentTo(new GetManyResponse<MyData>(expectedItems.Length, expectedItems));
+        response.Message.Should().BeEquivalentTo(new GetResponse<MyData>(expectedItems.Length, expectedItems));
     }
 
 
@@ -114,7 +123,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         IMessageDelivery IMessageHandler<LocalImportRequest>.HandleMessage(IMessageDelivery<LocalImportRequest> request)
         {
             // TODO V10: Mise-en-place must be been done ==> data plugin context
-            var someData = workspace.GetData<MyData>();
+            var someData = workspace.State.GetData<MyData>();
             var myInstance = someData.First();
             myInstance = myInstance with { Text = TextChange };
             workspace.Update(myInstance);
@@ -132,30 +141,19 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var response = await client.AwaitResponse(new GetManyRequest<MyData>(), o => o.WithTarget(new HostAddress()));
         response.Message.Items.Should().Contain(i => i.Text == TextChange);
         await Task.Delay(100);
-        storage.Values.Should().Contain(i => i.Text == TextChange);
+        storage.Values.Should().Contain(i => (i as MyData).Text == TextChange);
     }
 
     private Task<IEnumerable<MyData>> InitializeMyData(CancellationToken cancellationToken)
     {
-        foreach (var data in initialData)
-            storage[data.Id] = data;
+        storage = initialData.ToImmutableDictionary(x => (object)x.Id, x => (object)x);
         return Task.FromResult<IEnumerable<MyData>>(initialData);
     }
     
-    private void SaveMyData(IEnumerable<MyData> items)
+    private void SaveMyData(InstancesInCollection instancesInCollection)
     {
-        foreach (var data in items)
-        {
-            storage[data.Id] = data;
-        }
+        storage = instancesInCollection.Instances;
     }
 
-    private void DeleteMyData(IEnumerable<object> instances)
-    {
-        foreach (var instance in instances.OfType<MyData>())
-        {
-            storage.Remove(instance.Id);
-        }
-    }
 
 }
