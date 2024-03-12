@@ -34,7 +34,7 @@ public class PivotTest : TestBase //HubTestBase
 
     public PivotTest(ITestOutputHelper output) : base(output)
     {
-        Services.RegisterScopesAndArithmetics();
+        Services.RegisterScopes();
     }
 
     public override void Initialize()
