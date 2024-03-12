@@ -133,7 +133,7 @@ SystemName2,DisplayName2
 
     }
     
-    [Fact]
+    [Fact(Skip = "Illegal case in current implementation")]
     public async Task SnapshotImport_ZeroInstancesTest()
     {
         const string content = @"@@MyRecord

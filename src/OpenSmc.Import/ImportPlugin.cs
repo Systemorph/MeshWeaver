@@ -1,6 +1,4 @@
-﻿using System.Collections;
-using System.ComponentModel.DataAnnotations;
-using System.Text;
+﻿using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
@@ -58,6 +56,9 @@ public class ImportPlugin : MessageHubPlugin<ImportState>,
             else
                 workspace.Rollback();
 
+            if (format.SaveLog)
+                workspace.Update(activityService.GetCurrentActivityLog());
+
             //activityService.Finish();
 
         }
@@ -113,39 +114,5 @@ public class ImportPlugin : MessageHubPlugin<ImportState>,
         return (dataSet, importFormat);
     }
 
-
-
     public static string ValidationStageFailed = "Validation stage has failed.";
-
-
-
-    // TODO V10: Is this used? Where? (26.02.2024, Roland Bürgi)
-    private ICollection CreateAndValidate<T>(IDataSet dataSet, IDataTable table,  ImportFormat format, Func<IDataSet, IDataRow, int, IEnumerable<T>> initFunc)
-    {
-        var hasError = true;
-        var ret = new List<T>();
-
-        for (var i = 0; i < table.Rows.Count; i++)
-        {
-            var row = table.Rows[i];
-            if (row.ItemArray.Any(y => y != null))
-            {
-                foreach (var item in initFunc(dataSet, row, i) ?? Enumerable.Empty<T>())
-                {
-                    if (item == null)
-                        continue;
-                    foreach (var validation in format.Validations)
-                        hasError = validation(item, new ValidationContext(item, Hub.ServiceProvider, State.ValidationCache)) && hasError;
-                    ret.Add(item);
-                }
-
-            }
-        }
-
-        if (!hasError)
-            activityService.LogError(string.Format(ValidationStageFailed, typeof(T).FullName));
-
-        return ret;
-    }
-
 }

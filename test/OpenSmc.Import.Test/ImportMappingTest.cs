@@ -172,7 +172,7 @@ Record3SystemName,Record3DisplayName";
 
         ret.Message.Items.Should().HaveCount(2);
 
-        var resRecord = ret.Message.Items.Last();
+        var resRecord = ret.Message.Items.First(x => x.DisplayName == "test");
 
         resRecord.Should().NotBeNull();
         resRecord.DisplayName.Should().Contain("test");
