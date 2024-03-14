@@ -1,0 +1,44 @@
+﻿{
+  Data: {
+    DataSets: [
+      {
+        Data: [
+          1.0,
+          2.0,
+          3.0,
+          4.0
+        ],
+        Label: First
+      }
+    ],
+    Labels: [
+      One,
+      Two,
+      Three,
+      Four
+    ]
+  },
+  Options: {
+    Plugins: {
+      Legend: {
+        Display: true
+      },
+      Title: {
+        Display: true,
+        Position: left,
+        Font: {
+          Family: Ovеrpass,
+          Size: 22,
+          Weight: 600,
+          LineHeight: 24px
+        },
+        Text: My First Chart
+      },
+      ColorSchemes: {
+        Scheme: {
+          Palette: brewer.PastelOne9
+        }
+      }
+    }
+  }
+}

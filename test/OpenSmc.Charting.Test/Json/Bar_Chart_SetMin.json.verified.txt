@@ -1,0 +1,38 @@
+﻿{
+  Data: {
+    DataSets: [
+      {
+        Data: [
+          1.0,
+          2.0,
+          3.0,
+          4.0
+        ],
+        Label: First
+      }
+    ],
+    Labels: [
+      One,
+      Two,
+      Three,
+      Four
+    ]
+  },
+  Options: {
+    Scales: {
+      y: {
+        Min: -1.0
+      }
+    },
+    Plugins: {
+      Legend: {
+        Display: true
+      },
+      ColorSchemes: {
+        Scheme: {
+          Palette: brewer.PastelOne9
+        }
+      }
+    }
+  }
+}

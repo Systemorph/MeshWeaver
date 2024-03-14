@@ -1,0 +1,55 @@
+﻿{
+  Type: line,
+  Data: {
+    DataSets: [
+      {
+        Tension: 0.3,
+        Data: [
+          -1.0,
+          4.0,
+          3.0,
+          2.0
+        ],
+        Label: First
+      },
+      {
+        Tension: 0.4,
+        Data: [
+          4.0,
+          5.0,
+          6.0,
+          3.0
+        ],
+        Label: Second
+      }
+    ],
+    Labels: [
+      One,
+      two,
+      three,
+      four
+    ]
+  },
+  Options: {
+    Plugins: {
+      Legend: {
+        Display: true
+      },
+      Title: {
+        Display: true,
+        Font: {
+          Family: Ovеrpass,
+          Size: 22,
+          Weight: 600,
+          LineHeight: 24px
+        },
+        Text: Line Chart
+      },
+      ColorSchemes: {
+        Scheme: {
+          Palette: brewer.PastelOne9
+        }
+      }
+    }
+  }
+}
