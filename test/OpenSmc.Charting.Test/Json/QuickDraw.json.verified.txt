@@ -1,0 +1,45 @@
+﻿{
+  Data: {
+    DataSets: [
+      {
+        Data: [
+          -1.0,
+          4.0,
+          3.0,
+          2.0
+        ]
+      },
+      {
+        Data: [
+          4.0,
+          5.0,
+          6.0,
+          3.0
+        ]
+      },
+      {
+        Data: [
+          1.0,
+          4.0,
+          3.0,
+          2.0
+        ]
+      }
+    ],
+    Labels: [
+      1,
+      2,
+      3,
+      4
+    ]
+  },
+  Options: {
+    Plugins: {
+      ColorSchemes: {
+        Scheme: {
+          Palette: brewer.PastelOne9
+        }
+      }
+    }
+  }
+}
