@@ -1,0 +1,71 @@
+﻿{
+  Type: scatter,
+  Data: {
+    DataSets: [
+      {
+        Data: [
+          {
+            X: 1.0,
+            Y: 4.0
+          },
+          {
+            X: 4.0,
+            Y: 1.0
+          },
+          {
+            X: 3.0,
+            Y: 2.0
+          },
+          {
+            X: 2.0,
+            Y: 3.0
+          }
+        ],
+        Label: First
+      },
+      {
+        Data: [
+          {
+            X: 10.0,
+            Y: 4.0
+          },
+          {
+            X: 2.0,
+            Y: 1.0
+          },
+          {
+            X: 7.0,
+            Y: 2.0
+          },
+          {
+            X: 1.0,
+            Y: 3.0
+          }
+        ],
+        Label: Second
+      }
+    ]
+  },
+  Options: {
+    Plugins: {
+      Legend: {
+        Display: true
+      },
+      Title: {
+        Display: true,
+        Font: {
+          Family: Ovеrpass,
+          Size: 22,
+          Weight: 600,
+          LineHeight: 24px
+        },
+        Text: Scatter Chart
+      },
+      ColorSchemes: {
+        Scheme: {
+          Palette: brewer.DarkTwo8
+        }
+      }
+    }
+  }
+}
