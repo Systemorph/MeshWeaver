@@ -1,0 +1,54 @@
+﻿{
+  Data: {
+    DataSets: [
+      {
+        XAxisID: x1,
+        Data: [
+          5.2,
+          11.0
+        ],
+        Label: Italy,
+        Type: bar
+      },
+      {
+        XAxisID: x1,
+        Data: [
+          21.1,
+          null
+        ],
+        Label: Russia,
+        Type: bar
+      }
+    ],
+    Labels: [
+      1,
+      2
+    ]
+  },
+  Options: {
+    Responsive: true,
+    Scales: {
+      x1: {
+        Labels: [
+          Alessandro,
+          Paolo
+        ],
+        Display: true,
+        Stacked: false
+      },
+      y: {
+        Stacked: false
+      }
+    },
+    Plugins: {
+      Legend: {
+        Display: true
+      },
+      ColorSchemes: {
+        Scheme: {
+          Palette: brewer.PastelOne9
+        }
+      }
+    }
+  }
+}
