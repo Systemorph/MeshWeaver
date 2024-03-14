@@ -3,7 +3,7 @@ using System.Collections.Immutable;
 
 namespace OpenSmc.Data;
 
-public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace)
+public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace) : IAsyncDisposable
 {
     internal ImmutableDictionary<object,IDataSource> DataSources { get; private set; } = ImmutableDictionary<object, IDataSource>.Empty;
 
@@ -42,5 +42,13 @@ public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace)
     {
         foreach (var dataSource in DataSources.Values)
             dataSource.Update(ws);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        foreach (var dataSource in DataSources.Values)
+        {
+            await dataSource.DisposeAsync();
+        }
     }
 }

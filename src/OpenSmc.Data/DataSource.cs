@@ -5,7 +5,7 @@ using OpenSmc.Reflection;
 
 namespace OpenSmc.Data;
 
-public interface IDataSource : IDisposable
+public interface IDataSource : IAsyncDisposable
 {
     IEnumerable<ITypeSource> TypeSources { get; }
     IEnumerable<Type> MappedTypes { get; }
@@ -13,7 +13,6 @@ public interface IDataSource : IDisposable
     IReadOnlyCollection<DataChangeRequest> Change(DataChangeRequest request);
     Task<WorkspaceState> InitializeAsync(CancellationToken cancellationToken);
     void Update(WorkspaceState state);
-    object MapInstanceToPartition(object instance);
 }
 
 public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDataSource, IAsyncDisposable where TDataSource : DataSource<TDataSource>
@@ -95,13 +94,10 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
     }
 
 
-    public virtual void Dispose()
-    {
-    }
 
-    public async ValueTask DisposeAsync()
+    public virtual ValueTask DisposeAsync()
     {
-        if (Hub != null) await Hub.DisposeAsync();
+        return default;
     }
 }
 

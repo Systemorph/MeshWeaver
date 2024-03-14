@@ -41,4 +41,10 @@ public abstract record DataSourceWithStorage<TDataSource>(object Id, IMessageHub
     {
         persistenceHub.Schedule(c => UpdateAsync(workspace, c));
     }
+
+    public override async ValueTask DisposeAsync()
+    {
+        await persistenceHub.DisposeAsync();
+        await base.DisposeAsync();
+    }
 }

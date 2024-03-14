@@ -7,11 +7,15 @@ namespace OpenSmc.Messaging;
 public record ShutdownRequest(MessageHubRunLevel RunLevel, long Version);
 
 public enum MessageHubRunLevel{Starting, Started, DisposeHostedHubs, HostedHubsDisposed, ShutDown, Dead }
+public record ExecutionRequest(Func<CancellationToken, Task> Action);
 
 public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub<TAddress>, IMessageHandler<ShutdownRequest>
 {
     public override TAddress Address => (TAddress)MessageService.Address;
-    void IMessageHub.Schedule(Func<CancellationToken, Task> action) => MessageService.Schedule(action);
+
+
+    void IMessageHub.Schedule(Func<CancellationToken, Task> action) => Post(new ExecutionRequest(action));
+    private void Schedule(Func<CancellationToken, Task> action) => Post(new ExecutionRequest(action));
     public IServiceProvider ServiceProvider { get; }
     private readonly ConcurrentDictionary<string, List<AsyncDelivery>> callbacks = new();
 
@@ -19,7 +23,6 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
     public MessageHubConfiguration Configuration { get; }
     private readonly HostedHubsCollection hostedHubs;
     private readonly IDisposable deferral;
-    private readonly MessageHubConnections connections;
     public long Version { get; private set; }
     public MessageHubRunLevel RunLevel { get; private set; }
 
@@ -27,7 +30,7 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         MessageHubConfiguration configuration, IMessageHub parentHub) : base(serviceProvider)
     {
 
-        deferral = MessageService.Defer(_ => true);
+        deferral = MessageService.Defer(d => d.Message is not ExecutionRequest);
         MessageService.Initialize(DeliverMessageAsync);
 
         this.hostedHubs = hostedHubs;
@@ -35,25 +38,24 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         logger = serviceProvider.GetRequiredService<ILogger<MessageHub<TAddress>>>();
 
         Configuration = configuration;
-        connections = serviceProvider.GetRequiredService<MessageHubConnections>();
 
         disposeActions.AddRange(configuration.DisposeActions);
 
         var forwardConfig =
             (configuration.ForwardConfigurationBuilder ?? (x => x)).Invoke(new RouteConfiguration(this));
 
-        AddPlugin(new SubscribersPlugin(this));
+        //AddPlugin(new SubscribersPlugin(this));
         AddPlugin(new RoutePlugin(this, forwardConfig, parentHub));
 
 
         Register(HandleCallbacks);
-
+        Register(ExecuteRequest);
 
         foreach (var messageHandler in configuration.MessageHandlers)
             Register(messageHandler.MessageType, (d,c) => messageHandler.AsyncDelivery.Invoke(this, d,c));
 
 
-        MessageService.Schedule(StartAsync);
+        Schedule(StartAsync);
         logger.LogInformation("Message hub {address} initialized", Address);
 
     }
@@ -83,7 +85,6 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
             await buildup(this, cancellationToken);
 
         deferral.Dispose();
-        MessageService.Start();
         RunLevel = MessageHubRunLevel.Started;
     }
 
@@ -148,6 +149,14 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
 
         return tcs.Task;
     }
+
+    private async Task<IMessageDelivery> ExecuteRequest(IMessageDelivery delivery, CancellationToken cancellationToken)
+    {
+        if (delivery.Message is not ExecutionRequest er)
+            return delivery;
+        await er.Action.Invoke(cancellationToken);
+        return delivery.Processed();
+    }
     private async Task<IMessageDelivery> HandleCallbacks(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         if (!delivery.Properties.TryGetValue(PostOptions.RequestId, out var requestId) ||
@@ -160,7 +169,6 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         return delivery;
     }
 
-    public Task<bool> FlushAsync() => MessageService.FlushAsync();
 
 
 
@@ -245,7 +253,7 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
             disposingTaskCompletionSource = new(new CancellationTokenSource(ShutDownTimeout).Token);
         }
 
-        Post(new DisconnectHubRequest(), o => o.WithTarget(MessageTargets.Subscriptions));
+        //Post(new DisconnectHubRequest(), o => o.WithTarget(MessageTargets.Subscriptions));
         Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
     }
 
@@ -330,6 +338,8 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
 
     public void AddPlugin(IMessageHubPlugin plugin)
     {
+        logger.LogDebug("Adding plugin {plugin} in Address {address}", plugin.GetType(), Address);
+
         var def = MessageService.Defer(plugin.IsDeferred);
         Register(async (d,c) =>
         { 
@@ -337,11 +347,16 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
             return d;
         });
         WithDisposeAction(_ => plugin.DisposeAsync());
-        MessageService.Schedule(async c =>
+        Schedule(async c =>
         {
+            logger.LogDebug("Initializing plugin {plugin} in Address {address}", plugin.GetType(), Address);
             await plugin.StartAsync(c);
 #pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
-            plugin.Initialized.ContinueWith(_ => def.Dispose(), c);
+            plugin.Initialized.ContinueWith(_ =>
+            {
+                logger.LogDebug("Finished initializing plugin {plugin} in Address {address}", plugin.GetType(), Address);
+                def.Dispose();
+            }, c);
 #pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
         });
     }
@@ -355,6 +370,7 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
     public ILogger Logger => logger;
 
 }
+
 
 
 

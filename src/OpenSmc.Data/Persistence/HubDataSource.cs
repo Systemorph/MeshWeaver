@@ -87,10 +87,11 @@ public record HubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : 
 
     private const string Main = nameof(Main);
 
-    public override void Dispose()
+    public override ValueTask DisposeAsync()
     {
-        Hub.Post(new UnsubscribeDataRequest(Main));
-        base.Dispose();
+        // TODO V10: Cannot post from dispose ==> where to put? (12.03.2024, Roland Bürgi)
+        //Hub.Post(new UnsubscribeDataRequest(Main));
+        return base.DisposeAsync();
     }
 
     public void Rollback()

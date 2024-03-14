@@ -5,6 +5,7 @@ using System.Reactive.Subjects;
 using System.Text.Json.Nodes;
 using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using OpenSmc.Messaging;
 using OpenSmc.Serialization;
 
@@ -17,7 +18,6 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     IMessageHandler<SubscribeDataRequest>,
     IMessageHandler<UnsubscribeDataRequest>,
     IMessageHandler<PatchChangeRequest>
-
 {
     private readonly Subject<WorkspaceState> subject = new();
 
@@ -25,6 +25,7 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     public DataPlugin(IMessageHub hub) : base(hub)
     {
         serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
+        logger = hub.ServiceProvider.GetRequiredService<ILogger<DataPlugin>>();
         InitializeState(new WorkspaceState(hub, new EntityStore(ImmutableDictionary<string, InstancesInCollection>.Empty), ImmutableDictionary<Type, ITypeSource>.Empty));
         Stream = subject
             .StartWith(State)
@@ -41,23 +42,32 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
         => RequestChange(null, new DeleteDataRequest(instances.ToArray()));
 
 
-    //private Task initializeTask;
-    //public override Task Initialized => initializeTask;
-
+    private Task initializeTask;
+    public override Task Initialized => initializeTask;
+    private DataContext DataContext { get; set; }
     public override async Task StartAsync(CancellationToken cancellationToken)  // This loads the persisted state
     {
+        logger.LogDebug($"Starting data plugin at address {Address}");
         await base.StartAsync(cancellationToken);
 
-        var dataContext = Hub.GetDataConfiguration();
-        await InitializeAsync(cancellationToken, dataContext); 
+        DataContext = Hub.GetDataConfiguration();
+        await InitializeAsync(cancellationToken, DataContext); 
     }
 
-    private async Task InitializeAsync(CancellationToken cancellationToken, DataContext dataContext)
+
+    private Task InitializeAsync(CancellationToken cancellationToken, DataContext dataContext)
     {
-        var workspace = await dataContext.InitializeAsync(cancellationToken);
-        UpdateState(ws => ws.Merge(workspace) with { Version = Hub.Version });
+        logger.LogDebug($"Starting data plugin at address {Address}");
+        initializeTask = 
+            dataContext.InitializeAsync(cancellationToken)
+            .ContinueWith(t =>
+            {
+                logger.LogDebug("Initialized workspace in address {address}", Address);
+                UpdateState(ws => ws.Merge(t.Result) with { Version = Hub.Version });
+            }, cancellationToken);
         subject.OnNext(State);
         subject.DistinctUntilChanged().Subscribe(dataContext.Update);
+        return Task.CompletedTask;
     }
 
 
@@ -75,15 +85,8 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
         return request?.Processed();
     }
 
-
     IMessageDelivery IMessageHandler<DeleteDataRequest>.HandleMessage(IMessageDelivery<DeleteDataRequest> request)
         => RequestChange(request, request.Message);
-
-
-
-
-
-
 
     public override bool IsDeferred(IMessageDelivery delivery)
     {
@@ -92,7 +95,8 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
         if (delivery.Message is DataChangedEvent)
             return false;
         
-        return base.IsDeferred(delivery);
+        var ret = base.IsDeferred(delivery);
+        return ret;
     }
 
 
@@ -127,11 +131,14 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     private readonly ConcurrentDictionary<(object Address, string Id),IDisposable> subscriptions = new();
 
     private readonly ISerializationService serializationService;
+    private readonly ILogger<DataPlugin> logger;
+
+
     private IMessageDelivery StartSynchronization(IMessageDelivery<SubscribeDataRequest> request)
     {
         var key = (request.Message, request.Message.Id);
-        if (subscriptions.ContainsKey(key))
-            return request.Ignored();
+        if (subscriptions.TryRemove(key, out var existing))
+            existing.Dispose();
 
         subscriptions[key] = Stream
             .StartWith(State)
@@ -185,6 +192,17 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
         return request.Processed();
     }
 
+
+    public override async Task DisposeAsync()
+    {
+        foreach (var subscription in subscriptions.Values)
+        {
+            subscription.Dispose();
+        }
+
+        await DataContext.DisposeAsync();
+        await base.DisposeAsync();
+    }
 }
 
 public class DataSubscription<T> :IDisposable

@@ -11,7 +11,7 @@ public class MessageService : IMessageService
     private readonly ILogger<MessageService> logger;
     private bool isDisposing;
     private readonly BufferBlock<(IMessageDelivery Delivery, CancellationToken CancellationToken)> buffer = new();
-    private ActionBlock<(IMessageDelivery Delivery, CancellationToken CancellationToken)> deliveryAction;
+    private readonly ActionBlock<(IMessageDelivery Delivery, CancellationToken CancellationToken)> deliveryAction;
 
     private AsyncDelivery MessageHandler { get; set; }
 
@@ -20,35 +20,22 @@ public class MessageService : IMessageService
         MessageHandler = messageHandler;
     }
 
-    public void Schedule(Func<CancellationToken,Task> action) => topQueue.Schedule(action);
-    public Task<bool> FlushAsync() => topQueue.Flush();
     private readonly DeferralContainer deferralContainer;
 
-
-    private readonly ExecutionQueue topQueue;
 
     public MessageService(object address, ISerializationService serializationService, ILogger<MessageService> logger)
     {
         Address = address;
         this.serializationService = serializationService;
         this.logger = logger;
-        topQueue = new(logger);
-        topQueue.InstantiateActionBlock();
 
         deferralContainer = new DeferralContainer(NotifyAsync);
-    }
 
-    private bool isStarted;
-    public void Start()
-    {
-        if (isStarted)
-            return;
-        isStarted = true;
         deliveryAction = new(x =>
         {
             try
             {
-                return deferralContainer.DeliverAsync(x.Delivery,x.CancellationToken);
+                return deferralContainer.DeliverAsync(x.Delivery, x.CancellationToken);
             }
             catch (Exception e)
             {
@@ -57,7 +44,10 @@ public class MessageService : IMessageService
             }
         });
         buffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = true });
+
     }
+
+
 
 
     public object Address { get; }
@@ -75,12 +65,17 @@ public class MessageService : IMessageService
 
     private IMessageDelivery ScheduleNotify(IMessageDelivery delivery)
     {
+        if (isDisposing)
+            return delivery.Failed("Hub disposing");
+
         if (Address.Equals(delivery.Target))
             delivery = UnpackIfNecessary(delivery);
 
 
         // TODO V10: Here we need to inject the correct cancellation token. (19.02.2024, Roland Bürgi)
         var cancellationToken = CancellationToken.None;
+        logger.LogDebug("Buffering message {message} from sender {sender} in message service {address}", delivery.Message, delivery.Sender, delivery.Target);
+
         buffer.Post((delivery, cancellationToken));
         return delivery;
     }
@@ -107,14 +102,15 @@ public class MessageService : IMessageService
             return delivery;
         logger.LogDebug("Deserializing message {id} from sender {sender} to target {target}", delivery.Id, delivery.Sender, delivery.Target);
         var deserializedMessage = serializationService.Deserialize(rawJson.Content);
-        logger.LogDebug("Deserialized message {id} to Type {type}", delivery.Id, deserializedMessage.GetType().Name);
         return delivery.WithMessage(deserializedMessage);
     }
 
 
     private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
+        logger.LogDebug("Start processing {message} from {sender} in {address}", delivery.Message, delivery.Sender, Address);
         delivery = await MessageHandler.Invoke(delivery, cancellationToken);
+        logger.LogDebug("Finished processing {message} from {sender} in {address}", delivery.Message, delivery.Sender, Address);
         return delivery;
     }
 
@@ -140,23 +136,20 @@ public class MessageService : IMessageService
     }
 
 
+    private readonly object locker = new();
     public async ValueTask DisposeAsync()
     {
-        if (isDisposing)
-            return;
-        isDisposing = true;
-        do
+        lock (locker)
         {
-            await topQueue.Flush();
-        } while (topQueue.NeedsFlush);
+            if (isDisposing)
+                return;
+            isDisposing = true;
+        }
+
 
 
         buffer.Complete();
         await deliveryAction.Completion;
-
-
-        await topQueue.DisposeAsync();
-
         await deferralContainer.DisposeAsync();
     }
 }

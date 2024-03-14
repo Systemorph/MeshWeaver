@@ -9,9 +9,4 @@ public interface IMessageService : IAsyncDisposable
 
     void Initialize(AsyncDelivery messageHandler);
 
-    void Schedule(Func<CancellationToken, Task> action);
-
-    Task<bool> FlushAsync();
-
-    void Start();
 }
