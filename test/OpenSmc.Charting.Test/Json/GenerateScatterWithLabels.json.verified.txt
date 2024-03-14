@@ -1,0 +1,89 @@
+﻿{
+  Type: scatter,
+  Data: {
+    DataSets: [
+      {
+        Data: [
+          {
+            X: 0.0,
+            Y: 0.0
+          },
+          {
+            X: 1.0,
+            Y: 0.0
+          },
+          {
+            X: 2.0,
+            Y: 0.0
+          },
+          {
+            X: 3.0,
+            Y: 0.0
+          },
+          {
+            X: 4.0,
+            Y: 0.0
+          },
+          {
+            X: 0.0,
+            Y: 1.0
+          },
+          {
+            X: 1.0,
+            Y: 1.0
+          },
+          {
+            X: 2.0,
+            Y: 1.0
+          },
+          {
+            X: 3.0,
+            Y: 1.0
+          },
+          {
+            X: 4.0,
+            Y: 1.0
+          },
+          {
+            X: 0.0,
+            Y: 2.0
+          },
+          {
+            X: 1.0,
+            Y: 2.0
+          },
+          {
+            X: 2.0,
+            Y: 2.0
+          },
+          {
+            X: 3.0,
+            Y: 2.0
+          },
+          {
+            X: 4.0,
+            Y: 2.0
+          }
+        ],
+        Label: pp
+      }
+    ]
+  },
+  Options: {
+    Plugins: {
+      Legend: {
+        Display: true,
+        Position: bottom,
+        Labels: {
+          BoxWidth: 3,
+          BoxHeight: 3
+        }
+      },
+      ColorSchemes: {
+        Scheme: {
+          Palette: brewer.PastelOne9
+        }
+      }
+    }
+  }
+}

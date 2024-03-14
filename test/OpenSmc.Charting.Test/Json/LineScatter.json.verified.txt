@@ -1,0 +1,39 @@
+﻿{
+  Type: scatter,
+  Data: {
+    DataSets: [
+      {
+        Data: [
+          {
+            X: -10.0,
+            Y: 0.0
+          },
+          {
+            X: 0.0,
+            Y: 10.0
+          },
+          {
+            X: 10.0,
+            Y: 5.0
+          }
+        ]
+      }
+    ]
+  },
+  Options: {
+    Scales: {
+      x: {
+        BeginAtZero: true,
+        Position: bottom,
+        Type: linear
+      }
+    },
+    Plugins: {
+      ColorSchemes: {
+        Scheme: {
+          Palette: brewer.PastelOne9
+        }
+      }
+    }
+  }
+}

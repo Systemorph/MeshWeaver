@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\OpenSmc.Charting\OpenSmc.Charting.csproj" />
+    <ProjectReference Include="..\OpenSmc.Pivot\OpenSmc.Pivot.csproj" />
+  </ItemGroup>
+</Project>

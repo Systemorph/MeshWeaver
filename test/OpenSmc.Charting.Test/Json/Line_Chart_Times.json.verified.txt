@@ -1,0 +1,59 @@
+﻿{
+  Type: line,
+  Data: {
+    DataSets: [
+      {
+        Tension: 0.4,
+        Data: [
+          {
+            X: DateTimeOffset_1,
+            Y: 1.0
+          },
+          {
+            X: DateTimeOffset_2,
+            Y: 2.0
+          },
+          {
+            X: DateTimeOffset_3,
+            Y: 3.0
+          },
+          {
+            X: DateTimeOffset_4,
+            Y: 4.0
+          }
+        ]
+      }
+    ]
+  },
+  Options: {
+    Scales: {
+      x: {
+        Time: {
+          DisplayFormats: {
+            Day: D MMM YYYY
+          },
+          Unit: day
+        },
+        Type: time
+      }
+    },
+    Plugins: {
+      Title: {
+        Display: true,
+        Position: bottom,
+        Font: {
+          Family: Ovеrpass,
+          Size: 20,
+          Weight: 600,
+          LineHeight: 24px
+        },
+        Text: Timed Chart
+      },
+      ColorSchemes: {
+        Scheme: {
+          Palette: brewer.PastelOne9
+        }
+      }
+    }
+  }
+}
