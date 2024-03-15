@@ -102,15 +102,16 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         await Task.Delay(200);
 
         // asserts
-        deleteResponse.Message.Version.Should().Be(1);
+        deleteResponse.Message.Version.Should().Be(5L);
         var expectedItems = new[]
         {
             new MyData("2", "B")
         };
+        var workspace = GetWorkspace(client);
+        var data = await workspace.GetObservable<MyData>().FirstOrDefaultAsync(x => x?.Count == 1);
+
+        data.Should().BeEquivalentTo(expectedItems);
         storage.Values.Should().BeEquivalentTo(expectedItems);
-        
-        var response = await client.AwaitResponse(new GetManyRequest<MyData>(), o => o.WithTarget(new HostAddress()));
-        response.Message.Should().BeEquivalentTo(new GetResponse<MyData>(expectedItems.Length, expectedItems));
     }
 
 
