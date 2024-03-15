@@ -232,7 +232,7 @@ public record WorkspaceState
             var collection = kvp.Key;
             var existing = GetCollection(collection);
             if (existing != null)
-               yield return new(kvp.Key, kvp.Value with{Instances = existing.Instances.Remove(kvp.Value.Instances.Keys)});
+               yield return new(kvp.Key, kvp.Value with{Instances = existing.Instances.RemoveRange(kvp.Value.Instances.Keys) });
         }
     }
 

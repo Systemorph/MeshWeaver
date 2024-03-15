@@ -16,4 +16,3 @@ public record EnqueueRequest(Func<CancellationToken, Task> Action, string Id, in
 }
 
 public record EvaluationFinished(string Id);
-public record ForgetRequest(IReadOnlyCollection<string> Ids);
