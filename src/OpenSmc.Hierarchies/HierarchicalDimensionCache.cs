@@ -7,10 +7,10 @@ namespace OpenSmc.Hierarchies;
 
 public class HierarchicalDimensionCache : IHierarchicalDimensionCache
 {
-    private readonly IReadOnlyWorkspace readOnlyWorkspace;
+    private readonly IWorkspace readOnlyWorkspace;
     private readonly Dictionary<Type, IHierarchy> cachedDimensions = new();
 
-    public HierarchicalDimensionCache(IReadOnlyWorkspace readOnlyWorkspace)
+    public HierarchicalDimensionCache(IWorkspace readOnlyWorkspace)
     {
         this.readOnlyWorkspace = readOnlyWorkspace;
     }
