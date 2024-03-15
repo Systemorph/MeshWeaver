@@ -13,7 +13,7 @@ public static class ReportingRegistryExtensions
     {
         return configuration
                 .AddData(data)
-                .AddPlugin(h => new ReportingPlugin(h, reportConfiguration(new())))
+                .AddPlugin<ReportingPlugin>(p => p.WithFactory(() => new (p.Hub, reportConfiguration(new()))))
             ;
     }
 
@@ -24,6 +24,6 @@ public static class ReportingRegistryExtensions
         => configuration
             .WithServices(services => services.RegisterScopes())
             .AddData(data)
-            .AddPlugin(h => new ReportingPlugin(h, reportConfiguration(new())))
+            .AddPlugin<ReportingPlugin>(p => p.WithFactory(() => new (p.Hub, reportConfiguration(new()))))
         ;
 }
