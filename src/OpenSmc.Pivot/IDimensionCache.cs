@@ -18,11 +18,11 @@ namespace OpenSmc.Pivot
 
     public class DimensionCache : IDimensionCache
     {
-        private readonly IReadOnlyWorkspace readOnlyWorkspace;
+        private readonly IWorkspace readOnlyWorkspace;
         private readonly Dictionary<Type, IDimensionTypeCache> cachedDimensions = new();
         private Dictionary<string, DimensionDescriptor> knownDimensions = new();
 
-        public DimensionCache(IReadOnlyWorkspace readOnlyWorkspace)
+        public DimensionCache(IWorkspace readOnlyWorkspace)
         {
             this.readOnlyWorkspace = readOnlyWorkspace;
         }

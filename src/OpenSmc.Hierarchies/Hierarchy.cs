@@ -10,9 +10,9 @@ public class Hierarchy<T> : IHierarchy<T>
     private IDictionary<string, T> elementsBySystemName;
     private readonly IDictionary<string, IDictionary<int, string>> elementsBySystemNameAndLevels;
     private readonly IDictionary<int, IList<string>> dimensionsByLevel;
-    private readonly IReadOnlyWorkspace readOnlyWorkspace;
+    private readonly IWorkspace readOnlyWorkspace;
 
-    public Hierarchy(IReadOnlyWorkspace readOnlyWorkspace)
+    public Hierarchy(IWorkspace readOnlyWorkspace)
     {
         this.readOnlyWorkspace = readOnlyWorkspace;
         dimensionsByLevel = new Dictionary<int, IList<string>>();

@@ -1,6 +1,6 @@
 ﻿namespace OpenSmc.Data;
 
-public interface IWorkspace : IReadOnlyWorkspace
+public interface IWorkspace
 {
     IObservable<WorkspaceState> Stream { get; }
     WorkspaceState State { get; }
