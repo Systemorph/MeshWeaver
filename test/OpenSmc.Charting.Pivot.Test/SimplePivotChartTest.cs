@@ -83,7 +83,7 @@ public class SimplePivotChartTest
     public async Task BarChartAggregatedByCountry()
     {
         var charSlicedByName =  PivotFactory.ForDataCube(CubeWithValues)
-                                           .WithQuerySource(new StaticDataFieldQuerySource())
+                                           .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
                                            .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
                                            .SliceRowsBy(nameof(Name))
                                            .ToBarChart()
@@ -96,7 +96,7 @@ public class SimplePivotChartTest
     public async Task BarChartAggregatedByName()
     {
         var charSliceByCountry =  PivotFactory.ForDataCube(CubeWithValues)
-                                                  .WithQuerySource(new StaticDataFieldQuerySource())
+                                                  .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
                                                   .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
                                                   .SliceRowsBy(nameof(Country))
                                                   .ToBarChart()
@@ -108,7 +108,7 @@ public class SimplePivotChartTest
     public async Task StackedBarChartTestLabelSetting()
     {
         var charStacked =  PivotFactory.ForDataCube(CubeWithValues)
-                                           .WithQuerySource(new StaticDataFieldQuerySource())
+                                           .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
                                            .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
                                            .SliceRowsBy(nameof(Name), nameof(Country))
                                            .ToBarChart()
@@ -122,7 +122,7 @@ public class SimplePivotChartTest
     public async Task BarChartTestWithOption()
     {
         var doubleColumnSlice =  PivotFactory.ForDataCube(CubeWithValues)
-                                                 .WithQuerySource(new StaticDataFieldQuerySource())
+                                                 .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
                                                  .SliceColumnsBy(nameof(RecordWithValues.ValueIndex), nameof(Country))
                                                  .ToBarChart()
                                                  .WithOptions(m => m)
@@ -134,7 +134,7 @@ public class SimplePivotChartTest
     public async Task BarChartWithHierarchicalColumns()
     {
         var doubleColumnSliceTwoRows =  PivotFactory.ForDataCube(CubeWithValues)
-                                                        .WithQuerySource(new StaticDataFieldQuerySource())
+                                                        .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
                                                         .SliceColumnsBy(nameof(Country), nameof(RecordWithValues.ValueIndex))
                                                         .SliceRowsBy(nameof(Name))
                                                         .ToBarChart()
@@ -146,7 +146,7 @@ public class SimplePivotChartTest
     public async Task BarChartWithOneDefaultColumnReport()
     {
         var noColumnSlice =  PivotFactory.ForDataCube(CubeWithValues)
-                                             .WithQuerySource(new StaticDataFieldQuerySource())
+                                             .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
                                              .SliceRowsBy(nameof(RecordWithValues.ValueIndex))
                                              .ToBarChart()
                                              .Execute();
@@ -157,7 +157,7 @@ public class SimplePivotChartTest
     public async Task StackedBarChartWithManyColumns()
     {
         var stackOneOne =  PivotFactory.ForDataCube(CubeWithValues)
-                                           .WithQuerySource(new StaticDataFieldQuerySource())
+                                           .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
                                            .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
                                            .SliceRowsBy(nameof(Country))
                                            .ToBarChart()
@@ -170,7 +170,7 @@ public class SimplePivotChartTest
     public async Task StackedBarPlotsWithRestrictedColumns()
     {
         var stackTwoTwo =  PivotFactory.ForDataCube(CubeWithValues)
-                                           .WithQuerySource(new StaticDataFieldQuerySource())
+                                           .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
                                            .SliceColumnsBy(nameof(Name))
                                            .SliceRowsBy(nameof(Country))
                                            .ToBarChart()
@@ -183,7 +183,7 @@ public class SimplePivotChartTest
     public async Task BarChartWithRenaming()
     {
         var charSlicedByName =  PivotFactory.ForDataCube(CubeWithValues)
-                                                .WithQuerySource(new StaticDataFieldQuerySource())
+                                                .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
                                                 .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
                                                 .SliceRowsBy(nameof(Country))
                                                 .ToBarChart()
@@ -198,7 +198,7 @@ public class SimplePivotChartTest
     public async Task BarChartWithOptionsAndRenaming()
     {
         var charSliceByName =  PivotFactory.ForDataCube(CubeWithValues)
-                                               .WithQuerySource(new StaticDataFieldQuerySource())
+                                               .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
                                                .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
                                                .SliceRowsBy(nameof(Name), nameof(Country))
                                                .ToBarChart()
@@ -216,7 +216,7 @@ public class SimplePivotChartTest
     public async Task MixedChart()
     {
         var mixedPlot1 =  PivotFactory.ForDataCube(CubeWithValues)
-                                          .WithQuerySource(new StaticDataFieldQuerySource())
+                                          .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
                                           .SliceRowsBy(nameof(Name))
                                           .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
                                           .ToBarChart()
@@ -229,7 +229,7 @@ public class SimplePivotChartTest
     public async Task LineChart()
     {
         var linePlot1 =  PivotFactory.ForDataCube(CubeWithValues)
-                                         .WithQuerySource(new StaticDataFieldQuerySource())
+                                         .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
                                          .SliceRowsBy(nameof(Name), nameof(Country))
                                          .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
                                          .ToLineChart()
@@ -245,7 +245,7 @@ public class SimplePivotChartTest
     public async Task SimpleRadarChart()
     {
         var radarChart =  PivotFactory.ForDataCube(CubeWithValues)
-                                     .WithQuerySource(new StaticDataFieldQuerySource())
+                                     .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
                                      .SliceRowsBy((nameof(Name)))
                                      .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
                                      .ToRadarChart()
@@ -257,7 +257,7 @@ public class SimplePivotChartTest
     public async Task RadarChartWithExtraOptions()
     {
         var radarChart =  PivotFactory.ForDataCube(CubeWithValues)
-                                     .WithQuerySource(new StaticDataFieldQuerySource())
+                                     .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
                                      .SliceRowsBy(nameof(Name), nameof(Country))
                                      .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
                                      .ToRadarChart()
@@ -276,7 +276,7 @@ public class SimplePivotChartTest
         var filteredCube = CubeWithValues;
             //.Filter(x => x.Country == "RU" && x.Name == "A");
         var waterfall =  PivotFactory.ForDataCube(filteredCube)
-                                          .WithQuerySource(new StaticDataFieldQuerySource())
+                                          .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
                                           .SliceColumnsBy(nameof(Country), nameof(Name))
                                           .ToWaterfallChart()
                                           .WithStylingOptions(b => b.IncrementColor("#08BFD1")
