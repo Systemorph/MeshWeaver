@@ -11,11 +11,8 @@ public interface IHierarchicalDimensionCache
     IHierarchy<T> Get<T>()
         where T : class, IHierarchicalDimension;
 
-    Task InitializeAsync<T>()
+    void Initialize<T>()
         where T : class, IHierarchicalDimension;
 
-    void Initialize<T>(IDictionary<string, T> outerElementsBySystemName)
-        where T : class, IHierarchicalDimension;    
-
-    Task InitializeAsync(params DimensionDescriptor[] dimensionDescriptors);
+    void Initialize(params DimensionDescriptor[] dimensionDescriptors);
 }

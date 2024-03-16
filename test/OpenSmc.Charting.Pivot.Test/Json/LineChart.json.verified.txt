@@ -1,0 +1,56 @@
+﻿{
+  Type: line,
+  Data: {
+    DataSets: [
+      {
+        Fill: false,
+        Tension: 0.5,
+        Data: [
+          -3.9,
+          3.4,
+          3.0,
+          2.7,
+          null,
+          null,
+          null
+        ],
+        Label: Alessandro.Italy
+      },
+      {
+        Fill: false,
+        Tension: 0.4,
+        Data: [
+          1.1,
+          2.2,
+          3.3,
+          4.4,
+          null,
+          null,
+          null
+        ],
+        Label: Paolo.Italy
+      }
+    ],
+    Labels: [
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14
+    ]
+  },
+  Options: {
+    Plugins: {
+      Legend: {
+        Display: true
+      },
+      ColorSchemes: {
+        Scheme: {
+          Palette: brewer.PastelOne9
+        }
+      }
+    }
+  }
+}
