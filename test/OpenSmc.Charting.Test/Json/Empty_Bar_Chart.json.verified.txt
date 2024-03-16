@@ -1,0 +1,26 @@
+﻿{
+  Data: {
+    Labels: [
+      1
+    ]
+  },
+  Options: {
+    Plugins: {
+      Title: {
+        Display: true,
+        Font: {
+          Family: Ovеrpass,
+          Size: 22,
+          Weight: 600,
+          LineHeight: 24px
+        },
+        Text: Empty Chart
+      },
+      ColorSchemes: {
+        Scheme: {
+          Palette: brewer.PastelOne9
+        }
+      }
+    }
+  }
+}

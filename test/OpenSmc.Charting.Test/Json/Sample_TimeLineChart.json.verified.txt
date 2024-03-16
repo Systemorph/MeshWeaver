@@ -1,0 +1,72 @@
+﻿{
+  Type: line,
+  Data: {
+    DataSets: [
+      {
+        PointRadius: 0,
+        Tension: 0.4,
+        BorderWidth: 3,
+        Data: [
+          {
+            X: DateTimeOffset_1,
+            Y: -1.0
+          },
+          {
+            X: DateTimeOffset_2,
+            Y: 4.0
+          },
+          {
+            X: DateTimeOffset_3,
+            Y: 3.0
+          },
+          {
+            X: DateTimeOffset_4,
+            Y: 2.0
+          }
+        ],
+        Label: First
+      }
+    ]
+  },
+  Options: {
+    Scales: {
+      x: {
+        Time: {
+          DisplayFormats: {
+            Month: D MMM YYYY
+          },
+          Unit: month
+        },
+        Type: time
+      },
+      y: {
+        Ticks: {
+          Format: {
+            notation: compact,
+            maximumFractionDigits: 2
+          }
+        }
+      }
+    },
+    Plugins: {
+      Legend: {
+        Display: true
+      },
+      Title: {
+        Display: true,
+        Font: {
+          Family: Ovеrpass,
+          Size: 20,
+          Weight: 600,
+          LineHeight: 24px
+        },
+        Text: TimeLine Chart
+      },
+      ColorSchemes: {
+        Scheme: {
+          Palette: brewer.PastelOne9
+        }
+      }
+    }
+  }
+}

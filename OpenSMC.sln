@@ -145,7 +145,11 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Hierarchies.Test", 
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Charting", "src\OpenSmc.Charting\OpenSmc.Charting.csproj", "{CDF17221-4D7B-4C4D-A011-6EC00D1F358A}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Charting.Pivot", "src\OpemSmc.Charting.Pivot\OpenSmc.Charting.Pivot.csproj", "{9DABE2DD-3EB8-430A-BA3A-BBBF18B49208}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Charting.Pivot", "src\OpenSmc.Charting.Pivot\OpenSmc.Charting.Pivot.csproj", "{9DABE2DD-3EB8-430A-BA3A-BBBF18B49208}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Charting.Test", "test\OpenSmc.Charting.Test\OpenSmc.Charting.Test.csproj", "{DBC408AF-DE28-4B73-AC2E-8E451F2B9EF2}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Charting.Pivot.Test", "test\OpenSmc.Charting.Pivot.Test\OpenSmc.Charting.Pivot.Test.csproj", "{F1320357-8306-4633-A651-D8C190AF1189}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -417,6 +421,14 @@ Global
 		{9DABE2DD-3EB8-430A-BA3A-BBBF18B49208}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{9DABE2DD-3EB8-430A-BA3A-BBBF18B49208}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{9DABE2DD-3EB8-430A-BA3A-BBBF18B49208}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DBC408AF-DE28-4B73-AC2E-8E451F2B9EF2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DBC408AF-DE28-4B73-AC2E-8E451F2B9EF2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DBC408AF-DE28-4B73-AC2E-8E451F2B9EF2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DBC408AF-DE28-4B73-AC2E-8E451F2B9EF2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F1320357-8306-4633-A651-D8C190AF1189}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F1320357-8306-4633-A651-D8C190AF1189}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F1320357-8306-4633-A651-D8C190AF1189}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F1320357-8306-4633-A651-D8C190AF1189}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -440,6 +452,8 @@ Global
 		{6F344FFE-BAED-42FD-91CD-4F524A04EDA3} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{FBEE91E4-0686-4F9E-AC10-2228BD67BB8D} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{8B2F6D70-4F8D-41D1-A902-BF1F080CB13B} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
+		{DBC408AF-DE28-4B73-AC2E-8E451F2B9EF2} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
+		{F1320357-8306-4633-A651-D8C190AF1189} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {331ADDC7-02A4-4F0E-8C47-2060003082F2}
