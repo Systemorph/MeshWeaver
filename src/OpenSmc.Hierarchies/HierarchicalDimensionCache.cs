@@ -7,14 +7,12 @@ namespace OpenSmc.Hierarchies;
 
 public class HierarchicalDimensionCache : IHierarchicalDimensionCache
 {
-    private readonly IQuerySource querySource;
+    private readonly IReadOnlyWorkspace readOnlyWorkspace;
     private readonly Dictionary<Type, IHierarchy> cachedDimensions = new();
 
-    public HierarchicalDimensionCache() {}
-
-    public HierarchicalDimensionCache(IQuerySource querySource)
+    public HierarchicalDimensionCache(IReadOnlyWorkspace readOnlyWorkspace)
     {
-        this.querySource = querySource;
+        this.readOnlyWorkspace = readOnlyWorkspace;
     }
 
     public IHierarchyNode<T> Get<T>(string systemName)
@@ -31,37 +29,26 @@ public class HierarchicalDimensionCache : IHierarchicalDimensionCache
         return (IHierarchy<T>)inner;
     }
 
-    public async Task InitializeAsync(params DimensionDescriptor[] dimensionDescriptors)
+    public void Initialize(params DimensionDescriptor[] dimensionDescriptors)
     {
         foreach (var type in dimensionDescriptors.Where(d => d.Type != null).Select(d => d.Type))
         {
             if (typeof(IHierarchicalDimension).IsAssignableFrom(type))
-                await InitializeAsyncMethod.MakeGenericMethod(type).InvokeAsActionAsync(this);
+                InitializeMethod.MakeGenericMethod(type).InvokeAsAction(this);
         }
     }
 
-    private static readonly IGenericMethodCache InitializeAsyncMethod =
+    private static readonly IGenericMethodCache InitializeMethod =
 #pragma warning disable 4014
-        GenericCaches.GetMethodCache<HierarchicalDimensionCache>(x => x.InitializeAsync<IHierarchicalDimension>());
+        GenericCaches.GetMethodCache<HierarchicalDimensionCache>(x => x.Initialize<IHierarchicalDimension>());
 #pragma warning restore 4014
 
-    public async Task InitializeAsync<T>()
+    public void Initialize<T>()
         where T : class, IHierarchicalDimension
     {
-        if (querySource != null && !cachedDimensions.TryGetValue(typeof(T), out _))
+        if (readOnlyWorkspace != null && !cachedDimensions.TryGetValue(typeof(T), out _))
         {
-            var hierarchy = new Hierarchy<T>(querySource);
-            await hierarchy.InitializeAsync();
-            cachedDimensions[typeof(T)] = hierarchy;
-        }
-    }
-
-    public void Initialize<T>(IDictionary<string, T> outerElementsBySystemName)
-        where T : class, IHierarchicalDimension
-    {
-        if (outerElementsBySystemName != null && !cachedDimensions.TryGetValue(typeof(T), out _))
-        {
-            var hierarchy = new Hierarchy<T>(outerElementsBySystemName);
+            var hierarchy = new Hierarchy<T>(readOnlyWorkspace);
             hierarchy.Initialize();
             cachedDimensions[typeof(T)] = hierarchy;
         }
