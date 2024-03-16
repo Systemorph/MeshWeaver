@@ -1,0 +1,13 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<ItemGroup>
+		<PackageReference Include="Newtonsoft.Json" />
+		<PackageReference Include="Verify.Xunit" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <ProjectReference Include="..\..\src\OpenSmc.Charting\OpenSmc.Charting.csproj" />
+	  <ProjectReference Include="..\..\src\OpenSmc.ServiceProvider\OpenSmc.ServiceProvider.csproj" />
+	  <ProjectReference Include="..\OpenSmc.Fixture\OpenSmc.Fixture.csproj" />
+	</ItemGroup>
+</Project>

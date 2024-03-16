@@ -1,0 +1,36 @@
+﻿{
+  Type: pie,
+  Data: {
+    DataSets: [
+      {
+        Data: [
+          1.0,
+          2.0,
+          3.0,
+          4.0
+        ]
+      }
+    ],
+    Labels: [
+      One,
+      Two,
+      Three,
+      Four
+    ]
+  },
+  Options: {
+    Plugins: {
+      Legend: {
+        Display: true
+      },
+      ColorSchemes: {
+        Scheme: [
+          #00ff00,
+          #0000ff,
+          #ffff00,
+          #ff0000
+        ]
+      }
+    }
+  }
+}
