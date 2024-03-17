@@ -17,6 +17,7 @@ public abstract record WorkspaceReference<TReference> : WorkspaceReference
         => Stream.Subscribe((IObserver<TReference>)observer);
 
 }
+
 public record EntityStore(ImmutableDictionary<string, InstancesInCollection> Instances);
 
 public record EntireWorkspace : WorkspaceReference<EntityStore>

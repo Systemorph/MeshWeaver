@@ -80,15 +80,17 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
 
     public virtual async Task<WorkspaceState> InitializeAsync( CancellationToken cancellationToken)
     {
-        return new WorkspaceState(Hub,
-            new EntityStore((await TypeSources
-            .Values
-            .ToAsyncEnumerable()
-            .SelectAwait(async ts => new { TypeSource = ts, Instances = await ts.InitializeAsync(cancellationToken) })
-            .ToArrayAsync(cancellationToken: cancellationToken))
+        var instances = (await TypeSources
+                .Values
+                .ToAsyncEnumerable()
+                .SelectAwait(async ts => new
+                    { TypeSource = ts, Instances = await ts.InitializeAsync(cancellationToken) })
+                .ToArrayAsync(cancellationToken: cancellationToken))
             .ToImmutableDictionary(x => x.TypeSource.CollectionName,
-                x => new InstancesInCollection(x.Instances)))
-            ,
+                x => new InstancesInCollection(x.Instances));
+        return new WorkspaceState(
+            Hub,
+            new EntityStore(instances),
             TypeSources
             );
     }

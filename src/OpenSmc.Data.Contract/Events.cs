@@ -35,7 +35,7 @@ public enum DataChangeStatus{Committed, Failed}
 public record CreateRequest<TObject>(TObject Element) : IRequest<DataChangedEvent> { public object Options { get; init; } };
 
 
-public record SubscribeDataRequest(string Id, WorkspaceReference Reference) : IRequest<DataChangedEvent>;
+public record SubscribeRequest(string Id, WorkspaceReference Reference) : IRequest<DataChangedEvent>;
 
 public record DataChangedEvent(long Version, object Change);
 

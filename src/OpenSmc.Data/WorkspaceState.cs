@@ -26,7 +26,6 @@ public record WorkspaceState
         Hub = hub;
         this.Store = Store;
         TypeSourcesByType = typeSources.ToImmutableDictionary();
-        CollectionsByType = this.Store.Instances.Where(x => x.Value.ElementType != null).ToImmutableDictionary(x => x.Value.ElementType, x => x.Key);
         TypeSourcesByCollection = CollectionsByType.ToImmutableDictionary(x => x.Value, x => x.Key);
     }
 
@@ -60,8 +59,7 @@ public record WorkspaceState
     {
         return this with
         {
-            Store = new EntityStore(Instances: Store.Instances
-                .SetItems
+            Store = new EntityStore(Store.Instances.SetItems
                 (
                     store.Instances.Select
                     (
@@ -69,7 +67,11 @@ public record WorkspaceState
                             new KeyValuePair<string, InstancesInCollection>
                             (
                                 change.Key, change.Value.Merge(Store.Instances.GetValueOrDefault(change.Key))
-                            ))))
+                            )
+
+                    )
+                )
+            )
 
         };
     }
@@ -122,7 +124,7 @@ public record WorkspaceState
     private EntityStore ReduceImpl(CollectionsReference reference) =>
         new(reference
             .Collections
-            .Select(c => new KeyValuePair<string,InstancesInCollection>(c, GetCollection(c)))
+            .Select(c => new KeyValuePair<string, InstancesInCollection>(c, GetCollection(c)))
             .Where(x => x.Value != null)
             .ToImmutableDictionary());
 
@@ -211,18 +213,13 @@ public record WorkspaceState
 
     }
 
-    private EntityStore Merge(DataChangeRequestWithElements request)
-    {
-        switch (request)
+    private EntityStore Merge(DataChangeRequestWithElements request) =>
+        request switch
         {
-            case UpdateDataRequest update:
-                return new(MergeUpdate(update).ToImmutableDictionary());
-            case DeleteDataRequest delete:
-                return new(MergeDelete(delete).ToImmutableDictionary());
-        }
-
-        throw new NotSupportedException();
-    }
+            UpdateDataRequest update => new EntityStore(MergeUpdate(update).ToImmutableDictionary()),
+            DeleteDataRequest delete => new EntityStore(MergeDelete(delete).ToImmutableDictionary()),
+            _ => throw new NotSupportedException()
+        };
 
     private IEnumerable<KeyValuePair<string, InstancesInCollection>> MergeDelete(DeleteDataRequest update)
     {
