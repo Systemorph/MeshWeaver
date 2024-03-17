@@ -44,7 +44,7 @@ public record WorkspaceState
         IReadOnlyDictionary<Type, ITypeSource> typeSources)
         : this(hub, (EntityStore)dataChanged.Change, typeSources)
     {
-        LastSynchronized = this;
+        LastSynchronized = Store;
     }
 
     public long Version { get; init; }
@@ -170,7 +170,7 @@ public record WorkspaceState
         };
     }
 
-    public WorkspaceState LastSynchronized { get; init; }
+    public EntityStore LastSynchronized { get; init; }
 
     private WorkspaceState ApplyPatch(JsonPatch patch)
     {
@@ -178,10 +178,10 @@ public record WorkspaceState
         var result = patch.Apply(current);
         if (result.IsSuccess && result.Result != null)
         {
-            var newStore = (WorkspaceState)serializationService.Deserialize(result.Result.ToJsonString());
+            var newStore = (EntityStore)serializationService.Deserialize(result.Result.ToJsonString());
             return this with
             {
-                Store = newStore.Store,
+                Store = newStore,
                 LastSynchronized = newStore
             };
         }
@@ -208,7 +208,7 @@ public record WorkspaceState
         return ret with
         {
             Store = newElements,
-            LastSynchronized = ret
+            LastSynchronized = newElements
         };
 
     }
