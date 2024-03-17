@@ -8,7 +8,6 @@ using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Activities;
 using Xunit;
 using Xunit.Abstractions;
-using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Hub.Data.Test;
 
@@ -27,15 +26,14 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return base.ConfigureHost(configuration)
             .AddData(data => data
-                .FromConfigurableDataSource("ad hoc",dataSource => dataSource
+                .FromConfigurableDataSource("ad hoc", dataSource => dataSource
                     .WithType<MyData>(type => type
                         .WithKey(instance => instance.Id)
                         .WithInitialData(InitializeMyData)
                         .WithUpdate(SaveMyData)
                     )
                 )
-            )
-            .AddPlugin<ImportPlugin>();
+            );
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -118,21 +116,6 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     public static string TextChange = nameof(TextChange);
 
     public record LocalImportRequest : IRequest<ActivityLog>;
-    public class ImportPlugin(IMessageHub hub) : MessageHubPlugin(hub), IMessageHandler<LocalImportRequest>
-    {
-        [Inject] IWorkspace workspace;
-        IMessageDelivery IMessageHandler<LocalImportRequest>.HandleMessage(IMessageDelivery<LocalImportRequest> request)
-        {
-            // TODO V10: Mise-en-place must be been done ==> data plugin context
-            var someData = workspace.State.GetData<MyData>();
-            var myInstance = someData.First();
-            myInstance = myInstance with { Text = TextChange };
-            workspace.Update(myInstance);
-            workspace.Commit();
-            Hub.Post(new ActivityLog(DateTime.UtcNow, new UserInfo("User", "User")), o => o.ResponseFor(request));
-            return request.Processed();
-        }
-    }
 
     [Fact]
     public async Task CheckUsagesFromWorkspaceVariable()
@@ -140,9 +123,19 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
         var workspace = GetWorkspace(client);
         await workspace.Initialized;
-        var items = workspace.GetData<MyData>();
-        items.Should().Contain(i => i.Text == TextChange);
-        await Task.Delay(100);
+        var myInstance = workspace.GetData<MyData>("1");
+        myInstance.Text.Should().NotBe(TextChange);
+
+        // act
+        myInstance = myInstance with { Text = TextChange };
+        workspace.Update(myInstance);
+        workspace.Commit();
+
+        var hostWorkspace = GetWorkspace(GetHost());
+
+        var instance = await hostWorkspace.GetObservable<MyData>("1").FirstAsync(i => i?.Text == TextChange);
+        instance.Should().NotBeNull();
+
         storage.Values.Should().Contain(i => (i as MyData).Text == TextChange);
     }
 
