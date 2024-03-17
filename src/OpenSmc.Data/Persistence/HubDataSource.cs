@@ -53,7 +53,7 @@ public record HubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : 
 
 
     private readonly ITypeRegistry typeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
-    private static readonly Type[] DataTypes = [typeof(EntityStore), typeof(JsonPatch)];
+    private static readonly Type[] DataTypes = [typeof(EntityStore), typeof(JsonPatch), typeof(InstancesInCollection)];
     public override Task<WorkspaceState> InitializeAsync(CancellationToken cancellationToken)
     {
         typeRegistry.WithTypes(TypeSources.Values.Select(t => t.ElementType));
@@ -67,7 +67,7 @@ public record HubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : 
                         .Values
                         .Select(ts => ts.CollectionName).ToArray()
                 );
-        var startDataSynchronizationRequest = new SubscribeDataRequest(Main, collections);
+        var startDataSynchronizationRequest = new SubscribeRequest(Main, collections);
 
         var subscribeRequest =
             Hub.Post(startDataSynchronizationRequest,

@@ -29,8 +29,8 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
             return typeName;
 
         // ReSharper disable once AssignNullToNotNullAttribute
-        typeByName[type.FullName] = type;
-        nameByType[type] = type.FullName;
+        //typeByName[type.FullName] = type;
+        //nameByType[type] = type.FullName;
         return type.FullName;
     }
 

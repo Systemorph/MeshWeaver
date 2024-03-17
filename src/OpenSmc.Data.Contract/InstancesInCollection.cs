@@ -5,11 +5,7 @@ namespace OpenSmc.Data;
 
 public record InstancesInCollection(ImmutableDictionary<object, object> Instances)
 {
-    [JsonIgnore]
-    public Type ElementType { get; init; }
-
-    [JsonIgnore]
-    public Func<object, object> GetKey { get; init; }
+    internal Func<object,object> GetKey { get; init; }
     public InstancesInCollection Change(DataChangeRequest request)
     {
         switch (request)

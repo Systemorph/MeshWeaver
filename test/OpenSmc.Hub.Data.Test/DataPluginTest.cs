@@ -138,9 +138,10 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task CheckUsagesFromWorkspaceVariable()
     {
         var client = GetClient();
-        await client.AwaitResponse(new LocalImportRequest(), o => o.WithTarget(new HostAddress()));
-        var response = await client.AwaitResponse(new GetManyRequest<MyData>(), o => o.WithTarget(new HostAddress()));
-        response.Message.Items.Should().Contain(i => i.Text == TextChange);
+        var workspace = GetWorkspace(client);
+        await workspace.Initialized;
+        var items = workspace.GetData<MyData>();
+        items.Should().Contain(i => i.Text == TextChange);
         await Task.Delay(100);
         storage.Values.Should().Contain(i => (i as MyData).Text == TextChange);
     }

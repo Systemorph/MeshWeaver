@@ -15,7 +15,7 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     IMessageHandler<UpdateDataRequest>,
     IMessageHandler<DeleteDataRequest>,
     IMessageHandler<DataChangedEvent>,
-    IMessageHandler<SubscribeDataRequest>,
+    IMessageHandler<SubscribeRequest>,
     IMessageHandler<UnsubscribeDataRequest>,
     IMessageHandler<PatchChangeRequest>
 {
@@ -42,8 +42,8 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
         => RequestChange(null, new DeleteDataRequest(instances.ToArray()));
 
 
-    private Task initializeTask;
-    public override Task Initialized => initializeTask;
+    private TaskCompletionSource initializeTaskCompletionSource = new();
+    public override Task Initialized => initializeTaskCompletionSource.Task;
     private DataContext DataContext { get; set; }
     public override async Task StartAsync(CancellationToken cancellationToken)  // This loads the persisted state
     {
@@ -51,23 +51,22 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
         await base.StartAsync(cancellationToken);
 
         DataContext = Hub.GetDataConfiguration();
-        await InitializeAsync(cancellationToken, DataContext); 
+        Initialize(cancellationToken, DataContext);
     }
 
 
-    private Task InitializeAsync(CancellationToken cancellationToken, DataContext dataContext)
+    private void Initialize(CancellationToken cancellationToken, DataContext dataContext)
     {
         logger.LogDebug($"Starting data plugin at address {Address}");
-        initializeTask = 
-            dataContext.InitializeAsync(cancellationToken)
+        dataContext.InitializeAsync(cancellationToken)
             .ContinueWith(t =>
             {
                 logger.LogDebug("Initialized workspace in address {address}", Address);
                 UpdateState(ws => ws.Merge(t.Result) with { Version = Hub.Version });
+                initializeTaskCompletionSource.SetResult();
             }, cancellationToken);
         subject.OnNext(State);
         subject.DistinctUntilChanged().Subscribe(dataContext.Update);
-        return Task.CompletedTask;
     }
 
 
@@ -125,7 +124,7 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
         return request.Processed();
     }
 
-    IMessageDelivery IMessageHandler<SubscribeDataRequest>.HandleMessage(IMessageDelivery<SubscribeDataRequest> request)
+    IMessageDelivery IMessageHandler<SubscribeRequest>.HandleMessage(IMessageDelivery<SubscribeRequest> request)
         => StartSynchronization(request);
 
     private readonly ConcurrentDictionary<(object Address, string Id),IDisposable> subscriptions = new();
@@ -134,20 +133,20 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     private readonly ILogger<DataPlugin> logger;
 
 
-    private IMessageDelivery StartSynchronization(IMessageDelivery<SubscribeDataRequest> request)
+    private IMessageDelivery StartSynchronization(IMessageDelivery<SubscribeRequest> request)
     {
-        var key = (request.Message, request.Message.Id);
+        var key = (request.Sender, request.Message.Id);
         if (subscriptions.TryRemove(key, out var existing))
             existing.Dispose();
 
         subscriptions[key] = Stream
             .StartWith(State)
-            .Subscribe(new PatchSubscriber<object>(Hub, request, serializationService));
+            .Subscribe(new PatchSubscriber(Hub, request, serializationService));
 
         return request.Processed();
     }
 
-    private class PatchSubscriber<T>(IMessageHub hub, IMessageDelivery request, ISerializationService serializationService) : IObserver<T>
+    private class PatchSubscriber(IMessageHub hub, IMessageDelivery<SubscribeRequest> request, ISerializationService serializationService) : IObserver<WorkspaceState>
     {
         private JsonNode LastSynchronized { get; set; }
 
@@ -159,10 +158,13 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
         {
         }
 
-        public void OnNext(T value)
+        public void OnNext(WorkspaceState workspace)
         {
+            var value = workspace.Reduce(request.Message.Reference);
             if (value == null)
                 return;
+
+
 
             var node = value as JsonNode
                        ?? JsonNode.Parse(serializationService.SerializeToString(value));
@@ -172,7 +174,7 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
                 ? new DataChangedEvent(hub.Version, value)
                 : new DataChangedEvent(hub.Version, LastSynchronized.CreatePatch(node));
 
-            hub.Post(dataChanged, o => o.WithTarget(request.Sender));
+            hub.Post(dataChanged, o => o.ResponseFor(request));
             LastSynchronized = node;
 
         }
