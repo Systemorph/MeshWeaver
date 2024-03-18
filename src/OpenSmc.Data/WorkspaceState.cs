@@ -25,6 +25,7 @@ public record WorkspaceState
     {
         Hub = hub;
         this.Store = Store;
+        LastSynchronized = Store;
         TypeSourcesByType = typeSources.ToImmutableDictionary();
         TypeSourcesByCollection = CollectionsByType.ToImmutableDictionary(x => x.Value, x => x.Key);
     }
@@ -44,7 +45,6 @@ public record WorkspaceState
         IReadOnlyDictionary<Type, ITypeSource> typeSources)
         : this(hub, (EntityStore)dataChanged.Change, typeSources)
     {
-        LastSynchronized = Store;
     }
 
     public long Version { get; init; }
@@ -57,21 +57,23 @@ public record WorkspaceState
 
     public WorkspaceState SetItems(EntityStore store)
     {
-        return this with
-        {
-            Store = new EntityStore(Store.Instances.SetItems
+        var newStore = new EntityStore(Store.Instances.SetItems
+            (
+                store.Instances.Select
                 (
-                    store.Instances.Select
-                    (
-                        change =>
-                            new KeyValuePair<string, InstancesInCollection>
-                            (
-                                change.Key, change.Value.Merge(Store.Instances.GetValueOrDefault(change.Key))
-                            )
+                    change =>
+                        new KeyValuePair<string, InstancesInCollection>
+                        (
+                            change.Key, change.Value.Merge(Store.Instances.GetValueOrDefault(change.Key))
+                        )
 
-                    )
                 )
             )
+        );
+        return this with
+        {
+            Store = newStore,
+            LastSynchronized = newStore
 
         };
     }
@@ -142,6 +144,17 @@ public record WorkspaceState
 
         };
 
+    public WorkspaceState Change(PatchChangeRequest request)
+    {
+        if (LastSynchronized == null)
+            throw new ArgumentException("Cannot patch workspace which has not been initialized.");
+
+        var oldState = JsonNode.Parse(serializationService.SerializeToString(LastSynchronized));
+        var patch = (JsonPatch)request.Change;
+        var newState = patch.Apply(oldState);
+        var newStore = (EntityStore)serializationService.Deserialize(newState!.Result!.ToJsonString());
+        return this with { Store = newStore, LastSynchronized = newStore };
+    }
 
 
     public WorkspaceState Synchronize(DataChangedEvent @event)
@@ -166,7 +179,7 @@ public record WorkspaceState
         {
             Version = Hub.Version,
             Store = newInstances.Store,
-            LastSynchronized = newInstances.LastSynchronized
+            LastSynchronized = newInstances.Store
         };
     }
 
