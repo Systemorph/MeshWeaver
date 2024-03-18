@@ -33,7 +33,10 @@ public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace) : IAsync
             .SelectAwait(async ds => await ds.InitializeAsync(cancellationToken))
             .AggregateAsync((ws1, ws2) => ws1.Merge(ws2), cancellationToken: cancellationToken);
 
-        return workspace;
+        return workspace with
+        {
+            LastSynchronized = workspace.Store
+        };
     }
 
 

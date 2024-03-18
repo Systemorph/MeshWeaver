@@ -21,16 +21,13 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
 {
     private readonly Subject<WorkspaceState> subject = new();
 
-    public IObservable<WorkspaceState> Stream { get; }
+    public IObservable<WorkspaceState> Stream => subject;
     public DataPlugin(IMessageHub hub) : base(hub)
     {
         serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
         logger = hub.ServiceProvider.GetRequiredService<ILogger<DataPlugin>>();
         InitializeState(new WorkspaceState(hub, new EntityStore(ImmutableDictionary<string, InstancesInCollection>.Empty), ImmutableDictionary<Type, ITypeSource>.Empty));
-        Stream = subject
-            .StartWith(State)
-            .Replay(1)
-            .RefCount();
+        deferral = MessageService.Defer(IsDeferred);
     }
 
     public IEnumerable<Type> MappedTypes => State.MappedTypes;
@@ -63,10 +60,10 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
             {
                 logger.LogDebug("Initialized workspace in address {address}", Address);
                 UpdateState(ws => ws.Merge(t.Result) with { Version = Hub.Version });
+                deferral.Dispose();
                 initializeTaskCompletionSource.SetResult();
+                subject.DistinctUntilChanged().Subscribe(dataContext.Update);
             }, cancellationToken);
-        subject.OnNext(State);
-        subject.DistinctUntilChanged().Subscribe(dataContext.Update);
     }
 
 
@@ -81,8 +78,11 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     private IMessageDelivery RequestChange(IMessageDelivery request, DataChangeRequest change)
     {
         UpdateState(s => s.Change(change) with{Version = Hub.Version});
-        Commit();
-        Hub.Post(new DataChangeResponse(Hub.Version, DataChangeStatus.Committed), o => o.ResponseFor(request));
+        if (request != null)
+        {
+            Commit();
+            Hub.Post(new DataChangeResponse(Hub.Version, DataChangeStatus.Committed), o => o.ResponseFor(request));
+        }
         return request?.Processed();
     }
 
@@ -131,6 +131,7 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
 
     private readonly ISerializationService serializationService;
     private readonly ILogger<DataPlugin> logger;
+    private readonly IDisposable deferral;
 
 
     private IMessageDelivery StartSynchronization(IMessageDelivery<SubscribeRequest> request)
@@ -139,7 +140,7 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
         if (subscriptions.TryRemove(key, out var existing))
             existing.Dispose();
 
-        subscriptions[key] = Stream
+        subscriptions[key] = subject
             .StartWith(State)
             .Subscribe(new PatchSubscriber(Hub, request, serializationService));
 
