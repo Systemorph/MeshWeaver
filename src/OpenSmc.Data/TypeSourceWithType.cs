@@ -24,7 +24,7 @@ public interface ITypeSource
         => WithInitialData(_ => Task.FromResult(loadInstances()));
 
     object GetPartition(object instance);
-    void Update(WorkspaceState workspace);
+    InstancesInCollection Update(WorkspaceState workspace);
 }
 
 public abstract record TypeSource<TTypeSource> : ITypeSource
@@ -79,18 +79,16 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
     public object GetPartition(object instance)
         => PartitionFunction.Invoke(instance);
 
-    public virtual void Update(WorkspaceState workspace)
+    public virtual InstancesInCollection Update(WorkspaceState workspace)
     {
         var myCollection = workspace.Reduce(new CollectionReference(CollectionName)
         {
             Transformation = GetTransformation()
         });
-        UpdateImpl(myCollection);
+        return UpdateImpl(myCollection);
     }
 
-    protected virtual void UpdateImpl(InstancesInCollection myCollection)
-    {
-    }
+    protected virtual InstancesInCollection UpdateImpl(InstancesInCollection myCollection) => myCollection;
 
     private Func<InstancesInCollection, InstancesInCollection> GetTransformation()
     {
@@ -133,12 +131,12 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
 
 public record TypeSourceWithType<T>(object DataSource, IServiceProvider ServiceProvider) : TypeSourceWithType<T, TypeSourceWithType<T>>(DataSource, ServiceProvider)
 {
-    protected override void UpdateImpl(InstancesInCollection instances)
+    protected override InstancesInCollection UpdateImpl(InstancesInCollection instances)
         => UpdateAction.Invoke(instances);
 
-    protected Action<InstancesInCollection> UpdateAction { get; init; } = _ => { };
+    protected Func<InstancesInCollection, InstancesInCollection> UpdateAction { get; init; } = i => i;
 
-    public TypeSourceWithType<T> WithUpdate(Action<InstancesInCollection> update) => This with { UpdateAction = update };
+    public TypeSourceWithType<T> WithUpdate(Func<InstancesInCollection, InstancesInCollection> update) => This with { UpdateAction = update };
 
 
     public TypeSourceWithType<T> WithInitialData(Func<CancellationToken, Task<IEnumerable<T>>> initialData)

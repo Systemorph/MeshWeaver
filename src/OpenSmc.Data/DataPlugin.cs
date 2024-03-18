@@ -75,6 +75,8 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     IMessageDelivery IMessageHandler<PatchChangeRequest>.HandleMessage(IMessageDelivery<PatchChangeRequest> request)
         => RequestChange(request, request.Message);
 
+    IMessageDelivery IMessageHandler<DeleteDataRequest>.HandleMessage(IMessageDelivery<DeleteDataRequest> request)
+        => RequestChange(request, request.Message);
 
     private IMessageDelivery RequestChange(IMessageDelivery request, DataChangeRequest change)
     {
@@ -84,8 +86,6 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
         return request?.Processed();
     }
 
-    IMessageDelivery IMessageHandler<DeleteDataRequest>.HandleMessage(IMessageDelivery<DeleteDataRequest> request)
-        => RequestChange(request, request.Message);
 
     public override bool IsDeferred(IMessageDelivery delivery)
     {

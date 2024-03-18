@@ -1,5 +1,8 @@
-﻿using System.Collections.Immutable;
-using System.Text.Json.Serialization;
+﻿using System.Runtime.CompilerServices;
+using System.Collections.Immutable;
+
+[assembly:InternalsVisibleTo("OpenSmc.Data")]
+
 
 namespace OpenSmc.Data;
 

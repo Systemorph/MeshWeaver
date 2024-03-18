@@ -252,9 +252,12 @@ public record WorkspaceState
         foreach (var g in instances.GroupBy(x => x.GetType()))
         {
             var typeProvider = TypeSourcesByType.GetValueOrDefault(g.Key);
-            if (typeProvider != null)
-                yield return new(typeProvider.CollectionName, new(instances.ToImmutableDictionary(typeProvider.GetKey)));
-            
+            if (typeProvider == null)
+                throw new InvalidOperationException($"Type {g.Key} is not mapped to data source.");
+            yield return new(typeProvider.CollectionName, new(instances.ToImmutableDictionary(typeProvider.GetKey))
+            {
+                GetKey = typeProvider.GetKey
+            });
         }
     }
 

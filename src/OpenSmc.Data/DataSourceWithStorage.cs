@@ -37,9 +37,10 @@ public abstract record DataSourceWithStorage<TDataSource>(object Id, IMessageHub
         }
     }
 
-    public override void Update(WorkspaceState workspace)
+    public override EntityStore Update(WorkspaceState workspace)
     {
         persistenceHub.Schedule(c => UpdateAsync(workspace, c));
+        return workspace.Store;
     }
 
     public override async ValueTask DisposeAsync()

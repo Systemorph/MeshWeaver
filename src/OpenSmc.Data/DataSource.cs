@@ -12,7 +12,7 @@ public interface IDataSource : IAsyncDisposable
     object Id { get; }
     IReadOnlyCollection<DataChangeRequest> Change(DataChangeRequest request);
     Task<WorkspaceState> InitializeAsync(CancellationToken cancellationToken);
-    void Update(WorkspaceState state);
+    EntityStore Update(WorkspaceState state);
 }
 
 public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDataSource, IAsyncDisposable where TDataSource : DataSource<TDataSource>
@@ -41,10 +41,9 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
         TypeSources.Values.FirstOrDefault(x => x.CollectionName == collectionName);
 
 
-    public virtual void Update(WorkspaceState workspace)
+    public virtual EntityStore Update(WorkspaceState workspace)
     {
-        foreach (var typeSource in TypeSources.Values)
-            typeSource.Update(workspace);
+        return new(TypeSources.Values.ToImmutableDictionary(ts => ts.CollectionName, typeSource => typeSource.Update(workspace)));
     }
 
     public object MapInstanceToPartition(object instance)
@@ -87,7 +86,10 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
                     { TypeSource = ts, Instances = await ts.InitializeAsync(cancellationToken) })
                 .ToArrayAsync(cancellationToken: cancellationToken))
             .ToImmutableDictionary(x => x.TypeSource.CollectionName,
-                x => new InstancesInCollection(x.Instances));
+                x => new InstancesInCollection(x.Instances)
+                {
+                    GetKey = x.TypeSource.GetKey
+                });
         return new WorkspaceState(
             Hub,
             new EntityStore(instances),

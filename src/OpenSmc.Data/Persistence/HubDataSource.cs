@@ -1,4 +1,5 @@
-﻿using Json.Patch;
+﻿using System.Text.Json.Nodes;
+using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
 using OpenSmc.Serialization;
@@ -9,30 +10,26 @@ public record HubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : 
 {
 
     private readonly bool isExternalDataSource = !Id.Equals(Hub.Address);
-    public DataChangeResponse Commit()
+
+
+
+    private readonly ISerializationService serializationService = Hub.ServiceProvider.GetRequiredService<ISerializationService>();
+    public override EntityStore Update(WorkspaceState workspace)
     {
-        //State.Commit();
-        //var newWorkspace = GetSerializedWorkspace();
-        //var dataChanged = CurrentWorkspace == null
-        //    ? new DataChangedEvent(Hub.Version, new(newWorkspace.ToJsonString()), ChangeType.Full)
-        //    : new DataChangedEvent(Hub.Version, new(JsonSerializer.Serialize(CurrentWorkspace.CreatePatch(newWorkspace))), ChangeType.Patch);
+        var newStore = base.Update(workspace);
+        
+        if (isExternalDataSource)
+            SerializeAndPostChangeRequest(newStore);
 
-        //if (isExternalDataSource)
-        //    CommitTransactionExternally(dataChanged);
-
-        //CurrentWorkspace = newWorkspace;
-        //UpdateSubscriptions();
-        //return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, dataChanged);
-
-        throw new NotImplementedException();
+        return LastSerialized = newStore;
     }
 
-
-
-    private void CommitTransactionExternally(DataChangedEvent dataChanged)
+    private void SerializeAndPostChangeRequest(EntityStore newStore)
     {
-        var request = Hub.Post(new PatchChangeRequest(dataChanged.Change), o => o.WithTarget(Id));
-        Hub.RegisterCallback(request, HandleCommitResponse);
+        var oldJson = JsonNode.Parse(serializationService.SerializeToString(LastSerialized));
+        var newJson = JsonNode.Parse(serializationService.SerializeToString(newStore));
+        var patch = oldJson.CreatePatch(newJson);
+        Hub.RegisterCallback(Hub.Post(new PatchChangeRequest(patch), o => o.WithTarget(Id)), HandleCommitResponse);
     }
 
     private IMessageDelivery HandleCommitResponse(IMessageDelivery<DataChangeResponse> response)
@@ -43,7 +40,6 @@ public record HubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : 
         // TODO V10: Here we have to put logic to revert the state if commit has failed. (26.02.2024, Roland Bürgi)
         return response.Ignored();
     }
-
 
     protected override HubDataSource WithType<T>(Func<ITypeSource, ITypeSource> typeSource)
         => WithType<T>(x => (TypeSourceWithType<T>)typeSource.Invoke(x));
@@ -77,13 +73,15 @@ public record HubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : 
         Hub.RegisterCallback(subscribeRequest, response =>
             {
                 
-                tcs.SetResult(new WorkspaceState(Hub, response.Message, TypeSources));
+                tcs.SetResult(new WorkspaceState(Hub, LastSerialized = (EntityStore)response.Message.Change, TypeSources));
                 
                 return subscribeRequest.Processed();
             },
             cancellationToken);
         return tcs.Task;
     }
+
+    private EntityStore LastSerialized { get; set; }
 
     private const string Main = nameof(Main);
 
