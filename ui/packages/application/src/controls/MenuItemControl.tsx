@@ -36,36 +36,36 @@ export default function MenuItemControl({
                                             style,
                                             color,
                                         }: MenuItemView) {
-    const {parentControlContext} = useControlContext<MenuItemView>();
+    // const {parentControlContext} = useControlContext<MenuItemView>();
     const [isOpen, setIsOpen] = useState(false);
 
     const isExpandable = !!expandMessage;
 
     const clickAction = useClickAction(clickMessage);
 
-    const isSideMenu = isControlContextOfType(parentControlContext, LayoutStackControl)
-        && parentControlContext.boundView.skin === "SideMenu";
-
-    const isToolbar = getParentContextOfType(
-        parentControlContext,
-        LayoutStackControl,
-        context => context.boundView.skin === "Toolbar"
-    );
-
-    if (!skin) {
-        if (isSideMenu) {
-            skin = "LargeIcon";
-        }
-    }
-
-    if (!color) {
-        if (isToolbar) {
-            color = brightGray;
-        }
-        if (skin === "Link") {
-            color = brandeisBlue;
-        }
-    }
+    // const isSideMenu = isControlContextOfType(parentControlContext, LayoutStackControl)
+    //     && parentControlContext.boundView.skin === "SideMenu";
+    //
+    // const isToolbar = getParentContextOfType(
+    //     parentControlContext,
+    //     LayoutStackControl,
+    //     context => context.boundView.skin === "Toolbar"
+    // );
+    //
+    // if (!skin) {
+    //     if (isSideMenu) {
+    //         skin = "LargeIcon";
+    //     }
+    // }
+    //
+    // if (!color) {
+    //     if (isToolbar) {
+    //         color = brightGray;
+    //     }
+    //     if (skin === "Link") {
+    //         color = brandeisBlue;
+    //     }
+    // }
 
     const colorObj = color && tinycolor(color);
 
@@ -78,11 +78,10 @@ export default function MenuItemControl({
 
     const cssVars = {
         ["--main-color"]: colorObj?.toHexString()
-    };
+    }
 
     return (
         <div
-            id={id}
             className={className}
             style={{...style, ...cssVars}}
         >
@@ -94,21 +93,21 @@ export default function MenuItemControl({
                 onClick={clickAction}
             >
             </Button>
-            {isExpandable &&
-                <Dropdown
-                    trigger={['click']}
-                    overlay={<ExpandOverlay/>}
-                    overlayClassName={styles.overlay}
-                    align={{points: ['tr', 'br']}}
-                    onVisibleChange={(visible) => setIsOpen(visible)}
-                    onOverlayClick={(e) => setIsOpen(false)}
-                >
-                    <Button className={styles.chevron}
-                            type="button">
-                        <i className={classNames(isOpen ? 'sm sm-chevron-up' : 'sm sm-chevron-down')}/>
-                    </Button>
-                </Dropdown>
-            }
+            {/*{isExpandable &&*/}
+            {/*    <Dropdown*/}
+            {/*        trigger={['click']}*/}
+            {/*        overlay={<ExpandOverlay/>}*/}
+            {/*        overlayClassName={styles.overlay}*/}
+            {/*        align={{points: ['tr', 'br']}}*/}
+            {/*        onVisibleChange={(visible) => setIsOpen(visible)}*/}
+            {/*        onOverlayClick={(e) => setIsOpen(false)}*/}
+            {/*    >*/}
+            {/*        <Button className={styles.chevron}*/}
+            {/*                type="button">*/}
+            {/*            <i className={classNames(isOpen ? 'sm sm-chevron-up' : 'sm sm-chevron-down')}/>*/}
+            {/*        </Button>*/}
+            {/*    </Dropdown>*/}
+            {/*}*/}
         </div>
     )
 }

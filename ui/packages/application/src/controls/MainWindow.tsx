@@ -1,17 +1,14 @@
-import React, { Fragment, useEffect, useRef, useState } from "react";
-import { renderControl } from "../renderControl";
-import { useSubscribeToAreaChanged } from "../useSubscribeToAreaChanged";
+import { Fragment, useEffect, useRef, useState } from "react";
 import styles from "./mainWindow.module.scss";
 import { StackView } from "./LayoutStackControl";
 import { keyBy } from "lodash";
-import { AreaChangedEvent, CloseModalDialogEvent } from "../contract/application.contract";
+import { CloseModalDialogEvent } from "../contract/application.contract";
 import Dialog from "rc-dialog";
 import "@open-smc/ui-kit/src/components/dialog.scss";
 import classNames from "classnames";
-import { useMessageHub } from "../AddHub";
-import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
-import { MainWindowArea, mainWindowAreas } from "./mainWindowApi";
-import { Area } from "../Area";
+import { mainWindowAreas } from "./mainWindowApi";
+import { basename } from "path-browserify";
+import { RenderArea } from "../app/RenderArea";
 
 export type ModalOptions = {
     isClosable?: boolean;
@@ -20,17 +17,15 @@ export type ModalOptions = {
 
 type ModalSize = "S" | "M" | "L";
 
-export function MainWindow({id, areas}: StackView) {
-    const areasByKey = keyBy(areas, "area") as Record<MainWindowArea, AreaChangedEvent>;
+export function MainWindow({areaIds}: StackView) {
+    const mappedAreas = keyBy(areaIds, basename);
 
-    const main = areasByKey[mainWindowAreas.main];
-    const toolbar = areasByKey[mainWindowAreas.toolbar];
-    const sideMenu = areasByKey[mainWindowAreas.sideMenu];
-    const contextMenu = areasByKey[mainWindowAreas.contextMenu];
-    const statusBar = areasByKey[mainWindowAreas.statusBar]
-    const modal = areasByKey[mainWindowAreas.modal];
-
-    const hub = useMessageHub();
+    const mainAreaId = mappedAreas[mainWindowAreas.main];
+    const toolbarAreaId = mappedAreas[mainWindowAreas.toolbar];
+    const sideMenuAreaId = mappedAreas[mainWindowAreas.sideMenu];
+    const contextMenuAreaId = mappedAreas[mainWindowAreas.contextMenu];
+    const statusBarAreaId = mappedAreas[mainWindowAreas.statusBar]
+    const modalAreaId = mappedAreas[mainWindowAreas.modal];
 
     const [isResizing, setIsResizing] = useState(false);
 
@@ -71,11 +66,10 @@ export function MainWindow({id, areas}: StackView) {
 
     return (
         <Fragment>
-            <div id={id} className={styles.layout}>
-                {sideMenu &&
-                    <Area
-                        hub={hub}
-                        event={sideMenu}
+            <div className={styles.layout}>
+                {sideMenuAreaId &&
+                    <RenderArea
+                        id={sideMenuAreaId}
                         render={
                             view =>
                                 <div className={styles.sideMenu}>
@@ -84,10 +78,9 @@ export function MainWindow({id, areas}: StackView) {
                         }
                     />
                 }
-                {toolbar &&
-                    <Area
-                        hub={hub}
-                        event={toolbar}
+                {toolbarAreaId &&
+                    <RenderArea
+                        id={toolbarAreaId}
                         render={
                             view =>
                                 <div className={styles.toolbar}>
@@ -97,22 +90,21 @@ export function MainWindow({id, areas}: StackView) {
                     />
 
                 }
-                {main &&
-                    <Area
-                        hub={hub}
-                        event={main}
+                {mainAreaId &&
+                    <RenderArea
+                        id={mainAreaId}
                         render={
                             view =>
                                 <div className={styles.mainContent}>
                                     {view}
                                 </div>
                         }
+
                     />
                 }
-                {contextMenu &&
-                    <Area
-                        hub={hub}
-                        event={contextMenu}
+                {contextMenuAreaId &&
+                    <RenderArea
+                        id={contextMenuAreaId}
                         render={
                             view =>
                                 <div className={contextPanelClassName} ref={contextPanelRef}>

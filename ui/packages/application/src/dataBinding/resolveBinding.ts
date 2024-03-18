@@ -1,4 +1,4 @@
-const bindingType = "OpenSmc.Application.Layout.DataBinding.Binding";
+const bindingType = "OpenSmc.Layout.DataBinding.Binding";
 
 export interface Binding {
     $type: string;

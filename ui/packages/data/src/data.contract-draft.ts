@@ -3,7 +3,9 @@
 //     => LayoutStack
 // data host is Ifrs17Address
 
-import { ClickedEvent, RefreshRequest } from "../contract/application.contract";
+import { ClickedEvent, RefreshRequest } from "@open-smc/application/src/contract/application.contract";
+import { WorkspaceReference } from "./data.contract";
+import { makeBinding } from "@open-smc/application/src/dataBinding/resolveBinding";
 
 const view = {
     title: "Hello",
@@ -74,16 +76,38 @@ const dataContextSample =
 
 const layoutAddress = new LayoutAddress(123);
 
-post(layoutAddress, new SubscribeDataRequest("OpenSmc.Layout.Area", "$['OpenSmc.Layout.Area']"))
+post(layoutAddress, new SubscribeDataRequest())
 post(layoutAddress, new RefreshRequest("root"));
 
-renderArea("root")
+// queryRequest = "root", (/application/dev)
 
 handle(DataChange, () => {
     // patch workspace
     // re-render updated areas tree
     // this dataChange may not contain changes to data collections, then can come later
 })
+
+const rootControlWorkspaceReference = {
+    $type: "OpenSmc.Data.WorkspaceReference",
+    address: layoutAddress,
+    path: "$['OpenSmc.Layout.LayoutArea'][?@.id=='root']"
+}
+
+// root layoutArea pulled from the workspace by queryResult
+const layoutArea  = {
+    $type: "LayoutArea",
+    id: "/path",
+    control: {
+        $type: "Stack",
+        areas: [
+            {
+                $type: "OpenSmc.Data.WorkspaceReference",
+                address: layoutAddress,
+                path: "$['OpenSmc.Layout.Area'][?@.id=='root/SideMenu']"
+            },
+        ]
+    }
+}
 
 const workspace = {
     "OpenSmc.Layout.Area": [
@@ -93,7 +117,7 @@ const workspace = {
                 $type: "Stack",
                 areas: [
                     {
-                        $type: "OpenSmc.Data.EntityReference",
+                        $type: "OpenSmc.Data.WorkspaceReference",
                         address: layoutAddress,
                         path: "$['OpenSmc.Layout.Area'][?@.id=='root/SideMenu']"
                     },
@@ -109,7 +133,7 @@ const workspace = {
                 },
                 areas: [
                     {
-                        $type: "OpenSmc.Data.EntityReference",
+                        $type: "OpenSmc.Data.WorkspaceReference",
                         address: layoutAddress,
                         path: "$['OpenSmc.Layout.Area'][?@.id=='root/SideMenu/Button1']"
                     },
@@ -121,7 +145,7 @@ const workspace = {
             control: {
                 $type: "MenuItem",
                 dataContext: {
-                    $type: "OpenSmc.Data.EntityReference",
+                    $type: "OpenSmc.Data.WorkspaceReference",
                     address: layoutAddress,
                     path: "$['OpenSmc.DataRecords'][?@.systemName=='Hello']"
                 },
@@ -148,5 +172,75 @@ const workspace = {
         }
     ]
 }
+// main store init
+new SubscribeDataRequest("any string", new EntireWorkspace()); // sent to layout address (to be clarified)
 
 
+// layout store
+new SubscribeDataRequest("123", new LayoutAreaReference(path_from_url)); // sent to layout address (to be clarified)
+new DataChangedEvent({
+    $type: "LayoutArea", // or "JsonPatch"
+    object: {
+        id: "123",
+        control: {
+            $type: "LayoutStack",
+            areas: [
+                {
+                    $type: "MenuItemControl",
+                },
+                {
+                    $type: "InputBoxControl",
+                    dataContext: {
+                        playJson: 123,
+                        ref: new WorkspaceReference(), // always reference to the main store
+                    },
+                    value: makeBinding("ref.property") // json path
+                }
+            ]
+        }
+    } // full thing the first time, json patches afterwards,
+})
+
+// UI creates a store for layout area
+
+
+
+
+const mainStore = {
+    entity: {
+        property: "123"
+    }
+}
+
+// a projection from the main store, synchronized via json patches
+const layoutStore = {
+    $type: "LayoutArea",
+    id: "/",
+    control: {
+        $type: "LayoutStack",
+        skin: "MainWindow",
+        areas: [
+            {
+                $type: "LayoutArea",
+                id: "/Main",
+                control: {
+                    $type: "MenuItemControl",
+                    id: "123",
+                    // to be clarified where to send clicks
+                }
+            },
+            {
+                $type: "LayoutArea",
+                id: "/Toolbar",
+                control: {
+                    $type: "InputBoxControl",
+                    dataContext: {
+                        plainJson: 123,
+                        data: new WorkspaceReference("entity"), // reference to the main store
+                    },
+                    value: makeBinding("data.property") // JsonPath
+                }
+            }
+        ]
+    }
+}
