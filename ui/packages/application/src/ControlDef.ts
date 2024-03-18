@@ -25,12 +25,10 @@ export interface MessageAndAddressAndArea extends MessageAndAddress {
     readonly area: string;
 }
 
-export interface ControlSpec {
+export type ControlDef<TView extends ControlView = unknown> = TView & {
     readonly $type: string;
     readonly moduleName: string;
     readonly apiVersion: string;
     readonly address?: unknown;
     readonly dataContext?: unknown;
 }
-
-export type ControlDef<TView extends ControlView = unknown> = ControlSpec & TView;

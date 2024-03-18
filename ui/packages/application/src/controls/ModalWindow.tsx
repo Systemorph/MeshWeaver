@@ -1,10 +1,9 @@
 import styles from "./modalWindow.module.scss";
 import { StackView } from "./LayoutStackControl";
 import { keyBy } from "lodash";
-import { AreaChangedEvent } from "../contract/application.contract";
 import classNames from "classnames";
-import { useMessageHub } from "../AddHub";
-import { Area } from "../Area";
+import { basename } from "path-browserify";
+import { RenderArea } from "../app/RenderArea";
 
 export const modalWindowAreas = {
     main: "Main",
@@ -14,23 +13,20 @@ export const modalWindowAreas = {
 
 export type ModalWindowArea = typeof modalWindowAreas[keyof typeof modalWindowAreas];
 
-export function ModalWindow({id, areas, style}: StackView) {
-    const areasByKey = keyBy(areas, "area") as Record<ModalWindowArea, AreaChangedEvent>;
+export function ModalWindow({areaIds, style}: StackView) {
+    const mappedAreas = keyBy(areaIds, basename);
 
-    const main = areasByKey[modalWindowAreas.main];
-    const title = areasByKey[modalWindowAreas.header];
-    const footer = areasByKey[modalWindowAreas.footer];
-
-    const hub = useMessageHub();
+    const mainAreaId = mappedAreas[modalWindowAreas.main];
+    const titleAreaId = mappedAreas[modalWindowAreas.header];
+    const footerAreaId = mappedAreas[modalWindowAreas.footer];
 
     const className = classNames(styles.modalWindow);
 
     return (
-        <div id={id} className={className} style={style}>
-            {title &&
-                <Area
-                    hub={hub}
-                    event={title}
+        <div className={className} style={style}>
+            {titleAreaId &&
+                <RenderArea
+                    id={titleAreaId}
                     render={
                         view =>
                             <div className={styles.header}>
@@ -39,10 +35,9 @@ export function ModalWindow({id, areas, style}: StackView) {
                     }
                 />
             }
-            {main &&
-                <Area
-                    hub={hub}
-                    event={main}
+            {mainAreaId &&
+                <RenderArea
+                    id={mainAreaId}
                     render={
                         view =>
                             <div className={styles.main}>
@@ -51,10 +46,9 @@ export function ModalWindow({id, areas, style}: StackView) {
                     }
                 />
             }
-            {footer &&
-                <Area
-                    hub={hub}
-                    event={footer}
+            {footerAreaId &&
+                <RenderArea
+                    id={footerAreaId}
                     render={
                         view =>
                             <div className={styles.footer}>

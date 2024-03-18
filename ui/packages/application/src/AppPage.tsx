@@ -1,22 +1,19 @@
 import { useLocation } from "react-router-dom";
-import { MessageRouter } from "./MessageRouter";
-import { LayoutHub } from "./LayoutHub";
-import { ControlStarter } from "./ControlStarter";
-import { SignalrTransport } from "./SignalrTransport";
-import { NotificationProvider } from "./notifications/NotificationProvider";
+import { Provider } from "react-redux";
+import { store } from "./app/store";
+import React from "react";
+import App from "./App";
+import { registerControlResolver } from "./controlRegistry";
+import { applicationControlsResolver } from "./applicationControlResolver";
+
+registerControlResolver(applicationControlsResolver);
 
 export function AppPage() {
     const {pathname} = useLocation();
 
     return (
-        <NotificationProvider>
-            <SignalrTransport>
-                <MessageRouter>
-                    <LayoutHub>
-                        <ControlStarter area={"app"} path={pathname}/>
-                    </LayoutHub>
-                </MessageRouter>
-            </SignalrTransport>
-        </NotificationProvider>
+        <Provider store={store}>
+            <App/>
+        </Provider>
     );
 }

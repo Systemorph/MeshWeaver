@@ -1,27 +1,28 @@
-import React, { useEffect, useState } from 'react';
-import { Area } from "../Area";
-import { AreaChangedEvent } from "../contract/application.contract";
 import { MainWindow } from "./MainWindow";
 import classNames from "classnames";
 import styles from "./layoutStackControl.module.scss";
 import { ModalWindow } from "./ModalWindow";
 import { ControlView } from "../ControlDef";
-import { useSubscribeToAreaChanged } from "../useSubscribeToAreaChanged";
-import { insertAfter } from "@open-smc/utils/src/insertAfter";
-import { useMessageHub } from "../AddHub";
+import { RenderArea } from "../app/RenderArea";
 
-export type StackSkin = "VerticalPanel" | "HorizontalPanel" | "HorizontalPanelEqualCols" | "Toolbar" | "SideMenu" | "ContextMenu" | "MainWindow" |
-    "Action" | "Modal" | "GridLayout";
+export type StackSkin =
+    "VerticalPanel"
+    | "HorizontalPanel"
+    | "HorizontalPanelEqualCols"
+    | "Toolbar"
+    | "SideMenu"
+    | "ContextMenu"
+    | "MainWindow"
+    |
+    "Action"
+    | "Modal"
+    | "GridLayout";
 
 export interface StackView extends ControlView {
-    areas: AreaChangedEvent[];
+    areaIds: string[];
     skin?: StackSkin;
     highlightNewAreas?: boolean;
     columnCount?: number;
-}
-
-export type StackOptions = {
-    insertAfter?: string;
 }
 
 export default function LayoutStackControl(props: StackView) {
@@ -42,56 +43,29 @@ export default function LayoutStackControl(props: StackView) {
     return <LayoutStack {...props}/>;
 }
 
-function LayoutStack({id, skin, areas: areasInit, style, highlightNewAreas, columnCount}: StackView) {
-    const [areas, setAreas] = useState(areasInit);
-    const [addedAreas, setAddedAreas] = useState([]);
-    const hub = useMessageHub();
-
-    useEffect(() => {
-        setAreas(areasInit);
-        setAddedAreas([]);
-    }, [areasInit]);
-
-    useSubscribeToAreaChanged(hub, undefined,event => {
-        const {area} = event;
-        const options = event.options as StackOptions;
-
-        if (!areas?.find(a => a.area === area)) {
-            const insertAfterArea = options?.insertAfter;
-            const insertAfterEvent = insertAfterArea && areas?.find(a => a.area === insertAfterArea);
-            setAreas(areas ? insertAfter(areas, event, insertAfterEvent) : [event]);
-            setAddedAreas([...addedAreas, area]);
-        }
-    });
-
-    const elements = areas?.map(event => {
-        const {area, view} = event;
-
-        const className = classNames(styles.stackItem, {
-            isAdded: addedAreas.includes(area)
-        });
-
-        if (!view) {
-            return null;
-        }
+function LayoutStack({id, skin, areaIds, style, highlightNewAreas, columnCount}: StackView) {
+    const renderedAreas = areaIds?.map(id => {
+        const className = classNames(
+            styles.stackItem, {
+                // isAdded: addedAreas.includes(area)
+            }
+        );
 
         return (
-            <div style={event.style} className={className} key={area}>
-                <Area hub={hub} event={event}/>
-            </div>
+            <RenderArea id={id} className={className}/>
         );
     });
 
-    const containerClassName = getStackClassNames(skin, highlightNewAreas);
+    const className = getStackClassNames(skin, highlightNewAreas);
 
     const cssVars = {
-        ["--columnNumber"]: `${areas.length}`,
+        ["--columnNumber"]: `${areaIds.length}`,
         ["--columnCount"]: columnCount,
     };
 
     return (
-        <div id={id} className={containerClassName} style={{...style, ...cssVars}}>
-            {elements}
+        <div id={id} className={className} style={{...style, ...cssVars}}>
+            {renderedAreas}
         </div>
     );
 }
