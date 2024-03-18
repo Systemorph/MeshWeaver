@@ -39,7 +39,8 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
         return base.ConfigureClient(configuration)
-            .AddData(data => data.FromHub(new HostAddress()));
+            .AddData(data => data.FromHub(new HostAddress(), dataSource => dataSource
+                .WithType<MyData>()));
     }
 
     [Fact]
@@ -145,9 +146,10 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         return Task.FromResult<IEnumerable<MyData>>(initialData);
     }
     
-    private void SaveMyData(InstancesInCollection instancesInCollection)
+    private InstancesInCollection SaveMyData(InstancesInCollection instancesInCollection)
     {
         storage = instancesInCollection.Instances;
+        return instancesInCollection;
     }
 
 
