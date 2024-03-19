@@ -2,6 +2,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Persistence;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 
 namespace OpenSmc.Data;
 

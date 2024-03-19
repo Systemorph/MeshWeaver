@@ -5,7 +5,7 @@ namespace OpenSmc.Data;
 public static class WorkspaceExtensions
 {
     public static IReadOnlyCollection<T> GetData<T>(this WorkspaceState state)
-        => state.Reduce(new CollectionReference(typeof(T).FullName))?.Instances.Values.Cast<T>().ToArray();
+        => state?.Reduce(new CollectionReference(typeof(T).FullName))?.Instances.Values.Cast<T>().ToArray();
     public static IReadOnlyCollection<T> GetData<T>(this IWorkspace workspace)
         => workspace.State.GetData<T>();
     public static T GetData<T>(this WorkspaceState state, object id)
@@ -15,7 +15,13 @@ public static class WorkspaceExtensions
     public static IObservable<T> GetObservable<T>(this IWorkspace workspace, object id)
         => workspace.Stream.StartWith(workspace.State).Select(ws => ws.GetData<T>(id)).Replay(1).RefCount();
     public static IObservable<IReadOnlyCollection<T>> GetObservable<T>(this IWorkspace workspace)
-        => workspace.Stream.StartWith(workspace.State).Select(ws => ws.GetData<T>()).Replay(1).RefCount();
+    {
+        var stream = workspace.Stream;
+        if (workspace.State != null)
+            stream = stream.StartWith(workspace.State);
+
+        return stream.Select(ws => ws.GetData<T>()).Replay(1).RefCount();
+    }
 
     public static WorkspaceReference Observe(this IWorkspace workspace, WorkspaceReference reference)
         => ObserveImpl(workspace, (dynamic)reference);
