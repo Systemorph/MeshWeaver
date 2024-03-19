@@ -1,16 +1,13 @@
 ﻿using System.Collections.Concurrent;
-using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Text.Json.Nodes;
-using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Messaging;
 using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
-public class DataPlugin : MessageHubPlugin<WorkspaceState>,
+public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub),
     IWorkspace,
     IMessageHandler<UpdateDataRequest>,
     IMessageHandler<DeleteDataRequest>,
@@ -22,13 +19,6 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     private readonly Subject<WorkspaceState> subject = new();
 
     public IObservable<WorkspaceState> Stream => subject;
-    public DataPlugin(IMessageHub hub) : base(hub)
-    {
-        serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
-        logger = hub.ServiceProvider.GetRequiredService<ILogger<DataPlugin>>();
-        InitializeState(new WorkspaceState(hub, new EntityStore(ImmutableDictionary<string, InstancesInCollection>.Empty), ImmutableDictionary<Type, ITypeSource>.Empty));
-        deferral = MessageService.Defer(IsDeferred);
-    }
 
     public IEnumerable<Type> MappedTypes => State.MappedTypes;
 
@@ -39,7 +29,7 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
         => RequestChange(null, new DeleteDataRequest(instances.ToArray()));
 
 
-    private TaskCompletionSource initializeTaskCompletionSource = new();
+    private readonly TaskCompletionSource initializeTaskCompletionSource = new();
     public override Task Initialized => initializeTaskCompletionSource.Task;
     private DataContext DataContext { get; set; }
     public override async Task StartAsync(CancellationToken cancellationToken)  // This loads the persisted state
@@ -59,9 +49,9 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
             .ContinueWith(t =>
             {
                 logger.LogDebug("Initialized workspace in address {address}", Address);
-                UpdateState(ws => ws.Merge(t.Result) with { Version = Hub.Version });
-                deferral.Dispose();
+                InitializeState(t.Result);
                 initializeTaskCompletionSource.SetResult();
+                subject.OnNext(State);
                 subject.DistinctUntilChanged().Subscribe(dataContext.Update);
             }, cancellationToken);
     }
@@ -119,22 +109,23 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     IMessageDelivery IMessageHandler<DataChangedEvent>.HandleMessage(IMessageDelivery<DataChangedEvent> request)
     {
         var @event = request.Message;
+        if (State == null)
+            return request.Ignored();
         UpdateState(s => s.Synchronize(@event));
         Commit();
         return request.Processed();
     }
 
     IMessageDelivery IMessageHandler<SubscribeRequest>.HandleMessage(IMessageDelivery<SubscribeRequest> request)
-        => StartSynchronization(request);
+        => Subscribe(request);
 
     private readonly ConcurrentDictionary<(object Address, string Id),IDisposable> subscriptions = new();
 
-    private readonly ISerializationService serializationService;
-    private readonly ILogger<DataPlugin> logger;
-    private readonly IDisposable deferral;
+    private readonly ISerializationService serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
+    private readonly ILogger<DataPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<DataPlugin>>();
 
 
-    private IMessageDelivery StartSynchronization(IMessageDelivery<SubscribeRequest> request)
+    private IMessageDelivery Subscribe(IMessageDelivery<SubscribeRequest> request)
     {
         var key = (request.Sender, request.Message.Id);
         if (subscriptions.TryRemove(key, out var existing))
@@ -142,44 +133,11 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
 
         subscriptions[key] = subject
             .StartWith(State)
-            .Subscribe(new PatchSubscriber(Hub, request, serializationService));
+            .Subscribe(new PatchSubscriber(Hub, request, serializationService, State.TypeSources));
 
         return request.Processed();
     }
 
-    private class PatchSubscriber(IMessageHub hub, IMessageDelivery<SubscribeRequest> request, ISerializationService serializationService) : IObserver<WorkspaceState>
-    {
-        private JsonNode LastSynchronized { get; set; }
-
-        public void OnCompleted()
-        {
-        }
-
-        public void OnError(Exception error)
-        {
-        }
-
-        public void OnNext(WorkspaceState workspace)
-        {
-            var value = workspace.Reduce(request.Message.Reference);
-            if (value == null)
-                return;
-
-
-
-            var node = value as JsonNode
-                       ?? JsonNode.Parse(serializationService.SerializeToString(value));
-
-
-            var dataChanged = LastSynchronized == null
-                ? new DataChangedEvent(hub.Version, value)
-                : new DataChangedEvent(hub.Version, LastSynchronized.CreatePatch(node));
-
-            hub.Post(dataChanged, o => o.ResponseFor(request));
-            LastSynchronized = node;
-
-        }
-    }
 
 
     IMessageDelivery IMessageHandler<UnsubscribeDataRequest>.HandleMessage(
@@ -231,4 +189,3 @@ public class DataSubscription<T> :IDisposable
         subscription.Dispose();
     }
 }
-

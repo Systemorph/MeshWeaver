@@ -27,6 +27,9 @@ public interface ITypeSource
     InstancesInCollection Update(WorkspaceState workspace);
 }
 
+public record TypeSource(string CollectionName)
+    : TypeSource<TypeSource>(null, null, CollectionName);
+
 public abstract record TypeSource<TTypeSource> : ITypeSource
     where TTypeSource : TypeSource<TTypeSource>
 {
@@ -47,9 +50,9 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
     protected Func<object, object> Key { get; init; }
     private static Func<object, object> GetKeyFunction(Type elementType)
     {
-        var keyProperty = elementType.GetProperties().SingleOrDefault(p => p.HasAttribute<KeyAttribute>());
+        var keyProperty = elementType?.GetProperties().SingleOrDefault(p => p.HasAttribute<KeyAttribute>());
         if (keyProperty == null)
-            keyProperty = elementType.GetProperties().SingleOrDefault(x => x.Name.ToLowerInvariant() == "id");
+            keyProperty = elementType?.GetProperties().SingleOrDefault(x => x.Name.ToLowerInvariant() == "id");
         if (keyProperty == null)
             return null;
         var prm = Expression.Parameter(typeof(object));
@@ -87,6 +90,7 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
         });
         return UpdateImpl(myCollection);
     }
+
 
     protected virtual InstancesInCollection UpdateImpl(InstancesInCollection myCollection) => myCollection;
 

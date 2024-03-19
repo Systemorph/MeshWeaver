@@ -1,6 +1,8 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
+using Json.More;
 using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
@@ -8,50 +10,185 @@ using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
 
+public static class WorkspaceJsonSerializer
+{
+    public static JsonSerializerOptions Options(this ISerializationService serializationService,
+        IReadOnlyDictionary<string, ITypeSource> typeProviders) =>
+        new()
+        {
+            Converters =
+                { new EntityStoreConverter(typeProviders, serializationService), new SerializationServiceConverter(serializationService) }
+        };
+}
+
+public class SerializationServiceConverter(ISerializationService serializationService) : JsonConverter<object>
+{
+
+    public override bool CanConvert(Type typeToConvert)
+        => typeToConvert != typeof(EntityStore);
+
+    public override object Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        using JsonDocument doc = JsonDocument.ParseValue(ref reader);
+        return serializationService.Deserialize(doc.RootElement.ToString());
+    }
+
+    public override void Write(Utf8JsonWriter writer, object value, JsonSerializerOptions options)
+    {
+        JsonNode.Parse(serializationService.SerializeToString(value))!.WriteTo(writer);
+    }
+}
+
+public class EntityStoreConverter(IReadOnlyDictionary<string, ITypeSource> typeSourcesByCollection, ISerializationService serializationService) : JsonConverter<EntityStore>
+{
+    public override EntityStore Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        using JsonDocument doc = JsonDocument.ParseValue(ref reader);
+        return Deserialize(doc.RootElement.AsNode(), options);
+    }
+
+    public override void Write(Utf8JsonWriter writer, EntityStore value, JsonSerializerOptions options)
+    {
+        Serialize(value).WriteTo(writer);
+    }
+
+    private JsonNode Serialize(EntityStore store)
+    {
+        var ret = new JsonObject(
+            store.Instances.ToDictionary(
+                x => x.Key,
+                x => (JsonNode)new JsonArray(
+                    x.Value.Instances.Select(i => SerializeInstance(x.Key, i.Key, i.Value)).ToArray()
+                )
+            )
+        );
+        return ret;
+    }
+
+    private JsonNode SerializeInstance(string collection, object id, object instance)
+    {
+        var ret = JsonSerializer.SerializeToNode(instance);
+        ret![ReservedProperties.Type] = collection;
+        ret[ReservedProperties.Id] = JsonSerializer.SerializeToNode(id);
+        return ret;
+    }
+
+    public EntityStore Deserialize(JsonNode serializedWorkspace, JsonSerializerOptions options)
+    {
+        if (serializedWorkspace is not JsonObject obj)
+            throw new ArgumentException("Invalid serialized workspace");
+
+        var newStore = new EntityStore(obj.Select(kvp => DeserializeCollection(kvp.Key, kvp.Value, options)).ToImmutableDictionary());
+
+        return newStore;
+    }
+
+    private KeyValuePair<string, InstancesInCollection> DeserializeCollection(string collection, JsonNode node, JsonSerializerOptions options)
+    {
+        return
+            new(
+                collection,
+                DeserializeToInstances(node, typeSourcesByCollection.GetValueOrDefault(collection)?.ElementType, options)
+            );
+    }
+
+    public InstancesInCollection DeserializeToInstances(JsonNode node, Type elementType, JsonSerializerOptions options)
+    {
+        if (node is not JsonArray array)
+            throw new ArgumentException("Expecting an array");
+        return new(array.Select(jsonNode => DeserializeEntity(jsonNode, elementType, options)).ToImmutableDictionary());
+    }
+
+    private KeyValuePair<object, object> DeserializeEntity(JsonNode jsonNode, Type elementType, JsonSerializerOptions options)
+    {
+        if (jsonNode is not JsonObject obj)
+            throw new ArgumentException($"Expecting node type to be object");
+        if (!obj.TryGetPropertyValue(ReservedProperties.Id, out var id) || id == null)
+            throw new ArgumentException($"Expecting property {ReservedProperties.Id} to be set");
+        return new(serializationService.Deserialize(id.ToJsonString()), elementType == null ? jsonNode.DeepClone() : jsonNode.Deserialize(elementType));
+    }
+
+
+
+}
+
 public record WorkspaceState
 {
     private readonly ISerializationService serializationService;
     private ImmutableDictionary<Type, string> CollectionsByType { get; init; }
-    private ImmutableDictionary<Type, ITypeSource> TypeSourcesByType { get; init; }
-    private ImmutableDictionary<string, Type> TypeSourcesByCollection { get; init; }
+    public ImmutableDictionary<string, ITypeSource> TypeSources { get; init; }
     private IMessageHub Hub { get; }
     public WorkspaceState
-        (
-            IMessageHub hub,     
-            EntityStore Store, 
-            IReadOnlyDictionary<Type, ITypeSource> typeSources
-            )
-        :this(hub, typeSources)
+    (
+        IMessageHub hub,
+        EntityStore Store,
+        IReadOnlyDictionary<string, ITypeSource> typeSources
+    )
+        : this(hub, typeSources)
     {
         Hub = hub;
         this.Store = Store;
-        LastSynchronized = Store;
-        TypeSourcesByType = typeSources.ToImmutableDictionary();
-        TypeSourcesByCollection = CollectionsByType.ToImmutableDictionary(x => x.Value, x => x.Key);
+        LastSynchronized = JsonSerializer.SerializeToNode(Store, Options);
+    }
+    public WorkspaceState
+    (
+        IMessageHub hub,
+        JsonNode LastSynchronized,
+        IReadOnlyDictionary<string, ITypeSource> typeSources
+    )
+        : this(hub, typeSources)
+    {
+        Hub = hub;
+        this.LastSynchronized = LastSynchronized;
+        Store = LastSynchronized.Deserialize<EntityStore>(Options);
     }
 
-    private WorkspaceState(IMessageHub hub, IReadOnlyDictionary<Type, ITypeSource> typeSources)
+    private WorkspaceState(IMessageHub hub, IReadOnlyDictionary<string, ITypeSource> typeSources)
     {
         Hub = hub;
         Version = hub.Version;
         serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
-        CollectionsByType = typeSources.ToImmutableDictionary(x => x.Key, x => x.Value.CollectionName);
-        TypeSourcesByCollection = typeSources.Values.ToImmutableDictionary(x => x.CollectionName, x => x.ElementType);
-        TypeSourcesByType = typeSources.ToImmutableDictionary();
+        CollectionsByType = typeSources.Values.Where(x => x.ElementType != null).ToImmutableDictionary(x => x.ElementType, x => x.CollectionName);
+        TypeSources = typeSources.Values.ToImmutableDictionary(x => x.CollectionName);
+        Options = serializationService.Options(TypeSources);
     }
+
+    private JsonSerializerOptions Options { get;  }
 
 
     public WorkspaceState(IMessageHub hub, DataChangedEvent dataChanged,
-        IReadOnlyDictionary<Type, ITypeSource> typeSources)
-        : this(hub, (EntityStore)dataChanged.Change, typeSources)
+        IReadOnlyDictionary<string, ITypeSource> typeSources)
+        : this(hub, typeSources)
     {
+        LastSynchronized = GetSerializedWorkspace(dataChanged);
+        Store = LastSynchronized.Deserialize<EntityStore>(Options);
+    }
+    private JsonNode GetSerializedWorkspace(DataChangedEvent node) =>
+        node.ChangeType switch
+        {
+            ChangeType.Full => JsonNode.Parse(node.Change.Content),
+            ChangeType.Patch => JsonSerializer.Deserialize<JsonPatch>(node.Change.Content)
+                .Apply(LastSynchronized)
+                .Result,
+            _ => throw new ArgumentOutOfRangeException()
+        };
+
+
+    public WorkspaceState Synchronize(DataChangedEvent @event)
+    {
+        var workspace = GetSerializedWorkspace(@event);
+        return this with
+        {
+            LastSynchronized = workspace,
+            Store = workspace.Deserialize<EntityStore>(Options)
+        };
     }
 
     public long Version { get; init; }
 
 
     #region Instances
-    public EntityStore Store { get; init; }
+    public EntityStore Store { get; private init; }
 
     public InstancesInCollection GetCollection(string collection) => Store.Instances.GetValueOrDefault(collection);
 
@@ -73,8 +210,6 @@ public record WorkspaceState
         return this with
         {
             Store = newStore,
-            LastSynchronized = newStore
-
         };
     }
 
@@ -87,6 +222,7 @@ public record WorkspaceState
 
     public object Reduce(WorkspaceReference reference)
         => ReduceImpl((dynamic)reference);
+
     public TReference Reduce<TReference>(WorkspaceReference<TReference> reference)
         => (TReference)ReduceImpl((dynamic)reference);
 
@@ -144,58 +280,34 @@ public record WorkspaceState
 
         };
 
+
     public WorkspaceState Change(PatchChangeRequest request)
     {
         if (LastSynchronized == null)
             throw new ArgumentException("Cannot patch workspace which has not been initialized.");
 
-        var oldState = JsonNode.Parse(serializationService.SerializeToString(LastSynchronized));
         var patch = (JsonPatch)request.Change;
-        var newState = patch.Apply(oldState);
-        var newStore = (EntityStore)serializationService.Deserialize(newState!.Result!.ToJsonString());
-        return this with { Store = newStore, LastSynchronized = newStore };
-    }
-
-
-    public WorkspaceState Synchronize(DataChangedEvent @event)
-    {
-        if (@event.Change == null)
-            return this;
-
-        var newWorkspace = @event.Change;
-        if (newWorkspace == null)
-            throw new NotSupportedException();
-
-        var newInstances =
-            newWorkspace switch
-            {
-                WorkspaceState store => store,
-                JsonPatch patch => ApplyPatch(patch),
-                JsonNode o => ApplyPatch(o.Deserialize<JsonPatch>()),
-                _ => throw new NotSupportedException()
-            };
-
+        var newState = patch.Apply(LastSynchronized);
         return this with
         {
-            Version = Hub.Version,
-            Store = newInstances.Store,
-            LastSynchronized = newInstances.Store
+            LastSynchronized = newState.Result,
+            Store = newState.Result.Deserialize<EntityStore>(Options)
         };
     }
 
-    public EntityStore LastSynchronized { get; init; }
+    private JsonNode LastSynchronized { get; init; }
+
 
     private WorkspaceState ApplyPatch(JsonPatch patch)
     {
-        var current = JsonNode.Parse(serializationService.SerializeToString(Store));
-        var result = patch.Apply(current);
-        if (result.IsSuccess && result.Result != null)
+        var newStoreSerialized = patch.Apply(LastSynchronized);
+        if (newStoreSerialized.IsSuccess && newStoreSerialized.Result != null)
         {
-            var newStore = (EntityStore)serializationService.Deserialize(result.Result.ToJsonString());
+            var newStore = (EntityStore)serializationService.Deserialize(newStoreSerialized.Result.ToJsonString());
             return this with
             {
                 Store = newStore,
-                LastSynchronized = newStore
+                LastSynchronized = newStoreSerialized.Result
             };
         }
 
@@ -213,15 +325,10 @@ public record WorkspaceState
 
         var newElements = Merge(request);
 
-        // TODO V10: It's easier to split data away from state (11.03.2024, Roland Bürgi)
-        var ret = this with
-        {
-            Store = newElements
-        };
-        return ret with
+        return this with
         {
             Store = newElements,
-            LastSynchronized = newElements
+            LastSynchronized = JsonSerializer.SerializeToNode(newElements, Options)
         };
 
     }
@@ -264,9 +371,12 @@ public record WorkspaceState
     {
         foreach (var g in instances.GroupBy(x => x.GetType()))
         {
-            var typeProvider = TypeSourcesByType.GetValueOrDefault(g.Key);
+            var collection = CollectionsByType.GetValueOrDefault(g.Key);
+            if(collection == null)
+                throw new InvalidOperationException($"Type {g.Key.FullName} is not mapped to data source.");
+            var typeProvider = TypeSources.GetValueOrDefault(collection);
             if (typeProvider == null)
-                throw new InvalidOperationException($"Type {g.Key} is not mapped to data source.");
+                throw new InvalidOperationException($"Type {g.Key.FullName} is not mapped to data source.");
             yield return new(typeProvider.CollectionName, new(instances.ToImmutableDictionary(typeProvider.GetKey))
             {
                 GetKey = typeProvider.GetKey
@@ -286,8 +396,7 @@ public record WorkspaceState
     public WorkspaceState Merge(WorkspaceState other)
         => SetItems(other.Store) with
         {
-            TypeSourcesByType = TypeSourcesByType.SetItems(other.TypeSourcesByType),
-            TypeSourcesByCollection = TypeSourcesByCollection.SetItems(other.TypeSourcesByCollection),
+            TypeSources = TypeSources.SetItems(other.TypeSources),
             CollectionsByType = CollectionsByType.SetItems(other.CollectionsByType),
         };
 }

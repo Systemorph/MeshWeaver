@@ -1,4 +1,5 @@
-﻿using System.Text.Json.Nodes;
+﻿using System.Text.Json;
+using System.Text.Json.Nodes;
 using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
@@ -6,14 +7,14 @@ using OpenSmc.Serialization;
 
 namespace OpenSmc.Data.Persistence;
 
-public record HubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : DataSource<HubDataSource>(Id, Hub)
+public record HubDataSource : DataSource<HubDataSource>
 {
 
-    private readonly bool isExternalDataSource = !Id.Equals(Hub.Address);
+    private readonly bool isExternalDataSource;
 
+    
 
-
-    private readonly ISerializationService serializationService = Hub.ServiceProvider.GetRequiredService<ISerializationService>();
+    private readonly ISerializationService serializationService;
     public override EntityStore Update(WorkspaceState workspace)
     {
         var newStore = base.Update(workspace);
@@ -21,15 +22,16 @@ public record HubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : 
         if (isExternalDataSource)
             SerializeAndPostChangeRequest(newStore);
 
-        return LastSerialized = newStore;
+        LastSerialized = JsonSerializer.SerializeToNode(newStore, options);
+        return newStore;
     }
 
     private void SerializeAndPostChangeRequest(EntityStore newStore)
     {
-        var oldJson = JsonNode.Parse(serializationService.SerializeToString(LastSerialized));
-        var newJson = JsonNode.Parse(serializationService.SerializeToString(newStore));
-        var patch = oldJson.CreatePatch(newJson);
+        var newJson = JsonSerializer.SerializeToNode(newStore, options);
+        var patch = LastSerialized.CreatePatch(newJson);
         Hub.RegisterCallback(Hub.Post(new PatchChangeRequest(patch), o => o.WithTarget(Id)), HandleCommitResponse);
+        LastSerialized = newJson;
     }
 
     private IMessageDelivery HandleCommitResponse(IMessageDelivery<DataChangeResponse> response)
@@ -48,8 +50,19 @@ public record HubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : 
         => WithTypeSource(typeof(T), typeSource.Invoke(new TypeSourceWithType<T>(Id, Hub.ServiceProvider)));
 
 
-    private readonly ITypeRegistry typeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
+    private readonly ITypeRegistry typeRegistry;
     private static readonly Type[] DataTypes = [typeof(EntityStore), typeof(JsonPatch), typeof(InstancesInCollection)];
+    private readonly JsonSerializerOptions options;
+
+    public HubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : base(Id, Hub)
+    {
+        this.Workspace = Workspace;
+        isExternalDataSource = !Id.Equals(Hub.Address);
+        serializationService = Hub.ServiceProvider.GetRequiredService<ISerializationService>();
+        typeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
+        options = serializationService.Options(TypeSources.Values.ToDictionary(x => x.CollectionName));
+    }
+
     public override Task<WorkspaceState> InitializeAsync(CancellationToken cancellationToken)
     {
         typeRegistry.WithTypes(TypeSources.Values.Select(t => t.ElementType));
@@ -72,8 +85,7 @@ public record HubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : 
         var tcs = new TaskCompletionSource<WorkspaceState>(cancellationToken);
         Hub.RegisterCallback(subscribeRequest, response =>
             {
-                
-                tcs.SetResult(new WorkspaceState(Hub, LastSerialized = (EntityStore)response.Message.Change, TypeSources));
+                tcs.SetResult(new WorkspaceState(Hub, JsonNode.Parse(response.Message.Change.Content), TypeSources.Values.ToDictionary(x => x.CollectionName)));
                 
                 return subscribeRequest.Processed();
             },
@@ -81,7 +93,7 @@ public record HubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : 
         return tcs.Task;
     }
 
-    private EntityStore LastSerialized { get; set; }
+    private JsonNode LastSerialized { get; set; }
 
     private const string Main = nameof(Main);
 
@@ -98,6 +110,8 @@ public record HubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : 
 
 
     internal bool SyncAll { get; init; }
+    public IWorkspace Workspace { get; init; }
+
     public HubDataSource SynchronizeAll(bool synchronizeAll = true)
         => this with { SyncAll = synchronizeAll };
 

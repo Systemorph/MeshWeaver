@@ -93,7 +93,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
         return new WorkspaceState(
             Hub,
             new EntityStore(instances),
-            TypeSources
+            TypeSources.Values.ToDictionary(x => x.CollectionName)
             );
     }
 

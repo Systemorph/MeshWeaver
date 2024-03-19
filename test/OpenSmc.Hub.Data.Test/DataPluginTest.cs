@@ -101,7 +101,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         await Task.Delay(200);
 
         // asserts
-        deleteResponse.Message.Version.Should().Be(5L);
+        deleteResponse.Message.Version.Should().Be(4L);
         var expectedItems = new[]
         {
             new MyData("2", "B")
@@ -110,6 +110,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var data = await workspace.GetObservable<MyData>().FirstOrDefaultAsync(x => x?.Count == 1);
 
         data.Should().BeEquivalentTo(expectedItems);
+        await Task.Delay(100);
         storage.Values.Should().BeEquivalentTo(expectedItems);
     }
 
