@@ -1,6 +1,8 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data;
 using OpenSmc.DataStorage.EntityFramework;
 using OpenSmc.Hub.Fixture;
@@ -68,10 +70,9 @@ public class EntityFrameworkDataContextTest(ITestOutputHelper output) : HubTestB
         
     private static async Task<IReadOnlyCollection<MyDataRecord>> GetItems(IMessageHub client, object address, MyDataRecord myDataRecord)
     {
-        var response = await client.AwaitResponse(new GetManyRequest<MyDataRecord>(),
-            o => o.WithTarget(address));
+        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var items = await workspace.GetObservable<MyDataRecord>().FirstAsync();
 
-        var items = response.Message.Items;
         return items;
     }
 }

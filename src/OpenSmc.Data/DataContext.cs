@@ -34,7 +34,10 @@ public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace) : IAsync
             .AggregateAsync((ws1, ws2) => ws1.Merge(ws2), cancellationToken: cancellationToken);
 
         return new(Hub, workspace.Store,
-            DataSources.SelectMany(x => x.Value.TypeSources).ToDictionary(x => x.CollectionName));
+            DataSources
+                .SelectMany(x => x.Value.TypeSources)
+                .GroupBy(x => x.CollectionName)
+                .ToDictionary(x => x.Key, x => x.First()));
     }
 
 

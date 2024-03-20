@@ -3,19 +3,6 @@ using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
 
-public record GetManyRequest<T> : IRequest<GetResponse<T>>
-{
-    public int Page { get; init; }
-    public int? PageSize { get; init; }
-    public object Options { get; init; }
-};
-
-public abstract record GetManyResponseBase(int Total);
-public record GetResponse<T>(int Total, IReadOnlyCollection<T> Items) : GetManyResponseBase(Total)
-{
-    public static GetResponse<T> Empty() => new(0, Array.Empty<T>());
-}
-
 public record UpdateDataRequest(IReadOnlyCollection<object> Elements) : DataChangeRequestWithElements(Elements)
 {
     public UpdateOptions Options { get; init; }

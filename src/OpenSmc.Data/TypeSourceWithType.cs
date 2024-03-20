@@ -88,6 +88,7 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
         {
             Transformation = GetTransformation()
         });
+
         return UpdateImpl(myCollection);
     }
 
@@ -98,7 +99,9 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
     {
         if (PartitionFunction == null)
             return x => x;
-        return x => x with
+        return x =>
+            x == null ? null :
+            x with
         {
             Instances = x.Instances
                 .Where(y => PartitionFunction.Invoke(y.Value).Equals(Partition))

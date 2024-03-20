@@ -1,4 +1,5 @@
-﻿using FluentAssertions.Execution;
+﻿using System.Reactive.Linq;
+using FluentAssertions.Execution;
 using FluentAssertions;
 using OpenSmc.Activities;
 using OpenSmc.Data;
@@ -8,6 +9,7 @@ using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using Xunit;
 using Xunit.Abstractions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace OpenSmc.Import.Test;
 
@@ -56,9 +58,10 @@ public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubT
 
         // assert
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
-        var ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(), o => o.WithTarget(new HostAddress()));
-        var resRecord = ret.Message.Items.Should().ContainSingle().Which;
+        var resRecord = ret.Should().ContainSingle().Which;
         resRecord.Should().NotBeNull();
 
         using (new AssertionScope())

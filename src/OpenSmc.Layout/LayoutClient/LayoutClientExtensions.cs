@@ -1,6 +1,5 @@
 ﻿using OpenSmc.Data;
 using OpenSmc.Messaging;
-using OpenSmc.Messaging.Serialization;
 
 namespace OpenSmc.Layout.LayoutClient;
 

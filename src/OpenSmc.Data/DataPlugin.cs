@@ -79,8 +79,6 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
 
     public override bool IsDeferred(IMessageDelivery delivery)
     {
-        if (delivery.Message.GetType().IsGetRequest())
-            return true;
         if (delivery.Message is DataChangedEvent)
             return false;
         
@@ -124,8 +122,6 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
     private readonly ISerializationService serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
     private readonly ILogger<DataPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<DataPlugin>>();
     private IDisposable syncBack;
-    private IDisposable deferral;
-
 
     private IMessageDelivery Subscribe(IMessageDelivery<SubscribeRequest> request)
     {
