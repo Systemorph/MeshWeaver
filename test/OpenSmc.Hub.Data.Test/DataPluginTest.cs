@@ -110,7 +110,6 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var data = await workspace.GetObservable<MyData>().FirstOrDefaultAsync(x => x?.Count == 1);
 
         data.Should().BeEquivalentTo(expectedItems);
-        await Task.Delay(100);
         storage.Values.Should().BeEquivalentTo(expectedItems);
     }
 
