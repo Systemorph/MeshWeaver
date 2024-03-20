@@ -43,7 +43,14 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
 
     public virtual EntityStore Update(WorkspaceState workspace)
     {
-        return new(TypeSources.Values.ToImmutableDictionary(ts => ts.CollectionName, typeSource => typeSource.Update(workspace)));
+        return new(
+            TypeSources
+                .Values
+                .Select(ts => new KeyValuePair<string,InstancesInCollection>(ts.CollectionName, ts.Update(workspace)))
+                .Where(x => x.Value != null)
+                .ToImmutableDictionary()
+            )
+            ;
     }
 
     public object MapInstanceToPartition(object instance)

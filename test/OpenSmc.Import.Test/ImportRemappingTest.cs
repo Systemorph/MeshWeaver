@@ -1,5 +1,7 @@
-﻿using FluentAssertions;
+﻿using System.Reactive.Linq;
+using FluentAssertions;
 using FluentAssertions.Execution;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.Data.TestDomain;
@@ -100,9 +102,10 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
 
         // assert
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
-        var ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(), o => o.WithTarget(new HostAddress()));
-        var resRecord = ret.Message.Items.Should().ContainSingle().Which;
+        var resRecord = ret.Should().ContainSingle().Which;
         resRecord.Should().NotBeNull();
 
         using (new AssertionScope())

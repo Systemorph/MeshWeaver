@@ -2,7 +2,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Persistence;
 using OpenSmc.Messaging;
-using OpenSmc.Messaging.Serialization;
 
 namespace OpenSmc.Data;
 
@@ -31,10 +30,7 @@ public static class DataPluginExtensions
     }
 
 
-    internal static bool IsGetRequest(this Type type)
-        => type.IsGenericType && GetRequestTypes.Contains(type.GetGenericTypeDefinition());
 
-    private static readonly HashSet<Type> GetRequestTypes = [typeof(GetRequest<>), typeof(GetManyRequest<>)];
 
 
     public static DataContext FromHub(this DataContext dataSource, object address)

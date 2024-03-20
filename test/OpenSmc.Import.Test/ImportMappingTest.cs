@@ -1,4 +1,6 @@
-﻿using FluentAssertions;
+﻿using System.Reactive.Linq;
+using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.Data.TestDomain;
@@ -59,17 +61,16 @@ SystemName,DisplayName,Number,StringsArray0,StringsArray1,StringsArray2,StringsL
 SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
 
         var client = await DoImport(content);
+        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var ret2 = await workspace.GetObservable<MyRecord2>().FirstAsync();
 
-        var ret2 = await client.AwaitResponse(new GetManyRequest<MyRecord2>(),
-            o => o.WithTarget(new HostAddress()));
-        ret2.Message.Items.Should().HaveCount(0);
+        ret2.Should().HaveCount(0);
 
-        var ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
-        o => o.WithTarget(new HostAddress()));
+        var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
-        ret.Message.Items.Should().HaveCount(1);
+        ret.Should().HaveCount(1);
 
-        var resRecord = ret.Message.Items.Should().ContainSingle().Which;
+        var resRecord = ret.Should().ContainSingle().Which;
 
         resRecord.Should().NotBeNull();
         resRecord.SystemName.Should().Be("SystemName");
@@ -90,10 +91,10 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
     {
         var client = await DoImport(string.Empty);
 
-        var ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
-            o => o.WithTarget(new HostAddress()));
+        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
-        ret.Message.Items.Should().BeEmpty();
+        ret.Should().BeEmpty();
     }
 
     const string ThreeTablesContent = @"@@MyRecord
@@ -125,17 +126,17 @@ Record3SystemName,Record3DisplayName";
 
 
         //Check that didn't appeared what we don't import 
-        var ret2 = await client.AwaitResponse(new GetManyRequest<MyRecord2>(),
-            o => o.WithTarget(new HostAddress()));
-        ret2.Message.Items.Should().HaveCount(0);
+        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var ret2 = await workspace.GetObservable<MyRecord2>().FirstAsync();
 
-        var ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
-            o => o.WithTarget(new HostAddress()));
+        ret2.Should().HaveCount(0);
+
+        var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
 
-        ret.Message.Items.Should().HaveCount(1);
+        ret.Should().HaveCount(1);
 
-        var resRecord = ret.Message.Items.Should().ContainSingle().Which;
+        var resRecord = ret.Should().ContainSingle().Which;
 
         resRecord.Should().NotBeNull();
         resRecord.DisplayName.Should().Contain("test");
@@ -161,18 +162,17 @@ Record3SystemName,Record3DisplayName";
         };
 
         var client = await DoImport(ThreeTablesContent, "Test2");
+        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var ret2 = await workspace.GetObservable<MyRecord2>().FirstAsync();
 
-        var ret2 = await client.AwaitResponse(new GetManyRequest<MyRecord2>(),
-            o => o.WithTarget(new HostAddress()));
-        ret2.Message.Items.Should().HaveCount(1);
-
-        var ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
-            o => o.WithTarget(new HostAddress()));
+        ret2.Should().HaveCount(1);
+        var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
 
-        ret.Message.Items.Should().HaveCount(2);
 
-        var resRecord = ret.Message.Items.First(x => x.DisplayName == "test");
+        ret.Should().HaveCount(2);
+
+        var resRecord = ret.First(x => x.DisplayName == "test");
 
         resRecord.Should().NotBeNull();
         resRecord.DisplayName.Should().Contain("test");

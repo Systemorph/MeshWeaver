@@ -1,4 +1,5 @@
-﻿using FluentAssertions;
+﻿using System.Diagnostics;
+using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
@@ -6,6 +7,7 @@ using OpenSmc.Data;
 using OpenSmc.Data.TestDomain;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
+using System.Reactive.Linq;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -79,10 +81,10 @@ FoundationYear,ContractType
             .BeEquivalentTo("The field FoundationYear must be between 1999 and 2023.",
                 ImportPlugin.ValidationStageFailed);
 
-        var ret = await client.AwaitResponse(new GetManyRequest<TestDomain.Contract>(),
-            o => o.WithTarget(new HostAddress()));
+        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var ret = await workspace.GetObservable<TestDomain.Contract>().FirstAsync();
 
-        ret.Message.Items.Should().HaveCount(0);
+        ret.Should().HaveCount(0);
     }
 
     [Fact]
@@ -98,14 +100,14 @@ FoundationYear,ContractType
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Failed);
 
-        importResponse.Message.Log.Messages.OfType<LogMessage>().Should()
+        importResponse.Message.Log.Messages.Should()
             .ContainSingle(x => x.LogLevel == LogLevel.Error)
             .Which.Message.Should().Be(ImportPlugin.ValidationStageFailed);
+        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var ret = await workspace.GetObservable<TestDomain.Country>().FirstAsync();
 
-        var ret = await client.AwaitResponse(new GetManyRequest<TestDomain.Country>(),
-            o => o.WithTarget(new HostAddress()));
 
-        ret.Message.Items.Should().HaveCount(0);
+        ret.Should().HaveCount(0);
     }
 
     [Fact]
@@ -126,10 +128,11 @@ FoundationYear,ContractType
                 "The DecimalValue field value should be in interval from 10 to 20.",
                 ImportPlugin.ValidationStageFailed);
 
-        var ret = await client.AwaitResponse(new GetManyRequest<TestDomain.Discount>(),
-            o => o.WithTarget(new HostAddress()));
+        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var ret = await workspace.GetObservable<TestDomain.Discount>().FirstAsync();
 
-        ret.Message.Items.Should().HaveCount(0);
+
+        ret.Should().HaveCount(0);
     }
 
     [Fact]
@@ -144,16 +147,16 @@ FoundationYear,ContractType
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Failed);
 
-        importResponse.Message.Log.Messages.OfType<LogMessage>().Should()
+        importResponse.Message.Log.Messages.Should()
             .ContainSingle(x => x.LogLevel == LogLevel.Error)
             .Which.Message.Should().Be(ImportPlugin.ValidationStageFailed);
 
         await Task.Delay(300);
 
-        var ret = await client.AwaitResponse(new GetManyRequest<ActivityLog>(),
-            o => o.WithTarget(new HostAddress()));
+        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var ret = await workspace.GetObservable<ActivityLog>().FirstAsync();
 
-        ret.Message.Items.Should().HaveCount(1);
+        ret.Should().HaveCount(1);
         //var log = ret.Message.Items.First();
         //log.Status.Should().Be(ActivityLogStatus.Failed);
     }
