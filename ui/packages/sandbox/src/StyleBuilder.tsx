@@ -12,7 +12,7 @@ import {
     HtmlElement,
     JustifyContent,
     Position
-} from "@open-smc/application/src/Style";
+} from "packages/application/src/contract/controls/Style";
 
 class StyleBuilder extends Builder<HtmlElement & FlexContainer & FlexElement> {
     withWidth(value: string) {

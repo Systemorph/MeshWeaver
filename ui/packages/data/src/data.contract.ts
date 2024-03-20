@@ -1,5 +1,4 @@
 import { contractMessage } from "@open-smc/utils/src/contractMessage";
-import { LayoutArea } from "@open-smc/application/src/contract/application.contract";
 
 @contractMessage("OpenSmc.Data.SubscribeDataRequest")
 export class SubscribeDataRequest {
@@ -15,7 +14,7 @@ export class UnsubscribeDataRequest {
 
 @contractMessage("OpenSmc.Data.DataChangedEvent")
 export class DataChangedEvent {
-    constructor(public change: object) {
+    constructor(public id: string, public change: object) {
     }
 }
 

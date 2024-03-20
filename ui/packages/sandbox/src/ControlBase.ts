@@ -1,10 +1,10 @@
 import { ControlDef, MessageAndAddress } from "@open-smc/application/src/ControlDef";
-import { Style } from "@open-smc/application/src/Style";
+import { Style } from "packages/application/src/contract/controls/Style";
 import { SubjectHub } from "@open-smc/message-hub/src/SubjectHub";
 import { Subscription } from "rxjs";
 import { Constructor } from "@open-smc/utils/src/Constructor";
 import { MessageHandler } from "@open-smc/message-hub/src/api/MessageHandler";
-import { ofContractType } from "@open-smc/application/src/contract/ofContractType";
+import { ofType } from "packages/application/src/contract/ofType";
 import { v4 } from "uuid";
 import { isFunction } from "lodash-es";
 import { ClickedEvent } from "@open-smc/application/src/contract/application.contract";
@@ -81,7 +81,7 @@ export abstract class ControlBase extends SubjectHub implements ControlDef {
 
     protected handleMessage<T>(type: Constructor<T>, handler: MessageHandler<this, T>) {
         return this.input
-            .pipe(ofContractType(type))
+            .pipe(ofType(type))
             .subscribe(handler.bind(this));
     }
 

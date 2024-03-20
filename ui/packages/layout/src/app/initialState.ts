@@ -1,7 +1,8 @@
-import { ClickedEvent, LayoutArea } from "@open-smc/application/src/contract/application.contract";
+import { ClickedEvent } from "@open-smc/application/src/contract/application.contract";
 import { makeBinding } from "@open-smc/application/src/dataBinding/resolveBinding";
 import { RootState } from "../../../application/src/app/store";
 import { WorkspaceReference } from "@open-smc/data/src/data.contract";
+import { LayoutArea } from "../../../application/src/contract/LayoutArea";
 
 const layoutAddress = "layoutAddress";
 

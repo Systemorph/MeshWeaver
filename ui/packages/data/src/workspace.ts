@@ -10,7 +10,7 @@ enablePatches();
 export const jsonPatches = createAction<Patch[]>('jsonPatches');
 export const initState = createAction<any>('initState');
 
-export function createWorkspace<TState>(initialState?: TState) {
+export function createWorkspace<TState>(initialState?: TState, name?: string) {
     const reducer = createReducer(
         initialState,
         builder => {
@@ -26,6 +26,9 @@ export function createWorkspace<TState>(initialState?: TState) {
     );
 
     return configureStore({
-        reducer
+        reducer,
+        devTools: {
+            name
+        }
     });
 }

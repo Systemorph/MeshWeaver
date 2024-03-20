@@ -1,4 +1,5 @@
-import { Style } from "./Style";
+import { Style } from "./contract/controls/Style";
+import { MessageAndAddress } from "./contract/controls/Control";
 
 export interface ControlView {
     readonly id?: string;
@@ -14,11 +15,6 @@ export interface ControlView {
 
 export interface ExpandableView extends ControlView {
     readonly expandMessage?: MessageAndAddressAndArea;
-}
-
-export interface MessageAndAddress {
-    readonly message: unknown;
-    readonly address: unknown;
 }
 
 export interface MessageAndAddressAndArea extends MessageAndAddress {

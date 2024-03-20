@@ -1,7 +1,7 @@
 import { contractMessage } from "@open-smc/utils/src/contractMessage";
 import { v4 as uuid } from "uuid";
 import { ControlDef } from "../ControlDef";
-import {Style} from "../Style";
+import { Style } from "./controls/Style";
 
 // TODO: fix namespace (2/21/2024, akravets)
 @contractMessage("OpenSmc.Portal.LayoutAddress")
@@ -26,12 +26,6 @@ export class RefreshRequest {
 @contractMessage("OpenSmc.Layout.AreaChangedEvent")
 export class AreaChangedEvent {
     constructor(public area: string, public view?: ControlDef, public options?: any, public style?: Style) {
-    }
-}
-
-@contractMessage("OpenSmc.Layout.LayoutArea")
-export class LayoutArea {
-    constructor(public id: string, public control: ControlDef, public options?: any, public style?: Style) {
     }
 }
 

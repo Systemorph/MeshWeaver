@@ -1,12 +1,12 @@
 import { configureStore, createAction, createReducer } from "@reduxjs/toolkit"
 import { dataSyncHub } from "./dataSyncHub";
-import { Style } from "../Style";
+import { Style } from "../contract/controls/Style";
 import { createWorkspace } from "@open-smc/data/src/workspace";
 import { subscribeToDataChanges } from "@open-smc/data/src/subscribeToDataChanges";
 import { EntireWorkspace, LayoutAreaReference } from "@open-smc/data/src/data.contract";
 import { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
-import { distinctUntilChanged, distinctUntilKeyChanged, from, map } from "rxjs";
-import { LayoutArea } from "../contract/application.contract";
+import { fromLayoutArea } from "./fromLayoutArea";
+import { Subscription } from "rxjs";
 
 export type RootState = {
     rootArea: string;
@@ -32,43 +32,58 @@ export interface SetPropAction {
 }
 
 export const setProp = createAction<SetPropAction>('setProp');
+export const setArea = createAction<LayoutAreaModel>('addArea');
+export const removeArea = createAction<string>('removeArea');
+export const setRoot = createAction<string>('setRoot');
 
 const rootReducer = createReducer<RootState>(
     null,
     builder => {
-        builder.addCase(setProp, (state, action) => {
-            const {areaId, prop, value} = action.payload;
-            (state.areas[areaId].control.props as any)[prop] = value;
-        })
+        builder
+            .addCase(setProp, (state, action) => {
+                const {areaId, prop, value} = action.payload;
+                (state.areas[areaId].control.props as any)[prop] = value;
+            })
+            .addCase(setArea, (state, action) => {
+                const area = action.payload;
+                state.areas[area.id] = area;
+            })
+            .addCase(removeArea, (state, action) => {
+                delete state.areas[action.payload];
+            })
+            .addCase(setRoot, (state, action) => {
+                state.rootArea = action.payload;
+            })
     }
 );
 
 export const makeStore = (hub: MessageHub) => {
-    const dataStore = createWorkspace();
-    subscribeToDataChanges(hub, new EntireWorkspace(), dataStore.dispatch);
+    const subscription = new Subscription();
 
-    const layoutStore = createWorkspace<LayoutArea>();
-    subscribeToDataChanges(hub, new LayoutAreaReference("/"), layoutStore.dispatch);
+    const dataStore = createWorkspace(undefined, "data");
+    subscription.add(subscribeToDataChanges(hub, new EntireWorkspace(), dataStore.dispatch));
 
-    const store = configureStore({
-        reducer: rootReducer
+    const layoutStore = createWorkspace(undefined, "layout");
+
+    const store = configureStore<RootState>({
+        preloadedState: {
+            rootArea: null,
+            areas: {}
+        },
+        reducer: rootReducer,
+        devTools: {
+            name: "ui"
+        }
     });
 
-    from(layoutStore).pipe(
-        distinctUntilChanged((previous, current) => {
-            return current?.id === previous?.id
-                && current?.options === previous?.options
-                && current?.style === previous?.style;
-        })
+    subscription.add(
+        fromLayoutArea(layoutStore, [], store)
+            .subscribe(layoutAreaModel => {
+                store.dispatch(setRoot(layoutAreaModel.id));
+            })
     );
 
-    // subscribe to data-bound props, on change update data context
-    from(store)
-        .pipe(map(state => state.areas["123"].control.props["data"]))
-        .pipe(distinctUntilChanged())
-        .subscribe(value => {
-            // update dataContext
-        });
+    subscription.add(subscribeToDataChanges(hub, new LayoutAreaReference("/"), layoutStore.dispatch));
 
     return store;
 }
@@ -80,41 +95,3 @@ export type AppStore = typeof store;
 export type AppDispatch = AppStore["dispatch"];
 
 export const layoutAreaSelector = (id: string) => (state: RootState) => state.areas[id];
-
-export const initialState: RootState = {
-    rootArea: "/",
-    areas: {
-        "/": {
-            id: "/",
-            control: {
-                componentTypeName: "LayoutStackControl",
-                props: {
-                    skin: "MainWindow",
-                    areaIds: [
-                        "/Main",
-                        "/Toolbar"
-                    ]
-                }
-            }
-        },
-        "/Main": {
-            id: "/Main",
-            control: {
-                componentTypeName: "MenuItemControl",
-                props: {
-                    title: "Hello world",
-                    icon: "systemorph-fill"
-                }
-            }
-        },
-        "/Toolbar": {
-            id: "",
-            control: {
-                componentTypeName: "TextBoxControl",
-                props: {
-                    data: "Hello world"
-                }
-            }
-        }
-    }
-}
