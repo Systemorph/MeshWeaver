@@ -1,5 +1,5 @@
 import { SubjectHub } from "@open-smc/message-hub/src/SubjectHub";
-import { isOfContractType, ofContractType } from "../contract/ofContractType";
+import { isOfType, ofType } from "../contract/ofType";
 import {
     DataChangedEvent,
     EntireWorkspace,
@@ -7,57 +7,73 @@ import {
     SubscribeDataRequest
 } from "@open-smc/data/src/data.contract";
 import { makeBinding } from "../dataBinding/resolveBinding";
+import { messageOfType } from "@open-smc/message-hub/src/operators/messageOfType";
 
 // this is mock
 
 export const dataSyncHub =
     new SubjectHub((input, output) => {
-        input.pipe(ofContractType(SubscribeDataRequest))
+        input.pipe(messageOfType(SubscribeDataRequest))
             .subscribe(({message}) => {
-                const {workspaceReference} = message;
+                const {id, workspaceReference} = message;
 
-                if (isOfContractType(workspaceReference, EntireWorkspace)) {
-                    const message = new DataChangedEvent(workspace);
+                if (isOfType(workspaceReference, EntireWorkspace)) {
+                    const message = new DataChangedEvent(id, workspace);
                     output.next({message});
                 }
 
-                if (isOfContractType(workspaceReference, LayoutAreaReference)) {
-                    const message = new DataChangedEvent(layout);
+                if (isOfType(workspaceReference, LayoutAreaReference)) {
+                    const message = new DataChangedEvent(id, layout1);
                     output.next({message});
                 }
             });
     });
 
 const workspace = {
-
+    foo: 1
 }
 
-const layout= {
+const simpleLayout = {
     $type: "LayoutArea",
     id: "/",
+    style: {},
+    options: {},
     control: {
-        $type: "LayoutStackControl",
+        $type: "MenuItemControl",
+        title: "Hello world",
+        icon: "systemorph-fill"
+    }
+}
+
+const layout1= {
+    $type: "OpenSmc.Layout.LayoutArea",
+    id: "/",
+    style: {},
+    options: {},
+    control: {
+        $type: "OpenSmc.Layout.Composition.LayoutStackControl",
         skin: "MainWindow",
         areas: [
             {
-                $type: "LayoutArea",
+                $type: "OpenSmc.Layout.LayoutArea",
                 id: "/Main",
                 control: {
-                    $type: "MenuItemControl",
+                    $type: "OpenSmc.Layout.Views.MenuItemControl",
                     title: "Hello world",
                     icon: "systemorph-fill"
                 }
             },
             {
-                $type: "LayoutArea",
+                $type: "OpenSmc.Layout.LayoutArea",
                 id: "/Toolbar",
                 control: {
-                    $type: "InputBoxControl",
+                    $type: "OpenSmc.Layout.TextBoxControl",
                     dataContext: {
                         value: "Hello world",
                         // ref: new WorkspaceReference(), // always reference to the main store
                     },
-                    value: makeBinding("$.value") // json path
+                    value: "123"
+                    // value: makeBinding("$.value") // json path
                 }
             }
         ]

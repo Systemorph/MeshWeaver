@@ -11,7 +11,7 @@ import { Subscription } from "rxjs";
 import { MessageDelivery } from "@open-smc/message-hub/src/api/MessageDelivery";
 import { Constructor } from "@open-smc/utils/src/Constructor";
 import { MessageHandler } from "@open-smc/message-hub/src/api/MessageHandler";
-import { ofContractType } from "@open-smc/application/src/contract/ofContractType";
+import { ofType } from "packages/application/src/contract/ofType.ts";
 import { uiAddress } from "./contract";
 import { PlaygroundWindow } from "./app/PlaygroundWindow";
 import { AddToContextRequest } from "@open-smc/message-hub/src/api/AddToContextRequest";
@@ -33,7 +33,7 @@ export class LayoutHub extends SubjectHub {
 
     private handleMessage<T>(type: Constructor<T>, handler: MessageHandler<this, T>) {
         return this.input
-            .pipe(ofContractType(type))
+            .pipe(ofType(type))
             .subscribe(handler.bind(this));
     }
 

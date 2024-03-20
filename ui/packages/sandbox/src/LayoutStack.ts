@@ -11,7 +11,7 @@ import {Builder} from "@open-smc/utils/src/Builder";
 import { insertAfter } from "@open-smc/utils/src/insertAfter";
 import { ControlBase } from "./ControlBase";
 import { mainWindowAreas } from "@open-smc/application/src/controls/mainWindowApi";
-import { Style } from "@open-smc/application/src/Style";
+import { Style } from "packages/application/src/contract/controls/Style";
 
 export class LayoutStack extends ControlBase implements StackView {
     skin: StackSkin;

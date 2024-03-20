@@ -9,26 +9,31 @@ import {
     SubscribeDataRequest,
     UnsubscribeDataRequest
 } from "./data.contract";
-import { isOfContractType, ofContractType } from "@open-smc/application/src/contract/ofContractType";
 import { initState, jsonPatches } from "./workspace";
 import { Patch } from "immer";
+import { messageOfType } from "@open-smc/message-hub/src/operators/messageOfType";
+import { isOfType } from "@open-smc/application/src/contract/ofType";
+import { filter, map } from "rxjs";
 
 export function subscribeToDataChanges(hub: MessageHub, workspaceReference: any, dispatch: Dispatch) {
     const id = v4();
 
-    sendMessage(hub, new SubscribeDataRequest(id, workspaceReference));
-
-    const subscription = hub.pipe(ofContractType(DataChangedEvent))
-        .subscribe(({message}) => {
-            if (isOfContractType(message.change, JsonPatch)) {
-                dispatch(jsonPatches(message.change.operations?.map(toImmerPatch)))
+    const subscription = hub.pipe(messageOfType(DataChangedEvent))
+        .pipe(filter(({message}) => message.id === id))
+        .subscribe(({message: {id, change}}) => {
+            if (isOfType(change, JsonPatch)) {
+                dispatch(jsonPatches(change.operations?.map(toImmerPatch)))
             } else {
-                dispatch(initState(message.change));
+                dispatch(initState(change));
             }
         });
 
-    return subscription
+    sendMessage(hub, new SubscribeDataRequest(id, workspaceReference));
+
+    subscription
         .add(() => sendMessage(hub, new UnsubscribeDataRequest([id])));
+
+    return subscription;
 }
 
 function toImmerPatch(patch: PatchOperation): Patch {
