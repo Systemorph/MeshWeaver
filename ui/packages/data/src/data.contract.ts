@@ -36,7 +36,8 @@ export class JsonPathReference {
 
 @contractMessage("Json.Patch.JsonPatch")
 export class JsonPatch {
-    operations: PatchOperation[];
+    constructor(public operations: PatchOperation[]) {
+    }
 }
 
 export interface PatchOperation {
