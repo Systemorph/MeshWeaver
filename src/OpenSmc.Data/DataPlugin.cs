@@ -50,9 +50,9 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
             {
                 logger.LogDebug("Initialized workspace in address {address}", Address);
                 InitializeState(t.Result);
-                initializeTaskCompletionSource.SetResult();
                 subject.OnNext(State);
-                subject.DistinctUntilChanged().Subscribe(dataContext.Update);
+                syncBack = subject.DistinctUntilChanged().Subscribe(dataContext.Update);
+                initializeTaskCompletionSource.SetResult();
             }, cancellationToken);
     }
 
@@ -123,6 +123,8 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
 
     private readonly ISerializationService serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
     private readonly ILogger<DataPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<DataPlugin>>();
+    private IDisposable syncBack;
+    private IDisposable deferral;
 
 
     private IMessageDelivery Subscribe(IMessageDelivery<SubscribeRequest> request)
@@ -156,6 +158,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
 
     public override async Task DisposeAsync()
     {
+        syncBack.Dispose();
         foreach (var subscription in subscriptions.Values)
         {
             subscription.Dispose();
