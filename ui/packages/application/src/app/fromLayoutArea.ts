@@ -45,10 +45,20 @@ export function fromLayoutArea(layoutStore: Store, path: PropertyPath, store: St
     return from(layoutStore)
         .pipe(map(state => isEmpty(path) ? state : get(state, path) as LayoutArea))
         .pipe(
-            distinctUntilChanged((previous, current) =>
-                isEqualWith(previous, current, customizer))
+            distinctUntilChanged((previous, current) => {
+                    return isEqualWith(
+                        previous,
+                        current,
+                        (value, other, indexOrKey, stack) => {
+                            if (isOfType(value, LayoutArea) && isOfType(other, LayoutArea) && indexOrKey) {
+                                return value.id === other.id;
+                            }
+                        }
+                    )
+                }
+            )
         )
-        // .pipe(withPreviousValue())
+        .pipe(tap(area => console.log(area)))
         .pipe(switchMap(current => {
             if (!current) {
                 return of();
@@ -83,13 +93,6 @@ function withPreviousValue<T>() {
         startWith(undefined),
         pairwise<T>()
     );
-}
-
-// TODO: stack is empty (3/19/2024, akravets)
-function customizer(value: any, other: any, indexOrKey: string | number | symbol) {
-    if (isOfType(value, LayoutArea) && isOfType(other, LayoutArea) && indexOrKey === undefined) {
-        return value.id === other.id;
-    }
 }
 
 function getLayoutAreaModel(layoutArea: LayoutArea) {

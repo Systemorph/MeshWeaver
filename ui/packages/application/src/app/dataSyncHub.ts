@@ -2,12 +2,14 @@ import { SubjectHub } from "@open-smc/message-hub/src/SubjectHub";
 import { isOfType, ofType } from "../contract/ofType";
 import {
     DataChangedEvent,
-    EntireWorkspace,
-    LayoutAreaReference,
+    EntireWorkspace, JsonPatch,
+    LayoutAreaReference, PatchOperation,
     SubscribeDataRequest
 } from "@open-smc/data/src/data.contract";
 import { makeBinding } from "../dataBinding/resolveBinding";
 import { messageOfType } from "@open-smc/message-hub/src/operators/messageOfType";
+import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
+import { Patch, produce, produceWithPatches } from "immer";
 
 // this is mock
 
@@ -18,13 +20,25 @@ export const dataSyncHub =
                 const {id, workspaceReference} = message;
 
                 if (isOfType(workspaceReference, EntireWorkspace)) {
-                    const message = new DataChangedEvent(id, workspace);
-                    output.next({message});
+                    sendMessage(output, new DataChangedEvent(id, workspace));
                 }
 
                 if (isOfType(workspaceReference, LayoutAreaReference)) {
-                    const message = new DataChangedEvent(id, layout1);
-                    output.next({message});
+                    sendMessage(output, new DataChangedEvent(id, layoutState));
+
+                    setTimeout(() => {
+                        const [nextState, patches] =
+                            produceWithPatches(
+                                layoutState, state => {
+                                    // state.control.areas[1].control.data = "Hello";
+                                    state.control.areas.pop();
+                                });
+
+                        sendMessage(
+                            output,
+                            new DataChangedEvent(id, new JsonPatch(patches.map(toPatchOperation)))
+                        )
+                    }, 1000);
                 }
             });
     });
@@ -45,7 +59,7 @@ const simpleLayout = {
     }
 }
 
-const layout1= {
+const layoutState = {
     $type: "OpenSmc.Layout.LayoutArea",
     id: "/",
     style: {},
@@ -72,11 +86,21 @@ const layout1= {
                         value: "Hello world",
                         // ref: new WorkspaceReference(), // always reference to the main store
                     },
-                    value: "123"
+                    data: "123"
                     // value: makeBinding("$.value") // json path
                 }
             }
         ]
+    }
+}
+
+function toPatchOperation(patch: Patch): PatchOperation {
+    const {op, path, value} = patch;
+
+    return {
+        op,
+        path: path.join("/"),
+        value
     }
 }
 
