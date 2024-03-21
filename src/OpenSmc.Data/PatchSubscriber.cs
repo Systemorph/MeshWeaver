@@ -35,8 +35,8 @@ public class PatchSubscriber(IMessageHub hub, IMessageDelivery<SubscribeRequest>
 
 
         var dataChanged = LastSynchronized == null
-            ? new DataChangedEvent(hub.Version, new RawJson(node.ToJsonString()), ChangeType.Full)
-            : new DataChangedEvent(hub.Version, new(JsonSerializer.Serialize(LastSynchronized.CreatePatch(node))), ChangeType.Patch);
+            ? new DataChangedEvent(hub.Version, new RawJson(node!.ToJsonString()), ChangeType.Full, workspace.LastChangedBy ?? hub.Address)
+            : new DataChangedEvent(hub.Version, new(JsonSerializer.Serialize(LastSynchronized.CreatePatch(node))), ChangeType.Patch, workspace.LastChangedBy ?? hub.Address);
 
         hub.Post(dataChanged, o => o.ResponseFor(request));
         LastSynchronized = node;

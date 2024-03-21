@@ -17,8 +17,16 @@ public abstract record WorkspaceReference<TReference> : WorkspaceReference
         => Stream.Subscribe((IObserver<TReference>)observer);
 
 }
-public record EntityStore(ImmutableDictionary<string, InstancesInCollection> Instances);
+public record EntityStore
+{
+    public EntityStore(IEnumerable<KeyValuePair<string, InstancesInCollection>> instances)
+    {
+        Instances = instances.Where(x => x.Value != null && x.Value.Instances.Count > 0).ToImmutableDictionary();
+    }
 
+    public ImmutableDictionary<string, InstancesInCollection> Instances { get; init; }
+
+}
 
 public record EntireWorkspace : WorkspaceReference<EntityStore>
 {

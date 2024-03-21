@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Collections.Concurrent;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,9 +13,7 @@ public record HubDataSource : DataSource<HubDataSource>
 
     private readonly bool isExternalDataSource;
 
-    
 
-    private readonly ISerializationService serializationService;
     public override EntityStore Update(WorkspaceState workspace)
     {
         var newStore = base.Update(workspace);
@@ -30,15 +29,18 @@ public record HubDataSource : DataSource<HubDataSource>
     {
         var newJson = JsonSerializer.SerializeToNode(newStore, options);
         var patch = LastSerialized.CreatePatch(newJson);
-        Hub.RegisterCallback(Hub.Post(new PatchChangeRequest(patch), o => o.WithTarget(Id)), HandleCommitResponse);
+        if(patch.Operations.Any())
+            Hub.RegisterCallback(Hub.Post(new PatchChangeRequest(patch), o => o.WithTarget(Id)), HandleCommitResponse);
         LastSerialized = newJson;
     }
 
+
+    private readonly ConcurrentBag<long> versions = new();
     private IMessageDelivery HandleCommitResponse(IMessageDelivery<DataChangeResponse> response)
     {
         if (response.Message.Status == DataChangeStatus.Committed)
             return response.Processed();
-
+        versions.Add(response.Message.Version);
         // TODO V10: Here we have to put logic to revert the state if commit has failed. (26.02.2024, Roland Bürgi)
         return response.Ignored();
     }
@@ -58,7 +60,7 @@ public record HubDataSource : DataSource<HubDataSource>
     {
         this.Workspace = Workspace;
         isExternalDataSource = !Id.Equals(Hub.Address);
-        serializationService = Hub.ServiceProvider.GetRequiredService<ISerializationService>();
+        var serializationService = Hub.ServiceProvider.GetRequiredService<ISerializationService>();
         typeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
         options = serializationService.Options(TypeSources.Values.ToDictionary(x => x.CollectionName));
     }
@@ -85,7 +87,9 @@ public record HubDataSource : DataSource<HubDataSource>
         var tcs = new TaskCompletionSource<WorkspaceState>(cancellationToken);
         Hub.RegisterCallback(subscribeRequest, response =>
             {
-                tcs.SetResult(new WorkspaceState(Hub, JsonNode.Parse(response.Message.Change.Content), TypeSources.Values.ToDictionary(x => x.CollectionName)));
+                var workspaceState = new WorkspaceState(Hub, JsonNode.Parse(response.Message.Change.Content), TypeSources.Values.ToDictionary(x => x.CollectionName));
+                LastSerialized = JsonSerializer.Serialize(workspaceState.Store, options);
+                tcs.SetResult(workspaceState);
                 
                 return subscribeRequest.Processed();
             },
