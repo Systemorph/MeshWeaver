@@ -41,23 +41,21 @@ export type PropertyPath = (string | number)[];
 //         // update dataContext
 //     });
 
+const ignoreNestedAreas = (previous: LayoutArea, current: LayoutArea) =>
+    isEqualWith(
+        previous,
+        current,
+        (value, other, indexOrKey, stack) => {
+            if (isOfType(value, LayoutArea) && isOfType(other, LayoutArea) && indexOrKey) {
+                return value.id === other.id;
+            }
+        }
+    );
+
 export function fromLayoutArea(layoutStore: Store, path: PropertyPath, store: Store) {
     return from(layoutStore)
         .pipe(map(state => isEmpty(path) ? state : get(state, path) as LayoutArea))
-        .pipe(
-            distinctUntilChanged((previous, current) => {
-                    return isEqualWith(
-                        previous,
-                        current,
-                        (value, other, indexOrKey, stack) => {
-                            if (isOfType(value, LayoutArea) && isOfType(other, LayoutArea) && indexOrKey) {
-                                return value.id === other.id;
-                            }
-                        }
-                    )
-                }
-            )
-        )
+        .pipe(distinctUntilChanged(ignoreNestedAreas))
         .pipe(tap(area => console.log(area)))
         .pipe(switchMap(current => {
             if (!current) {

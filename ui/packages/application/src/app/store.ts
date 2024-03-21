@@ -1,4 +1,4 @@
-import { configureStore, createAction, createReducer } from "@reduxjs/toolkit"
+import { configureStore, createAction, createReducer, Dispatch } from "@reduxjs/toolkit"
 import { dataSyncHub } from "./dataSyncHub";
 import { Style } from "../contract/controls/Style";
 import { createWorkspace } from "@open-smc/data/src/workspace";
@@ -6,7 +6,8 @@ import { subscribeToDataChanges } from "@open-smc/data/src/subscribeToDataChange
 import { EntireWorkspace, LayoutAreaReference } from "@open-smc/data/src/data.contract";
 import { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
 import { fromLayoutArea } from "./fromLayoutArea";
-import { Subscription } from "rxjs";
+import { distinctUntilChanged, distinctUntilKeyChanged, from, Observable, Subscription } from "rxjs";
+import { LayoutArea } from "../contract/LayoutArea";
 
 export type RootState = {
     rootArea: string;
@@ -32,7 +33,7 @@ export interface SetPropAction {
 }
 
 export const setProp = createAction<SetPropAction>('setProp');
-export const setArea = createAction<LayoutAreaModel>('addArea');
+export const setArea = createAction<LayoutAreaModel>('setArea');
 export const removeArea = createAction<string>('removeArea');
 export const setRoot = createAction<string>('setRoot');
 
@@ -78,6 +79,7 @@ export const makeStore = (hub: MessageHub) => {
 
     subscription.add(
         fromLayoutArea(layoutStore, [], store)
+            .pipe(distinctUntilKeyChanged("id"))
             .subscribe(layoutAreaModel => {
                 store.dispatch(setRoot(layoutAreaModel.id));
             })
