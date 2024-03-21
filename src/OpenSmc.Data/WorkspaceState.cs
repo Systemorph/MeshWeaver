@@ -117,6 +117,7 @@ public record WorkspaceState
     private readonly ISerializationService serializationService;
     private ImmutableDictionary<Type, string> CollectionsByType { get; init; }
     public ImmutableDictionary<string, ITypeSource> TypeSources { get; init; }
+    public object LastChangedBy { get; init; }
     private IMessageHub Hub { get; }
     public WorkspaceState
     (
@@ -180,6 +181,7 @@ public record WorkspaceState
         return this with
         {
             LastSynchronized = workspace,
+            LastChangedBy = @event.Requester,
             Store = workspace.Deserialize<EntityStore>(Options)
         };
     }

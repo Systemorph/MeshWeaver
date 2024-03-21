@@ -51,9 +51,14 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
                 logger.LogDebug("Initialized workspace in address {address}", Address);
                 InitializeState(t.Result);
                 subject.OnNext(State);
-                syncBack = subject.DistinctUntilChanged().Subscribe(dataContext.Update);
+                syncBack = subject.DistinctUntilChanged().Subscribe(UpdateDataContext(dataContext));
                 initializeTaskCompletionSource.SetResult();
             }, cancellationToken);
+    }
+
+    private static Action<WorkspaceState> UpdateDataContext(DataContext dataContext)
+    {
+        return dataContext.Update;
     }
 
 
@@ -67,11 +72,11 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
 
     private IMessageDelivery RequestChange(IMessageDelivery request, DataChangeRequest change)
     {
-        UpdateState(s => s.Change(change) with{Version = Hub.Version});
+        UpdateState(s => s.Change(change) with{Version = Hub.Version, LastChangedBy = request?.Sender ?? Hub.Address});
         if (request != null)
         {
-            Commit();
             Hub.Post(new DataChangeResponse(Hub.Version, DataChangeStatus.Committed), o => o.ResponseFor(request));
+            Commit();
         }
         return request?.Processed();
     }
@@ -109,6 +114,10 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
         var @event = request.Message;
         if (State == null)
             return request.Ignored();
+
+        if (Hub.Address.Equals(request.Message.Requester))
+            return request.Ignored();
+
         UpdateState(s => s.Synchronize(@event));
         Commit();
         return request.Processed();
