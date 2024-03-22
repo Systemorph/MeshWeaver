@@ -1,8 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.Json.Serialization;
-using Json.More;
 using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
@@ -10,107 +8,6 @@ using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
 
-public static class WorkspaceJsonSerializer
-{
-    public static JsonSerializerOptions Options(this ISerializationService serializationService,
-        IReadOnlyDictionary<string, ITypeSource> typeProviders) =>
-        new()
-        {
-            Converters =
-                { new EntityStoreConverter(typeProviders, serializationService), new SerializationServiceConverter(serializationService) }
-        };
-}
-
-public class SerializationServiceConverter(ISerializationService serializationService) : JsonConverter<object>
-{
-
-    public override bool CanConvert(Type typeToConvert)
-        => typeToConvert != typeof(EntityStore);
-
-    public override object Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
-    {
-        using JsonDocument doc = JsonDocument.ParseValue(ref reader);
-        return serializationService.Deserialize(doc.RootElement.ToString());
-    }
-
-    public override void Write(Utf8JsonWriter writer, object value, JsonSerializerOptions options)
-    {
-        JsonNode.Parse(serializationService.SerializeToString(value))!.WriteTo(writer);
-    }
-}
-
-public class EntityStoreConverter(IReadOnlyDictionary<string, ITypeSource> typeSourcesByCollection, ISerializationService serializationService) : JsonConverter<EntityStore>
-{
-    public override EntityStore Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
-    {
-        using JsonDocument doc = JsonDocument.ParseValue(ref reader);
-        return Deserialize(doc.RootElement.AsNode(), options);
-    }
-
-    public override void Write(Utf8JsonWriter writer, EntityStore value, JsonSerializerOptions options)
-    {
-        Serialize(value).WriteTo(writer);
-    }
-
-    private JsonNode Serialize(EntityStore store)
-    {
-        var ret = new JsonObject(
-            store.Instances.ToDictionary(
-                x => x.Key,
-                x => (JsonNode)new JsonArray(
-                    x.Value.Instances.Select(i => SerializeInstance(x.Key, i.Key, i.Value)).ToArray()
-                )
-            )
-        );
-        return ret;
-    }
-
-    private JsonNode SerializeInstance(string collection, object id, object instance)
-    {
-        var ret = JsonSerializer.SerializeToNode(instance);
-        ret![ReservedProperties.Type] = collection;
-        ret[ReservedProperties.Id] = JsonSerializer.SerializeToNode(id);
-        return ret;
-    }
-
-    public EntityStore Deserialize(JsonNode serializedWorkspace, JsonSerializerOptions options)
-    {
-        if (serializedWorkspace is not JsonObject obj)
-            throw new ArgumentException("Invalid serialized workspace");
-
-        var newStore = new EntityStore(obj.Select(kvp => DeserializeCollection(kvp.Key, kvp.Value, options)).ToImmutableDictionary());
-
-        return newStore;
-    }
-
-    private KeyValuePair<string, InstancesInCollection> DeserializeCollection(string collection, JsonNode node, JsonSerializerOptions options)
-    {
-        return
-            new(
-                collection,
-                DeserializeToInstances(node, typeSourcesByCollection.GetValueOrDefault(collection)?.ElementType, options)
-            );
-    }
-
-    public InstancesInCollection DeserializeToInstances(JsonNode node, Type elementType, JsonSerializerOptions options)
-    {
-        if (node is not JsonArray array)
-            throw new ArgumentException("Expecting an array");
-        return new(array.Select(jsonNode => DeserializeEntity(jsonNode, elementType, options)).ToImmutableDictionary());
-    }
-
-    private KeyValuePair<object, object> DeserializeEntity(JsonNode jsonNode, Type elementType, JsonSerializerOptions options)
-    {
-        if (jsonNode is not JsonObject obj)
-            throw new ArgumentException($"Expecting node type to be object");
-        if (!obj.TryGetPropertyValue(ReservedProperties.Id, out var id) || id == null)
-            throw new ArgumentException($"Expecting property {ReservedProperties.Id} to be set");
-        return new(serializationService.Deserialize(id.ToJsonString()), elementType == null ? jsonNode.DeepClone() : jsonNode.Deserialize(elementType));
-    }
-
-
-
-}
 
 public record WorkspaceState
 {
@@ -118,7 +15,6 @@ public record WorkspaceState
     private ImmutableDictionary<Type, string> CollectionsByType { get; init; }
     public ImmutableDictionary<string, ITypeSource> TypeSources { get; init; }
     public object LastChangedBy { get; init; }
-    private IMessageHub Hub { get; }
     public WorkspaceState
     (
         IMessageHub hub,
@@ -127,7 +23,6 @@ public record WorkspaceState
     )
         : this(hub, typeSources)
     {
-        Hub = hub;
         this.Store = Store;
         LastSynchronized = JsonSerializer.SerializeToNode(Store, Options);
     }
@@ -139,14 +34,12 @@ public record WorkspaceState
     )
         : this(hub, typeSources)
     {
-        Hub = hub;
         this.LastSynchronized = LastSynchronized;
         Store = LastSynchronized.Deserialize<EntityStore>(Options);
     }
 
     private WorkspaceState(IMessageHub hub, IReadOnlyDictionary<string, ITypeSource> typeSources)
     {
-        Hub = hub;
         Version = hub.Version;
         serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
         CollectionsByType = typeSources.Values.Where(x => x.ElementType != null).ToImmutableDictionary(x => x.ElementType, x => x.CollectionName);
@@ -194,26 +87,6 @@ public record WorkspaceState
 
     public InstancesInCollection GetCollection(string collection) => Store.Instances.GetValueOrDefault(collection);
 
-    public WorkspaceState SetItems(EntityStore store)
-    {
-        var newStore = new EntityStore(Store.Instances.SetItems
-            (
-                store.Instances.Select
-                (
-                    change =>
-                        new KeyValuePair<string, InstancesInCollection>
-                        (
-                            change.Key, change.Value.Merge(Store.Instances.GetValueOrDefault(change.Key))
-                        )
-
-                )
-            )
-        );
-        return this with
-        {
-            Store = newStore,
-        };
-    }
 
 
     #endregion
@@ -259,7 +132,7 @@ public record WorkspaceState
         return GetCollection(collection)?.GetData(reference.Id);
     }
     private InstancesInCollection ReduceImpl(CollectionReference reference) => 
-        reference.Transformation(GetCollection(reference.Collection));
+        GetCollection(reference.Collection);
 
     private EntityStore ReduceImpl(CollectionsReference reference) =>
         new(reference
@@ -338,8 +211,8 @@ public record WorkspaceState
     private EntityStore Merge(DataChangeRequestWithElements request) =>
         request switch
         {
-            UpdateDataRequest update => new EntityStore(MergeUpdate(update).ToImmutableDictionary()),
-            DeleteDataRequest delete => new EntityStore(MergeDelete(delete).ToImmutableDictionary()),
+            UpdateDataRequest update => new EntityStore(Store.Instances.SetItems(MergeUpdate(update))),
+            DeleteDataRequest delete => new EntityStore(Store.Instances.SetItems(MergeDelete(delete))),
             _ => throw new NotSupportedException()
         };
 
@@ -365,7 +238,7 @@ public record WorkspaceState
             bool snapshotMode = update.Options?.Snapshot ?? false;
             if (existing == null || snapshotMode)
                 yield return kvp;
-            else yield return new(kvp.Key, kvp.Value.Merge(existing));
+            else yield return new(kvp.Key, existing with{Instances = existing.Instances.SetItems(kvp.Value.Instances)});
         }
     }
 
@@ -394,11 +267,14 @@ public record WorkspaceState
         throw new NotImplementedException();
     }
 
-
     public WorkspaceState Merge(WorkspaceState other)
-        => SetItems(other.Store) with
+    {
+        return this with
         {
-            TypeSources = TypeSources.SetItems(other.TypeSources),
             CollectionsByType = CollectionsByType.SetItems(other.CollectionsByType),
+            LastSynchronized = null,
+            Store = new(Store.Instances.SetItems(other.Store.Instances)),
+            TypeSources = TypeSources.SetItems(other.TypeSources)
         };
+    }
 }

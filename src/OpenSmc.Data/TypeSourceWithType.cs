@@ -14,8 +14,6 @@ public interface ITypeSource
     string CollectionName { get; }
     object GetKey(object instance);
     ITypeSource WithKey(Func<object, object> key);
-    ITypeSource WithPartition<T>(Func<T, object> partitionFunction, object partition);
-    ITypeSource WithPartition(Func<object, object> partitionFunction, object partition);
     ITypeSource WithInitialData(Func<CancellationToken, Task<IEnumerable<object>>> loadInstancesAsync);
 
     ITypeSource WithInitialData(IEnumerable<object> instances)
@@ -23,8 +21,13 @@ public interface ITypeSource
     ITypeSource WithInitialData(Func<IEnumerable<object>> loadInstances)
         => WithInitialData(_ => Task.FromResult(loadInstances()));
 
-    object GetPartition(object instance);
     InstancesInCollection Update(WorkspaceState workspace);
+
+}
+
+public interface IPartitionedTypeSource: ITypeSource
+{
+    object GetPartition(object instance);
 }
 
 public record TypeSource(string CollectionName)
@@ -66,28 +69,12 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
     protected TTypeSource This => (TTypeSource)this;
 
     
-    protected Func<object, object> PartitionFunction { get; init; }
-    public ITypeSource WithPartition<T>(Func<T, object> partitionFunction, object partition)
-        => WithPartition(o => partitionFunction.Invoke((T)o), partition);
 
-    public ITypeSource WithPartition(Func<object, object> partitionFunction, object partition)
-        => this with
-        {
-            PartitionFunction = partitionFunction,
-            Partition = partition
-        };
 
-    internal object Partition { get; set; }
-
-    public object GetPartition(object instance)
-        => PartitionFunction.Invoke(instance);
 
     public virtual InstancesInCollection Update(WorkspaceState workspace)
     {
-        var myCollection = workspace.Reduce(new CollectionReference(CollectionName)
-        {
-            Transformation = GetTransformation()
-        });
+        var myCollection = workspace.Reduce(new CollectionReference(CollectionName));
 
         return UpdateImpl(myCollection);
     }
@@ -95,19 +82,6 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
 
     protected virtual InstancesInCollection UpdateImpl(InstancesInCollection myCollection) => myCollection;
 
-    private Func<InstancesInCollection, InstancesInCollection> GetTransformation()
-    {
-        if (PartitionFunction == null)
-            return x => x;
-        return x =>
-            x == null ? null :
-            x with
-        {
-            Instances = x.Instances
-                .Where(y => PartitionFunction.Invoke(y.Value).Equals(Partition))
-                .ToImmutableDictionary()
-        };
-    }
 
     ITypeSource ITypeSource.WithInitialData(
         Func<CancellationToken, Task<IEnumerable<object>>> initialization)
@@ -134,6 +108,11 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
     private Task<IEnumerable<object>> InitializeDataAsync(CancellationToken cancellationToken) 
         => InitializationFunction(cancellationToken);
 
+}
+
+public record PartitionedTypeSourceWithType<T>(Func<T,object> PartitionFunction, object DataSource, IServiceProvider ServiceProvider) : TypeSourceWithType<T>(DataSource, ServiceProvider), IPartitionedTypeSource
+{
+    public object GetPartition(object instance) => PartitionFunction.Invoke((T)instance);
 }
 
 public record TypeSourceWithType<T>(object DataSource, IServiceProvider ServiceProvider) : TypeSourceWithType<T, TypeSourceWithType<T>>(DataSource, ServiceProvider)
@@ -169,8 +148,6 @@ where TTypeSource: TypeSourceWithType<T, TTypeSource>
         This with { CollectionName = collectionName };
 
     
-    public TTypeSource WithPartition(Func<T, object> partition)
-        => This with { PartitionFunction = o => partition.Invoke((T)o) };
 
 
     public TTypeSource WithQuery(Func<string, T> query)

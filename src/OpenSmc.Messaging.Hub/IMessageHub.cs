@@ -54,6 +54,8 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
     T Get<T>(string context = "");
     void AddPlugin(IMessageHubPlugin plugin);
     IMessageHub GetHostedHub<TAddress1>(TAddress1 address, Func<MessageHubConfiguration, MessageHubConfiguration> config);
+    IMessageHub GetHostedHub<TAddress1>(TAddress1 address)
+        => GetHostedHub(address, null);
 
     IMessageHub WithDisposeAction(Action<IMessageHub> disposeAction);
     IMessageHub WithDisposeAction(Func<IMessageHub, Task> disposeAction);

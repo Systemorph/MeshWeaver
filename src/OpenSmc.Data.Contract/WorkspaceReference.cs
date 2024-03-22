@@ -51,7 +51,6 @@ public record CollectionReference(string Collection) : WorkspaceReference<Instan
 {
     public string Path => $"$['{Collection}']";
     public override string ToString() => Path;
-    public Func<InstancesInCollection, InstancesInCollection> Transformation { get; init; } = x => x;
 
 }
 

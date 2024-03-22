@@ -13,14 +13,12 @@ public static class WorkspaceExtensions
     public static T GetData<T>(this IWorkspace workspace, object id)
         => workspace.State.GetData<T>(id);
     public static IObservable<T> GetObservable<T>(this IWorkspace workspace, object id)
-        => workspace.Stream.StartWith(workspace.State).Select(ws => ws.GetData<T>(id)).Replay(1).RefCount();
+        => workspace.Stream.Select(ws => ws.GetData<T>(id));
     public static IObservable<IReadOnlyCollection<T>> GetObservable<T>(this IWorkspace workspace)
     {
         var stream = workspace.Stream;
-        if (workspace.State != null)
-            stream = stream.StartWith(workspace.State);
 
-        return stream.Select(ws => ws.GetData<T>()).Replay(1).RefCount();
+        return stream.Select(ws => ws.GetData<T>());
     }
 
     public static WorkspaceReference Observe(this IWorkspace workspace, WorkspaceReference reference)
