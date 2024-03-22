@@ -1,13 +1,14 @@
-import { configureStore, createAction, createReducer, Dispatch } from "@reduxjs/toolkit"
+import { configureStore, createAction, createReducer } from "@reduxjs/toolkit"
 import { dataSyncHub } from "./dataSyncHub";
 import { Style } from "../contract/controls/Style";
 import { createWorkspace } from "@open-smc/data/src/workspace";
 import { subscribeToDataChanges } from "@open-smc/data/src/subscribeToDataChanges";
 import { EntireWorkspace, LayoutAreaReference } from "@open-smc/data/src/data.contract";
 import { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
-import { fromLayoutArea } from "./fromLayoutArea";
-import { distinctUntilChanged, distinctUntilKeyChanged, from, Observable, Subscription } from "rxjs";
+import { from, Subscription, tap } from "rxjs";
 import { LayoutArea } from "../contract/LayoutArea";
+import { syncArea } from "./syncArea";
+import { syncRoot } from "./syncRoot";
 
 export type RootState = {
     rootArea: string;
@@ -61,10 +62,13 @@ const rootReducer = createReducer<RootState>(
 export const makeStore = (hub: MessageHub) => {
     const subscription = new Subscription();
 
-    const dataStore = createWorkspace(undefined, "data");
+    const dataStore =
+        createWorkspace(undefined, "data");
     subscription.add(subscribeToDataChanges(hub, new EntireWorkspace(), dataStore.dispatch));
 
-    const layoutStore = createWorkspace(undefined, "layout");
+    const layoutStore =
+        createWorkspace<LayoutArea>(undefined, "layout");
+    subscription.add(subscribeToDataChanges(hub, new LayoutAreaReference("/"), layoutStore.dispatch));
 
     const store = configureStore<RootState>({
         preloadedState: {
@@ -78,14 +82,26 @@ export const makeStore = (hub: MessageHub) => {
     });
 
     subscription.add(
-        fromLayoutArea(layoutStore, [], store)
-            .pipe(distinctUntilKeyChanged("id"))
-            .subscribe(layoutAreaModel => {
-                store.dispatch(setRoot(layoutAreaModel.id));
-            })
+        from(layoutStore)
+            .pipe(
+                syncArea(store.dispatch, from(dataStore))
+            )
+            .pipe(
+                syncRoot(store.dispatch)
+            )
+            // .pipe(tap(layoutArea => console.log(layoutArea)))
+            .subscribe()
     );
 
-    subscription.add(subscribeToDataChanges(hub, new LayoutAreaReference("/"), layoutStore.dispatch));
+    // subscription.add(
+    //     fromLayoutArea(layoutStore, [], store)
+    //         .pipe(distinctUntilKeyChanged("id"))
+    //         .subscribe(layoutAreaModel => {
+    //             store.dispatch(setRoot(layoutAreaModel.id));
+    //         })
+    // );
+    //
+    // subscription.add(subscribeToDataChanges(hub, new LayoutAreaReference("/"), layoutStore.dispatch));
 
     return store;
 }

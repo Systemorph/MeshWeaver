@@ -27,16 +27,25 @@ export const dataSyncHub =
                     sendMessage(output, new DataChangedEvent(id, layoutState));
 
                     setTimeout(() => {
+                        return;
                         const [nextState, patches] =
                             produceWithPatches(
-                                layoutState, state => {
+                                layoutState,
+                                state => {
                                     // state.control.areas[1].control.data = "Hello";
-                                    state.control.areas.pop();
-                                });
+                                    // state.control.areas.pop();
+                                    // state.style = { fontWeight: "bold" }
+                                    // state.id = "/root"
+                                }
+                            );
+
+                        const jsonPatch = {
+                            ...new JsonPatch(patches.map(toPatchOperation))
+                        }
 
                         sendMessage(
                             output,
-                            new DataChangedEvent(id, new JsonPatch(patches.map(toPatchOperation)))
+                            new DataChangedEvent(id, jsonPatch)
                         )
                     }, 1000);
                 }

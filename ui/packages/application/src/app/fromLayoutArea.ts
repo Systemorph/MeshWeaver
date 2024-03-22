@@ -1,18 +1,6 @@
 import { Store } from "@reduxjs/toolkit";
-import {
-    distinctUntilChanged,
-    from,
-    map,
-    mergeMap,
-    Observable,
-    of,
-    pairwise,
-    pipe,
-    startWith,
-    switchMap,
-    tap
-} from "rxjs";
-import { get, isEqualWith } from "lodash-es";
+import { distinctUntilChanged, from, map, Observable, of, switchMap, tap } from "rxjs";
+import { get } from "lodash-es";
 import { LayoutArea } from "../contract/LayoutArea";
 import { Control } from "../contract/controls/Control";
 import { isOfType } from "../contract/ofType";
@@ -20,6 +8,7 @@ import { LayoutStackControl } from "../contract/controls/LayoutStackControl";
 import { ControlModel, LayoutAreaModel, removeArea, setArea } from "./store";
 import { isEmpty } from "lodash";
 import { withTeardownBefore } from "./withTeardownBefore";
+import { ignoreNestedAreas } from "./ignoreNestedAreas";
 
 export type PropertyPath = (string | number)[];
 
@@ -40,17 +29,6 @@ export type PropertyPath = (string | number)[];
 //     .subscribe(value => {
 //         // update dataContext
 //     });
-
-const ignoreNestedAreas = (previous: LayoutArea, current: LayoutArea) =>
-    isEqualWith(
-        previous,
-        current,
-        (value, other, indexOrKey, stack) => {
-            if (isOfType(value, LayoutArea) && isOfType(other, LayoutArea) && indexOrKey) {
-                return value.id === other.id;
-            }
-        }
-    );
 
 export function fromLayoutArea(layoutStore: Store, path: PropertyPath, store: Store) {
     return from(layoutStore)
@@ -86,17 +64,11 @@ export function fromLayoutArea(layoutStore: Store, path: PropertyPath, store: St
         );
 }
 
-function withPreviousValue<T>() {
-    return pipe(
-        startWith(undefined),
-        pairwise<T>()
-    );
-}
-
 function getLayoutAreaModel(layoutArea: LayoutArea) {
     const {id, control, options, style} = layoutArea;
 
-    const [controlModel, nestedAreaPaths] = getControlModel(control);
+    const [controlModel, nestedAreaPaths] =
+        getControlModel(control);
 
     const layoutAreaModel = {
         id,

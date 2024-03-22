@@ -1,18 +1,20 @@
 import { expect, test, describe, jest } from "@jest/globals";
 import { Observable, of } from "rxjs";
-import { withTeardownBefore } from "./withTeardownBefore";
+import { withCleanup } from "./withCleanup";
 
-describe("basic", () => {
+describe("cleanup", () => {
     test("1", () => {
         const subscription =
             new Observable(
                 subscriber => {
                     subscriber.next(1);
-                    // subscriber.complete();
+                    subscriber.next(2);
+                    subscriber.next(3);
+                    subscriber.complete();
                 })
-                .pipe(withTeardownBefore(() => console.log("added teardown")))
+                .pipe(withCleanup(value => () => console.log("cleanup " + value)))
                 .subscribe(console.log);
 
-        subscription.unsubscribe();
+        // subscription.unsubscribe();
     });
 });

@@ -5,15 +5,13 @@ import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
 import {
     DataChangedEvent,
     JsonPatch,
-    PatchOperation,
     SubscribeDataRequest,
     UnsubscribeDataRequest
 } from "./data.contract";
-import { initState, jsonPatches } from "./workspace";
-import { Patch } from "immer";
+import { initState, jsonPatch } from "./workspace";
 import { messageOfType } from "@open-smc/message-hub/src/operators/messageOfType";
 import { isOfType } from "@open-smc/application/src/contract/ofType";
-import { filter, map } from "rxjs";
+import { filter } from "rxjs";
 
 export function subscribeToDataChanges(hub: MessageHub, workspaceReference: any, dispatch: Dispatch) {
     const id = v4();
@@ -22,7 +20,7 @@ export function subscribeToDataChanges(hub: MessageHub, workspaceReference: any,
         .pipe(filter(({message}) => message.id === id))
         .subscribe(({message: {id, change}}) => {
             if (isOfType(change, JsonPatch)) {
-                dispatch(jsonPatches(change.operations?.map(toImmerPatch)))
+                dispatch(jsonPatch(change))
             } else {
                 dispatch(initState(change));
             }
@@ -34,14 +32,4 @@ export function subscribeToDataChanges(hub: MessageHub, workspaceReference: any,
         .add(() => sendMessage(hub, new UnsubscribeDataRequest([id])));
 
     return subscription;
-}
-
-function toImmerPatch(patch: PatchOperation): Patch {
-    const {op, path, value} = patch;
-
-    return {
-        op,
-        path: path?.split("/"),
-        value
-    }
 }

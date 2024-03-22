@@ -3,11 +3,12 @@ import {
     createAction,
     createReducer,
 } from '@reduxjs/toolkit';
-import { applyPatches, enablePatches, Patch, produce } from "immer";
+import { applyPatches, enablePatches, Patch } from "immer";
+import { JsonPatch, PatchOperation } from "./data.contract";
 
 enablePatches();
 
-export const jsonPatches = createAction<Patch[]>('jsonPatches');
+export const jsonPatch = createAction<JsonPatch>('jsonPatch');
 export const initState = createAction<any>('initState');
 
 export function createWorkspace<TState>(initialState?: TState, name?: string) {
@@ -16,12 +17,14 @@ export function createWorkspace<TState>(initialState?: TState, name?: string) {
         builder => {
             builder
                 .addCase(
-                    jsonPatches,
-                    (state, action) => {
-                        return applyPatches(state, action.payload);
-                    }
+                    jsonPatch,
+                    (state, action) =>
+                        action.payload.operations && applyPatches(state, action.payload.operations.map(toImmerPatch))
                 )
-                .addCase(initState,(state, action) => action.payload);
+                .addCase(
+                    initState,
+                    (state, action) => action.payload
+                );
         }
     );
 
@@ -31,4 +34,14 @@ export function createWorkspace<TState>(initialState?: TState, name?: string) {
             name
         }
     });
+}
+
+function toImmerPatch(patch: PatchOperation): Patch {
+    const {op, path, value} = patch;
+
+    return {
+        op,
+        path: path?.split("/"),
+        value
+    }
 }
