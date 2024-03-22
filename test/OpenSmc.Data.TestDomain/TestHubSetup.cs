@@ -59,20 +59,25 @@ public static class TestHubSetup
 
     public const string CashflowImportFormat = nameof(CashflowImportFormat);
 
-    public static MessageHubConfiguration ConfigureImportHub(this MessageHubConfiguration parent, int year, params string[] businessUnits)
+    public static MessageHubConfiguration ConfigureImportHub(this MessageHubConfiguration parent, int year,
+        params string[] businessUnits)
         => parent.WithHostedHub(new ImportAddress(year, parent.Address),
             config => config
-                .AddImport(data1 =>
-                        businessUnits.Aggregate(data1, (data, bu) =>
-                                data
-                                    .FromHub(new TransactionalDataAddress(year, bu, parent.Address), c => c
-                                        .WithType<TransactionalData>(t =>t
-                                            .WithPartition(i => new TransactionalDataAddress(i.Year, i.BusinessUnit, parent.Address))
-                                            )
-                                    )
-                                    .FromHub(new ComputedDataAddress(year, bu, parent.Address), c => c
-                                        .WithType<ComputedData>(t => t
-                                            .WithPartition(i => new ComputedDataAddress(i.Year, i.BusinessUnit, parent.Address)))))
+                .AddImport(data =>
+                        data
+                            .FromPartitionedHubs(nameof(TransactionalData), c => c
+                                .InitializingPartitions(businessUnits.Select(bu =>
+                                    new TransactionalDataAddress(year, bu, parent.Address)))
+                                .WithType<TransactionalData>(i =>
+                                    new TransactionalDataAddress(i.Year, i.BusinessUnit, parent.Address))
+
+                            )
+                            .FromPartitionedHubs(nameof(ComputedData), c => c
+                                .InitializingPartitions(businessUnits.Select(bu =>
+                                    new ComputedDataAddress(year, bu, parent.Address)))
+                                .WithType<ComputedData>(i =>
+                                    new ComputedDataAddress(i.Year, i.BusinessUnit, parent.Address))
+                            )
                             .FromHub(new ReferenceDataAddress(parent.Address),
                                 dataSource => dataSource
                                     .WithType<BusinessUnit>()

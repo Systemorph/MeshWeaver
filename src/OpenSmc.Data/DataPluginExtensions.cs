@@ -32,6 +32,10 @@ public static class DataPluginExtensions
 
 
 
+    public static DataContext FromPartitionedHubs(this DataContext dataSource, object id,
+        Func<PartitionedHubDataSource, PartitionedHubDataSource> configuration)
+        => dataSource.WithDataSourceBuilder(id, hub => configuration.Invoke(new PartitionedHubDataSource(id, hub, dataSource.Workspace))
+        );
 
     public static DataContext FromHub(this DataContext dataSource, object address)
         => FromHub(dataSource, address, ds => ds.SynchronizeAll());

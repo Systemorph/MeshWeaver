@@ -37,9 +37,9 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
 
         // assert
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
-        var workspace = GetWorkspace(client);
-        var transactionalItems1 = await workspace.GetObservable<TransactionalData>().FirstAsync();
-        var computedItems1 = await workspace.GetObservable < ComputedData >().FirstAsync();
+        var host = GetHost();
+        var transactionalItems1 = await GetWorkspace(host.GetHostedHub(new TransactionalDataAddress(2024, "1", new HostAddress()))).GetObservable<TransactionalData>().FirstAsync(x => x.Count == 2);
+        var computedItems1 = await GetWorkspace(host.GetHostedHub(new ComputedDataAddress(2024, "1", new HostAddress()))).GetObservable < ComputedData >().FirstAsync(x => x.Count == 2);
 
         using (new AssertionScope())
         {

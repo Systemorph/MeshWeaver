@@ -15,13 +15,9 @@ public interface IDataSource : IAsyncDisposable
     EntityStore Update(WorkspaceState state);
 }
 
-public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDataSource, IAsyncDisposable where TDataSource : DataSource<TDataSource>
+public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDataSource where TDataSource : DataSource<TDataSource>
 { 
     protected virtual TDataSource This => (TDataSource)this;
-    public TDataSource WithType(Type type)
-        => WithType(type, x => x);
-
-    //[Inject] private ILogger<DataSource<TDataSource>> logger;
 
     IEnumerable<ITypeSource> IDataSource.TypeSources => TypeSources.Values;
 
@@ -51,13 +47,6 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
                 .ToImmutableDictionary()
             )
             ;
-    }
-
-    public object MapInstanceToPartition(object instance)
-    {
-        if(TypeSources.TryGetValue(instance.GetType(), out var typeSource))
-            return typeSource.GetPartition(instance);
-        return null;
     }
 
     public virtual IReadOnlyCollection<DataChangeRequest> Change(DataChangeRequest request)

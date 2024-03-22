@@ -7,7 +7,7 @@ using OpenSmc.Messaging;
 using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
-public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub),
+public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     IWorkspace,
     IMessageHandler<UpdateDataRequest>,
     IMessageHandler<DeleteDataRequest>,
@@ -16,10 +16,10 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
     IMessageHandler<UnsubscribeDataRequest>,
     IMessageHandler<PatchChangeRequest>
 {
+
+    public IObservable<WorkspaceState> Stream => replaySubject;
+    private readonly ReplaySubject<WorkspaceState> replaySubject = new(1);
     private readonly Subject<WorkspaceState> subject = new();
-
-    public IObservable<WorkspaceState> Stream => subject;
-
     public IEnumerable<Type> MappedTypes => State.MappedTypes;
 
     public void Update(IEnumerable<object> instances, UpdateOptions options)
@@ -51,7 +51,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
                 logger.LogDebug("Initialized workspace in address {address}", Address);
                 InitializeState(t.Result);
                 subject.OnNext(State);
-                syncBack = subject.DistinctUntilChanged().Subscribe(UpdateDataContext(dataContext));
+                syncBack = subject.Subscribe(UpdateDataContext(dataContext));
                 initializeTaskCompletionSource.SetResult();
             }, cancellationToken);
     }
@@ -128,9 +128,16 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
 
     private readonly ConcurrentDictionary<(object Address, string Id),IDisposable> subscriptions = new();
 
-    private readonly ISerializationService serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
-    private readonly ILogger<DataPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<DataPlugin>>();
+    private readonly ISerializationService serializationService;
+    private readonly ILogger<DataPlugin> logger;
     private IDisposable syncBack;
+
+    public DataPlugin(IMessageHub hub) : base(hub)
+    {
+        serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
+        logger = hub.ServiceProvider.GetRequiredService<ILogger<DataPlugin>>();
+        subject.Subscribe(replaySubject);
+    }
 
     private IMessageDelivery Subscribe(IMessageDelivery<SubscribeRequest> request)
     {
@@ -138,8 +145,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
         if (subscriptions.TryRemove(key, out var existing))
             existing.Dispose();
 
-        subscriptions[key] = subject
-            .StartWith(State)
+        subscriptions[key] = replaySubject
             .Subscribe(new PatchSubscriber(Hub, request, serializationService, State.TypeSources));
 
         return request.Processed();
@@ -174,26 +180,23 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
     }
 }
 
-public class DataSubscription<T> :IDisposable
-{
-    private readonly IDisposable subscription;
-    private IObservable<T> Stream { get; }
-    public DataSubscription(IObservable<WorkspaceState> stateStream, 
-        WorkspaceReference reference, 
-        Action<T> action)
-    {
-        Stream = stateStream
-            .Select(ws => (T)ws.Reduce(reference))
-            .DistinctUntilChanged()
-            .Replay(1)
-            .RefCount();
+//public class DataSubscription<T> :IDisposable
+//{
+//    private readonly IDisposable subscription;
+//    private IObservable<T> Stream { get; }
+//    public DataSubscription(IObservable<WorkspaceState> stateStream, 
+//        WorkspaceReference reference, 
+//        Action<T> action)
+//    {
+//        Stream = stateStream
+//            .Select(ws => (T)ws.Reduce(reference));
 
-        subscription = Stream.Subscribe(action);
+//        subscription = Stream.Subscribe(action);
 
-    }
+//    }
 
-    public void Dispose()
-    {
-        subscription.Dispose();
-    }
-}
+//    public void Dispose()
+//    {
+//        subscription.Dispose();
+//    }
+//}
