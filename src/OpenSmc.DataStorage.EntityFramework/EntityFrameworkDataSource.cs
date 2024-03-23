@@ -10,7 +10,7 @@ public record EntityFrameworkDataSource(object Id,
     IMessageHub Hub,
     EntityFrameworkDataStorage EntityFrameworkDataStorage) : DataSourceWithStorage<EntityFrameworkDataSource>(Id, Hub, EntityFrameworkDataStorage)
 {
-    public override Task<WorkspaceState> InitializeAsync(CancellationToken cancellationToken)
+    public override Task<EntityStore> InitializeAsync(CancellationToken cancellationToken)
     {
         EntityFrameworkDataStorage.Initialize(ModelBuilder ?? ConvertDataSourceMappings);
         return base.InitializeAsync(cancellationToken);

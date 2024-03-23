@@ -3,7 +3,7 @@ using System.Collections.Immutable;
 
 namespace OpenSmc.Data;
 
-public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace) : IAsyncDisposable
+public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace, ReduceManager ReduceManager) : IAsyncDisposable
 {
     internal ImmutableDictionary<object,IDataSource> DataSources { get; private set; } = ImmutableDictionary<object, IDataSource>.Empty;
 
@@ -27,17 +27,19 @@ public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace) : IAsync
             .ToImmutableDictionary(kvp => kvp.Key,
                 kvp => kvp.Value.Invoke(Hub));
 
-        var workspace = await DataSources
+        var store = await DataSources
             .Values
             .ToAsyncEnumerable()
             .SelectAwait(async ds => await ds.InitializeAsync(cancellationToken))
-            .AggregateAsync((ws1, ws2) => ws1.Merge(ws2), cancellationToken: cancellationToken);
+            .AggregateAsync((ws1, ws2) => new(ws1.Instances.SetItems(ws2.Instances)), cancellationToken: cancellationToken);
 
-        return new(Hub, workspace.Store,
+        return new(Hub, store,
             DataSources
                 .SelectMany(x => x.Value.TypeSources)
                 .GroupBy(x => x.CollectionName)
-                .ToDictionary(x => x.Key, x => x.First()));
+                .ToDictionary(x => x.Key, x => x.First()), 
+            ReduceManager
+            );
     }
 
 

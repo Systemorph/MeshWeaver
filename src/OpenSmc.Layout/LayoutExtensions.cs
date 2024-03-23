@@ -14,7 +14,7 @@ public static class LayoutExtensions
     public static MessageHubConfiguration AddLayout(this MessageHubConfiguration conf, Func<LayoutDefinition, LayoutDefinition> layoutDefinition)
     {
         return conf
-            .WithDeferral(d => d.Message is RefreshRequest or SetAreaRequest)
+            .WithDeferral(d => d.Message is AreaReference or SetAreaRequest)
             .WithServices(
                 services => services.AddSingleton<IUiControlService, UiControlService>()
                 .AddAllControlHubs()
@@ -31,7 +31,7 @@ public static class LayoutExtensions
     public static MessageHubConfiguration RouteLayoutMessages(this MessageHubConfiguration configuration, object mainLayoutAddress)
         => configuration
             .WithRoutes(forward => forward
-                .RouteMessage<RefreshRequest>(_ => mainLayoutAddress)
+                .RouteMessage<AreaReference>(_ => mainLayoutAddress)
                 //.RouteMessage<SetAreaRequest>(_ => mainLayoutAddress) // // TODO V10: Not sure yet if we need this... (04.03.2024, Roland Bürgi)
             );
 

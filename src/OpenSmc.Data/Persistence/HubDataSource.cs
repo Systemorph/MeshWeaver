@@ -12,10 +12,10 @@ namespace OpenSmc.Data.Persistence;
 public record PartitionedHubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : HubDataSourceBase<PartitionedHubDataSource>(Id, Hub, Workspace)
 {
     public PartitionedHubDataSource WithType<T>(Func<T, object> partitionFunction)
-        => WithType<T>(partitionFunction, x => x);
+        => WithType(partitionFunction, x => x);
 
     public PartitionedHubDataSource WithType<T>(Func<T,object> partitionFunction, Func<ITypeSource, ITypeSource> config)
-        => WithType<T>(partitionFunction, x => (PartitionedTypeSourceWithType<T>)config.Invoke(x));
+        => WithType(partitionFunction, x => (PartitionedTypeSourceWithType<T>)config.Invoke(x));
 
     public PartitionedHubDataSource WithType<T>(Func<T, object> partitionFunction, Func<PartitionedTypeSourceWithType<T>, PartitionedTypeSourceWithType<T>> typeSource)
         => WithTypeSource(typeof(T), typeSource.Invoke(new PartitionedTypeSourceWithType<T>(partitionFunction, Id, Hub.ServiceProvider)));
@@ -64,13 +64,13 @@ public record PartitionedHubDataSource(object Id, IMessageHub Hub, IWorkspace Wo
 
     private readonly Dictionary<object, JsonNode> lastSynchronized = new();
 
-    public override Task<WorkspaceState> InitializeAsync(CancellationToken cancellationToken)
+    public override Task<EntityStore> InitializeAsync(CancellationToken cancellationToken)
     {
         var startDataSynchronizationRequest = GetSubscribeRequest();
 
-        var tcs = new TaskCompletionSource<WorkspaceState>(cancellationToken);
+        var tcs = new TaskCompletionSource<EntityStore>(cancellationToken);
         if (InitializePartitions.Length == 0)
-            tcs.SetResult(InitialWorkspaceState);
+            tcs.SetResult(initializingStore);
 
         else
         {
@@ -94,7 +94,7 @@ public record PartitionedHubDataSource(object Id, IMessageHub Hub, IWorkspace Wo
     private object[] InitializePartitions { get; init; } = Array.Empty<object>();
     private EntityStore initializingStore = new([]);
 
-    protected IMessageDelivery Initialize(IMessageDelivery<DataChangedEvent> response, TaskCompletionSource<WorkspaceState> tcs, HashSet<object> addresses)
+    protected IMessageDelivery Initialize(IMessageDelivery<DataChangedEvent> response, TaskCompletionSource<EntityStore> tcs, HashSet<object> addresses)
     {
         addresses.Remove(response.Sender);
         var json = lastSynchronized[response.Sender] = JsonNode.Parse(response.Message.Change.Content);
@@ -103,14 +103,13 @@ public record PartitionedHubDataSource(object Id, IMessageHub Hub, IWorkspace Wo
 
         if (addresses.Count == 0)
         {
-            tcs.SetResult(InitialWorkspaceState);
+            tcs.SetResult(initializingStore);
             initializingStore = null;
         }
 
         return response.Processed();
     }
 
-    private WorkspaceState InitialWorkspaceState => new(Hub, initializingStore, TypeSources.Values.ToImmutableDictionary(x => x.CollectionName));
 }
 
 public abstract record HubDataSourceBase<TDataSource> : DataSource<TDataSource> where TDataSource : HubDataSourceBase<TDataSource>
@@ -229,11 +228,11 @@ public record HubDataSource : HubDataSourceBase<HubDataSource>
         LastSerialized = JsonSerializer.SerializeToNode(newStore, Options);
         return newStore;
     }
-    public override Task<WorkspaceState> InitializeAsync(CancellationToken cancellationToken)
+    public override Task<EntityStore> InitializeAsync(CancellationToken cancellationToken)
     {
         var startDataSynchronizationRequest = GetSubscribeRequest();
 
-        var tcs = new TaskCompletionSource<WorkspaceState>(cancellationToken);
+        var tcs = new TaskCompletionSource<EntityStore>(cancellationToken);
 
         Hub.RegisterCallback
         (
@@ -243,10 +242,9 @@ public record HubDataSource : HubDataSourceBase<HubDataSource>
         return tcs.Task;
     }
 
-    protected IMessageDelivery Initialize(IMessageDelivery<DataChangedEvent> response, TaskCompletionSource<WorkspaceState> tcs)
+    protected IMessageDelivery Initialize(IMessageDelivery<DataChangedEvent> response, TaskCompletionSource<EntityStore> tcs)
     {
-        var workspaceState = new WorkspaceState(Hub, JsonNode.Parse(response.Message.Change.Content), TypeSources.Values.ToDictionary(x => x.CollectionName));
-        tcs.SetResult(workspaceState);
+        tcs.SetResult(JsonNode.Parse(response.Message.Change.Content).Deserialize<EntityStore>(Options));
 
         return response.Processed();
     }

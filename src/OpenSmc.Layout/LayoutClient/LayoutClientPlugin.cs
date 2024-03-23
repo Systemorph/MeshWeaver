@@ -6,7 +6,7 @@ public class LayoutClientPlugin(LayoutClientConfiguration configuration, IMessag
     : MessageHubPlugin<LayoutClientState>(hub)
 {
     public override bool IsDeferred(IMessageDelivery delivery) 
-        => delivery.Message is RefreshRequest
+        => delivery.Message is AreaReference
             || base.IsDeferred(delivery);
 
     public override async Task StartAsync(CancellationToken cancellationToken)

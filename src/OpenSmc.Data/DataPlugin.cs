@@ -32,12 +32,14 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     private readonly TaskCompletionSource initializeTaskCompletionSource = new();
     public override Task Initialized => initializeTaskCompletionSource.Task;
     private DataContext DataContext { get; set; }
+
+    private ReduceManager ReduceManager { get; init; } = new();
     public override async Task StartAsync(CancellationToken cancellationToken)  // This loads the persisted state
     {
         logger.LogDebug($"Starting data plugin at address {Address}");
         await base.StartAsync(cancellationToken);
 
-        DataContext = Hub.GetDataConfiguration();
+        DataContext = Hub.GetDataConfiguration(ReduceManager);
         Initialize(cancellationToken, DataContext);
     }
 
