@@ -25,15 +25,15 @@ export const dataSyncHub =
 
                 if (isOfType(workspaceReference, LayoutAreaReference)) {
                     sendMessage(output, new DataChangedEvent(id, layoutState));
-
+// return;
                     setTimeout(() => {
-                        return;
                         const [nextState, patches] =
                             produceWithPatches(
                                 layoutState,
                                 state => {
-                                    // state.control.areas[1].control.data = "Hello";
-                                    // state.control.areas.pop();
+                                    // state.control.areas[0].control.title = "Hi";
+                                    // state.control.areas[1].control.data = "Hi";
+                                    state.control.areas.pop();
                                     // state.style = { fontWeight: "bold" }
                                     // state.id = "/root"
                                 }
@@ -71,8 +71,8 @@ const simpleLayout = {
 const layoutState = {
     $type: "OpenSmc.Layout.LayoutArea",
     id: "/",
-    style: {},
-    options: {},
+    // style: {},
+    // options: {},
     control: {
         $type: "OpenSmc.Layout.Composition.LayoutStackControl",
         skin: "MainWindow",

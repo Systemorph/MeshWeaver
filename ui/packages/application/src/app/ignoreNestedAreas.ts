@@ -7,7 +7,7 @@ export const ignoreNestedAreas = (previous: LayoutArea, current: LayoutArea) =>
         previous,
         current,
         (value, other, indexOrKey, stack) => {
-            if (isOfType(value, LayoutArea) && isOfType(other, LayoutArea) && indexOrKey) {
+            if (isOfType(value, LayoutArea) && isOfType(other, LayoutArea) && indexOrKey !== undefined) {
                 return value.id === other.id;
             }
         }

@@ -7,8 +7,10 @@ import { EntireWorkspace, LayoutAreaReference } from "@open-smc/data/src/data.co
 import { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
 import { from, Subscription, tap } from "rxjs";
 import { LayoutArea } from "../contract/LayoutArea";
-import { syncArea } from "./syncArea";
 import { syncRoot } from "./syncRoot";
+import { cleanupOldArea } from "./cleanupOldArea";
+import { syncNestedAreas } from "./syncNestedAreas";
+import { setNewArea } from "./setNewArea";
 
 export type RootState = {
     rootArea: string;
@@ -81,17 +83,27 @@ export const makeStore = (hub: MessageHub) => {
         }
     });
 
-    subscription.add(
-        from(layoutStore)
-            .pipe(
-                syncArea(store.dispatch, from(dataStore))
-            )
-            .pipe(
-                syncRoot(store.dispatch)
-            )
-            // .pipe(tap(layoutArea => console.log(layoutArea)))
-            .subscribe()
-    );
+    const rootLayoutArea$ = from(layoutStore);
+    const data$ = from(dataStore);
+
+    const {dispatch} = store;
+
+    rootLayoutArea$
+        .pipe(syncNestedAreas(dispatch, data$))
+        .subscribe();
+
+    rootLayoutArea$
+        .pipe(setNewArea(dispatch, data$))
+        .subscribe();
+
+    rootLayoutArea$
+        .pipe(syncRoot(dispatch))
+        .subscribe();
+
+    rootLayoutArea$
+        .pipe(cleanupOldArea(dispatch))
+        .subscribe();
+
 
     // subscription.add(
     //     fromLayoutArea(layoutStore, [], store)
