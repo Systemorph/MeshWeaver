@@ -59,16 +59,15 @@ public record SetAreaRequest(string Area) : IRequest<LayoutArea>
 }
 
 
-public record RefreshRequest(string Area = "") : IRequest<RefreshResponse>
+public record AreaReference(string Area = "") : WorkspaceReference<LayoutArea>
 {
     // TODO SMCv2: consider making this Dictionary<string, object> (2023-10-18, Andrei Sirotenko)
     public object Options { get; init; }
 }
 
-public record RefreshResponse(EntityReference Reference);
 
 
-public delegate object ViewDefinition(RefreshRequest request);
+public delegate object ViewDefinition(AreaReference request);
 
 public abstract record ViewElement(string Area);
 

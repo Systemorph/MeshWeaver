@@ -90,7 +90,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     {
 
         var client = GetClient();
-        client.Post(new RefreshRequest { Area = TestLayoutPlugin.UpdatingView }, o => o.WithTarget(new HostAddress()));
+        client.Post(new AreaReference { Area = TestLayoutPlugin.UpdatingView }, o => o.WithTarget(new HostAddress()));
         var area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.UpdatingView));
         area.Control
             .Should().BeOfType<TextBoxControl>()
@@ -127,7 +127,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var client = GetClient();
         var observer = client.AddObservable();
-        client.Post(new RefreshRequest { Area = TestLayoutPlugin.DataBoundView }, o => o.WithTarget(new HostAddress()));
+        client.Post(new AreaReference { Area = TestLayoutPlugin.DataBoundView }, o => o.WithTarget(new HostAddress()));
         var area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.DataBoundView));
         area.Control
             .Should().BeOfType<MenuItemControl>()

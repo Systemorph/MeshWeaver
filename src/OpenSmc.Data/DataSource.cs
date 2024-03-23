@@ -11,7 +11,7 @@ public interface IDataSource : IAsyncDisposable
     IEnumerable<Type> MappedTypes { get; }
     object Id { get; }
     IReadOnlyCollection<DataChangeRequest> Change(DataChangeRequest request);
-    Task<WorkspaceState> InitializeAsync(CancellationToken cancellationToken);
+    Task<EntityStore> InitializeAsync(CancellationToken cancellationToken);
     EntityStore Update(WorkspaceState state);
 }
 
@@ -73,7 +73,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
 
     protected abstract TDataSource WithType<T>(Func<ITypeSource, ITypeSource> config) where T : class;
 
-    public virtual async Task<WorkspaceState> InitializeAsync( CancellationToken cancellationToken)
+    public virtual async Task<EntityStore> InitializeAsync( CancellationToken cancellationToken)
     {
         var instances = (await TypeSources
                 .Values
@@ -86,11 +86,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
                 {
                     GetKey = x.TypeSource.GetKey
                 });
-        return new WorkspaceState(
-            Hub,
-            new EntityStore(instances),
-            TypeSources.Values.ToDictionary(x => x.CollectionName)
-            );
+        return new EntityStore(instances);
     }
 
 

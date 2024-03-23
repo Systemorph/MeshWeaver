@@ -8,30 +8,31 @@ namespace OpenSmc.Layout.Composition;
 
 public class LayoutPlugin(LayoutDefinition layoutDefinition) :
     MessageHubPlugin(layoutDefinition.Hub),
-    IMessageHandler<RefreshRequest>
+    IMessageHandler<AreaReference>
 {
     [Inject] private IUiControlService uiControlService;
     private readonly LayoutDefinition layoutDefinition;
     private readonly IWorkspace workspace = layoutDefinition.Hub.ServiceProvider.GetRequiredService<IWorkspace>();
 
+    private ImmutableDictionary<string, LayoutArea> Areas { get; set; } = ImmutableDictionary<string, LayoutArea>.Empty;
 
+    public override Task Initialized => workspace.Initialized;
 
     public override async Task StartAsync(CancellationToken cancellationToken)
     {
-        await workspace.Initialized;
         await base.StartAsync(cancellationToken);
 
         if (layoutDefinition.InitialState == null)
             return;
         var control = layoutDefinition.InitialState;
-        RenderControl(string.Empty, control, new());
-        workspace.Commit();
+        if(control != null)
+            RenderControl(string.Empty, control, new());
 
         foreach (var initialization in layoutDefinition.Initializations)
             await initialization.Invoke(cancellationToken);
     }
 
-    private EntityReference RenderControl(string area, UiControl control, RefreshRequest request)
+    private EntityReference RenderControl(string area, UiControl control, AreaReference request)
     {
         if (control == null)
             return null;
@@ -48,7 +49,7 @@ public class LayoutPlugin(LayoutDefinition layoutDefinition) :
         return workspace.GetReference(layoutArea);
     }
 
-    private UiControl ParseControl(RefreshRequest request, ViewElement a)
+    private UiControl ParseControl(AreaReference request, ViewElement a)
         => a switch
         {
             ViewElementWithView ve => uiControlService.GetUiControl(ve.View),
@@ -57,7 +58,7 @@ public class LayoutPlugin(LayoutDefinition layoutDefinition) :
         };
 
 
-    private UiControl GetControl(RefreshRequest request)
+    private UiControl GetControl(AreaReference request)
     {
         var generator = layoutDefinition.ViewGenerators.FirstOrDefault(g => g.Filter(request));
         if (generator == null)
@@ -66,13 +67,13 @@ public class LayoutPlugin(LayoutDefinition layoutDefinition) :
         return control;
     }
 
-    IMessageDelivery IMessageHandler<RefreshRequest>.HandleMessage(IMessageDelivery<RefreshRequest> request)
+    IMessageDelivery IMessageHandler<AreaReference>.HandleMessage(IMessageDelivery<AreaReference> request)
         => RefreshView(request);
 
 
 
 
-    protected IMessageDelivery RefreshView(IMessageDelivery<RefreshRequest> request)
+    protected IMessageDelivery RefreshView(IMessageDelivery<AreaReference> request)
     {
         if (string.IsNullOrWhiteSpace(request.Message.Area))
             return request.Ignored();
@@ -86,7 +87,6 @@ public class LayoutPlugin(LayoutDefinition layoutDefinition) :
 
         var reference = RenderControl(request.Message.Area, layoutArea, request.Message);
         workspace.Commit();
-        Hub.Post(new RefreshResponse(reference), o => o.ResponseFor(request));
 
         return request.Processed();
     }
@@ -98,7 +98,7 @@ public class LayoutPlugin(LayoutDefinition layoutDefinition) :
     }
 }
 
-internal record ViewGenerator(Func<RefreshRequest, bool> Filter, ViewDefinition Generator);
+internal record ViewGenerator(Func<AreaReference, bool> Filter, ViewDefinition Generator);
 
 public record LayoutDefinition(IMessageHub Hub)
 {
@@ -106,9 +106,9 @@ public record LayoutDefinition(IMessageHub Hub)
     internal LayoutStackControl InitialState { get; init; }
     internal ImmutableList<ViewGenerator> ViewGenerators { get; init; } = ImmutableList<ViewGenerator>.Empty;
     public LayoutDefinition WithInitialState(LayoutStackControl initialState) => this with { InitialState = initialState };
-    public LayoutDefinition WithGenerator(Func<RefreshRequest, bool> filter, ViewDefinition viewGenerator) => this with { ViewGenerators = ViewGenerators.Add(new(filter, viewGenerator)) };
+    public LayoutDefinition WithGenerator(Func<AreaReference, bool> filter, ViewDefinition viewGenerator) => this with { ViewGenerators = ViewGenerators.Add(new(filter, viewGenerator)) };
 
-    public LayoutDefinition WithView(string area, Func<RefreshRequest, object> generator) =>
+    public LayoutDefinition WithView(string area, Func<AreaReference, object> generator) =>
         WithGenerator(r => r.Area == area, r => new LayoutArea(area,uiControlService.GetUiControl(generator.Invoke(r))));
 
 

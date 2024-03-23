@@ -2,7 +2,7 @@
 
 public record LayoutClientConfiguration(object LayoutHostAddress)
 {
-    internal object RefreshRequest { get; init; } = new RefreshRequest();
+    internal object RefreshRequest { get; init; } = new AreaReference();
     internal string Area = string.Empty;
     public LayoutClientConfiguration WithRefreshRequest (object refreshRequest) =>
         this with { RefreshRequest = refreshRequest };
@@ -13,6 +13,6 @@ public record LayoutClientConfiguration(object LayoutHostAddress)
         this with
         {
             MainArea = mainArea, 
-            RefreshRequest = RefreshRequest is RefreshRequest refreshRequest ? refreshRequest with {Area = mainArea} : RefreshRequest
+            RefreshRequest = RefreshRequest is AreaReference refreshRequest ? refreshRequest with {Area = mainArea} : RefreshRequest
         };
 }

@@ -20,10 +20,10 @@ public static class DataPluginExtensions
         return config.Get<ImmutableList<Func<DataContext, DataContext>>>() ?? ImmutableList<Func<DataContext, DataContext>>.Empty;
     }
 
-    internal static DataContext GetDataConfiguration(this IMessageHub hub)
+    internal static DataContext GetDataConfiguration(this IMessageHub hub, ReduceManager reduceManager)
     {
         var dataPluginConfig = hub.Configuration.GetListOfLambdas();
-        var ret = new DataContext(hub, hub.ServiceProvider.GetRequiredService<IWorkspace>());
+        var ret = new DataContext(hub, hub.ServiceProvider.GetRequiredService<IWorkspace>(), reduceManager);
         foreach (var func in dataPluginConfig)
             ret = func.Invoke(ret);
         return ret;
