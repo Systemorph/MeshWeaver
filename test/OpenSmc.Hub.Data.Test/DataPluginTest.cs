@@ -137,7 +137,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var instance = await hostWorkspace.GetObservable<MyData>("1").FirstAsync(i => i?.Text == TextChange);
         instance.Should().NotBeNull();
 
-        await Task.Delay(100);
+        await DisposeAsync();
         storage.Values.Should().Contain(i => (i as MyData).Text == TextChange);
     }
 
