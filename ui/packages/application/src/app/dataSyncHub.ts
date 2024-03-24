@@ -33,9 +33,10 @@ export const dataSyncHub =
                                 state => {
                                     // state.control.areas[0].control.title = "Hi";
                                     // state.control.areas[1].control.data = "Hi";
-                                    state.control.areas.pop();
+                                    // state.control.areas[0].id = "/ContextMenu";
+                                    // state.control.areas.pop();
                                     // state.style = { fontWeight: "bold" }
-                                    // state.id = "/root"
+                                    state.id = "/root"
                                 }
                             );
 
