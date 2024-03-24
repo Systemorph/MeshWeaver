@@ -20,7 +20,7 @@ export const setNewArea = (dispatch: Dispatch, data$: Observable<any>) =>
             )
 
 
-function toLayoutAreaModel(layoutArea: LayoutArea): LayoutAreaModel {
+export function toLayoutAreaModel(layoutArea: LayoutArea): LayoutAreaModel {
     const {id, control, options, style} = layoutArea;
 
     return {

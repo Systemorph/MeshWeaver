@@ -1,66 +1,52 @@
 import { Dispatch } from "@reduxjs/toolkit";
-import { map, Observable, of, OperatorFunction, Subscription } from "rxjs";
+import { distinctUntilChanged, map, Observable, Subscription } from "rxjs";
 import { LayoutArea } from "../contract/LayoutArea";
 import { Control } from "../contract/controls/Control";
 import { isOfType } from "../contract/ofType";
 import { LayoutStackControl } from "../contract/controls/LayoutStackControl";
-import { setNewArea } from "./setNewArea";
-import { cleanupOldArea } from "./cleanupOldArea";
+import { toLayoutAreaModel } from "./setNewArea";
 import { keys } from "lodash";
+import { ignoreNestedAreas } from "./ignoreNestedAreas";
+import { removeArea, setArea } from "./store";
 
-export const syncNestedAreas = (dispatch: Dispatch, data$: Observable<any>): OperatorFunction<LayoutArea, any> =>
+export const syncArea = (dispatch: Dispatch, data$: Observable<any>) =>
     (source: Observable<LayoutArea>) =>
-        source
-            .pipe(subAreas())
-            .pipe(scanLayoutAreas(dispatch, data$))
-
-export const scanLayoutAreas = (dispatch: Dispatch, data$: Observable<any>) =>
-    (source: Observable<LayoutArea[]>) =>
-        new Observable(subscriber => {
+        new Observable<LayoutArea>(subscriber => {
             const state: Record<string, Subscription> = {};
+            const nestedAreas$ = source.pipe(subAreas());
 
-            const subscription = source.subscribe({
-                next: layoutAreas => {
+            nestedAreas$
+                .subscribe(layoutAreas => {
                     layoutAreas?.filter(layoutArea => !state[layoutArea.id])
                         .forEach(layoutArea => {
                             const area$ =
-                                source.pipe(
+                                nestedAreas$.pipe(
                                     map(
                                         layoutAreas =>
                                             layoutAreas.find(area => area.id === layoutArea.id)
                                     )
                                 );
-
-                            const subscription = new Subscription();
-
-                            subscription.add(
-                                area$.pipe(syncNestedAreas(dispatch, data$)).subscribe()
-                            );
-
-                            subscription.add(
-                                area$.pipe(setNewArea(dispatch, data$)).subscribe()
-                            );
-
-                            // subscription.add(
-                            //     area$.pipe(cleanupOldArea(dispatch)).subscribe()
-                            // );
-
-                            state[layoutArea.id] = subscription;
+                            state[layoutArea.id] = area$.pipe(syncArea(dispatch, data$)).subscribe();
                         });
+                });
 
+            source
+                .pipe(distinctUntilChanged(ignoreNestedAreas))
+                .subscribe(layoutArea =>
+                    layoutArea && dispatch(setArea(toLayoutAreaModel(layoutArea))));
+
+            nestedAreas$
+                .subscribe(layoutAreas => {
                     keys(state).forEach(id => {
                         if (!layoutAreas?.find(area => area.id === id)) {
+                            dispatch(removeArea(id));
                             state[id].unsubscribe();
                             delete state[id];
                         }
                     })
-                    subscriber.next(keys(state));
-                },
-                complete: () => subscriber.complete(),
-                error: err => subscriber.error(err)
-            });
+                });
 
-            return () => subscription.unsubscribe();
+            source.subscribe(layoutArea => subscriber.next(layoutArea));
         });
 
 export const subAreas = () =>
