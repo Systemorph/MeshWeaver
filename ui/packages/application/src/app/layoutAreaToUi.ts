@@ -1,15 +1,15 @@
 import { Dispatch } from "@reduxjs/toolkit";
 import { Observable, switchMap, tap } from "rxjs";
 import { LayoutArea } from "../contract/LayoutArea";
-import { expandAllReferences } from "packages/data/src/expandAllReferences";
 import { setArea } from "./store";
 import { expandBindings } from "./expandBindings";
 import { isOfType } from "../contract/ofType";
 import { cloneDeepWith } from "lodash-es";
+import { expandAllReferences } from "@open-smc/data/src/expandAllReferences";
 
 export const layoutAreaToUi = (dispatch: Dispatch, data$: Observable<unknown>, parentDataContext: unknown) =>
     (source: Observable<LayoutArea>) =>
-        new Observable(subscriber => {
+        new Observable<LayoutArea>(subscriber => {
             const subscription =
                 source
                     .pipe(
