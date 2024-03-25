@@ -18,7 +18,7 @@ public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubT
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration) 
         => base.ConfigureHost(configuration)
             .AddData(
-                data => data.FromConfigurableDataSource(nameof(DataSource),
+                data => data.FromConfigurableDataSource(nameof(GenericDataSource),
                     source => source
                         .ConfigureCategory(TestDomain.TestRecordsDomain)
                 )

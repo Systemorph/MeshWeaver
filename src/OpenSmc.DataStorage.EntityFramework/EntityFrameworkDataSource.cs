@@ -10,10 +10,10 @@ public record EntityFrameworkDataSource(object Id,
     IMessageHub Hub,
     EntityFrameworkDataStorage EntityFrameworkDataStorage) : DataSourceWithStorage<EntityFrameworkDataSource>(Id, Hub, EntityFrameworkDataStorage)
 {
-    public override IEnumerable<ChangeStream<EntityStore>> GetStreams(IObservable<WorkspaceState> workspaceStream)
+    public override IEnumerable<ChangeStream<EntityStore>> Initialize()
     {
         EntityFrameworkDataStorage.Initialize(ModelBuilder ?? ConvertDataSourceMappings);
-        return base.GetStreams(workspaceStream);
+        return base.Initialize();
     }
 
 
@@ -43,4 +43,5 @@ public record EntityFrameworkDataSource(object Id,
     public EntityFrameworkDataSource WithType<T>(Func<TypeSourceWithTypeWithDataStorage<T>, TypeSourceWithTypeWithDataStorage<T>> typeSource) 
         where T : class 
         => this with { TypeSources = TypeSources.Add(typeof(T), typeSource.Invoke(new TypeSourceWithTypeWithDataStorage<T>(Hub,Id, Storage))) };
+
 }

@@ -22,23 +22,35 @@ public abstract record DataSourceWithStorage<TDataSource>(object Id, IMessageHub
         return Storage.StartTransactionAsync(cancellationToken);
     }
 
-    //protected virtual async Task UpdateAsync(WorkspaceState workspace, CancellationToken cancellationToken)
-    //{
-    //    await using ITransaction transaction = await StartTransactionAsync(cancellationToken);
-    //    try
-    //    {
-    //        base.Update(workspace);
-    //        await transaction.CommitAsync(cancellationToken);
-    //    }
-    //    catch (Exception ex)
-    //    {
-    //        logger.LogWarning("Transaction failed: {exception}", ex);
-    //        await transaction.RevertAsync();
-    //    }
-    //}
+    public override IEnumerable<ChangeStream<EntityStore>> Initialize()
+    {
+        Workspace.ChangeStream.Subscribe(Update);
+        return base.Initialize();
+    }
+
+    private void Update(WorkspaceState workspace)
+    {
+        persistenceHub.Schedule(ct => UpdateAsync(workspace, ct));
+    }
+
+    protected virtual async Task UpdateAsync(WorkspaceState workspace, CancellationToken cancellationToken)
+    {
+        await using ITransaction transaction = await StartTransactionAsync(cancellationToken);
+        try
+        {
+            foreach (var ts in TypeSources.Values)
+                ts.Update(workspace);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning("Transaction failed: {exception}", ex);
+            await transaction.RevertAsync();
+        }
+    }
 
 
-    
+
 
     public override async ValueTask DisposeAsync()
     {

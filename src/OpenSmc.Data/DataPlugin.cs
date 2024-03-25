@@ -10,7 +10,7 @@ using OpenSmc.Messaging;
 using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
-public class DataPlugin : MessageHubPlugin<WorkspaceState>,
+public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub),
     IWorkspace,
     IMessageHandler<UpdateDataRequest>,
     IMessageHandler<DeleteDataRequest>,
@@ -23,7 +23,7 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     public IObservable<WorkspaceState> Stream => synchronizationStream;
     private readonly ReplaySubject<WorkspaceState> synchronizationStream = new(1);
     private readonly Subject<WorkspaceState> subject = new();
-
+    public IObservable<WorkspaceState> ChangeStream => changeStream;
     public IEnumerable<Type> MappedTypes => State.MappedTypes;
     private readonly ConcurrentDictionary<(object Address, WorkspaceReference Reference), IDisposable> streams = new ();
 
@@ -32,12 +32,12 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     {
         if (externalSubscriptions.ContainsKey((address, reference)))
             return;
-        var stream = GetRemoteStream(Hub.Address, reference);
-        var change = stream.Subscribe<DataChangedEvent>(dc => Hub.Post(dc, o => o.WithTarget(address)));
-        externalSubscriptions.TryAdd((address, reference), change);
+        var stream = GetChangeStream(Hub.Address, reference);
+        var subscription = stream.Subscribe<DataChangedEvent>(dc => Hub.Post(dc, o => o.WithTarget(address)));
+        externalSubscriptions.TryAdd((address, reference), subscription);
     }
     
-    public ChangeStream<TReference> GetRemoteStream<TReference>(object id, WorkspaceReference<TReference> reference)
+    public ChangeStream<TReference> GetChangeStream<TReference>(object id, WorkspaceReference<TReference> reference)
     {
         var key = (id, reference);
         return (ChangeStream<TReference>)streams.GetOrAdd(key, _ =>
@@ -53,7 +53,7 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
                 .DistinctUntilChanged()
                 .Subscribe(ret);
             var mySynchronization = synchronizationStream
-                .Select(x => new ChangeItem<TReference>(x.Reduce(reference), x.LastChangedBy, false))
+                .Select(x => new ChangeItem<TReference>(x.Reduce(reference), x?.LastChangedBy, false))
                 .DistinctUntilChanged()
                 .Subscribe(ret);
 
@@ -125,7 +125,7 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
         options = serializationService.Options(typeSources);
 
         logger.LogDebug($"Starting data plugin at address {Address}");
-        var dataContextStreams = dataContext.Initialize(subject).ToArray();
+        var dataContextStreams = dataContext.Initialize().ToArray();
 
         logger.LogDebug("Initialized workspace in address {address}", Address);
 
@@ -140,11 +140,7 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
         List<IDisposable> disposables = new();
         var initializeObserver = new InitializeObserver(dataContextStreams.Select(i => i.Address).ToHashSet(), () =>
         {
-            foreach (var disposable in disposables)
-                disposable.Dispose();
-
-            subject.OnNext(State);
-            initializeTaskCompletionSource.SetResult();
+            FinishInitialization(disposables);
         });
 
         foreach (var stream in dataContextStreams)
@@ -154,6 +150,17 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
             disposables.Add(stream.Subscribe(initializeObserver));
         }
 
+    }
+
+    private void FinishInitialization(List<IDisposable> disposables)
+    {
+        foreach (var disposable in disposables)
+            disposable.Dispose();
+
+        initializeTaskCompletionSource.SetResult();
+        subject.Subscribe(synchronizationStream);
+
+        subject.OnNext(State);
     }
 
     private void Synchronize(ChangeItem<EntityStore> item)
@@ -224,13 +231,7 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
 
     private readonly ConcurrentDictionary<(object Address, string Id),IDisposable> subscriptions = new();
 
-    private readonly ILogger<DataPlugin> logger;
-
-    public DataPlugin(IMessageHub hub) : base(hub)
-    {
-        logger = hub.ServiceProvider.GetRequiredService<ILogger<DataPlugin>>();
-        subject.Subscribe(synchronizationStream);
-    }
+    private readonly ILogger<DataPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<DataPlugin>>();
 
     private IMessageDelivery Subscribe(IMessageDelivery<SubscribeRequest> request)
     {
@@ -281,25 +282,4 @@ internal class InitializeObserver(HashSet<object> ids, Action finishInit) : IObs
 
     }
 }
-
-//public class DataSubscription<T> :IDisposable
-//{
-//    private readonly IDisposable subscription;
-//    private IObservable<T> Stream { get; }
-//    public DataSubscription(IObservable<WorkspaceState> stateStream, 
-//        WorkspaceReference reference, 
-//        Action<T> action)
-//    {
-//        Stream = stateStream
-//            .Select(ws => (T)ws.Reduce(reference));
-
-//        subscription = Stream.Subscribe(action);
-
-//    }
-
-//    public void Dispose()
-//    {
-//        subscription.Dispose();
-//    }
-//}
 

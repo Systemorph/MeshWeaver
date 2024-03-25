@@ -34,7 +34,7 @@ public static class DataPluginExtensions
 
     public static DataContext FromPartitionedHubs(this DataContext dataSource, object id,
         Func<PartitionedHubDataSource, PartitionedHubDataSource> configuration)
-        => dataSource.WithDataSourceBuilder(id, hub => configuration.Invoke(new PartitionedHubDataSource(id, hub, dataSource.Workspace))
+        => dataSource.WithDataSourceBuilder(id, hub => configuration.Invoke(new PartitionedHubDataSource(id, hub))
         );
 
     public static DataContext FromHub(this DataContext dataSource, object address)
@@ -45,8 +45,8 @@ public static class DataPluginExtensions
         => dataSource.WithDataSourceBuilder(address, hub => configuration.Invoke(new HubDataSource(address, hub, dataSource.Workspace))
         );
     public static DataContext FromConfigurableDataSource(this DataContext dataSource, object address,
-        Func<DataSource, DataSource> configuration)
-        => dataSource.WithDataSourceBuilder(address, hub => configuration.Invoke(new DataSource(address, hub))
+        Func<GenericDataSource, GenericDataSource> configuration)
+        => dataSource.WithDataSourceBuilder(address, hub => configuration.Invoke(new GenericDataSource(address, hub))
         );
 
 }

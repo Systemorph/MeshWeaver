@@ -46,35 +46,21 @@ namespace OpenSmc.DataStorage.EntityFramework
             return new Transaction(this);
         }
 
+
         public void Add<T>(IEnumerable<T> instances) where T : class
-        {
-            throw new NotImplementedException();
-        }
-
-        public void Update<T>(IEnumerable<T> instances) where T : class
-        {
-            throw new NotImplementedException();
-        }
-
-        public void Delete<T>(IEnumerable<T> instances) where T : class
-        {
-            throw new NotImplementedException();
-        }
-
-        public void Add<T>(IReadOnlyCollection<T> instances) where T : class
         {
             var dbSet = Context.Set<T>();
             dbSet.AddRange(instances);
 
         }
 
-        public void Update<T>(IReadOnlyCollection<T> instances) where T : class
+        public void Update<T>(IEnumerable<T> instances) where T : class
         {
             var dbSet = Context.Set<T>();
             dbSet.UpdateRange(instances);
         }
 
-        public void Delete<T>(IReadOnlyCollection<T> instances) where T : class
+        public void Delete<T>(IEnumerable<T> instances) where T : class
         {
             var dbSet = Context.Set<T>();
             dbSet.RemoveRange(instances);
