@@ -45,17 +45,6 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
             if(!Hub.Address.Equals(id))
                 Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(id));
             var ret = new ChangeStream<TReference>(this, id, reference, options, () => Hub.Version);
-            //ret.Disposables.Add(
-            //    changeStream
-            //    .Select(x => new ChangeItem<TReference>(x.Reduce(reference), State.LastChangedBy, true))
-            //    .DistinctUntilChanged()
-            //    .Subscribe(ret)); ;
-
-            //ret.Disposables.Add(synchronizationStream
-            //    .Select(x => new ChangeItem<TReference>(x.Reduce(reference), x.LastChangedBy, false))
-            //    .DistinctUntilChanged()
-            //    .Subscribe(ret));
-
 
             if (!Hub.Address.Equals(id))
             {
@@ -271,7 +260,7 @@ internal class InitializeObserver(HashSet<object> ids, Action finishInit) : IObs
 
     public void OnNext(ChangeItem<EntityStore> value)
     {
-        ids.Remove(value.ChangedBy);
+        ids.Remove(value.Address);
         if (ids.Count == 0)
             finishInit();
 

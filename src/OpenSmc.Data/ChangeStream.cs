@@ -7,7 +7,7 @@ using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
 
-public record ChangeItem<TReference>(TReference Value, object ChangedBy);
+public record ChangeItem<TReference>(object Address, TReference Value, object ChangedBy);
 
 public record ChangeStream<TReference> : IDisposable,
         IObservable<ChangeItem<TReference>>,
@@ -55,7 +55,7 @@ public record ChangeStream<TReference> : IDisposable,
         var newJson = JsonSerializer.SerializeToNode(newStore, Options);
         var patch = LastSynchronized.CreatePatch(newJson);
         if (patch.Operations.Any())
-            Changes.OnNext(new ChangeItem<JsonPatch>(patch,changedBy));
+            Changes.OnNext(new ChangeItem<JsonPatch>(Address, patch,changedBy));
         LastSynchronized = newJson;
     }
 
@@ -71,14 +71,14 @@ public record ChangeStream<TReference> : IDisposable,
         };
 
         var newStore = newStoreSerialized.Deserialize<TReference>(Options);
-        Subject.OnNext(new(newStore, request.ChangedBy));
+        Subject.OnNext(new(Address, newStore, request.ChangedBy));
     }
 
     public void Initialize(TReference initial)
     {
         if(initial == null)
             throw new ArgumentNullException(nameof(initial));
-        Subject.OnNext(new(initial, Address));
+        Subject.OnNext(new(Address, initial, null));
         LastSynchronized = JsonSerializer.SerializeToNode(initial, Options);
     }
 
@@ -92,16 +92,25 @@ public record ChangeStream<TReference> : IDisposable,
 
         var dataChanged = LastSynchronized == null
             ? GetFullDataChange(node)
-            : new DataChangedEvent(Address, Reference, GetVersion(), new(JsonSerializer.Serialize(LastSynchronized.CreatePatch(node))), ChangeType.Patch, changedBy ?? Address);
+            : GetPatch(changedBy, node);
 
-        DataChangedStream.OnNext(dataChanged);
+        if(dataChanged != null)
+            DataChangedStream.OnNext(dataChanged);
         LastSynchronized = node;
 
     }
 
+    private DataChangedEvent GetPatch(object changedBy, JsonNode node)
+    {
+        var jsonPatch = LastSynchronized.CreatePatch(node);
+        if (!jsonPatch.Operations.Any())
+            return null;
+        return new DataChangedEvent(Address, Reference, GetVersion(), new(JsonSerializer.Serialize(jsonPatch)), ChangeType.Patch, changedBy ?? Address);
+    }
+
     private DataChangedEvent GetFullDataChange(JsonNode node)
     {
-        return new DataChangedEvent(Address, Reference, GetVersion(), new RawJson(node!.ToJsonString()), ChangeType.Full, Address);
+        return new DataChangedEvent(Address, Reference, GetVersion(), new RawJson(node!.ToJsonString()), ChangeType.Full, null);
     }
 
 
