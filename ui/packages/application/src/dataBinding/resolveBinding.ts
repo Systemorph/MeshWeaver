@@ -1,19 +1,18 @@
-const bindingType = "OpenSmc.Layout.DataBinding.Binding";
+import { contractMessage } from "@open-smc/utils/src/contractMessage";
+import { isOfType } from "../contract/ofType";
 
-export type Binding = {
-    $type: string;
-    path: string;
+contractMessage("OpenSmc.Layout.DataBinding.Binding")
+export class Binding {
+    constructor(public path: string) {
+    }
 }
 
 export type Bindable<T> = T | Binding;
 
-export function isBinding(data: Binding | unknown): data is Binding {
-    return (data as Binding)?.$type === bindingType;
+export function isBinding(data: unknown) {
+    return isOfType(data, Binding);
 }
 
 export function makeBinding(path: string) {
-    return {
-        $type: bindingType,
-        path
-    } as any
+    return new Binding(path);
 }

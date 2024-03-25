@@ -8,6 +8,7 @@ import { keys } from "lodash";
 import { ignoreNestedAreas } from "./ignoreNestedAreas";
 import { removeArea, RootState } from "./store";
 import { layoutAreaToUi } from "./layoutAreaToUi";
+import { uiToData } from "./uiToData";
 
 export const syncLayoutArea = (
     data$: Observable<unknown>,
@@ -48,8 +49,8 @@ export const syncLayoutArea = (
             subscription.add(
                 source
                     .pipe(distinctUntilChanged(ignoreNestedAreas))
-                    // .pipe(uiToData(ui$, dataDispatch))
                     .pipe(layoutAreaToUi(uiDispatch, data$, parentContext))
+                    .pipe(uiToData(ui$, dataDispatch))
                     .subscribe()
             );
 
