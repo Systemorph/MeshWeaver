@@ -2,8 +2,9 @@
 
 public interface IWorkspace
 {
-    ChangeStream<TReference> GetRemoteStream<TReference>(object id, WorkspaceReference<TReference> reference);
+    ChangeStream<TReference> GetChangeStream<TReference>(object id, WorkspaceReference<TReference> reference);
     IObservable<WorkspaceState> Stream { get; }
+    IObservable<WorkspaceState> ChangeStream { get; }
     WorkspaceState State { get; }
     Task Initialized { get; }
     IEnumerable<Type> MappedTypes { get;  }

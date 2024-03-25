@@ -18,7 +18,7 @@ public class SnapshotImportTest(ITestOutputHelper output) : HubTestBase(output)
             .AddData(
                 data => data.FromConfigurableDataSource
                 (
-                    nameof(DataSource),
+                    nameof(GenericDataSource),
                     source => source
                         .ConfigureCategory(TestDomain.TestRecordsDomain)
                 )

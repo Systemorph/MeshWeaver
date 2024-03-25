@@ -30,10 +30,10 @@ public record TypeSourceWithTypeWithDataStorage<T> : TypeSourceWithType<T, TypeS
     }
 
 
-    public override async Task<InstanceCollection> InitializeAsync(IObservable<WorkspaceState> workspaceStream, CancellationToken cancellationToken)
+    public override async Task<InstanceCollection> InitializeAsync(CancellationToken cancellationToken)
     {
         await using var transaction = await Storage.StartTransactionAsync(cancellationToken);
-        await base.InitializeAsync(workspaceStream, cancellationToken);
+        await base.InitializeAsync(cancellationToken);
         return LastSaved = new((await Storage.Query<T>().ToDictionaryAsync(GetKey, x => (object)x, cancellationToken)).ToImmutableDictionary()){GetKey = GetKey};
     }
 

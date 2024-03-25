@@ -1,5 +1,4 @@
-﻿using System.Reactive.Linq;
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
@@ -8,7 +7,7 @@ using OpenSmc.Serialization;
 
 namespace OpenSmc.Data.Persistence;
 
-public record PartitionedHubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : HubDataSourceBase<PartitionedHubDataSource>(Id, Hub, Workspace)
+public record PartitionedHubDataSource(object Id, IMessageHub Hub) : HubDataSourceBase<PartitionedHubDataSource>(Id, Hub)
 {
     public PartitionedHubDataSource WithType<T>(Func<T, object> partitionFunction)
         => WithType(partitionFunction, x => x);
@@ -27,9 +26,9 @@ public record PartitionedHubDataSource(object Id, IMessageHub Hub, IWorkspace Wo
     }
 
 
-    public override IEnumerable<ChangeStream<EntityStore>> GetStreams(IObservable<WorkspaceState> state)
+    public override IEnumerable<ChangeStream<EntityStore>> Initialize()
     {
-        streams = InitializePartitions.Select(a => GetStream(state, a)).ToArray();
+        streams = InitializePartitions.Select(a => GetStream(a)).ToArray();
         return streams;
     }
 
@@ -61,40 +60,26 @@ public abstract record HubDataSourceBase<TDataSource> : DataSource<TDataSource> 
     protected JsonSerializerOptions Options;
     private readonly ISerializationService serializationService;
 
-    protected readonly IWorkspace Workspace;
-    protected HubDataSourceBase(object Id, IMessageHub Hub, IWorkspace Workspace) : base(Id, Hub)
+    protected HubDataSourceBase(object Id, IMessageHub Hub) : base(Id, Hub)
     {
-        this.Workspace = Workspace;
         serializationService = Hub.ServiceProvider.GetRequiredService<ISerializationService>();
         typeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
     }
 
 
-    protected virtual WorkspaceReference<EntityStore> GetReference()
+
+    protected override WorkspaceReference<EntityStore> GetReference()
     {
         Options = serializationService.Options(TypeSources.Values.ToDictionary(x => x.CollectionName));
         typeRegistry.WithTypes(TypeSources.Values.Select(t => t.ElementType));
         typeRegistry.WithType<JsonPatch>();
-        WorkspaceReference<EntityStore> collections =
-            SyncAll
-                ? new EntireWorkspace()
-                : new CollectionsReference
-                (
-                    TypeSources
-                        .Values
-                        .Select(ts => ts.CollectionName).ToArray()
-                );
-        return collections;
+        return SyncAll
+            ? new EntireWorkspace()
+            : base.GetReference();
     }
 
 
 
-
-    protected ChangeStream<EntityStore> GetStream(IObservable<WorkspaceState> updateStream,  object address)
-    {
-        var reference = GetReference();
-        return Workspace.GetRemoteStream(address, reference);
-    }
 
 
     internal bool SyncAll { get; init; }
@@ -112,16 +97,15 @@ public record HubDataSource : HubDataSourceBase<HubDataSource>
     public HubDataSource WithType<T>(Func<TypeSourceWithType<T>, TypeSourceWithType<T>> typeSource)
         => WithTypeSource(typeof(T), typeSource.Invoke(new TypeSourceWithType<T>(Hub, Id)));
 
-    public HubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : base(Id, Hub, Workspace)
+    public HubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : base(Id, Hub)
     {
     }
 
 
 
-
-    public override IEnumerable<ChangeStream<EntityStore>> GetStreams(IObservable<WorkspaceState> workspaceStream)
+    public override IEnumerable<ChangeStream<EntityStore>> Initialize()
     {
-        return [GetStream(workspaceStream, Id)];
+        return [GetStream(Id)];
     }
 
     protected IMessageDelivery Initialize(IMessageDelivery<DataChangedEvent> response, TaskCompletionSource<EntityStore> tcs)
