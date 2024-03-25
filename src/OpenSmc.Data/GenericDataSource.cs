@@ -69,7 +69,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
     {
 
         //return TypeSources.Values.Select(ts => ts.InitializeAsync(workspaceStream));
-        var ret = new ChangeStream<EntityStore>(Workspace, Id, new EntireWorkspace(), Hub.ServiceProvider.GetRequiredService<ISerializationService>().Options(TypeSources.Values.ToDictionary(x => x.CollectionName)), () => Hub.Version);
+        var ret = GetInitialChangeStream();
         Hub.Schedule(async cancellationToken =>
         {
 
@@ -82,17 +82,19 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
                     .ToArrayAsync(cancellationToken: cancellationToken))
                 .ToImmutableDictionary(x => x.TypeSource.CollectionName, x => x.Instances);
 
-            ret.Initialize(new(instances));
+            foreach (var changeStream in ret)
+                changeStream.Initialize(new(instances));
         });
+        return ret;
+    }
+
+    protected virtual IReadOnlyCollection<ChangeStream<EntityStore>> GetInitialChangeStream()
+    {
+        var ret = new ChangeStream<EntityStore>(Workspace, Id, new EntireWorkspace(), Hub.ServiceProvider.GetRequiredService<ISerializationService>().Options(TypeSources.Values.ToDictionary(x => x.CollectionName)), () => Hub.Version);
         return [ret];
     }
 
 
-    protected ChangeStream<EntityStore> GetStream(object address)
-    {
-        var reference = GetReference();
-        return Workspace.GetChangeStream(address, reference);
-    }
     protected virtual WorkspaceReference<EntityStore> GetReference()
     {
         WorkspaceReference<EntityStore> collections = new CollectionsReference

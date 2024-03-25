@@ -28,11 +28,17 @@ public record PartitionedHubDataSource(object Id, IMessageHub Hub) : HubDataSour
 
     public override IEnumerable<ChangeStream<EntityStore>> Initialize()
     {
-        streams = InitializePartitions.Select(a => GetStream(a)).ToArray();
+        streams = InitializePartitions.Select(a => GetStream(a, GetReference(a))).ToArray();
         return streams;
     }
 
 
+
+    protected  WorkspaceReference<EntityStore> GetReference(object partition)
+    {
+        var ret = new PartitionedCollectionsReference(GetReference(), partition);
+        return ret;
+    }
 
     public PartitionedHubDataSource InitializingPartitions(IEnumerable<object> partitions)
         => this with { InitializePartitions = InitializePartitions.Concat(partitions).ToArray() };
@@ -68,8 +74,10 @@ public abstract record HubDataSourceBase<TDataSource> : DataSource<TDataSource> 
             : base.GetReference();
     }
 
-
-
+    protected ChangeStream<EntityStore> GetStream(object address, WorkspaceReference<EntityStore> reference)
+    {
+        return Workspace.GetChangeStream(address, reference);
+    }
 
 
     internal bool SyncAll { get; init; }
@@ -87,15 +95,15 @@ public record HubDataSource : HubDataSourceBase<HubDataSource>
     public HubDataSource WithType<T>(Func<TypeSourceWithType<T>, TypeSourceWithType<T>> typeSource)
         => WithTypeSource(typeof(T), typeSource.Invoke(new TypeSourceWithType<T>(Hub, Id)));
 
-    public HubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : base(Id, Hub)
+    public HubDataSource(object Id, IMessageHub Hub) : base(Id, Hub)
     {
     }
 
 
-
+    
     public override IEnumerable<ChangeStream<EntityStore>> Initialize()
     {
-        return [GetStream(Id)];
+        return [GetStream(Id, GetReference())];
     }
 
     protected IMessageDelivery Initialize(IMessageDelivery<DataChangedEvent> response, TaskCompletionSource<EntityStore> tcs)

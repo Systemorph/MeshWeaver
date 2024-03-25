@@ -42,7 +42,7 @@ public static class DataPluginExtensions
 
     public static DataContext FromHub(this DataContext dataSource, object address,
         Func<HubDataSource, HubDataSource> configuration)
-        => dataSource.WithDataSourceBuilder(address, hub => configuration.Invoke(new HubDataSource(address, hub, dataSource.Workspace))
+        => dataSource.WithDataSourceBuilder(address, hub => configuration.Invoke(new HubDataSource(address, hub))
         );
     public static DataContext FromConfigurableDataSource(this DataContext dataSource, object address,
         Func<GenericDataSource, GenericDataSource> configuration)

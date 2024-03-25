@@ -72,6 +72,10 @@ public record CollectionsReference(IReadOnlyCollection<string> Collections)
 
 }
 
-public record PartitionedCollectionsReference(IReadOnlyCollection<string> Collections, object Partition)
-    : CollectionsReference(Collections);
+public record PartitionedCollectionsReference(WorkspaceReference<EntityStore> Collections, object Partition)
+    : WorkspaceReference<EntityStore>
+{
+    public string Path => $"{Collections}@{Partition}";
+    public override string ToString() => Path;
+}
 
