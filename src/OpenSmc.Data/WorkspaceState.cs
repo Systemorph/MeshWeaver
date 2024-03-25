@@ -138,9 +138,9 @@ public record WorkspaceState
             .ToImmutableDictionary());
 
     internal EntityStore ReduceImpl(PartitionedCollectionsReference reference) =>
-        new(reference
-            .Collections
-            .Select(c => new KeyValuePair<string, InstanceCollection>(c, GetPartitionedCollection(c, reference.Partition)))
+        new(Reduce(reference.Collections)
+            .Instances
+            .Select(c => new KeyValuePair<string, InstanceCollection>(c.Key, GetPartitionedCollection(c.Key, reference.Partition)))
             .Where(x => x.Value != null)
             .ToImmutableDictionary());
 
