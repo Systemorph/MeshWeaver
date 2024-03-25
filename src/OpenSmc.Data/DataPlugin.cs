@@ -44,26 +44,24 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
         {
             if(!Hub.Address.Equals(id))
                 Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(id));
-            var ret = new ChangeStream<TReference>(id, reference, options)
-            {
-                GetVersion = () => Hub.Version
-            };
-            var myChangesSubscription = changeStream
-                .Select(x => new ChangeItem<TReference>(x.Reduce(reference), State.LastChangedBy, true))
-                .DistinctUntilChanged()
-                .Subscribe(ret);
-            var mySynchronization = synchronizationStream
-                .Select(x => new ChangeItem<TReference>(x.Reduce(reference), x?.LastChangedBy, false))
-                .DistinctUntilChanged()
-                .Subscribe(ret);
+            var ret = new ChangeStream<TReference>(this, id, reference, options, () => Hub.Version);
+            //ret.Disposables.Add(
+            //    changeStream
+            //    .Select(x => new ChangeItem<TReference>(x.Reduce(reference), State.LastChangedBy, true))
+            //    .DistinctUntilChanged()
+            //    .Subscribe(ret)); ;
 
-            ret.Disposables.AddRange([myChangesSubscription, mySynchronization]);
+            //ret.Disposables.Add(synchronizationStream
+            //    .Select(x => new ChangeItem<TReference>(x.Reduce(reference), x.LastChangedBy, false))
+            //    .DistinctUntilChanged()
+            //    .Subscribe(ret));
+
 
             if (!Hub.Address.Equals(id))
             {
-                var patchSubscription = ret.Subscribe<JsonPatch>(patch =>
+                var patchSubscription = ret.Changes.Subscribe(patch =>
                     Hub.RegisterCallback(
-                        Hub.Post(new PatchChangeRequest(id, patch), o => o.WithTarget(id)),
+                        Hub.Post(new PatchChangeRequest(id, patch.Value, patch.ChangedBy), o => o.WithTarget(id)),
                         HandleCommitResponse));
                 var changeSubscription =
                     ret.Subscribe<DataChangedEvent>(dataChanged => Hub.Post(dataChanged, o => o.WithTarget(id)));
@@ -110,14 +108,14 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
         await base.StartAsync(cancellationToken);
 
         DataContext = Hub.GetDataConfiguration(ReduceManager);
-        Initialize(DataContext, cancellationToken);
+        Initialize(DataContext);
     }
 
     private readonly Subject<WorkspaceState> changeStream = new();
 
     private JsonSerializerOptions options;
 
-    private void Initialize(DataContext dataContext, CancellationToken cancellationToken)
+    private void Initialize(DataContext dataContext)
     {
 
         var serializationService = Hub.ServiceProvider.GetRequiredService<ISerializationService>();
@@ -157,10 +155,10 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
         foreach (var disposable in disposables)
             disposable.Dispose();
 
-        initializeTaskCompletionSource.SetResult();
         subject.Subscribe(synchronizationStream);
-
         subject.OnNext(State);
+
+        initializeTaskCompletionSource.SetResult();
     }
 
     private void Synchronize(ChangeItem<EntityStore> item)
@@ -229,7 +227,6 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
     IMessageDelivery IMessageHandler<SubscribeRequest>.HandleMessage(IMessageDelivery<SubscribeRequest> request)
         => Subscribe(request);
 
-    private readonly ConcurrentDictionary<(object Address, string Id),IDisposable> subscriptions = new();
 
     private readonly ILogger<DataPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<DataPlugin>>();
 
@@ -254,10 +251,8 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
 
     public override async Task DisposeAsync()
     {
-        foreach (var subscription in subscriptions.Values)
-        {
+        foreach (var subscription in externalSubscriptions.Values)
             subscription.Dispose();
-        }
 
         await DataContext.DisposeAsync();
         await base.DisposeAsync();

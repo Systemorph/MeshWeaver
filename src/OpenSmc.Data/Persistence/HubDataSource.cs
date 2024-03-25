@@ -46,16 +46,6 @@ public record PartitionedHubDataSource(object Id, IMessageHub Hub) : HubDataSour
 
 public abstract record HubDataSourceBase<TDataSource> : DataSource<TDataSource> where TDataSource : HubDataSourceBase<TDataSource>
 {
-
-
-
-
-
-
-
-
-
-
     private readonly ITypeRegistry typeRegistry;
     protected JsonSerializerOptions Options;
     private readonly ISerializationService serializationService;

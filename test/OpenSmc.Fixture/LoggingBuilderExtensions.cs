@@ -103,7 +103,11 @@ public class XUnitLogger : ILogger
             s.Append(scope);
         }, sb);
 
-        testOutputHelperAccessor.OutputHelper.WriteLine(sb.ToString());
+        try
+        {
+            testOutputHelperAccessor.OutputHelper.WriteLine(sb.ToString());
+        }
+        catch (Exception) { }
     }
 
     [SuppressMessage("ReSharper", "StringLiteralTypo")]

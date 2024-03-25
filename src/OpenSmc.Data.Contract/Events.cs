@@ -33,4 +33,4 @@ public record DataChangedEvent(object Address, WorkspaceReference Reference, lon
 /// </summary>
 public record UnsubscribeDataRequest(WorkspaceReference Reference);
 
-public record PatchChangeRequest(object Address, object Change) : DataChangeRequest;
+public record PatchChangeRequest(object Address, object Change, object ChangedBy) : DataChangeRequest;

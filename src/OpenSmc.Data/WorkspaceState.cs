@@ -183,6 +183,7 @@ public record WorkspaceState
         return this with
         {
             LastSynchronized = newState.Result,
+            LastChangedBy = request.ChangedBy,
             Store = newState.Result.Deserialize<EntityStore>(Options)
         };
     }

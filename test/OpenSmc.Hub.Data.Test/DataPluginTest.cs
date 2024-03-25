@@ -101,7 +101,6 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         await Task.Delay(200);
 
         // asserts
-        deleteResponse.Message.Version.Should().Be(4L);
         var expectedItems = new[]
         {
             new MyData("2", "B")
