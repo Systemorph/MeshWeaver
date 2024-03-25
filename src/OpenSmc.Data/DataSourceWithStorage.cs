@@ -24,12 +24,15 @@ public abstract record DataSourceWithStorage<TDataSource>(object Id, IMessageHub
 
     public override IEnumerable<ChangeStream<EntityStore>> Initialize()
     {
-        Workspace.ChangeStream.Subscribe(Update);
+        Workspace.ChangeStream
+            .Subscribe(Update);
+
         return base.Initialize();
     }
 
     private void Update(WorkspaceState workspace)
     {
+        // TODO V10: Should see that there are actual changes ==> no reducer applied here. (25.03.2024, Roland Bürgi)
         persistenceHub.Schedule(ct => UpdateAsync(workspace, ct));
     }
 

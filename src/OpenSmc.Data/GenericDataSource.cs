@@ -69,7 +69,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
     {
 
         //return TypeSources.Values.Select(ts => ts.InitializeAsync(workspaceStream));
-        var ret = new ChangeStream<EntityStore>(Id, new EntireWorkspace(), Hub.ServiceProvider.GetRequiredService<ISerializationService>().Options(TypeSources.Values.ToDictionary(x => x.CollectionName)));
+        var ret = new ChangeStream<EntityStore>(Workspace, Id, new EntireWorkspace(), Hub.ServiceProvider.GetRequiredService<ISerializationService>().Options(TypeSources.Values.ToDictionary(x => x.CollectionName)), () => Hub.Version);
         Hub.Schedule(async cancellationToken =>
         {
 
