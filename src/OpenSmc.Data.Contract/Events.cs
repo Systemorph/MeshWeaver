@@ -22,20 +22,15 @@ public enum DataChangeStatus{Committed, Failed}
 public record CreateRequest<TObject>(TObject Element) : IRequest<DataChangedEvent> { public object Options { get; init; } };
 
 
-public record SubscribeRequest(string Id, WorkspaceReference Reference) : IRequest<DataChangedEvent>;
+public record SubscribeRequest(WorkspaceReference Reference) : IRequest<DataChangedEvent>;
 
 public enum ChangeType{ Full, Patch }
-public record DataChangedEvent(long Version, RawJson Change, ChangeType ChangeType, object Requester);
+public record DataChangedEvent(object Address, WorkspaceReference Reference, long Version, RawJson Change, ChangeType ChangeType, object ChangedBy);
 
 
 /// <summary>
 /// Ids of the synchronization requests to be stopped (generated with request)
 /// </summary>
-/// <param name="Ids"></param>
-public record UnsubscribeDataRequest(params string[] Ids);
+public record UnsubscribeDataRequest(WorkspaceReference Reference);
 
-public record PatchChangeRequest(object Change) : DataChangeRequest
-{
-    public string Id { get; init; } = Guid.NewGuid().ToString();
-}
-
+public record PatchChangeRequest(object Address, object Change) : DataChangeRequest;

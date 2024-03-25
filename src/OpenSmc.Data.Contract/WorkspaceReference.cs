@@ -19,13 +19,16 @@ public abstract record WorkspaceReference<TReference> : WorkspaceReference
 }
 public record EntityStore
 {
-    public EntityStore(IEnumerable<KeyValuePair<string, InstancesInCollection>> instances)
+    public EntityStore(IEnumerable<KeyValuePair<string, InstanceCollection>> instances)
     {
-        Instances = instances.Where(x => x.Value != null && x.Value.Instances.Count > 0).ToImmutableDictionary();
+        Instances = instances
+            //.Where(x => x.Value != null && x.Value.Instances.Count > 0)
+            .ToImmutableDictionary();
     }
 
-    public ImmutableDictionary<string, InstancesInCollection> Instances { get; init; }
+    public ImmutableDictionary<string, InstanceCollection> Instances { get; init; }
 
+    public EntityStore Merge(EntityStore s2) => new(Instances.SetItems(s2.Instances.Select(kvp => new KeyValuePair<string, InstanceCollection>(kvp.Key, kvp.Value.Merge(Instances.GetValueOrDefault(kvp.Key))))));
 }
 
 public record EntireWorkspace : WorkspaceReference<EntityStore>
@@ -39,20 +42,27 @@ public record JsonPathReference(string Path) : WorkspaceReference<JsonNode>
     public override string ToString() => $"{Path}";
 }
 
-public record EntityReference(string Collection, object Id) : WorkspaceReference<object>
+public record InstanceReference(object Id) : WorkspaceReference<object>
 {
-    public string Path => $"$['{Collection}']['{Id}']";
+    public virtual string Path => $"$.['{Id}']";
+
+}
+
+public record EntityReference(string Collection, object Id) : InstanceReference(Id)
+{
+    public override string Path => $"$.['{Collection}']['{Id}']";
     public override string ToString() => Path;
 
 }
 
 
-public record CollectionReference(string Collection) : WorkspaceReference<InstancesInCollection>
+public record CollectionReference(string Collection) : WorkspaceReference<InstanceCollection>
 {
     public string Path => $"$['{Collection}']";
     public override string ToString() => Path;
 
 }
+
 
 public record CollectionsReference(IReadOnlyCollection<string> Collections)
     : WorkspaceReference<EntityStore>
@@ -61,3 +71,7 @@ public record CollectionsReference(IReadOnlyCollection<string> Collections)
     public override string ToString() => Path;
 
 }
+
+public record PartitionedCollectionsReference(IReadOnlyCollection<string> Collections, object Partition)
+    : CollectionsReference(Collections);
+

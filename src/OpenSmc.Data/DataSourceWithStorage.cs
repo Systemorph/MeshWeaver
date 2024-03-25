@@ -22,26 +22,23 @@ public abstract record DataSourceWithStorage<TDataSource>(object Id, IMessageHub
         return Storage.StartTransactionAsync(cancellationToken);
     }
 
-    protected virtual async Task UpdateAsync(WorkspaceState workspace, CancellationToken cancellationToken)
-    {
-        await using ITransaction transaction = await StartTransactionAsync(cancellationToken);
-        try
-        {
-            base.Update(workspace);
-            await transaction.CommitAsync(cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning("Transaction failed: {exception}", ex);
-            await transaction.RevertAsync();
-        }
-    }
+    //protected virtual async Task UpdateAsync(WorkspaceState workspace, CancellationToken cancellationToken)
+    //{
+    //    await using ITransaction transaction = await StartTransactionAsync(cancellationToken);
+    //    try
+    //    {
+    //        base.Update(workspace);
+    //        await transaction.CommitAsync(cancellationToken);
+    //    }
+    //    catch (Exception ex)
+    //    {
+    //        logger.LogWarning("Transaction failed: {exception}", ex);
+    //        await transaction.RevertAsync();
+    //    }
+    //}
 
-    public override EntityStore Update(WorkspaceState workspace)
-    {
-        persistenceHub.Schedule(c => UpdateAsync(workspace, c));
-        return workspace.Store;
-    }
+
+    
 
     public override async ValueTask DisposeAsync()
     {

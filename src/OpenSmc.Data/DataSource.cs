@@ -1,7 +1,9 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
+using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
 
@@ -11,8 +13,7 @@ public interface IDataSource : IAsyncDisposable
     IEnumerable<Type> MappedTypes { get; }
     object Id { get; }
     IReadOnlyCollection<DataChangeRequest> Change(DataChangeRequest request);
-    Task<EntityStore> InitializeAsync(CancellationToken cancellationToken);
-    EntityStore Update(WorkspaceState state);
+    IEnumerable<ChangeStream<EntityStore>> GetStreams(IObservable<WorkspaceState> workspaceStream);
 }
 
 public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDataSource where TDataSource : DataSource<TDataSource>
@@ -37,17 +38,6 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
         TypeSources.Values.FirstOrDefault(x => x.CollectionName == collectionName);
 
 
-    public virtual EntityStore Update(WorkspaceState workspace)
-    {
-        return new(
-            TypeSources
-                .Values
-                .Select(ts => new KeyValuePair<string,InstancesInCollection>(ts.CollectionName, ts.Update(workspace)))
-                .Where(x => x.Value != null)
-                .ToImmutableDictionary()
-            )
-            ;
-    }
 
     public virtual IReadOnlyCollection<DataChangeRequest> Change(DataChangeRequest request)
     {
@@ -73,20 +63,26 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
 
     protected abstract TDataSource WithType<T>(Func<ITypeSource, ITypeSource> config) where T : class;
 
-    public virtual async Task<EntityStore> InitializeAsync( CancellationToken cancellationToken)
+    public virtual IEnumerable<ChangeStream<EntityStore>> GetStreams(IObservable<WorkspaceState> workspaceStream)
     {
-        var instances = (await TypeSources
-                .Values
-                .ToAsyncEnumerable()
-                .SelectAwait(async ts => new
-                    { TypeSource = ts, Instances = await ts.InitializeAsync(cancellationToken) })
-                .ToArrayAsync(cancellationToken: cancellationToken))
-            .ToImmutableDictionary(x => x.TypeSource.CollectionName,
-                x => new InstancesInCollection(x.Instances)
-                {
-                    GetKey = x.TypeSource.GetKey
-                });
-        return new EntityStore(instances);
+
+        //return TypeSources.Values.Select(ts => ts.InitializeAsync(workspaceStream));
+        var ret = new ChangeStream<EntityStore>(Id, new EntireWorkspace(), Hub.ServiceProvider.GetRequiredService<ISerializationService>().Options(TypeSources.Values.ToDictionary(x => x.CollectionName)));
+        Hub.Schedule(async cancellationToken =>
+        {
+
+
+            var instances = (await TypeSources
+                    .Values
+                    .ToAsyncEnumerable()
+                    .SelectAwait(async ts => new
+                        { TypeSource = ts, Instances = await ts.InitializeAsync(workspaceStream, cancellationToken) })
+                    .ToArrayAsync(cancellationToken: cancellationToken))
+                .ToImmutableDictionary(x => x.TypeSource.CollectionName, x => x.Instances);
+
+            ret.Initialize(new(instances));
+        });
+        return [ret];
     }
 
 
@@ -111,7 +107,7 @@ public record DataSource(object Id, IMessageHub Hub) : DataSource<DataSource>(Id
     public DataSource WithType<T>(
         Func<TypeSourceWithType<T>, TypeSourceWithType<T>> configurator)
         where T : class
-        => WithTypeSource(typeof(T), configurator.Invoke(new(Id, Hub.ServiceProvider)));
+        => WithTypeSource(typeof(T), configurator.Invoke(new(Hub, Id)));
 
 
 }

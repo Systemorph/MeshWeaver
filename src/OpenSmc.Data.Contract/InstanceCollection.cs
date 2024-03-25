@@ -6,10 +6,10 @@ using System.Collections.Immutable;
 
 namespace OpenSmc.Data;
 
-public record InstancesInCollection(ImmutableDictionary<object, object> Instances)
+public record InstanceCollection(ImmutableDictionary<object, object> Instances)
 {
     internal Func<object,object> GetKey { get; init; }
-    public InstancesInCollection Change(DataChangeRequest request)
+    public InstanceCollection Change(DataChangeRequest request)
     {
         switch (request)
         {
@@ -46,14 +46,14 @@ public record InstancesInCollection(ImmutableDictionary<object, object> Instance
 
 
 
-    private InstancesInCollection Delete(IEnumerable<object> ids) =>
+    private InstanceCollection Delete(IEnumerable<object> ids) =>
         this with
         {
             Instances = Instances.RemoveRange(ids)
         };
 
 
-    private InstancesInCollection Update(ImmutableDictionary<object, object> entities, bool snapshot = false)
+    private InstanceCollection Update(ImmutableDictionary<object, object> entities, bool snapshot = false)
     {
         return snapshot
             ? this with
@@ -66,4 +66,13 @@ public record InstancesInCollection(ImmutableDictionary<object, object> Instance
             };
     }
 
+    public InstanceCollection Merge(InstanceCollection other)
+    {
+        if (other == null)
+            return this;
+        return this with
+        {
+            Instances = Instances.SetItems(other.Instances)
+        };
+    }
 }

@@ -1,6 +1,9 @@
 ﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Text.Json;
+using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Messaging;
@@ -17,13 +20,80 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     IMessageHandler<PatchChangeRequest>
 {
 
-    public IObservable<WorkspaceState> Stream => replaySubject;
-    private readonly ReplaySubject<WorkspaceState> replaySubject = new(1);
+    public IObservable<WorkspaceState> Stream => synchronizationStream;
+    private readonly ReplaySubject<WorkspaceState> synchronizationStream = new(1);
     private readonly Subject<WorkspaceState> subject = new();
-    public IEnumerable<Type> MappedTypes => State.MappedTypes;
 
-    public void Update(IEnumerable<object> instances, UpdateOptions options)
-        => RequestChange(null,  new UpdateDataRequest(instances.ToArray()){Options = options});
+    public IEnumerable<Type> MappedTypes => State.MappedTypes;
+    private readonly ConcurrentDictionary<(object Address, WorkspaceReference Reference), IDisposable> streams = new ();
+
+    private readonly ConcurrentDictionary<(object Address, WorkspaceReference Reference), IDisposable> externalSubscriptions = new ();
+    private void RegisterChangeFeed<TReference>(object address, WorkspaceReference<TReference> reference)
+    {
+        if (externalSubscriptions.ContainsKey((address, reference)))
+            return;
+        var stream = GetRemoteStream(Hub.Address, reference);
+        var change = stream.Subscribe<DataChangedEvent>(dc => Hub.Post(dc, o => o.WithTarget(address)));
+        externalSubscriptions.TryAdd((address, reference), change);
+    }
+    
+    public ChangeStream<TReference> GetRemoteStream<TReference>(object id, WorkspaceReference<TReference> reference)
+    {
+        var key = (id, reference);
+        return (ChangeStream<TReference>)streams.GetOrAdd(key, _ =>
+        {
+            if(!Hub.Address.Equals(id))
+                Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(id));
+            var ret = new ChangeStream<TReference>(id, reference, options)
+            {
+                GetVersion = () => Hub.Version
+            };
+            var myChangesSubscription = changeStream
+                .Select(x => new ChangeItem<TReference>(x.Reduce(reference), State.LastChangedBy, true))
+                .DistinctUntilChanged()
+                .Subscribe(ret);
+            var mySynchronization = synchronizationStream
+                .Select(x => new ChangeItem<TReference>(x.Reduce(reference), x.LastChangedBy, false))
+                .DistinctUntilChanged()
+                .Subscribe(ret);
+
+            ret.Disposables.AddRange([myChangesSubscription, mySynchronization]);
+
+            if (!Hub.Address.Equals(id))
+            {
+                var patchSubscription = ret.Subscribe<JsonPatch>(patch =>
+                    Hub.RegisterCallback(
+                        Hub.Post(new PatchChangeRequest(id, patch), o => o.WithTarget(id)),
+                        HandleCommitResponse));
+                var changeSubscription =
+                    ret.Subscribe<DataChangedEvent>(dataChanged => Hub.Post(dataChanged, o => o.WithTarget(id)));
+                externalSynchronizationStream
+                    .Where(x => x.Address.Equals(id) && x.Reference.Equals(reference))
+                    .DistinctUntilChanged()
+                    .Subscribe(ret);
+
+                ret.Disposables.AddRange(
+                [
+                    patchSubscription,
+                    changeSubscription,
+                    new Disposables.AnonymousDisposable(() => Hub.Post(new UnsubscribeDataRequest(reference), o => o.WithTarget(id))),
+                ]);
+            }
+            return ret;
+        });
+    }
+
+    protected IMessageDelivery HandleCommitResponse(IMessageDelivery<DataChangeResponse> response)
+    {
+        if (response.Message.Status == DataChangeStatus.Committed)
+            return response.Processed();
+        // TODO V10: Here we have to put logic to revert the state if commit has failed. (26.02.2024, Roland Bürgi)
+        return response.Ignored();
+    }
+
+
+    public void Update(IEnumerable<object> instances, UpdateOptions updateOptions)
+        => RequestChange(null,  new UpdateDataRequest(instances.ToArray()){Options = updateOptions});
 
     public void Delete(IEnumerable<object> instances)
         => RequestChange(null, new DeleteDataRequest(instances.ToArray()));
@@ -33,35 +103,63 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     public override Task Initialized => initializeTaskCompletionSource.Task;
     private DataContext DataContext { get; set; }
 
-    private ReduceManager ReduceManager { get; init; } = new();
+    private ReduceManager ReduceManager { get; } = new();
     public override async Task StartAsync(CancellationToken cancellationToken)  // This loads the persisted state
     {
         logger.LogDebug($"Starting data plugin at address {Address}");
         await base.StartAsync(cancellationToken);
 
         DataContext = Hub.GetDataConfiguration(ReduceManager);
-        Initialize(cancellationToken, DataContext);
+        Initialize(DataContext, cancellationToken);
     }
 
-
-    private void Initialize(CancellationToken cancellationToken, DataContext dataContext)
+    private readonly Subject<WorkspaceState> changeStream = new();
+    private void Initialize(DataContext dataContext, CancellationToken cancellationToken)
     {
         logger.LogDebug($"Starting data plugin at address {Address}");
-        dataContext.InitializeAsync(cancellationToken)
-            .ContinueWith(t =>
-            {
-                logger.LogDebug("Initialized workspace in address {address}", Address);
-                InitializeState(t.Result);
-                subject.OnNext(State);
-                syncBack = subject.Subscribe(UpdateDataContext(dataContext));
-                initializeTaskCompletionSource.SetResult();
-            }, cancellationToken);
+        var serializationService = Hub.ServiceProvider.GetRequiredService<ISerializationService>();
+        var typeSources = DataContext.DataSources.Values.SelectMany(ds => ds.TypeSources)
+            .ToImmutableDictionary(x => x.CollectionName);
+        options = serializationService.Options(typeSources);
+
+        logger.LogDebug("Initialized workspace in address {address}", Address);
+
+
+        InitializeState(new(Hub, new EntityStore(ImmutableDictionary<string, InstanceCollection>.Empty), typeSources, ReduceManager));
+
+        var dataContextStreams = dataContext.GetStreams(subject).ToArray();
+
+
+        List<IDisposable> disposables = new();
+        var initializeObserver = new InitializeObserver(dataContextStreams.Select(i => i.Address).ToHashSet(), () =>
+        {
+            foreach (var disposable in disposables)
+                disposable.Dispose();
+
+            subject.OnNext(State);
+            initializeTaskCompletionSource.SetResult();
+        });
+
+        foreach (var stream in dataContextStreams)
+        {
+            streams[(stream.Address, stream.Reference)] = stream;
+            stream.Subscribe<ChangeItem<EntityStore>>(Synchronize);
+            disposables.Add(stream.Subscribe(initializeObserver));
+        }
+
     }
 
-    private static Action<WorkspaceState> UpdateDataContext(DataContext dataContext)
+    private void Synchronize(ChangeItem<EntityStore> item)
     {
-        return dataContext.Update;
+        if (Hub.Address.Equals(item.ChangedBy))
+            return;
+
+        UpdateState(s => s.Synchronize(item));
     }
+
+
+
+
 
 
     IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(IMessageDelivery<UpdateDataRequest> request)
@@ -75,6 +173,7 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     private IMessageDelivery RequestChange(IMessageDelivery request, DataChangeRequest change)
     {
         UpdateState(s => s.Change(change) with{Version = Hub.Version, LastChangedBy = request?.Sender ?? Hub.Address});
+        changeStream.OnNext(State);
         if (request != null)
         {
             Hub.Post(new DataChangeResponse(Hub.Version, DataChangeStatus.Committed), o => o.ResponseFor(request));
@@ -105,22 +204,10 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     }
 
 
-    public EntityReference GetReference(object entity)
-    {
-        throw new NotImplementedException();
-    }
-
-
+    private readonly Subject<DataChangedEvent> externalSynchronizationStream = new();
     IMessageDelivery IMessageHandler<DataChangedEvent>.HandleMessage(IMessageDelivery<DataChangedEvent> request)
     {
-        var @event = request.Message;
-        if (State == null)
-            return request.Ignored();
-
-        if (Hub.Address.Equals(request.Message.Requester))
-            return request.Ignored();
-
-        UpdateState(s => s.Synchronize(@event));
+        externalSynchronizationStream.OnNext(request.Message);
         Commit();
         return request.Processed();
     }
@@ -130,40 +217,29 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
 
     private readonly ConcurrentDictionary<(object Address, string Id),IDisposable> subscriptions = new();
 
-    private readonly ISerializationService serializationService;
     private readonly ILogger<DataPlugin> logger;
-    private IDisposable syncBack;
+    private JsonSerializerOptions options;
 
     public DataPlugin(IMessageHub hub) : base(hub)
     {
-        serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
         logger = hub.ServiceProvider.GetRequiredService<ILogger<DataPlugin>>();
-        subject.Subscribe(replaySubject);
+        subject.Subscribe(synchronizationStream);
     }
 
     private IMessageDelivery Subscribe(IMessageDelivery<SubscribeRequest> request)
     {
-        var key = (request.Sender, request.Message.Id);
-        if (subscriptions.TryRemove(key, out var existing))
-            existing.Dispose();
-
-        subscriptions[key] = replaySubject
-            .Subscribe(new PatchSubscriber(Hub, request, serializationService, State.TypeSources));
-
+        RegisterChangeFeed(request.Sender, (dynamic)request.Message.Reference);
         return request.Processed();
     }
+
 
 
 
     IMessageDelivery IMessageHandler<UnsubscribeDataRequest>.HandleMessage(
         IMessageDelivery<UnsubscribeDataRequest> request)
     {
-        foreach (var id in request.Message.Ids)
-        {
-            if (subscriptions.TryRemove((request.Message, id), out var existing))
-                existing.Dispose();
-
-        }
+        if (externalSubscriptions.TryRemove((request.Sender, request.Message.Reference), out var existing))
+            existing.Dispose();
 
         return request.Processed();
     }
@@ -171,7 +247,6 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
 
     public override async Task DisposeAsync()
     {
-        syncBack.Dispose();
         foreach (var subscription in subscriptions.Values)
         {
             subscription.Dispose();
@@ -179,6 +254,25 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
 
         await DataContext.DisposeAsync();
         await base.DisposeAsync();
+    }
+}
+
+internal class InitializeObserver(HashSet<object> ids, Action finishInit) : IObserver<ChangeItem<EntityStore>>
+{
+    public void OnCompleted()
+    {
+    }
+
+    public void OnError(Exception error)
+    {
+    }
+
+    public void OnNext(ChangeItem<EntityStore> value)
+    {
+        ids.Remove(value.ChangedBy);
+        if (ids.Count == 0)
+            finishInit();
+
     }
 }
 
@@ -202,3 +296,4 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
 //        subscription.Dispose();
 //    }
 //}
+

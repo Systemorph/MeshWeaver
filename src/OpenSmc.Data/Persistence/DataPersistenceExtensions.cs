@@ -8,7 +8,7 @@ namespace OpenSmc.Data.Persistence;
 
 public static class DataPersistenceExtensions
 {
-    public static JsonObject SerializeState(this ISerializationService serializationService, IReadOnlyDictionary<string, InstancesInCollection> data) 
+    public static JsonObject SerializeState(this ISerializationService serializationService, IReadOnlyDictionary<string, InstanceCollection> data) 
         => new(
             data
                 .Select(g => new KeyValuePair<string, JsonNode>

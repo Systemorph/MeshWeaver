@@ -10,11 +10,12 @@ public record EntityFrameworkDataSource(object Id,
     IMessageHub Hub,
     EntityFrameworkDataStorage EntityFrameworkDataStorage) : DataSourceWithStorage<EntityFrameworkDataSource>(Id, Hub, EntityFrameworkDataStorage)
 {
-    public override Task<EntityStore> InitializeAsync(CancellationToken cancellationToken)
+    public override IEnumerable<ChangeStream<EntityStore>> GetStreams(IObservable<WorkspaceState> workspaceStream)
     {
         EntityFrameworkDataStorage.Initialize(ModelBuilder ?? ConvertDataSourceMappings);
-        return base.InitializeAsync(cancellationToken);
+        return base.GetStreams(workspaceStream);
     }
+
 
     public EntityFrameworkDataSource WithModel(Action<ModelBuilder> modelBuilder)
         => this with { ModelBuilder = modelBuilder };
@@ -41,5 +42,5 @@ public record EntityFrameworkDataSource(object Id,
 
     public EntityFrameworkDataSource WithType<T>(Func<TypeSourceWithTypeWithDataStorage<T>, TypeSourceWithTypeWithDataStorage<T>> typeSource) 
         where T : class 
-        => this with { TypeSources = TypeSources.Add(typeof(T), typeSource.Invoke(new TypeSourceWithTypeWithDataStorage<T>(Id, Hub.ServiceProvider, Storage))) };
+        => this with { TypeSources = TypeSources.Add(typeof(T), typeSource.Invoke(new TypeSourceWithTypeWithDataStorage<T>(Hub,Id, Storage))) };
 }

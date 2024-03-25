@@ -5,7 +5,7 @@ namespace OpenSmc.Layout;
 
 public record CodeSample(string Code, string Language = "csharp") : IObjectWithUiControl
 {
-    public UiControl GetUiControl(IUiControlService uiControlService, IServiceProvider serviceProvider)
+    public UiControl GetUiControl(UiControlsManager uiControlsManager)
     {
         return Controls.CodeSample(this);
     }

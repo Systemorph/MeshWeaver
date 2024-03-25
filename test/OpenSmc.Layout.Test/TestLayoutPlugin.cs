@@ -39,13 +39,13 @@ public class TestLayoutPlugin(IMessageHub hub) : MessageHubPlugin(hub),
         => layout
             .WithInitialState(Controls.Stack()
                 .WithId(MainStackId)
-                .WithClickAction(context =>
-                {
-                    context.Hub.Post(new SetAreaRequest(TestAreas.NewArea,
-                        Controls.TextBox("Hello")
-                            .WithId("HelloId")));
-                    return Task.CompletedTask;
-                })
+                //.WithClickAction(context =>
+                //{
+                //    context.Hub.Post(new SetAreaRequest(TestAreas.NewArea,
+                //        Controls.TextBox("Hello")
+                //            .WithId("HelloId")));
+                //    return Task.CompletedTask;
+                //})
             )
             .WithView(NamedArea, _ =>
                 Controls.TextBox(NamedArea)
