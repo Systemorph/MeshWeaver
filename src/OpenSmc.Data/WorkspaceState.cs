@@ -252,7 +252,7 @@ public record WorkspaceState
             var typeProvider = TypeSources.GetValueOrDefault(collection);
             if (typeProvider == null)
                 throw new InvalidOperationException($"Type {g.Key.FullName} is not mapped to data source.");
-            yield return new(typeProvider.CollectionName, new(instances.ToImmutableDictionary(typeProvider.GetKey))
+            yield return new(typeProvider.CollectionName, new(g.ToImmutableDictionary(typeProvider.GetKey))
             {
                 GetKey = typeProvider.GetKey
             });
