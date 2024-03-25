@@ -114,20 +114,27 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     }
 
     private readonly Subject<WorkspaceState> changeStream = new();
+
+    private JsonSerializerOptions options;
+
     private void Initialize(DataContext dataContext, CancellationToken cancellationToken)
     {
-        logger.LogDebug($"Starting data plugin at address {Address}");
+
         var serializationService = Hub.ServiceProvider.GetRequiredService<ISerializationService>();
-        var typeSources = DataContext.DataSources.Values.SelectMany(ds => ds.TypeSources)
-            .ToImmutableDictionary(x => x.CollectionName);
+        var typeSources = new Dictionary<string, ITypeSource>();
         options = serializationService.Options(typeSources);
 
+        logger.LogDebug($"Starting data plugin at address {Address}");
+        var dataContextStreams = dataContext.Initialize(subject).ToArray();
+
         logger.LogDebug("Initialized workspace in address {address}", Address);
+
+        foreach (var ts in DataContext.DataSources.Values.SelectMany(ds => ds.TypeSources))
+            typeSources[ts.CollectionName] = ts;
 
 
         InitializeState(new(Hub, new EntityStore(ImmutableDictionary<string, InstanceCollection>.Empty), typeSources, ReduceManager));
 
-        var dataContextStreams = dataContext.GetStreams(subject).ToArray();
 
 
         List<IDisposable> disposables = new();
@@ -218,7 +225,6 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     private readonly ConcurrentDictionary<(object Address, string Id),IDisposable> subscriptions = new();
 
     private readonly ILogger<DataPlugin> logger;
-    private JsonSerializerOptions options;
 
     public DataPlugin(IMessageHub hub) : base(hub)
     {
