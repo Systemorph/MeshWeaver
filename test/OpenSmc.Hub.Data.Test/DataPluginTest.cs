@@ -147,10 +147,10 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         return Task.FromResult<IEnumerable<MyData>>(initialData);
     }
     
-    private InstancesInCollection SaveMyData(InstancesInCollection instancesInCollection)
+    private InstanceCollection SaveMyData(InstanceCollection instanceCollection)
     {
-        storage = instancesInCollection.Instances;
-        return instancesInCollection;
+        storage = instanceCollection.Instances;
+        return instanceCollection;
     }
 
 

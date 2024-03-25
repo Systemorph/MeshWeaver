@@ -18,6 +18,12 @@ namespace OpenSmc.TestDomain
 
         #region Not Implemented support for IWorkspace
 
+        public ChangeStream<TReference> GetRemoteStream<TReference>(object id, WorkspaceReference<TReference> reference)
+        {
+            throw new NotImplementedException();
+        }
+
+
         public IObservable<WorkspaceState> Stream => throw new NotImplementedException();
 
         public WorkspaceState State => throw new NotImplementedException();
@@ -46,7 +52,7 @@ namespace OpenSmc.TestDomain
             throw new NotImplementedException();
         }
 
-        public void Update(IEnumerable<object> instances, UpdateOptions options)
+        public void Update(IEnumerable<object> instances, UpdateOptions updateOptions)
         {
             throw new NotImplementedException();
         }

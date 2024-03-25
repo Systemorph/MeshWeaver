@@ -15,6 +15,7 @@ public record ReduceManager
     public ReduceManager()
     {
         WithReference<EntityReference>((ws, reference) => ws.ReduceImpl(reference))
+            .WithReference<PartitionedCollectionsReference>((ws,reference) => ws.ReduceImpl(reference))
             .WithReference<CollectionReference>((ws, reference) => ws.ReduceImpl(reference))
             .WithReference<CollectionsReference>((ws, reference) => ws.ReduceImpl(reference))
             .WithReference<EntireWorkspace>((ws, reference) => ws.ReduceImpl(reference));
@@ -23,7 +24,7 @@ public record ReduceManager
     public ReduceManager WithReference<TReference>(Func<WorkspaceState, TReference, object> reducer)
         where TReference : WorkspaceReference
     {
-        Reducers.AddLast((ws, r, node) => ReduceImpl<TReference>(ws, r, reducer, node));
+        Reducers.AddLast((ws, r, node) => ReduceImpl(ws, r, reducer, node));
         return this;
     }
 
@@ -46,6 +47,8 @@ public record ReduceManager
 internal delegate object Reduce(WorkspaceState state, WorkspaceReference reference, LinkedListNode<Reduce> node);
 public record WorkspaceState
 {
+    private readonly IMessageHub hub;
+
     private readonly ReduceManager reduceManager;
     //private readonly ISerializationService serializationService;
     private ImmutableDictionary<Type, string> CollectionsByType { get; init; }
@@ -60,8 +63,8 @@ public record WorkspaceState
     )
         : this(hub, typeSources, reduceManager)
     {
+        this.hub = hub;
         this.Store = Store;
-        LastSynchronized = JsonSerializer.SerializeToNode(Store, Options);
     }
 
     private WorkspaceState(IMessageHub hub, IReadOnlyDictionary<string, ITypeSource> typeSources, ReduceManager reduceManager1)
@@ -78,44 +81,13 @@ public record WorkspaceState
     private JsonSerializerOptions Options { get;  }
 
 
-    public WorkspaceState(IMessageHub hub, 
-        DataChangedEvent dataChanged,
-        IReadOnlyDictionary<string, ITypeSource> typeSources,
-        ReduceManager reduceManager)
-        : this(hub, typeSources, reduceManager)
-    {
-        LastSynchronized = GetSerializedWorkspace(dataChanged);
-        Store = LastSynchronized.Deserialize<EntityStore>(Options);
-    }
-    private JsonNode GetSerializedWorkspace(DataChangedEvent node) =>
-        node.ChangeType switch
-        {
-            ChangeType.Full => JsonNode.Parse(node.Change.Content),
-            ChangeType.Patch => JsonSerializer.Deserialize<JsonPatch>(node.Change.Content)
-                .Apply(LastSynchronized)
-                .Result,
-            _ => throw new ArgumentOutOfRangeException()
-        };
-
-
-    public WorkspaceState Synchronize(DataChangedEvent @event)
-    {
-        var workspace = GetSerializedWorkspace(@event);
-        return this with
-        {
-            LastSynchronized = workspace,
-            LastChangedBy = @event.Requester,
-            Store = workspace.Deserialize<EntityStore>(Options)
-        };
-    }
-
     public long Version { get; init; }
 
 
     #region Instances
     public EntityStore Store { get; private init; }
 
-    public InstancesInCollection GetCollection(string collection) => Store.Instances.GetValueOrDefault(collection);
+    public InstanceCollection GetCollection(string collection) => Store.Instances.GetValueOrDefault(collection);
 
 
 
@@ -155,17 +127,38 @@ public record WorkspaceState
     internal object ReduceImpl(EntityReference reference) => GetCollection(reference.Collection)?.GetData(reference.Id);
     internal object ReduceImpl(EntireWorkspace _) => Store;
 
-    internal InstancesInCollection ReduceImpl(CollectionReference reference) => 
+    internal InstanceCollection ReduceImpl(CollectionReference reference) =>
         GetCollection(reference.Collection);
 
     internal EntityStore ReduceImpl(CollectionsReference reference) =>
         new(reference
             .Collections
-            .Select(c => new KeyValuePair<string, InstancesInCollection>(c, GetCollection(c)))
+            .Select(c => new KeyValuePair<string, InstanceCollection>(c, GetCollection(c)))
             .Where(x => x.Value != null)
             .ToImmutableDictionary());
 
+    internal EntityStore ReduceImpl(PartitionedCollectionsReference reference) =>
+        new(reference
+            .Collections
+            .Select(c => new KeyValuePair<string, InstanceCollection>(c, GetPartitionedCollection(c, reference.Partition)))
+            .Where(x => x.Value != null)
+            .ToImmutableDictionary());
 
+    private InstanceCollection GetPartitionedCollection(string collection, object partition)
+    {
+        var ret = GetCollection(collection);
+        if (ret == null)
+            return null;
+        if (TypeSources.TryGetValue(collection, out var ts) && partition != null &&
+            ts is IPartitionedTypeSource partitionedTypeSource)
+            ret = ret with
+            {
+                Instances = ret.Instances
+                    .Where(kvp => partition.Equals(partitionedTypeSource.GetPartition(kvp.Value)))
+                    .ToImmutableDictionary()
+            };
+        return ret;
+    }
 
     #endregion
 
@@ -197,27 +190,8 @@ public record WorkspaceState
     private JsonNode LastSynchronized { get; init; }
 
 
-    //private WorkspaceState ApplyPatch(JsonPatch patch)
-    //{
-    //    var newStoreSerialized = patch.Apply(LastSynchronized);
-    //    if (newStoreSerialized.IsSuccess && newStoreSerialized.Result != null)
-    //    {
-    //        var newStore = (EntityStore)serializationService.Deserialize(newStoreSerialized.Result.ToJsonString());
-    //        return this with
-    //        {
-    //            Store = newStore,
-    //            LastSynchronized = newStoreSerialized.Result
-    //        };
-    //    }
 
-    //    // TODO V10: Add error handling (11.03.2024, Roland Bürgi)
-
-    //    return this;
-    //}
-
-
-
-    protected virtual WorkspaceState Change(DataChangeRequestWithElements request)
+    protected virtual WorkspaceState Change(DataChangeRequestWithElements request, object changedBy)
     {
         if (request.Elements == null)
             return null;
@@ -227,7 +201,9 @@ public record WorkspaceState
         return this with
         {
             Store = newElements,
-            LastSynchronized = JsonSerializer.SerializeToNode(newElements, Options)
+            LastSynchronized = JsonSerializer.SerializeToNode(newElements, Options),
+            LastChangedBy = changedBy,
+            Version = hub.Version
         };
 
     }
@@ -240,7 +216,7 @@ public record WorkspaceState
             _ => throw new NotSupportedException()
         };
 
-    private IEnumerable<KeyValuePair<string, InstancesInCollection>> MergeDelete(DeleteDataRequest update)
+    private IEnumerable<KeyValuePair<string, InstanceCollection>> MergeDelete(DeleteDataRequest update)
     {
         var instances = GetChanges(update.Elements);
         foreach (var kvp in instances)
@@ -252,7 +228,7 @@ public record WorkspaceState
         }
     }
 
-    private IEnumerable<KeyValuePair<string, InstancesInCollection>> MergeUpdate(UpdateDataRequest update)
+    private IEnumerable<KeyValuePair<string, InstanceCollection>> MergeUpdate(UpdateDataRequest update)
     {
         var instances = GetChanges(update.Elements);
         foreach (var kvp in instances)
@@ -266,7 +242,7 @@ public record WorkspaceState
         }
     }
 
-    private IEnumerable<KeyValuePair<string, InstancesInCollection>> GetChanges(IReadOnlyCollection<object> instances)
+    private IEnumerable<KeyValuePair<string, InstanceCollection>> GetChanges(IReadOnlyCollection<object> instances)
     {
         foreach (var g in instances.GroupBy(x => x.GetType()))
         {
@@ -291,14 +267,28 @@ public record WorkspaceState
         throw new NotImplementedException();
     }
 
-    public WorkspaceState Merge(WorkspaceState other)
+
+    public WorkspaceState Synchronize(ChangeItem<EntityStore> item)
     {
+        var newStore = CreateNewStore(item);
         return this with
         {
-            CollectionsByType = CollectionsByType.SetItems(other.CollectionsByType),
-            LastSynchronized = null,
-            Store = new(Store.Instances.SetItems(other.Store.Instances)),
-            TypeSources = TypeSources.SetItems(other.TypeSources)
+            Store = newStore,
+            LastSynchronized = JsonSerializer.Serialize(newStore, Options),
+            Version = hub.Version,
+            LastChangedBy = item.ChangedBy
         };
+    }
+
+    private EntityStore CreateNewStore(ChangeItem<EntityStore> item)
+    {
+        return new(
+            Store.Instances.SetItems(item.Value.Instances.Select(kvp =>
+                new KeyValuePair<string, InstanceCollection>(kvp.Key,
+                    TypeSources.TryGetValue(kvp.Key, out var ts) && ts is IPartitionedTypeSource &&
+                    Store.Instances.TryGetValue(kvp.Key, out var existing)
+                        ? existing.Merge(kvp.Value)
+                        : kvp.Value)))
+        );
     }
 }

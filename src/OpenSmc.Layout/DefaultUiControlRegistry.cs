@@ -5,7 +5,7 @@ namespace OpenSmc.Layout;
 
 public static class DefaultUiControlRegistry
 {
-    public static void RegisterDefaults(IUiControlService service)
+    public static void RegisterDefaults(UiControlsManager service)
     {
         // TODO V10: complete stack trace (2022-10-10, Andrei Sirotenko)
 

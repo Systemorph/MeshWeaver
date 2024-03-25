@@ -6,7 +6,6 @@ namespace OpenSmc.Layout.Composition;
 public record LayoutStackControl() : UiControl<LayoutStackControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
 {
     public record AreaChangedOptions(string InsertAfter = null);
-    private readonly ImmutableList<LayoutArea> areasImpl = ImmutableList<LayoutArea>.Empty;
     internal const string Root = "";
 
     internal ImmutableList<ViewElement> ViewElements { get; init; } = ImmutableList<ViewElement>.Empty; //definition of views

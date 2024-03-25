@@ -21,34 +21,22 @@ public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace, ReduceMa
 
     public delegate IDataSource DataSourceBuilder(IMessageHub hub); 
 
-    public async Task<WorkspaceState> InitializeAsync(CancellationToken cancellationToken)
+    public IReadOnlyCollection<ChangeStream<EntityStore>> GetStreams(IObservable<WorkspaceState> workspaceObservable)
     {
         DataSources = DataSourceBuilders
             .ToImmutableDictionary(kvp => kvp.Key,
                 kvp => kvp.Value.Invoke(Hub));
 
-        var store = await DataSources
+        var streams = DataSources
             .Values
-            .ToAsyncEnumerable()
-            .SelectAwait(async ds => await ds.InitializeAsync(cancellationToken))
-            .AggregateAsync((ws1, ws2) => new(ws1.Instances.SetItems(ws2.Instances)), cancellationToken: cancellationToken);
+            .SelectMany(ds => ds.GetStreams(workspaceObservable))
+            .ToArray();
 
-        return new(Hub, store,
-            DataSources
-                .SelectMany(x => x.Value.TypeSources)
-                .GroupBy(x => x.CollectionName)
-                .ToDictionary(x => x.Key, x => x.First()), 
-            ReduceManager
-            );
+        return streams;
     }
 
 
 
-    public void Update(WorkspaceState ws)
-    {
-        foreach (var dataSource in DataSources.Values)
-            dataSource.Update(ws);
-    }
 
     public async ValueTask DisposeAsync()
     {

@@ -6,7 +6,7 @@ using OpenSmc.Utils;
 
 namespace OpenSmc.Layout;
 
-public class UiControlService(IServiceProvider serviceProvider) : IUiControlService
+public record UiControlsManager() 
 {
     private readonly SortByTypeRelevanceRegistry<Func<object, UiControl>> rules = new ();
     private Func<object, UiControl> fallbackRule;
@@ -46,7 +46,7 @@ public class UiControlService(IServiceProvider serviceProvider) : IUiControlServ
         try
         {
             if (instance is IObjectWithUiControl poa)
-                return poa.GetUiControl(this, serviceProvider);
+                return poa.GetUiControl(this);
 
             if (instance is UiControl control)
                 return control;
@@ -83,7 +83,7 @@ public class UiControlService(IServiceProvider serviceProvider) : IUiControlServ
     {
         //we ll get first or in it is empty we ll call fallback
         foreach (var propertyWithUiControl in attributes)
-            return propertyWithUiControl.GetUiControl(this, serviceProvider);
+            return propertyWithUiControl.GetUiControl(this);
 
         // HACK V10: THis is hack, which will go when we ll eliminate this functionality.
         // For now all properties which has custom registry, which depends on instance will have potential null reference exception(for example nullables) (2023.08.29, Armen Sirotenko)

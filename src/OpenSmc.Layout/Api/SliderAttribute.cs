@@ -14,7 +14,7 @@ public class SliderAttribute : Attribute, IPropertyWithUiControl
         Step = step;
     }
 
-    UiControl IPropertyWithUiControl.GetUiControl(IUiControlService uiControlService, IServiceProvider serviceProvider)
+    UiControl IPropertyWithUiControl.GetUiControl(UiControlsManager uiControlsManager)
     {
         UiControl control = Controls.Slider(Min, Max, Step);
         

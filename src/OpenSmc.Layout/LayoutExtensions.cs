@@ -14,12 +14,6 @@ public static class LayoutExtensions
     public static MessageHubConfiguration AddLayout(this MessageHubConfiguration conf, Func<LayoutDefinition, LayoutDefinition> layoutDefinition)
     {
         return conf
-            .WithDeferral(d => d.Message is AreaReference or SetAreaRequest)
-            .WithServices(
-                services => services.AddSingleton<IUiControlService, UiControlService>()
-                .AddAllControlHubs()
-            )
-            .AddApplicationScope()
             .AddData(data => data.FromConfigurableDataSource("Layout", dataSource => dataSource
                 //.WithType<LayoutArea>(type => type.WithQuery())
             ))

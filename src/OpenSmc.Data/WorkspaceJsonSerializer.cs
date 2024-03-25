@@ -13,7 +13,11 @@ public static class WorkspaceJsonSerializer
         new()
         {
             Converters =
-                { new EntityStoreConverter(typeProviders, serializationService), new SerializationServiceConverter(serializationService) }
+            {
+                new EntityStoreConverter(typeProviders, serializationService), 
+                new InstancesInCollectionConverter(serializationService),
+                new SerializationServiceConverter(serializationService)
+            }
         };
 }
 
@@ -35,58 +39,58 @@ public class SerializationServiceConverter(ISerializationService serializationSe
     }
 }
 
-public class EntityStoreConverter(IReadOnlyDictionary<string, ITypeSource> typeSourcesByCollection, ISerializationService serializationService) : JsonConverter<EntityStore>
+public class EntityStoreConverter(
+    IReadOnlyDictionary<string, ITypeSource> typeSourcesByCollection,
+    ISerializationService serializationService) : JsonConverter<EntityStore>
 {
     public override EntityStore Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         using JsonDocument doc = JsonDocument.ParseValue(ref reader);
-        return Deserialize(doc.RootElement.AsNode());
+        return Deserialize(doc.RootElement.AsNode(), options);
     }
 
     public override void Write(Utf8JsonWriter writer, EntityStore value, JsonSerializerOptions options)
     {
-        Serialize(value).WriteTo(writer);
+        Serialize(value, options).WriteTo(writer);
     }
 
-    private JsonNode Serialize(EntityStore store)
+    private JsonNode Serialize(EntityStore store, JsonSerializerOptions options)
     {
         var ret = new JsonObject(
             store.Instances.ToDictionary(
                 x => x.Key,
-                x => Serialize(x.Value)
+                x => JsonSerializer.SerializeToNode(x.Value, options)
             ));
         return ret;
     }
 
-    private JsonNode Serialize(InstancesInCollection instances)
-    {
-        return new JsonObject(instances.Instances.Select(y =>
-            new KeyValuePair<string, JsonNode>(serializationService.SerializeToString(y.Key),
-               JsonNode.Parse(serializationService.SerializeToString(y.Value))))
-        );
-    }
 
 
-    public EntityStore Deserialize(JsonNode serializedWorkspace)
+    public EntityStore Deserialize(JsonNode serializedWorkspace, JsonSerializerOptions options)
     {
         if (serializedWorkspace is not JsonObject obj)
             throw new ArgumentException("Invalid serialized workspace");
 
-        var newStore = new EntityStore(obj.Select(kvp => DeserializeCollection(kvp.Key, kvp.Value)).ToImmutableDictionary());
+        var newStore =
+            new EntityStore(obj.Select(kvp => DeserializeCollection(kvp.Key, kvp.Value, options)).ToImmutableDictionary());
 
         return newStore;
     }
 
-    private KeyValuePair<string, InstancesInCollection> DeserializeCollection(string collection, JsonNode node)
+    private KeyValuePair<string, InstanceCollection> DeserializeCollection(string collection, JsonNode node, JsonSerializerOptions options)
     {
         return
             new(
                 collection,
-                DeserializeToInstances(node)
+                node.Deserialize<InstanceCollection>(options)
             );
     }
+}
 
-    public InstancesInCollection DeserializeToInstances(JsonNode node)
+public class InstancesInCollectionConverter(ISerializationService serializationService) : JsonConverter<InstanceCollection>
+{
+
+    private InstanceCollection Deserialize(JsonNode node)
     {
         if (node is not JsonObject obj)
             throw new ArgumentException("Expecting an array");
@@ -100,6 +104,23 @@ public class EntityStoreConverter(IReadOnlyDictionary<string, ITypeSource> typeS
             serializationService.Deserialize(jsonNode.ToJsonString()));
     }
 
+    private JsonNode Serialize(InstanceCollection instances)
+    {
+        return new JsonObject(instances.Instances.Select(y =>
+            new KeyValuePair<string, JsonNode>(serializationService.SerializeToString(y.Key),
+                JsonNode.Parse(serializationService.SerializeToString(y.Value))))
+        );
+    }
+
+    public override InstanceCollection Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        using JsonDocument doc = JsonDocument.ParseValue(ref reader);
+        return Deserialize(doc.RootElement.AsNode());
+    }
 
 
+    public override void Write(Utf8JsonWriter writer, InstanceCollection value, JsonSerializerOptions options)
+    {
+        Serialize(value).WriteTo(writer);
+    }
 }
