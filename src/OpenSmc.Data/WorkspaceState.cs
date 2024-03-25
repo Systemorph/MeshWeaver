@@ -191,7 +191,7 @@ public record WorkspaceState
 
 
 
-    protected virtual WorkspaceState Change(DataChangeRequestWithElements request, object changedBy)
+    protected virtual WorkspaceState Change(DataChangeRequestWithElements request)
     {
         if (request.Elements == null)
             return null;
@@ -202,7 +202,6 @@ public record WorkspaceState
         {
             Store = newElements,
             LastSynchronized = JsonSerializer.SerializeToNode(newElements, Options),
-            LastChangedBy = changedBy,
             Version = hub.Version
         };
 
@@ -274,7 +273,7 @@ public record WorkspaceState
         return this with
         {
             Store = newStore,
-            LastSynchronized = JsonSerializer.Serialize(newStore, Options),
+            LastSynchronized = JsonSerializer.SerializeToNode(newStore, Options),
             Version = hub.Version,
             LastChangedBy = item.ChangedBy
         };

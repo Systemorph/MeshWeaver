@@ -21,7 +21,7 @@ public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace, ReduceMa
 
     public delegate IDataSource DataSourceBuilder(IMessageHub hub); 
 
-    public IReadOnlyCollection<ChangeStream<EntityStore>> GetStreams(IObservable<WorkspaceState> workspaceObservable)
+    public IReadOnlyCollection<ChangeStream<EntityStore>> Initialize(IObservable<WorkspaceState> workspaceObservable)
     {
         DataSources = DataSourceBuilders
             .ToImmutableDictionary(kvp => kvp.Key,

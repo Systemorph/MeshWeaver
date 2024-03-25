@@ -2,6 +2,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
+using Newtonsoft.Json.Linq;
 using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
@@ -67,6 +68,7 @@ public record ChangeStream<TReference>(object Address, WorkspaceReference<TRefer
     public void Initialize(TReference initial)
     {
         Subject.OnNext(new(initial, Address, false));
+        LastSynchronized = JsonSerializer.SerializeToNode(initial, Options);
     }
 
     private void Synchronize(ChangeItem<TReference> value)
@@ -76,13 +78,19 @@ public record ChangeStream<TReference>(object Address, WorkspaceReference<TRefer
 
 
         var dataChanged = LastSynchronized == null
-            ? new DataChangedEvent(Address, Reference, GetVersion(), new RawJson(node!.ToJsonString()), ChangeType.Full, Address)
+            ? GetFullDataChange(node)
             : new DataChangedEvent(Address, Reference, GetVersion(), new(JsonSerializer.Serialize(LastSynchronized.CreatePatch(node))), ChangeType.Patch, value.ChangedBy ?? Address);
 
         DataChangedStream.OnNext(dataChanged);
         LastSynchronized = node;
 
     }
+
+    private DataChangedEvent GetFullDataChange(JsonNode node)
+    {
+        return new DataChangedEvent(Address, Reference, GetVersion(), new RawJson(node!.ToJsonString()), ChangeType.Full, Address);
+    }
+
 
     internal Func<long> GetVersion { get; init; }
 
@@ -105,12 +113,15 @@ public record ChangeStream<TReference>(object Address, WorkspaceReference<TRefer
         else
             Synchronize(value);
     }
-
+    
     public IDisposable Subscribe(IObserver<DataChangedEvent> observer)
     {
+        if(LastSynchronized != null)
+            observer.OnNext(GetFullDataChange(LastSynchronized));
         return DataChangedStream.Subscribe(observer);
     }
 
     public IDisposable Subscribe(IObserver<JsonPatch> observer)
         => JsonPatchStream.Subscribe(observer);
+
 }
