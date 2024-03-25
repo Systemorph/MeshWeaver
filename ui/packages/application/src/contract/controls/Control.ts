@@ -1,5 +1,7 @@
 import { Style } from "./Style";
 
+import { DataInput } from "@open-smc/data/src/data.contract";
+
 export class Control {
     $type: string;
     id?: string;
@@ -12,7 +14,7 @@ export class Control {
     data?: unknown;
     label?: string;
     address?: unknown;
-    dataContext?: unknown;
+    dataContext?: DataInput<unknown>;
 }
 
 export interface MessageAndAddress {

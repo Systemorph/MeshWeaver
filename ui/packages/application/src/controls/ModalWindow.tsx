@@ -13,8 +13,8 @@ export const modalWindowAreas = {
 
 export type ModalWindowArea = typeof modalWindowAreas[keyof typeof modalWindowAreas];
 
-export function ModalWindow({areaIds, style}: StackView) {
-    const mappedAreas = keyBy(areaIds, basename);
+export function ModalWindow({areas, style}: StackView) {
+    const mappedAreas = keyBy(areas, basename);
 
     const mainAreaId = mappedAreas[modalWindowAreas.main];
     const titleAreaId = mappedAreas[modalWindowAreas.header];

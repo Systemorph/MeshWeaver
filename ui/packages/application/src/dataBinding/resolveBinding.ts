@@ -1,9 +1,11 @@
 const bindingType = "OpenSmc.Layout.DataBinding.Binding";
 
-export interface Binding {
+export type Binding = {
     $type: string;
     path: string;
 }
+
+export type Bindable<T> = T | Binding;
 
 export function isBinding(data: Binding | unknown): data is Binding {
     return (data as Binding)?.$type === bindingType;

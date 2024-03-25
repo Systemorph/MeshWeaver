@@ -17,8 +17,8 @@ export type ModalOptions = {
 
 type ModalSize = "S" | "M" | "L";
 
-export function MainWindow({areaIds}: StackView) {
-    const mappedAreas = keyBy(areaIds, basename);
+export function MainWindow({areas}: StackView) {
+    const mappedAreas = keyBy(areas, basename);
 
     const mainAreaId = mappedAreas[mainWindowAreas.main];
     const toolbarAreaId = mappedAreas[mainWindowAreas.toolbar];

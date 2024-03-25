@@ -19,7 +19,7 @@ export type StackSkin =
     | "GridLayout";
 
 export interface StackView extends ControlView {
-    areaIds: string[];
+    areas: string[];
     skin?: StackSkin;
     highlightNewAreas?: boolean;
     columnCount?: number;
@@ -43,8 +43,8 @@ export default function LayoutStackControl(props: StackView) {
     return <LayoutStack {...props}/>;
 }
 
-function LayoutStack({id, skin, areaIds, style, highlightNewAreas, columnCount}: StackView) {
-    const renderedAreas = areaIds?.map(id => {
+function LayoutStack({id, skin, areas, style, highlightNewAreas, columnCount}: StackView) {
+    const renderedAreas = areas?.map(id => {
         const className = classNames(
             styles.stackItem, {
                 // isAdded: addedAreas.includes(area)
@@ -59,7 +59,7 @@ function LayoutStack({id, skin, areaIds, style, highlightNewAreas, columnCount}:
     const className = getStackClassNames(skin, highlightNewAreas);
 
     const cssVars = {
-        ["--columnNumber"]: `${areaIds.length}`,
+        ["--columnNumber"]: `${areas.length}`,
         ["--columnCount"]: columnCount,
     };
 

@@ -18,19 +18,23 @@ export class DataChangedEvent {
     }
 }
 
+export class WorkspaceReference {}
+
 @contractMessage("OpenSmc.Data.EntireWorkspace")
-export class EntireWorkspace {
+export class EntireWorkspace extends WorkspaceReference {
 }
 
 @contractMessage("OpenSmc.Data.LayoutAreaReference")
-export class LayoutAreaReference {
+export class LayoutAreaReference extends WorkspaceReference  {
     constructor(public path: string) {
+        super();
     }
 }
 
 @contractMessage("OpenSmc.Data.JsonPathReference")
-export class JsonPathReference {
+export class JsonPathReference extends WorkspaceReference  {
     constructor(public path: string) {
+        super();
     }
 }
 
@@ -44,4 +48,8 @@ export interface PatchOperation {
     op: "replace" | "remove" | "add";
     path: string;
     value?: any;
+}
+
+export type DataInput<T> = {
+    [key: string]: keyof T | WorkspaceReference;
 }

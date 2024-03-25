@@ -7,7 +7,7 @@ import { EntireWorkspace, LayoutAreaReference } from "@open-smc/data/src/data.co
 import { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
 import { distinctUntilKeyChanged, from, Subscription } from "rxjs";
 import { LayoutArea } from "../contract/LayoutArea";
-import { syncArea } from "./syncArea";
+import { syncLayoutArea } from "./syncLayoutArea";
 import { withPreviousValue } from "./withPreviousValue";
 import { withCleanup } from "./withCleanup";
 
@@ -71,7 +71,7 @@ export const makeStore = (hub: MessageHub) => {
         createWorkspace<LayoutArea>(undefined, "layout");
     subscription.add(subscribeToDataChanges(hub, new LayoutAreaReference("/"), layoutStore.dispatch));
 
-    const store = configureStore<RootState>({
+    const uiStore = configureStore<RootState>({
         preloadedState: {
             rootArea: null,
             areas: {}
@@ -84,11 +84,12 @@ export const makeStore = (hub: MessageHub) => {
 
     const rootLayoutArea$ = from(layoutStore);
     const data$ = from(dataStore);
+    const ui$ = from(uiStore);
 
-    const {dispatch} = store;
+    const {dispatch} = uiStore;
 
     rootLayoutArea$
-        .pipe(syncArea(dispatch, data$))
+        .pipe(syncLayoutArea(data$, dispatch, ui$))
         .pipe(distinctUntilKeyChanged("id"))
         .pipe(withPreviousValue())
         .subscribe(([previous, current]) => {
@@ -98,7 +99,7 @@ export const makeStore = (hub: MessageHub) => {
             dispatch(setRoot(current?.id ? current.id : null));
         });
 
-    return store;
+    return uiStore;
 }
 
 export const store = makeStore(dataSyncHub);
