@@ -2,7 +2,7 @@ import { SubjectHub } from "@open-smc/message-hub/src/SubjectHub";
 import { isOfType, ofType } from "../contract/ofType";
 import {
     DataChangedEvent,
-    EntireWorkspace, JsonPatch,
+    EntireWorkspace, JsonPatch, JsonPathReference,
     LayoutAreaReference, PatchOperation,
     SubscribeDataRequest
 } from "@open-smc/data/src/data.contract";
@@ -54,7 +54,9 @@ export const dataSyncHub =
     });
 
 const workspace = {
-    foo: 1
+    user: {
+        name: "foo"
+    }
 }
 
 const simpleLayout = {
@@ -72,8 +74,8 @@ const simpleLayout = {
 const layoutState = {
     $type: "OpenSmc.Layout.LayoutArea",
     id: "/",
-    // style: {},
-    // options: {},
+    style: {},
+    options: {},
     control: {
         $type: "OpenSmc.Layout.Composition.LayoutStackControl",
         skin: "MainWindow",
@@ -94,10 +96,9 @@ const layoutState = {
                     $type: "OpenSmc.Layout.TextBoxControl",
                     dataContext: {
                         value: "Hello world",
-                        // ref: new WorkspaceReference(), // always reference to the main store
+                        user: new JsonPathReference("$.user"),
                     },
-                    data: "123"
-                    // value: makeBinding("$.value") // json path
+                    data: makeBinding("$.user.name")
                 }
             }
         ]

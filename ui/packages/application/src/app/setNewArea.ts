@@ -31,25 +31,3 @@ export function toLayoutAreaModel(layoutArea: LayoutArea): LayoutAreaModel {
     }
 }
 
-function toControlModel(control: Control): ControlModel {
-    const {$type, dataContext, ...props} = control;
-
-    const componentTypeName = $type.split(".").pop();
-
-    if (isOfType(control, LayoutStackControl)) {
-        const {areas, ...props} = control;
-
-        return {
-            componentTypeName,
-            props: {
-                ...props,
-                areaIds: areas.map(area => area.id)
-            }
-        }
-    }
-
-    return {
-        componentTypeName,
-        props
-    }
-}
