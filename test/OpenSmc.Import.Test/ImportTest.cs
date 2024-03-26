@@ -96,11 +96,9 @@ SystemName,DisplayName
         var importRequest = new ImportRequest(MultipleTypesCsv);
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new ImportAddress(2024, new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
-
-        var actualLoBs = await client.AwaitResponse(new GetManyRequest<LineOfBusiness>(),
-            o => o.WithTarget(new ReferenceDataAddress(new HostAddress())));
-        var actualBUs = await client.AwaitResponse(new GetManyRequest<BusinessUnit>(),
-            o => o.WithTarget(new ReferenceDataAddress(new HostAddress())));
+        var workspace = GetWorkspace(GetHost().GetHostedHub(new ReferenceDataAddress(new HostAddress()), null));
+        var actualLoBs = await workspace.GetObservable<LineOfBusiness>().FirstAsync();
+        var actualBUs = await workspace.GetObservable<BusinessUnit>().FirstAsync();
         var expectedLoBs = new[]
         {
             new LineOfBusiness("1", "LoB_one"),
@@ -115,8 +113,8 @@ SystemName,DisplayName
 
         using (new AssertionScope())
         {
-            actualLoBs.Message.Items.Should().HaveSameCount(expectedLoBs).And.BeEquivalentTo(expectedLoBs);
-            actualBUs.Message.Items.Should().HaveSameCount(expectedBUs).And.BeEquivalentTo(expectedBUs);
+            actualLoBs.Should().HaveSameCount(expectedLoBs).And.BeEquivalentTo(expectedLoBs);
+            actualBUs.Should().HaveSameCount(expectedBUs).And.BeEquivalentTo(expectedBUs);
         }
     }
 
