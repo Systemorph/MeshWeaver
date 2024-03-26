@@ -18,7 +18,7 @@ namespace OpenSmc.TestDomain
 
         #region Not Implemented support for IWorkspace
 
-        public ChangeStream<TReference> GetChangeStream<TReference>(object id, WorkspaceReference<TReference> reference)
+        public ChangeStream<TReference> GetRemoteStream<TReference>(object address, WorkspaceReference<TReference> reference)
         {
             throw new NotImplementedException();
         }

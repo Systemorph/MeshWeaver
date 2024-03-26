@@ -2,7 +2,7 @@
 
 public interface IWorkspace
 {
-    ChangeStream<TReference> GetChangeStream<TReference>(object id, WorkspaceReference<TReference> reference);
+    ChangeStream<TReference> GetRemoteStream<TReference>(object address, WorkspaceReference<TReference> reference);
     IObservable<WorkspaceState> Stream { get; }
     IObservable<WorkspaceState> ChangeStream { get; }
     WorkspaceState State { get; }

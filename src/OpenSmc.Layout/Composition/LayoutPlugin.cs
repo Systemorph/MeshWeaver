@@ -6,13 +6,22 @@ namespace OpenSmc.Layout.Composition;
 
 public interface ILayout
 {
-    InstanceCollection Render(AreaReference reference);
+    LayoutAreaCollection Render(WorkspaceState state, LayoutAreaReference reference);
 }
-public class LayoutPlugin(LayoutDefinition layoutDefinition) 
-    : MessageHubPlugin(layoutDefinition.Hub), 
+
+public record LayoutAddress(object Host) : IHostedAddress;
+
+public class LayoutPlugin(IMessageHub hub) 
+    : MessageHubPlugin(hub), 
     ILayout
 {
-    private ImmutableDictionary<string, UiControl> Areas { get; set; } = ImmutableDictionary<string, UiControl>.Empty;
+    private ImmutableDictionary<LayoutAreaReference, UiControl> Areas { get; set; } = ImmutableDictionary<LayoutAreaReference, UiControl>.Empty;
+
+    private readonly LayoutDefinition layoutDefinition =
+        hub.Configuration.GetListOfLambdas().Aggregate(new LayoutDefinition(hub), (x, y) => y.Invoke(x));
+
+    private readonly IMessageHub layoutHub =
+        hub.GetHostedHub(new LayoutAddress(hub.Address));
 
 
     public override async Task StartAsync(CancellationToken cancellationToken)
@@ -23,13 +32,19 @@ public class LayoutPlugin(LayoutDefinition layoutDefinition)
             return;
         var control = layoutDefinition.InitialState;
         if(control != null)
-            RenderControl(new(string.Empty), control);
+            RenderArea(new(string.Empty), control);
 
         foreach (var initialization in layoutDefinition.Initializations)
             await initialization.Invoke(cancellationToken);
     }
 
-    private AreaReference RenderControl(AreaReference reference, UiControl control)
+    private LayoutAreaReference RenderArea(LayoutAreaReference reference)
+    {
+        return RenderArea(reference, layoutDefinition.GetViewElement(reference));
+    }
+
+
+    private LayoutAreaReference RenderArea(LayoutAreaReference reference, UiControl control)
     {
         if (control == null)
             return null;
@@ -37,73 +52,96 @@ public class LayoutPlugin(LayoutDefinition layoutDefinition)
         if (control is LayoutStackControl stack)
             control = stack with
             {
-                Areas = stack.ViewElements
-                    .Select(ve => RenderControl(reference with {Id = $"{reference.Id}/{ve.Area}" }, ParseControl(reference, ve))).ToArray()
+                Areas = stack.ViewElements.Select(ve => RenderArea(reference with {Area = $"{reference.Area}/{ve.Reference.Area}"}, ve)).ToArray()
             };
 
-        Areas = Areas.SetItem(reference.Id.ToString(), control);
+        Areas = Areas.SetItem(reference, control);
         return reference;
     }
 
-    private UiControl ParseControl(AreaReference request, ViewElement a)
-        => a switch
+    private LayoutAreaReference RenderArea(LayoutAreaReference reference, ViewElementWithViewDefinition viewDefinition)
+    {
+        layoutHub.Schedule(ct =>
         {
-            ViewElementWithView ve => layoutDefinition.UiControlsManager.GetUiControl(ve.View),
-            ViewElementWithViewDefinition ve => layoutDefinition.UiControlsManager.GetUiControl(ve.ViewDefinition.Invoke(request)),
-            _ => throw new NotSupportedException()
+            ct.ThrowIfCancellationRequested();
+            var view = viewDefinition.ViewDefinition.Invoke(reference);
+            var control = layoutDefinition.ControlsManager.Get(view);
+            Areas = Areas.SetItem(reference, control);
+            return Task.CompletedTask;
+        });
+
+        return reference;
+    }
+    private LayoutAreaReference RenderArea(LayoutAreaReference reference, ViewElement viewElement) =>
+        viewElement switch
+        {
+            ViewElementWithView view => RenderArea(reference, layoutDefinition.ControlsManager.Get(view.View)),
+            ViewElementWithViewDefinition viewDefinition => RenderArea(reference, viewDefinition),
+            _ => throw new NotSupportedException($"Unknown type: {viewElement.GetType().FullName}")
         };
 
 
-    private UiControl GetControl(AreaReference request)
-    {
-        var generator = layoutDefinition.ViewGenerators.FirstOrDefault(g => g.Filter(request));
-        if (generator == null)
-            return null;
-        var control = layoutDefinition.UiControlsManager.GetUiControl(generator.Generator.Invoke(request));
-        return control;
-    }
+
+    //private UiControl GetControl(LayoutAreaReference request)
+    //{
+    //    var generator = layoutDefinition.ViewGenerators.FirstOrDefault(g => g.Filter(request));
+    //    if (generator == null)
+    //        return null;
+    //    var control = layoutDefinition.ControlsManager.Get(generator.Generator.Invoke(request));
+    //    return control;
+    //}
 
     private void DisposeArea(string area)
     {
-        Areas = Areas.RemoveRange(Areas.Keys.Where(a => a.StartsWith(area)));
+        Areas = Areas.RemoveRange(Areas.Keys.Where(a => a.Area.StartsWith(area)));
     }
 
-    public InstanceCollection Render(AreaReference reference)
+    public LayoutAreaCollection Render(WorkspaceState state, LayoutAreaReference reference)
     {
         var area = reference.Area;
         DisposeArea(area);
         RenderArea(reference);
-        return new(Areas.Where(a => a.Key.StartsWith(area)).ToImmutableDictionary(x => (object)x.Key, x => (object)x.Value));
+        return new(Areas.Where(a => a.Key.Area.StartsWith(area)).ToImmutableDictionary());
     }
 
-    private void RenderArea(AreaReference reference)
-    {
-    }
 }
 
-internal record ViewGenerator(Func<AreaReference, bool> Filter, ViewDefinition Generator);
+internal record ViewGenerator(Func<LayoutAreaReference, bool> Filter, ViewElement ViewElement);
 
 public record LayoutDefinition(IMessageHub Hub)
 {
     internal LayoutStackControl InitialState { get; init; }
     internal ImmutableList<ViewGenerator> ViewGenerators { get; init; } = ImmutableList<ViewGenerator>.Empty;
     public LayoutDefinition WithInitialState(LayoutStackControl initialState) => this with { InitialState = initialState };
-    public LayoutDefinition WithGenerator(Func<AreaReference, bool> filter, ViewDefinition viewGenerator) => this with { ViewGenerators = ViewGenerators.Add(new(filter, viewGenerator)) };
+    public LayoutDefinition WithGenerator(Func<LayoutAreaReference, bool> filter, ViewElement viewElement) => this with { ViewGenerators = ViewGenerators.Add(new(filter, viewElement)) };
 
-    public LayoutDefinition WithView(string area, Func<AreaReference, object> generator) =>
-        WithGenerator(r => r.Area == area, r => UiControlsManager.GetUiControl(generator.Invoke(r)));
+    public LayoutDefinition WithView(LayoutAreaReference reference, Func<LayoutAreaReference, object> generator) =>
+        WithGenerator(reference.Equals,  new ViewElementWithViewDefinition(reference,r => ControlsManager.Get(generator.Invoke(reference))));
 
+    public LayoutDefinition WithView(string area, Func<LayoutAreaReference, object> generator) =>
+        WithView(new LayoutAreaReference(area), generator);
 
     internal ImmutableList<Func<CancellationToken, Task>> Initializations { get; init; } = ImmutableList<Func<CancellationToken, Task>>.Empty;
 
     public LayoutDefinition WithInitialization(Func<CancellationToken, Task> func)
         => this with { Initializations = Initializations.Add(func) };
 
-    internal UiControlsManager UiControlsManager { get; } = new();
+    internal UiControlsManager ControlsManager { get; } = new();
 
     public LayoutDefinition WithUiControls(Action<UiControlsManager> configuration)
     {
-        configuration.Invoke(UiControlsManager);
+        configuration.Invoke(ControlsManager);
         return this;
+    }
+
+    public ViewElement GetViewElement(LayoutAreaReference reference)
+    {
+        foreach (var viewGenerator in ViewGenerators)
+        {
+            if (viewGenerator.Filter(reference))
+                return viewGenerator.ViewElement;
+        }
+
+        return null;
     }
 }

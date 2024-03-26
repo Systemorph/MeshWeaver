@@ -1,7 +1,11 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using System.Reactive.Linq;
+using System.Runtime.InteropServices.ComTypes;
+using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
+using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
 using OpenSmc.ServiceProvider;
 using Xunit.Abstractions;
@@ -12,6 +16,11 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 {
     [Inject] private ILogger<LayoutTest> logger;
 
+    private static readonly Dictionary<LayoutAreaReference, UiControl> TestAreas
+        = new()
+        {
+            { new LayoutAreaReference("/"), (UiControl)Controls.Stack().WithView("Hello", "Hello").WithView("World", "World") },
+        };
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
@@ -20,18 +29,40 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 .FromConfigurableDataSource("Local", 
                 ds => ds
                     .WithType<TestLayoutPlugin.DataRecord>(t => t.WithInitialData([new("Hello", "World")]))))
-            .AddPlugin<TestLayoutPlugin>()    
-            .AddLayout(layout => layout.Hub.ServiceProvider.GetRequiredService<TestLayoutPlugin>().Configure(layout));
+            .AddLayout(layout => TestAreas.Aggregate(layout, (l,kvp) => l.WithView(kvp.Key, _ => kvp.Value)));
             
 
     }
 
 
-    //protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
-    //{
-    //    return base.ConfigureClient(configuration).AddLayoutClient(new HostAddress());
-    //}
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureClient(configuration).AddData(data => data.FromHub(new HostAddress()));
+    }
 
+    [HubFact]
+    public async Task BasicArea()
+    {
+        var workspace = GetClient().GetWorkspace();
+        var reference = new LayoutAreaReference("/");
+        var stream = workspace.GetRemoteStream(new HostAddress(), reference);
+
+        var control = await stream.GetControl(reference);
+        var areas = control.Should().BeOfType<LayoutStackControl>()
+            .Which
+            .Areas.Should().HaveCount(2)
+                .And.Subject.Should().AllBeOfType<LayoutAreaReference>()
+                .And.Subject.Cast<LayoutAreaReference>()
+                .ToArray();
+
+
+        var areaControls = areas
+            .ToAsyncEnumerable()
+            .SelectAwait(async a => await stream.GetControl(a).FirstAsync())
+            .ToArrayAsync();
+
+
+    }
 
     //    public async Task LayoutStackUpdateTest()
     //    {
@@ -52,9 +83,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     //    [Fact(Timeout = 5000)]
     //#endif
 
-    public async Task GetSimpleArea()
-    {
-        var client = GetClient();
+    //public async Task GetSimpleArea()
+    //{
+        //var client = GetClient();
         //client.Post(new RefreshRequest { Area = TestLayoutPlugin.NamedArea }, o => o.WithTarget(new HostAddress()));
         //var area = await client.GetAreaAsync(state => state.GetByIdAndArea(TestLayoutPlugin.MainStackId, TestLayoutPlugin.NamedArea));
         //area.Control.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(TestLayoutPlugin.NamedArea);
@@ -64,7 +95,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         //area = await client.GetAreaAsync(state => state.GetByAddress(address));
         //area.Control.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(TestLayoutPlugin.NamedArea);
 
-    }
+    //}
 
 
 

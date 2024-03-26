@@ -76,7 +76,7 @@ public abstract record HubDataSourceBase<TDataSource> : DataSource<TDataSource> 
 
     protected ChangeStream<EntityStore> GetStream(object address, WorkspaceReference<EntityStore> reference)
     {
-        return Workspace.GetChangeStream(address, reference);
+        return Workspace.GetRemoteStream(address, reference);
     }
 
 

@@ -22,8 +22,8 @@ public static class DefaultUiControlRegistry
                                              {
                                                  // HACK V10: in case of nullable type has null value, we still have to show proper control, not html control (2023-08-31, Andrei Sirotenko)
                                                  return instance == null
-                                                            ? service.GetUiControl(null)
-                                                            : service.GetUiControl(instance, Nullable.GetUnderlyingType(instance.GetType()));
+                                                            ? service.Get(null)
+                                                            : service.Get(instance, Nullable.GetUnderlyingType(instance.GetType()));
                                              });
     }
 }

@@ -3,7 +3,6 @@ using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
-using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Messaging;
@@ -32,40 +31,43 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
     {
         if (externalSubscriptions.ContainsKey((address, reference)))
             return;
-        var stream = GetChangeStream(Hub.Address, reference);
-        var subscription = stream.Subscribe<DataChangedEvent>(dc => Hub.Post(dc, o => o.WithTarget(address)));
+        var stream = (ChangeStream<TReference>)streams.GetOrAdd((Hub.Address,reference),
+            _ => { return new ChangeStream<TReference>(this, address, reference, options, () => Hub.Version); });
+        var subscription = stream.DataChangedStream.Subscribe(dc => Hub.Post(dc, o => o.WithTarget(address)));
         externalSubscriptions.TryAdd((address, reference), subscription);
     }
     
-    public ChangeStream<TReference> GetChangeStream<TReference>(object id, WorkspaceReference<TReference> reference)
+    public ChangeStream<TReference> GetRemoteStream<TReference>(object address, WorkspaceReference<TReference> reference)
     {
-        var key = (id, reference);
+        if (Hub.Address.Equals(address))
+            throw new ArgumentException(
+                $"This method provides access to external hubs. Address {address} is our own address.");
+ 
+        var key = (address, reference);
         return (ChangeStream<TReference>)streams.GetOrAdd(key, _ =>
         {
-            if(!Hub.Address.Equals(id))
-                Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(id));
-            var ret = new ChangeStream<TReference>(this, id, reference, options, () => Hub.Version);
+            Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(address));
+            var ret = new ChangeStream<TReference>(this, address, reference, options, () => Hub.Version);
 
-            if (!Hub.Address.Equals(id))
-            {
-                var patchSubscription = ret.Changes.Subscribe(patch =>
-                    Hub.RegisterCallback(
-                        Hub.Post(new PatchChangeRequest(id, patch.Value, patch.ChangedBy), o => o.WithTarget(id)),
-                        HandleCommitResponse));
-                var changeSubscription =
-                    ret.Subscribe<DataChangedEvent>(dataChanged => Hub.Post(dataChanged, o => o.WithTarget(id)));
-                externalSynchronizationStream
-                    .Where(x => x.Address.Equals(id) && x.Reference.Equals(reference))
-                    .DistinctUntilChanged()
-                    .Subscribe(ret);
+            var patchSubscription = ret.Changes
+                .Where(x => x.Address.Equals(address) && x.Reference.Equals(reference))
+                .Subscribe(patch =>
+                Hub.RegisterCallback(
+                    Hub.Post(patch, o => o.WithTarget(address)), HandleCommitResponse));
+            var changeSubscription =
+                ret.DataChangedStream.Subscribe<DataChangedEvent>(dataChanged => Hub.Post(dataChanged, o => o.WithTarget(address)));
+            externalSynchronizationStream
+                .Where(x => x.Address.Equals(address) && x.Reference.Equals(reference))
+                .DistinctUntilChanged()
+                .Subscribe(ret);
 
-                ret.Disposables.AddRange(
-                [
-                    patchSubscription,
-                    changeSubscription,
-                    new Disposables.AnonymousDisposable(() => Hub.Post(new UnsubscribeDataRequest(reference), o => o.WithTarget(id))),
-                ]);
-            }
+            ret.Disposables.AddRange(
+            [
+                patchSubscription,
+                changeSubscription,
+                new Disposables.AnonymousDisposable(() =>
+                    Hub.Post(new UnsubscribeDataRequest(reference), o => o.WithTarget(address))),
+            ]);
             return ret;
         });
     }
@@ -133,7 +135,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
         foreach (var stream in dataContextStreams)
         {
             streams[(stream.Address, stream.Reference)] = stream;
-            stream.Subscribe<ChangeItem<EntityStore>>(Synchronize);
+            stream.Store.Subscribe(Synchronize);
             disposables.Add(stream.Subscribe(initializeObserver));
         }
 

@@ -14,7 +14,7 @@ public static class WorkspaceJsonSerializer
         {
             Converters =
             {
-                new EntityStoreConverter(typeProviders, serializationService), 
+                new EntityStoreConverter(), 
                 new InstancesInCollectionConverter(serializationService),
                 new SerializationServiceConverter(serializationService)
             }
@@ -39,9 +39,7 @@ public class SerializationServiceConverter(ISerializationService serializationSe
     }
 }
 
-public class EntityStoreConverter(
-    IReadOnlyDictionary<string, ITypeSource> typeSourcesByCollection,
-    ISerializationService serializationService) : JsonConverter<EntityStore>
+public class EntityStoreConverter : JsonConverter<EntityStore>
 {
     public override EntityStore Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
