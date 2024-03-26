@@ -79,7 +79,7 @@ Id,Year,LoB,BusinessUnit,Value
             new LineOfBusiness("2", "LoB_two"),
         };
 
-        items.Should().HaveCount(2).And.BeEquivalentTo(expectedLoBs);
+        items.Should().HaveSameCount(expectedLoBs).And.BeEquivalentTo(expectedLoBs);
     }
 
     private const string VanillaCsv =
@@ -87,6 +87,45 @@ Id,Year,LoB,BusinessUnit,Value
 SystemName,DisplayName
 1,LoB_one
 2,LoB_two
+";
+
+    [Fact]
+    public async Task MultipleTypes()
+    {
+        var client = GetClient();
+        var importRequest = new ImportRequest(MultipleTypesCsv);
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new ImportAddress(2024, new HostAddress())));
+        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+
+        var actualLoBs = await client.AwaitResponse(new GetManyRequest<LineOfBusiness>(),
+            o => o.WithTarget(new ReferenceDataAddress(new HostAddress())));
+        var actualBUs = await client.AwaitResponse(new GetManyRequest<BusinessUnit>(),
+            o => o.WithTarget(new ReferenceDataAddress(new HostAddress())));
+        var expectedLoBs = new[]
+        {
+            new LineOfBusiness("1", "LoB_one"),
+            new LineOfBusiness("2", "LoB_two"),
+        };
+        var expectedBUs = new[]
+        {
+            new BusinessUnit("1", "1"),
+            new BusinessUnit("BU1", "BU_one"),
+            new BusinessUnit("2", "BU_two"),
+        };
+
+        using (new AssertionScope())
+        {
+            actualLoBs.Message.Items.Should().HaveSameCount(expectedLoBs).And.BeEquivalentTo(expectedLoBs);
+            actualBUs.Message.Items.Should().HaveSameCount(expectedBUs).And.BeEquivalentTo(expectedBUs);
+        }
+    }
+
+    private const string MultipleTypesCsv =
+$@"{VanillaCsv}
+@@BusinessUnit
+SystemName,DisplayName
+BU1,BU_one
+2,BU_two
 ";
 }
 public static class ComputedDataEquivalencyExtensions
