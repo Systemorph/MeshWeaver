@@ -1,7 +1,5 @@
 ﻿using System.Reactive.Linq;
-using System.Runtime.InteropServices.ComTypes;
 using FluentAssertions;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
@@ -24,13 +22,25 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
-            .WithRoutes(r => r.RouteAddress<ClientAddress>((a,d)=>d.Package()))
-            .AddData(data => data
-                .FromConfigurableDataSource("Local", 
-                ds => ds
-                    .WithType<TestLayoutPlugin.DataRecord>(t => t.WithInitialData([new("Hello", "World")]))))
-            .AddLayout(layout => TestAreas.Aggregate(layout, (l,kvp) => l.WithView(kvp.Key, _ => kvp.Value)));
-            
+                .WithRoutes(r => r.RouteAddress<ClientAddress>((a, d) => d.Package()))
+                .AddData(data => data
+                    .FromConfigurableDataSource("Local",
+                        ds => ds
+                            .WithType<TestLayoutPlugin.DataRecord>(t => t.WithInitialData([new("Hello", "World")]))))
+                .AddLayout(
+                    layout =>
+                        TestAreas.Aggregate(layout, (l, kvp) => l.WithView(kvp.Key, _ => kvp.Value))
+                            .WithView("Report", reference => Controls.Stack().WithView
+                            (
+                                layout.Hub.GetWorkspace().ChangeStream
+                                    .Select(ws => ws.GetData<ToolbarEntity>("Report1Toolbar"))
+                                    .DistinctUntilChanged()
+                                    .Subscribe(toolbar => new HtmlControl($"Report for year {toolbar.Year}"))
+                            ))
+                )
+
+            ;
+
 
     }
 
@@ -161,6 +171,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
 }
 
+public record ToolbarEntity(int Year)
+{
+}
 
 public static class TestAreas
 {

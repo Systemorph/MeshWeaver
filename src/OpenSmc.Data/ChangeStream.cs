@@ -9,8 +9,7 @@ namespace OpenSmc.Data;
 
 public record ChangeItem<TReference>(object Address, WorkspaceReference Reference, TReference Value, object ChangedBy);
 
-public record ChangeStream<TReference> : IDisposable,
-        IObserver<DataChangedEvent>
+public record ChangeStream<TReference> : IDisposable, IObserver<DataChangedEvent>
 {
     public readonly ReplaySubject<ChangeItem<TReference>> Store = new();
     public readonly Subject<DataChangedEvent> DataChangedStream = new();
