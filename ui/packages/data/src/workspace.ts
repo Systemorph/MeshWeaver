@@ -1,10 +1,10 @@
 import {
     configureStore,
     createAction,
-    createReducer,
+    createReducer, Store,
 } from '@reduxjs/toolkit';
 import { applyPatches, enablePatches, Patch } from "immer";
-import { JsonPatch, PatchOperation } from "./data.contract";
+import { JsonPatch, PatchOperation, WorkspaceReference } from "./data.contract";
 
 enablePatches();
 
@@ -34,6 +34,10 @@ export function createWorkspace<TState>(initialState?: TState, name?: string) {
             name
         }
     });
+}
+
+function reduce(store: Store, reference: WorkspaceReference) {
+
 }
 
 function toImmerPatch(patch: PatchOperation): Patch {

@@ -6,26 +6,39 @@ import {
     LayoutAreaReference, PatchOperation,
     SubscribeDataRequest
 } from "@open-smc/data/src/data.contract";
-import { makeBinding } from "../dataBinding/resolveBinding";
 import { messageOfType } from "@open-smc/message-hub/src/operators/messageOfType";
 import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
-import { Patch, produce, produceWithPatches } from "immer";
+import { Patch, produceWithPatches } from "immer";
 
 // this is mock
 
 export const dataSyncHub =
     new SubjectHub((input, output) => {
-        input.pipe(messageOfType(SubscribeDataRequest))
+        input
+            .pipe(messageOfType(SubscribeDataRequest))
             .subscribe(({message}) => {
                 const {id, workspaceReference} = message;
 
-                if (isOfType(workspaceReference, EntireWorkspace)) {
+                if (workspaceReference instanceof EntireWorkspace) {
                     sendMessage(output, new DataChangedEvent(id, workspace));
+
+                    setTimeout(() => {
+                        const [nextState, patches] =
+                            produceWithPatches(
+                                workspace,
+                                state => {
+                                    state.user.name = "bar";
+                                });
+                        sendMessage(
+                            output,
+                            new DataChangedEvent(id, new JsonPatch(patches.map(toPatchOperation)))
+                        );
+                    }, 1000)
                 }
 
-                if (isOfType(workspaceReference, LayoutAreaReference)) {
+                if (workspaceReference instanceof LayoutAreaReference) {
                     sendMessage(output, new DataChangedEvent(id, layoutState));
-// return;
+
                     setTimeout(() => {
                         const [nextState, patches] =
                             produceWithPatches(
@@ -36,17 +49,13 @@ export const dataSyncHub =
                                     // state.control.areas[0].id = "/ContextMenu";
                                     // state.control.areas.pop();
                                     // state.style = { fontWeight: "bold" }
-                                    state.id = "/root"
+                                    // state.id = "/root"
                                 }
                             );
 
-                        const jsonPatch = {
-                            ...new JsonPatch(patches.map(toPatchOperation))
-                        }
-
                         sendMessage(
                             output,
-                            new DataChangedEvent(id, jsonPatch)
+                            new DataChangedEvent(id, new JsonPatch(patches.map(toPatchOperation)))
                         )
                     }, 1000);
                 }
@@ -96,9 +105,15 @@ const layoutState = {
                     $type: "OpenSmc.Layout.TextBoxControl",
                     dataContext: {
                         value: "Hello world",
-                        user: new JsonPathReference("$.user"),
+                        user: {
+                            $type: "OpenSmc.Data.JsonPathReference",
+                            path: "$.user"
+                        }
                     },
-                    data: makeBinding("$.user.name")
+                    data: {
+                        $type: "OpenSmc.Layout.DataBinding.Binding",
+                        path: "$.user.name"
+                    }
                 }
             }
         ]

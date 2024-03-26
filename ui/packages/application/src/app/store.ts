@@ -5,11 +5,12 @@ import { createWorkspace } from "@open-smc/data/src/workspace";
 import { subscribeToDataChanges } from "@open-smc/data/src/subscribeToDataChanges";
 import { EntireWorkspace, LayoutAreaReference } from "@open-smc/data/src/data.contract";
 import { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
-import { distinctUntilKeyChanged, from, Subscription } from "rxjs";
+import { distinctUntilKeyChanged, from, Subscription, tap } from "rxjs";
 import { LayoutArea } from "../contract/LayoutArea";
 import { syncLayoutArea } from "./syncLayoutArea";
 import { withPreviousValue } from "./withPreviousValue";
-import { withCleanup } from "./withCleanup";
+import { deserialize } from "./deserialize";
+import '../contract';
 
 export type RootState = {
     rootArea: string;
@@ -60,16 +61,16 @@ const rootReducer = createReducer<RootState>(
     }
 );
 
-export const makeStore = (hub: MessageHub) => {
+export const makeStore = (backendHub: MessageHub) => {
     const subscription = new Subscription();
 
     const dataStore =
         createWorkspace(undefined, "data");
-    subscription.add(subscribeToDataChanges(hub, new EntireWorkspace(), dataStore.dispatch));
+    subscription.add(subscribeToDataChanges(backendHub, new EntireWorkspace(), dataStore.dispatch));
 
     const layoutStore =
         createWorkspace<LayoutArea>(undefined, "layout");
-    subscription.add(subscribeToDataChanges(hub, new LayoutAreaReference("/"), layoutStore.dispatch));
+    subscription.add(subscribeToDataChanges(backendHub, new LayoutAreaReference("/"), layoutStore.dispatch));
 
     const uiStore = configureStore<RootState>({
         preloadedState: {
@@ -82,14 +83,18 @@ export const makeStore = (hub: MessageHub) => {
         }
     });
 
-    const rootLayoutArea$ = from(layoutStore);
+    const rootLayoutArea$ =
+        from(layoutStore)
+            .pipe(deserialize());
+
     const data$ = from(dataStore);
+
     const ui$ = from(uiStore);
 
     const {dispatch} = uiStore;
 
     rootLayoutArea$
-        .pipe(syncLayoutArea(data$, dispatch, ui$))
+        .pipe(syncLayoutArea(data$, dispatch, ui$, dataStore.dispatch))
         .pipe(distinctUntilKeyChanged("id"))
         .pipe(withPreviousValue())
         .subscribe(([previous, current]) => {
