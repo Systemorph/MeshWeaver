@@ -39,8 +39,8 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
         return base.ConfigureClient(configuration)
-            .AddData(data => data.FromHub(new HostAddress(), dataSource => dataSource
-                .WithType<MyData>()));
+            .AddData(data => 
+                data.FromHub(new HostAddress(), dataSource => dataSource.WithType<MyData>()));
     }
 
     [Fact]

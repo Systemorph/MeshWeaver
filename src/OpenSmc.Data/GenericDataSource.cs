@@ -90,7 +90,13 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
 
     protected virtual IReadOnlyCollection<ChangeStream<EntityStore>> GetInitialChangeStream()
     {
-        var ret = new ChangeStream<EntityStore>(Workspace, Id, new EntireWorkspace(), Hub.ServiceProvider.GetRequiredService<ISerializationService>().Options(TypeSources.Values.ToDictionary(x => x.CollectionName)), () => Hub.Version);
+        var ret = new ChangeStream<EntityStore>(
+            Workspace, 
+            Id, 
+            new EntireWorkspace(), 
+            Hub.ServiceProvider.GetRequiredService<ISerializationService>().Options(TypeSources.Values.ToDictionary(x => x.CollectionName)), 
+            () => Hub.Version,
+             true);
         return [ret];
     }
 
