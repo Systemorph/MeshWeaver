@@ -2,7 +2,6 @@ import { Dispatch } from "@reduxjs/toolkit";
 import { distinctUntilChanged, map, Observable, Subscription } from "rxjs";
 import { LayoutArea } from "../contract/LayoutArea";
 import { Control } from "../contract/controls/Control";
-import { isOfType } from "../contract/ofType";
 import { LayoutStackControl } from "../contract/controls/LayoutStackControl";
 import { keys } from "lodash";
 import { ignoreNestedAreas } from "./ignoreNestedAreas";
@@ -50,7 +49,7 @@ export const syncLayoutArea = (
                 source
                     .pipe(distinctUntilChanged(ignoreNestedAreas))
                     .pipe(layoutAreaToUi(uiDispatch, data$, parentContext))
-                    .pipe(uiToData(ui$, dataDispatch))
+                    // .pipe(uiToData(ui$, dataDispatch))
                     .subscribe()
             );
 
@@ -89,7 +88,7 @@ export const subAreas = () =>
             );
 
 const getNestedAreas = (control: Control) => {
-    if (isOfType(control, LayoutStackControl)) {
+    if (control instanceof LayoutStackControl) {
         return control?.areas;
     }
 }

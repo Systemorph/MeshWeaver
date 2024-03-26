@@ -2,7 +2,7 @@ import { contractMessage } from "@open-smc/utils/src/contractMessage";
 import { Style } from "./controls/Style";
 import { Control } from "./controls/Control";
 
-@contractMessage("OpenSmc.Layout.LayoutArea")
+@contractMessage("OpenSmc.Layout")
 export class LayoutArea {
     constructor(
         public id: string,

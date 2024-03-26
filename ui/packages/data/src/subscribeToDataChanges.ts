@@ -10,7 +10,6 @@ import {
 } from "./data.contract";
 import { initState, jsonPatch } from "./workspace";
 import { messageOfType } from "@open-smc/message-hub/src/operators/messageOfType";
-import { isOfType } from "@open-smc/application/src/contract/ofType";
 import { filter } from "rxjs";
 
 export function subscribeToDataChanges(hub: MessageHub, workspaceReference: any, dispatch: Dispatch) {
@@ -19,9 +18,10 @@ export function subscribeToDataChanges(hub: MessageHub, workspaceReference: any,
     const subscription = hub.pipe(messageOfType(DataChangedEvent))
         .pipe(filter(({message}) => message.id === id))
         .subscribe(({message: {id, change}}) => {
-            if (isOfType(change, JsonPatch)) {
+            if (change instanceof JsonPatch) {
                 dispatch(jsonPatch(change))
-            } else {
+            }
+            else {
                 dispatch(initState(change));
             }
         });

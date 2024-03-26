@@ -12,7 +12,7 @@ export class UnsubscribeDataRequest {
     }
 }
 
-@contractMessage("OpenSmc.Data.DataChangedEvent")
+@contractMessage("OpenSmc.Data")
 export class DataChangedEvent {
     constructor(public id: string, public change: object) {
     }
@@ -20,18 +20,18 @@ export class DataChangedEvent {
 
 export class WorkspaceReference {}
 
-@contractMessage("OpenSmc.Data.EntireWorkspace")
+@contractMessage("OpenSmc.Data")
 export class EntireWorkspace extends WorkspaceReference {
 }
 
-@contractMessage("OpenSmc.Data.LayoutAreaReference")
+@contractMessage("OpenSmc.Data")
 export class LayoutAreaReference extends WorkspaceReference  {
     constructor(public path: string) {
         super();
     }
 }
 
-@contractMessage("OpenSmc.Data.JsonPathReference")
+@contractMessage("OpenSmc.Data")
 export class JsonPathReference extends WorkspaceReference  {
     constructor(public path: string) {
         super();
@@ -51,5 +51,5 @@ export interface PatchOperation {
 }
 
 export type DataInput<T> = {
-    [key: string]: keyof T | WorkspaceReference;
+    [key: string]: unknown | WorkspaceReference;
 }

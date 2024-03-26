@@ -3,7 +3,6 @@ import { Style } from "./Style";
 import { DataInput } from "@open-smc/data/src/data.contract";
 
 export class Control {
-    $type: string;
     id?: string;
     isReadonly?: boolean;
     clickMessage?: MessageAndAddress;

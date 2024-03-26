@@ -1,12 +1,19 @@
-import { Observable } from "rxjs";
-import { Bindable } from "../dataBinding/resolveBinding";
+import { cloneDeepWith } from "lodash-es";
+import { isOfType } from "../contract/ofType";
+import { JsonPathReference } from "@open-smc/data/src/data.contract";
+import { select } from "@open-smc/data/src/select";
+import { Binding } from "../contract/Binding";
 
+// TODO: respect parentDataContext (3/26/2024, akravets)
 export const expandBindings = <T extends {}>(props: PropsInput<T>, parentDataContext: unknown) =>
-    (source: Observable<unknown>): Observable<T> =>
-        new Observable(subscriber => {
+    (source: unknown): T =>
+        cloneDeepWith(
+            props,
+            value =>
+                isOfType(value, Binding)
+                    ? select(source, new JsonPathReference(value.path)) : undefined
+        );
 
-        });
-
-export type PropsInput<T> = {
-    [key: string]: Bindable<T>;
+export type PropsInput<T extends {} = {}> = {
+    [key: string]: unknown | Binding;
 }
