@@ -37,7 +37,7 @@ public static class Controls
     public static ProgressControl Progress(object message, object progress) => new(message, progress);
 
     public static RedirectControl Redirect(object message, object address, object area) => new(message, address, area);
-    public static RedirectControl Redirect(AreaReference message, object address) => new(message, address, message.Area);
+    public static RedirectControl Redirect(LayoutAreaReference message, object address) => new(message, address, message.Area);
     public static Composition.LayoutStackControl ApplicationWindow() => Stack().WithSkin(Skin.MainWindow); 
 
     public static Composition.LayoutStackControl SideMenu() => Stack().WithSkin(Skin.SideMenu);

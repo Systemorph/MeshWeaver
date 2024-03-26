@@ -14,14 +14,14 @@ public record ReduceManager
 
     public ReduceManager()
     {
-        WithReference<EntityReference>((ws, reference) => ws.ReduceImpl(reference))
-            .WithReference<PartitionedCollectionsReference>((ws,reference) => ws.ReduceImpl(reference))
-            .WithReference<CollectionReference>((ws, reference) => ws.ReduceImpl(reference))
-            .WithReference<CollectionsReference>((ws, reference) => ws.ReduceImpl(reference))
-            .WithReference<EntireWorkspace>((ws, reference) => ws.ReduceImpl(reference));
+        AddWorkspaceReference<EntityReference>((ws, reference) => ws.ReduceImpl(reference))
+            .AddWorkspaceReference<PartitionedCollectionsReference>((ws,reference) => ws.ReduceImpl(reference))
+            .AddWorkspaceReference<CollectionReference>((ws, reference) => ws.ReduceImpl(reference))
+            .AddWorkspaceReference<CollectionsReference>((ws, reference) => ws.ReduceImpl(reference))
+            .AddWorkspaceReference<EntireWorkspace>((ws, reference) => ws.ReduceImpl(reference));
     }
 
-    public ReduceManager WithReference<TReference>(Func<WorkspaceState, TReference, object> reducer)
+    public ReduceManager AddWorkspaceReference<TReference>(Func<WorkspaceState, TReference, object> reducer)
         where TReference : WorkspaceReference
     {
         Reducers.AddLast((ws, r, node) => ReduceImpl(ws, r, reducer, node));

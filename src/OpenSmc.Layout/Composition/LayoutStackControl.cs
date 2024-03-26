@@ -22,24 +22,27 @@ public record LayoutStackControl() : UiControl<LayoutStackControl>(ModuleSetup.M
 
 
     public LayoutStackControl WithView(object value) => WithView(GetAutoName(), value);
+    public LayoutStackControl WithView(string area, object value) => WithView(new LayoutAreaReference(area), value);
 
     private string GetAutoName()
     {
         return $"Area{ViewElements.Count + 1}";
     }
 
-    public LayoutStackControl WithView(string area, object value)
+    public LayoutStackControl WithView(LayoutAreaReference reference, object value)
     {
-        return this with { ViewElements = ViewElements.Add(new ViewElementWithView(area, value)) };
+        return this with { ViewElements = ViewElements.Add(new ViewElementWithView(reference, value)) };
     }
 
 
     public LayoutStackControl WithView(ViewDefinition viewDefinition)
-        => WithView(GetAutoName(), viewDefinition);
-
+        => WithView(new LayoutAreaReference(GetAutoName()), viewDefinition);
     public LayoutStackControl WithView(string area, ViewDefinition viewDefinition)
+        => WithView(new LayoutAreaReference(area), viewDefinition);
+
+    public LayoutStackControl WithView(LayoutAreaReference reference, ViewDefinition viewDefinition)
     {
-        return this with { ViewElements = ViewElements.Add(new ViewElementWithViewDefinition(area, viewDefinition)) };
+        return this with { ViewElements = ViewElements.Add(new ViewElementWithViewDefinition(reference, viewDefinition)) };
     }
 
     private string GetAreaName()

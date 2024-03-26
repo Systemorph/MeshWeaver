@@ -1,9 +1,10 @@
 ﻿using OpenSmc.Messaging;
 using System.Collections.Immutable;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace OpenSmc.Data;
 
-public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace, ReduceManager ReduceManager) : IAsyncDisposable
+public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace) : IAsyncDisposable
 {
     internal ImmutableDictionary<object,IDataSource> DataSources { get; private set; } = ImmutableDictionary<object, IDataSource>.Empty;
 
@@ -18,6 +19,11 @@ public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace, ReduceMa
     };
 
     public ImmutableDictionary<object, DataSourceBuilder> DataSourceBuilders { get; set; } = ImmutableDictionary<object, DataSourceBuilder>.Empty;
+    internal ReduceManager ReduceManager { get; init; }
+
+    public DataContext AddWorkspaceReference<TReference>(Func<WorkspaceState, TReference, object> referenceDefinition)
+        where TReference : WorkspaceReference
+        => this with { ReduceManager = ReduceManager.AddWorkspaceReference(referenceDefinition) };
 
     public delegate IDataSource DataSourceBuilder(IMessageHub hub); 
 

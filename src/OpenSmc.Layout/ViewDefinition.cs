@@ -1,10 +1,10 @@
 ﻿namespace OpenSmc.Layout;
 
-public delegate object ViewDefinition(AreaReference request);
+public delegate object ViewDefinition(LayoutAreaReference reference);
 
-public abstract record ViewElement(string Area);
+public abstract record ViewElement(LayoutAreaReference Reference);
 
-public record ViewElementWithViewDefinition(string Area, ViewDefinition ViewDefinition) : ViewElement(Area);
-public record ViewElementWithView(string Area, object View) : ViewElement(Area);
+public record ViewElementWithViewDefinition(LayoutAreaReference Reference, ViewDefinition ViewDefinition) : ViewElement(Reference);
+public record ViewElementWithView(LayoutAreaReference Reference, object View) : ViewElement(Reference);
 
 

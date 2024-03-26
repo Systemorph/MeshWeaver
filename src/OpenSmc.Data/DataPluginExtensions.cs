@@ -10,12 +10,12 @@ public static class DataPluginExtensions
     public static MessageHubConfiguration AddData(this MessageHubConfiguration config, Func<DataContext, DataContext> dataPluginConfiguration)
     {
         return config
-            .WithServices(sc => sc.AddSingleton<IWorkspace, DataPlugin>())
+            .WithServices(sc => sc.AddScoped<IWorkspace, DataPlugin>())
             .Set(config.GetListOfLambdas().Add(dataPluginConfiguration))
             .AddPlugin<DataPlugin>(plugin => plugin.WithFactory(() => (DataPlugin)plugin.Hub.ServiceProvider.GetRequiredService<IWorkspace>()));
     }
 
-    public static ImmutableList<Func<DataContext, DataContext>> GetListOfLambdas(this MessageHubConfiguration config)
+    internal static ImmutableList<Func<DataContext, DataContext>> GetListOfLambdas(this MessageHubConfiguration config)
     {
         return config.Get<ImmutableList<Func<DataContext, DataContext>>>() ?? ImmutableList<Func<DataContext, DataContext>>.Empty;
     }
@@ -23,7 +23,7 @@ public static class DataPluginExtensions
     internal static DataContext GetDataConfiguration(this IMessageHub hub, ReduceManager reduceManager)
     {
         var dataPluginConfig = hub.Configuration.GetListOfLambdas();
-        var ret = new DataContext(hub, hub.ServiceProvider.GetRequiredService<IWorkspace>(), reduceManager);
+        var ret = new DataContext(hub, hub.ServiceProvider.GetRequiredService<IWorkspace>()){ReduceManager = reduceManager};
         foreach (var func in dataPluginConfig)
             ret = func.Invoke(ret);
         return ret;
@@ -48,5 +48,6 @@ public static class DataPluginExtensions
         Func<GenericDataSource, GenericDataSource> configuration)
         => dataSource.WithDataSourceBuilder(address, hub => configuration.Invoke(new GenericDataSource(address, hub))
         );
+
 
 }

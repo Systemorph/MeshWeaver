@@ -1,4 +1,6 @@
 ﻿using System.Reactive.Linq;
+using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
 
@@ -36,4 +38,8 @@ public static class WorkspaceExtensions
         };
 
     }
+
+    public static IWorkspace GetWorkspace(this IMessageHub messageHub) =>
+        messageHub.ServiceProvider.GetRequiredService<IWorkspace>();
+
 }

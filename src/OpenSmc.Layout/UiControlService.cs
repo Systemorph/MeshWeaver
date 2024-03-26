@@ -29,7 +29,7 @@ public record UiControlsManager()
         fallbackRule = factory;
     }
         
-    public UiControl GetUiControl(object instance, Type type = null)
+    public UiControl Get(object instance, Type type = null)
     {
         try
         {
