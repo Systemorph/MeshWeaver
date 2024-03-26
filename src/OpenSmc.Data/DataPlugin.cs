@@ -32,12 +32,18 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
         if (externalSubscriptions.ContainsKey((address, reference)))
             return;
         var stream = (ChangeStream<TReference>)streams.GetOrAdd((Hub.Address,reference),
-            _ => { return new ChangeStream<TReference>(this, address, reference, options, () => Hub.Version); });
-        var subscription = stream.DataChangedStream.Subscribe(dc => Hub.Post(dc, o => o.WithTarget(address)));
-        externalSubscriptions.TryAdd((address, reference), subscription);
+            key => { return new ChangeStream<TReference>(this, key.Address, reference, options, () => Hub.Version, false); });
+        stream.Disposables.Add(externalSynchronizationStream.Where(x => x.Address.Equals(address) && x.Reference.Equals(reference)).Subscribe(stream));
+        externalSubscriptions.GetOrAdd((address, reference), _ => 
+            stream.Subscribe(dc => Hub.Post(dc, o => o.WithTarget(address))));
     }
     
     public ChangeStream<TReference> GetRemoteStream<TReference>(object address, WorkspaceReference<TReference> reference)
+    {
+        return GetRemoteStreamImpl(address, reference);
+    }
+
+    internal ChangeStream<TReference> GetRemoteStreamImpl<TReference>(object address, WorkspaceReference<TReference> reference)
     {
         if (Hub.Address.Equals(address))
             throw new ArgumentException(
@@ -47,27 +53,26 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
         return (ChangeStream<TReference>)streams.GetOrAdd(key, _ =>
         {
             Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(address));
-            var ret = new ChangeStream<TReference>(this, address, reference, options, () => Hub.Version);
+            var ret = new ChangeStream<TReference>(this, address, reference, options, () => Hub.Version, true);
 
-            var patchSubscription = ret.Changes
+            ret.Disposables.Add(
+                ret.Changes
                 .Where(x => x.Address.Equals(address) && x.Reference.Equals(reference))
                 .Subscribe(patch =>
-                Hub.RegisterCallback(
-                    Hub.Post(patch, o => o.WithTarget(address)), HandleCommitResponse));
-            var changeSubscription =
-                ret.DataChangedStream.Subscribe<DataChangedEvent>(dataChanged => Hub.Post(dataChanged, o => o.WithTarget(address)));
+                    Hub.RegisterCallback(
+                        Hub.Post(patch, o => o.WithTarget(address)), HandleCommitResponse)));
+            ret.Disposables.Add(
+                ret.Subscribe(dataChanged => Hub.Post(dataChanged, o => o.WithTarget(address)))
+                );
             externalSynchronizationStream
                 .Where(x => x.Address.Equals(address) && x.Reference.Equals(reference))
                 .DistinctUntilChanged()
                 .Subscribe(ret);
 
-            ret.Disposables.AddRange(
-            [
-                patchSubscription,
-                changeSubscription,
+            ret.Disposables.Add(
                 new Disposables.AnonymousDisposable(() =>
-                    Hub.Post(new UnsubscribeDataRequest(reference), o => o.WithTarget(address))),
-            ]);
+                    Hub.Post(new UnsubscribeDataRequest(reference), o => o.WithTarget(address)))
+            );
             return ret;
         });
     }
@@ -126,31 +131,25 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
 
 
 
-        List<IDisposable> disposables = new();
-        var initializeObserver = new InitializeObserver(dataContextStreams.Select(i => i.Address).ToHashSet(), () =>
-        {
-            FinishInitialization(disposables);
-        });
+        var initializeObserver = new InitializeObserver(
+            dataContextStreams.ToDictionary(x => x.Address),
+            () =>
+            {
+                subject.Subscribe(synchronizationStream);
+                subject.OnNext(State);
+
+                initializeTaskCompletionSource.SetResult();
+            });
 
         foreach (var stream in dataContextStreams)
         {
             streams[(stream.Address, stream.Reference)] = stream;
-            stream.Store.Subscribe(Synchronize);
-            disposables.Add(stream.Subscribe(initializeObserver));
+            stream.Disposables.Add(stream.Store.Subscribe(Synchronize));
+            initializeObserver.Disposables.Add(stream.Subscribe(initializeObserver));
         }
 
     }
 
-    private void FinishInitialization(List<IDisposable> disposables)
-    {
-        foreach (var disposable in disposables)
-            disposable.Dispose();
-
-        subject.Subscribe(synchronizationStream);
-        subject.OnNext(State);
-
-        initializeTaskCompletionSource.SetResult();
-    }
 
     private void Synchronize(ChangeItem<EntityStore> item)
     {
@@ -250,7 +249,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
     }
 }
 
-internal class InitializeObserver(HashSet<object> ids, Action finishInit) : IObserver<ChangeItem<EntityStore>>
+internal class InitializeObserver(Dictionary<object, ChangeStream<EntityStore>> streams, Action onCompleteInitialization) : IObserver<ChangeItem<EntityStore>>
 {
     public void OnCompleted()
     {
@@ -262,10 +261,22 @@ internal class InitializeObserver(HashSet<object> ids, Action finishInit) : IObs
 
     public void OnNext(ChangeItem<EntityStore> value)
     {
-        ids.Remove(value.Address);
-        if (ids.Count == 0)
-            finishInit();
+        //if (streams.Remove(value.Address, out var stream))
+        //    stream.Initialize(value.Value);
+        streams.Remove(value.Address);
+        if (streams.Count == 0)
+            Complete();
 
     }
+
+    private void Complete()
+    {
+        foreach (var disposable in Disposables)
+            disposable.Dispose();
+        onCompleteInitialization.Invoke();
+    }
+
+
+    public readonly List<IDisposable> Disposables = new();
 }
 

@@ -9,10 +9,11 @@ namespace OpenSmc.Data;
 
 public record ChangeItem<TReference>(object Address, WorkspaceReference Reference, TReference Value, object ChangedBy);
 
-public record ChangeStream<TReference> : IDisposable, IObserver<DataChangedEvent>
+public record ChangeStream<TReference> : IDisposable, IObserver<DataChangedEvent>, IObservable<DataChangedEvent>
 {
-    public readonly ReplaySubject<ChangeItem<TReference>> Store = new();
-    public readonly Subject<DataChangedEvent> DataChangedStream = new();
+    private readonly bool isExternalStream;
+    public readonly ReplaySubject<ChangeItem<TReference>> Store = new(1);
+    private readonly Subject<DataChangedEvent> dataChangedStream = new();
     public readonly Subject<PatchChangeRequest> Changes = new();
     private IDisposable updateSubscription;
 
@@ -22,12 +23,24 @@ public record ChangeStream<TReference> : IDisposable, IObserver<DataChangedEvent
     {
         return Store.Subscribe(observer);
     }
+    public IDisposable Subscribe(IObserver<DataChangedEvent> observer)
+    {
+        if (LastSynchronized != null)
+            observer.OnNext(GetFullDataChange(LastSynchronized));
+        return dataChangedStream.Subscribe(observer);
+    }
 
 
     public readonly List<IDisposable> Disposables = new();
 
-    public ChangeStream(IWorkspace Workspace, object Address, WorkspaceReference<TReference> Reference, JsonSerializerOptions Options, Func<long> GetVersion)
+    public ChangeStream(IWorkspace Workspace, 
+        object Address, 
+        WorkspaceReference<TReference> Reference, 
+        JsonSerializerOptions Options, 
+        Func<long> GetVersion,
+        bool isExternalStream)
     {
+        this.isExternalStream = isExternalStream;
         this.Workspace = Workspace;
         this.Address = Address;
         this.Reference = Reference;
@@ -71,17 +84,19 @@ public record ChangeStream<TReference> : IDisposable, IObserver<DataChangedEvent
         Store.OnNext(new(Address, Reference, newStore, request.ChangedBy));
     }
 
-    public void Initialize(TReference initial)
+    public ChangeStream<TReference> Initialize(TReference initial)
     {
         if(initial == null)
             throw new ArgumentNullException(nameof(initial));
         Store.OnNext(new(Address, Reference, initial, null));
         LastSynchronized = JsonSerializer.SerializeToNode(initial, Options);
+        dataChangedStream.OnNext(GetFullDataChange(LastSynchronized));
+        return this;
     }
 
     private void Synchronize(TReference value, object changedBy)
     {
-        if (Address.Equals(changedBy))
+        if (isExternalStream && (changedBy == null || Address.Equals(changedBy)))
             return;
 
         var node = JsonSerializer.SerializeToNode(value, Options);
@@ -92,7 +107,7 @@ public record ChangeStream<TReference> : IDisposable, IObserver<DataChangedEvent
             : GetPatch(changedBy, node);
 
         if(dataChanged != null)
-            DataChangedStream.OnNext(dataChanged);
+            dataChangedStream.OnNext(dataChanged);
         LastSynchronized = node;
 
     }
@@ -131,12 +146,6 @@ public record ChangeStream<TReference> : IDisposable, IObserver<DataChangedEvent
         => Synchronize(value);
 
     
-    public IDisposable Subscribe(IObserver<DataChangedEvent> observer)
-    {
-        if(LastSynchronized != null)
-            observer.OnNext(GetFullDataChange(LastSynchronized));
-        return DataChangedStream.Subscribe(observer);
-    }
 
 
 
