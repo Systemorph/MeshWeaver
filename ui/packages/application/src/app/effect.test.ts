@@ -1,8 +1,9 @@
 import { expect, test, describe, jest } from "@jest/globals";
 import { Observable, of } from "rxjs";
-import { withCleanup } from "./withCleanup";
+import { effect } from "./effect";
 
-describe("cleanup", () => {
+// TODO: tbd (3/27/2024, akravets)
+describe("effect", () => {
     test("1", () => {
         const subscription =
             new Observable(
@@ -12,9 +13,9 @@ describe("cleanup", () => {
                     subscriber.next(3);
                     subscriber.complete();
                 })
-                .pipe(withCleanup(value => () => console.log("cleanup " + value)))
+                .pipe(effect(value => () => console.log("effect " + value)))
                 .subscribe(console.log);
 
-        // subscription.unsubscribe();
+        subscription.unsubscribe();
     });
 });

@@ -1,35 +1,27 @@
-import { from, map, Observable, skip, switchMap } from "rxjs";
+import { from, map, Observable } from "rxjs";
 import { LayoutAreaModel, RootState } from "./store";
 import { Dispatch } from "@reduxjs/toolkit";
 import { LayoutArea } from "../contract/LayoutArea";
 import { keys } from "lodash";
-import { isOfType } from "../contract/ofType";
-import { Binding } from "../dataBinding/resolveBinding";
 import { PropsInput } from "./expandBindings";
 import { DataInput, JsonPatch } from "@open-smc/data/src/data.contract";
 import { jsonPatch } from "@open-smc/data/src/workspace";
+import { Binding } from "../contract/Binding";
 
-export const uiToData = (ui$: Observable<RootState>, dataDispatch: Dispatch) =>
-    (source: Observable<LayoutArea>) =>
-        new Observable<LayoutArea>(subscriber => {
-            const subscription =
-                source
-                    .pipe(
-                        switchMap(
-                            layoutArea => {
-                                const {control} = layoutArea;
-                                const {$type, dataContext, ...props} = control;
+export const reverseDataBinding = ($ui: Observable<RootState>, dataDispatch: Dispatch) =>
+    (layoutArea: LayoutArea) => {
+        const {control} = layoutArea;
+        const {dataContext, ...props} = control;
 
-                                return ui$
-                                    .pipe(map(ui => ui.areas[layoutArea.id]))
-                                    .pipe(layoutAreaModelToData(props, dataContext, dataDispatch));
-                            }
-                        )
-                    )
-                    .subscribe();
+        const boundKeys = keys(props)
+            .filter(key => (props as any)[key] instanceof Binding);
 
-            return () => subscription.unsubscribe();
-        });
+        const propObservables = boundKeys.map($ui)
+
+        return ui$
+            .pipe(map(ui => ui.areas[layoutArea.id]))
+            .pipe(layoutAreaModelToData(props, dataContext, dataDispatch));
+    }
 
 const keyChanged = <T, TKey extends keyof T>(keys: TKey[]) =>
     (previous: T, current: T) => keys.map(key => previous)
