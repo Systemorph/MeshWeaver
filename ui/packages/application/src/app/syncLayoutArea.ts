@@ -6,15 +6,16 @@ import { LayoutStackControl } from "../contract/controls/LayoutStackControl";
 import { keys } from "lodash";
 import { ignoreNestedAreas } from "./ignoreNestedAreas";
 import { removeArea, RootState } from "./store";
-import { layoutAreaToUi } from "./layoutAreaToUi";
-import { uiToData } from "./uiToData";
+import { dataBinding } from "./dataBinding";
+import { reverseDataBinding } from "./reverseDataBinding";
+import { effect } from "./effect";
 
 export const syncLayoutArea = (
     data$: Observable<unknown>,
     uiDispatch: Dispatch,
     ui$: Observable<RootState>,
     dataDispatch: Dispatch,
-    parentContext?: unknown
+    parentDataContext?: unknown
 ) =>
     (source: Observable<LayoutArea>) =>
         new Observable<LayoutArea>(subscriber => {
@@ -48,8 +49,8 @@ export const syncLayoutArea = (
             subscription.add(
                 source
                     .pipe(distinctUntilChanged(ignoreNestedAreas))
-                    .pipe(layoutAreaToUi(uiDispatch, data$, parentContext))
-                    // .pipe(uiToData(ui$, dataDispatch))
+                    .pipe(effect(dataBinding(data$, parentDataContext, uiDispatch)))
+                    // .pipe(effect(reverseDataBinding(ui$, dataDispatch)))
                     .subscribe()
             );
 
