@@ -1,12 +1,15 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Layout.Composition;
 
-public interface ILayout
+public interface ILayout : IObservable<LayoutAreaCollection>
 {
-    LayoutAreaCollection Render(WorkspaceState state, LayoutAreaReference reference);
+    IObservable<LayoutAreaCollection> Render(IObservable<WorkspaceState> state, LayoutAreaReference reference);
 }
 
 public record LayoutAddress(object Host) : IHostedAddress;
@@ -23,7 +26,7 @@ public class LayoutPlugin(IMessageHub hub)
     private readonly IMessageHub layoutHub =
         hub.GetHostedHub(new LayoutAddress(hub.Address));
 
-
+    private readonly IWorkspace workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
     public override async Task StartAsync(CancellationToken cancellationToken)
     {
         await base.StartAsync(cancellationToken);
@@ -38,13 +41,13 @@ public class LayoutPlugin(IMessageHub hub)
             await initialization.Invoke(cancellationToken);
     }
 
-    private LayoutAreaReference RenderArea(LayoutAreaReference reference)
+    private LayoutAreaReference RenderArea(IObservable<WorkspaceState> state, LayoutAreaReference reference)
     {
         return RenderArea(reference, layoutDefinition.GetViewElement(reference));
     }
 
 
-    private LayoutAreaReference RenderArea(LayoutAreaReference reference, UiControl control)
+    private UiControl RenderArea(LayoutAreaReference reference, UiControl control)
     {
         if (control == null)
             return null;
@@ -56,30 +59,45 @@ public class LayoutPlugin(IMessageHub hub)
             };
 
         Areas = Areas.SetItem(reference, control);
-        return reference;
+        return control;
     }
 
-    private LayoutAreaReference RenderArea(LayoutAreaReference reference, ViewElementWithViewDefinition viewDefinition)
+    private UiControl RenderArea(LayoutAreaReference reference, ViewElementWithViewDefinition viewDefinition)
     {
         layoutHub.Schedule(ct =>
         {
             ct.ThrowIfCancellationRequested();
-            var view = viewDefinition.ViewDefinition.Invoke(reference);
+            var view = viewDefinition.ViewDefinition.Invoke(workspace.Stream, reference);
             var control = layoutDefinition.ControlsManager.Get(view);
             Areas = Areas.SetItem(reference, control);
+            Commit(reference);
             return Task.CompletedTask;
         });
 
-        return reference;
+        return new SpinnerControl();
     }
-    private LayoutAreaReference RenderArea(LayoutAreaReference reference, ViewElement viewElement) =>
-        viewElement switch
+
+    private void Commit(LayoutAreaReference reference)
+    {
+        areaSubject.OnNext(LayoutAreaCollection(reference));
+    }
+
+    private LayoutAreaCollection LayoutAreaCollection(LayoutAreaReference reference)
+    {
+        return new(reference, Areas.Where(a => a.Key.Area.StartsWith(reference.Area)).ToImmutableDictionary());
+    }
+
+
+    private LayoutAreaReference RenderArea(LayoutAreaReference reference, ViewElement viewElement)
+    {
+        Areas = Areas.SetItem(reference, viewElement switch
         {
             ViewElementWithView view => RenderArea(reference, layoutDefinition.ControlsManager.Get(view.View)),
             ViewElementWithViewDefinition viewDefinition => RenderArea(reference, viewDefinition),
             _ => throw new NotSupportedException($"Unknown type: {viewElement.GetType().FullName}")
-        };
-
+        });
+        return reference;
+    }
 
 
     //private UiControl GetControl(LayoutAreaReference request)
@@ -96,52 +114,19 @@ public class LayoutPlugin(IMessageHub hub)
         Areas = Areas.RemoveRange(Areas.Keys.Where(a => a.Area.StartsWith(area)));
     }
 
-    public LayoutAreaCollection Render(WorkspaceState state, LayoutAreaReference reference)
+    public IObservable<LayoutAreaCollection> Render(IObservable<WorkspaceState> state, LayoutAreaReference reference)
     {
-        var area = reference.Area;
-        DisposeArea(area);
-        RenderArea(reference);
-        return new(Areas.Where(a => a.Key.Area.StartsWith(area)).ToImmutableDictionary());
+        DisposeArea(reference.Area);
+        RenderArea(state, reference);
+        return areaSubject.Where(a => a.Reference.Equals(reference));
     }
 
-}
 
-internal record ViewGenerator(Func<LayoutAreaReference, bool> Filter, ViewElement ViewElement);
 
-public record LayoutDefinition(IMessageHub Hub)
-{
-    internal LayoutStackControl InitialState { get; init; }
-    internal ImmutableList<ViewGenerator> ViewGenerators { get; init; } = ImmutableList<ViewGenerator>.Empty;
-    public LayoutDefinition WithInitialState(LayoutStackControl initialState) => this with { InitialState = initialState };
-    public LayoutDefinition WithGenerator(Func<LayoutAreaReference, bool> filter, ViewElement viewElement) => this with { ViewGenerators = ViewGenerators.Add(new(filter, viewElement)) };
-
-    public LayoutDefinition WithView(LayoutAreaReference reference, Func<LayoutAreaReference, object> generator) =>
-        WithGenerator(reference.Equals,  new ViewElementWithViewDefinition(reference,r => ControlsManager.Get(generator.Invoke(reference))));
-
-    public LayoutDefinition WithView(string area, Func<LayoutAreaReference, object> generator) =>
-        WithView(new LayoutAreaReference(area), generator);
-
-    internal ImmutableList<Func<CancellationToken, Task>> Initializations { get; init; } = ImmutableList<Func<CancellationToken, Task>>.Empty;
-
-    public LayoutDefinition WithInitialization(Func<CancellationToken, Task> func)
-        => this with { Initializations = Initializations.Add(func) };
-
-    internal UiControlsManager ControlsManager { get; } = new();
-
-    public LayoutDefinition WithUiControls(Action<UiControlsManager> configuration)
+    private readonly ReplaySubject<LayoutAreaCollection> areaSubject = new(1);
+    public IDisposable Subscribe(IObserver<LayoutAreaCollection> observer)
     {
-        configuration.Invoke(ControlsManager);
-        return this;
-    }
-
-    public ViewElement GetViewElement(LayoutAreaReference reference)
-    {
-        foreach (var viewGenerator in ViewGenerators)
-        {
-            if (viewGenerator.Filter(reference))
-                return viewGenerator.ViewElement;
-        }
-
-        return null;
+        return areaSubject.Subscribe(observer);
     }
 }
+

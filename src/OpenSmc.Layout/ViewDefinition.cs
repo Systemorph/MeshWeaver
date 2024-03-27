@@ -1,6 +1,8 @@
-﻿namespace OpenSmc.Layout;
+﻿using OpenSmc.Data;
 
-public delegate object ViewDefinition(LayoutAreaReference reference);
+namespace OpenSmc.Layout;
+
+public delegate IObservable<object> ViewDefinition(IObservable<WorkspaceState> stateStream, LayoutAreaReference reference);
 
 public abstract record ViewElement(LayoutAreaReference Reference);
 

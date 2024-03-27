@@ -18,7 +18,7 @@ public static class LayoutExtensions
         return config
             .WithServices(services => services.AddScoped<ILayout, LayoutPlugin>())
             .AddData(data => data
-                .AddWorkspaceReference<LayoutAreaReference>((ws, a) =>
+                .AddWorkspaceReferenceStream<LayoutAreaReference>((ws, a) =>
                     data.Hub.ServiceProvider.GetRequiredService<ILayout>().Render(ws, a))
             )
             .AddLayoutTypes()

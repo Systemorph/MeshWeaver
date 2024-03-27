@@ -174,7 +174,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
 
     private IMessageDelivery RequestChange(IMessageDelivery request, DataChangeRequest change)
     {
-        UpdateState(s => s.Change(change) with{Version = Hub.Version, LastChangedBy = request?.Sender ?? Hub.Address});
+        UpdateState(s => s.Change(change) with{Version = Hub.Version});
         changeStream.OnNext(State);
         if (request != null)
         {
@@ -203,6 +203,11 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
     public void Rollback()
     {
         State.Rollback();
+    }
+
+    public IObservable<TReference> Get<TReference>(WorkspaceReference<TReference> reference)
+    {
+        return ReduceManager.ReduceStream(Stream, reference);
     }
 
 
