@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
@@ -11,6 +12,7 @@ namespace OpenSmc.Data;
 public record ReduceManager
 {
     internal readonly LinkedList<Reduce> Reducers = new();
+    internal readonly LinkedList<ReduceStream> ReduceStreams = new();
 
     public ReduceManager()
     {
@@ -21,11 +23,40 @@ public record ReduceManager
             .AddWorkspaceReference<EntireWorkspace>((ws, reference) => ws.ReduceImpl(reference));
     }
 
+    public ReduceManager AddWorkspaceReferenceStream<TReference>(Func<IObservable<WorkspaceState>, TReference, IObservable<object>> reducer)
+        where TReference : WorkspaceReference
+    {
+        IObservable<object> Stream(IObservable<WorkspaceState> stream, WorkspaceReference reference,
+            LinkedListNode<ReduceStream> node)
+            => ReduceImpl(stream, reference, reducer,node);
+
+        ReduceStreams.AddLast(Stream);
+        return this;
+    }
     public ReduceManager AddWorkspaceReference<TReference>(Func<WorkspaceState, TReference, object> reducer)
         where TReference : WorkspaceReference
     {
-        Reducers.AddLast((ws, r, node) => ReduceImpl(ws, r, reducer, node));
+        object Lambda(WorkspaceState ws, WorkspaceReference r, LinkedListNode<Reduce> node) => ReduceImpl(ws, r, reducer, node);
+        Reducers.AddLast(Lambda);
+
+        IObservable<object> Stream(IObservable<WorkspaceState> stream, WorkspaceReference reference,
+            LinkedListNode<ReduceStream> node)
+            => stream.Select(ws => Reduce(ws, reference));
+
+        ReduceStreams.AddLast(Stream);
         return this;
+    }
+
+    private static IObservable<object> ReduceImpl<TReference>(IObservable<WorkspaceState> state, WorkspaceReference @ref,
+        Func<IObservable<WorkspaceState>, TReference, IObservable<object>> reducer, LinkedListNode<ReduceStream> node)
+        where TReference : WorkspaceReference
+    {
+        return @ref is TReference reference
+            ? reducer.Invoke(state, reference)
+            : node.Next != null
+                ? node.Next.Value.Invoke(state, @ref, node.Next)
+                : throw new NotSupportedException($"Reducer for reference {@ref.GetType().Name} not specified");
+
     }
 
     private static object ReduceImpl<TReference>(WorkspaceState state, WorkspaceReference @ref, Func<WorkspaceState, TReference, object> reducer, LinkedListNode<Reduce> node) where TReference : WorkspaceReference
@@ -40,11 +71,17 @@ public record ReduceManager
     public object Reduce(WorkspaceState workspaceState, WorkspaceReference reference)
     {
         var first = Reducers.First;
-        return first!.Value(workspaceState,reference, first);
+        return first!.Value(workspaceState, reference, first);
+    }
+    public IObservable<TReference> ReduceStream<TReference>(IObservable<WorkspaceState> workspaceState, WorkspaceReference<TReference> reference)
+    {
+        var first = ReduceStreams.First;
+        return first?.Value(workspaceState, reference, first)?.Cast<TReference>();
     }
 }
 
 internal delegate object Reduce(WorkspaceState state, WorkspaceReference reference, LinkedListNode<Reduce> node);
+internal delegate IObservable<object> ReduceStream(IObservable<WorkspaceState> state, WorkspaceReference reference, LinkedListNode<ReduceStream> node);
 public record WorkspaceState
 {
     private readonly IMessageHub hub;
@@ -53,7 +90,6 @@ public record WorkspaceState
     //private readonly ISerializationService serializationService;
     private ImmutableDictionary<Type, string> CollectionsByType { get; init; }
     public ImmutableDictionary<string, ITypeSource> TypeSources { get; init; }
-    public object LastChangedBy { get; init; }
     public WorkspaceState
     (
         IMessageHub hub,
@@ -183,7 +219,6 @@ public record WorkspaceState
         return this with
         {
             LastSynchronized = newState.Result,
-            LastChangedBy = request.ChangedBy,
             Store = newState.Result.Deserialize<EntityStore>(Options)
         };
     }
@@ -276,7 +311,6 @@ public record WorkspaceState
             Store = newStore,
             LastSynchronized = JsonSerializer.SerializeToNode(newStore, Options),
             Version = hub.Version,
-            LastChangedBy = item.ChangedBy
         };
     }
 

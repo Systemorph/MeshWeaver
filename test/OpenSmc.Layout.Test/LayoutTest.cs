@@ -29,15 +29,13 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                             .WithType<TestLayoutPlugin.DataRecord>(t => t.WithInitialData([new("Hello", "World")]))))
                 .AddLayout(
                     layout =>
-                        TestAreas.Aggregate(layout, (l, kvp) => l.WithView(kvp.Key, _ => kvp.Value))
-                            .WithView("Report", reference => Controls.Stack().WithView
-                            (
-                                layout.Hub.GetWorkspace().ChangeStream
+                        TestAreas.Aggregate(layout, (l, kvp) => l.WithView(kvp.Key, kvp.Value))
+                            .WithView("Report", (stateStream, reference) =>
+                                stateStream
                                     .Select(ws => ws.GetData<ToolbarEntity>("Report1Toolbar"))
                                     .DistinctUntilChanged()
-                                    .Subscribe(toolbar => new GridControl($"Report for year {toolbar.Year}"))
+                                    .Select(toolbar => new HtmlControl($"Report for year {toolbar.Year}"))
                             ))
-                )
 
             ;
 

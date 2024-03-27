@@ -54,6 +54,11 @@ namespace OpenSmc.TestDomain
             throw new NotImplementedException();
         }
 
+        public IObservable<TReference> Get<TReference>(WorkspaceReference<TReference> reference)
+        {
+            throw new NotImplementedException();
+        }
+
         public void Update(IEnumerable<object> instances, UpdateOptions updateOptions)
         {
             throw new NotImplementedException();
