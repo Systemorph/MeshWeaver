@@ -96,6 +96,7 @@ SystemName,DisplayName
         var importRequest = new ImportRequest(MultipleTypesCsv);
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new ImportAddress(2024, new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        await Task.Delay(100);
         var workspace = GetWorkspace(GetHost().GetHostedHub(new ReferenceDataAddress(new HostAddress()), null));
         var actualLoBs = await workspace.GetObservable<LineOfBusiness>().FirstAsync();
         var actualBUs = await workspace.GetObservable<BusinessUnit>().FirstAsync();
