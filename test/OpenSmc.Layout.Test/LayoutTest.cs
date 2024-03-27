@@ -35,7 +35,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                                 layout.Hub.GetWorkspace().ChangeStream
                                     .Select(ws => ws.GetData<ToolbarEntity>("Report1Toolbar"))
                                     .DistinctUntilChanged()
-                                    .Subscribe(toolbar => new HtmlControl($"Report for year {toolbar.Year}"))
+                                    .Subscribe(toolbar => new GridControl($"Report for year {toolbar.Year}"))
                             ))
                 )
 
