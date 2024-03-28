@@ -37,7 +37,7 @@ export const dataSyncHub =
 
                 if (workspaceReference instanceof LayoutAreaReference) {
                     sendMessage(output, new DataChangedEvent(id, layoutState));
-
+return;
                     setTimeout(() => {
                         const [nextState, patches] =
                             produceWithPatches(
@@ -114,6 +114,21 @@ const layoutState = {
                         path: "$.user.name"
                     }
                 }
+            },
+            {
+                $type: "OpenSmc.Layout.LayoutArea",
+                id: "/ContextMenu",
+                control: {
+                    $type: "OpenSmc.Layout.TextBoxControl",
+                    dataContext: {
+                        $type: "OpenSmc.Data.JsonPathReference",
+                        path: "$.user"
+                    },
+                    data: {
+                        $type: "OpenSmc.Layout.DataBinding.Binding",
+                        path: "$.name"
+                    }
+                }
             }
         ]
     }
@@ -124,7 +139,7 @@ function toPatchOperation(patch: Patch): PatchOperation {
 
     return {
         op,
-        path: path.join("/"),
+        path: "/" + path.join("/"),
         value
     }
 }
