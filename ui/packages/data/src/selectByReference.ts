@@ -1,7 +1,7 @@
 import { JsonPathReference, WorkspaceReference } from "./data.contract";
 import { JSONPath } from "jsonpath-plus";
 
-export const select = (value: any, reference: WorkspaceReference) => {
+export const selectByReference = (value: any, reference: WorkspaceReference) => {
     if (reference instanceof JsonPathReference) {
         return JSONPath(
             {

@@ -18,16 +18,24 @@ export class DataChangedEvent {
     }
 }
 
-export class WorkspaceReference {}
+export abstract class WorkspaceReference {
+    abstract toJsonPath(): string;
+}
 
 @contractMessage("OpenSmc.Data")
 export class EntireWorkspace extends WorkspaceReference {
+    toJsonPath: () => "$";
 }
 
+// TODO: should ui be the one who resolves this from data store? (3/28/2024, akravets)
 @contractMessage("OpenSmc.Data")
 export class LayoutAreaReference extends WorkspaceReference  {
     constructor(public path: string) {
         super();
+    }
+
+    toJsonPath(): string {
+        throw 'This reference should never be resolved on UI';
     }
 }
 
@@ -35,6 +43,10 @@ export class LayoutAreaReference extends WorkspaceReference  {
 export class JsonPathReference extends WorkspaceReference  {
     constructor(public path: string) {
         super();
+    }
+
+    toJsonPath() {
+        return this.path;
     }
 }
 
@@ -50,6 +62,6 @@ export interface PatchOperation {
     value?: any;
 }
 
-export type DataInput<T> = {
+export type DataInput = {
     [key: string]: unknown | WorkspaceReference;
 }

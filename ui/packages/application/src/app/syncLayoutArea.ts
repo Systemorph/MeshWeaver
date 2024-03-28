@@ -50,7 +50,7 @@ export const syncLayoutArea = (
                 source
                     .pipe(distinctUntilChanged(ignoreNestedAreas))
                     .pipe(effect(dataBinding(data$, parentDataContext, uiDispatch)))
-                    // .pipe(effect(reverseDataBinding(ui$, dataDispatch)))
+                    .pipe(effect(reverseDataBinding(ui$, data$, dataDispatch)))
                     .subscribe()
             );
 

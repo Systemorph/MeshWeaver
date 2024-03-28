@@ -19,7 +19,9 @@ export function RenderArea({id, className, render}: RenderAreaProps) {
 
     const {control, style} = layoutAreaModel;
 
-    const onChange = (prop: string, value: any) => dispatch(setProp({areaId: id, prop, value}));
+    const onChange = (prop: string, value: any) => {
+        dispatch(setProp({areaId: id, prop, value}));
+    }
 
     const {componentTypeName, props} = control;
 
