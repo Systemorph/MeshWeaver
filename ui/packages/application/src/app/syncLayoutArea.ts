@@ -1,5 +1,5 @@
 import { Dispatch } from "@reduxjs/toolkit";
-import { distinctUntilChanged, map, Observable, Subscription } from "rxjs";
+import { distinctUntilChanged, finalize, map, Observable, Subscription } from "rxjs";
 import { LayoutArea } from "../contract/LayoutArea";
 import { Control } from "../contract/controls/Control";
 import { LayoutStackControl } from "../contract/controls/LayoutStackControl";
@@ -46,10 +46,17 @@ export const syncLayoutArea = (
                 )
             );
 
+            const layoutArea$ = source
+                .pipe(distinctUntilChanged(ignoreNestedAreas));
+
             subscription.add(
-                source
-                    .pipe(distinctUntilChanged(ignoreNestedAreas))
+                layoutArea$
                     .pipe(effect(dataBinding(data$, parentDataContext, uiDispatch)))
+                    .subscribe()
+            );
+
+            subscription.add(
+                layoutArea$
                     .pipe(effect(reverseDataBinding(ui$, data$, dataDispatch)))
                     .subscribe()
             );

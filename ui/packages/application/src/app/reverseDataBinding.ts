@@ -13,7 +13,11 @@ import { walk } from 'walkjs';
 import { selectByPath } from "@open-smc/data/src/selectByPath";
 import { JSONPath } from "jsonpath-plus";
 
-export const reverseDataBinding = (ui$: Observable<RootState>, data$: Observable<unknown>, dataDispatch: Dispatch) =>
+export const reverseDataBinding = (
+    ui$: Observable<RootState>,
+    data$: Observable<unknown>,
+    dataDispatch: Dispatch
+) =>
     (layoutArea: LayoutArea) => {
         const {control} = layoutArea;
 
@@ -46,11 +50,11 @@ export const reverseDataBinding = (ui$: Observable<RootState>, data$: Observable
                                         .subscribe(dataDispatch)
                                 );
 
-                                // subscription.add(
-                                //     ui$
-                                //         .pipe(dataContextPatch(layoutArea.id, bindings))
-                                //         .subscribe(dataContextWorkspace.dispatch)
-                                // );
+                                subscription.add(
+                                    ui$
+                                        .pipe(dataContextPatch(layoutArea.id, bindings))
+                                        .subscribe(dataContextWorkspace.dispatch)
+                                );
 
                                 return subscription;
                             }
