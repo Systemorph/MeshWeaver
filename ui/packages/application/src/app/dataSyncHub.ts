@@ -1,5 +1,4 @@
 import { SubjectHub } from "@open-smc/message-hub/src/SubjectHub";
-import { isOfType, ofType } from "../contract/ofType";
 import {
     DataChangedEvent,
     EntireWorkspace, JsonPatch, JsonPathReference,

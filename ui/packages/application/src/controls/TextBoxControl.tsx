@@ -1,6 +1,6 @@
 import { InputText } from "@open-smc/ui-kit/src/components/InputText";
 import { ControlView } from "../ControlDef";
-import { ControlProps } from "../app/fromLayoutArea";
+import { ControlProps } from "../app/RenderArea";
 
 export interface TextBoxView extends ControlView {
     data?: string;

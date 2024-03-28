@@ -1,12 +1,11 @@
 import { configureStore, createAction, createReducer } from "@reduxjs/toolkit"
 import { dataSyncHub } from "./dataSyncHub";
 import { Style } from "../contract/controls/Style";
-import { createWorkspace } from "@open-smc/data/src/workspace";
+import { workspaceReducer } from "@open-smc/data/src/workspace";
 import { subscribeToDataChanges } from "@open-smc/data/src/subscribeToDataChanges";
 import { EntireWorkspace, LayoutAreaReference } from "@open-smc/data/src/data.contract";
 import { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
 import { distinctUntilKeyChanged, from, Subscription, tap } from "rxjs";
-import { LayoutArea } from "../contract/LayoutArea";
 import { syncLayoutArea } from "./syncLayoutArea";
 import { withPreviousValue } from "./withPreviousValue";
 import { deserialize } from "./deserialize";
@@ -19,7 +18,7 @@ export type RootState = {
 
 export type LayoutAreaModel = {
     id: string;
-    control: ControlModel;
+    control?: ControlModel;
     options?: any;
     style?: Style;
 }
@@ -65,11 +64,23 @@ export const makeStore = (backendHub: MessageHub) => {
     const subscription = new Subscription();
 
     const dataStore =
-        createWorkspace(undefined, "data");
+        configureStore({
+            reducer: workspaceReducer,
+            devTools: {
+                name: "data"
+            }
+        });
+
     subscription.add(subscribeToDataChanges(backendHub, new EntireWorkspace(), dataStore.dispatch));
 
     const layoutStore =
-        createWorkspace<LayoutArea>(undefined, "layout");
+        configureStore({
+            reducer: workspaceReducer,
+            devTools: {
+                name: "layout"
+            }
+        });
+
     subscription.add(subscribeToDataChanges(backendHub, new LayoutAreaReference("/"), layoutStore.dispatch));
 
     const uiStore = configureStore<RootState>({
