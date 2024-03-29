@@ -2,20 +2,22 @@ import { expect, test, describe, jest } from "@jest/globals";
 import { Observable, of } from "rxjs";
 import { effect } from "./effect";
 
-// TODO: tbd (3/27/2024, akravets)
+// TODO: write proper test (3/27/2024, akravets)
 describe("effect", () => {
     test("1", () => {
         const subscription =
-            new Observable(
-                subscriber => {
-                    subscriber.next(1);
-                    subscriber.next(2);
-                    subscriber.next(3);
-                    subscriber.complete();
-                })
-                .pipe(effect(value => () => console.log("effect " + value)))
-                .subscribe(console.log);
+            of(1, 2, 3)
+                .pipe(effect(sample("1")))
+                .pipe(effect(sample("2")))
+                .subscribe();
 
-        subscription.unsubscribe();
+        // subscription.unsubscribe();
     });
 });
+
+const sample = (id: string) =>
+    (value: number) => {
+        console.log(`effect id = ${id}, value=${value}`);
+        return () => console.log(`cleanup id = ${id}, value=${value}`);
+    }
+
