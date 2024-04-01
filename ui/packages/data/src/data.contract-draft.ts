@@ -3,9 +3,14 @@
 //     => LayoutStack
 // data host is Ifrs17Address
 
-import { ClickedEvent, RefreshRequest } from "@open-smc/application/src/contract/application.contract";
-import { WorkspaceReference } from "./data.contract";
-import { makeBinding } from "@open-smc/application/src/dataBinding/resolveBinding";
+import {
+    DataChangedEvent,
+    EntireWorkspace,
+    LayoutAreaReference,
+    SubscribeDataRequest,
+    WorkspaceReference
+} from "./data.contract";
+import { ClickedEvent, LayoutAddress } from "@open-smc/layout/src/contract/application.contract";
 
 const view = {
     title: "Hello",
@@ -74,18 +79,18 @@ const dataContextSample =
 
 // url: /root
 
-const layoutAddress = new LayoutAddress(123);
+const layoutAddress = new LayoutAddress("123");
 
-post(layoutAddress, new SubscribeDataRequest())
-post(layoutAddress, new RefreshRequest("root"));
+// post(layoutAddress, new SubscribeDataRequest())
+// post(layoutAddress, new RefreshRequest("root"));
 
 // queryRequest = "root", (/application/dev)
 
-handle(DataChange, () => {
+// handle(DataChange, () => {
     // patch workspace
     // re-render updated areas tree
     // this dataChange may not contain changes to data collections, then can come later
-})
+// })
 
 const rootControlWorkspaceReference = {
     $type: "OpenSmc.Data.WorkspaceReference",
@@ -177,29 +182,29 @@ new SubscribeDataRequest("any string", new EntireWorkspace()); // sent to layout
 
 
 // layout store
-new SubscribeDataRequest("123", new LayoutAreaReference(path_from_url)); // sent to layout address (to be clarified)
-new DataChangedEvent({
-    $type: "LayoutArea", // or "JsonPatch"
-    object: {
-        id: "123",
-        control: {
-            $type: "LayoutStack",
-            areas: [
-                {
-                    $type: "MenuItemControl",
-                },
-                {
-                    $type: "InputBoxControl",
-                    dataContext: {
-                        playJson: 123,
-                        ref: new WorkspaceReference(), // always reference to the main store
-                    },
-                    value: makeBinding("ref.property") // json path
-                }
-            ]
-        }
-    } // full thing the first time, json patches afterwards,
-})
+// new SubscribeDataRequest("123", new LayoutAreaReference(path_from_url)); // sent to layout address (to be clarified)
+// new DataChangedEvent({
+//     $type: "LayoutArea", // or "JsonPatch"
+//     object: {
+//         id: "123",
+//         control: {
+//             $type: "LayoutStack",
+//             areas: [
+//                 {
+//                     $type: "MenuItemControl",
+//                 },
+//                 {
+//                     $type: "InputBoxControl",
+//                     dataContext: {
+//                         playJson: 123,
+//                         ref: new WorkspaceReference(), // always reference to the main store
+//                     },
+//                     value: makeBinding("ref.property") // json path
+//                 }
+//             ]
+//         }
+//     } // full thing the first time, json patches afterwards,
+// })
 
 // UI creates a store for layout area
 
@@ -236,9 +241,9 @@ const layoutStore = {
                     $type: "InputBoxControl",
                     dataContext: {
                         plainJson: 123,
-                        data: new WorkspaceReference("entity"), // reference to the main store
+                        // data: new WorkspaceReference("entity"), // reference to the main store
                     },
-                    value: makeBinding("data.property") // JsonPath
+                    // value: makeBinding("data.property") // JsonPath
                 }
             }
         ]

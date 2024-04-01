@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@open-smc/application": "0.0.0"
+    "@open-smc/app": "0.0.0"
   },
   "devDependencies": {
     "@types/react": "^18.2.43",

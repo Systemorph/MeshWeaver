@@ -1,18 +1,18 @@
-import { contractMessage } from "@open-smc/utils/src/contractMessage";
+import { type } from "@open-smc/serialization/src/type";
 
-@contractMessage("OpenSmc.Data.SubscribeDataRequest")
+@type("OpenSmc.Data.SubscribeDataRequest")
 export class SubscribeDataRequest {
     constructor(public id: string, public workspaceReference: unknown) {
     }
 }
 
-@contractMessage("OpenSmc.Data.UnsubscribeDataRequest")
+@type("OpenSmc.Data.UnsubscribeDataRequest")
 export class UnsubscribeDataRequest {
     constructor(public ids: string[]) {
     }
 }
 
-@contractMessage("OpenSmc.Data")
+@type("OpenSmc.Data.DataChangedEvent")
 export class DataChangedEvent {
     constructor(public id: string, public change: object) {
     }
@@ -22,13 +22,13 @@ export abstract class WorkspaceReference {
     abstract toJsonPath(): string;
 }
 
-@contractMessage("OpenSmc.Data")
+@type("OpenSmc.Data.EntireWorkspace")
 export class EntireWorkspace extends WorkspaceReference {
     toJsonPath: () => "$";
 }
 
 // TODO: should ui be the one who resolves this from data store? (3/28/2024, akravets)
-@contractMessage("OpenSmc.Data")
+@type("OpenSmc.Data.LayoutAreaReference")
 export class LayoutAreaReference extends WorkspaceReference  {
     constructor(public path: string) {
         super();
@@ -39,7 +39,7 @@ export class LayoutAreaReference extends WorkspaceReference  {
     }
 }
 
-@contractMessage("OpenSmc.Data")
+@type("OpenSmc.Data.JsonPathReference")
 export class JsonPathReference extends WorkspaceReference  {
     constructor(public path: string) {
         super();
@@ -50,7 +50,7 @@ export class JsonPathReference extends WorkspaceReference  {
     }
 }
 
-@contractMessage("Json.Patch.JsonPatch")
+@type("Json.Patch.JsonPatch")
 export class JsonPatch {
     constructor(public operations: PatchOperation[]) {
     }
