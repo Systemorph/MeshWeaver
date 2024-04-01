@@ -1,4 +1,4 @@
 import { get } from "lodash-es";
 
 export const selectByPath = (path: string) =>
-    (value: unknown) => get(value, path);
+    (value: unknown) => path ? get(value, path) : value;
