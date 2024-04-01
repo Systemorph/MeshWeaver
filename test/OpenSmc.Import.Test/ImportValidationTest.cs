@@ -1,5 +1,4 @@
-﻿using System.Diagnostics;
-using FluentAssertions;
+﻿using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
@@ -183,12 +182,11 @@ Blue,FR";
             .ContainSingle(x => x.LogLevel == LogLevel.Error)
             .Which.Message.Should().Be(ImportPlugin.ValidationStageFailed);
 
-        var ret = await client.AwaitResponse(new GetManyRequest<TestDomain.Country>(),
-            o => o.WithTarget(new HostAddress()));
-        var ret2 = await client.AwaitResponse(new GetManyRequest<TestDomain.Address>(),
-            o => o.WithTarget(new HostAddress()));
+        var workspace = client.GetWorkspace();
 
-        ret.Message.Items.Should().HaveCount(0);
+        var ret = await workspace.GetObservable<TestDomain.Country>().FirstAsync();
+        var ret2 = await workspace.GetObservable<TestDomain.Address>().FirstAsync();
+
+        ret.Should().HaveCount(0);
     }
-
 }
