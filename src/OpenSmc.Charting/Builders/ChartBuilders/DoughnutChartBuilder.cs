@@ -2,7 +2,7 @@
 using OpenSmc.Charting.Builders.OptionsBuilders;
 using OpenSmc.Charting.Enums;
 using OpenSmc.Charting.Models;
-using Systemorph.Charting.Models.Segmented;
+using OpenSmc.Charting.Models.Segmented;
 
 namespace OpenSmc.Charting.Builders.ChartBuilders;
 

@@ -1,8 +1,4 @@
-﻿// ReSharper disable once CheckNamespace
-
-using OpenSmc.Charting.Models;
-
-namespace Systemorph.Charting.Models
+﻿namespace OpenSmc.Charting.Models
 {
     public record PolarDataSet : DataSet
     {

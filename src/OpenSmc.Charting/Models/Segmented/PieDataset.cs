@@ -1,7 +1,4 @@
-﻿using System.Collections.Generic;
-
-// ReSharper disable once CheckNamespace
-namespace Systemorph.Charting.Models
+﻿namespace OpenSmc.Charting.Models
 {
     public record PieDataSet : SegmentDataSetBase
     {

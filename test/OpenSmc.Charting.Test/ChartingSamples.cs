@@ -1,7 +1,7 @@
 using OpenSmc.Charting.Builders;
 using OpenSmc.Charting.Builders.DataSetBuilders;
 using OpenSmc.Charting.Enums;
-using Systemorph.Charting.Models;
+using OpenSmc.Charting.Models;
 
 namespace OpenSmc.Charting.Test;
 

@@ -1,7 +1,6 @@
 ﻿using OpenSmc.Charting.Models;
 using OpenSmc.Charting.Models.Bar;
 using OpenSmc.Utils;
-using Systemorph.Charting.Models;
 
 namespace OpenSmc.Charting.Builders.DataSetBuilders;
 
