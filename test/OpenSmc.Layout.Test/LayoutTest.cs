@@ -45,7 +45,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
-        return base.ConfigureClient(configuration).AddData(data => data.FromHub(new HostAddress()));
+        return base.ConfigureClient(configuration)
+            .AddLayout(d => d);
     }
 
     [HubFact]

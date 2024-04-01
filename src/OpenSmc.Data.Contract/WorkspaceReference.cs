@@ -4,19 +4,9 @@ using System.Text.Json.Serialization;
 
 namespace OpenSmc.Data;
 
-public abstract record WorkspaceReference : IObservable<object>
-{
-    public abstract IDisposable Subscribe(IObserver<object> observer);
-}
+public abstract record WorkspaceReference;
 
-public abstract record WorkspaceReference<TReference> : WorkspaceReference
-{
-    [JsonIgnore] public IObservable<TReference> Stream { get; init; }
-
-    public override IDisposable Subscribe(IObserver<object> observer)
-        => Stream.Subscribe((IObserver<TReference>)observer);
-
-}
+public abstract record WorkspaceReference<TReference> : WorkspaceReference;
 
 public record EntityStore
 {

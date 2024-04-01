@@ -47,9 +47,9 @@ public record ChangeStream<TReference> : IDisposable, IObserver<DataChangedEvent
         this.Options = Options;
         this.GetVersion = GetVersion;
 
-        Disposables.Add(Workspace.GetStream(Reference).DistinctUntilChanged().Subscribe(Update));
-
-
+        Disposables.Add(isExternalStream
+            ? Workspace.GetStream(Reference).DistinctUntilChanged().Subscribe(Update)
+            : Workspace.GetStream(Reference).DistinctUntilChanged().Subscribe(Synchronize));
     }
 
     public void Dispose()
