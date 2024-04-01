@@ -23,21 +23,6 @@ public static class WorkspaceExtensions
         return stream.Select(ws => ws.GetData<T>());
     }
 
-    public static WorkspaceReference Observe(this IWorkspace workspace, WorkspaceReference reference)
-        => ObserveImpl(workspace, (dynamic)reference);
-
-    private static WorkspaceReference<TReference> ObserveImpl<TReference>(this IWorkspace workspace, WorkspaceReference<TReference> reference)
-    {
-        return reference with
-        {
-            Stream = workspace.Stream
-                .Select(ws => ws.Reduce(reference))
-                .DistinctUntilChanged()
-                .Replay(1)
-                .RefCount()
-        };
-
-    }
 
     public static IWorkspace GetWorkspace(this IMessageHub messageHub) =>
         messageHub.ServiceProvider.GetRequiredService<IWorkspace>();

@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Messaging.Serialization;
+using OpenSmc.Serialization;
 
 namespace OpenSmc.Messaging;
 
@@ -63,8 +64,15 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         var configurations =
             Configuration.Get<ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>>() ??
             ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>.Empty;
-        JsonSerializerOptions = configurations.Aggregate(new SerializationConfiguration(this), (c,f) => f.Invoke(c)).Options;
+        JsonSerializerOptions = configurations.Aggregate(
+            CreateSerializationConfiguration(), (c,f) => f.Invoke(c)).Options;
 
+    }
+
+    private SerializationConfiguration CreateSerializationConfiguration()
+    {
+        return new SerializationConfiguration(this)
+            .WithOptions(o => o.Converters.Insert(0, new TypedObjectConverter(ServiceProvider)));
     }
 
 

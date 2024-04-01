@@ -1,47 +1,18 @@
 ﻿using System.Collections;
 using System.Reflection;
 using System.Text;
-using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Converters;
 using Newtonsoft.Json.Linq;
 using OpenSmc.Serialization;
 using OpenSmc.Utils;
 
 namespace OpenSmc.Messaging.Serialization;
 
-public class SerializationService : ISerializationService
+public class SerializationService(IServiceProvider serviceProvider) : ISerializationService
 {
-    private readonly IServiceProvider serviceProvider;
-    private readonly JsonSerializer serializer;
+    private readonly JsonSerializer serializer = serviceProvider.GetNewtonsoftSerializer();
     public JsonSerializer Serializer => serializer;
 
-
-
-    public SerializationService(IServiceProvider serviceProvider)
-    {
-        this.serviceProvider = serviceProvider;
-        var contractResolver = new CustomContractResolver();
-        var typeRegistry = serviceProvider.GetRequiredService<ITypeRegistry>();
-        var converters = new List<JsonConverter>
-        {
-            new StringEnumConverter(), 
-            new RawJsonNewtonsoftConverter(),
-            new JsonNodeNewtonsoftConverter(),
-            new ObjectDeserializationConverter(typeRegistry)
-        };
-        serializer = JsonSerializer.Create(new()
-                                           {
-                                               ReferenceLoopHandling = ReferenceLoopHandling.Error,
-                                               // TypeNameHandling = TypeNameHandling.Auto,
-                                               TypeNameHandling = TypeNameHandling.Objects,
-                                               NullValueHandling = NullValueHandling.Ignore,
-                                               ContractResolver = contractResolver,
-                                               MetadataPropertyHandling = MetadataPropertyHandling.ReadAhead,
-                                               Converters = converters,
-                                               SerializationBinder = new SerializationBinder(typeRegistry)
-                                           });
-    }
 
     public string SerializeToString(object obj)
     {

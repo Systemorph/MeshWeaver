@@ -12,20 +12,24 @@ public static class DataPluginExtensions
 {
     public static MessageHubConfiguration AddData(this MessageHubConfiguration config, Func<DataContext, DataContext> dataPluginConfiguration)
     {
-        return config
+        var existingLambdas = config.GetListOfLambdas();
+        var ret = config
             .WithServices(sc => sc.AddScoped<IWorkspace, DataPlugin>())
-            .Set(config.GetListOfLambdas().Add(dataPluginConfiguration))
-            .WithSerialization(options =>
-            {
-                var serializationService = options.Hub.ServiceProvider.GetRequiredService<ISerializationService>();
-                return options.WithOptions(o =>
-                {
-                    o.Converters.Add(new EntityStoreConverter());
-                    o.Converters.Add(new InstancesInCollectionConverter(serializationService));
-                    o.Converters.Add(new SerializationServiceConverter(serializationService));
-                });
-            })
+            .Set(existingLambdas.Add(dataPluginConfiguration))
             .AddPlugin<DataPlugin>(plugin => plugin.WithFactory(() => (DataPlugin)plugin.Hub.ServiceProvider.GetRequiredService<IWorkspace>()));
+
+        if (existingLambdas.Count == 0)
+            ret = ret
+                .WithSerialization(options =>
+                {
+                    var serializationService = options.Hub.ServiceProvider.GetRequiredService<ISerializationService>();
+                    return options.WithOptions(o =>
+                    {
+                        o.Converters.Insert(0, new EntityStoreConverter());
+                        o.Converters.Insert(0, new InstancesInCollectionConverter());
+                    });
+                });
+        return ret;
     }
 
     internal static ImmutableList<Func<DataContext, DataContext>> GetListOfLambdas(this MessageHubConfiguration config)
