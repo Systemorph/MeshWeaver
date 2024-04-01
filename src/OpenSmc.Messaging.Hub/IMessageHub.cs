@@ -1,4 +1,7 @@
-﻿namespace OpenSmc.Messaging;
+﻿using System.Text.Json;
+using OpenSmc.Messaging.Serialization;
+
+namespace OpenSmc.Messaging;
 
 
 public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDisposable
@@ -59,6 +62,7 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
 
     IMessageHub WithDisposeAction(Action<IMessageHub> disposeAction);
     IMessageHub WithDisposeAction(Func<IMessageHub, Task> disposeAction);
+    JsonSerializerOptions JsonSerializerOptions { get; }
 }
 
 

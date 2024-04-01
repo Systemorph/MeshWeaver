@@ -1,7 +1,10 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data;
+using OpenSmc.Data.Serialization;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
@@ -21,6 +24,7 @@ public static class LayoutExtensions
                 .AddWorkspaceReferenceStream<LayoutAreaReference>((ws, a) =>
                     data.Hub.ServiceProvider.GetRequiredService<ILayout>().Render(ws, a))
             )
+            .WithSerialization(options => options.WithOptions(o => o.Converters.Add(new LayoutAreaCollectionConverter())))
             .AddLayoutTypes()
             .Set(config.GetListOfLambdas().Add(layoutDefinition))
 
@@ -47,4 +51,17 @@ public static class LayoutExtensions
         LayoutAreaReference reference)
         => changeItems.Select(i => i.Value.Instances.GetValueOrDefault(reference))
             .Where(x => x != null);
+}
+
+public class LayoutAreaCollectionConverter : JsonConverter<LayoutAreaCollection>
+{
+    public override LayoutAreaCollection Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        throw new NotImplementedException();
+    }
+
+    public override void Write(Utf8JsonWriter writer, LayoutAreaCollection value, JsonSerializerOptions options)
+    {
+        throw new NotImplementedException();
+    }
 }

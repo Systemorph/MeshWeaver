@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using OpenSmc.Data;
+using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 using System.Reflection;

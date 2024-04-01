@@ -24,7 +24,6 @@ public static class ApplicationScopeRegistryExtensions
                 .AddSingleton<IScopeFactory, ScopeFactory>()
                 .AddSingleton(serviceProvider => serviceProvider.GetRequiredService<IScopeFactory>().ForSingleton()
                     .ToScope<IApplicationScope>()))
-            .WithSerialization(rule => rule.WithTransformation<IScope>(TransformScope))
             .WithHostedHub
             (
                 new ApplicationScopeAddress(conf.Address),

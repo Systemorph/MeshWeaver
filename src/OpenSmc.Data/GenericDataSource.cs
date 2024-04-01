@@ -1,9 +1,9 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
-using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
 
@@ -94,7 +94,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
             Workspace, 
             Id, 
             new EntireWorkspace(), 
-            Hub.ServiceProvider.GetRequiredService<ISerializationService>().Options(TypeSources.Values.ToDictionary(x => x.CollectionName)), 
+            Hub.JsonSerializerOptions, 
             () => Hub.Version,
              true);
         return [ret];

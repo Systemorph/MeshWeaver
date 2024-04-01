@@ -1,6 +1,7 @@
 ﻿using OpenSmc.Messaging;
 using System.Collections.Immutable;
 using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Data.Serialization;
 
 namespace OpenSmc.Data;
 
