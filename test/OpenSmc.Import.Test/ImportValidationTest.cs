@@ -157,4 +157,35 @@ FoundationYear,ContractType
         //var log = ret.Message.Items.First();
         //log.Status.Should().Be(ActivityLogStatus.Failed);
     }
+
+    [Fact]
+    public async Task ImportWithCategoryValidationTest()
+    {
+        const string content = 
+@"@@Country
+SystemName,DisplayName
+RU,Russia
+FR,France
+@@Address
+Street,Country
+Red,RU
+Blue,FR";
+
+        var client = GetClient();
+        var importRequest = new ImportRequest(content) { Format = "Test2" };
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
+        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Failed);
+
+        importResponse.Message.Log.Messages.OfType<LogMessage>().Should()
+            .ContainSingle(x => x.LogLevel == LogLevel.Error)
+            .Which.Message.Should().Be(ImportPlugin.ValidationStageFailed);
+
+        var ret = await client.AwaitResponse(new GetManyRequest<TestDomain.Country>(),
+            o => o.WithTarget(new HostAddress()));
+        var ret2 = await client.AwaitResponse(new GetManyRequest<TestDomain.Address>(),
+            o => o.WithTarget(new HostAddress()));
+
+        ret.Message.Items.Should().HaveCount(0);
+    }
+
 }
