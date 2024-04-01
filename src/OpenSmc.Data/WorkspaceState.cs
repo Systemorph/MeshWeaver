@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 using OpenSmc.Serialization;
 
@@ -30,20 +31,20 @@ public record ReduceManager
             LinkedListNode<ReduceStream> node)
             => ReduceImpl(stream, reference, reducer,node);
 
-        ReduceStreams.AddLast(Stream);
+        ReduceStreams.AddFirst(Stream);
         return this;
     }
     public ReduceManager AddWorkspaceReference<TReference>(Func<WorkspaceState, TReference, object> reducer)
         where TReference : WorkspaceReference
     {
         object Lambda(WorkspaceState ws, WorkspaceReference r, LinkedListNode<Reduce> node) => ReduceImpl(ws, r, reducer, node);
-        Reducers.AddLast(Lambda);
+        Reducers.AddFirst(Lambda);
 
         IObservable<object> Stream(IObservable<WorkspaceState> stream, WorkspaceReference reference,
             LinkedListNode<ReduceStream> node)
             => stream.Select(ws => Reduce(ws, reference));
 
-        ReduceStreams.AddLast(Stream);
+        ReduceStreams.AddFirst(Stream);
         return this;
     }
 
@@ -110,7 +111,7 @@ public record WorkspaceState
         var serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
         CollectionsByType = typeSources.Values.Where(x => x.ElementType != null).ToImmutableDictionary(x => x.ElementType, x => x.CollectionName);
         TypeSources = typeSources.Values.ToImmutableDictionary(x => x.CollectionName);
-        Options = serializationService.Options(TypeSources);
+        Options = hub.JsonSerializerOptions;
 
     }
 

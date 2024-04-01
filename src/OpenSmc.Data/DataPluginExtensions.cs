@@ -1,7 +1,10 @@
 ﻿using System.Collections.Immutable;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Persistence;
+using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
+using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
 
@@ -12,6 +15,16 @@ public static class DataPluginExtensions
         return config
             .WithServices(sc => sc.AddScoped<IWorkspace, DataPlugin>())
             .Set(config.GetListOfLambdas().Add(dataPluginConfiguration))
+            .WithSerialization(options =>
+            {
+                var serializationService = options.Hub.ServiceProvider.GetRequiredService<ISerializationService>();
+                return options.WithOptions(o =>
+                {
+                    o.Converters.Add(new EntityStoreConverter());
+                    o.Converters.Add(new InstancesInCollectionConverter(serializationService));
+                    o.Converters.Add(new SerializationServiceConverter(serializationService));
+                });
+            })
             .AddPlugin<DataPlugin>(plugin => plugin.WithFactory(() => (DataPlugin)plugin.Hub.ServiceProvider.GetRequiredService<IWorkspace>()));
     }
 

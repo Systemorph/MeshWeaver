@@ -13,16 +13,14 @@ namespace OpenSmc.Messaging.Serialization;
 public class SerializationService : ISerializationService
 {
     private readonly IServiceProvider serviceProvider;
-    public SerializationConfiguration Configuration { get; }
     private readonly JsonSerializer serializer;
     public JsonSerializer Serializer => serializer;
 
 
 
-    public SerializationService(IServiceProvider serviceProvider, SerializationConfiguration configuration)
+    public SerializationService(IServiceProvider serviceProvider)
     {
         this.serviceProvider = serviceProvider;
-        Configuration = configuration;
         var contractResolver = new CustomContractResolver();
         var typeRegistry = serviceProvider.GetRequiredService<ITypeRegistry>();
         var converters = new List<JsonConverter>
@@ -32,7 +30,6 @@ public class SerializationService : ISerializationService
             new JsonNodeNewtonsoftConverter(),
             new ObjectDeserializationConverter(typeRegistry)
         };
-        converters.AddRange(configuration.TypeFactories.Select(t => new FactoryConverter(t)));
         serializer = JsonSerializer.Create(new()
                                            {
                                                ReferenceLoopHandling = ReferenceLoopHandling.Error,
@@ -78,13 +75,6 @@ public class SerializationService : ISerializationService
     internal void SerializeTraverse(SerializationContext context)
     {
         var originalValue = context.OriginalValue;
-
-        if (originalValue != null)
-        {
-            originalValue = Configuration.Transformations.Aggregate(originalValue, (ov, t) => t.Invoke(context, ov));
-            foreach (var mutation in Configuration.Mutations)
-                mutation.Invoke(context, originalValue);
-        }
 
 
         var jToken = context.ResultToken;

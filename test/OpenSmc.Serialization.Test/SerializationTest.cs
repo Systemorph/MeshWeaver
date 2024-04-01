@@ -51,8 +51,7 @@ public class SerializationTest : TestBase
 
     private static MessageHubConfiguration ConfigureClient(MessageHubConfiguration c)
     {
-        return c
-            .WithSerialization(conf => conf.WithMutation<MyEvent> ( (context, _) => context.SetProperty("NewProp", "New")));
+        return c; 
     }
 
     [Fact]

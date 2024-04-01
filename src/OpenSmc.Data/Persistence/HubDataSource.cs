@@ -2,6 +2,7 @@
 using System.Text.Json.Nodes;
 using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 using OpenSmc.Serialization;
 
@@ -53,7 +54,7 @@ public record PartitionedHubDataSource(object Id, IMessageHub Hub) : HubDataSour
 public abstract record HubDataSourceBase<TDataSource> : DataSource<TDataSource> where TDataSource : HubDataSourceBase<TDataSource>
 {
     private readonly ITypeRegistry typeRegistry;
-    protected JsonSerializerOptions Options;
+    protected JsonSerializerOptions Options => Hub.JsonSerializerOptions;
     private readonly ISerializationService serializationService;
 
     protected HubDataSourceBase(object Id, IMessageHub Hub) : base(Id, Hub)
@@ -66,7 +67,6 @@ public abstract record HubDataSourceBase<TDataSource> : DataSource<TDataSource> 
 
     protected override WorkspaceReference<EntityStore> GetReference()
     {
-        Options = serializationService.Options(TypeSources.Values.ToDictionary(x => x.CollectionName));
         typeRegistry.WithTypes(TypeSources.Values.Select(t => t.ElementType));
         typeRegistry.WithType<JsonPatch>();
         return SyncAll
@@ -108,7 +108,7 @@ public record HubDataSource : HubDataSourceBase<HubDataSource>
 
     protected IMessageDelivery Initialize(IMessageDelivery<DataChangedEvent> response, TaskCompletionSource<EntityStore> tcs)
     {
-        tcs.SetResult(JsonNode.Parse(response.Message.Change.Content).Deserialize<EntityStore>(Options));
+        tcs.SetResult(JsonNode.Parse(((RawJson)response.Message.Change).Content).Deserialize<EntityStore>(Options));
 
         return response.Processed();
     }

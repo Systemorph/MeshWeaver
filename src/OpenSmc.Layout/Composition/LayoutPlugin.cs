@@ -67,25 +67,20 @@ public class LayoutPlugin(IMessageHub hub)
         layoutHub.Schedule(ct =>
         {
             ct.ThrowIfCancellationRequested();
-            var view = viewDefinition.ViewDefinition.Invoke(workspace.Stream, reference);
-            var control = layoutDefinition.ControlsManager.Get(view);
-            Areas = Areas.SetItem(reference, control);
-            Commit(reference);
+            var stream = viewDefinition.ViewDefinition.Invoke(workspace.Stream, reference);
+            stream.Select(view => 
+                    new LayoutAreaCollection(
+                        reference, 
+                        Areas = Areas.SetItem(reference, layoutDefinition.ControlsManager.Get(view)).Where(a => a.Key.Area.StartsWith(reference.Area)).ToImmutableDictionary()))
+                .DistinctUntilChanged()
+                .Subscribe(areaSubject);
             return Task.CompletedTask;
         });
 
         return new SpinnerControl();
     }
 
-    private void Commit(LayoutAreaReference reference)
-    {
-        areaSubject.OnNext(LayoutAreaCollection(reference));
-    }
 
-    private LayoutAreaCollection LayoutAreaCollection(LayoutAreaReference reference)
-    {
-        return new(reference, Areas.Where(a => a.Key.Area.StartsWith(reference.Area)).ToImmutableDictionary());
-    }
 
 
     private LayoutAreaReference RenderArea(LayoutAreaReference reference, ViewElement viewElement)

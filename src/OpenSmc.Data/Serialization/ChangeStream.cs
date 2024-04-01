@@ -5,7 +5,7 @@ using System.Text.Json.Nodes;
 using Json.Patch;
 using OpenSmc.Serialization;
 
-namespace OpenSmc.Data;
+namespace OpenSmc.Data.Serialization;
 
 public record ChangeItem<TReference>(object Address, WorkspaceReference Reference, TReference Value, object ChangedBy);
 
@@ -33,10 +33,10 @@ public record ChangeStream<TReference> : IDisposable, IObserver<DataChangedEvent
 
     public readonly List<IDisposable> Disposables = new();
 
-    public ChangeStream(IWorkspace Workspace, 
-        object Address, 
-        WorkspaceReference<TReference> Reference, 
-        JsonSerializerOptions Options, 
+    public ChangeStream(IWorkspace Workspace,
+        object Address,
+        WorkspaceReference<TReference> Reference,
+        JsonSerializerOptions Options,
         Func<long> GetVersion,
         bool isExternalStream)
     {
@@ -47,10 +47,9 @@ public record ChangeStream<TReference> : IDisposable, IObserver<DataChangedEvent
         this.Options = Options;
         this.GetVersion = GetVersion;
 
-        Disposables.Add(Workspace.ChangeStream.Select(ws => ws.Reduce(Reference)).DistinctUntilChanged().Subscribe(Update));
+        Disposables.Add(Workspace.GetStream(Reference).DistinctUntilChanged().Subscribe(Update));
 
 
-        Disposables.Add(Workspace.Get(Reference).Subscribe(ws => Synchronize(ws)));
     }
 
     public void Dispose()
@@ -76,9 +75,9 @@ public record ChangeStream<TReference> : IDisposable, IObserver<DataChangedEvent
     {
         var newStoreSerialized = request.ChangeType switch
         {
-            ChangeType.Patch => LastSynchronized = JsonSerializer.Deserialize<JsonPatch>(request.Change.Content).Apply(LastSynchronized)
+            ChangeType.Patch => LastSynchronized = JsonSerializer.Deserialize<JsonPatch>(((RawJson)request.Change).Content).Apply(LastSynchronized)
                 .Result,
-            ChangeType.Full => LastSynchronized = JsonNode.Parse(request.Change.Content),
+            ChangeType.Full => LastSynchronized = JsonNode.Parse(((RawJson)request.Change).Content),
             _ => throw new ArgumentOutOfRangeException()
         };
 
@@ -88,7 +87,7 @@ public record ChangeStream<TReference> : IDisposable, IObserver<DataChangedEvent
 
     public ChangeStream<TReference> Initialize(TReference initial)
     {
-        if(initial == null)
+        if (initial == null)
             throw new ArgumentNullException(nameof(initial));
         Store.OnNext(new(Address, Reference, initial, null));
         LastSynchronized = JsonSerializer.SerializeToNode(initial, Options);
@@ -103,9 +102,9 @@ public record ChangeStream<TReference> : IDisposable, IObserver<DataChangedEvent
 
         var dataChanged = LastSynchronized == null
             ? GetFullDataChange(node)
-            : GetPatch( node);
+            : GetPatch(node);
 
-        if(dataChanged != null)
+        if (dataChanged != null)
             dataChangedStream.OnNext(dataChanged);
         LastSynchronized = node;
 
@@ -116,7 +115,7 @@ public record ChangeStream<TReference> : IDisposable, IObserver<DataChangedEvent
         var jsonPatch = LastSynchronized.CreatePatch(node);
         if (!jsonPatch.Operations.Any())
             return null;
-        return new DataChangedEvent(Address, Reference, GetVersion(), new(JsonSerializer.Serialize(jsonPatch)), ChangeType.Patch, Address);
+        return new DataChangedEvent(Address, Reference, GetVersion(), new RawJson(JsonSerializer.Serialize(jsonPatch)), ChangeType.Patch, Address);
     }
 
     private DataChangedEvent GetFullDataChange(JsonNode node)
@@ -144,7 +143,7 @@ public record ChangeStream<TReference> : IDisposable, IObserver<DataChangedEvent
     public void OnNext(DataChangedEvent value)
         => Synchronize(value);
 
-    
+
 
 
 

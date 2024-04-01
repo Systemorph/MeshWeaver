@@ -26,17 +26,8 @@ public record MessageHubConfiguration
     {
         Address = address;
         ParentServiceProvider = parentServiceProvider;
-        Properties = InitializeProperties();
     }
 
-    private ImmutableDictionary<Type, object> InitializeProperties()
-    {
-        return ImmutableDictionary<Type, object>.Empty
-            .Add(typeof(SerializationConfiguration), ParentServiceProvider
-                .GetService<ISerializationService>()?.Configuration
-            ?? new()
-            );
-    }
 
     internal Func<IServiceCollection, IServiceCollection> Services { get; init; } = x => x;
 
@@ -114,7 +105,7 @@ public record MessageHubConfiguration
             sp.GetRequiredService<ILogger<MessageService>>()
         )));
         services.Replace(ServiceDescriptor.Singleton(sp => new ParentMessageHub(sp.GetRequiredService<IMessageHub>())));
-        services.Replace(ServiceDescriptor.Singleton<ISerializationService>(sp => new SerializationService(sp, Get<SerializationConfiguration>())));
+        services.Replace(ServiceDescriptor.Singleton<ISerializationService>(sp => new SerializationService(sp)));
         Services.Invoke(services);
         return services;
     }

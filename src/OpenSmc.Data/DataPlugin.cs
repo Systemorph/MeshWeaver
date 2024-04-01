@@ -5,6 +5,7 @@ using System.Reactive.Subjects;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 using OpenSmc.Serialization;
 
@@ -114,9 +115,8 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
     private void Initialize(DataContext dataContext)
     {
 
-        var serializationService = Hub.ServiceProvider.GetRequiredService<ISerializationService>();
         var typeSources = new Dictionary<string, ITypeSource>();
-        options = serializationService.Options(typeSources);
+        options = Hub.JsonSerializerOptions;
 
         logger.LogDebug($"Starting data plugin at address {Address}");
         var dataContextStreams = dataContext.Initialize().ToArray();
@@ -205,7 +205,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
         State.Rollback();
     }
 
-    public IObservable<TReference> Get<TReference>(WorkspaceReference<TReference> reference)
+    public IObservable<TReference> GetStream<TReference>(WorkspaceReference<TReference> reference)
     {
         return ReduceManager.ReduceStream(Stream, reference);
     }

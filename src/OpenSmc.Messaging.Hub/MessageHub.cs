@@ -1,6 +1,9 @@
 ﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using OpenSmc.Messaging.Serialization;
 
 namespace OpenSmc.Messaging;
 
@@ -44,7 +47,6 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         var forwardConfig =
             (configuration.ForwardConfigurationBuilder ?? (x => x)).Invoke(new RouteConfiguration(this));
 
-        //AddPlugin(new SubscribersPlugin(this));
         AddPlugin(new RoutePlugin(this, forwardConfig, parentHub));
 
 
@@ -57,6 +59,11 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
 
         Schedule(StartAsync);
         logger.LogInformation("Message hub {address} initialized", Address);
+
+        var configurations =
+            Configuration.Get<ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>>() ??
+            ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>.Empty;
+        JsonSerializerOptions = configurations.Aggregate(new SerializationConfiguration(this), (c,f) => f.Invoke(c)).Options;
 
     }
 
@@ -234,6 +241,8 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         disposeActions.Add(disposeAction);
         return this;
     }
+
+    public JsonSerializerOptions JsonSerializerOptions { get; }
 
     private bool IsDisposing => disposingTaskCompletionSource != null;
 

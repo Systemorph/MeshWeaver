@@ -1,5 +1,6 @@
 ﻿using System.Reflection;
 using OpenSmc.Data;
+using OpenSmc.Data.Serialization;
 
 namespace OpenSmc.TestDomain
 {
@@ -54,7 +55,7 @@ namespace OpenSmc.TestDomain
             throw new NotImplementedException();
         }
 
-        public IObservable<TReference> Get<TReference>(WorkspaceReference<TReference> reference)
+        public IObservable<TReference> GetStream<TReference>(WorkspaceReference<TReference> reference)
         {
             throw new NotImplementedException();
         }
