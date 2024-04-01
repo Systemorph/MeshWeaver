@@ -7,6 +7,5 @@
 
 	<ItemGroup>
 	  <ProjectReference Include="..\..\src\OpenSmc.Charting\OpenSmc.Charting.csproj" />
-	  <ProjectReference Include="..\OpenSmc.Fixture\OpenSmc.Fixture.csproj" />
 	</ItemGroup>
 </Project>
