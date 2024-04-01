@@ -8,7 +8,7 @@ import { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
 import { distinctUntilKeyChanged, from, Subscription, tap } from "rxjs";
 import { syncLayoutArea } from "./syncLayoutArea";
 import { withPreviousValue } from "./withPreviousValue";
-import { deserialize } from "./deserialize";
+import { deserialize } from "../contract/deserialize";
 import '../contract';
 
 export type RootState = {
