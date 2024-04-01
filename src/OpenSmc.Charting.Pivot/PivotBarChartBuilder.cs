@@ -6,7 +6,6 @@ using OpenSmc.Charting.Models;
 using OpenSmc.Charting.Models.Options.Scales;
 using OpenSmc.Pivot.Builder;
 using OpenSmc.Pivot.Models;
-using Systemorph.Charting.Models.Options.Scales;
 
 namespace OpenSmc.Charting.Pivot;
 

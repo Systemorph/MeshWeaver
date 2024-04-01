@@ -1,6 +1,4 @@
-﻿using Systemorph.Charting.Models.Options.Scales;
-
-namespace OpenSmc.Charting.Models.Options.Scales
+﻿namespace OpenSmc.Charting.Models.Options.Scales
 {
     public record TimeScale : CartesianScale
     {
