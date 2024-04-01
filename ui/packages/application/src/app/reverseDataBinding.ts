@@ -9,9 +9,9 @@ import { Binding, isBinding } from "../contract/Binding";
 import { pickBy } from "lodash-es";
 import { selectAll } from "@open-smc/data/src/selectAll";
 import { effect } from "./effect";
-import { walk } from 'walkjs';
 import { selectByPath } from "@open-smc/data/src/selectByPath";
 import { JSONPath } from "jsonpath-plus";
+import { extractReferences } from "@open-smc/data/src/extractReferences";
 
 export const reverseDataBinding = (
     ui$: Observable<RootState>,
@@ -106,32 +106,6 @@ const dataPatch = (dataContext: unknown) =>
                             .pipe(map(referenceToJsonPatchAction(reference)))
                 )
         );
-
-const extractReferences = (dataContext: unknown) => {
-    const references: {
-        path: string,
-        reference: WorkspaceReference
-    }[] = [];
-
-    walk(
-        dataContext,
-        {
-            onVisit: {
-                filters: node => node.val instanceof WorkspaceReference,
-                callback:
-                    node =>
-                        references.push(
-                            {
-                                path: node.getPath(),
-                                reference: node.val
-                            }
-                        )
-            }
-        }
-    );
-
-    return references;
-}
 
 const referenceToJsonPatchAction = (reference: WorkspaceReference) =>
     (value: unknown) =>
