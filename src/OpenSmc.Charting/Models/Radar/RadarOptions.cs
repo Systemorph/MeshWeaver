@@ -1,8 +1,6 @@
 ﻿using OpenSmc.Charting.Models.Options.Scales;
-using Systemorph.Charting.Models.Options.Scales;
 
-// ReSharper disable once CheckNamespace
-namespace Systemorph.Charting.Models
+namespace OpenSmc.Charting.Models
 {
     public record RadarOptions : OpenSmc.Charting.Models.Options.Options
     {

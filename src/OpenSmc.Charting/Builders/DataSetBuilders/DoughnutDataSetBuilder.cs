@@ -1,4 +1,4 @@
-﻿using Systemorph.Charting.Models.Segmented;
+﻿using OpenSmc.Charting.Models.Segmented;
 
 namespace OpenSmc.Charting.Builders.DataSetBuilders;
 

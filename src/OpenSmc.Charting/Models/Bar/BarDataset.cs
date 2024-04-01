@@ -1,12 +1,9 @@
-﻿using System.Collections.Generic;
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 using OpenSmc.Charting.Enums;
-using OpenSmc.Charting.Models;
 using OpenSmc.Charting.Models.Options.Scales;
-using Systemorph.Charting.Models.Options.Scales;
 
 // ReSharper disable once CheckNamespace
-namespace Systemorph.Charting.Models
+namespace OpenSmc.Charting.Models
 {
     /// <summary>
     /// https://www.chartjs.org/docs/latest/charts/bar.html
@@ -131,7 +128,7 @@ namespace Systemorph.Charting.Models
     public record BarDataSet : BarDataSetBase;
 
     public record HorizontalBarDataSet : BarDataSet;
-    
+
     public record HorizontalFloatingBarDataSet : HorizontalBarDataSet;
 
     public record FloatingBarDataSet : BarDataSetBase;

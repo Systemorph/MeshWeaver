@@ -1,11 +1,8 @@
-﻿using System.Collections.Generic;
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 using OpenSmc.Charting.Enums;
 using OpenSmc.Charting.Helpers;
-using OpenSmc.Charting.Models;
 
-// ReSharper disable once CheckNamespace
-namespace Systemorph.Charting.Models
+namespace OpenSmc.Charting.Models
 {
     [SuppressMessage("ReSharper", "InconsistentNaming")]
     public abstract record LineDataSetBase : DataSet, IDataSetWithOrder, IDataSetWithPointRadiusAndRotation, IDataSetWithTension, IDataSetWithPointStyle, IDataSetWithFill, IDataSetWithStack

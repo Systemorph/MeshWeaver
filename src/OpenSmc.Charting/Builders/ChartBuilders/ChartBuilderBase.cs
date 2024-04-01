@@ -4,8 +4,7 @@ using OpenSmc.Charting.Enums;
 using OpenSmc.Charting.Helpers;
 using OpenSmc.Charting.Models;
 using OpenSmc.Charting.Models.Options;
-using Systemorph.Charting.Models;
-using Systemorph.Charting.Models.Segmented;
+using OpenSmc.Charting.Models.Segmented;
 
 namespace OpenSmc.Charting.Builders.ChartBuilders;
 
