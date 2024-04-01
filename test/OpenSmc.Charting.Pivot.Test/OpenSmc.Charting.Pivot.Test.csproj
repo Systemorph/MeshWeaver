@@ -1,17 +1,14 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-        
 
   <ItemGroup>
     <Folder Include="Json\" />
   </ItemGroup>
 	
-    <ItemGroup>
-		<PackageReference Include="Verify.Xunit" />
-	</ItemGroup>        
+  <ItemGroup>
+    <PackageReference Include="Verify.Xunit" />
+  </ItemGroup>        
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\OpenSmc.Charting\OpenSmc.Charting.csproj" />
-    <ProjectReference Include="..\..\src\OpenSmc.Pivot\OpenSmc.Pivot.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Charting.Pivot\OpenSmc.Charting.Pivot.csproj" />
     <ProjectReference Include="..\OpenSmc.Fixture\OpenSmc.Fixture.csproj" />
     <ProjectReference Include="..\OpenSmc.TestDomain\OpenSmc.TestDomain.csproj" />
