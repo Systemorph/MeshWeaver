@@ -1,26 +1,39 @@
 import { expect, test, describe, jest } from "@jest/globals";
-import { createWorkspace, applyPatch } from "./workspace";
+import { configureStore } from "@reduxjs/toolkit";
+import { jsonPatch, workspaceReducer } from "./workspaceReducer";
+import { JsonPatch } from "./data.contract";
 
 describe("workspace", () => {
     test("subscribe and patch", () => {
-        const workspace = createWorkspace({
-            users: [
-                {
-                    name: "foo"
+        const workspace = configureStore(
+            {
+                reducer: workspaceReducer,
+                preloadedState: {
+                    users: [
+                        {
+                            name: "foo"
+                        }
+                    ]
                 }
-            ]
-        });
+            }
+        );
 
         const listener = jest.fn();
 
         workspace.subscribe(listener);
 
         workspace.dispatch(
-            applyPatch({
-                op: "replace",
-                path: ["users", 0, "name"],
-                value: "bar"
-            })
+            jsonPatch(
+                new JsonPatch(
+                    [
+                        {
+                            op: "replace",
+                            path: "users/0/name",
+                            value: "bar"
+                        }
+                    ]
+                )
+            )
         );
 
         expect(listener).toHaveBeenCalledTimes(1);

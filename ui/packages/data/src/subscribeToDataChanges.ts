@@ -8,7 +8,7 @@ import {
     SubscribeDataRequest,
     UnsubscribeDataRequest
 } from "./data.contract";
-import { initState, jsonPatch } from "./workspace";
+import { initState, jsonPatch } from "./workspaceReducer";
 import { messageOfType } from "@open-smc/message-hub/src/operators/messageOfType";
 import { filter } from "rxjs";
 

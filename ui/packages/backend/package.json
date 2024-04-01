@@ -1,15 +1,12 @@
 {
-  "name": "@open-smc/data",
+  "name": "@open-smc/backend",
   "version": "0.0.0",
   "dependencies": {
     "@open-smc/serialization": "0.0.0",
     "@reduxjs/toolkit": "^2.0.1",
     "immer": "10.0.3",
-    "uuid": "^9.0.1",
-    "lodash-es": "^4.17.21",
-    "jsonpath-plus": "^8.1.0",
-    "walkjs": "^6.0.1",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "lodash-es": "^4.17.21"
   },
   "devDependencies": {
     "@jest/globals": "^29.6.1",
