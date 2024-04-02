@@ -1,7 +1,6 @@
 import { configureStore } from "@reduxjs/toolkit";
 import { workspaceReducer } from "./workspaceReducer";
-import { from, map } from "rxjs";
-import { deserialize } from "@open-smc/serialization/src/deserialize";
+import { from } from "rxjs";
 import { serializeMiddleware } from "./serializeMiddleware";
 
 export const dataStore =
@@ -11,9 +10,9 @@ export const dataStore =
             name: "data"
         },
         middleware: getDefaultMiddleware =>
-            getDefaultMiddleware().concat(serializeMiddleware),
+            getDefaultMiddleware()
+                .prepend(serializeMiddleware),
     });
 
 export const data$ =
-    from(dataStore)
-        .pipe(map(deserialize));
+    from(dataStore);
