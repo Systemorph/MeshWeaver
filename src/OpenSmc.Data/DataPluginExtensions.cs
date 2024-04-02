@@ -16,6 +16,7 @@ public static class DataPluginExtensions
         var ret = config
             .WithServices(sc => sc.AddScoped<IWorkspace, DataPlugin>())
             .Set(existingLambdas.Add(dataPluginConfiguration))
+            .WithTypes(typeof(EntityStore), typeof(InstanceCollection), typeof(EntityReference), typeof(CollectionReference), typeof(CollectionsReference), typeof(EntireWorkspace), typeof(JsonPathReference))
             .AddPlugin<DataPlugin>(plugin => plugin.WithFactory(() => (DataPlugin)plugin.Hub.ServiceProvider.GetRequiredService<IWorkspace>()));
 
         return ret;

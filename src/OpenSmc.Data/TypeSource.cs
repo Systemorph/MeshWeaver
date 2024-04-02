@@ -1,8 +1,10 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
+using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
 
@@ -11,12 +13,13 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
 {
     private readonly IMessageHub hub;
 
-    protected TypeSource(IMessageHub hub, Type ElementType, object DataSource, string CollectionName)
+    protected TypeSource(IMessageHub hub, Type ElementType, object DataSource)
     {
         this.hub = hub;
         this.ElementType = ElementType;
         this.DataSource = DataSource;
-        this.CollectionName = CollectionName;
+        var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>().WithType(ElementType);
+        CollectionName = typeRegistry.TryGetTypeName(ElementType, out var typeName) ? typeName : ElementType.FullName;
         Key = GetKeyFunction(ElementType);
     }
 

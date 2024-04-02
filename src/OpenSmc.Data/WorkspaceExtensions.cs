@@ -7,7 +7,7 @@ namespace OpenSmc.Data;
 public static class WorkspaceExtensions
 {
     public static IReadOnlyCollection<T> GetData<T>(this WorkspaceState state)
-        => state?.Reduce(new CollectionReference(typeof(T).FullName))?.Instances.Values.Cast<T>().ToArray();
+        => state?.Reduce(new CollectionReference(state.GetCollectionName(typeof(T))))?.Instances.Values.Cast<T>().ToArray();
     public static IReadOnlyCollection<T> GetData<T>(this IWorkspace workspace)
         => workspace.State.GetData<T>();
     public static T GetData<T>(this WorkspaceState state, object id)

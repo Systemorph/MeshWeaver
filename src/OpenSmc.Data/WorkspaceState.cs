@@ -86,7 +86,6 @@ internal delegate IObservable<object> ReduceStream(IObservable<WorkspaceState> s
 public record WorkspaceState
 {
     private readonly IMessageHub hub;
-
     private readonly ReduceManager reduceManager;
     //private readonly ISerializationService serializationService;
     private ImmutableDictionary<Type, string> CollectionsByType { get; init; }
@@ -103,6 +102,8 @@ public record WorkspaceState
         this.hub = hub;
         this.Store = Store;
     }
+
+    public string GetCollectionName(Type type) => CollectionsByType.GetValueOrDefault(type);
 
     private WorkspaceState(IMessageHub hub, IReadOnlyDictionary<string, ITypeSource> typeSources, ReduceManager reduceManager1)
     {
