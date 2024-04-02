@@ -1,16 +1,37 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Reflection;
+using Microsoft.DotNet.Interactive.Formatting;
 using OpenSmc.Layout.DataBinding;
 using OpenSmc.TypeRelevance;
 using OpenSmc.Utils;
 
 namespace OpenSmc.Layout;
 
-public record UiControlsManager() 
+public record UiControlsManager
 {
     private readonly SortByTypeRelevanceRegistry<Func<object, UiControl>> rules = new ();
     private Func<object, UiControl> fallbackRule;
 
+    public UiControlsManager()
+    {
+        RegisterFallback(o =>
+        {
+            var mimeType = Formatter.GetPreferredMimeTypesFor(o?.GetType()).FirstOrDefault();
+            return Controls.HtmlView(o.ToDisplayString(mimeType));
+        });
+
+        Register(typeof(Exception), o => Controls.Exception((Exception)o));
+
+
+        Register(typeof(Nullable<>), instance =>
+        {
+            // HACK V10: in case of nullable type has null value, we still have to show proper control, not html control (2023-08-31, Andrei Sirotenko)
+            return instance == null
+                ? Get(null)
+                : Get(instance, Nullable.GetUnderlyingType(instance.GetType()));
+        });
+
+    }
     public void Register<T>(Func<T, UiControl> factory)
     {
         Register(typeof(T), instance => factory((T)instance));

@@ -1,5 +1,4 @@
-﻿using System.Collections.Immutable;
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data;
@@ -18,7 +17,7 @@ public class LayoutPlugin(IMessageHub hub)
     : MessageHubPlugin(hub), 
     ILayout
 {
-    private ImmutableDictionary<LayoutAreaReference, UiControl> Areas { get; set; } = ImmutableDictionary<LayoutAreaReference, UiControl>.Empty;
+    //private ImmutableDictionary<string, UiControl> Areas { get; set; } = ImmutableDictionary<string, UiControl>.Empty;
 
     private readonly LayoutDefinition layoutDefinition =
         hub.Configuration.GetListOfLambdas().Aggregate(new LayoutDefinition(hub), (x, y) => y.Invoke(x));
@@ -35,64 +34,55 @@ public class LayoutPlugin(IMessageHub hub)
             return;
         var control = layoutDefinition.InitialState;
         if(control != null)
-            RenderArea(new(string.Empty), control);
+            RenderArea(new LayoutAreaCollection(new(string.Empty)), string.Empty, control);
 
         foreach (var initialization in layoutDefinition.Initializations)
             await initialization.Invoke(cancellationToken);
     }
 
-    private LayoutAreaReference RenderArea(IObservable<WorkspaceState> state, LayoutAreaReference reference)
+    private void RenderArea(IObservable<WorkspaceState> state, LayoutAreaReference reference)
     {
-        return RenderArea(reference, layoutDefinition.GetViewElement(reference));
+        var ret = new LayoutAreaCollection(reference);
+        areaSubject.OnNext(RenderArea(ret, reference.Area, layoutDefinition.GetViewElement(reference)));
     }
 
 
-    private UiControl RenderArea(LayoutAreaReference reference, UiControl control)
+    private LayoutAreaCollection RenderArea(LayoutAreaCollection collection, string area, UiControl control)
     {
         if (control == null)
             return null;
 
         if (control is LayoutStackControl stack)
-            control = stack with
-            {
-                Areas = stack.ViewElements.Select(ve => RenderArea(reference with {Area = $"{reference.Area}/{ve.Reference.Area}"}, ve)).ToArray()
-            };
-
-        Areas = Areas.SetItem(reference, control);
-        return control;
+            collection = stack.ViewElements.Aggregate(collection, (c, ve) => RenderArea(c, $"{area}/{ve.Area}", ve));
+        return collection with{Areas = collection.Areas.SetItem(area, control)};
     }
 
-    private UiControl RenderArea(LayoutAreaReference reference, ViewElementWithViewDefinition viewDefinition)
+    private LayoutAreaCollection RenderArea(LayoutAreaCollection collection, string area, ViewElementWithViewDefinition viewDefinition)
     {
+        var ret = collection with { Areas = collection.Areas.SetItem(area, new SpinnerControl()) };
         layoutHub.Schedule(ct =>
         {
             ct.ThrowIfCancellationRequested();
-            var stream = viewDefinition.ViewDefinition.Invoke(workspace.Stream, reference);
-            stream.Select(view => 
-                    new LayoutAreaCollection(
-                        reference, 
-                        Areas = Areas.SetItem(reference, layoutDefinition.ControlsManager.Get(view)).Where(a => a.Key.Area.StartsWith(reference.Area)).ToImmutableDictionary()))
+            var stream = viewDefinition.ViewDefinition.Invoke(workspace.Stream, collection.Reference with {Area = area});
+            stream.Select(view => RenderArea(collection, area, view))
                 .DistinctUntilChanged()
                 .Subscribe(areaSubject);
             return Task.CompletedTask;
         });
-
-        return new SpinnerControl();
+        return ret;
     }
 
 
+    private LayoutAreaCollection RenderArea(LayoutAreaCollection collection, string area, object view)
+        => RenderArea(collection, area, layoutDefinition.ControlsManager.Get(view));
 
-
-    private LayoutAreaReference RenderArea(LayoutAreaReference reference, ViewElement viewElement)
-    {
-        Areas = Areas.SetItem(reference, viewElement switch
+    private LayoutAreaCollection RenderArea(LayoutAreaCollection collection, string area, ViewElement viewElement)
+        => viewElement switch
         {
-            ViewElementWithView view => RenderArea(reference, layoutDefinition.ControlsManager.Get(view.View)),
-            ViewElementWithViewDefinition viewDefinition => RenderArea(reference, viewDefinition),
+            ViewElementWithView view => RenderArea(collection, area, layoutDefinition.ControlsManager.Get(view.View)),
+            ViewElementWithViewDefinition viewDefinition => RenderArea(collection, area, viewDefinition),
             _ => throw new NotSupportedException($"Unknown type: {viewElement.GetType().FullName}")
-        });
-        return reference;
-    }
+        };
 
 
     //private UiControl GetControl(LayoutAreaReference request)
@@ -104,16 +94,11 @@ public class LayoutPlugin(IMessageHub hub)
     //    return control;
     //}
 
-    private void DisposeArea(string area)
-    {
-        Areas = Areas.RemoveRange(Areas.Keys.Where(a => a.Area.StartsWith(area)));
-    }
 
     public IObservable<LayoutAreaCollection> Render(IObservable<WorkspaceState> state, LayoutAreaReference reference)
     {
-        DisposeArea(reference.Area);
         RenderArea(state, reference);
-        return areaSubject.Where(a => a.Reference.Equals(reference));
+        return areaSubject;
     }
 
 

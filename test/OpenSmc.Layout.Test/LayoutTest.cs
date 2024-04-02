@@ -14,15 +14,17 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 {
     [Inject] private ILogger<LayoutTest> logger;
 
-    private static readonly Dictionary<LayoutAreaReference, UiControl> TestAreas
+
+    private const string View1 = nameof(View1);
+    private static readonly Dictionary<string, UiControl> TestAreas
         = new()
         {
-            { new LayoutAreaReference("/"), (UiControl)Controls.Stack().WithView("Hello", "Hello").WithView("World", "World") },
+            { View1, Controls.Stack().WithView("Hello", "Hello").WithView("World", "World") },
         };
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
-                .WithRoutes(r => r.RouteAddress<ClientAddress>((a, d) => d.Package()))
+                .WithRoutes(r => r.RouteAddress<ClientAddress>((a, d) => d.Package(r.Hub.JsonSerializerOptions)))
                 .AddData(data => data
                     .FromConfigurableDataSource("Local",
                         ds => ds
@@ -53,10 +55,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task BasicArea()
     {
         var workspace = GetClient().GetWorkspace();
-        var reference = new LayoutAreaReference("/");
+        var reference = new LayoutAreaReference(View1);
         var stream = workspace.GetRemoteStream(new HostAddress(), reference);
 
-        var control = await stream.GetControl(reference);
+        var control = await stream.GetControl(reference).FirstAsync();
         var areas = control.Should().BeOfType<LayoutStackControl>()
             .Which
             .Areas.Should().HaveCount(2)

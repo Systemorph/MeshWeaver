@@ -1,5 +1,5 @@
 ﻿using System.Reflection;
-using System.Runtime.Serialization;
+using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using OpenSmc.Serialization;
@@ -27,15 +27,22 @@ public class SerializationContext : ISerializationContext
         this.serializer = serializer;
         ServiceProvider = serviceProvider;
         OriginalValue = originalValue;
-        this.resultToken = resultToken ?? (originalValue != null ? JToken.FromObject(originalValue, serializer) : null);
+        typeRegistry = ServiceProvider.GetRequiredService<ITypeRegistry>();
+        this.resultToken = resultToken ?? (originalValue != null ? FromObject(originalValue) : null);
         ParentProperty = parentProperty;
         Parent = parent;
         Depth = depth + 1;
-
-        if (Depth > MaxDepth)
-            throw new SerializationException($"Depth of serialization exceeds {MaxDepth}");
     }
 
+    private JToken FromObject(object originalValue)
+    {
+        var ret = JToken.FromObject(originalValue, serializer);
+        if(typeRegistry.TryGetTypeName(originalValue.GetType(), out var typeName))
+            ((JObject)ret)["$type"] = typeName;
+        return ret;
+    }
+
+    private readonly ITypeRegistry typeRegistry;
     public IServiceProvider ServiceProvider { get; }
     public object OriginalValue { get; }
 

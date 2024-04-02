@@ -1,6 +1,7 @@
 ﻿using System.Collections;
 using System.Reflection;
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using OpenSmc.Serialization;
@@ -12,7 +13,6 @@ public class SerializationService(IServiceProvider serviceProvider) : ISerializa
 {
     private readonly JsonSerializer serializer = serviceProvider.GetNewtonsoftSerializer();
     public JsonSerializer Serializer => serializer;
-
 
     public string SerializeToString(object obj)
     {

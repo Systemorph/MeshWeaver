@@ -1,6 +1,5 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json.Nodes;
-using System.Text.Json.Serialization;
 
 namespace OpenSmc.Data;
 
@@ -8,18 +7,10 @@ public abstract record WorkspaceReference;
 
 public abstract record WorkspaceReference<TReference> : WorkspaceReference;
 
-public record EntityStore
+public record EntityStore(ImmutableDictionary<string, InstanceCollection> Instances)
 {
-    public EntityStore(IEnumerable<KeyValuePair<string, InstanceCollection>> instances)
-    {
-        Instances = instances
-            //.Where(x => x.Value != null && x.Value.Instances.Count > 0)
-            .ToImmutableDictionary();
-    }
 
-    public ImmutableDictionary<string, InstanceCollection> Instances { get; init; }
-
-    public EntityStore Merge(EntityStore s2) => new(Instances.SetItems(s2.Instances.Select(kvp => new KeyValuePair<string, InstanceCollection>(kvp.Key, kvp.Value.Merge(Instances.GetValueOrDefault(kvp.Key))))));
+    public EntityStore Merge(EntityStore s2) => new(Instances.SetItems(s2.Instances.ToImmutableDictionary(kvp => kvp.Key, kvp => kvp.Value.Merge(Instances.GetValueOrDefault(kvp.Key)))));
 }
 
 public record EntireWorkspace : WorkspaceReference<EntityStore>

@@ -1,4 +1,6 @@
-﻿namespace OpenSmc.Messaging;
+﻿using System.Text.Json;
+
+namespace OpenSmc.Messaging;
 
 public interface IMessageService : IAsyncDisposable
 {
@@ -7,6 +9,6 @@ public interface IMessageService : IAsyncDisposable
     IMessageDelivery IncomingMessage(IMessageDelivery message);
     IMessageDelivery Post<TMessage>(TMessage message, PostOptions opt);
 
-    void Initialize(AsyncDelivery messageHandler);
+    void Initialize(AsyncDelivery messageHandler, JsonSerializerOptions options);
 
 }

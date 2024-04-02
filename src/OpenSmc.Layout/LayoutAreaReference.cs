@@ -8,6 +8,7 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<LayoutAreaCo
     public object Options { get; init; }
 }
 
-public record LayoutAreaCollection(
-    LayoutAreaReference Reference,
-    ImmutableDictionary<LayoutAreaReference, UiControl> Instances) ;
+public record LayoutAreaCollection(LayoutAreaReference Reference)
+{
+    public ImmutableDictionary<string, UiControl> Areas { get; init; } = ImmutableDictionary<string, UiControl>.Empty;
+}

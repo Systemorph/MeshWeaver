@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 
 [assembly: InternalsVisibleTo("OpenSmc.Messaging.Hub")]
 
@@ -16,7 +17,7 @@ public interface IMessageDelivery
     object Message { get; }
 
     string AccessObject { get; }
-    IMessageDelivery Package();
+    IMessageDelivery Package(JsonSerializerOptions options);
 
     internal IMessageDelivery SetAccessObject(string accessObject, object address);
     internal IMessageDelivery ChangeState(string state);

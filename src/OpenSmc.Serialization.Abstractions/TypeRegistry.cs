@@ -1,5 +1,4 @@
-﻿using System;
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 
 namespace OpenSmc.Serialization;
 
@@ -47,11 +46,11 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
 
     public static string FormatType(Type mainType)
     {
+        var mainTypeName = (mainType.FullName ?? mainType.Name).Replace('\u002B', '.');
         if (!mainType.IsGenericType)
-            return mainType.FullName ?? mainType.Name;
+            return mainTypeName;
 
-        var @namespace = mainType.Namespace != null ? mainType.Namespace + "." : "";
-        var text = $"{@namespace}{mainType.Name[..mainType.Name.IndexOf('`')]}[{string.Join(',', mainType.GetGenericArguments().Select(FormatType))}]";
+        var text = $"{mainTypeName[..mainTypeName.IndexOf('`')]}[{string.Join(',', mainType.GetGenericArguments().Select(FormatType))}]";
         return text;
     }
 }
