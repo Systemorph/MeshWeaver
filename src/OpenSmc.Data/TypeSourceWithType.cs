@@ -30,7 +30,7 @@ public record TypeSourceWithType<T>(IMessageHub Hub, object DataSource) : TypeSo
 public abstract record TypeSourceWithType<T, TTypeSource> : TypeSource<TTypeSource>
 where TTypeSource: TypeSourceWithType<T, TTypeSource>
 {
-    protected TypeSourceWithType(IMessageHub hub, object DataSource) : base(hub, typeof(T), DataSource, typeof(T).FullName)
+    protected TypeSourceWithType(IMessageHub hub, object DataSource) : base(hub, typeof(T), DataSource)
     {
         hub.ServiceProvider.GetRequiredService<ITypeRegistry>().WithType(typeof(T));
     }
