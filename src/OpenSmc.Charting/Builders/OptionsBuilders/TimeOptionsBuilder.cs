@@ -1,6 +1,5 @@
 ﻿using OpenSmc.Charting.Enums;
 using OpenSmc.Charting.Models.Options.Scales;
-using Systemorph.Charting.Models.Options.Scales;
 
 namespace OpenSmc.Charting.Builders.OptionsBuilders;
 

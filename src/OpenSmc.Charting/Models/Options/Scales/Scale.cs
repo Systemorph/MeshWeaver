@@ -1,5 +1,4 @@
 ﻿using OpenSmc.Charting.Helpers;
-using Systemorph.Charting.Models.Options.Scales;
 
 namespace OpenSmc.Charting.Models.Options.Scales
 {

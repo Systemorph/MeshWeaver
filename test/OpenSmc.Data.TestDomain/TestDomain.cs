@@ -38,6 +38,7 @@ public static class TestDomain
         {
             { typeof(Contract), new Contract[] { } },
             { typeof(Country), new Country[] { } },
+            { typeof(Address), new Address[] { } },
             { typeof(Discount), new Discount[] { } },
         };
 
@@ -45,7 +46,7 @@ public static class TestDomain
     {
         [Required]
         public string Street { get; set; }
-        [Category("Country")]
+        [Category<Country>]
         public string Country { get; set; }
     }
 
@@ -61,6 +62,7 @@ public static class TestDomain
 
     public record Country : INamed
     {
+        [Key]
         public string SystemName { get; set; }
         public string DisplayName { get; set; }
     }

@@ -1,7 +1,4 @@
-﻿using System.Collections.Generic;
-
-// ReSharper disable once CheckNamespace
-namespace Systemorph.Charting.Models.Options.Scales
+﻿namespace OpenSmc.Charting.Models.Options.Scales
 {
     public record CategoryTick : CartesianTick
     {

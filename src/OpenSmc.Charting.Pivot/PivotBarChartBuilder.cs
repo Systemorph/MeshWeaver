@@ -2,11 +2,10 @@
 using OpenSmc.Charting.Builders.DataSetBuilders;
 using OpenSmc.Charting.Builders.OptionsBuilders;
 using OpenSmc.Charting.Enums;
+using OpenSmc.Charting.Models;
 using OpenSmc.Charting.Models.Options.Scales;
 using OpenSmc.Pivot.Builder;
 using OpenSmc.Pivot.Models;
-using Systemorph.Charting.Models;
-using Systemorph.Charting.Models.Options.Scales;
 
 namespace OpenSmc.Charting.Pivot;
 

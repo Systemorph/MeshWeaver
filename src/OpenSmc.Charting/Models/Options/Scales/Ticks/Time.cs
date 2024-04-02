@@ -1,8 +1,6 @@
-﻿// ReSharper disable once CheckNamespace
+﻿using OpenSmc.Charting.Enums;
 
-using OpenSmc.Charting.Enums;
-
-namespace Systemorph.Charting.Models.Options.Scales
+namespace OpenSmc.Charting.Models.Options.Scales
 {
     public record Time
     {

@@ -1,8 +1,6 @@
-﻿using System;
-using OpenSmc.Charting.Enums;
+﻿using OpenSmc.Charting.Enums;
 
-// ReSharper disable once CheckNamespace
-namespace Systemorph.Charting.Models.Options.Scales
+namespace OpenSmc.Charting.Models.Options.Scales
 {
     public record TimeDisplayFormat
     {

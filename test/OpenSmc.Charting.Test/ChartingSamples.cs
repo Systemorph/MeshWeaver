@@ -1,13 +1,11 @@
 using OpenSmc.Charting.Builders;
 using OpenSmc.Charting.Builders.DataSetBuilders;
 using OpenSmc.Charting.Enums;
-using OpenSmc.Fixture;
-using Systemorph.Charting.Models;
-using Xunit.Abstractions;
+using OpenSmc.Charting.Models;
 
 namespace OpenSmc.Charting.Test;
 
-public class ChartingSamples : TestBase
+public class ChartingSamples
 {
     private readonly double[] data1 = { -1.0, 4.0, 3.0, 2.0 };
     private readonly double[] data2 = { 4.0, 5.0, 6.0, 3.0 };
@@ -25,11 +23,6 @@ public class ChartingSamples : TestBase
     private readonly double[] y = { 4.0, 1.0, 2.0, 3.0 };
 
     private readonly string[] labels = { "One", "two", "three", "four" };
-
-    public ChartingSamples(ITestOutputHelper toh)
-        : base(toh)
-    {
-    }
 
     [Fact]
     public async Task BarChart()

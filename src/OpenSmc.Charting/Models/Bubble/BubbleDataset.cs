@@ -1,9 +1,6 @@
-﻿// ReSharper disable once CheckNamespace
+﻿using OpenSmc.Charting.Enums;
 
-using OpenSmc.Charting.Enums;
-using OpenSmc.Charting.Models;
-
-namespace Systemorph.Charting.Models
+namespace OpenSmc.Charting.Models
 {
     public record BubbleDataSet : DataSet, IDataSetWithOrder, IDataSetWithPointStyle
     {
