@@ -1,12 +1,8 @@
-﻿using System.Collections.Generic;
-using OpenSmc.Charting.Enums;
+﻿using OpenSmc.Charting.Enums;
 using OpenSmc.Charting.Helpers;
-using OpenSmc.Charting.Models;
 using OpenSmc.Charting.Models.Options.Scales;
-using Systemorph.Charting.Models.Options.Scales;
 
-// ReSharper disable once CheckNamespace
-namespace Systemorph.Charting.Models
+namespace OpenSmc.Charting.Models
 {
     public record RadarDataSet : DataSet, IDataSetWithOrder, IDataSetWithPointRadiusAndRotation, IDataSetWithTension, IDataSetWithFill, IDataSetWithPointStyle
     {

@@ -1,6 +1,5 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 using OpenSmc.Charting.Models;
-using Systemorph.Charting.Models;
 
 namespace OpenSmc.Charting.Builders.DataSetBuilders;
 

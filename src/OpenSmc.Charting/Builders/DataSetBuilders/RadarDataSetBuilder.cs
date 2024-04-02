@@ -1,4 +1,4 @@
-﻿using Systemorph.Charting.Models;
+﻿using OpenSmc.Charting.Models;
 
 namespace OpenSmc.Charting.Builders.DataSetBuilders;
 

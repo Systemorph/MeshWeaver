@@ -8,7 +8,6 @@ using OpenSmc.Charting.Models.Options;
 using OpenSmc.Charting.Models.Options.Scales;
 using OpenSmc.Charting.Models.Options.Tooltips;
 using OpenSmc.Utils;
-using Systemorph.Charting.Models;
 
 namespace OpenSmc.Charting.Builders.ChartBuilders;
 

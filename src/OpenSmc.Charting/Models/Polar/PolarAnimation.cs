@@ -1,7 +1,6 @@
 ﻿using OpenSmc.Charting.Models.Options.Animation;
 
-// ReSharper disable once CheckNamespace
-namespace Systemorph.Charting.Models
+namespace OpenSmc.Charting.Models
 {
     public record PolarAnimation : Animation
     {

@@ -1,8 +1,6 @@
 ﻿using OpenSmc.Charting.Helpers;
-using OpenSmc.Charting.Models.Options;
 
-// ReSharper disable once CheckNamespace
-namespace Systemorph.Charting.Models.Options.Scales
+namespace OpenSmc.Charting.Models.Options.Scales
 {
     // https://www.chartjs.org/docs/3.7.1/axes/#common-tick-options-to-all-axes
     public record Tick
