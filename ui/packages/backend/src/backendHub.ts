@@ -1,26 +1,28 @@
 import { SubjectHub } from "@open-smc/message-hub/src/SubjectHub";
 import {
     DataChangedEvent,
-    EntireWorkspace, JsonPatch, JsonPathReference,
+    EntireWorkspace, JsonPatch,
     LayoutAreaReference, PatchOperation,
     SubscribeDataRequest
 } from "@open-smc/data/src/data.contract";
 import { messageOfType } from "@open-smc/message-hub/src/operators/messageOfType";
 import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
 import { Patch, produceWithPatches } from "immer";
+import { deserialize } from "@open-smc/serialization/src/deserialize";
 import { map, Subject, tap } from "rxjs";
 import { MessageDelivery } from "@open-smc/message-hub/src/api/MessageDelivery";
+import { serialize } from "@open-smc/serialization/src/serialize";
 
 export const backendHub =
-    new SubjectHub((input, output) => {
+    new SubjectHub((input, outgoing) => {
 
-        const outgoing =
-            new Subject<MessageDelivery>();
-
-        outgoing
-            // .pipe(map(serialize))
-            // .pipe(tap(console.log))
-            .subscribe(output);
+        // const outgoing =
+        //     new Subject<MessageDelivery>();
+        //
+        // outgoing
+        //     .pipe(map(serialize))
+        //     .pipe(tap(console.log))
+        //     .subscribe(output);
 
         input
             // .pipe(map(deserialize))

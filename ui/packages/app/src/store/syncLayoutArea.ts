@@ -13,8 +13,8 @@ import { removeArea } from "./appReducer";
 
 export const syncLayoutArea = (
     data$: Observable<unknown>,
-    uiDispatch: Dispatch,
-    ui$: Observable<AppState>,
+    appDispatch: Dispatch,
+    app$: Observable<AppState>,
     dataDispatch: Dispatch,
     parentDataContext?: unknown
 ) =>
@@ -40,7 +40,7 @@ export const syncLayoutArea = (
                                     );
 
                                 state[layoutArea.id] =
-                                    area$.pipe(syncLayoutArea(data$, uiDispatch, ui$, dataDispatch))
+                                    area$.pipe(syncLayoutArea(data$, appDispatch, app$, dataDispatch))
                                         .subscribe();
                             });
                     }
@@ -50,8 +50,8 @@ export const syncLayoutArea = (
             subscription.add(
                 source
                     .pipe(distinctUntilChanged(ignoreNestedAreas))
-                    .pipe(effect(dataBinding(data$, parentDataContext, uiDispatch)))
-                    .pipe(effect(reverseDataBinding(ui$, data$, dataDispatch)))
+                    .pipe(effect(dataBinding(data$, parentDataContext, appDispatch)))
+                    .pipe(effect(reverseDataBinding(app$, data$, dataDispatch)))
                     .subscribe()
             );
 
@@ -60,7 +60,7 @@ export const syncLayoutArea = (
                     layoutAreas => {
                         keys(state).forEach(id => {
                             if (!layoutAreas?.find(area => area.id === id)) {
-                                uiDispatch(removeArea(id));
+                                appDispatch(removeArea(id));
                                 state[id].unsubscribe();
                                 delete state[id];
                             }

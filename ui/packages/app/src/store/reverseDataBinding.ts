@@ -1,4 +1,4 @@
-import { distinctUntilChanged, from, map, merge, Observable, skip, Subscription } from "rxjs";
+import { distinctUntilChanged, from, map, merge, Observable, skip, Subscription, tap } from "rxjs";
 import { AppState } from "./appStore";
 import { configureStore, Dispatch } from "@reduxjs/toolkit";
 import { LayoutArea } from "@open-smc/layout/src/contract/LayoutArea";
@@ -12,9 +12,10 @@ import { effect } from "@open-smc/utils/src/operators/effect";
 import { selectByPath } from "@open-smc/data/src/selectByPath";
 import { JSONPath } from "jsonpath-plus";
 import { extractReferences } from "@open-smc/data/src/extractReferences";
+import { serializeMiddleware } from "@open-smc/data/src/serializeMiddleware";
 
 export const reverseDataBinding = (
-    ui$: Observable<AppState>,
+    app$: Observable<AppState>,
     data$: Observable<unknown>,
     dataDispatch: Dispatch
 ) =>
@@ -25,22 +26,25 @@ export const reverseDataBinding = (
             if (control) {
                 const {dataContext, ...props} = control;
 
-                const bindings = pickBy(props, isBinding);
+                if (dataContext) {
+                    const bindings = pickBy(props, isBinding);
 
-                return data$
-                    .pipe(map(selectDeep(dataContext)))
-                    .pipe(distinctUntilChanged(isEqual))
-                    .pipe(
-                        effect(
-                            dataContextState => {
-                                if (dataContextState) {
+                    return data$
+                        .pipe(map(selectDeep(dataContext)))
+                        .pipe(distinctUntilChanged(isEqual))
+                        .pipe(
+                            effect(
+                                dataContextState => {
                                     const dataContextWorkspace =
                                         configureStore({
                                             reducer: workspaceReducer,
                                             preloadedState: dataContextState,
                                             devTools: {
                                                 name: layoutArea.id
-                                            }
+                                            },
+                                            middleware: getDefaultMiddleware =>
+                                                getDefaultMiddleware()
+                                                    .prepend(serializeMiddleware),
                                         });
 
                                     const subscription = new Subscription();
@@ -52,17 +56,17 @@ export const reverseDataBinding = (
                                     );
 
                                     subscription.add(
-                                        ui$
+                                        app$
                                             .pipe(dataContextPatch(layoutArea.id, bindings))
                                             .subscribe(dataContextWorkspace.dispatch)
                                     );
 
                                     return subscription;
                                 }
-                            }
+                            )
                         )
-                    )
-                    .subscribe();
+                        .subscribe();
+                }
             }
         }
     }

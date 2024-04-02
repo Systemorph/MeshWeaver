@@ -1,5 +1,5 @@
 import { Dispatch } from "@reduxjs/toolkit";
-import { distinctUntilChanged, map, Observable } from "rxjs";
+import { distinctUntilChanged, map, Observable, tap } from "rxjs";
 import { LayoutArea } from "@open-smc/layout/src/contract/LayoutArea";
 import { expandBindings } from "./expandBindings";
 import { cloneDeepWith } from "lodash-es";
@@ -7,7 +7,11 @@ import { isEqual } from "lodash";
 import { selectDeep } from "@open-smc/data/src/selectDeep";
 import { setArea } from "./appReducer";
 
-export const dataBinding = (data$: Observable<unknown>, parentDataContext: unknown, uiDispatch: Dispatch) =>
+export const dataBinding = (
+    data$: Observable<unknown>,
+    parentDataContext: unknown,
+    appDispatch: Dispatch
+) =>
     (layoutArea: LayoutArea) => {
         if (layoutArea) {
             const {id, control, options, style} = layoutArea;
@@ -22,7 +26,7 @@ export const dataBinding = (data$: Observable<unknown>, parentDataContext: unkno
                     .pipe(map(expandBindings(nestedAreasToIds(props), parentDataContext)))
                     .subscribe(
                         props => {
-                            uiDispatch(
+                            appDispatch(
                                 setArea({
                                     id,
                                     control: {
@@ -37,7 +41,7 @@ export const dataBinding = (data$: Observable<unknown>, parentDataContext: unkno
                     );
             }
 
-            uiDispatch(
+            appDispatch(
                 setArea({
                     id,
                     options,
