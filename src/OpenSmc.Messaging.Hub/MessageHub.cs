@@ -35,13 +35,19 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
     {
 
         deferral = MessageService.Defer(d => d.Message is not ExecutionRequest);
-        MessageService.Initialize(DeliverMessageAsync);
 
         this.hostedHubs = hostedHubs;
         ServiceProvider = serviceProvider;
         logger = serviceProvider.GetRequiredService<ILogger<MessageHub<TAddress>>>();
 
         Configuration = configuration;
+        var configurations =
+            Configuration.Get<ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>>() ??
+            ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>.Empty;
+        JsonSerializerOptions = configurations.Aggregate(
+            CreateSerializationConfiguration(), (c, f) => f.Invoke(c)).Options;
+
+        MessageService.Initialize(DeliverMessageAsync, JsonSerializerOptions);
 
         disposeActions.AddRange(configuration.DisposeActions);
 
@@ -58,21 +64,21 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
             Register(messageHandler.MessageType, (d,c) => messageHandler.AsyncDelivery.Invoke(this, d,c));
 
 
+
         Schedule(StartAsync);
         logger.LogInformation("Message hub {address} initialized", Address);
-
-        var configurations =
-            Configuration.Get<ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>>() ??
-            ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>.Empty;
-        JsonSerializerOptions = configurations.Aggregate(
-            CreateSerializationConfiguration(), (c,f) => f.Invoke(c)).Options;
 
     }
 
     private SerializationConfiguration CreateSerializationConfiguration()
     {
         return new SerializationConfiguration(this)
-            .WithOptions(o => o.Converters.Insert(0, new TypedObjectConverter(ServiceProvider)));
+            .WithOptions(o =>
+            {
+                o.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
+
+                o.Converters.Insert(0, new TypedObjectConverter(ServiceProvider));
+            });
     }
 
 

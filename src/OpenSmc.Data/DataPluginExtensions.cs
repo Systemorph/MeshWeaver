@@ -18,17 +18,6 @@ public static class DataPluginExtensions
             .Set(existingLambdas.Add(dataPluginConfiguration))
             .AddPlugin<DataPlugin>(plugin => plugin.WithFactory(() => (DataPlugin)plugin.Hub.ServiceProvider.GetRequiredService<IWorkspace>()));
 
-        if (existingLambdas.Count == 0)
-            ret = ret
-                .WithSerialization(options =>
-                {
-                    var serializationService = options.Hub.ServiceProvider.GetRequiredService<ISerializationService>();
-                    return options.WithOptions(o =>
-                    {
-                        o.Converters.Insert(0, new EntityStoreConverter());
-                        o.Converters.Insert(0, new InstancesInCollectionConverter());
-                    });
-                });
         return ret;
     }
 

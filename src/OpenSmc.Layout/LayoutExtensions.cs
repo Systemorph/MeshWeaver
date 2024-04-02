@@ -42,10 +42,7 @@ public static class LayoutExtensions
 
     public static IObservable<UiControl> GetControl(this ChangeStream<LayoutAreaCollection> changeItems,
         LayoutAreaReference reference)
-        => changeItems.Store.GetControl(reference);
-
-    public static IObservable<UiControl> GetControl(this IObservable<ChangeItem<LayoutAreaCollection>> changeItems,
-        LayoutAreaReference reference)
-        => changeItems.Select(i => i.Value.Instances.GetValueOrDefault(reference))
+        => ((IObservable<ChangeItem<LayoutAreaCollection>>)changeItems).Select(i => i.Value.Areas.GetValueOrDefault(reference.Area))
             .Where(x => x != null);
+
 }

@@ -7,7 +7,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
-using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
 public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub),
@@ -36,7 +35,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
             key => { return new ChangeStream<TReference>(this, key.Address, reference, options, () => Hub.Version, false); });
         stream.Disposables.Add(externalSynchronizationStream.Where(x => x.Address.Equals(address) && x.Reference.Equals(reference)).Subscribe(stream));
         externalSubscriptions.GetOrAdd((address, reference), _ => 
-            stream.Subscribe(dc => Hub.Post(dc, o => o.WithTarget(address))));
+            stream.Subscribe<DataChangedEvent>(dc => Hub.Post(dc, o => o.WithTarget(address))));
     }
     
     public ChangeStream<TReference> GetRemoteStream<TReference>(object address, WorkspaceReference<TReference> reference)
@@ -57,18 +56,21 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
             var ret = new ChangeStream<TReference>(this, address, reference, options, () => Hub.Version, true);
 
             ret.Disposables.Add(
-                ret.Changes
+                ((IObservable<PatchChangeRequest>)ret)
                 .Where(x => x.Address.Equals(address) && x.Reference.Equals(reference))
                 .Subscribe(patch =>
                     Hub.RegisterCallback(
                         Hub.Post(patch, o => o.WithTarget(address)), HandleCommitResponse)));
             ret.Disposables.Add(
-                ret.Subscribe(dataChanged => Hub.Post(dataChanged, o => o.WithTarget(address)))
+                ret.Subscribe<DataChangedEvent>(dataChanged => Hub.Post(dataChanged, o => o.WithTarget(address)))
                 );
-            externalSynchronizationStream
+
+            //ret.Disposables.Add(ret.Subscribe<ChangeItem<TReference>>(Synchronize));
+
+            ret.Disposables.Add(externalSynchronizationStream
                 .Where(x => x.Address.Equals(address) && x.Reference.Equals(reference))
                 .DistinctUntilChanged()
-                .Subscribe(ret);
+                .Subscribe(ret));
 
             ret.Disposables.Add(
                 new Disposables.AnonymousDisposable(() =>
@@ -144,7 +146,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
         foreach (var stream in dataContextStreams)
         {
             streams[(stream.Address, stream.Reference)] = stream;
-            stream.Disposables.Add(stream.Store.Subscribe(Synchronize));
+            stream.Disposables.Add(stream.Subscribe<ChangeItem<EntityStore>>(Synchronize));
             initializeObserver.Disposables.Add(stream.Subscribe(initializeObserver));
         }
 

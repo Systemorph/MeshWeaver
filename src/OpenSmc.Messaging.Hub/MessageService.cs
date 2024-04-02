@@ -1,4 +1,5 @@
 ﻿using System.Reflection;
+using System.Text.Json;
 using System.Threading.Tasks.Dataflow;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Serialization;
@@ -7,7 +8,7 @@ namespace OpenSmc.Messaging;
 
 public class MessageService : IMessageService
 {
-    private readonly ISerializationService serializationService;
+    private JsonSerializerOptions options;
     private readonly ILogger<MessageService> logger;
     private bool isDisposing;
     private readonly BufferBlock<(IMessageDelivery Delivery, CancellationToken CancellationToken)> buffer = new();
@@ -15,18 +16,18 @@ public class MessageService : IMessageService
 
     private AsyncDelivery MessageHandler { get; set; }
 
-    public void Initialize(AsyncDelivery messageHandler)
+    public void Initialize(AsyncDelivery messageHandler, JsonSerializerOptions options1)
     {
         MessageHandler = messageHandler;
+        options = options1;
     }
 
     private readonly DeferralContainer deferralContainer;
 
 
-    public MessageService(object address, ISerializationService serializationService, ILogger<MessageService> logger)
+    public MessageService(object address, ILogger<MessageService> logger)
     {
         Address = address;
-        this.serializationService = serializationService;
         this.logger = logger;
 
         deferralContainer = new DeferralContainer(NotifyAsync);
@@ -101,7 +102,7 @@ public class MessageService : IMessageService
         if (delivery.Message is not RawJson rawJson)
             return delivery;
         logger.LogDebug("Deserializing message {id} from sender {sender} to target {target}", delivery.Id, delivery.Sender, delivery.Target);
-        var deserializedMessage = serializationService.Deserialize(rawJson.Content);
+        var deserializedMessage = JsonSerializer.Deserialize(rawJson.Content, typeof(object), options);
         return delivery.WithMessage(deserializedMessage);
     }
 

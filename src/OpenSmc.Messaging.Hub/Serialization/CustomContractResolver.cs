@@ -6,6 +6,10 @@ namespace OpenSmc.Messaging.Serialization;
 
 public class CustomContractResolver : CamelCasePropertyNamesContractResolver
 {
+    public CustomContractResolver()
+    {
+        NamingStrategy = new CamelCaseNamingStrategy(false, true);
+    }
     protected override JsonProperty CreateProperty(MemberInfo member, MemberSerialization memberSerialization)
     {
         var property = base.CreateProperty(member, memberSerialization);

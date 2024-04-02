@@ -45,7 +45,7 @@ public static class SerializationExtensions
         return new()
         {
             ReferenceLoopHandling = ReferenceLoopHandling.Error,
-            TypeNameHandling = TypeNameHandling.Objects,
+            TypeNameHandling = TypeNameHandling.Auto,
             NullValueHandling = NullValueHandling.Ignore,
             ContractResolver = contractResolver,
             MetadataPropertyHandling = MetadataPropertyHandling.ReadAhead,
