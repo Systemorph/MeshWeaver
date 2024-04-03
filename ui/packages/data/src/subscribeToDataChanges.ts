@@ -2,15 +2,13 @@ import { Dispatch } from "@reduxjs/toolkit";
 import { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
 import { v4 } from "uuid";
 import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
-import {
-    DataChangedEvent,
-    JsonPatch,
-    SubscribeRequest,
-    UnsubscribeDataRequest
-} from "./data.contract";
 import { initState, patch } from "./workspaceReducer";
 import { messageOfType } from "@open-smc/message-hub/src/operators/messageOfType";
 import { filter } from "rxjs";
+import { SubscribeRequest } from "./contract/SubscribeRequest";
+import { UnsubscribeDataRequest } from "./contract/UnsubscribeDataRequest";
+import { DataChangedEvent } from "./contract/DataChangedEvent";
+import { JsonPatch } from "./contract/JsonPatch";
 
 export function subscribeToDataChanges(hub: MessageHub, workspaceReference: any, dispatch: Dispatch) {
     const id = v4();

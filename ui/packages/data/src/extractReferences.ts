@@ -1,5 +1,5 @@
-import { WorkspaceReference } from "./data.contract";
 import { walk } from 'walkjs';
+import { WorkspaceReference } from "./contract/WorkspaceReference";
 
 export type ExtractedReference = {
     path: string;

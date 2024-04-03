@@ -1,6 +1,7 @@
-import { DataInput, WorkspaceReference } from "./data.contract";
 import { cloneDeepWith } from "lodash-es";
 import { selectByReference } from "./selectByReference";
+import { WorkspaceReference } from "./contract/WorkspaceReference";
+import { DataInput } from "./contract/DataInput";
 
 export const selectDeep = <T extends DataInput>(data: T) =>
     (source: unknown): T =>
@@ -11,3 +12,4 @@ export const selectDeep = <T extends DataInput>(data: T) =>
                     ? (selectByReference(source, value) ?? null)
                     : undefined
         );
+

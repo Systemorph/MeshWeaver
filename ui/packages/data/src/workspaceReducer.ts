@@ -3,8 +3,8 @@ import {
     createReducer
 } from '@reduxjs/toolkit';
 import { applyPatches, enablePatches, Patch } from "immer";
-import { JsonPatch, PatchOperation } from "./data.contract";
 import { identity } from "lodash-es";
+import { JsonPatch, PatchOperation } from "./contract/JsonPatch";
 
 enablePatches();
 

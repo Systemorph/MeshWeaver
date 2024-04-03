@@ -1,13 +1,12 @@
 import { SubjectHub } from "@open-smc/message-hub/src/SubjectHub";
-import {
-    DataChangedEvent,
-    EntireWorkspace, JsonPatch,
-    LayoutAreaReference, PatchOperation,
-    SubscribeRequest
-} from "@open-smc/data/src/data.contract";
 import { messageOfType } from "@open-smc/message-hub/src/operators/messageOfType";
 import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
 import { Patch, produceWithPatches } from "immer";
+import { SubscribeRequest } from "@open-smc/data/src/contract/SubscribeRequest";
+import { EntireWorkspace } from "@open-smc/data/src/contract/EntireWorkspace";
+import { DataChangedEvent } from "@open-smc/data/src/contract/DataChangedEvent";
+import { JsonPatch } from "@open-smc/data/src/contract/JsonPatch";
+import { LayoutAreaReference } from "@open-smc/data/src/contract/LayoutAreaReference";
 
 export const backendHub =
     new SubjectHub((input, outgoing) => {

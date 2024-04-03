@@ -1,13 +1,14 @@
 import { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
 import { distinctUntilKeyChanged, Subscription } from "rxjs";
 import { subscribeToDataChanges } from "@open-smc/data/src/subscribeToDataChanges";
-import { EntireWorkspace, LayoutAreaReference } from "@open-smc/data/src/data.contract";
 import { syncLayoutArea } from "./store/syncLayoutArea";
 import { withPreviousValue } from "@open-smc/utils/src/operators/withPreviousValue";
 import { removeArea, setRoot } from "./store/appReducer";
 import { app$, appStore } from "./store/appStore";
 import { data$, dataStore } from "./store/dataStore";
 import { layout$, layoutStore } from "./store/layoutStore";
+import { EntireWorkspace } from "@open-smc/data/src/contract/EntireWorkspace";
+import { LayoutAreaReference } from "@open-smc/data/src/contract/LayoutAreaReference";
 
 export const startSynchronization = (backendHub: MessageHub) => {
     const subscription = new Subscription();

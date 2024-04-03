@@ -1,7 +1,8 @@
 import { expect, test, describe, jest } from "@jest/globals";
 import { configureStore } from "@reduxjs/toolkit";
 import { patch, workspaceReducer } from "./workspaceReducer";
-import { JsonPatch } from "./data.contract";
+
+import { JsonPatch } from "./contract/JsonPatch";
 
 describe("workspace", () => {
     test("subscribe and patch", () => {
