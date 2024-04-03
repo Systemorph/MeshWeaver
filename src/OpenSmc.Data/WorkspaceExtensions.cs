@@ -11,7 +11,7 @@ public static class WorkspaceExtensions
     public static IReadOnlyCollection<T> GetData<T>(this IWorkspace workspace)
         => workspace.State.GetData<T>();
     public static T GetData<T>(this WorkspaceState state, object id)
-        => (T)state.Reduce(new EntityReference(typeof(T).FullName, id));
+        => (T)state.Reduce(new EntityReference(state.GetCollectionName(typeof(T)), id));
     public static T GetData<T>(this IWorkspace workspace, object id)
         => workspace.State.GetData<T>(id);
     public static IObservable<T> GetObservable<T>(this IWorkspace workspace, object id)
