@@ -3,7 +3,7 @@ import { distinctUntilChanged, map, Observable, Subscription } from "rxjs";
 import { LayoutArea } from "@open-smc/layout/src/contract/LayoutArea";
 import { Control } from "@open-smc/layout/src/contract/controls/Control";
 import { LayoutStackControl } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
-import { keys } from "lodash";
+import { keys } from "lodash-es";
 import { ignoreNestedAreas } from "@open-smc/layout/src/operators/ignoreNestedAreas";
 import { AppState } from "./appStore";
 import { dataBinding } from "./dataBinding";

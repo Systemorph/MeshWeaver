@@ -8,25 +8,10 @@ import {
 import { messageOfType } from "@open-smc/message-hub/src/operators/messageOfType";
 import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
 import { Patch, produceWithPatches } from "immer";
-import { deserialize } from "@open-smc/serialization/src/deserialize";
-import { map, Subject, tap } from "rxjs";
-import { MessageDelivery } from "@open-smc/message-hub/src/api/MessageDelivery";
-import { serialize } from "@open-smc/serialization/src/serialize";
 
 export const backendHub =
     new SubjectHub((input, outgoing) => {
-
-        // const outgoing =
-        //     new Subject<MessageDelivery>();
-        //
-        // outgoing
-        //     .pipe(map(serialize))
-        //     .pipe(tap(console.log))
-        //     .subscribe(output);
-
         input
-            // .pipe(map(deserialize))
-            // .pipe(tap(console.log))
             .pipe(messageOfType(SubscribeDataRequest))
             .subscribe(({message}) => {
                 const {id, workspaceReference} = message;
