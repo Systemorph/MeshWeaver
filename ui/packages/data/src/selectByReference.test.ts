@@ -1,6 +1,7 @@
 import { expect, test, describe, jest } from "@jest/globals";
 import { selectByReference } from "./selectByReference";
-import { JsonPathReference } from "./data.contract";
+
+import { JsonPathReference } from "./contract/JsonPathReference";
 
 describe("selectByReference", () => {
     test("data is string", () => {

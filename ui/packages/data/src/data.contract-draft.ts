@@ -3,14 +3,12 @@
 //     => LayoutStack
 // data host is Ifrs17Address
 
-import {
-    DataChangedEvent,
-    EntireWorkspace,
-    LayoutAreaReference,
-    SubscribeRequest,
-    WorkspaceReference
-} from "./data.contract";
 import { ClickedEvent, LayoutAddress } from "@open-smc/layout/src/contract/application.contract";
+import { SubscribeRequest } from "./contract/SubscribeRequest";
+import { DataChangedEvent } from "./contract/DataChangedEvent";
+import { WorkspaceReference } from "./contract/WorkspaceReference";
+import { EntireWorkspace } from "./contract/EntireWorkspace";
+import { LayoutAreaReference } from "./contract/LayoutAreaReference";
 
 const view = {
     title: "Hello",

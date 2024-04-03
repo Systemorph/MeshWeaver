@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { startSynchronization } from "./startSynchronization";
 import { backendHub } from "@open-smc/backend/src/backendHub";
 import '@open-smc/layout/src/contract';
-import '@open-smc/data/src/data.contract';
+import '@open-smc/data/src/contract';
 
 export default function App() {
     const rootAreaId = useAppSelector(state => state.rootArea);
