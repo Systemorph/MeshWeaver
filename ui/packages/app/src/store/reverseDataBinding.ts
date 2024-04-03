@@ -10,8 +10,8 @@ import { selectDeep } from "@open-smc/data/src/selectDeep";
 import { effect } from "@open-smc/utils/src/operators/effect";
 import { selectByPath } from "@open-smc/data/src/selectByPath";
 import { extractReferences } from "@open-smc/data/src/extractReferences";
-import { serializeMiddleware } from "@open-smc/data/src/serializeMiddleware";
-import { referenceToPatchAction } from "./referenceToPatchAction";
+import { serializeMiddleware } from "@open-smc/data/src/middleware/serializeMiddleware";
+import { referenceToPatchRequestAction } from "./referenceToPatchRequestAction";
 import { bindingToPatchAction } from "./bindingToPatchAction";
 
 export const reverseDataBinding = (
@@ -71,7 +71,7 @@ export const reverseDataBinding = (
                                                             .pipe(map(selectByPath(path)))
                                                             .pipe(distinctUntilChanged(isEqual))
                                                             .pipe(skip(1))
-                                                            .pipe(map(referenceToPatchAction(reference)))
+                                                            .pipe(map(referenceToPatchRequestAction(reference)))
                                                 )
                                         );
 

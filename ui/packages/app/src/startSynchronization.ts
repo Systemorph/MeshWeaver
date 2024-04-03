@@ -6,8 +6,8 @@ import { syncLayoutArea } from "./store/syncLayoutArea";
 import { withPreviousValue } from "@open-smc/utils/src/operators/withPreviousValue";
 import { removeArea, setRoot } from "./store/appReducer";
 import { app$, appStore } from "./store/appStore";
-import { data$, dataStore } from "@open-smc/data/src/dataStore";
-import { layout$, layoutStore } from "@open-smc/layout/src/layoutStore";
+import { data$, dataStore } from "./store/dataStore";
+import { layout$, layoutStore } from "./store/layoutStore";
 
 export const startSynchronization = (backendHub: MessageHub) => {
     const subscription = new Subscription();

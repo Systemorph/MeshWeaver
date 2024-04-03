@@ -3,5 +3,5 @@ export interface MessageDelivery<TMessage = any> {
     readonly sender?: unknown;
     readonly target?: unknown;
     readonly message: TMessage;
-    readonly properties?: Record<string, unknown>;
+    readonly properties?: Record<string, unknown>; // in case of response contains requestId = messageDelivery.id
 }

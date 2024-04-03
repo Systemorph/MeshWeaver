@@ -3,7 +3,7 @@ import {
     DataChangedEvent,
     EntireWorkspace, JsonPatch,
     LayoutAreaReference, PatchOperation,
-    SubscribeDataRequest
+    SubscribeRequest
 } from "@open-smc/data/src/data.contract";
 import { messageOfType } from "@open-smc/message-hub/src/operators/messageOfType";
 import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
@@ -12,7 +12,7 @@ import { Patch, produceWithPatches } from "immer";
 export const backendHub =
     new SubjectHub((input, outgoing) => {
         input
-            .pipe(messageOfType(SubscribeDataRequest))
+            .pipe(messageOfType(SubscribeRequest))
             .subscribe(({message}) => {
                 const {id, workspaceReference} = message;
 
@@ -77,6 +77,47 @@ const simpleLayout = {
         icon: "systemorph-fill"
     }
 }
+
+const layout = {
+    $type: "OpenSmc.Layout.LayoutAreaCollection",
+    reference: {
+        $type: "OpenSmc.Layout.LayoutAreaReference",
+        area: "Main"
+    },
+    areas: {
+        Main: {
+            $type: "OpenSmc.Layout.Composition.LayoutStackControl",
+            areas: [
+                {
+                    $type: "OpenSmc.Layout.LayoutAreaReference",
+                    area: "Main/View1"
+                },
+                {
+                    $type: "OpenSmc.Layout.LayoutAreaReference",
+                    area: "Main/View2"
+                }
+            ]
+        },
+        "Main/View1": {
+            $type: "OpenSmc.Layout.Composition.SpinnerControl",
+            message: "processing...",
+            progress: 0.5
+        },
+        "Main/View2": {
+            $type: "OpenSmc.Layout.Composition.TextBoxControl",
+            dataContext: {
+                $type: "EntityReference",
+                collection: "LineOfBusiness",
+                id: "myLob"
+            },
+            data: {
+                $type: "Binding",
+                path: "$.name"
+            }
+        }
+    }
+}
+
 
 const layoutState = {
     $type: "OpenSmc.Layout.LayoutArea",

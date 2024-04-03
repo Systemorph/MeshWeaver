@@ -7,7 +7,7 @@ import {
     DataChangedEvent,
     EntireWorkspace,
     LayoutAreaReference,
-    SubscribeDataRequest,
+    SubscribeRequest,
     WorkspaceReference
 } from "./data.contract";
 import { ClickedEvent, LayoutAddress } from "@open-smc/layout/src/contract/application.contract";
@@ -178,7 +178,7 @@ const workspace = {
     ]
 }
 // main store init
-new SubscribeDataRequest("any string", new EntireWorkspace()); // sent to layout address (to be clarified)
+new SubscribeRequest("any string", new EntireWorkspace()); // sent to layout address (to be clarified)
 
 
 // layout store
