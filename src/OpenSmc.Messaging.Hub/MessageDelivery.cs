@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
-using Microsoft.Extensions.DependencyInjection;
+using System.Text.Json;
+using OpenSmc.Messaging.Serialization;
 using OpenSmc.Serialization;
 using OpenSmc.ShortGuid;
 
@@ -78,13 +79,19 @@ public abstract record MessageDelivery(object Sender, object Target) : IMessageD
         };
     }
 
-    public IMessageDelivery Package()
+    public IMessageDelivery Package(JsonSerializerOptions options)
     {
-        var serializationService = SenderHub.ServiceProvider.GetService<ISerializationService>();
-        if (serializationService == null)
-            return this;
-
-        return serializationService.SerializeDelivery(this);
+        try
+        {
+            var message = GetMessage();
+            var serialized = JsonSerializer.Serialize(message, options);
+            var rawJson = new RawJson(serialized);
+            return WithMessage(rawJson);
+        }
+        catch (Exception e)
+        {
+            return ((IMessageDelivery)this).Failed($"Error serializing: \n{e}");
+        }
     }
 
 }

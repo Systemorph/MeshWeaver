@@ -1,7 +1,6 @@
 ﻿using System.Linq.Expressions;
 using System.Reflection;
 using OpenSmc.Reflection;
-using OpenSmc.Scopes.Proxy;
 using OpenSmc.Utils;
 
 namespace OpenSmc.Layout.DataBinding;
@@ -47,7 +46,7 @@ public static class TemplateBuilder
 
         private IEnumerable<Type> GetTypes(Type type)
         {
-            if(type.IsPrimitive || type == typeof(string) || type.IsScope() || !included.Add(type))
+            if(type.IsPrimitive || type == typeof(string)  || !included.Add(type))
                 yield break;
 
             yield return type;

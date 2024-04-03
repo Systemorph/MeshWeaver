@@ -8,7 +8,7 @@ namespace OpenSmc.Data.Persistence;
 
 public static class DataPersistenceExtensions
 {
-    public static JsonObject SerializeState(this ISerializationService serializationService, IReadOnlyDictionary<string, InstancesInCollection> data) 
+    public static JsonObject SerializeState(this ISerializationService serializationService, IReadOnlyDictionary<string, InstanceCollection> data) 
         => new(
             data
                 .Select(g => new KeyValuePair<string, JsonNode>
@@ -30,29 +30,6 @@ public static class DataPersistenceExtensions
         node = (JsonObject)JsonNode.Parse(JsonSerializer.Serialize(kvp.Value));
         node!.TryAdd(ReservedProperties.Id, serializationService.SerializeToString(kvp.Key));
         return node;
-    }
-
-    public static InstancesInCollection DeserializeToEntities(this ISerializationService serializationService, object obj)
-    {
-        if (obj is InstancesInCollection instances)
-            return instances;
-
-        if (obj is not JsonArray array)
-            throw new ArgumentException(nameof(array));
-
-        return new(DeserializeEntities(serializationService, array).ToImmutableDictionary());
-    }
-
-    private static IEnumerable<KeyValuePair<object,object>> DeserializeEntities(ISerializationService serializationService, JsonArray array)
-    {
-        foreach (var item in array.OfType<JsonObject>())
-        {
-            if (item.TryGetPropertyValue(ReservedProperties.Id, out var id)
-                && id != null
-                && item.TryGetPropertyValue(ReservedProperties.DataSource, out var dataSource)
-                && dataSource != null)
-                yield return new(serializationService.Deserialize(id.ToString()), serializationService.Deserialize(item.ToString()));
-        }
     }
 
 

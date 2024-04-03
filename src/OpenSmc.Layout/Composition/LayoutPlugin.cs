@@ -1,119 +1,112 @@
-﻿using System.Collections.Immutable;
+﻿using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data;
 using OpenSmc.Messaging;
-using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Layout.Composition;
 
-public class LayoutPlugin(LayoutDefinition layoutDefinition) :
-    MessageHubPlugin(layoutDefinition.Hub),
-    IMessageHandler<RefreshRequest>
+public interface ILayout : IObservable<LayoutAreaCollection>
 {
-    [Inject] private IUiControlService uiControlService;
-    private readonly LayoutDefinition layoutDefinition;
-    private readonly IWorkspace workspace = layoutDefinition.Hub.ServiceProvider.GetRequiredService<IWorkspace>();
+    IObservable<LayoutAreaCollection> Render(IObservable<WorkspaceState> state, LayoutAreaReference reference);
+}
 
+public record LayoutAddress(object Host) : IHostedAddress;
 
+public class LayoutPlugin(IMessageHub hub) 
+    : MessageHubPlugin(hub), 
+    ILayout
+{
+    //private ImmutableDictionary<string, UiControl> Areas { get; set; } = ImmutableDictionary<string, UiControl>.Empty;
 
+    private readonly LayoutDefinition layoutDefinition =
+        hub.Configuration.GetListOfLambdas().Aggregate(new LayoutDefinition(hub), (x, y) => y.Invoke(x));
+
+    private readonly IMessageHub layoutHub =
+        hub.GetHostedHub(new LayoutAddress(hub.Address));
+
+    private readonly IWorkspace workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
     public override async Task StartAsync(CancellationToken cancellationToken)
     {
-        await workspace.Initialized;
         await base.StartAsync(cancellationToken);
 
         if (layoutDefinition.InitialState == null)
             return;
         var control = layoutDefinition.InitialState;
-        RenderControl(string.Empty, control, new());
-        workspace.Commit();
+        if(control != null)
+            RenderArea(new LayoutAreaCollection(new(string.Empty)), string.Empty, control);
 
         foreach (var initialization in layoutDefinition.Initializations)
             await initialization.Invoke(cancellationToken);
     }
 
-    private EntityReference RenderControl(string area, UiControl control, RefreshRequest request)
+    private void RenderArea(IObservable<WorkspaceState> state, LayoutAreaReference reference)
+    {
+        var ret = new LayoutAreaCollection(reference);
+        areaSubject.OnNext(RenderArea(ret, reference.Area, layoutDefinition.GetViewElement(reference)));
+    }
+
+
+    private LayoutAreaCollection RenderArea(LayoutAreaCollection collection, string area, UiControl control)
     {
         if (control == null)
             return null;
 
         if (control is LayoutStackControl stack)
-            control = stack with
-            {
-                Areas = stack.ViewElements
-                    .Select(ve => RenderControl($"{area}/{ve.Area}", ParseControl(request, ve), request)).ToArray()
-            };
-
-        var layoutArea = new LayoutArea(area, control);
-        workspace.Update(layoutArea);
-        return workspace.GetReference(layoutArea);
+            collection = stack.ViewElements.Aggregate(collection, (c, ve) => RenderArea(c, $"{area}/{ve.Area}", ve));
+        return collection with{Areas = collection.Areas.SetItem(area, control)};
     }
 
-    private UiControl ParseControl(RefreshRequest request, ViewElement a)
-        => a switch
+    private LayoutAreaCollection RenderArea(LayoutAreaCollection collection, string area, ViewElementWithViewDefinition viewDefinition)
+    {
+        var ret = collection with { Areas = collection.Areas.SetItem(area, new SpinnerControl()) };
+        layoutHub.Schedule(ct =>
         {
-            ViewElementWithView ve => uiControlService.GetUiControl(ve.View),
-            ViewElementWithViewDefinition ve => uiControlService.GetUiControl(ve.ViewDefinition.Invoke(request)),
-            _ => throw new NotSupportedException()
+            ct.ThrowIfCancellationRequested();
+            var stream = viewDefinition.ViewDefinition.Invoke(workspace.Stream, collection.Reference with {Area = area});
+            stream.Select(view => RenderArea(collection, area, view))
+                .DistinctUntilChanged()
+                .Subscribe(areaSubject);
+            return Task.CompletedTask;
+        });
+        return ret;
+    }
+
+
+    private LayoutAreaCollection RenderArea(LayoutAreaCollection collection, string area, object view)
+        => RenderArea(collection, area, layoutDefinition.ControlsManager.Get(view));
+
+    private LayoutAreaCollection RenderArea(LayoutAreaCollection collection, string area, ViewElement viewElement)
+        => viewElement switch
+        {
+            ViewElementWithView view => RenderArea(collection, area, layoutDefinition.ControlsManager.Get(view.View)),
+            ViewElementWithViewDefinition viewDefinition => RenderArea(collection, area, viewDefinition),
+            _ => throw new NotSupportedException($"Unknown type: {viewElement.GetType().FullName}")
         };
 
 
-    private UiControl GetControl(RefreshRequest request)
+    //private UiControl GetControl(LayoutAreaReference request)
+    //{
+    //    var generator = layoutDefinition.ViewGenerators.FirstOrDefault(g => g.Filter(request));
+    //    if (generator == null)
+    //        return null;
+    //    var control = layoutDefinition.ControlsManager.Get(generator.Generator.Invoke(request));
+    //    return control;
+    //}
+
+
+    public IObservable<LayoutAreaCollection> Render(IObservable<WorkspaceState> state, LayoutAreaReference reference)
     {
-        var generator = layoutDefinition.ViewGenerators.FirstOrDefault(g => g.Filter(request));
-        if (generator == null)
-            return null;
-        var control = uiControlService.GetUiControl(generator.Generator.Invoke(request));
-        return control;
+        RenderArea(state, reference);
+        return areaSubject;
     }
 
-    IMessageDelivery IMessageHandler<RefreshRequest>.HandleMessage(IMessageDelivery<RefreshRequest> request)
-        => RefreshView(request);
 
 
-
-
-    protected IMessageDelivery RefreshView(IMessageDelivery<RefreshRequest> request)
+    private readonly ReplaySubject<LayoutAreaCollection> areaSubject = new(1);
+    public IDisposable Subscribe(IObserver<LayoutAreaCollection> observer)
     {
-        if (string.IsNullOrWhiteSpace(request.Message.Area))
-            return request.Ignored();
-
-        var area = request.Message.Area;
-
-        DisposeArea(area);
-
-
-        var layoutArea = GetControl(request.Message);
-
-        var reference = RenderControl(request.Message.Area, layoutArea, request.Message);
-        workspace.Commit();
-        Hub.Post(new RefreshResponse(reference), o => o.ResponseFor(request));
-
-        return request.Processed();
-    }
-
-    private void DisposeArea(string area)
-    {
-        var areas = workspace.State.GetData<LayoutArea>().Where(a => a.Area.StartsWith(area)).ToArray();
-        workspace.Delete(areas);
+        return areaSubject.Subscribe(observer);
     }
 }
 
-internal record ViewGenerator(Func<RefreshRequest, bool> Filter, ViewDefinition Generator);
-
-public record LayoutDefinition(IMessageHub Hub)
-{
-    private readonly IUiControlService uiControlService = Hub.ServiceProvider.GetRequiredService<IUiControlService>();
-    internal LayoutStackControl InitialState { get; init; }
-    internal ImmutableList<ViewGenerator> ViewGenerators { get; init; } = ImmutableList<ViewGenerator>.Empty;
-    public LayoutDefinition WithInitialState(LayoutStackControl initialState) => this with { InitialState = initialState };
-    public LayoutDefinition WithGenerator(Func<RefreshRequest, bool> filter, ViewDefinition viewGenerator) => this with { ViewGenerators = ViewGenerators.Add(new(filter, viewGenerator)) };
-
-    public LayoutDefinition WithView(string area, Func<RefreshRequest, object> generator) =>
-        WithGenerator(r => r.Area == area, r => new LayoutArea(area,uiControlService.GetUiControl(generator.Invoke(r))));
-
-
-    internal ImmutableList<Func<CancellationToken, Task>> Initializations { get; init; } = ImmutableList<Func<CancellationToken, Task>>.Empty;
-
-    public LayoutDefinition WithInitialization(Func<CancellationToken, Task> func)
-        => this with { Initializations = Initializations.Add(func) };
-}

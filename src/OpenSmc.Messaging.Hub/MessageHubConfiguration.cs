@@ -26,17 +26,8 @@ public record MessageHubConfiguration
     {
         Address = address;
         ParentServiceProvider = parentServiceProvider;
-        Properties = InitializeProperties();
     }
 
-    private ImmutableDictionary<Type, object> InitializeProperties()
-    {
-        return ImmutableDictionary<Type, object>.Empty
-            .Add(typeof(SerializationConfiguration), ParentServiceProvider
-                .GetService<ISerializationService>()?.Configuration
-            ?? new()
-            );
-    }
 
     internal Func<IServiceCollection, IServiceCollection> Services { get; init; } = x => x;
 
@@ -109,12 +100,9 @@ public record MessageHubConfiguration
         services.Replace(ServiceDescriptor.Singleton<HostedHubsCollection, HostedHubsCollection>());
         services.Replace(ServiceDescriptor.Singleton(typeof(ITypeRegistry),
             sp => new TypeRegistry(ParentServiceProvider.GetService<ITypeRegistry>())));
-        services.Replace(ServiceDescriptor.Singleton<IMessageService>(sp => new MessageService(Address,
-            sp.GetService<ISerializationService>(), // HACK: GetRequiredService replaced by GetService (16.01.2024, Alexander Yolokhov)
-            sp.GetRequiredService<ILogger<MessageService>>()
-        )));
+        services.Replace(ServiceDescriptor.Singleton<IMessageService>(sp => new MessageService(Address,sp.GetRequiredService<ILogger<MessageService>>())));
         services.Replace(ServiceDescriptor.Singleton(sp => new ParentMessageHub(sp.GetRequiredService<IMessageHub>())));
-        services.Replace(ServiceDescriptor.Singleton<ISerializationService>(sp => new SerializationService(sp, Get<SerializationConfiguration>())));
+        services.Replace(ServiceDescriptor.Singleton<ISerializationService>(sp => new SerializationService(sp)));
         Services.Invoke(services);
         return services;
     }

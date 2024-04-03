@@ -2,63 +2,168 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Text.Json.Nodes;
-using Json.Patch;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
-using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
-public class DataPlugin : MessageHubPlugin<WorkspaceState>,
+public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub),
     IWorkspace,
     IMessageHandler<UpdateDataRequest>,
     IMessageHandler<DeleteDataRequest>,
     IMessageHandler<DataChangedEvent>,
-    IMessageHandler<SubscribeDataRequest>,
+    IMessageHandler<SubscribeRequest>,
     IMessageHandler<UnsubscribeDataRequest>,
     IMessageHandler<PatchChangeRequest>
-
 {
-    private readonly Subject<WorkspaceState> subject = new();
 
-    public IObservable<WorkspaceState> Stream { get; }
-    public DataPlugin(IMessageHub hub) : base(hub)
+    public IObservable<WorkspaceState> Stream => synchronizationStream;
+    private readonly ReplaySubject<WorkspaceState> synchronizationStream = new(1);
+    private readonly Subject<WorkspaceState> subject = new();
+    public IObservable<WorkspaceState> ChangeStream => changeStream;
+    public IEnumerable<Type> MappedTypes => State.MappedTypes;
+    private readonly ConcurrentDictionary<(object Address, WorkspaceReference Reference), IDisposable> streams = new ();
+
+    private readonly ConcurrentDictionary<(object Address, WorkspaceReference Reference), IDisposable> externalSubscriptions = new ();
+    private void RegisterChangeFeed<TReference>(object address, WorkspaceReference<TReference> reference)
     {
-        serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
-        InitializeState(new WorkspaceState(hub, new EntityStore(ImmutableDictionary<string, InstancesInCollection>.Empty), ImmutableDictionary<Type, ITypeSource>.Empty));
-        Stream = subject
-            .StartWith(State)
-            .Replay(1)
-            .RefCount();
+        if (externalSubscriptions.ContainsKey((address, reference)))
+            return;
+        var stream = (ChangeStream<TReference>)streams.GetOrAdd((Hub.Address,reference),
+            key => { return new ChangeStream<TReference>(this, key.Address, reference, options, () => Hub.Version, false); });
+        stream.Disposables.Add(externalSynchronizationStream.Where(x => x.Address.Equals(address) && x.Reference.Equals(reference)).Subscribe(stream));
+        externalSubscriptions.GetOrAdd((address, reference), _ => 
+            stream.Subscribe<DataChangedEvent>(dc => Hub.Post(dc, o => o.WithTarget(address))));
+    }
+    
+    public ChangeStream<TReference> GetRemoteStream<TReference>(object address, WorkspaceReference<TReference> reference)
+    {
+        return GetRemoteStreamImpl(address, reference);
     }
 
-    public IEnumerable<Type> MappedTypes => State.MappedTypes;
+    internal ChangeStream<TReference> GetRemoteStreamImpl<TReference>(object address, WorkspaceReference<TReference> reference)
+    {
+        if (Hub.Address.Equals(address))
+            throw new ArgumentException(
+                $"This method provides access to external hubs. Address {address} is our own address.");
+ 
+        var key = (address, reference);
+        return (ChangeStream<TReference>)streams.GetOrAdd(key, _ =>
+        {
+            Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(address));
+            var ret = new ChangeStream<TReference>(this, address, reference, options, () => Hub.Version, true);
 
-    public void Update(IEnumerable<object> instances, UpdateOptions options)
-        => RequestChange(null,  new UpdateDataRequest(instances.ToArray()){Options = options});
+            ret.Disposables.Add(
+                ((IObservable<PatchChangeRequest>)ret)
+                .Where(x => x.Address.Equals(address) && x.Reference.Equals(reference))
+                .Subscribe(patch =>
+                    Hub.RegisterCallback(
+                        Hub.Post(patch, o => o.WithTarget(address)), HandleCommitResponse)));
+            ret.Disposables.Add(
+                ret.Subscribe<DataChangedEvent>(dataChanged => Hub.Post(dataChanged, o => o.WithTarget(address)))
+                );
+
+            //ret.Disposables.Add(ret.Subscribe<ChangeItem<TReference>>(Synchronize));
+
+            ret.Disposables.Add(externalSynchronizationStream
+                .Where(x => x.Address.Equals(address) && x.Reference.Equals(reference))
+                .DistinctUntilChanged()
+                .Subscribe(ret));
+
+            ret.Disposables.Add(
+                new Disposables.AnonymousDisposable(() =>
+                    Hub.Post(new UnsubscribeDataRequest(reference), o => o.WithTarget(address)))
+            );
+            return ret;
+        });
+    }
+
+    protected IMessageDelivery HandleCommitResponse(IMessageDelivery<DataChangeResponse> response)
+    {
+        if (response.Message.Status == DataChangeStatus.Committed)
+            return response.Processed();
+        // TODO V10: Here we have to put logic to revert the state if commit has failed. (26.02.2024, Roland Bürgi)
+        return response.Ignored();
+    }
+
+
+    public void Update(IEnumerable<object> instances, UpdateOptions updateOptions)
+        => RequestChange(null,  new UpdateDataRequest(instances.ToArray()){Options = updateOptions});
 
     public void Delete(IEnumerable<object> instances)
         => RequestChange(null, new DeleteDataRequest(instances.ToArray()));
 
 
-    //private Task initializeTask;
-    //public override Task Initialized => initializeTask;
+    private readonly TaskCompletionSource initializeTaskCompletionSource = new();
+    public override Task Initialized => initializeTaskCompletionSource.Task;
+    private DataContext DataContext { get; set; }
 
+    private ReduceManager ReduceManager { get; } = new();
     public override async Task StartAsync(CancellationToken cancellationToken)  // This loads the persisted state
     {
+        logger.LogDebug($"Starting data plugin at address {Address}");
         await base.StartAsync(cancellationToken);
 
-        var dataContext = Hub.GetDataConfiguration();
-        await InitializeAsync(cancellationToken, dataContext); 
+        DataContext = Hub.GetDataConfiguration(ReduceManager);
+        Initialize(DataContext);
     }
 
-    private async Task InitializeAsync(CancellationToken cancellationToken, DataContext dataContext)
+    private readonly Subject<WorkspaceState> changeStream = new();
+
+    private JsonSerializerOptions options;
+
+    private void Initialize(DataContext dataContext)
     {
-        var workspace = await dataContext.InitializeAsync(cancellationToken);
-        UpdateState(ws => ws.Merge(workspace) with { Version = Hub.Version });
-        subject.OnNext(State);
-        subject.DistinctUntilChanged().Subscribe(dataContext.Update);
+
+        var typeSources = new Dictionary<string, ITypeSource>();
+        options = Hub.JsonSerializerOptions;
+
+        logger.LogDebug($"Starting data plugin at address {Address}");
+        var dataContextStreams = dataContext.Initialize().ToArray();
+
+        logger.LogDebug("Initialized workspace in address {address}", Address);
+
+        foreach (var ts in DataContext.DataSources.Values.SelectMany(ds => ds.TypeSources))
+            typeSources[ts.CollectionName] = ts;
+
+
+        InitializeState(new(Hub, new EntityStore(ImmutableDictionary<string, InstanceCollection>.Empty), typeSources, ReduceManager));
+
+
+
+        var initializeObserver = new InitializeObserver(
+            dataContextStreams.ToDictionary(x => x.Address),
+            () =>
+            {
+                subject.Subscribe(synchronizationStream);
+                subject.OnNext(State);
+
+                initializeTaskCompletionSource.SetResult();
+            });
+
+        foreach (var stream in dataContextStreams)
+        {
+            streams[(stream.Address, stream.Reference)] = stream;
+            stream.Disposables.Add(stream.Subscribe<ChangeItem<EntityStore>>(Synchronize));
+            initializeObserver.Disposables.Add(stream.Subscribe(initializeObserver));
+        }
+
     }
+
+
+    private void Synchronize(ChangeItem<EntityStore> item)
+    {
+        if (Hub.Address.Equals(item.ChangedBy))
+            return;
+
+        UpdateState(s => s.Synchronize(item));
+    }
+
+
+
+
 
 
     IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(IMessageDelivery<UpdateDataRequest> request)
@@ -66,33 +171,29 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
     IMessageDelivery IMessageHandler<PatchChangeRequest>.HandleMessage(IMessageDelivery<PatchChangeRequest> request)
         => RequestChange(request, request.Message);
 
+    IMessageDelivery IMessageHandler<DeleteDataRequest>.HandleMessage(IMessageDelivery<DeleteDataRequest> request)
+        => RequestChange(request, request.Message);
 
     private IMessageDelivery RequestChange(IMessageDelivery request, DataChangeRequest change)
     {
         UpdateState(s => s.Change(change) with{Version = Hub.Version});
-        Commit();
-        Hub.Post(new DataChangeResponse(Hub.Version, DataChangeStatus.Committed), o => o.ResponseFor(request));
+        changeStream.OnNext(State);
+        if (request != null)
+        {
+            Hub.Post(new DataChangeResponse(Hub.Version, DataChangeStatus.Committed), o => o.ResponseFor(request));
+            Commit();
+        }
         return request?.Processed();
     }
 
 
-    IMessageDelivery IMessageHandler<DeleteDataRequest>.HandleMessage(IMessageDelivery<DeleteDataRequest> request)
-        => RequestChange(request, request.Message);
-
-
-
-
-
-
-
     public override bool IsDeferred(IMessageDelivery delivery)
     {
-        if (delivery.Message.GetType().IsGetRequest())
-            return true;
         if (delivery.Message is DataChangedEvent)
             return false;
         
-        return base.IsDeferred(delivery);
+        var ret = base.IsDeferred(delivery);
+        return ret;
     }
 
 
@@ -106,108 +207,83 @@ public class DataPlugin : MessageHubPlugin<WorkspaceState>,
         State.Rollback();
     }
 
-
-    public EntityReference GetReference(object entity)
+    public IObservable<TReference> GetStream<TReference>(WorkspaceReference<TReference> reference)
     {
-        throw new NotImplementedException();
+        return ReduceManager.ReduceStream(Stream, reference);
     }
 
 
+    private readonly Subject<DataChangedEvent> externalSynchronizationStream = new();
     IMessageDelivery IMessageHandler<DataChangedEvent>.HandleMessage(IMessageDelivery<DataChangedEvent> request)
     {
-        var @event = request.Message;
-        UpdateState(s => s.Synchronize(@event));
+        externalSynchronizationStream.OnNext(request.Message);
         Commit();
         return request.Processed();
     }
 
-    IMessageDelivery IMessageHandler<SubscribeDataRequest>.HandleMessage(IMessageDelivery<SubscribeDataRequest> request)
-        => StartSynchronization(request);
+    IMessageDelivery IMessageHandler<SubscribeRequest>.HandleMessage(IMessageDelivery<SubscribeRequest> request)
+        => Subscribe(request);
 
-    private readonly ConcurrentDictionary<(object Address, string Id),IDisposable> subscriptions = new();
 
-    private readonly ISerializationService serializationService;
-    private IMessageDelivery StartSynchronization(IMessageDelivery<SubscribeDataRequest> request)
+    private readonly ILogger<DataPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<DataPlugin>>();
+
+    private IMessageDelivery Subscribe(IMessageDelivery<SubscribeRequest> request)
     {
-        var key = (request.Message, request.Message.Id);
-        if (subscriptions.ContainsKey(key))
-            return request.Ignored();
-
-        subscriptions[key] = Stream
-            .StartWith(State)
-            .Subscribe(new PatchSubscriber<object>(Hub, request, serializationService));
-
+        RegisterChangeFeed(request.Sender, (dynamic)request.Message.Reference);
         return request.Processed();
     }
 
-    private class PatchSubscriber<T>(IMessageHub hub, IMessageDelivery request, ISerializationService serializationService) : IObserver<T>
-    {
-        private JsonNode LastSynchronized { get; set; }
 
-        public void OnCompleted()
-        {
-        }
-
-        public void OnError(Exception error)
-        {
-        }
-
-        public void OnNext(T value)
-        {
-            if (value == null)
-                return;
-
-            var node = value as JsonNode
-                       ?? JsonNode.Parse(serializationService.SerializeToString(value));
-
-
-            var dataChanged = LastSynchronized == null
-                ? new DataChangedEvent(hub.Version, value)
-                : new DataChangedEvent(hub.Version, LastSynchronized.CreatePatch(node));
-
-            hub.Post(dataChanged, o => o.WithTarget(request.Sender));
-            LastSynchronized = node;
-
-        }
-    }
 
 
     IMessageDelivery IMessageHandler<UnsubscribeDataRequest>.HandleMessage(
         IMessageDelivery<UnsubscribeDataRequest> request)
     {
-        foreach (var id in request.Message.Ids)
-        {
-            if (subscriptions.TryRemove((request.Message, id), out var existing))
-                existing.Dispose();
-
-        }
+        if (externalSubscriptions.TryRemove((request.Sender, request.Message.Reference), out var existing))
+            existing.Dispose();
 
         return request.Processed();
     }
 
+
+    public override async Task DisposeAsync()
+    {
+        foreach (var subscription in externalSubscriptions.Values)
+            subscription.Dispose();
+
+        await DataContext.DisposeAsync();
+        await base.DisposeAsync();
+    }
 }
 
-public class DataSubscription<T> :IDisposable
+internal class InitializeObserver(Dictionary<object, ChangeStream<EntityStore>> streams, Action onCompleteInitialization) : IObserver<ChangeItem<EntityStore>>
 {
-    private readonly IDisposable subscription;
-    private IObservable<T> Stream { get; }
-    public DataSubscription(IObservable<WorkspaceState> stateStream, 
-        WorkspaceReference reference, 
-        Action<T> action)
+    public void OnCompleted()
     {
-        Stream = stateStream
-            .Select(ws => (T)ws.Reduce(reference))
-            .DistinctUntilChanged()
-            .Replay(1)
-            .RefCount();
+    }
 
-        subscription = Stream.Subscribe(action);
+    public void OnError(Exception error)
+    {
+    }
+
+    public void OnNext(ChangeItem<EntityStore> value)
+    {
+        //if (streams.Remove(value.Address, out var stream))
+        //    stream.Initialize(value.Value);
+        streams.Remove(value.Address);
+        if (streams.Count == 0)
+            Complete();
 
     }
 
-    public void Dispose()
+    private void Complete()
     {
-        subscription.Dispose();
+        foreach (var disposable in Disposables)
+            disposable.Dispose();
+        onCompleteInitialization.Invoke();
     }
+
+
+    public readonly List<IDisposable> Disposables = new();
 }
 

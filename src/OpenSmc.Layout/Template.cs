@@ -52,28 +52,13 @@ public static class Template
 }
 
 //result into ui control with DataBinding set
-public record ItemTemplateControl : UiControl<ItemTemplateControl>, IObjectWithUiControl
+public record ItemTemplateControl : UiControl<ItemTemplateControl>
 {
     public ItemTemplateControl(object view, object data)
         : base(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
     {
         View = view;
         Data = data;
-    }
-
-    public UiControl GetUiControl(IUiControlService uiControlService, IServiceProvider serviceProvider)
-    {
-        if (View is Composition.LayoutStackControl stackControl)
-        {
-            stackControl = stackControl with
-                           {
-                               Areas = stackControl.ViewElements
-                                                   .Select(x => new LayoutArea(x.Area, uiControlService.GetUiControl(x is ViewElementWithView { View: not null } d ? d.View : null)))
-                                                   .ToImmutableList()
-                           };
-            return uiControlService.GetUiControl(stackControl);
-        }
-        return uiControlService.GetUiControl(View);
     }
 
 
@@ -95,11 +80,6 @@ public record ItemTemplateControl : UiControl<ItemTemplateControl>, IObjectWithU
 
     public object View { get; init; }
 
-    public void Deconstruct(out object View, out object DataContext)
-    {
-        View = this.View;
-        DataContext = this.DataContext;
-    }
 }
 
 

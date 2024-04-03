@@ -1,4 +1,6 @@
-﻿using FluentAssertions;
+﻿using System.Reactive.Linq;
+using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.Data.TestDomain;
@@ -16,7 +18,7 @@ public class SnapshotImportTest(ITestOutputHelper output) : HubTestBase(output)
             .AddData(
                 data => data.FromConfigurableDataSource
                 (
-                    nameof(DataSource),
+                    nameof(GenericDataSource),
                     source => source
                         .ConfigureCategory(TestDomain.TestRecordsDomain)
                 )
@@ -48,10 +50,10 @@ B4,B,4
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
-        var ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
-            o => o.WithTarget(new HostAddress()));
+        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
-        ret.Message.Items.Should().HaveCount(4);
+        ret.Should().HaveCount(4);
 
         const string content2 = @"@@MyRecord
 SystemName,DisplayName,Number
@@ -66,11 +68,10 @@ SystemName,DisplayName
 
         await Task.Delay(100);
 
-        ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
-            o => o.WithTarget(new HostAddress()));
+        ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
-        ret.Message.Items.Should().HaveCount(1);
-        ret.Message.Items.Should().ContainSingle().Which.Number.Equals(5);
+        ret.Should().HaveCount(1);
+        ret.Should().ContainSingle().Which.Number.Equals(5);
     }
 
     [Fact]
@@ -88,11 +89,10 @@ B4,B,4
         var importRequest = new ImportRequest(content1);
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
-        var ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
-            o => o.WithTarget(new HostAddress()));
-
-        ret.Message.Items.Should().HaveCount(4);
+        ret.Should().HaveCount(4);
 
         const string content2 = @"@@MyRecord
 SystemName,DisplayName,Number
@@ -108,11 +108,10 @@ SystemName,DisplayName
 
         await Task.Delay(100);
 
-        ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
-            o => o.WithTarget(new HostAddress()));
+        ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
-        ret.Message.Items.Should().HaveCount(1);
-        ret.Message.Items.Should().ContainSingle().Which.Number.Equals(5);
+        ret.Should().HaveCount(1);
+        ret.Should().ContainSingle().Which.Number.Equals(5);
 
         const string content3 = @"@@MyRecord
 SystemName,DisplayName,Number
@@ -126,10 +125,9 @@ SystemName2,DisplayName2
         importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
-        ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
-            o => o.WithTarget(new HostAddress()));
+        ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
-        ret.Message.Items.Should().HaveCount(2);
+        ret.Should().HaveCount(2);
 
     }
     
@@ -149,10 +147,10 @@ B4,B,4
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
-        var ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
-            o => o.WithTarget(new HostAddress()));
+        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
-        ret.Message.Items.Should().HaveCount(4);
+        ret.Should().HaveCount(4);
 
         const string content2 = @"@@MyRecord
 SystemName,DisplayName,Number
@@ -163,11 +161,10 @@ SystemName,DisplayName,Number
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
         
         await Task.Delay(100);
-        
-        ret = await client.AwaitResponse(new GetManyRequest<MyRecord>(),
-            o => o.WithTarget(new HostAddress()));
 
-        ret.Message.Items.Should().BeEmpty();
+        ret = await workspace.GetObservable<MyRecord>().FirstAsync();
+
+        ret.Should().BeEmpty();
     }
 
 }

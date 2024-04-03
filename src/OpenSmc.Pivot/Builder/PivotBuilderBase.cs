@@ -10,7 +10,7 @@ namespace OpenSmc.Pivot.Builder
     public abstract record PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> : IPivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
         where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
     {
-        private readonly IQuerySource fQuerySource;
+        private readonly IWorkspace fReadOnlyWorkspace;
         public IDimensionCache DimensionsCache { get; private init; }
         public IHierarchicalDimensionCache HierarchicalDimensionCache { get; private init; }
         public IHierarchicalDimensionOptions HierarchicalDimensionOptions { get; private init; }
@@ -27,12 +27,12 @@ namespace OpenSmc.Pivot.Builder
             HierarchicalDimensionOptions = new HierarchicalDimensionOptions();
         }
 
-        internal IQuerySource QuerySource
+        internal IWorkspace ReadOnlyWorkspace
         {
-            get => fQuerySource;
+            get => fReadOnlyWorkspace;
             init
             {
-                fQuerySource = value;
+                fReadOnlyWorkspace = value;
                 DimensionsCache = new DimensionCache(value);
                 HierarchicalDimensionCache = new HierarchicalDimensionCache(value);
             }
@@ -43,9 +43,9 @@ namespace OpenSmc.Pivot.Builder
             return (TPivotBuilder)this with { HierarchicalDimensionOptions = optionsFunc(HierarchicalDimensionOptions) };
         }
 
-        public TPivotBuilder WithQuerySource(IQuerySource querySource)
+        public TPivotBuilder WithQuerySource(IWorkspace readOnlyWorkspace)
         {
-            return (TPivotBuilder)this with { QuerySource = querySource };
+            return (TPivotBuilder)this with { ReadOnlyWorkspace = readOnlyWorkspace };
         }
 
         public virtual TPivotBuilder Transpose<TValue>()

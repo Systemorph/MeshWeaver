@@ -1,57 +1,63 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json.Nodes;
-using System.Text.Json.Serialization;
 
 namespace OpenSmc.Data;
 
-public abstract record WorkspaceReference : IObservable<object>
+public abstract record WorkspaceReference;
+
+public abstract record WorkspaceReference<TReference> : WorkspaceReference;
+
+public record EntityStore(ImmutableDictionary<string, InstanceCollection> Instances)
 {
-    public abstract IDisposable Subscribe(IObserver<object> observer);
+
+    public EntityStore Merge(EntityStore s2) => new(Instances.SetItems(s2.Instances.ToImmutableDictionary(kvp => kvp.Key, kvp => kvp.Value.Merge(Instances.GetValueOrDefault(kvp.Key)))));
 }
-
-public abstract record WorkspaceReference<TReference> : WorkspaceReference
-{
-    [JsonIgnore] public IObservable<TReference> Stream { get; init; }
-
-    public override IDisposable Subscribe(IObserver<object> observer)
-        => Stream.Subscribe((IObserver<TReference>)observer);
-
-}
-public record EntityStore(ImmutableDictionary<string, InstancesInCollection> Instances);
 
 public record EntireWorkspace : WorkspaceReference<EntityStore>
 {
-    public override string ToString() => nameof(EntireWorkspace);
+    public string Path => "$";
+    public override string ToString() => Path;
 }
 
 public record JsonPathReference(string Path) : WorkspaceReference<JsonNode>
 {
-    public override string ToString() => $"Path:{Path}";
-
+    public override string ToString() => $"{Path}";
 }
 
-public record EntityReference(string Collection, object Id) : WorkspaceReference<object>
+public record InstanceReference(object Id) : WorkspaceReference<object>
 {
-    public override string ToString() => $"{Collection} : {Id}";
+    public virtual string Path => $"$.['{Id}']";
 
 }
 
-public record EntityReference<T>(object Id) : WorkspaceReference<T>
+public record EntityReference(string Collection, object Id) : InstanceReference(Id)
 {
-    public override string ToString() => $"{typeof(T).FullName} : {Id}";
+    public override string Path => $"$.['{Collection}']['{Id}']";
+    public override string ToString() => Path;
 
 }
 
-public record CollectionReference(string Collection) : WorkspaceReference<InstancesInCollection>
+
+public record CollectionReference(string Collection) : WorkspaceReference<InstanceCollection>
 {
-    public override string ToString() => $"Collection : {Collection}";
-    public Func<InstancesInCollection, InstancesInCollection> Transformation { get; init; } = x => x;
+    public string Path => $"$['{Collection}']";
+    public override string ToString() => Path;
 
 }
+
 
 public record CollectionsReference(IReadOnlyCollection<string> Collections)
     : WorkspaceReference<EntityStore>
 {
-    public override string ToString() => $"Collections : {Collections.Aggregate(string.Empty, (x,y) => $"{x},{y}")}";
+    public string Path => $"$[{Collections.Select(c => $"'{c}'").Aggregate((x,y) => $"{x},{y}")}]";
+    public override string ToString() => Path;
 
 }
+
+public record PartitionedCollectionsReference(WorkspaceReference<EntityStore> Collections, object Partition)
+    : WorkspaceReference<EntityStore>
+{
+    public string Path => $"{Collections}@{Partition}";
+    public override string ToString() => Path;
+}
+

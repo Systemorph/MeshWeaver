@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
@@ -22,12 +23,27 @@ public abstract record DataSourceWithStorage<TDataSource>(object Id, IMessageHub
         return Storage.StartTransactionAsync(cancellationToken);
     }
 
+    public override IEnumerable<ChangeStream<EntityStore>> Initialize()
+    {
+        Workspace.ChangeStream
+            .Subscribe(Update);
+
+        return base.Initialize();
+    }
+
+    private void Update(WorkspaceState workspace)
+    {
+        // TODO V10: Should see that there are actual changes ==> no reducer applied here. (25.03.2024, Roland Bürgi)
+        persistenceHub.Schedule(ct => UpdateAsync(workspace, ct));
+    }
+
     protected virtual async Task UpdateAsync(WorkspaceState workspace, CancellationToken cancellationToken)
     {
         await using ITransaction transaction = await StartTransactionAsync(cancellationToken);
         try
         {
-            base.Update(workspace);
+            foreach (var ts in TypeSources.Values)
+                ts.Update(workspace);
             await transaction.CommitAsync(cancellationToken);
         }
         catch (Exception ex)
@@ -37,8 +53,12 @@ public abstract record DataSourceWithStorage<TDataSource>(object Id, IMessageHub
         }
     }
 
-    public override void Update(WorkspaceState workspace)
+
+
+
+    public override async ValueTask DisposeAsync()
     {
-        persistenceHub.Schedule(c => UpdateAsync(workspace, c));
+        await persistenceHub.DisposeAsync();
+        await base.DisposeAsync();
     }
 }

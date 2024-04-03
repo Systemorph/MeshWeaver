@@ -1,0 +1,11 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\OpenSmc.TestDomain\OpenSmc.TestDomain.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.Hierarchies\OpenSmc.Hierarchies.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="**\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+</Project>

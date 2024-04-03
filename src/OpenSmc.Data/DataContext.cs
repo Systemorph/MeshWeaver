@@ -1,9 +1,11 @@
 ﻿using OpenSmc.Messaging;
 using System.Collections.Immutable;
+using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Data.Serialization;
 
 namespace OpenSmc.Data;
 
-public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace)
+public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace) : IAsyncDisposable
 {
     internal ImmutableDictionary<object,IDataSource> DataSources { get; private set; } = ImmutableDictionary<object, IDataSource>.Empty;
 
@@ -18,29 +20,39 @@ public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace)
     };
 
     public ImmutableDictionary<object, DataSourceBuilder> DataSourceBuilders { get; set; } = ImmutableDictionary<object, DataSourceBuilder>.Empty;
+    internal ReduceManager ReduceManager { get; init; }
+
+    public DataContext AddWorkspaceReferenceStream<TReference>(Func<IObservable<WorkspaceState>, TReference, IObservable<object>> referenceDefinition)
+        where TReference : WorkspaceReference
+        => this with { ReduceManager = ReduceManager.AddWorkspaceReferenceStream(referenceDefinition) };
+    public DataContext AddWorkspaceReference<TReference>(Func<WorkspaceState, TReference, object> referenceDefinition)
+        where TReference : WorkspaceReference
+        => this with { ReduceManager = ReduceManager.AddWorkspaceReference(referenceDefinition) };
 
     public delegate IDataSource DataSourceBuilder(IMessageHub hub); 
 
-    public async Task<WorkspaceState> InitializeAsync(CancellationToken cancellationToken)
+    public IReadOnlyCollection<ChangeStream<EntityStore>> Initialize()
     {
         DataSources = DataSourceBuilders
             .ToImmutableDictionary(kvp => kvp.Key,
                 kvp => kvp.Value.Invoke(Hub));
 
-        var workspace = await DataSources
+        var streams = DataSources
             .Values
-            .ToAsyncEnumerable()
-            .SelectAwait(async ds => await ds.InitializeAsync(cancellationToken))
-            .AggregateAsync((ws1, ws2) => ws1.Merge(ws2), cancellationToken: cancellationToken);
+            .SelectMany(ds => ds.Initialize())
+            .ToArray();
 
-        return workspace;
+        return streams;
     }
 
 
 
-    public void Update(WorkspaceState ws)
+
+    public async ValueTask DisposeAsync()
     {
         foreach (var dataSource in DataSources.Values)
-            dataSource.Update(ws);
+        {
+            await dataSource.DisposeAsync();
+        }
     }
 }

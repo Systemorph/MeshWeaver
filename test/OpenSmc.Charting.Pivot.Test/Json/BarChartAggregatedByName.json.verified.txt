@@ -1,0 +1,74 @@
+﻿{
+  Data: {
+    DataSets: [
+      {
+        XAxisID: x1,
+        Data: [
+          -2.8,
+          5.6,
+          6.3,
+          7.1000000000000005,
+          null,
+          null,
+          null
+        ],
+        Label: Italy,
+        Type: bar
+      },
+      {
+        XAxisID: x1,
+        Data: [
+          4.1,
+          4.0,
+          -2.0,
+          4.0,
+          3.0,
+          4.0,
+          4.0
+        ],
+        Label: Russia,
+        Type: bar
+      }
+    ],
+    Labels: [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ]
+  },
+  Options: {
+    Responsive: true,
+    Scales: {
+      x1: {
+        Labels: [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7
+        ],
+        Display: true,
+        Stacked: false
+      },
+      y: {
+        Stacked: false
+      }
+    },
+    Plugins: {
+      Legend: {
+        Display: true
+      },
+      ColorSchemes: {
+        Scheme: {
+          Palette: brewer.PastelOne9
+        }
+      }
+    }
+  }
+}

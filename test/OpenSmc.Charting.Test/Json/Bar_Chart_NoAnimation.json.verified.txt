@@ -1,0 +1,55 @@
+﻿{
+  Data: {
+    DataSets: [
+      {
+        Data: [
+          2.0,
+          2.0,
+          3.0,
+          3.0
+        ],
+        Label: One
+      },
+      {
+        Data: [
+          1.0,
+          4.0,
+          1.0,
+          2.0
+        ],
+        Label: Two
+      }
+    ],
+    Labels: [
+      Jan,
+      Feb,
+      Mar,
+      Apr
+    ]
+  },
+  Options: {
+    Animation: {
+      Duration: 0
+    },
+    Plugins: {
+      Legend: {
+        Display: true
+      },
+      Title: {
+        Display: true,
+        Font: {
+          Family: Ovеrpass,
+          Size: 22,
+          Weight: 600,
+          LineHeight: 24px
+        },
+        Text: No animation
+      },
+      ColorSchemes: {
+        Scheme: {
+          Palette: brewer.PastelOne9
+        }
+      }
+    }
+  }
+}

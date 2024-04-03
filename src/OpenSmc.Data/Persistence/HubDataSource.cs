@@ -1,105 +1,116 @@
-﻿using Json.Patch;
+﻿using System.Text.Json;
+using System.Text.Json.Nodes;
+using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 using OpenSmc.Serialization;
 
 namespace OpenSmc.Data.Persistence;
 
-public record HubDataSource(object Id, IMessageHub Hub, IWorkspace Workspace) : DataSource<HubDataSource>(Id, Hub)
+public record PartitionedHubDataSource(object Id, IMessageHub Hub) : HubDataSourceBase<PartitionedHubDataSource>(Id, Hub)
 {
+    public PartitionedHubDataSource WithType<T>(Func<T, object> partitionFunction)
+        => WithType(partitionFunction, x => x);
 
-    private readonly bool isExternalDataSource = !Id.Equals(Hub.Address);
-    public DataChangeResponse Commit()
+    public PartitionedHubDataSource WithType<T>(Func<T,object> partitionFunction, Func<ITypeSource, ITypeSource> config)
+        => WithType(partitionFunction, x => (PartitionedTypeSourceWithType<T>)config.Invoke(x));
+
+    public PartitionedHubDataSource WithType<T>(Func<T, object> partitionFunction, Func<PartitionedTypeSourceWithType<T>, PartitionedTypeSourceWithType<T>> typeSource)
+        => WithTypeSource(typeof(T), typeSource.Invoke(new PartitionedTypeSourceWithType<T>(Hub, partitionFunction, Id)));
+
+
+
+    protected override PartitionedHubDataSource WithType<T>(Func<ITypeSource, ITypeSource> config)
     {
-        //State.Commit();
-        //var newWorkspace = GetSerializedWorkspace();
-        //var dataChanged = CurrentWorkspace == null
-        //    ? new DataChangedEvent(Hub.Version, new(newWorkspace.ToJsonString()), ChangeType.Full)
-        //    : new DataChangedEvent(Hub.Version, new(JsonSerializer.Serialize(CurrentWorkspace.CreatePatch(newWorkspace))), ChangeType.Patch);
+        throw new NotSupportedException("Please use method with partition");
+    }
 
-        //if (isExternalDataSource)
-        //    CommitTransactionExternally(dataChanged);
 
-        //CurrentWorkspace = newWorkspace;
-        //UpdateSubscriptions();
-        //return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, dataChanged);
-
-        throw new NotImplementedException();
+    public override IEnumerable<ChangeStream<EntityStore>> Initialize()
+    {
+        streams = InitializePartitions.Select(a => GetStream(a, GetReference(a))).ToArray();
+        return streams;
     }
 
 
 
-    private void CommitTransactionExternally(DataChangedEvent dataChanged)
+    protected  WorkspaceReference<EntityStore> GetReference(object partition)
     {
-        var request = Hub.Post(new PatchChangeRequest(dataChanged.Change), o => o.WithTarget(Id));
-        Hub.RegisterCallback(request, HandleCommitResponse);
+        var ret = new PartitionedCollectionsReference(GetReference(), partition);
+        return ret;
     }
 
-    private IMessageDelivery HandleCommitResponse(IMessageDelivery<DataChangeResponse> response)
-    {
-        if (response.Message.Status == DataChangeStatus.Committed)
-            return response.Processed();
+    public PartitionedHubDataSource InitializingPartitions(IEnumerable<object> partitions)
+        => this with { InitializePartitions = InitializePartitions.Concat(partitions).ToArray() };
 
-        // TODO V10: Here we have to put logic to revert the state if commit has failed. (26.02.2024, Roland Bürgi)
-        return response.Ignored();
+    private object[] InitializePartitions { get; init; } = Array.Empty<object>();
+    private ChangeStream<EntityStore>[] streams;
+
+}
+
+
+
+public abstract record HubDataSourceBase<TDataSource> : DataSource<TDataSource> where TDataSource : HubDataSourceBase<TDataSource>
+{
+    private readonly ITypeRegistry typeRegistry;
+    protected JsonSerializerOptions Options => Hub.JsonSerializerOptions;
+    private readonly ISerializationService serializationService;
+
+    protected HubDataSourceBase(object Id, IMessageHub Hub) : base(Id, Hub)
+    {
+        serializationService = Hub.ServiceProvider.GetRequiredService<ISerializationService>();
+        typeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
     }
 
 
-    protected override HubDataSource WithType<T>(Func<ITypeSource, ITypeSource> typeSource)
-        => WithType<T>(x => (TypeSourceWithType<T>)typeSource.Invoke(x));
 
-    public HubDataSource WithType<T> (Func<TypeSourceWithType<T>, TypeSourceWithType<T>> typeSource)
-        => WithTypeSource(typeof(T), typeSource.Invoke(new TypeSourceWithType<T>(Id, Hub.ServiceProvider)));
-
-
-    private readonly ITypeRegistry typeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
-    private static readonly Type[] DataTypes = [typeof(EntityStore), typeof(JsonPatch)];
-    public override Task<WorkspaceState> InitializeAsync(CancellationToken cancellationToken)
+    protected override WorkspaceReference<EntityStore> GetReference()
     {
         typeRegistry.WithTypes(TypeSources.Values.Select(t => t.ElementType));
-        typeRegistry.WithTypes(DataTypes);
-        WorkspaceReference collections =
-            SyncAll
-                ? new EntireWorkspace()
-                : new CollectionsReference
-                (
-                    TypeSources
-                        .Values
-                        .Select(ts => ts.CollectionName).ToArray()
-                );
-        var startDataSynchronizationRequest = new SubscribeDataRequest(Main, collections);
-
-        var subscribeRequest =
-            Hub.Post(startDataSynchronizationRequest,
-                o => o.WithTarget(Id));
-
-        var tcs = new TaskCompletionSource<WorkspaceState>(cancellationToken);
-        Hub.RegisterCallback(subscribeRequest, response =>
-            {
-                
-                tcs.SetResult(new WorkspaceState(Hub, response.Message, TypeSources));
-                
-                return subscribeRequest.Processed();
-            },
-            cancellationToken);
-        return tcs.Task;
+        typeRegistry.WithType<JsonPatch>();
+        return SyncAll
+            ? new EntireWorkspace()
+            : base.GetReference();
     }
 
-    private const string Main = nameof(Main);
-
-    public override void Dispose()
+    protected ChangeStream<EntityStore> GetStream(object address, WorkspaceReference<EntityStore> reference)
     {
-        Hub.Post(new UnsubscribeDataRequest(Main));
-        base.Dispose();
-    }
-
-    public void Rollback()
-    {
+        return Workspace.GetRemoteStream(address, reference);
     }
 
 
     internal bool SyncAll { get; init; }
-    public HubDataSource SynchronizeAll(bool synchronizeAll = true)
-        => this with { SyncAll = synchronizeAll };
+
+    public TDataSource SynchronizeAll(bool synchronizeAll = true)
+        => This with { SyncAll = synchronizeAll };
 
 }
+
+public record HubDataSource : HubDataSourceBase<HubDataSource>
+{
+    protected override HubDataSource WithType<T>(Func<ITypeSource, ITypeSource> typeSource)
+        => WithType<T>(x => (TypeSourceWithType<T>)typeSource.Invoke(x));
+
+    public HubDataSource WithType<T>(Func<TypeSourceWithType<T>, TypeSourceWithType<T>> typeSource)
+        => WithTypeSource(typeof(T), typeSource.Invoke(new TypeSourceWithType<T>(Hub, Id)));
+
+    public HubDataSource(object Id, IMessageHub Hub) : base(Id, Hub)
+    {
+    }
+
+
+    
+    public override IEnumerable<ChangeStream<EntityStore>> Initialize()
+    {
+        return [GetStream(Id, GetReference())];
+    }
+
+    protected IMessageDelivery Initialize(IMessageDelivery<DataChangedEvent> response, TaskCompletionSource<EntityStore> tcs)
+    {
+        tcs.SetResult(JsonNode.Parse(((RawJson)response.Message.Change).Content).Deserialize<EntityStore>(Options));
+
+        return response.Processed();
+    }
+}
+

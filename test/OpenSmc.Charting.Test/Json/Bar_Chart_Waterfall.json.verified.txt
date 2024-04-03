@@ -1,0 +1,311 @@
+﻿{
+  Data: {
+    DataSets: [
+      {
+        BackgroundColor: {
+          Red: 102,
+          Green: 183,
+          Blue: 255,
+          Alpha: 1.0
+        },
+        Data: [
+          {
+            Range: [
+              0.0,
+              1.0
+            ],
+            Label: Jan,
+            DataLabel: 1,
+            DataLabelColor: #66B7FF,
+            DataLabelAlignment: end
+          },
+          {
+            Range: [
+              1.0,
+              5.0
+            ],
+            Label: Feb,
+            DataLabel: 4,
+            DataLabelColor: #66B7FF,
+            DataLabelAlignment: end
+          },
+          {
+            Label: Mar,
+            DataLabel: ,
+            DataLabelColor: #66B7FF,
+            DataLabelAlignment: end
+          },
+          {
+            Label: Apr,
+            DataLabel: ,
+            DataLabelColor: #66B7FF,
+            DataLabelAlignment: end
+          },
+          {
+            Range: [
+              0.0,
+              8.0
+            ],
+            Label: May,
+            DataLabel: 8,
+            DataLabelColor: #66B7FF,
+            DataLabelAlignment: end
+          },
+          {
+            Range: [
+              8.0,
+              19.0
+            ],
+            Label: June,
+            DataLabel: 11,
+            DataLabelColor: #66B7FF,
+            DataLabelAlignment: end
+          }
+        ],
+        HoverBackgroundColor: {
+          Red: 102,
+          Green: 183,
+          Blue: 255,
+          Alpha: 1.0
+        },
+        Label: Increments,
+        Parsing: {
+          XAxisKey: label,
+          YAxisKey: range
+        }
+      },
+      {
+        BackgroundColor: {
+          Red: 245,
+          Green: 98,
+          Blue: 149,
+          Alpha: 1.0
+        },
+        Data: [
+          {
+            Label: Jan,
+            DataLabel: ,
+            DataLabelColor: #F56295,
+            DataLabelAlignment: end
+          },
+          {
+            Label: Feb,
+            DataLabel: ,
+            DataLabelColor: #F56295,
+            DataLabelAlignment: end
+          },
+          {
+            Range: [
+              2.0,
+              5.0
+            ],
+            Label: Mar,
+            DataLabel: -3,
+            DataLabelColor: #F56295,
+            DataLabelAlignment: end
+          },
+          {
+            Range: [
+              0.0,
+              2.0
+            ],
+            Label: Apr,
+            DataLabel: -2,
+            DataLabelColor: #F56295,
+            DataLabelAlignment: end
+          },
+          {
+            Label: May,
+            DataLabel: ,
+            DataLabelColor: #F56295,
+            DataLabelAlignment: end
+          },
+          {
+            Label: June,
+            DataLabel: ,
+            DataLabelColor: #F56295,
+            DataLabelAlignment: end
+          }
+        ],
+        HoverBackgroundColor: {
+          Red: 245,
+          Green: 98,
+          Blue: 149,
+          Alpha: 1.0
+        },
+        Label: Decrements,
+        Parsing: {
+          XAxisKey: label,
+          YAxisKey: range
+        }
+      },
+      {
+        BackgroundColor: {
+          Red: 166,
+          Green: 171,
+          Blue: 194,
+          Alpha: 1.0
+        },
+        Data: [
+          {
+            Label: Jan,
+            DataLabel: ,
+            DataLabelColor: #A6ABC2,
+            DataLabelAlignment: end
+          },
+          {
+            Label: Feb,
+            DataLabel: ,
+            DataLabelColor: #A6ABC2,
+            DataLabelAlignment: end
+          },
+          {
+            Label: Mar,
+            DataLabel: ,
+            DataLabelColor: #A6ABC2,
+            DataLabelAlignment: end
+          },
+          {
+            Label: Apr,
+            DataLabel: ,
+            DataLabelColor: #A6ABC2,
+            DataLabelAlignment: end
+          },
+          {
+            Label: May,
+            DataLabel: ,
+            DataLabelColor: #A6ABC2,
+            DataLabelAlignment: end
+          },
+          {
+            Label: June,
+            DataLabel: ,
+            DataLabelColor: #A6ABC2,
+            DataLabelAlignment: end
+          }
+        ],
+        HoverBackgroundColor: {
+          Red: 166,
+          Green: 171,
+          Blue: 194,
+          Alpha: 1.0
+        },
+        Label: Total,
+        Parsing: {
+          XAxisKey: label,
+          YAxisKey: range
+        }
+      },
+      {
+        PointRadius: 0,
+        BorderWidth: 1,
+        Data: [
+          1.0,
+          1.0,
+          null,
+          0.0,
+          0.0,
+          null
+        ],
+        Label: hidden,
+        DataLabels: {
+          Display: false
+        },
+        Type: line
+      },
+      {
+        PointRadius: 0,
+        BorderWidth: 1,
+        Data: [
+          null,
+          5.0,
+          5.0,
+          null,
+          8.0,
+          8.0
+        ],
+        Label: hidden,
+        DataLabels: {
+          Display: false
+        },
+        Type: line
+      },
+      {
+        PointRadius: 0,
+        BorderWidth: 1,
+        Data: [
+          null,
+          null,
+          2.0,
+          2.0,
+          null,
+          null
+        ],
+        Label: hidden,
+        DataLabels: {
+          Display: false
+        },
+        Type: line
+      }
+    ],
+    Labels: [
+      Jan,
+      Feb,
+      Mar,
+      Apr,
+      May,
+      June
+    ]
+  },
+  Options: {
+    Scales: {
+      x: {
+        Grid: {
+          Display: false
+        },
+        Stacked: true
+      },
+      y: {
+        Display: false
+      }
+    },
+    Plugins: {
+      Legend: {
+        Display: true,
+        Labels: {
+          Filter: item => item.text !== 'hidden'
+        }
+      },
+      Title: {
+        Display: true,
+        Font: {
+          Family: Ovеrpass,
+          Size: 22,
+          Weight: 600,
+          LineHeight: 24px
+        },
+        Text: Waterfall
+      },
+      Tooltip: {
+        Enabled: false
+      },
+      ColorSchemes: {
+        Scheme: [
+          #66B7FF,
+          #F56295,
+          #A6ABC2,
+          #A6ABC2,
+          #A6ABC2,
+          #A6ABC2
+        ]
+      },
+      DataLabels: {
+        Align: context => context.dataset.data[context.dataIndex].dataLabelAlignment,
+        Anchor: context => context.dataset.data[context.dataIndex].dataLabelAlignment,
+        Color: context => context.dataset.data[context.dataIndex].dataLabelColor,
+        Display: true,
+        Formatter: (value, context) => context.dataset.data[context.dataIndex]?.dataLabel
+      }
+    }
+  }
+}

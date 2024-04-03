@@ -17,10 +17,7 @@ public class DeferralContainer : IAsyncDisposable
 
         var deliveryLink = new DeferralItem(deferredFilter, deferralItem!.Value.DeliverMessage);
         deferralChain.AddFirst(deliveryLink);
-        return new AnonymousDisposable(() =>
-        {
-            deliveryLink.Release();
-        });
+        return new AnonymousDisposable(deliveryLink.Release);
     }
 
     public Task<IMessageDelivery> DeliverAsync(IMessageDelivery delivery, CancellationToken cancellationToken) =>

@@ -1,6 +1,8 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using OpenSmc.Application.Scope;
+﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data;
+using OpenSmc.Data.Serialization;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
@@ -11,58 +13,36 @@ namespace OpenSmc.Layout;
 public static class LayoutExtensions
 {
 
-    public static MessageHubConfiguration AddLayout(this MessageHubConfiguration conf, Func<LayoutDefinition, LayoutDefinition> layoutDefinition)
+    public static MessageHubConfiguration AddLayout(this MessageHubConfiguration config,
+        Func<LayoutDefinition, LayoutDefinition> layoutDefinition)
     {
-        return conf
-            .WithDeferral(d => d.Message is RefreshRequest or SetAreaRequest)
-            .WithServices(
-                services => services.AddSingleton<IUiControlService, UiControlService>()
-                .AddAllControlHubs()
+        return config
+            .WithServices(services => services.AddScoped<ILayout, LayoutPlugin>())
+            .AddData(data => data
+                .AddWorkspaceReferenceStream<LayoutAreaReference>((ws, a) =>
+                    data.Hub.ServiceProvider.GetRequiredService<ILayout>().Render(ws, a))
             )
-            .AddApplicationScope()
-            .AddData(data => data.FromConfigurableDataSource("Layout", dataSource => dataSource
-                //.WithType<LayoutArea>(type => type.WithQuery())
-            ))
             .AddLayoutTypes()
-            .AddPlugin<LayoutPlugin>(plugin => plugin.WithFactory(() => new LayoutPlugin(layoutDefinition.Invoke(new LayoutDefinition(plugin.Hub)))))
-            ;
-    }
+            .Set(config.GetListOfLambdas().Add(layoutDefinition))
 
-    public static MessageHubConfiguration RouteLayoutMessages(this MessageHubConfiguration configuration, object mainLayoutAddress)
-        => configuration
-            .WithRoutes(forward => forward
-                .RouteMessage<RefreshRequest>(_ => mainLayoutAddress)
-                //.RouteMessage<SetAreaRequest>(_ => mainLayoutAddress) // // TODO V10: Not sure yet if we need this... (04.03.2024, Roland Bürgi)
-            );
+            .AddPlugin<LayoutPlugin>(plugin =>
+                plugin.WithFactory(() => (LayoutPlugin)plugin.Hub.ServiceProvider.GetRequiredService<ILayout>()));
+    }
+    internal static ImmutableList<Func<LayoutDefinition, LayoutDefinition>> GetListOfLambdas(this MessageHubConfiguration config) => config.Get<ImmutableList<Func<LayoutDefinition, LayoutDefinition>>>() ?? ImmutableList<Func<LayoutDefinition, LayoutDefinition>>.Empty;
 
 
     public static MessageHubConfiguration AddLayoutTypes(this MessageHubConfiguration configuration)
         => configuration
             .WithTypes(typeof(UiControl).Assembly.GetTypes()
                 .Where(t => typeof(IUiControl).IsAssignableFrom(t) && !t.IsAbstract))
-            .WithTypes(typeof(MessageAndAddress))
+            .WithTypes(typeof(MessageAndAddress), typeof(LayoutAreaCollection), typeof(LayoutAreaReference))
         ;
 
-    private static MessageHubConfiguration MainLayoutConfiguration(MessageHubConfiguration configuration,
-        Func<LayoutDefinition, LayoutDefinition> layoutDefinition)
-    {
-        return configuration.AddPlugin<LayoutPlugin>(plugin => plugin.WithFactory(() => CreateLayoutPlugin(plugin.Hub, layoutDefinition)));
-    }
 
 
-    internal static IServiceCollection AddAllControlHubs(this IServiceCollection services)
-        => typeof(LayoutPlugin).Assembly.GetTypes().Where(t => typeof(IMessageHubPlugin).IsAssignableFrom(t))
-            .Aggregate(services, (s, t) => s.AddTransient(t));
-
-    internal static LayoutPlugin CreateLayoutPlugin(this IMessageHub hub, Func<LayoutDefinition, LayoutDefinition> layoutDefinition)
-    {
-        var ld = new LayoutDefinition(hub);
-        if (layoutDefinition != null)
-            ld = layoutDefinition(ld);
-
-        return new LayoutPlugin(ld);
-    }
-
-
+    public static IObservable<UiControl> GetControl(this ChangeStream<LayoutAreaCollection> changeItems,
+        LayoutAreaReference reference)
+        => ((IObservable<ChangeItem<LayoutAreaCollection>>)changeItems).Select(i => i.Value.Areas.GetValueOrDefault(reference.Area))
+            .Where(x => x != null);
 
 }
