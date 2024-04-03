@@ -1,9 +1,8 @@
 import { Dispatch } from "@reduxjs/toolkit";
-import { distinctUntilChanged, map, Observable, tap } from "rxjs";
+import { distinctUntilChanged, map, Observable } from "rxjs";
 import { LayoutArea } from "@open-smc/layout/src/contract/LayoutArea";
 import { expandBindings } from "./expandBindings";
-import { cloneDeepWith } from "lodash-es";
-import { isEqual } from "lodash";
+import { cloneDeepWith, isEqual } from "lodash-es";
 import { selectDeep } from "@open-smc/data/src/selectDeep";
 import { setArea } from "./appReducer";
 

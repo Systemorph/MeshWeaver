@@ -1,5 +1,5 @@
 import { configureStore } from "@reduxjs/toolkit"
-import { Style } from "../../../layout/src/contract/controls/Style";
+import { Style } from "@open-smc/layout/src/contract/controls/Style";
 import { appReducer } from "./appReducer";
 import { from } from "rxjs";
 
