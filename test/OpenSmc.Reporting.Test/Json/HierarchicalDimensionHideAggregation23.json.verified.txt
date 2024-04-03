@@ -1,0 +1,177 @@
+﻿{
+  ColumnDefs: [
+    {
+      ColId: Value,
+      HeaderName: Value,
+      ValueGetter: data.data && data.data['value']
+    }
+  ],
+  RowData: [
+    {
+      RowGroup: {
+        Coordinates: [
+          A1
+        ],
+        SystemName: A1,
+        DisplayName: A 1,
+        GrouperName: DimA0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A1,
+          A11
+        ],
+        SystemName: A1.A11,
+        DisplayName: A 11,
+        GrouperName: DimA1
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A1,
+          A11,
+          A111
+        ],
+        SystemName: A1.A11.A111,
+        DisplayName: A 111,
+        GrouperName: DimA2
+      },
+      Data: {
+        Value: 1.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A1,
+          A11,
+          A112
+        ],
+        SystemName: A1.A11.A112,
+        DisplayName: A 112,
+        GrouperName: DimA2
+      },
+      Data: {
+        Value: 2.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A1,
+          A12
+        ],
+        SystemName: A1.A12,
+        DisplayName: A 12,
+        GrouperName: DimA1
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A1,
+          A12,
+          NullGroup
+        ],
+        SystemName: A1.A12.NullGroup,
+        DisplayName:  ,
+        GrouperName: DimA2
+      },
+      Data: {
+        Value: 3.0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A2
+        ],
+        SystemName: A2,
+        DisplayName: A 2,
+        GrouperName: DimA0
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A2,
+          NullGroup
+        ],
+        SystemName: A2.NullGroup,
+        DisplayName:  ,
+        GrouperName: DimA1
+      }
+    },
+    {
+      RowGroup: {
+        Coordinates: [
+          A2,
+          NullGroup,
+          NullGroup
+        ],
+        SystemName: A2.NullGroup.NullGroup,
+        DisplayName:  ,
+        GrouperName: DimA2
+      },
+      Data: {
+        Value: 4.0
+      }
+    }
+  ],
+  DefaultColDef: {
+    CellStyle: {
+      TextAlign: right
+    },
+    ValueFormatter: typeof(value) == 'number' ? new Intl.NumberFormat([], { maximumFractionDigits: 2 }).format(value) : value,
+    Resizable: true
+  },
+  DefaultColGroupDef: {
+    OpenByDefault: true
+  },
+  AutoGroupColumnDef: {
+    ColId: Name,
+    HeaderName: Name,
+    CellStyle: {
+      TextAlign: left
+    },
+    CellRendererParams: {
+      InnerRenderer: displayNameGroupColumnRenderer,
+      SuppressCount: true
+    },
+    Resizable: true
+  },
+  Components: {
+    displayNameGroupColumnRenderer:
+(function () {
+                function DisplayNameGroupColumnRenderer() {}
+                DisplayNameGroupColumnRenderer.prototype.init = function (params) {
+                    var tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = params.data.rowGroup.displayName;
+                    this.eGui = tempDiv.firstChild;
+                };
+                DisplayNameGroupColumnRenderer.prototype.getGui = function () {
+                    return this.eGui;
+                };
+                return DisplayNameGroupColumnRenderer;
+        }())
+  },
+  TreeData: true,
+  GetDataPath: data => data.rowGroup.coordinates,
+  HeaderHeight: 35,
+  RowHeight: 35,
+  GetRowStyle: params => params.data.style,
+  OnGridReady:
+event => {
+                var allColumnIds = [];
+                event.columnApi.getAllGridColumns().forEach(function (column) {
+                allColumnIds.push(column.colId);
+                });
+
+                event.columnApi.autoSizeColumns(allColumnIds);
+        },
+  ColumnHoverHighlight: true,
+  DomLayout: autoHeight
+}

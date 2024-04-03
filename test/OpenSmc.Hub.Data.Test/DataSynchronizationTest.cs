@@ -1,4 +1,6 @@
-﻿using FluentAssertions;
+﻿using System.Reactive.Linq;
+using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data;
 using OpenSmc.Data.TestDomain;
 using OpenSmc.Hub.Fixture;
@@ -38,26 +40,24 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
     public async Task TestBasicSynchronization()
     {
         var client = GetClient();
-        var businessUnitResponse = 
-            await client.AwaitResponse(new GetManyRequest<BusinessUnit>());
-        businessUnitResponse.Message.Items.Should().HaveCountGreaterThan(1);
+        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var businessUnits = await workspace.GetObservable<BusinessUnit>().FirstAsync();
+        businessUnits.Should().HaveCountGreaterThan(1);
 
-        var businessUnit = businessUnitResponse.Message.Items.First();
+        var businessUnit = businessUnits.First();
         businessUnit = businessUnit with { DisplayName = NewName };
         client.Post(new UpdateDataRequest(new []{ businessUnit }));
 
         // get the data from the client again
-        var getRequest = new GetRequest<BusinessUnit> { Id = businessUnit.SystemName };
-        var loadedInstance = await client.AwaitResponse(getRequest);
-        loadedInstance.Message.Should().Be(businessUnit);
+        var loadedInstance = await workspace.GetObservable<BusinessUnit>(businessUnit.SystemName).FirstAsync();
+        loadedInstance.Should().Be(businessUnit);
 
         // data sync is happening async in order not to block the client ==> we need to give it
         // some grace time for the sync to happen
         await Task.Delay(100);
 
-        
-        loadedInstance = await client.AwaitResponse(getRequest, 
-            o => o.WithTarget(new HostAddress())); // we query directly the host to see that data sync worked
-        loadedInstance.Message.Should().Be(businessUnit);
+        var hostWorkspace = GetHost().ServiceProvider.GetRequiredService<IWorkspace>();
+        loadedInstance = await hostWorkspace.GetObservable<BusinessUnit>(businessUnit.SystemName).FirstAsync(); // we query directly the host to see that data sync worked
+        loadedInstance.Should().Be(businessUnit);
     }
 }

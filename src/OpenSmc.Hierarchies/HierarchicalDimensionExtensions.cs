@@ -4,8 +4,8 @@ namespace OpenSmc.Hierarchies;
 
 public static class HierarchicalDimensionExtensions
 {
-    public static IHierarchicalDimensionCache ToHierarchicalDimensionCache(this IQuerySource querySource)
+    public static IHierarchicalDimensionCache ToHierarchicalDimensionCache(this IWorkspace readOnlyWorkspace)
     {
-        return new HierarchicalDimensionCache(querySource);
+        return new HierarchicalDimensionCache(readOnlyWorkspace);
     }
 }

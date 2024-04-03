@@ -39,23 +39,21 @@ public class TestLayoutPlugin(IMessageHub hub) : MessageHubPlugin(hub),
         => layout
             .WithInitialState(Controls.Stack()
                 .WithId(MainStackId)
-                .WithClickAction(context =>
-                {
-                    context.Hub.Post(new SetAreaRequest(TestAreas.NewArea,
-                        Controls.TextBox("Hello")
-                            .WithId("HelloId")));
-                    return Task.CompletedTask;
-                })
+                //.WithClickAction(context =>
+                //{
+                //    context.Hub.Post(new SetAreaRequest(TestAreas.NewArea,
+                //        Controls.TextBox("Hello")
+                //            .WithId("HelloId")));
+                //    return Task.CompletedTask;
+                //})
             )
-            .WithView(NamedArea, _ =>
-                Controls.TextBox(NamedArea)
+            .WithView(NamedArea, Controls.TextBox(NamedArea)
                     .WithId(NamedArea)
             )
             // this tests proper updating in the case of MVP
-            .WithView(UpdatingView, _ => ModelViewPresenterTestCase())
+            .WithView(UpdatingView, ModelViewPresenterTestCase())
             // this tests proper updating in the case of MVVM
-            .WithView(DataBoundView, _ =>
-                Template.Bind(workspace.State.GetData<DataRecord>().First(),
+            .WithView(DataBoundView, Template.Bind(workspace.State.GetData<DataRecord>().First(),
                     record =>
                         Controls
                             .Menu(record.DisplayName)

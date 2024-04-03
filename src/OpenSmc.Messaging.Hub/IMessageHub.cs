@@ -1,4 +1,7 @@
-﻿namespace OpenSmc.Messaging;
+﻿using System.Text.Json;
+using OpenSmc.Messaging.Serialization;
+
+namespace OpenSmc.Messaging;
 
 
 public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDisposable
@@ -46,7 +49,6 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
 
     // ReSharper disable once UnusedMethodReturnValue.Local
     Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, AsyncDelivery callback, CancellationToken cancellationToken);
-    Task<bool> FlushAsync();
     public void Schedule(Func<CancellationToken, Task> action);
 
 
@@ -55,9 +57,12 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
     T Get<T>(string context = "");
     void AddPlugin(IMessageHubPlugin plugin);
     IMessageHub GetHostedHub<TAddress1>(TAddress1 address, Func<MessageHubConfiguration, MessageHubConfiguration> config);
+    IMessageHub GetHostedHub<TAddress1>(TAddress1 address)
+        => GetHostedHub(address, x => x);
 
     IMessageHub WithDisposeAction(Action<IMessageHub> disposeAction);
     IMessageHub WithDisposeAction(Func<IMessageHub, Task> disposeAction);
+    JsonSerializerOptions JsonSerializerOptions { get; }
 }
 
 

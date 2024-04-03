@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using OpenSmc.Data;
+using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 using System.Reflection;
@@ -10,11 +11,12 @@ public record EntityFrameworkDataSource(object Id,
     IMessageHub Hub,
     EntityFrameworkDataStorage EntityFrameworkDataStorage) : DataSourceWithStorage<EntityFrameworkDataSource>(Id, Hub, EntityFrameworkDataStorage)
 {
-    public override Task<WorkspaceState> InitializeAsync(CancellationToken cancellationToken)
+    public override IEnumerable<ChangeStream<EntityStore>> Initialize()
     {
         EntityFrameworkDataStorage.Initialize(ModelBuilder ?? ConvertDataSourceMappings);
-        return base.InitializeAsync(cancellationToken);
+        return base.Initialize();
     }
+
 
     public EntityFrameworkDataSource WithModel(Action<ModelBuilder> modelBuilder)
         => this with { ModelBuilder = modelBuilder };
@@ -41,5 +43,6 @@ public record EntityFrameworkDataSource(object Id,
 
     public EntityFrameworkDataSource WithType<T>(Func<TypeSourceWithTypeWithDataStorage<T>, TypeSourceWithTypeWithDataStorage<T>> typeSource) 
         where T : class 
-        => this with { TypeSources = TypeSources.Add(typeof(T), typeSource.Invoke(new TypeSourceWithTypeWithDataStorage<T>(Id, Hub.ServiceProvider, Storage))) };
+        => this with { TypeSources = TypeSources.Add(typeof(T), typeSource.Invoke(new TypeSourceWithTypeWithDataStorage<T>(Hub,Id, Storage))) };
+
 }

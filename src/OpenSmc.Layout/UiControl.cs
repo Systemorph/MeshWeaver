@@ -53,6 +53,7 @@ public abstract record UiControl(object Data) : IUiControl
     public bool IsClickable => ClickAction != null;
 
     internal Func<IUiActionContext, Task> ClickAction { get; init; }
+
     public Task ClickAsync(IUiActionContext context) => ClickAction?.Invoke(context) ?? Task.CompletedTask;
 }
 
@@ -73,8 +74,6 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion,
     public override bool IsUpToDate(object other)
         => Equals(other);
 
-    protected bool IsUpToDate(LayoutArea a, LayoutArea b)
-        => a.Equals(b);
 
     public TControl WithStyle(Func<StyleBuilder, StyleBuilder> styleBuilder) => This with { Style = styleBuilder(new StyleBuilder()).Build() };
     public TControl WithSkin(string skin) => This with { Skin = skin };
@@ -172,7 +171,6 @@ public abstract record ExpandableUiControl<TControl>(string ModuleName, string A
     }
 
     internal Func<IUiActionContext, Task<UiControl>> ExpandFunc { get; init; }
-    public LayoutArea Expanded { get; init; }
     public TControl WithExpand(object message, object target, object area) => This with { ExpandMessage = new(message, target, area) };
 
     public TControl WithExpand(object payload, Func<IUiActionContext, Task<UiControl>> expand)

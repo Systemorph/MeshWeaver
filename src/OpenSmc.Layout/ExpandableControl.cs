@@ -16,6 +16,7 @@ public record CodeSampleControl(object Data) : UiControl<CodeSampleControl>(Modu
 public record HtmlControl(object Data) : UiControl<HtmlControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);
 public record TitleControl(object Data) : UiControl<TitleControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);
 public record CheckBoxControl(object Data) : UiControl<CheckBoxControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);
+public record GridControl(object Data) : UiControl<GridControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);
 
 // TODO V10: fix build (2023.09.07, Armen Sirotenko)
 public record BadgeControl(object Title, object SubTitle, object Color) : UiControl<BadgeControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null);

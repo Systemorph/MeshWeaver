@@ -1,5 +1,4 @@
-﻿using System;
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 
 namespace OpenSmc.Serialization;
 
@@ -23,17 +22,8 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
         return parent?.TryGetType(name, out type) ?? false;
     }
 
-    public string GetTypeName(Type type)
-    {
-        if (nameByType.TryGetValue(type, out var typeName))
-            return typeName;
-
-        // ReSharper disable once AssignNullToNotNullAttribute
-        typeByName[type.FullName] = type;
-        nameByType[type] = type.FullName;
-        return type.FullName;
-    }
-
+    public bool TryGetTypeName(Type type, out string typeName)
+        => nameByType.TryGetValue(type, out typeName);
     public string GetOrAddTypeName(Type type)
     {
         if (nameByType.TryGetValue(type, out var typeName))
@@ -56,11 +46,11 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
 
     public static string FormatType(Type mainType)
     {
+        var mainTypeName = (mainType.FullName ?? mainType.Name).Replace('\u002B', '.');
         if (!mainType.IsGenericType)
-            return mainType.FullName ?? mainType.Name;
+            return mainTypeName;
 
-        var @namespace = mainType.Namespace != null ? mainType.Namespace + "." : "";
-        var text = $"{@namespace}{mainType.Name[..mainType.Name.IndexOf('`')]}[{string.Join(',', mainType.GetGenericArguments().Select(FormatType))}]";
+        var text = $"{mainTypeName[..mainTypeName.IndexOf('`')]}[{string.Join(',', mainType.GetGenericArguments().Select(FormatType))}]";
         return text;
     }
 }

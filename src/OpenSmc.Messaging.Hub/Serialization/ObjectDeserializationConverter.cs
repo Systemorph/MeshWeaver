@@ -4,15 +4,8 @@ using OpenSmc.Serialization;
 
 namespace OpenSmc.Messaging.Serialization;
 
-public class ObjectDeserializationConverter : JsonConverter
+public class ObjectDeserializationConverter(ITypeRegistry typeRegistry) : JsonConverter
 {
-    private readonly ITypeRegistry typeRegistry;
-
-    public ObjectDeserializationConverter(ITypeRegistry typeRegistry)
-    {
-        this.typeRegistry = typeRegistry;
-    }
-
     public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer1)
     {
         throw new NotSupportedException();

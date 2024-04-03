@@ -20,11 +20,10 @@ public static class ApplicationScopeRegistryExtensions
         var applicationScopeAddress = new ApplicationScopeAddress(conf.Address);
         return conf
             .WithServices(services => services
-                .RegisterScopes()
+                .RegisterScopesAndArithmetics()
                 .AddSingleton<IScopeFactory, ScopeFactory>()
                 .AddSingleton(serviceProvider => serviceProvider.GetRequiredService<IScopeFactory>().ForSingleton()
                     .ToScope<IApplicationScope>()))
-            .WithSerialization(rule => rule.WithTransformation<IScope>(TransformScope))
             .WithHostedHub
             (
                 new ApplicationScopeAddress(conf.Address),

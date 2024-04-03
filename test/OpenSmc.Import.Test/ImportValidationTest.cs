@@ -6,6 +6,7 @@ using OpenSmc.Data;
 using OpenSmc.Data.TestDomain;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
+using System.Reactive.Linq;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -22,7 +23,7 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
             .AddData(
                 data => data.FromConfigurableDataSource
                 (
-                    nameof(DataSource),
+                    nameof(GenericDataSource),
                     source => source
                             .ConfigureCategory(TestDomain.ContractDomain)
                             .WithType<ActivityLog>()
@@ -79,10 +80,10 @@ FoundationYear,ContractType
             .BeEquivalentTo("The field FoundationYear must be between 1999 and 2023.",
                 ImportPlugin.ValidationStageFailed);
 
-        var ret = await client.AwaitResponse(new GetManyRequest<TestDomain.Contract>(),
-            o => o.WithTarget(new HostAddress()));
+        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var ret = await workspace.GetObservable<TestDomain.Contract>().FirstAsync();
 
-        ret.Message.Items.Should().HaveCount(0);
+        ret.Should().HaveCount(0);
     }
 
     [Fact]
@@ -98,14 +99,14 @@ FoundationYear,ContractType
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Failed);
 
-        importResponse.Message.Log.Messages.OfType<LogMessage>().Should()
+        importResponse.Message.Log.Messages.Should()
             .ContainSingle(x => x.LogLevel == LogLevel.Error)
             .Which.Message.Should().Be(ImportPlugin.ValidationStageFailed);
+        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var ret = await workspace.GetObservable<TestDomain.Country>().FirstAsync();
 
-        var ret = await client.AwaitResponse(new GetManyRequest<TestDomain.Country>(),
-            o => o.WithTarget(new HostAddress()));
 
-        ret.Message.Items.Should().HaveCount(0);
+        ret.Should().HaveCount(0);
     }
 
     [Fact]
@@ -126,10 +127,11 @@ FoundationYear,ContractType
                 "The DecimalValue field value should be in interval from 10 to 20.",
                 ImportPlugin.ValidationStageFailed);
 
-        var ret = await client.AwaitResponse(new GetManyRequest<TestDomain.Discount>(),
-            o => o.WithTarget(new HostAddress()));
+        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var ret = await workspace.GetObservable<TestDomain.Discount>().FirstAsync();
 
-        ret.Message.Items.Should().HaveCount(0);
+
+        ret.Should().HaveCount(0);
     }
 
     [Fact]
@@ -144,17 +146,47 @@ FoundationYear,ContractType
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Failed);
 
-        importResponse.Message.Log.Messages.OfType<LogMessage>().Should()
+        importResponse.Message.Log.Messages.Should()
             .ContainSingle(x => x.LogLevel == LogLevel.Error)
             .Which.Message.Should().Be(ImportPlugin.ValidationStageFailed);
 
         await Task.Delay(300);
 
-        var ret = await client.AwaitResponse(new GetManyRequest<ActivityLog>(),
-            o => o.WithTarget(new HostAddress()));
+        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var ret = await workspace.GetObservable<ActivityLog>().FirstAsync();
 
-        ret.Message.Items.Should().HaveCount(1);
+        ret.Should().HaveCount(1);
         //var log = ret.Message.Items.First();
         //log.Status.Should().Be(ActivityLogStatus.Failed);
+    }
+
+    [Fact]
+    public async Task ImportWithCategoryValidationTest()
+    {
+        const string content = 
+@"@@Country
+SystemName,DisplayName
+RU,Russia
+FR,France
+@@Address
+Street,Country
+Red,RU
+Blue,FR";
+
+        var client = GetClient();
+        var importRequest = new ImportRequest(content) { Format = "Test2" };
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
+        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Failed);
+
+        importResponse.Message.Log.Messages.OfType<LogMessage>().Should()
+            .ContainSingle(x => x.LogLevel == LogLevel.Error)
+            .Which.Message.Should().Be(ImportPlugin.ValidationStageFailed);
+
+        var workspace = client.GetWorkspace();
+
+        var ret = await workspace.GetObservable<TestDomain.Country>().FirstAsync();
+        var ret2 = await workspace.GetObservable<TestDomain.Address>().FirstAsync();
+
+        ret.Should().HaveCount(0);
     }
 }

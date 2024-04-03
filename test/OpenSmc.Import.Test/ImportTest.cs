@@ -1,6 +1,8 @@
-﻿using FluentAssertions;
+﻿using System.Reactive.Linq;
+using FluentAssertions;
 using FluentAssertions.Equivalency;
 using FluentAssertions.Execution;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.Data.TestDomain;
@@ -35,29 +37,22 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
 
         // assert
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
-
-        var transactionalItems1 = await client.AwaitResponse(new GetManyRequest<TransactionalData>(),
-            o => o.WithTarget(new TransactionalDataAddress(2024, "1", new HostAddress())));
-        var computedItems1 = await client.AwaitResponse(new GetManyRequest<ComputedData>(),
-            o => o.WithTarget(new ComputedDataAddress(2024, "1", new HostAddress())));
-        var transactionalItems2 = await client.AwaitResponse(new GetManyRequest<TransactionalData>(),
-            o => o.WithTarget(new TransactionalDataAddress(2024, "2", new HostAddress())));
-        var computedItems2 = await client.AwaitResponse(new GetManyRequest<ComputedData>(),
-            o => o.WithTarget(new ComputedDataAddress(2024, "2", new HostAddress())));
+        var host = GetHost();
+        var transactionalItems1 = await GetWorkspace(host.GetHostedHub(new TransactionalDataAddress(2024, "1", new HostAddress()))).GetObservable<TransactionalData>().FirstAsync();
+        var computedItems1 = await GetWorkspace(host.GetHostedHub(new ComputedDataAddress(2024, "1", new HostAddress()))).GetObservable < ComputedData >().FirstAsync();
 
         using (new AssertionScope())
         {
-            transactionalItems1.Message.Total.Should().Be(2);
-            var expectedComputedItems1 = transactionalItems1.Message.Items.Select(x => new ComputedData("", 2024, x.LoB, "1", 2 * x.Value));
-            computedItems1.Message.Total.Should().Be(2);
-            computedItems1.Message.Items.Select(x => x.Value).Should().BeEquivalentTo(expectedComputedItems1.Select(x => x.Value));
-            computedItems1.Message.Items.Should().HaveCount(2).And.BeEquivalentTo(expectedComputedItems1, c => c.WithoutId());
-
-            transactionalItems2.Message.Total.Should().Be(2);
-            var expectedComputedItems2 = transactionalItems2.Message.Items.Select(x => new ComputedData("", 2024, x.LoB, "2", 2 * x.Value));
-            computedItems2.Message.Total.Should().Be(2);
-            computedItems2.Message.Items.Should().HaveCount(2).And.BeEquivalentTo(expectedComputedItems2, c => c.WithoutId());
+            transactionalItems1.Should().HaveCount(2);
+            var expectedComputedItems1 = transactionalItems1.Select(x => new ComputedData("", 2024, x.LoB, "1", 2 * x.Value)).ToArray();
+            computedItems1.Should().HaveCount(2);
+            computedItems1.Select(x => x.Value).Should().BeEquivalentTo(expectedComputedItems1.Select(x => x.Value));
         }
+    }
+
+    private IWorkspace GetWorkspace(IMessageHub hub)
+    {
+        return hub.ServiceProvider.GetRequiredService<IWorkspace>();
     }
 
     private const string VanillaDistributedCsv =
@@ -76,16 +71,15 @@ Id,Year,LoB,BusinessUnit,Value
         var importRequest = new ImportRequest(VanillaCsv);
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new ImportAddress(2024, new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
-
-        var items = await client.AwaitResponse(new GetManyRequest<LineOfBusiness>(),
-            o => o.WithTarget(new ReferenceDataAddress(new HostAddress())));
+        var workspace = GetWorkspace(GetHost().GetHostedHub(new ReferenceDataAddress(new HostAddress()), null));
+        var items = await workspace.GetObservable<LineOfBusiness>().FirstAsync();
         var expectedLoBs = new[] 
         { 
             new LineOfBusiness("1", "LoB_one"),
             new LineOfBusiness("2", "LoB_two"),
         };
 
-        items.Message.Items.Should().HaveCount(2).And.BeEquivalentTo(expectedLoBs);
+        items.Should().HaveSameCount(expectedLoBs).And.BeEquivalentTo(expectedLoBs);
     }
 
     private const string VanillaCsv =
@@ -93,6 +87,44 @@ Id,Year,LoB,BusinessUnit,Value
 SystemName,DisplayName
 1,LoB_one
 2,LoB_two
+";
+
+    [Fact]
+    public async Task MultipleTypes()
+    {
+        var client = GetClient();
+        var importRequest = new ImportRequest(MultipleTypesCsv);
+        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new ImportAddress(2024, new HostAddress())));
+        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        await Task.Delay(100);
+        var workspace = GetWorkspace(GetHost().GetHostedHub(new ReferenceDataAddress(new HostAddress()), null));
+        var actualLoBs = await workspace.GetObservable<LineOfBusiness>().FirstAsync();
+        var actualBUs = await workspace.GetObservable<BusinessUnit>().FirstAsync();
+        var expectedLoBs = new[]
+        {
+            new LineOfBusiness("1", "LoB_one"),
+            new LineOfBusiness("2", "LoB_two"),
+        };
+        var expectedBUs = new[]
+        {
+            new BusinessUnit("1", "1"),
+            new BusinessUnit("BU1", "BU_one"),
+            new BusinessUnit("2", "BU_two"),
+        };
+
+        using (new AssertionScope())
+        {
+            actualLoBs.Should().HaveSameCount(expectedLoBs).And.BeEquivalentTo(expectedLoBs);
+            actualBUs.Should().HaveSameCount(expectedBUs).And.BeEquivalentTo(expectedBUs);
+        }
+    }
+
+    private const string MultipleTypesCsv =
+$@"{VanillaCsv}
+@@BusinessUnit
+SystemName,DisplayName
+BU1,BU_one
+2,BU_two
 ";
 }
 public static class ComputedDataEquivalencyExtensions

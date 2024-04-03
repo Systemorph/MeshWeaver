@@ -8,7 +8,6 @@ using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Activities;
 using Xunit;
 using Xunit.Abstractions;
-using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Hub.Data.Test;
 
@@ -27,21 +26,21 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return base.ConfigureHost(configuration)
             .AddData(data => data
-                .FromConfigurableDataSource("ad hoc",dataSource => dataSource
+                .FromConfigurableDataSource("ad hoc", dataSource => dataSource
                     .WithType<MyData>(type => type
                         .WithKey(instance => instance.Id)
                         .WithInitialData(InitializeMyData)
                         .WithUpdate(SaveMyData)
                     )
                 )
-            )
-            .AddPlugin<ImportPlugin>();
+            );
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
         return base.ConfigureClient(configuration)
-            .AddData(data => data.FromHub(new HostAddress()));
+            .AddData(data => 
+                data.FromHub(new HostAddress(), dataSource => dataSource.WithType<MyData>()));
     }
 
     [Fact]
@@ -102,45 +101,42 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         await Task.Delay(200);
 
         // asserts
-        deleteResponse.Message.Version.Should().Be(1);
         var expectedItems = new[]
         {
             new MyData("2", "B")
         };
+        var workspace = GetWorkspace(client);
+        var data = await workspace.GetObservable<MyData>().FirstOrDefaultAsync(x => x?.Count == 1);
+
+        data.Should().BeEquivalentTo(expectedItems);
         storage.Values.Should().BeEquivalentTo(expectedItems);
-        
-        var response = await client.AwaitResponse(new GetManyRequest<MyData>(), o => o.WithTarget(new HostAddress()));
-        response.Message.Should().BeEquivalentTo(new GetResponse<MyData>(expectedItems.Length, expectedItems));
     }
 
 
     public static string TextChange = nameof(TextChange);
 
     public record LocalImportRequest : IRequest<ActivityLog>;
-    public class ImportPlugin(IMessageHub hub) : MessageHubPlugin(hub), IMessageHandler<LocalImportRequest>
-    {
-        [Inject] IWorkspace workspace;
-        IMessageDelivery IMessageHandler<LocalImportRequest>.HandleMessage(IMessageDelivery<LocalImportRequest> request)
-        {
-            // TODO V10: Mise-en-place must be been done ==> data plugin context
-            var someData = workspace.State.GetData<MyData>();
-            var myInstance = someData.First();
-            myInstance = myInstance with { Text = TextChange };
-            workspace.Update(myInstance);
-            workspace.Commit();
-            Hub.Post(new ActivityLog(DateTime.UtcNow, new UserInfo("User", "User")), o => o.ResponseFor(request));
-            return request.Processed();
-        }
-    }
 
     [Fact]
     public async Task CheckUsagesFromWorkspaceVariable()
     {
         var client = GetClient();
-        await client.AwaitResponse(new LocalImportRequest(), o => o.WithTarget(new HostAddress()));
-        var response = await client.AwaitResponse(new GetManyRequest<MyData>(), o => o.WithTarget(new HostAddress()));
-        response.Message.Items.Should().Contain(i => i.Text == TextChange);
-        await Task.Delay(100);
+        var workspace = GetWorkspace(client);
+        await workspace.Initialized;
+        var myInstance = workspace.GetData<MyData>("1");
+        myInstance.Text.Should().NotBe(TextChange);
+
+        // act
+        myInstance = myInstance with { Text = TextChange };
+        workspace.Update(myInstance);
+        workspace.Commit();
+
+        var hostWorkspace = GetWorkspace(GetHost());
+
+        var instance = await hostWorkspace.GetObservable<MyData>("1").FirstAsync(i => i?.Text == TextChange);
+        instance.Should().NotBeNull();
+
+        await DisposeAsync();
         storage.Values.Should().Contain(i => (i as MyData).Text == TextChange);
     }
 
@@ -150,9 +146,10 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         return Task.FromResult<IEnumerable<MyData>>(initialData);
     }
     
-    private void SaveMyData(InstancesInCollection instancesInCollection)
+    private InstanceCollection SaveMyData(InstanceCollection instanceCollection)
     {
-        storage = instancesInCollection.Instances;
+        storage = instanceCollection.Instances;
+        return instanceCollection;
     }
 
 

@@ -1,16 +1,11 @@
 ﻿using System.Reactive.Linq;
 using FluentAssertions;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
-using OpenSmc.Layout.DataBinding;
-using OpenSmc.Layout.LayoutClient;
-using OpenSmc.Layout.Views;
+using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
 using OpenSmc.ServiceProvider;
-using OpenSmc.Utils;
-using Xunit;
 using Xunit.Abstractions;
 
 namespace OpenSmc.Layout.Test;
@@ -19,54 +14,89 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 {
     [Inject] private ILogger<LayoutTest> logger;
 
+
+    private const string View1 = nameof(View1);
+    private static readonly Dictionary<string, UiControl> TestAreas
+        = new()
+        {
+            { View1, Controls.Stack().WithView("Hello", "Hello").WithView("World", "World") },
+        };
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
-            .WithRoutes(r => r.RouteAddress<ClientAddress>((a,d)=>d.Package()))
-            .AddData(data => data.FromConfigurableDataSource("Local", 
-                ds => ds
-                    .WithType<TestLayoutPlugin.DataRecord>(t => t.WithInitialData([new("Hello", "World")]))))
-            .AddPlugin<TestLayoutPlugin>()    
-            .AddLayout(layout => layout.Hub.ServiceProvider.GetRequiredService<TestLayoutPlugin>().Configure(layout));
-            
+                .WithRoutes(r => r.RouteAddress<ClientAddress>((a, d) => d.Package(r.Hub.JsonSerializerOptions)))
+                .AddData(data => data
+                    .FromConfigurableDataSource("Local",
+                        ds => ds
+                            .WithType<TestLayoutPlugin.DataRecord>(t => t.WithInitialData([new("Hello", "World")]))))
+                .AddLayout(
+                    layout =>
+                        TestAreas.Aggregate(layout, (l, kvp) => l.WithView(kvp.Key, kvp.Value))
+                            .WithView("Report", (stateStream, reference) =>
+                                stateStream
+                                    .Select(ws => ws.GetData<ToolbarEntity>("Report1Toolbar"))
+                                    .DistinctUntilChanged()
+                                    .Select(toolbar => new HtmlControl($"Report for year {toolbar.Year}"))
+                            ))
+
+            ;
+
 
     }
 
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
-        return base.ConfigureClient(configuration).AddLayoutClient(new HostAddress());
+        return base.ConfigureClient(configuration)
+            .AddLayout(d => d);
     }
 
-
-#if CIRun
-    [Fact(Skip = "Hangs")]
-#else
-    [Fact(Timeout = 5000)]
-#endif
-
-    public async Task LayoutStackUpdateTest()
+    [HubFact]
+    public async Task BasicArea()
     {
-        var client = GetClient();
-        var area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.MainStackId));
-        area.Control.Should().BeOfType<Composition.LayoutStackControl>().Which.Areas.Should().BeEmpty();
-        await client.ClickAsync(_ => area);
+        var workspace = GetClient().GetWorkspace();
+        var reference = new LayoutAreaReference(View1);
+        var stream = workspace.GetRemoteStream(new HostAddress(), reference);
 
-        await client.GetAreaAsync(state => state.GetById("HelloId"));
-        area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.MainStackId));
-        area.Control.Should().BeOfType<Composition.LayoutStackControl>().Which.Areas.Should().HaveCount(1);
+        var control = await stream.GetControl(reference).FirstAsync();
+        var areas = control.Should().BeOfType<LayoutStackControl>()
+            .Which
+            .Areas.Should().HaveCount(2)
+                .And.Subject.Should().AllBeOfType<LayoutAreaReference>()
+                .And.Subject.Cast<LayoutAreaReference>()
+                .ToArray();
+
+
+        var areaControls = areas
+            .ToAsyncEnumerable()
+            .SelectAwait(async a => await stream.GetControl(a).FirstAsync())
+            .ToArrayAsync();
+
 
     }
 
-#if CIRun
-    [Fact(Skip = "Hangs")]
-#else
-    [Fact(Timeout = 5000)]
-#endif
+    //    public async Task LayoutStackUpdateTest()
+    //    {
+    //        var client = GetClient();
+    //        var area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.MainStackId));
+    //        area.Control.Should().BeOfType<Composition.LayoutStackControl>().Which.Areas.Should().BeEmpty();
+    //        await client.ClickAsync(_ => area);
 
-    public async Task GetPredefinedArea()
-    {
-        var client = GetClient();
+    //        await client.GetAreaAsync(state => state.GetById("HelloId"));
+    //        area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.MainStackId));
+    //        area.Control.Should().BeOfType<Composition.LayoutStackControl>().Which.Areas.Should().HaveCount(1);
+
+    //    }
+
+    //#if CIRun
+    //    [Fact(Skip = "Hangs")]
+    //#else
+    //    [Fact(Timeout = 5000)]
+    //#endif
+
+    //public async Task GetSimpleArea()
+    //{
+        //var client = GetClient();
         //client.Post(new RefreshRequest { Area = TestLayoutPlugin.NamedArea }, o => o.WithTarget(new HostAddress()));
         //var area = await client.GetAreaAsync(state => state.GetByIdAndArea(TestLayoutPlugin.MainStackId, TestLayoutPlugin.NamedArea));
         //area.Control.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(TestLayoutPlugin.NamedArea);
@@ -76,72 +106,75 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         //area = await client.GetAreaAsync(state => state.GetByAddress(address));
         //area.Control.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(TestLayoutPlugin.NamedArea);
 
-    }
+    //}
 
 
 
-#if CIRun
-    [Fact(Skip = "Hangs")]
-#else
-    [Fact(Timeout = 5000)]
-#endif
+    //#if CIRun
+    //    [Fact(Skip = "Hangs")]
+    //#else
+    //    [Fact(Timeout = 5000)]
+    //#endif
 
-    public async Task UpdatingView()
-    {
+    //    public async Task UpdatingView()
+    //    {
 
-        var client = GetClient();
-        client.Post(new RefreshRequest { Area = TestLayoutPlugin.UpdatingView }, o => o.WithTarget(new HostAddress()));
-        var area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.UpdatingView));
-        area.Control
-            .Should().BeOfType<TextBoxControl>()
-            .Which.Data.Should().Be(TestLayoutPlugin.SomeString);
+    //        var client = GetClient();
+    //        client.Post(new AreaReference(TestLayoutPlugin.UpdatingView), o => o.WithTarget(new HostAddress()));
+    //        var area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.UpdatingView));
+    //        area.Control
+    //            .Should().BeOfType<TextBoxControl>()
+    //            .Which.Data.Should().Be(TestLayoutPlugin.SomeString);
 
-        await client.ClickAsync(_ => area);
+    //        await client.ClickAsync(_ => area);
 
-        LayoutArea IsUpdatedView(LayoutClientState layoutClientState)
-        {
-            var ret = layoutClientState.GetById(TestLayoutPlugin.UpdatingView);
-            if (ret?.Control is TextBoxControl { Data: not TestLayoutPlugin.SomeString })
-                return ret;
+    //        LayoutArea IsUpdatedView(LayoutClientState layoutClientState)
+    //        {
+    //            var ret = layoutClientState.GetById(TestLayoutPlugin.UpdatingView);
+    //            if (ret?.Control is TextBoxControl { Data: not TestLayoutPlugin.SomeString })
+    //                return ret;
 
-            logger.LogInformation($"Found view: {ret?.Control}");
-            return null;
-        }
+    //            logger.LogInformation($"Found view: {ret?.Control}");
+    //            return null;
+    //        }
 
-        var changedArea = await client.GetAreaAsync(IsUpdatedView);
-        changedArea.Control
-            .Should().BeOfType<TextBoxControl>()
-            .Which.Data.Should().Be(TestLayoutPlugin.NewString);
+    //        var changedArea = await client.GetAreaAsync(IsUpdatedView);
+    //        changedArea.Control
+    //            .Should().BeOfType<TextBoxControl>()
+    //            .Which.Data.Should().Be(TestLayoutPlugin.NewString);
 
 
-    }
+    //    }
 
-#if CIRun
-    [Fact(Skip = "Hangs")]
-#else
-    [Fact(Timeout = 5000)]
-#endif
+    //#if CIRun
+    //    [Fact(Skip = "Hangs")]
+    //#else
+    //    [Fact(Timeout = 5000)]
+    //#endif
 
-    public async Task DataBoundView()
-    {
+    //    public async Task DataBoundView()
+    //    {
 
-        var client = GetClient();
-        var observer = client.AddObservable();
-        client.Post(new RefreshRequest { Area = TestLayoutPlugin.DataBoundView }, o => o.WithTarget(new HostAddress()));
-        var area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.DataBoundView));
-        area.Control
-            .Should().BeOfType<MenuItemControl>()
-            .Which.Title.Should().BeOfType<Binding>()
-            .Which.Path.Should().Be(nameof(TestLayoutPlugin.DataRecord.DisplayName).ToCamelCase());
+    //        var client = GetClient();
+    //        var observer = client.AddObservable();
+    //        client.Post(new AreaReference { Area = TestLayoutPlugin.DataBoundView }, o => o.WithTarget(new HostAddress()));
+    //        var area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.DataBoundView));
+    //        area.Control
+    //            .Should().BeOfType<MenuItemControl>()
+    //            .Which.Title.Should().BeOfType<Binding>()
+    //            .Which.Path.Should().Be(nameof(TestLayoutPlugin.DataRecord.DisplayName).ToCamelCase());
 
-        client.Click(area);
-        var dataChanged = await observer.OfType<DataChangedEvent>().FirstAsync();
-        
+    //        client.Click(area);
+    //        var dataChanged = await observer.OfType<DataChangedEvent>().FirstAsync();
 
-    }
+
+    //    }
 
 }
 
+public record ToolbarEntity(int Year)
+{
+}
 
 public static class TestAreas
 {

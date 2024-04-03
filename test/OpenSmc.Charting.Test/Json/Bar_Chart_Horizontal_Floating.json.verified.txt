@@ -1,0 +1,68 @@
+﻿{
+  Data: {
+    DataSets: [
+      {
+        Data: [
+          [
+            -2,
+            96
+          ],
+          [
+            30,
+            96
+          ],
+          null,
+          null
+        ],
+        Label: first
+      },
+      {
+        Data: [
+          null,
+          [
+            -5,
+            20
+          ],
+          [
+            6,
+            12
+          ],
+          [
+            3,
+            6
+          ]
+        ],
+        Label: second
+      }
+    ],
+    Labels: [
+      Jan,
+      Feb,
+      Mar,
+      Apr
+    ]
+  },
+  Options: {
+    Plugins: {
+      Legend: {
+        Display: true
+      },
+      Title: {
+        Display: true,
+        Font: {
+          Family: Ovеrpass,
+          Size: 22,
+          Weight: 600,
+          LineHeight: 24px
+        },
+        Text: Horizontal floating
+      },
+      ColorSchemes: {
+        Scheme: {
+          Palette: brewer.PastelOne9
+        }
+      }
+    },
+    IndexAxis: y
+  }
+}
