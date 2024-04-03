@@ -5,10 +5,10 @@ import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
 import {
     DataChangedEvent,
     JsonPatch,
-    SubscribeDataRequest,
+    SubscribeRequest,
     UnsubscribeDataRequest
 } from "./data.contract";
-import { initState, jsonPatch } from "./workspaceReducer";
+import { initState, patch } from "./workspaceReducer";
 import { messageOfType } from "@open-smc/message-hub/src/operators/messageOfType";
 import { filter } from "rxjs";
 
@@ -19,14 +19,14 @@ export function subscribeToDataChanges(hub: MessageHub, workspaceReference: any,
         .pipe(filter(({message}) => message.id === id))
         .subscribe(({message: {id, change}}) => {
             if (change instanceof JsonPatch) {
-                dispatch(jsonPatch(change))
+                dispatch(patch(change))
             }
             else {
                 dispatch(initState(change));
             }
         });
 
-    sendMessage(hub, new SubscribeDataRequest(id, workspaceReference));
+    sendMessage(hub, new SubscribeRequest(id, workspaceReference));
 
     subscription
         .add(() => sendMessage(hub, new UnsubscribeDataRequest([id])));

@@ -8,7 +8,8 @@ import { identity } from "lodash-es";
 
 enablePatches();
 
-export const jsonPatch = createAction<JsonPatch>('jsonPatch');
+export const patch = createAction<JsonPatch>('patch');
+export const patchRequest = createAction<JsonPatch>('patchRequest');
 export const initState = createAction<unknown>('initState');
 
 export const workspaceReducer = createReducer(
@@ -16,7 +17,7 @@ export const workspaceReducer = createReducer(
     builder => {
         builder
             .addCase(
-                jsonPatch,
+                patch,
                 (state, action) =>
                     action.payload.operations &&
                     applyPatches(state, action.payload.operations.map(toImmerPatch))

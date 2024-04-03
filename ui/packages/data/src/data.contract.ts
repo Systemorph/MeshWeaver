@@ -1,7 +1,7 @@
 import { type } from "@open-smc/serialization/src/type";
 
-@type("OpenSmc.Data.SubscribeDataRequest")
-export class SubscribeDataRequest {
+@type("OpenSmc.Data.SubscribeRequest")
+export class SubscribeRequest {
     constructor(public id: string, public workspaceReference: unknown) {
     }
 }
@@ -30,9 +30,11 @@ export class EntireWorkspace extends WorkspaceReference {
 // TODO: should ui be the one who resolves this from data store? (3/28/2024, akravets)
 @type("OpenSmc.Data.LayoutAreaReference")
 export class LayoutAreaReference extends WorkspaceReference  {
-    constructor(public path: string) {
+    constructor(public area: string) {
         super();
     }
+
+    options: {}
 
     toJsonPath(): string {
         throw 'This reference should never be resolved on UI';

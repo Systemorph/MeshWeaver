@@ -1,9 +1,9 @@
 import { configureStore } from "@reduxjs/toolkit";
 import { workspaceReducer } from "@open-smc/data/src/workspaceReducer";
-import { LayoutArea } from "./contract/LayoutArea";
+import { LayoutArea } from "@open-smc/layout/src/contract/LayoutArea";
 import { from, map } from "rxjs";
 import { deserialize } from "@open-smc/serialization/src/deserialize";
-import { serializeMiddleware } from "@open-smc/data/src/serializeMiddleware";
+import { serializeMiddleware } from "@open-smc/data/src/middleware/serializeMiddleware";
 
 export const layoutStore =
     configureStore<LayoutArea>({
@@ -13,7 +13,7 @@ export const layoutStore =
         },
         middleware: getDefaultMiddleware =>
             getDefaultMiddleware()
-                .concat(serializeMiddleware) as any,
+                .prepend(serializeMiddleware) as any,
     });
 
 export const layout$ =
