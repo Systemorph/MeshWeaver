@@ -1,13 +1,13 @@
 import { PluginOption, ViteDevServer } from "vite";
 import { WebSocketClientHub } from "./WebSocketClientHub";
-import { makeProxy } from "@open-smc/message-hub/src/middleware/makeProxy";
-import { connect } from "@open-smc/message-hub/src/middleware/connect";
-import { addToContext } from "@open-smc/message-hub/src/middleware/addToContext";
+import { makeProxy } from "@open-smc/messaging/src/middleware/makeProxy";
+import { connect } from "@open-smc/messaging/src/middleware/connect";
+import { addToContext } from "@open-smc/messaging/src/middleware/addToContext";
 import { LayoutHub } from "./LayoutHub";
 
 import { layoutAddress, uiAddress } from "./contract.ts";
 import { Subject } from "rxjs";
-import { MessageDelivery } from "@open-smc/message-hub/src/api/MessageDelivery.ts";
+import { MessageDelivery } from "@open-smc/messaging/src/api/MessageDelivery.ts";
 
 export function playgroundServer() {
     return {

@@ -1,6 +1,6 @@
 import { Observable, Subscription } from "rxjs";
-import type { MessageDelivery } from "@open-smc/message-hub/src/api/MessageDelivery";
-import type { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
+import type { MessageDelivery } from "@open-smc/messaging/src/api/MessageDelivery";
+import type { MessageHub } from "@open-smc/messaging/src/api/MessageHub";
 import { WebSocketClient, WebSocketCustomListener, WebSocketServer } from "vite";
 import { methodName } from "./contract";
 

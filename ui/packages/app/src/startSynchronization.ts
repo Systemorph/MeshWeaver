@@ -1,4 +1,4 @@
-import { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
+import { MessageHub } from "@open-smc/messaging/src/api/MessageHub";
 import { distinctUntilKeyChanged, Subscription } from "rxjs";
 import { subscribeToDataChanges } from "@open-smc/data/src/subscribeToDataChanges";
 import { syncLayoutArea } from "./store/syncLayoutArea";

@@ -1,6 +1,6 @@
 import { MessageAndAddress } from "./ControlDef";
 import { useMessageHub } from "./AddHub";
-import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
+import { sendMessage } from "@open-smc/messaging/src/sendMessage";
 
 export function useClickAction(clickMessage: MessageAndAddress) {
     const hub = useMessageHub();

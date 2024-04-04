@@ -1,7 +1,7 @@
 import { SignalrConnection } from "./makeSignalrConnection";
 import { Observable } from "rxjs";
-import { MessageDelivery } from "@open-smc/message-hub/src/api/MessageDelivery";
-import { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
+import { MessageDelivery } from "@open-smc/messaging/src/api/MessageDelivery";
+import { MessageHub } from "@open-smc/messaging/src/api/MessageHub";
 
 const methodName = "DeliverMessage";
 

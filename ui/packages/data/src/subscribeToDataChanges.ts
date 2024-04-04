@@ -1,9 +1,9 @@
 import { Dispatch } from "@reduxjs/toolkit";
-import { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
+import { MessageHub } from "@open-smc/messaging/src/api/MessageHub";
 import { v4 } from "uuid";
-import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
+import { sendMessage } from "@open-smc/messaging/src/sendMessage";
 import { initState, patch } from "./workspaceReducer";
-import { messageOfType } from "@open-smc/message-hub/src/operators/messageOfType";
+import { messageOfType } from "@open-smc/messaging/src/operators/messageOfType";
 import { filter } from "rxjs";
 import { SubscribeRequest } from "./contract/SubscribeRequest";
 import { UnsubscribeDataRequest } from "./contract/UnsubscribeDataRequest";
