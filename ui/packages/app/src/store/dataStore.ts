@@ -2,7 +2,7 @@ import { configureStore } from "@reduxjs/toolkit";
 import { workspaceReducer } from "@open-smc/data/src/workspaceReducer";
 import { from } from "rxjs";
 import { serializeMiddleware } from "@open-smc/data/src/middleware/serializeMiddleware";
-import { backendHub } from "@open-smc/backend/src/backendHub";
+import { sampleApp } from "@open-smc/backend/src/SampleApp";
 import { patchRequestMiddleware } from "./middleware/patchRequestMiddleware";
 
 export const dataStore =
@@ -14,7 +14,7 @@ export const dataStore =
         middleware: getDefaultMiddleware =>
             getDefaultMiddleware()
                 .prepend(
-                    patchRequestMiddleware(backendHub),
+                    patchRequestMiddleware(sampleApp),
                     serializeMiddleware
                 )
     });
