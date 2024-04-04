@@ -131,8 +131,7 @@ public class ReportTestWithHubs(ITestOutputHelper output) : HubTestBase(output)
         //var gridOptions = dataCubeReportBuilder
         //    .Execute();
 
-        await gridOptions.Verify("HierarchicalDimensionHideAggregation.json");
+        await gridOptions.Verify("HierarchicalDimensionHideAggregation_Hub.json");
     }
-    
 }
 
