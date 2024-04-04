@@ -13,7 +13,7 @@ import { JsonPatch } from "./contract/JsonPatch";
 export function subscribeToDataChanges(hub: MessageHub, workspaceReference: any, dispatch: Dispatch) {
     const id = v4();
 
-    const subscription = hub.pipe(messageOfType(DataChangedEvent))
+    const subscription = hub.pipe(filter(messageOfType(DataChangedEvent)))
         .pipe(filter(({message}) => message.id === id))
         .subscribe(({message: {id, change}}) => {
             if (change instanceof JsonPatch) {
