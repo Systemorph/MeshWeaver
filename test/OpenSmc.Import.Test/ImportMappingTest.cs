@@ -1,6 +1,5 @@
 ﻿using System.Reactive.Linq;
 using FluentAssertions;
-using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.Data.TestDomain;
@@ -60,8 +59,9 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
 SystemName,DisplayName,Number,StringsArray0,StringsArray1,StringsArray2,StringsList0,StringsList1,StringsList2,IntArray0,IntArray1,IntArray2,IntList0,IntList1,IntList2
 SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
 
-        var client = await DoImport(content);
-        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        _ = await DoImport(content);
+        var host = GetHost();
+        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress())).GetWorkspace();
         var ret2 = await workspace.GetObservable<MyRecord2>().FirstAsync();
 
         ret2.Should().HaveCount(0);
@@ -89,9 +89,10 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
     [Fact]
     public async Task EmptyDataSetImportTest()
     {
-        var client = await DoImport(string.Empty);
+        _ = await DoImport(string.Empty);
 
-        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var host = GetHost();
+        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress())).GetWorkspace();
         var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
         ret.Should().BeEmpty();
@@ -122,11 +123,12 @@ Record3SystemName,Record3DisplayName";
             );
         };
 
-        var client = await DoImport(ThreeTablesContent, "Test");
+        _ = await DoImport(ThreeTablesContent, "Test");
 
 
         //Check that didn't appeared what we don't import 
-        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var host = GetHost();
+        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress())).GetWorkspace();
         var ret2 = await workspace.GetObservable<MyRecord2>().FirstAsync();
 
         ret2.Should().HaveCount(0);
@@ -161,8 +163,9 @@ Record3SystemName,Record3DisplayName";
             );
         };
 
-        var client = await DoImport(ThreeTablesContent, "Test2");
-        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        _ = await DoImport(ThreeTablesContent, "Test2");
+        var host = GetHost();
+        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress())).GetWorkspace();
         var ret2 = await workspace.GetObservable<MyRecord2>().FirstAsync();
 
         ret2.Should().HaveCount(1);
