@@ -1,5 +1,5 @@
 import { Style } from "../../layout/src/contract/controls/Style";
-import { MessageAndAddress } from "../../layout/src/contract/controls/Control";
+import { MessageAndAddress } from "@open-smc/layout/src/contract/controls/UiControl";
 import { MessageAndAddressAndArea } from "@open-smc/layout/src/controls/ExpandableControl";
 
 export interface ControlView {

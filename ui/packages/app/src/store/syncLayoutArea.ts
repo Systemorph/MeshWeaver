@@ -1,7 +1,7 @@
 import { Dispatch } from "@reduxjs/toolkit";
 import { distinctUntilChanged, map, Observable, Subscription } from "rxjs";
 import { LayoutArea } from "@open-smc/layout/src/contract/LayoutArea";
-import { Control } from "@open-smc/layout/src/contract/controls/Control";
+import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
 import { LayoutStackControl } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
 import { keys } from "lodash-es";
 import { ignoreNestedAreas } from "@open-smc/layout/src/operators/ignoreNestedAreas";
@@ -89,7 +89,7 @@ export const subAreas = () =>
                 )
             );
 
-const getNestedAreas = (control: Control) => {
+const getNestedAreas = (control: UiControl) => {
     if (control instanceof LayoutStackControl) {
         return control?.areas;
     }

@@ -1,8 +1,10 @@
 import { Style } from "./Style";
 import { Bindable } from "../Binding";
 import { DataInput } from "@open-smc/data/src/contract/DataInput";
+import { type } from "@open-smc/serialization/src/type";
 
-export class Control {
+// @type("OpenSmc.Layout.UiControl")
+export class UiControl {
     id?: Bindable<string>;
     isReadonly?: Bindable<boolean>;
     clickMessage?: Bindable<MessageAndAddress>;

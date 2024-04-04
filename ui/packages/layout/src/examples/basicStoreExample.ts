@@ -5,7 +5,7 @@ const basicStoreExample = {
         area: "Main"
     },
     instances: {
-        $areas: {
+        "OpenSmc.Layout.UiControl": {
             Main: {
                 $type: "OpenSmc.Layout.Composition.LayoutStackControl",
                 dataContext: {
@@ -16,12 +16,12 @@ const basicStoreExample = {
                 areas: [
                     {
                         $type: "EntityReference",
-                        collection: "$areas",
+                        collection: "OpenSmc.Layout.UiControl",
                         id: "Main/View1"
                     },
                     {
                         $type: "EntityReference",
-                        collection: "$areas",
+                        collection: "OpenSmc.Layout.UiControl",
                         id: "Main/View2"
                     }
                 ]
