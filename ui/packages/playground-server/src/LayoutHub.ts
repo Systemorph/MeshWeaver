@@ -1,4 +1,4 @@
-import { SubjectHub } from "@open-smc/message-hub/src/SubjectHub";
+import { SubjectHub } from "@open-smc/messaging/src/SubjectHub";
 import {
     AreaChangedEvent,
     ClickedEvent,
@@ -8,13 +8,13 @@ import {
 import { ControlBase } from "@open-smc/sandbox/src/ControlBase";
 import { makeMenuItem } from "@open-smc/sandbox/src/MenuItem";
 import { Subscription } from "rxjs";
-import { MessageDelivery } from "@open-smc/message-hub/src/api/MessageDelivery";
+import { MessageDelivery } from "@open-smc/messaging/src/api/MessageDelivery";
 import { Constructor } from "@open-smc/utils/src/Constructor";
-import { MessageHandler } from "@open-smc/message-hub/src/api/MessageHandler";
+import { MessageHandler } from "@open-smc/messaging/src/api/MessageHandler";
 import { ofType } from "packages/application/src/contract/ofType.ts";
 import { uiAddress } from "./contract";
 import { PlaygroundWindow } from "./app/PlaygroundWindow";
-import { AddToContextRequest } from "@open-smc/message-hub/src/api/AddToContextRequest";
+import { AddToContextRequest } from "@open-smc/messaging/src/api/AddToContextRequest";
 
 export class LayoutHub extends SubjectHub {
     private readonly controlsByArea = new Map<string, ControlBase>();

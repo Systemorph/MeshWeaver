@@ -1,5 +1,5 @@
 {
-  "name": "@open-smc/message-hub",
+  "name": "@open-smc/messaging",
   "version": "0.0.0",
   "dependencies": {
     "lodash": "^4.17.21",

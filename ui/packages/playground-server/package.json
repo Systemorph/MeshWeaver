@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "@open-smc/application": "0.0.0",
-    "@open-smc/message-hub": "0.0.0",
+    "@open-smc/messaging": "0.0.0",
     "@open-smc/utils": "0.0.0",
     "rxjs": "^7.8.1",
     "lodash-es": "^4.17.21"

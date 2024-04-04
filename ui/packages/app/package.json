@@ -9,7 +9,7 @@
     "@open-smc/backend": "0.0.0",
     "@open-smc/data": "0.0.0",
     "@open-smc/layout": "0.0.0",
-    "@open-smc/message-hub": "0.0.0",
+    "@open-smc/messaging": "0.0.0",
     "@open-smc/portal": "0.0.0",
     "@open-smc/serialization": "0.0.0",
     "@open-smc/ui-kit": "0.0.0",

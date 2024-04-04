@@ -1,16 +1,16 @@
 import { ControlDef, MessageAndAddress } from "@open-smc/application/src/ControlDef";
 import { Style } from "packages/application/src/contract/controls/Style";
-import { SubjectHub } from "@open-smc/message-hub/src/SubjectHub";
+import { SubjectHub } from "@open-smc/messaging/src/SubjectHub";
 import { Subscription } from "rxjs";
 import { Constructor } from "@open-smc/utils/src/Constructor";
-import { MessageHandler } from "@open-smc/message-hub/src/api/MessageHandler";
+import { MessageHandler } from "@open-smc/messaging/src/api/MessageHandler";
 import { ofType } from "packages/application/src/contract/ofType";
 import { v4 } from "uuid";
 import { isFunction } from "lodash-es";
 import { ClickedEvent } from "@open-smc/application/src/contract/application.contract";
-import { MessageHub } from "@open-smc/message-hub/src/api/MessageHub";
-import { AddedToContext } from "@open-smc/message-hub/src/api/AddedToContext";
-import { addToContext } from "@open-smc/message-hub/src/middleware/addToContext";
+import { MessageHub } from "@open-smc/messaging/src/api/MessageHub";
+import { AddedToContext } from "@open-smc/messaging/src/api/AddedToContext";
+import { addToContext } from "@open-smc/messaging/src/middleware/addToContext";
 
 export abstract class ControlBase extends SubjectHub implements ControlDef {
     readonly moduleName: string;

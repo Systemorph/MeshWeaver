@@ -15,7 +15,7 @@ import tinycolor from "tinycolor2";
 // import { useSubscribeToAreaChanged } from "../useSubscribeToAreaChanged";
 import { ExpandableView } from "../ControlDef";
 import { useClickAction } from "../useClickAction";
-// import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
+// import { sendMessage } from "@open-smc/messaging/src/sendMessage";
 
 export type MenuItemSkin = "LargeButton" | "LargeIcon" | "Link";
 

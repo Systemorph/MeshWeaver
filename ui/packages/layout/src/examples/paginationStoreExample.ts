@@ -1,4 +1,4 @@
-const pagingExampleStore = {
+const paginationStoreExample = {
     $type: "OpenSmc.Data.EntityStore",
     reference: {
         $type: "OpenSmc.Layout.LayoutAreaReference",

@@ -1,6 +1,6 @@
-import { SubjectHub } from "@open-smc/message-hub/src/SubjectHub";
-import { messageOfType } from "@open-smc/message-hub/src/operators/messageOfType";
-import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
+import { SubjectHub } from "@open-smc/messaging/src/SubjectHub";
+import { messageOfType } from "@open-smc/messaging/src/operators/messageOfType";
+import { sendMessage } from "@open-smc/messaging/src/sendMessage";
 import { Patch, produceWithPatches } from "immer";
 import { SubscribeRequest } from "@open-smc/data/src/contract/SubscribeRequest";
 import { EntireWorkspace } from "@open-smc/data/src/contract/EntireWorkspace";
@@ -77,45 +77,13 @@ const simpleLayout = {
     }
 }
 
-const layout = {
-    $type: "OpenSmc.Layout.LayoutAreaCollection",
-    reference: {
-        $type: "OpenSmc.Layout.LayoutAreaReference",
-        area: "Main"
-    },
-    areas: {
-        Main: {
-            $type: "OpenSmc.Layout.Composition.LayoutStackControl",
-            areas: [
-                {
-                    $type: "OpenSmc.Layout.LayoutAreaReference",
-                    area: "Main/View1"
-                },
-                {
-                    $type: "OpenSmc.Layout.LayoutAreaReference",
-                    area: "Main/View2"
-                }
-            ]
-        },
-        "Main/View1": {
-            $type: "OpenSmc.Layout.Composition.SpinnerControl",
-            message: "processing...",
-            progress: 0.5
-        },
-        "Main/View2": {
-            $type: "OpenSmc.Layout.Composition.TextBoxControl",
-            dataContext: {
-                $type: "EntityReference",
-                collection: "LineOfBusiness",
-                id: "myLob"
-            },
-            data: {
-                $type: "Binding",
-                path: "$.name"
-            }
-        }
-    }
-}
+
+
+
+
+
+
+
 
 
 const layoutState = {

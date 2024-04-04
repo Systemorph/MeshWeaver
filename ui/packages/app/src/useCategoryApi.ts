@@ -1,10 +1,10 @@
 import { v4 as uuid } from "uuid";
 import { CategoryItemsRequest, CategoryItemsResponse, Named, ErrorEvent, SetSelectionRequest } from "@open-smc/layout/src/contract/application.contract";
-import { receiveMessage } from "@open-smc/message-hub/src/receiveMessage";
-import { sendMessage } from "@open-smc/message-hub/src/sendMessage";
+import { receiveMessage } from "@open-smc/messaging/src/receiveMessage";
+import { sendMessage } from "@open-smc/messaging/src/sendMessage";
 import { ofType } from "@open-smc/utils/src/operators/ofType";
-import { SubjectHub } from "@open-smc/message-hub/src/SubjectHub";
-import { messageOfType } from "@open-smc/message-hub/src/operators/messageOfType";
+import { SubjectHub } from "@open-smc/messaging/src/SubjectHub";
+import { messageOfType } from "@open-smc/messaging/src/operators/messageOfType";
 
 export function useCategoryApi() {
     const hub = new SubjectHub(null);
