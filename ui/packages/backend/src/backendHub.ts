@@ -5,13 +5,20 @@ import { Patch, produceWithPatches } from "immer";
 import { SubscribeRequest } from "@open-smc/data/src/contract/SubscribeRequest";
 import { EntireWorkspace } from "@open-smc/data/src/contract/EntireWorkspace";
 import { DataChangedEvent } from "@open-smc/data/src/contract/DataChangedEvent";
-import { JsonPatch } from "@open-smc/data/src/contract/JsonPatch";
+import { JsonPatch, PatchOperation } from "@open-smc/data/src/contract/JsonPatch";
 import { LayoutAreaReference } from "@open-smc/data/src/contract/LayoutAreaReference";
+import { filter, tap } from "rxjs";
+import { PatchChangeRequest } from "@open-smc/data/src/contract/PatchChangeRequest";
 
 export const backendHub =
     new SubjectHub((input, outgoing) => {
         input
-            .pipe(messageOfType(SubscribeRequest))
+            .pipe(filter(messageOfType(PatchChangeRequest)))
+            .pipe(tap(console.log))
+            .subscribe();
+
+        input
+            .pipe(filter(messageOfType(SubscribeRequest)))
             .subscribe(({message}) => {
                 const {id, workspaceReference} = message;
 
@@ -76,15 +83,6 @@ const simpleLayout = {
         icon: "systemorph-fill"
     }
 }
-
-
-
-
-
-
-
-
-
 
 const layoutState = {
     $type: "OpenSmc.Layout.LayoutArea",

@@ -13,7 +13,10 @@ export const dataStore =
         },
         middleware: getDefaultMiddleware =>
             getDefaultMiddleware()
-                .prepend(patchRequestMiddleware(backendHub), serializeMiddleware),
+                .prepend(
+                    patchRequestMiddleware(backendHub),
+                    serializeMiddleware
+                )
     });
 
 export const data$ =
