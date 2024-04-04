@@ -1,7 +1,7 @@
 import { map, Observable } from "rxjs";
 import { LayoutArea } from "../contract/LayoutArea";
 import { LayoutStackControl } from "../contract/controls/LayoutStackControl";
-import { Control } from "../contract/controls/Control";
+import { UiControl } from "../contract/controls/UiControl";
 
 export const nestedAreas = () =>
     (source: Observable<LayoutArea>) =>
@@ -14,7 +14,7 @@ export const nestedAreas = () =>
                 )
             );
 
-const nestedAreaProjections = (control: Control) => {
+const nestedAreaProjections = (control: UiControl) => {
     if (control instanceof LayoutStackControl) {
         return control?.areas.map(
             (area, index) =>
