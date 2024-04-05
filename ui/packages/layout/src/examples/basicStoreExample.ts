@@ -1,4 +1,4 @@
-const basicStoreExample = {
+export const basicStoreExample = {
     $type: "OpenSmc.Data.EntityStore",
     reference: {
         $type: "OpenSmc.Layout.LayoutAreaReference",

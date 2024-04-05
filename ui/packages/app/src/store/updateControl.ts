@@ -11,15 +11,14 @@ import { reverseDataBinding } from "./reverseDataBinding";
 import { effect } from "@open-smc/utils/src/operators/effect";
 import { removeArea } from "./appReducer";
 
-export const syncLayoutArea = (
-    data$: Observable<unknown>,
+export const updateControl = (
     appDispatch: Dispatch,
     app$: Observable<AppState>,
-    dataDispatch: Dispatch,
+    entityStoreDispatch: Dispatch,
     parentDataContext?: unknown
 ) =>
-    (source: Observable<LayoutArea>) =>
-        new Observable<LayoutArea>(subscriber => {
+    (source: Observable<UiControl>) =>
+        new Observable<UiControl>(subscriber => {
             const state: Record<string, Subscription> = {};
             const nestedAreas$ = source.pipe(subAreas());
 
@@ -40,7 +39,7 @@ export const syncLayoutArea = (
                                     );
 
                                 state[layoutArea.id] =
-                                    area$.pipe(syncLayoutArea(data$, appDispatch, app$, dataDispatch))
+                                    area$.pipe(updateControl(data$, appDispatch, app$, entityStoreDispatch))
                                         .subscribe();
                             });
                     }
@@ -51,7 +50,7 @@ export const syncLayoutArea = (
                 source
                     .pipe(distinctUntilChanged(ignoreNestedAreas))
                     .pipe(effect(dataBinding(data$, parentDataContext, appDispatch)))
-                    .pipe(effect(reverseDataBinding(app$, data$, dataDispatch)))
+                    .pipe(effect(reverseDataBinding(app$, data$, entityStoreDispatch)))
                     .subscribe()
             );
 
@@ -79,8 +78,8 @@ export const syncLayoutArea = (
             return () => subscription.unsubscribe();
         });
 
-export const subAreas = () =>
-    (source: Observable<LayoutArea>) =>
+export const subAreas = (controls: Collecti) =>
+    (source: Observable<Collection.>) =>
         source
             .pipe(
                 map(

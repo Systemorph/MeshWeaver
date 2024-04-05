@@ -1,17 +1,16 @@
-import { messageOfType } from "@open-smc/messaging/src/operators/messageOfType";
-import { sendMessage } from "@open-smc/messaging/src/sendMessage";
 import { produceWithPatches } from "immer";
 import { SubscribeRequest } from "@open-smc/data/src/contract/SubscribeRequest";
-import { EntireWorkspace } from "@open-smc/data/src/contract/EntireWorkspace";
 import { DataChangedEvent } from "@open-smc/data/src/contract/DataChangedEvent";
 import { JsonPatch } from "@open-smc/data/src/contract/JsonPatch";
 import { LayoutAreaReference } from "@open-smc/data/src/contract/LayoutAreaReference";
-import { filter, Observable, Observer, Subject } from "rxjs";
+import { Observable, Observer, of, Subject } from "rxjs";
 import { PatchChangeRequest } from "@open-smc/data/src/contract/PatchChangeRequest";
 import { MessageDelivery } from "@open-smc/messaging/src/api/MessageDelivery";
-import { workspace } from "./workspace";
-import { layoutState } from "./layoutState";
 import { toPatchOperation } from "./toPatchOperation";
+import { EMPTY } from "rxjs";
+import { handleRequest } from "@open-smc/messaging/src/handleRequest";
+import { sendMessage } from "@open-smc/messaging/src/sendMessage";
+import { basicStoreExample } from "@open-smc/layout/src/examples/basicStoreExample";
 
 export class SampleApp extends Observable<MessageDelivery> implements Observer<MessageDelivery> {
     protected input = new Subject<MessageDelivery>();
@@ -21,12 +20,12 @@ export class SampleApp extends Observable<MessageDelivery> implements Observer<M
         super(subscriber => this.output.subscribe(subscriber));
 
         this.input
-            .pipe(filter(messageOfType(SubscribeRequest)))
-            .subscribe(({message}) => this.subscribeRequestHandler(message));
+            .pipe(handleRequest(SubscribeRequest, this.subscribeRequestHandler()))
+            .subscribe(this.output);
 
         this.input
-            .pipe(filter(messageOfType(PatchChangeRequest)))
-            .subscribe(({message}) => this.patchChangeRequestHandler(message));
+            .pipe(handleRequest(PatchChangeRequest, this.patchChangeRequestHandler()))
+            .subscribe(this.output);
     }
 
     complete() {
@@ -39,54 +38,36 @@ export class SampleApp extends Observable<MessageDelivery> implements Observer<M
         this.input.next(value);
     }
 
-    subscribeRequestHandler(message: SubscribeRequest) {
-        const {id, workspaceReference} = message;
+    subscribeRequestHandler = () =>
+        (message: SubscribeRequest) => {
+            const {reference} = message;
 
-        if (workspaceReference instanceof EntireWorkspace) {
-            sendMessage(this.output, new DataChangedEvent(id, workspace));
+            if (reference instanceof LayoutAreaReference) {
+                setTimeout(() => {
+                    const [nextState, patches] =
+                        produceWithPatches(
+                            basicStoreExample,
+                            state => {
+                                state.instances.LineOfBusiness["1"].DisplayName = "Hello";
+                            }
+                        );
 
-            setTimeout(() => {
-                const [nextState, patches] =
-                    produceWithPatches(
-                        workspace,
-                        state => {
-                            state.user.name = "bar";
-                        });
-                sendMessage(
-                    this.output,
-                    new DataChangedEvent(id, new JsonPatch(patches.map(toPatchOperation)))
-                );
-            }, 1000)
+                    sendMessage(
+                        this.output,
+                        new DataChangedEvent(reference, new JsonPatch(patches.map(toPatchOperation)), "Patch")
+                    )
+                }, 1000);
+
+                return of(new DataChangedEvent(reference, basicStoreExample, "Full"));
+
+            }
         }
 
-        if (workspaceReference instanceof LayoutAreaReference) {
-            sendMessage(this.output, new DataChangedEvent(id, layoutState));
-
-            // setTimeout(() => {
-            //     const [nextState, patches] =
-            //         produceWithPatches(
-            //             layoutState,
-            //             state => {
-            //                 // state.control.areas[0].control.title = "Hi";
-            //                 // state.control.areas[1].control.data = "Hi";
-            //                 // state.control.areas[0].id = "/ContextMenu";
-            //                 // state.control.areas.pop();
-            //                 // state.style = { fontWeight: "bold" }
-            //                 // state.id = "/root"
-            //             }
-            //         );
-            //
-            //     sendMessage(
-            //         this.output,
-            //         new DataChangedEvent(id, new JsonPatch(patches.map(toPatchOperation)))
-            //     )
-            // }, 1000);
+    patchChangeRequestHandler = () =>
+        (message: PatchChangeRequest) => {
+            console.log(message);
+            return EMPTY as any;
         }
-    }
-
-    patchChangeRequestHandler(message: PatchChangeRequest) {
-        console.log(message);
-    }
 }
 
 export const sampleApp = new SampleApp();
