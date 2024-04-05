@@ -15,8 +15,8 @@ namespace OpenSmc.Messaging.Orleans.Test
         [Fact]
         public async Task TestMethod()
         {
-            ImmutableArray<ScriptVariable> variablesAfterEvaluation;
-            ImmutableArray<ScriptVariable> variable2CountAfterEvaluation;
+            //ImmutableArray<ScriptVariable> variablesAfterEvaluation;
+            //ImmutableArray<ScriptVariable> variable2CountAfterEvaluation;
 
             var kernel = CreateKernel();
             var location = @"C:\dev\OpenSmc\src\OpenSmc.Arithmetics\bin\Debug\net8.0\OpenSmc.Arithmetics.dll";

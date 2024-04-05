@@ -1,5 +1,4 @@
 ﻿using System.Collections.Concurrent;
-using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
@@ -129,7 +128,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
             typeSources[ts.CollectionName] = ts;
 
 
-        InitializeState(new(Hub, new EntityStore(ImmutableDictionary<string, InstanceCollection>.Empty), typeSources, ReduceManager));
+        InitializeState(new(Hub, new EntityStore(){Reference = new EntireWorkspace()}, typeSources, ReduceManager));
 
 
 

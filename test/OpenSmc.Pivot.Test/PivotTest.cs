@@ -37,7 +37,7 @@ public class PivotTest : TestBase //HubTestBase
         Services.RegisterScopes();
     }
 
-    public override void Initialize()
+    protected override void Initialize()
     {
         base.Initialize();
         ServiceProvider.InitializeDataCubesInterceptor();

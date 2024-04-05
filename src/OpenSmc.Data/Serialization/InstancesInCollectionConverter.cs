@@ -3,7 +3,6 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Json.More;
-using OpenSmc.Serialization;
 
 namespace OpenSmc.Data.Serialization;
 
@@ -14,7 +13,7 @@ public class InstancesInCollectionConverter() : JsonConverter<InstanceCollection
     {
         if (node is not JsonObject obj)
             throw new ArgumentException("Expecting an array");
-        return new(obj.Select(jsonNode => DeserializeEntity(jsonNode.Key, jsonNode.Value, options)).ToImmutableDictionary());
+        return new(){Instances = obj.Select(jsonNode => DeserializeEntity(jsonNode.Key, jsonNode.Value, options)).ToImmutableDictionary()};
     }
 
     private KeyValuePair<object, object> DeserializeEntity(string idSerialized, JsonNode jsonNode, JsonSerializerOptions options)

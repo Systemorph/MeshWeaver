@@ -25,7 +25,7 @@ public class ScopesTestBase : HubTestBase
             .AddApplicationScope();
     }
 
-    public override void Initialize()
+    protected override void Initialize()
     {
         base.Initialize();
         ScopeFactory = GetHost().ServiceProvider.GetRequiredService<IScopeFactory>();

@@ -5,20 +5,9 @@ namespace OpenSmc.Layout.Composition;
 
 public record LayoutStackControl() : UiControl<LayoutStackControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
 {
-    private readonly ImmutableList<ViewElement> viewElements = ImmutableList<ViewElement>.Empty;
-
-    public record AreaChangedOptions(string InsertAfter = null);
     internal const string Root = "";
 
-    internal ImmutableList<ViewElement> ViewElements
-    {
-        get => viewElements;
-        init
-        {
-            viewElements = value;
-            Areas = viewElements?.Select(ve => new LayoutAreaReference(ve.Area)).ToArray();
-        }
-    } //definition of views
+    internal ImmutableList<ViewElement> ViewElements { get; init; } = ImmutableList<ViewElement>.Empty;
 
     public IReadOnlyCollection<object> Areas { get; init; }
 
@@ -45,19 +34,7 @@ public record LayoutStackControl() : UiControl<LayoutStackControl>(ModuleSetup.M
         return this with { ViewElements = ViewElements.Add(new ViewElementWithViewDefinition(area, viewDefinition)) };
     }
 
-    private string GetAreaName()
-    {
-        return $"{ViewElements.Count + 1}";
-    }
-
-
-    public LayoutStackControl WithColumns(int columns)
-    {
-        return this with { ColumnCount = columns };
-    }
-
-    public int ColumnCount { get; init; }
-
+   
     public bool HighlightNewAreas { get; init; }
     public LayoutStackControl WithHighlightNewAreas()
     {

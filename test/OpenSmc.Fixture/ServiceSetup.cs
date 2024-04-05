@@ -18,13 +18,13 @@ public class ServiceSetup
         Services.AddOptions();
     }
 
-    public virtual void Initialize()
+    protected virtual void Initialize()
     {
         BuildServiceProvider();
         ServiceProvider.Buildup(this);
     }
 
-    public virtual void BuildServiceProvider()
+    protected virtual void BuildServiceProvider()
     {
         ServiceProvider = Services.SetupModules(Modules);
 
@@ -33,13 +33,13 @@ public class ServiceSetup
     }
 
 
-    public void SetOutputHelper(ITestOutputHelper output)
+    internal void SetOutputHelper(ITestOutputHelper output)
     {
         if (output != null)
             ServiceProvider.GetRequiredService<TestOutputHelperAccessor>().OutputHelper = output;
     }
 
-    public void Initialize(ITestOutputHelper output)
+    protected void Initialize(ITestOutputHelper output)
     {
         Initialize();
         SetOutputHelper(output);
