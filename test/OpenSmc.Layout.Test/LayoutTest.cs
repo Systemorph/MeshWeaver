@@ -72,7 +72,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .SelectAwait(async a => await stream.GetData(a).FirstAsync())
             .ToArrayAsync();
 
-        areaControls.Should().HaveCount(2).And.BeOfType<HtmlControl>();
+        areaControls.Should().HaveCount(2).And.AllBeOfType<HtmlControl>();
     }
 
     //    public async Task LayoutStackUpdateTest()
