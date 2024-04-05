@@ -12,7 +12,7 @@ namespace OpenSmc.Layout.Test;
 
 public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    [Inject] private ILogger<LayoutTest> logger;
+    //[Inject] private ILogger<LayoutTest> logger;
 
 
     private const string View1 = nameof(View1);
@@ -58,21 +58,21 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var reference = new LayoutAreaReference(View1);
         var stream = workspace.GetRemoteStream(new HostAddress(), reference);
 
-        var control = await stream.GetControl(reference).FirstAsync();
+        var control = await stream.GetControl(reference.Area).FirstAsync();
         var areas = control.Should().BeOfType<LayoutStackControl>()
             .Which
             .Areas.Should().HaveCount(2)
-                .And.Subject.Should().AllBeOfType<LayoutAreaReference>()
-                .And.Subject.Cast<LayoutAreaReference>()
+                .And.Subject.Should().AllBeOfType<EntityReference>()
+                .And.Subject.Cast<EntityReference>()
                 .ToArray();
 
 
-        var areaControls = areas
+        var areaControls = await areas
             .ToAsyncEnumerable()
-            .SelectAwait(async a => await stream.GetControl(a).FirstAsync())
+            .SelectAwait(async a => await stream.GetData(a).FirstAsync())
             .ToArrayAsync();
 
-
+        areaControls.Should().HaveCount(2).And.BeOfType<HtmlControl>();
     }
 
     //    public async Task LayoutStackUpdateTest()

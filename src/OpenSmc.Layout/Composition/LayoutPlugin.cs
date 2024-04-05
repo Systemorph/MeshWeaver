@@ -6,9 +6,9 @@ using OpenSmc.Messaging;
 
 namespace OpenSmc.Layout.Composition;
 
-public interface ILayout : IObservable<LayoutAreaCollection>
+public interface ILayout : IObservable<EntityStore>
 {
-    IObservable<LayoutAreaCollection> Render(IObservable<WorkspaceState> state, LayoutAreaReference reference);
+    IObservable<EntityStore> Render(IObservable<WorkspaceState> state, LayoutAreaReference reference);
 }
 
 public record LayoutAddress(object Host) : IHostedAddress;
@@ -18,7 +18,7 @@ public class LayoutPlugin(IMessageHub hub)
     ILayout
 {
     //private ImmutableDictionary<string, UiControl> Areas { get; set; } = ImmutableDictionary<string, UiControl>.Empty;
-
+    private static readonly string ControlsCollection = typeof(UiControl).FullName;
     private readonly LayoutDefinition layoutDefinition =
         hub.Configuration.GetListOfLambdas().Aggregate(new LayoutDefinition(hub), (x, y) => y.Invoke(x));
 
@@ -34,7 +34,7 @@ public class LayoutPlugin(IMessageHub hub)
             return;
         var control = layoutDefinition.InitialState;
         if(control != null)
-            RenderArea(new LayoutAreaCollection(new(string.Empty)), string.Empty, control);
+            RenderArea(new EntityStore{Reference = new LayoutAreaReference(string.Empty)}, string.Empty, control);
 
         foreach (var initialization in layoutDefinition.Initializations)
             await initialization.Invoke(cancellationToken);
@@ -42,28 +42,35 @@ public class LayoutPlugin(IMessageHub hub)
 
     private void RenderArea(IObservable<WorkspaceState> state, LayoutAreaReference reference)
     {
-        var ret = new LayoutAreaCollection(reference);
+        var ret = new EntityStore{Reference = reference};
         areaSubject.OnNext(RenderArea(ret, reference.Area, layoutDefinition.GetViewElement(reference)));
     }
 
 
-    private LayoutAreaCollection RenderArea(LayoutAreaCollection collection, string area, UiControl control)
+    private EntityStore RenderArea(EntityStore collection, string area, UiControl control)
     {
         if (control == null)
             return null;
 
         if (control is LayoutStackControl stack)
+        {
             collection = stack.ViewElements.Aggregate(collection, (c, ve) => RenderArea(c, $"{area}/{ve.Area}", ve));
-        return collection with{Areas = collection.Areas.SetItem(area, control)};
+            control = stack with
+            {
+                Areas = stack.ViewElements
+                    .Select(ve => new EntityReference(ControlsCollection, $"{area}/{ve.Area}")).ToArray()
+            };
+        }
+        return collection.UpdateCollection(ControlsCollection, c => c.SetItem(area, control));
     }
 
-    private LayoutAreaCollection RenderArea(LayoutAreaCollection collection, string area, ViewElementWithViewDefinition viewDefinition)
+    private EntityStore RenderArea(EntityStore collection, string area, ViewElementWithViewDefinition viewDefinition, LayoutAreaReference reference)
     {
-        var ret = collection with { Areas = collection.Areas.SetItem(area, new SpinnerControl()) };
+        var ret = collection.UpdateCollection(ControlsCollection, i =>  i.SetItem(area, new SpinnerControl() ));
         layoutHub.Schedule(ct =>
         {
             ct.ThrowIfCancellationRequested();
-            var stream = viewDefinition.ViewDefinition.Invoke(workspace.Stream, collection.Reference with {Area = area});
+            var stream = viewDefinition.ViewDefinition.Invoke(workspace.Stream, reference with {Area = area});
             stream.Select(view => RenderArea(collection, area, view))
                 .DistinctUntilChanged()
                 .Subscribe(areaSubject);
@@ -73,10 +80,10 @@ public class LayoutPlugin(IMessageHub hub)
     }
 
 
-    private LayoutAreaCollection RenderArea(LayoutAreaCollection collection, string area, object view)
+    private EntityStore RenderArea(EntityStore collection, string area, object view)
         => RenderArea(collection, area, layoutDefinition.ControlsManager.Get(view));
 
-    private LayoutAreaCollection RenderArea(LayoutAreaCollection collection, string area, ViewElement viewElement)
+    private EntityStore RenderArea(EntityStore collection, string area, ViewElement viewElement)
         => viewElement switch
         {
             ViewElementWithView view => RenderArea(collection, area, layoutDefinition.ControlsManager.Get(view.View)),
@@ -95,7 +102,7 @@ public class LayoutPlugin(IMessageHub hub)
     //}
 
 
-    public IObservable<LayoutAreaCollection> Render(IObservable<WorkspaceState> state, LayoutAreaReference reference)
+    public IObservable<EntityStore> Render(IObservable<WorkspaceState> state, LayoutAreaReference reference)
     {
         RenderArea(state, reference);
         return areaSubject;
@@ -103,8 +110,8 @@ public class LayoutPlugin(IMessageHub hub)
 
 
 
-    private readonly ReplaySubject<LayoutAreaCollection> areaSubject = new(1);
-    public IDisposable Subscribe(IObserver<LayoutAreaCollection> observer)
+    private readonly ReplaySubject<EntityStore> areaSubject = new(1);
+    public IDisposable Subscribe(IObserver<EntityStore> observer)
     {
         return areaSubject.Subscribe(observer);
     }

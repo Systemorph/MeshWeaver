@@ -17,11 +17,11 @@ public record ReduceManager
 
     public ReduceManager()
     {
-        AddWorkspaceReference<EntityReference>((ws, reference) => ws.ReduceImpl(reference))
+        AddWorkspaceReference<EntityReference>((ws, reference) => ws.Store.ReduceImpl(reference))
             .AddWorkspaceReference<PartitionedCollectionsReference>((ws,reference) => ws.ReduceImpl(reference))
-            .AddWorkspaceReference<CollectionReference>((ws, reference) => ws.ReduceImpl(reference))
-            .AddWorkspaceReference<CollectionsReference>((ws, reference) => ws.ReduceImpl(reference))
-            .AddWorkspaceReference<EntireWorkspace>((ws, reference) => ws.ReduceImpl(reference));
+            .AddWorkspaceReference<CollectionReference>((ws, reference) => ws.Store.ReduceImpl(reference))
+            .AddWorkspaceReference<CollectionsReference>((ws, reference) => ws.Store.ReduceImpl(reference))
+            .AddWorkspaceReference<EntireWorkspace>((ws, reference) => ws.Store.ReduceImpl(reference));
     }
 
     public ReduceManager AddWorkspaceReferenceStream<TReference>(Func<IObservable<WorkspaceState>, TReference, IObservable<object>> reducer)
@@ -83,13 +83,17 @@ public record ReduceManager
 
 internal delegate object Reduce(WorkspaceState state, WorkspaceReference reference, LinkedListNode<Reduce> node);
 internal delegate IObservable<object> ReduceStream(IObservable<WorkspaceState> state, WorkspaceReference reference, LinkedListNode<ReduceStream> node);
+
 public record WorkspaceState
 {
     private readonly IMessageHub hub;
+
     private readonly ReduceManager reduceManager;
+
     //private readonly ISerializationService serializationService;
     private ImmutableDictionary<Type, string> CollectionsByType { get; init; }
     public ImmutableDictionary<string, ITypeSource> TypeSources { get; init; }
+
     public WorkspaceState
     (
         IMessageHub hub,
@@ -105,27 +109,29 @@ public record WorkspaceState
 
     public string GetCollectionName(Type type) => CollectionsByType.GetValueOrDefault(type);
 
-    private WorkspaceState(IMessageHub hub, IReadOnlyDictionary<string, ITypeSource> typeSources, ReduceManager reduceManager1)
+    private WorkspaceState(IMessageHub hub, IReadOnlyDictionary<string, ITypeSource> typeSources,
+        ReduceManager reduceManager1)
     {
         this.reduceManager = reduceManager1;
         Version = hub.Version;
         var serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
-        CollectionsByType = typeSources.Values.Where(x => x.ElementType != null).ToImmutableDictionary(x => x.ElementType, x => x.CollectionName);
+        CollectionsByType = typeSources.Values.Where(x => x.ElementType != null)
+            .ToImmutableDictionary(x => x.ElementType, x => x.CollectionName);
         TypeSources = typeSources.Values.ToImmutableDictionary(x => x.CollectionName);
         Options = hub.JsonSerializerOptions;
 
     }
 
-    private JsonSerializerOptions Options { get;  }
+    private JsonSerializerOptions Options { get; }
 
 
     public long Version { get; init; }
 
 
     #region Instances
+
     public EntityStore Store { get; private init; }
 
-    public InstanceCollection GetCollection(string collection) => Store.Instances.GetValueOrDefault(collection);
 
 
 
@@ -142,49 +148,22 @@ public record WorkspaceState
         => (TReference)reduceManager.Reduce(this, reference);
 
 
-    internal object ReduceImpl(WorkspaceReference reference)
-    {
-        throw new NotSupportedException($"Reducing with type {reference.GetType().FullName} is not supported.");
-    }
-
-    //private JsonNode ReduceImpl(JsonPathReference reducer)
-    //{
-    //    var node = GetCurrentJsonNode();
-
-    //    var jsonPath = JsonPath.Parse(reducer.Path);
-    //    var evaluated = jsonPath.Evaluate(node);
-    //    var match = evaluated.Matches switch
-    //    {
-    //        { Count: 1 } => evaluated.Matches[0].Value,
-    //        { Count: > 1 } => new JsonArray(evaluated.Matches.Select(x => x.Value).ToArray()),
-    //        _ => null
-    //    };
-    //    return match;
-    //}
-
-    internal object ReduceImpl(EntityReference reference) => GetCollection(reference.Collection)?.GetData(reference.Id);
-    internal object ReduceImpl(EntireWorkspace _) => Store;
-
-    internal InstanceCollection ReduceImpl(CollectionReference reference) =>
-        GetCollection(reference.Collection);
-
-    internal EntityStore ReduceImpl(CollectionsReference reference) =>
-        new(reference
-            .Collections
-            .Select(c => new KeyValuePair<string, InstanceCollection>(c, GetCollection(c)))
-            .Where(x => x.Value != null)
-            .ToImmutableDictionary());
-
     internal EntityStore ReduceImpl(PartitionedCollectionsReference reference) =>
-        new(Reduce(reference.Collections)
-            .Instances
-            .Select(c => new KeyValuePair<string, InstanceCollection>(c.Key, GetPartitionedCollection(c.Key, reference.Partition)))
-            .Where(x => x.Value != null)
-            .ToImmutableDictionary());
+        new()
+        {
+            Reference = reference,
+            Instances = ((EntityStore)Reduce((dynamic)reference.Collections))
+                .Instances
+                .Select(c =>
+                    new KeyValuePair<string, InstanceCollection>(c.Key,
+                        GetPartitionedCollection(c.Key, reference.Partition)))
+                .Where(x => x.Value != null)
+                .ToImmutableDictionary()
+        };
 
     private InstanceCollection GetPartitionedCollection(string collection, object partition)
     {
-        var ret = GetCollection(collection);
+        var ret = Store.GetCollection(collection);
         if (ret == null)
             return null;
         if (TypeSources.TryGetValue(collection, out var ts) && partition != null &&
@@ -197,6 +176,8 @@ public record WorkspaceState
             };
         return ret;
     }
+
+
 
     #endregion
 
@@ -248,9 +229,10 @@ public record WorkspaceState
     private EntityStore Merge(DataChangeRequestWithElements request) =>
         request switch
         {
-            UpdateDataRequest update => new EntityStore(Store.Instances.SetItems(MergeUpdate(update))),
-            DeleteDataRequest delete => new EntityStore(Store.Instances.SetItems(MergeDelete(delete))),
-            _ => throw new NotSupportedException()
+            UpdateDataRequest update => Store with { Instances = Store.Instances.SetItems(MergeUpdate(update)) },
+            DeleteDataRequest delete => Store with { Instances = Store.Instances.SetItems(MergeDelete(delete)) },
+
+_ => throw new NotSupportedException()
         };
 
     private IEnumerable<KeyValuePair<string, InstanceCollection>> MergeDelete(DeleteDataRequest update)
@@ -259,7 +241,7 @@ public record WorkspaceState
         foreach (var kvp in instances)
         {
             var collection = kvp.Key;
-            var existing = GetCollection(collection);
+            var existing = Store.GetCollection(collection);
             if (existing != null)
                yield return new(kvp.Key, kvp.Value with{Instances = existing.Instances.RemoveRange(kvp.Value.Instances.Keys) });
         }
@@ -271,7 +253,7 @@ public record WorkspaceState
         foreach (var kvp in instances)
         {
             var collection = kvp.Key;
-            var existing = GetCollection(collection);
+            var existing = Store.GetCollection(collection);
             bool snapshotMode = update.Options?.Snapshot ?? false;
             if (existing == null || snapshotMode)
                 yield return kvp;
@@ -289,10 +271,7 @@ public record WorkspaceState
             var typeProvider = TypeSources.GetValueOrDefault(collection);
             if (typeProvider == null)
                 throw new InvalidOperationException($"Type {g.Key.FullName} is not mapped to data source.");
-            yield return new(typeProvider.CollectionName, new(g.ToImmutableDictionary(typeProvider.GetKey))
-            {
-                GetKey = typeProvider.GetKey
-            });
+            yield return new(typeProvider.CollectionName, new(){Instances = g.ToImmutableDictionary(typeProvider.GetKey), GetKey = typeProvider.GetKey });
         }
     }
 
@@ -316,15 +295,15 @@ public record WorkspaceState
         };
     }
 
-    private EntityStore CreateNewStore(ChangeItem<EntityStore> item)
-    {
-        return new(
-            Store.Instances.SetItems(item.Value.Instances.Select(kvp =>
+    private EntityStore CreateNewStore(ChangeItem<EntityStore> item) =>
+        Store with
+        {
+            Instances = Store.Instances.SetItems(item.Value.Instances.Select(kvp =>
                 new KeyValuePair<string, InstanceCollection>(kvp.Key,
                     TypeSources.TryGetValue(kvp.Key, out var ts) && ts is IPartitionedTypeSource &&
                     Store.Instances.TryGetValue(kvp.Key, out var existing)
                         ? existing.Merge(kvp.Value)
                         : kvp.Value)))
-        );
-    }
+
+        };
 }

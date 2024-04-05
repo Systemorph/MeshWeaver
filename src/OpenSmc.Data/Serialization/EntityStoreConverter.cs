@@ -37,7 +37,10 @@ public class EntityStoreConverter : JsonConverter<EntityStore>
             throw new ArgumentException("Invalid serialized workspace");
 
         var newStore =
-            new EntityStore(obj.Select(kvp => DeserializeCollection(kvp.Key, kvp.Value, options)).ToImmutableDictionary());
+            new EntityStore()
+            {
+                Instances = obj.Select(kvp => DeserializeCollection(kvp.Key, kvp.Value, options)).ToImmutableDictionary(),
+            };
 
         return newStore;
     }
