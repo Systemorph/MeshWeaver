@@ -22,3 +22,4 @@ export const sendRequest = <T>(hub: MessageHub, message: Request<T>) => {
 
     return result$;
 }
+

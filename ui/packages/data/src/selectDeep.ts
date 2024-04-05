@@ -9,7 +9,7 @@ export const selectDeep = <T extends DataInput>(data: T) =>
             data,
             value =>
                 value instanceof WorkspaceReference
-                    ? (selectByReference(source, value) ?? null)
+                    ? (selectByReference(value)(source) ?? null)
                     : undefined
         );
 

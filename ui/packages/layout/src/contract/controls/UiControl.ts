@@ -3,7 +3,7 @@ import { Bindable } from "../Binding";
 import { DataInput } from "@open-smc/data/src/contract/DataInput";
 import { type } from "@open-smc/serialization/src/type";
 
-// @type("OpenSmc.Layout.UiControl")
+@type("OpenSmc.Layout.UiControl")
 export class UiControl {
     id?: Bindable<string>;
     isReadonly?: Bindable<boolean>;
