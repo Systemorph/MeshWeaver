@@ -52,7 +52,7 @@ function LayoutStack({id, skin, areas, style, highlightNewAreas, columnCount}: S
         );
 
         return (
-            <RenderArea id={id} className={className}/>
+            <RenderArea id={id} className={className} key={id}/>
         );
     });
 

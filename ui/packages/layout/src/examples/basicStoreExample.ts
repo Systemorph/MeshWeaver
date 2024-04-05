@@ -2,39 +2,40 @@ export const basicStoreExample = {
     $type: "OpenSmc.Data.EntityStore",
     reference: {
         $type: "OpenSmc.Layout.LayoutAreaReference",
-        area: "Main"
+        area: "MainWindow"
     },
     instances: {
         "OpenSmc.Layout.UiControl": {
-            Main: {
+            MainWindow: {
                 $type: "OpenSmc.Layout.Composition.LayoutStackControl",
-                dataContext: {
-                    $type: "EntityReference",
-                    collection: "LineOfBusiness",
-                    id: "1"
-                },
+                skin: "MainWindow",
                 areas: [
                     {
-                        $type: "EntityReference",
+                        $type: "OpenSmc.Data.EntityReference",
                         collection: "OpenSmc.Layout.UiControl",
-                        id: "Main/View1"
+                        id: "Main"
                     },
                     {
-                        $type: "EntityReference",
+                        $type: "OpenSmc.Data.EntityReference",
                         collection: "OpenSmc.Layout.UiControl",
-                        id: "Main/View2"
+                        id: "Toolbar"
                     }
                 ]
             },
-            "Main/View1": {
+            "Main": {
                 $type: "OpenSmc.Layout.Composition.SpinnerControl",
                 message: "processing...",
                 progress: 0.5
             },
-            "Main/View2": {
-                $type: "OpenSmc.Layout.Composition.TextBoxControl",
+            "Toolbar": {
+                $type: "OpenSmc.Layout.TextBoxControl",
+                dataContext: {
+                    $type: "OpenSmc.Data.EntityReference",
+                    collection: "LineOfBusiness",
+                    id: "1"
+                },
                 data: {
-                    $type: "Binding",
+                    $type: "OpenSmc.Layout.DataBinding.Binding",
                     path: "$.DisplayName"
                 }
             }

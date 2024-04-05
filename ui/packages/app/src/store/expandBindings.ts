@@ -10,5 +10,5 @@ export const expandBindings = <T>(props: T, parentDataContext?: unknown) =>
             props,
             value =>
                 value instanceof Binding
-                    ? selectByReference(source, new JsonPathReference(value.path)) ?? null : undefined
+                    ? selectByReference(new JsonPathReference(value.path))(source) ?? null : undefined
         );
