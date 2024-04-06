@@ -128,7 +128,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
             typeSources[ts.CollectionName] = ts;
 
 
-        InitializeState(new(Hub, new EntityStore(){Reference = new EntireWorkspace()}, typeSources, ReduceManager));
+        InitializeState(new(Hub, new EntityStore(), typeSources, ReduceManager));
 
 
 

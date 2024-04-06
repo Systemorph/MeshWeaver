@@ -83,7 +83,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
                 .ToImmutableDictionary(x => x.TypeSource.CollectionName, x => x.Instances);
 
             foreach (var changeStream in ret)
-                changeStream.Initialize(new(){Reference = changeStream.Reference, Instances = instances});
+                changeStream.Initialize(new(){Instances = instances});
         });
         return ret;
     }

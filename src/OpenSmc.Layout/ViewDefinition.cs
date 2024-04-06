@@ -1,8 +1,8 @@
-﻿using OpenSmc.Data;
+﻿using OpenSmc.Layout.Composition;
 
 namespace OpenSmc.Layout;
 
-public delegate IObservable<object> ViewDefinition(IObservable<WorkspaceState> stateStream, LayoutAreaReference reference);
+public delegate IObservable<Func<LayoutArea, Task<UiControl>>> ViewDefinition(LayoutAreaReference reference);
 
 public abstract record ViewElement(string Area);
 

@@ -7,10 +7,9 @@ public abstract record WorkspaceReference;
 
 public abstract record WorkspaceReference<TReference> : WorkspaceReference;
 
-public record EntityStore()
+public record EntityStore
 {
     public ImmutableDictionary<string, InstanceCollection> Instances { get; init; } = ImmutableDictionary<string, InstanceCollection>.Empty;
-    public WorkspaceReference Reference { get; init; }
 
     public EntityStore Merge(EntityStore s2) =>
         this with
@@ -41,7 +40,6 @@ public record EntityStore()
     internal EntityStore ReduceImpl(CollectionsReference reference) =>
         this with
         {
-            Reference = reference,
             Instances = reference
                 .Collections
                 .Select(c => new KeyValuePair<string, InstanceCollection>(c, GetCollection(c)))

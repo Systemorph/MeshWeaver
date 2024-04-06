@@ -151,7 +151,6 @@ public record WorkspaceState
     internal EntityStore ReduceImpl(PartitionedCollectionsReference reference) =>
         new()
         {
-            Reference = reference,
             Instances = ((EntityStore)Reduce((dynamic)reference.Collections))
                 .Instances
                 .Select(c =>
