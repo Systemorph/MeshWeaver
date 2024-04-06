@@ -1,11 +1,9 @@
 ﻿using System.Reactive.Linq;
 using FluentAssertions;
-using Microsoft.Extensions.Logging;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
-using OpenSmc.ServiceProvider;
 using Xunit.Abstractions;
 
 namespace OpenSmc.Layout.Test;
@@ -15,12 +13,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     //[Inject] private ILogger<LayoutTest> logger;
 
 
-    private const string View1 = nameof(View1);
-    private static readonly Dictionary<string, UiControl> TestAreas
-        = new()
-        {
-            { View1, Controls.Stack().WithView("Hello", "Hello").WithView("World", "World") },
-        };
+    private const string StaticView = nameof(StaticView);
+
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
@@ -30,20 +24,30 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                         ds => ds
                             .WithType<TestLayoutPlugin.DataRecord>(t => t.WithInitialData([new("Hello", "World")]))))
                 .AddLayout(
-                    layout =>
-                        TestAreas.Aggregate(layout, (l, kvp) => l.WithView(kvp.Key, kvp.Value))
-                            .WithView("Report", (stateStream, reference) =>
-                                stateStream
-                                    .Select(ws => ws.GetData<ToolbarEntity>("Report1Toolbar"))
-                                    .DistinctUntilChanged()
-                                    .Select(toolbar => new HtmlControl($"Report for year {toolbar.Year}"))
-                            ))
-
+                    layout => layout
+                        .WithView(StaticView, Controls.Stack().WithView("Hello", "Hello").WithView("World", "World"))
+                        .WithView(nameof(ViewWithProgress), ViewWithProgress)
+                )
             ;
 
 
     }
 
+
+    private static async Task<object> ViewWithProgress(LayoutArea area)
+    {
+        var percentage = 0;
+        var progress = Controls.Progress("Processing", percentage);
+        for (int i = 0; i < 10; i++)
+        {
+            await Task.Delay(10);
+            area.UpdateView(nameof(ViewWithProgress),
+                progress = progress with { Progress = percentage = percentage += 10 });
+
+        }
+
+        return Controls.HtmlView("Report");
+    }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
@@ -55,7 +59,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task BasicArea()
     {
         var workspace = GetClient().GetWorkspace();
-        var reference = new LayoutAreaReference(View1);
+        var reference = new LayoutAreaReference(StaticView);
         var stream = workspace.GetRemoteStream(new HostAddress(), reference);
 
         var control = await stream.GetControl(reference.Area).FirstAsync();
