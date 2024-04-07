@@ -1,7 +1,6 @@
 ﻿using System.Collections;
 using System.Reflection;
 using System.Text;
-using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using OpenSmc.Messaging.Serialization.Newtonsoft;

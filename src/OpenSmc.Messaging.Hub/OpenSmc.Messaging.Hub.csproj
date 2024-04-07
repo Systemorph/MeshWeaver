@@ -8,12 +8,12 @@
     <PackageReference Include="JsonPatch.Net" />
     <PackageReference Include="Microsoft.Extensions.Logging" />
     <PackageReference Include="System.Reactive" />
-    <PackageReference Include="Newtonsoft.Json" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\OpenSmc.Disposables\OpenSmc.Disposables.csproj" />
     <ProjectReference Include="..\OpenSmc.Messaging.Contract\OpenSmc.Messaging.Contract.csproj" />
+    <ProjectReference Include="..\OpenSmc.Messaging.Serialization\OpenSmc.Messaging.Serialization.csproj" />
     <ProjectReference Include="..\OpenSmc.Reflection\OpenSmc.Reflection.csproj" />
     <ProjectReference Include="..\OpenSmc.Serialization.Abstractions\OpenSmc.Serialization.Abstractions.csproj" />
     <ProjectReference Include="..\OpenSmc.ServiceProvider\OpenSmc.ServiceProvider.csproj" />
