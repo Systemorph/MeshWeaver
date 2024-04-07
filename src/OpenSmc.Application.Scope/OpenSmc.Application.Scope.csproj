@@ -1,8 +1,0 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-
-  <ItemGroup>
-    <ProjectReference Include="..\OpenSmc.Application.Contract\OpenSmc.Application.Contract.csproj" />
-    <ProjectReference Include="..\OpenSmc.Messaging.Hub\OpenSmc.Messaging.Hub.csproj" />
-  </ItemGroup>
-
-</Project>
