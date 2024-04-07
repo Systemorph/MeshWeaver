@@ -4,6 +4,7 @@ using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using OpenSmc.Messaging.Serialization.Newtonsoft;
 using OpenSmc.Serialization;
 using OpenSmc.Utils;
 

@@ -5,7 +5,7 @@ using Newtonsoft.Json.Linq;
 using OpenSmc.Serialization;
 using OpenSmc.Utils;
 
-namespace OpenSmc.Messaging.Serialization;
+namespace OpenSmc.Messaging.Serialization.Newtonsoft;
 
 public class SerializationContext : ISerializationContext
 {
@@ -14,12 +14,12 @@ public class SerializationContext : ISerializationContext
     private JToken resultToken;
     private const int MaxDepth = 500;
 
-    public SerializationContext(SerializationService serializationService, 
-                                IServiceProvider serviceProvider, 
-                                JsonSerializer serializer, 
-                                object originalValue, 
-                                JToken resultToken, 
-                                PropertyInfo parentProperty, 
+    public SerializationContext(SerializationService serializationService,
+                                IServiceProvider serviceProvider,
+                                JsonSerializer serializer,
+                                object originalValue,
+                                JToken resultToken,
+                                PropertyInfo parentProperty,
                                 object parent,
                                 int depth)
     {
@@ -37,7 +37,7 @@ public class SerializationContext : ISerializationContext
     private JToken FromObject(object originalValue)
     {
         var ret = JToken.FromObject(originalValue, serializer);
-        if(typeRegistry.TryGetTypeName(originalValue.GetType(), out var typeName))
+        if (typeRegistry.TryGetTypeName(originalValue.GetType(), out var typeName))
             ((JObject)ret)["$type"] = typeName;
         return ret;
     }

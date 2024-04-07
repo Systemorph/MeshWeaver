@@ -2,7 +2,7 @@
 using Newtonsoft.Json;
 using OpenSmc.Serialization;
 
-namespace OpenSmc.Messaging.Serialization;
+namespace OpenSmc.Messaging.Serialization.Newtonsoft;
 
 public class RawJsonNewtonsoftConverter : JsonConverter
 {

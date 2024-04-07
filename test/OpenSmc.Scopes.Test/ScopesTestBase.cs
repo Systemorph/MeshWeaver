@@ -1,10 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
-using OpenSmc.Application.Scope;
-using OpenSmc.Fixture;
 using OpenSmc.Hub.Fixture;
-using OpenSmc.Messaging;
 using OpenSmc.Scopes.Proxy;
-using OpenSmc.ServiceProvider;
 using Xunit.Abstractions;
 
 namespace OpenSmc.Scopes.Test;
@@ -17,12 +13,6 @@ public class ScopesTestBase : HubTestBase
     protected ScopesTestBase(ITestOutputHelper output)
         : base(output)
     {
-    }
-
-    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
-    {
-        return base.ConfigureHost(configuration)
-            .AddApplicationScope();
     }
 
     protected override void Initialize()

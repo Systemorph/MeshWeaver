@@ -55,11 +55,9 @@ public abstract record HubDataSourceBase<TDataSource> : DataSource<TDataSource> 
 {
     private readonly ITypeRegistry typeRegistry;
     protected JsonSerializerOptions Options => Hub.JsonSerializerOptions;
-    private readonly ISerializationService serializationService;
 
     protected HubDataSourceBase(object Id, IMessageHub Hub) : base(Id, Hub)
     {
-        serializationService = Hub.ServiceProvider.GetRequiredService<ISerializationService>();
         typeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
     }
 

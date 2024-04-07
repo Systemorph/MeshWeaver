@@ -1,7 +1,6 @@
 ﻿using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using Microsoft.Extensions.DependencyInjection;
-using OpenSmc.Application.Scope;
 using OpenSmc.Data;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
@@ -32,7 +31,6 @@ public class TestLayoutPlugin(IMessageHub hub) : MessageHubPlugin(hub),
     public record DataRecord([property: Key]string SystemName, string DisplayName);
 
 
-    private IApplicationScope applicationScope = hub.ServiceProvider.GetRequiredService<IApplicationScope>();
     private readonly IWorkspace workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
 
     public LayoutDefinition Configure(LayoutDefinition layout)
@@ -51,7 +49,6 @@ public class TestLayoutPlugin(IMessageHub hub) : MessageHubPlugin(hub),
                     .WithId(NamedArea)
             )
             // this tests proper updating in the case of MVP
-            .WithView(UpdatingView, ModelViewPresenterTestCase())
             // this tests proper updating in the case of MVVM
             .WithView(DataBoundView, Template.Bind(workspace.State.GetData<DataRecord>().First(),
                     record =>
@@ -72,12 +69,6 @@ public class TestLayoutPlugin(IMessageHub hub) : MessageHubPlugin(hub),
 
     public string DataBindClicked;
 
-    private object ModelViewPresenterTestCase()
-    {
-        return Controls.TextBox(applicationScope.GetScope<ITestScope>().String)
-            .WithId(UpdatingView)
-            .WithClickAction(_ => applicationScope.GetScope<ITestScope>().String = NewString);
-    }
 
     public IMessageDelivery HandleMessage(IMessageDelivery<ChangeDataRecordRequest> request)
     {

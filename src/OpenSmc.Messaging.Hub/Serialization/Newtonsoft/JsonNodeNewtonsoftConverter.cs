@@ -1,7 +1,7 @@
 ﻿using System.Text.Json.Nodes;
 using Newtonsoft.Json;
 
-namespace OpenSmc.Messaging.Serialization;
+namespace OpenSmc.Messaging.Serialization.Newtonsoft;
 
 public class JsonNodeNewtonsoftConverter : JsonConverter
 {
