@@ -21,4 +21,9 @@ public record LayoutArea(LayoutAreaReference Reference)
         if (!deferUpdate)
             Commit();
     }
+
+    private readonly Subject<ProgressControl> progressStream = new();
+
+    public void UpdateProgress(object message, object progress)
+        => progressStream.OnNext(new ProgressControl(message, progress));
 }

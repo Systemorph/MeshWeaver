@@ -11,18 +11,24 @@ public record LayoutDefinition(IMessageHub Hub)
     public LayoutDefinition WithInitialState(UiControl initialState) => this with { InitialState = initialState };
     public LayoutDefinition WithViewGenerator(Func<LayoutAreaReference, bool> filter, ViewElement viewElement) => this with { ViewGenerators = ViewGenerators.Add(new(filter, viewElement)) };
 
-    public LayoutDefinition WithView(string area, Func<LayoutAreaReference, Func<LayoutArea, object>> generator)
-        => WithView(area, r => Observable.Return(generator.Invoke(r)));
+    public LayoutDefinition WithView(string area,  Func<LayoutArea, object> generator)
+        => WithView(area,  Observable.Return(generator));
 
-    public LayoutDefinition WithView(string area, Func<LayoutAreaReference, IObservable<Func<LayoutArea, object>>> generator)
-    => WithView(area, r => generator.Invoke(r).Select(o => (Func<LayoutArea, Task<object>>)(a => Task.FromResult(o.Invoke(a)))));
+    public LayoutDefinition WithView(string area, IObservable<Func<LayoutArea, object>> generator)
+    => WithView(area, r => generator.Select(o => (Func<LayoutArea, Task<object>>)(a => Task.FromResult(o.Invoke(a)))));
 
     public LayoutDefinition WithView(string area, Func<LayoutArea, Task<object>> generator)
         => WithView(area, Observable.Return(generator));
 
-    public LayoutDefinition WithView(string area, Func<LayoutAreaReference, IObservable<Func<LayoutArea, Task<object>>>> generator)
-        => WithViewGenerator(r => r.Area == area, new ViewElementWithViewDefinition(area, r => generator.Invoke(r).Select(x => (Func<LayoutArea, Task<UiControl>>)(async a => ControlsManager.Get(await x(a))))));
+    public LayoutDefinition WithView(string area, IObservable<Func<LayoutArea, Task<object>>> generator)
+        => WithViewGenerator(r => r.Area == area, new ViewElementWithViewDefinition(area, 
+            generator.Select(x => (ViewDefinition)(async a => ControlsManager.Get(await x(a))))));
+
     public LayoutDefinition WithView(string area, ViewDefinition generator)
+        => WithViewGenerator(r => r.Area == area, new ViewElementWithViewDefinition(area, Observable.Return(generator)));
+
+
+    public LayoutDefinition WithView(string area, IObservable<ViewDefinition> generator)
         => WithViewGenerator(r => r.Area == area, new ViewElementWithViewDefinition(area, generator));
 
 

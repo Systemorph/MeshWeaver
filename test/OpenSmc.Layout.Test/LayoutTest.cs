@@ -42,7 +42,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         {
             await Task.Delay(10);
             area.UpdateView(nameof(ViewWithProgress),
-                progress = progress with { Progress = percentage = percentage += 10 });
+                progress = progress with { Progress = percentage += 10 });
 
         }
 
@@ -58,8 +58,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     [HubFact]
     public async Task BasicArea()
     {
-        var workspace = GetClient().GetWorkspace();
         var reference = new LayoutAreaReference(StaticView);
+
+        var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream(new HostAddress(), reference);
 
         var control = await stream.GetControl(reference.Area).FirstAsync();
@@ -77,6 +78,17 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .ToArrayAsync();
 
         areaControls.Should().HaveCount(2).And.AllBeOfType<HtmlControl>();
+    }
+
+    [HubFact]
+    public async Task TestViewWithProgress()
+    {
+        var reference = new LayoutAreaReference(nameof(ViewWithProgress));
+
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream(new HostAddress(), reference);
+        var control = await stream.GetControl(reference.Area).TakeUntil(o => o is HtmlControl).ToArray();
+
     }
 
     //    public async Task LayoutStackUpdateTest()
@@ -100,15 +112,15 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
     //public async Task GetSimpleArea()
     //{
-        //var client = GetClient();
-        //client.Post(new RefreshRequest { Area = TestLayoutPlugin.NamedArea }, o => o.WithTarget(new HostAddress()));
-        //var area = await client.GetAreaAsync(state => state.GetByIdAndArea(TestLayoutPlugin.MainStackId, TestLayoutPlugin.NamedArea));
-        //area.Control.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(TestLayoutPlugin.NamedArea);
-        //area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.NamedArea));
-        //area.Control.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(TestLayoutPlugin.NamedArea);
-        //var address = ((IUiControl)area.Control).Address;
-        //area = await client.GetAreaAsync(state => state.GetByAddress(address));
-        //area.Control.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(TestLayoutPlugin.NamedArea);
+    //var client = GetClient();
+    //client.Post(new RefreshRequest { Area = TestLayoutPlugin.NamedArea }, o => o.WithTarget(new HostAddress()));
+    //var area = await client.GetAreaAsync(state => state.GetByIdAndArea(TestLayoutPlugin.MainStackId, TestLayoutPlugin.NamedArea));
+    //area.Control.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(TestLayoutPlugin.NamedArea);
+    //area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.NamedArea));
+    //area.Control.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(TestLayoutPlugin.NamedArea);
+    //var address = ((IUiControl)area.Control).Address;
+    //area = await client.GetAreaAsync(state => state.GetByAddress(address));
+    //area.Control.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(TestLayoutPlugin.NamedArea);
 
     //}
 

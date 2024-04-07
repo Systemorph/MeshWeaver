@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 
 namespace OpenSmc.Layout.Composition;
 
@@ -27,9 +28,9 @@ public record LayoutStackControl() : UiControl<LayoutStackControl>(ModuleSetup.M
 
 
     public LayoutStackControl WithView(ViewDefinition viewDefinition)
-        => WithView(GetAutoName(), viewDefinition);
+        => WithView(GetAutoName(), Observable.Return(viewDefinition));
 
-    public LayoutStackControl WithView(string area, ViewDefinition viewDefinition)
+    public LayoutStackControl WithView(string area, IObservable<ViewDefinition> viewDefinition)
     {
         return this with { ViewElements = ViewElements.Add(new ViewElementWithViewDefinition(area, viewDefinition)) };
     }

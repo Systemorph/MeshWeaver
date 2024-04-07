@@ -27,7 +27,7 @@ public interface IUiControl<out TControl> : IUiControl
 
 public abstract record UiControl(object Data) : IUiControl
 {
-    public string Id { get; init; } = Guid.NewGuid().AsString();
+    public string Id { get; init; }
 
 
     IUiControl IUiControl.WithBuildAction(Func<IUiControl, IServiceProvider, IUiControl> buildFunction) => WithBuild(buildFunction);
