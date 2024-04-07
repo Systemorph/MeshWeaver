@@ -4,7 +4,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
-using OpenSmc.Messaging.Serialization;
+using OpenSmc.Messaging.Serialization.Newtonsoft;
 using OpenSmc.Serialization;
 
 namespace OpenSmc.Json.Assertions;
