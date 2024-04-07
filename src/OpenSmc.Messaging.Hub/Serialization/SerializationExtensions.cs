@@ -39,6 +39,7 @@ public static class SerializationExtensions
             new StringEnumConverter(),
             new RawJsonNewtonsoftConverter(),
             new JsonNodeNewtonsoftConverter(),
+            new DataChangedConverter(),
             new ObjectDeserializationConverter(typeRegistry)
         };
 

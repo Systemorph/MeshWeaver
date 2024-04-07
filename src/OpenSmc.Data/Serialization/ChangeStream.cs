@@ -3,7 +3,6 @@ using System.Reactive.Subjects;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
-using OpenSmc.Serialization;
 
 namespace OpenSmc.Data.Serialization;
 
@@ -15,7 +14,6 @@ public record ChangeStream<TReference> : IDisposable,
     IObservable<ChangeItem<TReference>>,
     IObservable<PatchChangeRequest>
 {
-    private readonly bool isExternalStream;
     private readonly ReplaySubject<ChangeItem<TReference>> store = new(1);
     private readonly Subject<DataChangedEvent> dataChangedStream = new();
     private readonly Subject<PatchChangeRequest> changes = new();
@@ -44,7 +42,6 @@ public record ChangeStream<TReference> : IDisposable,
         Func<long> GetVersion,
         bool isExternalStream)
     {
-        this.isExternalStream = isExternalStream;
         this.Workspace = Workspace;
         this.Address = Address;
         this.Reference = Reference;
@@ -79,7 +76,7 @@ public record ChangeStream<TReference> : IDisposable,
     {
         var newState = request.ChangeType switch
         {
-            ChangeType.Patch => (LastSynchronized = JsonSerializer.Deserialize<JsonPatch>(((RawJson)request.Change).Content).Apply(LastSynchronized).Result).Deserialize<TReference>(Options),
+            ChangeType.Patch => (LastSynchronized = ((JsonPatch)request.Change).Apply(LastSynchronized).Result).Deserialize<TReference>(Options),
             ChangeType.Full => GetFullState(request),
             _ => throw new ArgumentOutOfRangeException()
         };
@@ -123,7 +120,7 @@ public record ChangeStream<TReference> : IDisposable,
         var jsonPatch = LastSynchronized.CreatePatch(node);
         if (!jsonPatch.Operations.Any())
             return null;
-        return new DataChangedEvent(Address, Reference, GetVersion(), new RawJson(JsonSerializer.Serialize(jsonPatch)), ChangeType.Patch, Address);
+        return new DataChangedEvent(Address, Reference, GetVersion(), jsonPatch, ChangeType.Patch, Address);
     }
 
     private DataChangedEvent GetFullDataChange(TReference value)

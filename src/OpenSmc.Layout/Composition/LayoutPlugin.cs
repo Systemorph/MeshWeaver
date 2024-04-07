@@ -59,7 +59,7 @@ public class LayoutPlugin(IMessageHub hub)
 
     private LayoutArea RenderArea(LayoutArea layoutArea, string area, ViewElementWithViewDefinition viewDefinition)
     {
-        var stream = viewDefinition.ViewDefinition.Invoke(layoutArea.Reference);
+        var stream = viewDefinition.ViewDefinition;
         layoutArea.UpdateView(area, new SpinnerControl(), deferUpdate:true);
         stream.Subscribe(
             f => layoutHub.Schedule(async ct =>

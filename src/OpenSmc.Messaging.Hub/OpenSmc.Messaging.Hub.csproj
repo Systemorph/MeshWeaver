@@ -5,6 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="JsonPatch.Net" />
     <PackageReference Include="Microsoft.Extensions.Logging" />
     <PackageReference Include="System.Reactive" />
     <PackageReference Include="Newtonsoft.Json" />
