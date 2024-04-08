@@ -16,7 +16,7 @@ public class InstancesInCollectionConverter : JsonConverter<InstanceCollection>
 
 
         return new JsonArray(instances.Instances.Values.Zip(
-            instances.Instances.Keys.Select(k => JsonSerializer.Serialize(k, options)),
+            instances.Instances.Keys.Select(k => JsonSerializer.SerializeToNode(k, options)),
             (o, k) =>
             {
                 var obj = JsonSerializer.SerializeToNode(o, options)!;
