@@ -78,10 +78,11 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         };
 
         var workspace = GetWorkspace(client);
-        var data = await workspace.GetObservable<MyData>().FirstOrDefaultAsync(x => x?.Count == 3);
+        var data = (await workspace.GetObservable<MyData>().FirstOrDefaultAsync(x => x?.Count == 3))
+            .OrderBy(a => a.Id).ToArray();
 
-        data.Should().BeEquivalentTo(expectedItems);
-        storage.Values.Should().BeEquivalentTo(expectedItems);
+        data.ToArray().Should().BeEquivalentTo(expectedItems);
+        storage.Values.Cast<MyData>().OrderBy(x => x.Id).Should().BeEquivalentTo(expectedItems);
         
     }
 

@@ -3,10 +3,8 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
-using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
-using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
 
@@ -114,7 +112,6 @@ public record WorkspaceState
     {
         this.reduceManager = reduceManager1;
         Version = hub.Version;
-        var serializationService = hub.ServiceProvider.GetRequiredService<ISerializationService>();
         CollectionsByType = typeSources.Values.Where(x => x.ElementType != null)
             .ToImmutableDictionary(x => x.ElementType, x => x.CollectionName);
         TypeSources = typeSources.Values.ToImmutableDictionary(x => x.CollectionName);
@@ -151,8 +148,8 @@ public record WorkspaceState
     internal EntityStore ReduceImpl(PartitionedCollectionsReference reference) =>
         new()
         {
-            Instances = ((EntityStore)Reduce((dynamic)reference.Collections))
-                .Instances
+            Collections = ((EntityStore)Reduce((dynamic)reference.Collections))
+                .Collections
                 .Select(c =>
                     new KeyValuePair<string, InstanceCollection>(c.Key,
                         GetPartitionedCollection(c.Key, reference.Partition)))
@@ -228,8 +225,8 @@ public record WorkspaceState
     private EntityStore Merge(DataChangeRequestWithElements request) =>
         request switch
         {
-            UpdateDataRequest update => Store with { Instances = Store.Instances.SetItems(MergeUpdate(update)) },
-            DeleteDataRequest delete => Store with { Instances = Store.Instances.SetItems(MergeDelete(delete)) },
+            UpdateDataRequest update => Store with { Collections = Store.Collections.SetItems(MergeUpdate(update)) },
+            DeleteDataRequest delete => Store with { Collections = Store.Collections.SetItems(MergeDelete(delete)) },
 
 _ => throw new NotSupportedException()
         };
@@ -297,10 +294,10 @@ _ => throw new NotSupportedException()
     private EntityStore CreateNewStore(ChangeItem<EntityStore> item) =>
         Store with
         {
-            Instances = Store.Instances.SetItems(item.Value.Instances.Select(kvp =>
+            Collections = Store.Collections.SetItems(item.Value.Collections.Select(kvp =>
                 new KeyValuePair<string, InstanceCollection>(kvp.Key,
                     TypeSources.TryGetValue(kvp.Key, out var ts) && ts is IPartitionedTypeSource &&
-                    Store.Instances.TryGetValue(kvp.Key, out var existing)
+                    Store.Collections.TryGetValue(kvp.Key, out var existing)
                         ? existing.Merge(kvp.Value)
                         : kvp.Value)))
 

@@ -102,7 +102,6 @@ public record MessageHubConfiguration
             sp => new TypeRegistry(ParentServiceProvider.GetService<ITypeRegistry>())));
         services.Replace(ServiceDescriptor.Singleton<IMessageService>(sp => new MessageService(Address,sp.GetRequiredService<ILogger<MessageService>>())));
         services.Replace(ServiceDescriptor.Singleton(sp => new ParentMessageHub(sp.GetRequiredService<IMessageHub>())));
-        services.Replace(ServiceDescriptor.Singleton<ISerializationService>(sp => new SerializationService(sp)));
         Services.Invoke(services);
         return services;
     }

@@ -9,19 +9,19 @@ public abstract record WorkspaceReference<TReference> : WorkspaceReference;
 
 public record EntityStore
 {
-    public ImmutableDictionary<string, InstanceCollection> Instances { get; init; } = ImmutableDictionary<string, InstanceCollection>.Empty;
+    public ImmutableDictionary<string, InstanceCollection> Collections { get; init; } = ImmutableDictionary<string, InstanceCollection>.Empty;
 
     public EntityStore Merge(EntityStore s2) =>
         this with
         {
-            Instances = Instances.SetItems(s2.Instances.ToImmutableDictionary(kvp => kvp.Key,
-                kvp => kvp.Value.Merge(Instances.GetValueOrDefault(kvp.Key))))
+            Collections = Collections.SetItems(s2.Collections.ToImmutableDictionary(kvp => kvp.Key,
+                kvp => kvp.Value.Merge(Collections.GetValueOrDefault(kvp.Key))))
         };
 
     public EntityStore UpdateCollection(string collection, Func<InstanceCollection, InstanceCollection> update)
         => this with
         {
-            Instances = Instances.SetItem(collection, update.Invoke(Instances.GetValueOrDefault(collection) ?? new InstanceCollection()))
+            Collections = Collections.SetItem(collection, update.Invoke(Collections.GetValueOrDefault(collection) ?? new InstanceCollection()))
         };
 
     public object Reduce(WorkspaceReference reference)
@@ -40,7 +40,7 @@ public record EntityStore
     internal EntityStore ReduceImpl(CollectionsReference reference) =>
         this with
         {
-            Instances = reference
+            Collections = reference
                 .Collections
                 .Select(c => new KeyValuePair<string, InstanceCollection>(c, GetCollection(c)))
                 .Where(x => x.Value != null)
@@ -49,7 +49,7 @@ public record EntityStore
         };
 
 
-    public InstanceCollection GetCollection(string collection) => Instances.GetValueOrDefault(collection);
+    public InstanceCollection GetCollection(string collection) => Collections.GetValueOrDefault(collection);
 
 }
 

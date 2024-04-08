@@ -29,8 +29,8 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
         if (nameByType.TryGetValue(type, out var typeName))
             return typeName;
 
-        WithType(type);
-        return nameByType[type];
+        typeByName[type.AssemblyQualifiedName!] = type;
+        return nameByType[type] = type.AssemblyQualifiedName;
     }
 
     public ITypeRegistry WithTypesFromAssembly(Type type, Func<Type, bool> filter)

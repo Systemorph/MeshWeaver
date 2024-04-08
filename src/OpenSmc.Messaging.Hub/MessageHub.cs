@@ -76,8 +76,8 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
             .WithOptions(o =>
             {
                 o.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
-
-                o.Converters.Insert(0, new TypedObjectConverter(ServiceProvider));
+                o.Converters.Add(new DictionaryConverter());
+                o.Converters.Add( new TypedObjectConverter(TypeRegistry, null));
             });
     }
 

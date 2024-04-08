@@ -22,7 +22,7 @@ public class EntityStoreConverter : JsonConverter<EntityStore>
     private JsonNode Serialize(EntityStore store, JsonSerializerOptions options)
     {
         var ret = new JsonObject(
-            store.Instances.ToDictionary(
+            store.Collections.ToDictionary(
                 x => x.Key,
                 x => JsonSerializer.SerializeToNode(x.Value, options)
             ));
@@ -39,7 +39,7 @@ public class EntityStoreConverter : JsonConverter<EntityStore>
         var newStore =
             new EntityStore()
             {
-                Instances = obj.Select(kvp => DeserializeCollection(kvp.Key, kvp.Value, options)).ToImmutableDictionary(),
+                Collections = obj.Select(kvp => DeserializeCollection(kvp.Key, kvp.Value, options)).ToImmutableDictionary(),
             };
 
         return newStore;

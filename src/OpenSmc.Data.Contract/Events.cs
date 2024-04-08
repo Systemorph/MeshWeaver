@@ -1,4 +1,5 @@
-﻿using OpenSmc.Messaging;
+﻿using Json.Patch;
+using OpenSmc.Messaging;
 using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
@@ -33,4 +34,4 @@ public record DataChangedEvent(object Address, WorkspaceReference Reference, lon
 /// </summary>
 public record UnsubscribeDataRequest(WorkspaceReference Reference);
 
-public record PatchChangeRequest(object Address, WorkspaceReference Reference, object Change) : DataChangeRequest;
+public record PatchChangeRequest(object Address, WorkspaceReference Reference, JsonPatch Change) : DataChangeRequest;
