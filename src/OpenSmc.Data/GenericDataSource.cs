@@ -94,7 +94,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
             Workspace, 
             Id, 
             new EntireWorkspace(), 
-            Hub.JsonSerializerOptions, 
+            Hub, 
             () => Hub.Version,
              true);
         return [ret];

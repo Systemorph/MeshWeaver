@@ -1,23 +1,28 @@
 ﻿using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Json.More;
 using OpenSmc.Serialization;
 using OpenSmc.Utils;
 
 namespace OpenSmc.Messaging.Serialization;
 
-public class TypedObjectConverter(ITypeRegistry typeRegistry, Type excluded) : System.Text.Json.Serialization.JsonConverter<object>
+public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry)
+    : System.Text.Json.Serialization.JsonConverter<object>
 {
     private const string TypeProperty = "$type";
+
     public override bool CanConvert(Type typeToConvert)
-        => typeToConvert != excluded;
+        => typeToConvert == typeof(object);
 
     public override object Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         if (reader.TokenType == JsonTokenType.Number)
             // Convert numeric values to strings
-            return reader.TryGetInt64(out long l) ? l.ToString() : reader.GetDouble().ToString(CultureInfo.InvariantCulture);
+            return reader.TryGetInt64(out long l)
+                ? l.ToString()
+                : reader.GetDouble().ToString(CultureInfo.InvariantCulture);
 
         if (reader.TokenType == JsonTokenType.String)
             // Keep string values as-is
@@ -28,10 +33,10 @@ public class TypedObjectConverter(ITypeRegistry typeRegistry, Type excluded) : S
         return Deserialize(node, typeToConvert, options);
     }
 
+
     private object Deserialize(JsonNode node, Type typeToConvert, JsonSerializerOptions options)
     {
 
-        var clonedOptions = CloneOptions(options);
 
         if (node is JsonObject jObject)
         {
@@ -43,15 +48,13 @@ public class TypedObjectConverter(ITypeRegistry typeRegistry, Type excluded) : S
                     return node;
 
 
-                clonedOptions.Converters.Add(new TypedObjectConverter(typeRegistry, type));
 
-                return node.Deserialize(type, clonedOptions);
+                return node.Deserialize(type, options);
 
-                
+
             }
 
-            clonedOptions.Converters.Add(new TypedObjectConverter(typeRegistry, typeToConvert));
-            return node.Deserialize(typeToConvert, clonedOptions);
+            return node.Deserialize(typeToConvert, options);
         }
 
         if (node is JsonArray jArray)
@@ -73,10 +76,26 @@ public class TypedObjectConverter(ITypeRegistry typeRegistry, Type excluded) : S
                 //ignore
             }
         }
+
+    }
+    public override void Write(Utf8JsonWriter writer, object value, JsonSerializerOptions options)
+    {
+        throw new NotImplementedException();
     }
 
 
+}
 
+public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry) : JsonConverter<object>{
+    private const string TypeProperty = "$type";
+
+    public override bool CanConvert(Type typeToConvert)
+        => true;
+
+    public override object Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        throw new NotImplementedException();
+    }
 
     public override void Write(Utf8JsonWriter writer, object value, JsonSerializerOptions options)
     {

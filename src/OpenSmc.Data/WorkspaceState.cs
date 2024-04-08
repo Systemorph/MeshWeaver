@@ -115,11 +115,9 @@ public record WorkspaceState
         CollectionsByType = typeSources.Values.Where(x => x.ElementType != null)
             .ToImmutableDictionary(x => x.ElementType, x => x.CollectionName);
         TypeSources = typeSources.Values.ToImmutableDictionary(x => x.CollectionName);
-        Options = hub.JsonSerializerOptions;
 
     }
 
-    private JsonSerializerOptions Options { get; }
 
 
     public long Version { get; init; }
@@ -198,7 +196,7 @@ public record WorkspaceState
         return this with
         {
             LastSynchronized = newState.Result,
-            Store = newState.Result.Deserialize<EntityStore>(Options)
+            Store = newState.Result.Deserialize<EntityStore>(hub.DeserializationOptions)
         };
     }
 
@@ -216,7 +214,7 @@ public record WorkspaceState
         return this with
         {
             Store = newElements,
-            LastSynchronized = JsonSerializer.SerializeToNode(newElements, Options),
+            LastSynchronized = JsonSerializer.SerializeToNode(newElements, hub.SerializationOptions),
             Version = hub.Version
         };
 
@@ -286,7 +284,7 @@ _ => throw new NotSupportedException()
         return this with
         {
             Store = newStore,
-            LastSynchronized = JsonSerializer.SerializeToNode(newStore, Options),
+            LastSynchronized = JsonSerializer.SerializeToNode(newStore, hub.SerializationOptions),
             Version = hub.Version,
         };
     }

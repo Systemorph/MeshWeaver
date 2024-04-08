@@ -1,5 +1,6 @@
 ﻿using OpenSmc.Messaging;
 using System.ComponentModel.DataAnnotations;
+using Newtonsoft.Json;
 
 namespace OpenSmc.Data.TestDomain;
 
@@ -9,7 +10,8 @@ namespace OpenSmc.Data.TestDomain;
 /// For tests, it is handy to ship initial values. Can be also hosted in separate file.
 /// </summary>
 
-public record TransactionalData([property: Key] string Id, int Year, string LoB, string BusinessUnit, double Value);
+public record TransactionalData([property: Key][JsonProperty("$id")] string Id, int Year, string LoB, string BusinessUnit, double Value);
+public record TransactionalData2(string Id, int Year, string LoB, string BusinessUnit, double Value);
 
 
 

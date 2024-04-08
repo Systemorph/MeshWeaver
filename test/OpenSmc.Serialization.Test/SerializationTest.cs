@@ -25,14 +25,14 @@ public class SerializationTest : TestBase
                 .RouteAddress<HostAddress>((routedAddress, d) =>
                     {
                         var hostedHub = f.Hub.GetHostedHub(routedAddress, ConfigureHost);
-                        var packagedDelivery = d.Package(f.Hub.JsonSerializerOptions);
+                        var packagedDelivery = d.Package(f.Hub.SerializationOptions);
                         hostedHub.DeliverMessage(packagedDelivery);
                         return d.Forwarded();
                     })
                 .RouteAddress<ClientAddress>((routedAddress, d) =>
                 {
                     var hostedHub = f.Hub.GetHostedHub(routedAddress, ConfigureClient);
-                    var packagedDelivery = d.Package(f.Hub.JsonSerializerOptions);
+                    var packagedDelivery = d.Package(f.Hub.SerializationOptions);
                     hostedHub.DeliverMessage(packagedDelivery);
                     return d.Forwarded();
 

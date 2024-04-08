@@ -18,7 +18,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
-                .WithRoutes(r => r.RouteAddress<ClientAddress>((a, d) => d.Package(r.Hub.JsonSerializerOptions)))
+                .WithRoutes(r => r.RouteAddress<ClientAddress>((a, d) => d.Package(r.Hub.SerializationOptions)))
                 .AddData(data => data
                     .FromConfigurableDataSource("Local",
                         ds => ds

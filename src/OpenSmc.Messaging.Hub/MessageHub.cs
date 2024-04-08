@@ -44,10 +44,14 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         var configurations =
             Configuration.Get<ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>>() ??
             ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>.Empty;
-        JsonSerializerOptions = configurations.Aggregate(
+        SerializationOptions = configurations.Aggregate(
             CreateSerializationConfiguration(), (c, f) => f.Invoke(c)).Options;
+        var typeRegistry = serviceProvider.GetRequiredService<ITypeRegistry>();
+        DeserializationOptions = new JsonSerializerOptions(SerializationOptions);
+        SerializationOptions.Converters.Add(new TypedObjectSerializeConverter(typeRegistry));
+        DeserializationOptions.Converters.Add(new TypedObjectDeserializeConverter(typeRegistry));
 
-        MessageService.Initialize(DeliverMessageAsync, JsonSerializerOptions);
+        MessageService.Initialize(DeliverMessageAsync, DeserializationOptions);
 
         disposeActions.AddRange(configuration.DisposeActions);
 
@@ -76,8 +80,6 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
             .WithOptions(o =>
             {
                 o.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
-                o.Converters.Add(new DictionaryConverter());
-                o.Converters.Add( new TypedObjectConverter(TypeRegistry, null));
             });
     }
 
@@ -256,7 +258,8 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         return this;
     }
 
-    public JsonSerializerOptions JsonSerializerOptions { get; }
+    public JsonSerializerOptions SerializationOptions { get; }
+    public JsonSerializerOptions DeserializationOptions { get; }
 
     private bool IsDisposing => disposingTaskCompletionSource != null;
 

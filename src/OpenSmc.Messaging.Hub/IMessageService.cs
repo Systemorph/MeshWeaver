@@ -9,6 +9,6 @@ public interface IMessageService : IAsyncDisposable
     IMessageDelivery IncomingMessage(IMessageDelivery message);
     IMessageDelivery Post<TMessage>(TMessage message, PostOptions opt);
 
-    void Initialize(AsyncDelivery messageHandler, JsonSerializerOptions options);
+    void Initialize(AsyncDelivery messageHandler, JsonSerializerOptions deserializationOptions);
 
 }
