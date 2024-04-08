@@ -36,7 +36,7 @@ public class InstancesInCollectionConverter : JsonConverter<InstanceCollection>
         {
             Instances = array.Select(i =>
                     new KeyValuePair<object, object>(
-                        (i as JsonObject)?[IdName].Deserialize<object>(options),
+                        ((JsonObject)i)[IdName].Deserialize<object>(options),
                         i.Deserialize<object>(options)
                     )
                 )

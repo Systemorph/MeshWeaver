@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Messaging.Serialization;
@@ -48,7 +49,7 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
             CreateSerializationConfiguration(), (c, f) => f.Invoke(c)).Options;
         var typeRegistry = serviceProvider.GetRequiredService<ITypeRegistry>();
         DeserializationOptions = new JsonSerializerOptions(SerializationOptions);
-        SerializationOptions.Converters.Add(new TypedObjectSerializeConverter(typeRegistry));
+        SerializationOptions.Converters.Add(new TypedObjectSerializeConverter(typeRegistry, null));
         DeserializationOptions.Converters.Add(new TypedObjectDeserializeConverter(typeRegistry));
 
         MessageService.Initialize(DeliverMessageAsync, DeserializationOptions);
@@ -80,6 +81,7 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
             .WithOptions(o =>
             {
                 o.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
+                o.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault;
             });
     }
 

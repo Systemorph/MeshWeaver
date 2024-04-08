@@ -11,7 +11,7 @@ public class DataChangedEventConverter : JsonConverter<DataChangedEvent>
         using JsonDocument doc = JsonDocument.ParseValue(ref reader);
         var root = doc.RootElement;
         var address = root.GetProperty("address").Deserialize<object>(options);
-        var reference = root.GetProperty("reference").Deserialize<WorkspaceReference>(options);
+        var reference = (WorkspaceReference)root.GetProperty("reference").Deserialize<object>(options);
         var version = root.GetProperty("version").GetInt64();
         var changeType = Enum.Parse<ChangeType>(root.GetProperty("changeType").ToString());
         var changedBy = root.TryGetProperty("changedBy", out var prop) ? prop.Deserialize<object>(options) : null;

@@ -25,7 +25,7 @@ public record CreateRequest<TObject>(TObject Element) : IRequest<DataChangedEven
 public record SubscribeRequest(WorkspaceReference Reference) : IRequest<DataChangedEvent>;
 
 public enum ChangeType{ Full, Patch, Instance }
-public record DataChangedEvent(object Address, WorkspaceReference Reference, long Version, object Change, ChangeType ChangeType, object ChangedBy);
+public record DataChangedEvent(object Address, object Reference, long Version, object Change, ChangeType ChangeType, object ChangedBy);
 
 
 /// <summary>
@@ -33,4 +33,4 @@ public record DataChangedEvent(object Address, WorkspaceReference Reference, lon
 /// </summary>
 public record UnsubscribeDataRequest(WorkspaceReference Reference);
 
-public record PatchChangeRequest(object Address, WorkspaceReference Reference, JsonPatch Change) : DataChangeRequest;
+public record PatchChangeRequest(object Address, object Reference, JsonPatch Change) : DataChangeRequest;
