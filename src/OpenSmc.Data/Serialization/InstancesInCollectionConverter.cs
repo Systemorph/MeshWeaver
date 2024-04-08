@@ -6,35 +6,42 @@ using Json.More;
 
 namespace OpenSmc.Data.Serialization;
 
-public class InstancesInCollectionConverter() : JsonConverter<InstanceCollection>
+public class InstancesInCollectionConverter : JsonConverter<InstanceCollection>
 {
+    private const string IdName = "$id";
 
-    private InstanceCollection Deserialize(JsonNode node, JsonSerializerOptions options)
-    {
-        if (node is not JsonObject obj)
-            throw new ArgumentException("Expecting an array");
-        return new(){Instances = obj.Select(jsonNode => DeserializeEntity(jsonNode.Key, jsonNode.Value, options)).ToImmutableDictionary()};
-    }
-
-    private KeyValuePair<object, object> DeserializeEntity(string idSerialized, JsonNode jsonNode, JsonSerializerOptions options)
-    {
-        return new(
-            JsonSerializer.Deserialize<object>(idSerialized, options),
-            jsonNode.Deserialize<object>(options));
-    }
 
     private JsonNode Serialize(InstanceCollection instances, JsonSerializerOptions options)
     {
-        return new JsonObject(instances.Instances.Select(y =>
-            new KeyValuePair<string, JsonNode>(JsonSerializer.Serialize(y.Key, options),
-                JsonNode.Parse(JsonSerializer.Serialize(y.Value, options))))
-        );
+
+
+        return new JsonArray(instances.Instances.Values.Zip(
+            instances.Instances.Keys.Select(k => JsonSerializer.Serialize(k, options)),
+            (o, k) =>
+            {
+                var obj = JsonSerializer.SerializeToNode(o, options)!;
+                obj[IdName] = k;
+                return obj;
+            }).ToArray());
+
     }
 
     public override InstanceCollection Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         using JsonDocument doc = JsonDocument.ParseValue(ref reader);
-        return Deserialize(doc.RootElement.AsNode(), options);
+        var array = (JsonArray)doc.RootElement.AsNode();
+        if (array == null)
+            return null;
+        return new InstanceCollection()
+        {
+            Instances = array.Select(i =>
+                    new KeyValuePair<object, object>(
+                        (i as JsonObject)?[IdName].Deserialize<object>(options),
+                        i.Deserialize<object>(options)
+                    )
+                )
+                .ToImmutableDictionary()
+        };
     }
 
 

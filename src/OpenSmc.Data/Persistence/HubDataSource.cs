@@ -65,8 +65,8 @@ public abstract record HubDataSourceBase<TDataSource> : DataSource<TDataSource> 
 
     protected override WorkspaceReference<EntityStore> GetReference()
     {
-        typeRegistry.WithTypes(TypeSources.Values.Select(t => t.ElementType));
-        typeRegistry.WithType<JsonPatch>();
+        foreach (var typeSource in TypeSources.Values)
+            typeRegistry.WithType(typeSource.ElementType, typeSource.CollectionName, typeSource.GetKey);
         return SyncAll
             ? new EntireWorkspace()
             : base.GetReference();
