@@ -1,0 +1,60 @@
+﻿using System.Text.Json;
+using System.Text.Json.Serialization;
+using Json.Patch;
+
+namespace OpenSmc.Data;
+
+public class DataChangedEventConverter : JsonConverter<DataChangedEvent>
+{
+    public override DataChangedEvent Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        using JsonDocument doc = JsonDocument.ParseValue(ref reader);
+        var root = doc.RootElement;
+        var address = root.GetProperty("address").Deserialize<object>(options);
+        var reference = root.GetProperty("reference").Deserialize<WorkspaceReference>(options);
+        var version = root.GetProperty("version").GetInt64();
+        var changeType = Enum.Parse<ChangeType>(root.GetProperty("changeType").ToString());
+        var changedBy = root.TryGetProperty("changedBy", out var prop) ? prop.Deserialize<object>(options) : null;
+
+        // Deserialize the Change property based on the ChangeType
+        object change = changeType switch{
+            ChangeType.Patch => root.GetProperty("change").Deserialize<JsonPatch>(),
+            _ => root.GetProperty("change").Deserialize<object>(options)
+        };
+
+        return new DataChangedEvent(address, reference, version, change, (ChangeType)changeType, changedBy);
+    }
+
+    public override void Write(Utf8JsonWriter writer, DataChangedEvent value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        writer.WritePropertyName("address");
+        JsonSerializer.SerializeToNode(value.Address, options)!.WriteTo(writer);
+
+        writer.WritePropertyName("reference");
+        JsonSerializer.SerializeToNode(value.Reference, options)!.WriteTo(writer);
+        writer.WriteNumber("version", value.Version);
+        writer.WriteString("changeType", value.ChangeType.ToString());
+        if (value.ChangedBy != null)
+        {
+            writer.WritePropertyName("changedBy");
+            JsonSerializer.SerializeToNode(value.ChangedBy, options)!.WriteTo(writer);
+        }
+
+
+        // Serialize the Change property based on the ChangeType
+        writer.WritePropertyName("change");
+        switch (value.ChangeType)
+        {
+            case ChangeType.Patch:
+                JsonSerializer.SerializeToNode(value.Change)!.WriteTo(writer);
+                break;
+            default:
+                JsonSerializer.SerializeToNode(value.Change, options)!.WriteTo(writer);
+                break;
+        }
+        // Handle other ChangeType values similarly
+
+        writer.WriteEndObject();
+    }
+}

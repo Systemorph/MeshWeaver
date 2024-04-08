@@ -2,10 +2,9 @@
 using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Persistence;
-using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
-using OpenSmc.Serialization;
+using OpenSmc.Messaging.Serialization.Newtonsoft;
 
 namespace OpenSmc.Data;
 
@@ -16,6 +15,8 @@ public static class DataPluginExtensions
         var existingLambdas = config.GetListOfLambdas();
         var ret = config
             .WithServices(sc => sc.AddScoped<IWorkspace, DataPlugin>())
+            .WithSerialization(serialization => serialization.WithOptions(options => options.Converters.Insert(0, new JsonPatchConverter())))
+            .WithSerialization(serialization => serialization.WithOptions(options => options.Converters.Insert(0, new DataChangedEventConverter())))
             .Set(existingLambdas.Add(dataPluginConfiguration))
             .WithTypes(typeof(EntityStore), typeof(InstanceCollection), typeof(EntityReference), typeof(CollectionReference), typeof(CollectionsReference), typeof(EntireWorkspace), typeof(JsonPathReference), typeof(JsonPatch))
             .AddPlugin<DataPlugin>(plugin => plugin.WithFactory(() => (DataPlugin)plugin.Hub.ServiceProvider.GetRequiredService<IWorkspace>()));

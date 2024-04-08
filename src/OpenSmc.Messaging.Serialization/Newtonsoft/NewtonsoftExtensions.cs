@@ -1,5 +1,4 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using Newtonsoft.Json;
+﻿using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
 using OpenSmc.Serialization;
 
@@ -7,21 +6,19 @@ namespace OpenSmc.Messaging.Serialization.Newtonsoft
 {
     internal static class NewtonsoftExtensions
     {
-        internal static JsonSerializer GetNewtonsoftSerializer(this IServiceProvider serviceProvider)
+        internal static JsonSerializer GetNewtonsoftSerializer(this ITypeRegistry typeRegistry)
         {
-            return JsonSerializer.Create(serviceProvider.GetNewtonsoftSettings());
+            return JsonSerializer.Create(typeRegistry.GetNewtonsoftSettings());
         }
 
-        internal static JsonSerializerSettings GetNewtonsoftSettings(this IServiceProvider serviceProvider)
+        internal static JsonSerializerSettings GetNewtonsoftSettings(this ITypeRegistry typeRegistry)
         {
             var contractResolver = new CustomContractResolver();
-            var typeRegistry = serviceProvider.GetRequiredService<ITypeRegistry>();
             var converters = new List<JsonConverter>
             {
                 new StringEnumConverter(),
                 new RawJsonNewtonsoftConverter(),
                 new JsonNodeNewtonsoftConverter(),
-                new ObjectDeserializationConverter(typeRegistry)
             };
 
             return new()

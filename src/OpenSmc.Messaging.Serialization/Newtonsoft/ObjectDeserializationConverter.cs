@@ -1,10 +1,13 @@
-﻿using Newtonsoft.Json;
+﻿using System.Text.Json;
+using System.Text.Json.Nodes;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using OpenSmc.Serialization;
+using JsonSerializer = Newtonsoft.Json.JsonSerializer;
 
 namespace OpenSmc.Messaging.Serialization.Newtonsoft;
 
-public class ObjectDeserializationConverter(ITypeRegistry typeRegistry) : JsonConverter
+public class ObjectDeserializationConverter(ITypeRegistry typeRegistry, JsonSerializerOptions options) : JsonConverter
 {
     public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer1)
     {
@@ -25,6 +28,8 @@ public class ObjectDeserializationConverter(ITypeRegistry typeRegistry) : JsonCo
                     return token;
                 }
 
+                if (objectType != type)
+                    return JsonNode.Parse(token.ToString()).Deserialize(type, options);
                 objectType = type;
             }
 

@@ -1,4 +1,6 @@
-﻿namespace OpenSmc.Serialization;
+﻿using System.Text.Json.Nodes;
+
+namespace OpenSmc.Serialization;
 
 public interface ITypeRegistry
 {
@@ -12,4 +14,5 @@ public interface ITypeRegistry
 
     public ITypeRegistry WithTypesFromAssembly(Type type, Func<Type, bool> filter);
     ITypeRegistry WithTypes(IEnumerable<Type> select);
+    string GetOrAddTypeName(Type valueType);
 }
