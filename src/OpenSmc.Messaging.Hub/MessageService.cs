@@ -8,7 +8,7 @@ namespace OpenSmc.Messaging;
 
 public class MessageService : IMessageService
 {
-    private JsonSerializerOptions options;
+    private JsonSerializerOptions deserializeOptions;
     private readonly ILogger<MessageService> logger;
     private bool isDisposing;
     private readonly BufferBlock<(IMessageDelivery Delivery, CancellationToken CancellationToken)> buffer = new();
@@ -16,10 +16,10 @@ public class MessageService : IMessageService
 
     private AsyncDelivery MessageHandler { get; set; }
 
-    public void Initialize(AsyncDelivery messageHandler, JsonSerializerOptions options1)
+    public void Initialize(AsyncDelivery messageHandler, JsonSerializerOptions deserializationOptions)
     {
         MessageHandler = messageHandler;
-        options = options1;
+        deserializeOptions = deserializationOptions;
     }
 
     private readonly DeferralContainer deferralContainer;
@@ -102,7 +102,7 @@ public class MessageService : IMessageService
         if (delivery.Message is not RawJson rawJson)
             return delivery;
         logger.LogDebug("Deserializing message {id} from sender {sender} to target {target}", delivery.Id, delivery.Sender, delivery.Target);
-        var deserializedMessage = JsonSerializer.Deserialize(rawJson.Content, typeof(object), options);
+        var deserializedMessage = JsonSerializer.Deserialize(rawJson.Content, typeof(object), deserializeOptions);
         return delivery.WithMessage(deserializedMessage);
     }
 
