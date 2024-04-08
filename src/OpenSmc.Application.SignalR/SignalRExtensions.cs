@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace OpenSmc.Application.SignalR;
 
@@ -15,5 +16,15 @@ public static class SignalRExtensions
             });
 
         return services;
+    }
+
+    public static IApplicationBuilder UseApplicationSignalR(this IApplicationBuilder app)
+    {
+        app.UseEndpoints(endpoints =>
+        {
+            endpoints.MapHub<ApplicationHub>(DefaultSignalREndpoint);
+        });
+
+        return app;
     }
 }
