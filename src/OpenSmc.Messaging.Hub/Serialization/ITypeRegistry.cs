@@ -1,6 +1,4 @@
-﻿using System.Text.Json.Nodes;
-
-namespace OpenSmc.Serialization;
+﻿namespace OpenSmc.Messaging.Serialization;
 
 public interface ITypeRegistry
 {

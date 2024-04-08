@@ -4,6 +4,7 @@ using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 using OpenSmc.Serialization;
 
 namespace OpenSmc.Data.Persistence;

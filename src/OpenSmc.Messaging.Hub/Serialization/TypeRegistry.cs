@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using OpenSmc.Messaging.Serialization;
 
 namespace OpenSmc.Serialization;
 
