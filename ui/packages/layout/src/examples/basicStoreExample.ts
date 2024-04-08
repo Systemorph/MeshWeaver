@@ -4,16 +4,16 @@ export const basicStoreExample = {
         $type: "OpenSmc.Layout.LayoutAreaReference",
         area: "MainWindow"
     },
-    instances: {
-        "OpenSmc.Layout.UiControl": {
-            MainWindow: {
+    collections: {
+        "OpenSmc.Layout.UiControl": [
+            {
                 $type: "OpenSmc.Layout.Composition.LayoutStackControl",
                 skin: "MainWindow",
                 areas: [
                     {
                         $type: "OpenSmc.Data.EntityReference",
                         collection: "OpenSmc.Layout.UiControl",
-                        id: "Main"
+                        $id: "Main"
                     },
                     {
                         $type: "OpenSmc.Data.EntityReference",
@@ -22,33 +22,45 @@ export const basicStoreExample = {
                     }
                 ]
             },
-            "Main": {
+            {
                 $type: "OpenSmc.Layout.Composition.SpinnerControl",
                 message: "processing...",
                 progress: 0.5
             },
-            "Toolbar": {
+            {
                 $type: "OpenSmc.Layout.TextBoxControl",
                 dataContext: {
                     $type: "OpenSmc.Data.EntityReference",
-                    collection: "LineOfBusiness",
-                    id: "1"
+                    collection: "DataCube",
+                    id: {
+                        lineOfBusiness: "1",
+                        currency: "CHF"
+                    }
                 },
                 data: {
                     $type: "OpenSmc.Layout.DataBinding.Binding",
                     path: "$.DisplayName"
                 }
             }
-        },
-        LineOfBusiness: {
-            "1": {
+        ],
+        LineOfBusiness: [
+            {
                 SystemName: "1",
                 DisplayName: "1"
             },
-            "2": {
+            {
                 SystemName: "2",
                 DisplayName: "2"
             }
-        }
+        ],
+        DataCube: [
+            {
+                value: 42,
+                $id: {
+                    lineOfBusiness: "1",
+                    currency: "CHF"
+                }
+            }
+        ]
     }
 }
