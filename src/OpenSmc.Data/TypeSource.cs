@@ -3,6 +3,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 using OpenSmc.Reflection;
 using OpenSmc.Serialization;
 

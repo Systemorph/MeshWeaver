@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Json.More;
+using OpenSmc.Messaging.Serialization;
 using OpenSmc.Serialization;
 
 namespace OpenSmc.Data.Serialization;

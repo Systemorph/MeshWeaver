@@ -13,10 +13,16 @@
   <ItemGroup>
     <ProjectReference Include="..\OpenSmc.Disposables\OpenSmc.Disposables.csproj" />
     <ProjectReference Include="..\OpenSmc.Messaging.Contract\OpenSmc.Messaging.Contract.csproj" />
+    <ProjectReference Include="..\OpenSmc.Messaging.Serialization\OpenSmc.Messaging.Serialization.csproj" />
     <ProjectReference Include="..\OpenSmc.Reflection\OpenSmc.Reflection.csproj" />
+    <ProjectReference Include="..\OpenSmc.Serialization.Abstractions\OpenSmc.Serialization.Abstractions.csproj" />
     <ProjectReference Include="..\OpenSmc.ServiceProvider\OpenSmc.ServiceProvider.csproj" />
     <ProjectReference Include="..\OpenSmc.ShortGuid\OpenSmc.ShortGuid.csproj" />
     <ProjectReference Include="..\OpenSmc.Utils\OpenSmc.Utils.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Serialization\" />
   </ItemGroup>
 
 </Project>
