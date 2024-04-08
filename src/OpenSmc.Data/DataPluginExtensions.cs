@@ -18,9 +18,13 @@ public static class DataPluginExtensions
             .WithServices(sc => sc.AddScoped<IWorkspace, DataPlugin>())
             .WithSerialization(serialization => serialization.WithOptions(options =>
             {
-                options.Converters.Insert(0, new EntityStoreConverter(serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()));
-                options.Converters.Insert(0, new InstancesInCollectionConverter());
-                options.Converters.Insert(0, new DataChangedEventConverter());
+                if(!options.Converters.Any(c => c is EntityStoreConverter))
+                    options.Converters.Insert(0, new EntityStoreConverter(serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()));
+                if (!options.Converters.Any(c => c is InstancesInCollectionConverter))
+                    options.Converters.Insert(0, new InstancesInCollectionConverter());
+
+                if (!options.Converters.Any(c => c is DataChangedEventConverter))
+                    options.Converters.Insert(0, new DataChangedEventConverter());
             }))
             .Set(existingLambdas.Add(dataPluginConfiguration))
             .WithTypes(typeof(EntityStore), typeof(InstanceCollection), typeof(EntityReference), typeof(CollectionReference), typeof(CollectionsReference), typeof(EntireWorkspace), typeof(JsonPathReference), typeof(JsonPatch))

@@ -28,6 +28,7 @@ public class EntityStoreConverter(ITypeRegistry typeRegistry) : JsonConverter<En
                 x => x.Key,
                 x => JsonSerializer.SerializeToNode(x.Value,  options)
             ));
+        ret["$type"] = typeof(EntityStore).FullName;
         return ret;
     }
 
@@ -41,7 +42,7 @@ public class EntityStoreConverter(ITypeRegistry typeRegistry) : JsonConverter<En
         var newStore =
             new EntityStore()
             {
-                Collections = obj.Select(kvp => DeserializeCollection(kvp.Key, kvp.Value, options)).ToImmutableDictionary(),
+                Collections = obj.Where(kvp => kvp.Key != "$type").Select(kvp => DeserializeCollection(kvp.Key, kvp.Value, options)).ToImmutableDictionary(),
             };
 
         return newStore;

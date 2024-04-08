@@ -3,13 +3,12 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Json.More;
-using OpenSmc.Serialization;
 using OpenSmc.Utils;
 
 namespace OpenSmc.Messaging.Serialization;
 
 public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry)
-    : System.Text.Json.Serialization.JsonConverter<object>
+    : JsonConverter<object>
 {
     private const string TypeProperty = "$type";
 
@@ -54,6 +53,9 @@ public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry)
 
             }
 
+            if (typeToConvert == typeof(object))
+                return node;
+
             return node.Deserialize(typeToConvert, options);
         }
 
@@ -86,11 +88,11 @@ public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry)
 
 }
 
-public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry) : JsonConverter<object>{
+public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry, Type exlude) : JsonConverter<object>{
     private const string TypeProperty = "$type";
 
     public override bool CanConvert(Type typeToConvert)
-        => true;
+        => typeToConvert == typeof(object);
 
     public override object Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
@@ -100,7 +102,8 @@ public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry) : JsonCon
     public override void Write(Utf8JsonWriter writer, object value, JsonSerializerOptions options)
     {
         var clonedOptions = CloneOptions(options);
-        var serialized = JsonSerializer.SerializeToNode(value, clonedOptions);
+        clonedOptions.Converters.Add(new TypedObjectSerializeConverter(typeRegistry, value.GetType()));
+        var serialized = JsonSerializer.SerializeToNode(value, value.GetType(), clonedOptions);
         serialized = Traverse(serialized, value, null);
         serialized.WriteTo(writer);
     }
