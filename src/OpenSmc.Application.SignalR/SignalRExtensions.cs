@@ -4,6 +4,8 @@ namespace OpenSmc.Application.SignalR;
 
 public static class SignalRExtensions
 {
+    public const string DefaultSignalREndpoint = "/signalR/application";
+
     public static IServiceCollection ConfigureApplicationSignalR(this IServiceCollection services)
     {
         services.AddSignalR(o =>
