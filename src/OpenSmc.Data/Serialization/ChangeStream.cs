@@ -89,7 +89,7 @@ public record ChangeStream<TReference> : IDisposable,
 
     private  TReference GetFullState(DataChangedEvent request)
     {
-        LastSynchronized = JsonSerializer.Serialize(request.Change);
+        LastSynchronized = JsonSerializer.SerializeToNode(request.Change, request.Change.GetType(), Hub.SerializationOptions);
         return (TReference)request.Change;
     }
 

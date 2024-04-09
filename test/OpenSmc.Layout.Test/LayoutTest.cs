@@ -87,8 +87,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream(new HostAddress(), reference);
-        var control = await stream.GetControl(reference.Area).TakeUntil(o => o is HtmlControl).ToArray();
-
+        var controls = await stream.GetControl(reference.Area).TakeUntil(o => o is HtmlControl).ToArray();
+        controls.Should().HaveCount(12);
     }
 
     //    public async Task LayoutStackUpdateTest()

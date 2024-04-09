@@ -29,16 +29,16 @@ public class DataChangedEventConverter : JsonConverter<DataChangedEvent>
     {
         writer.WriteStartObject();
         writer.WritePropertyName("address");
-        JsonSerializer.SerializeToNode(value.Address, options)!.WriteTo(writer);
+        JsonSerializer.SerializeToNode(value.Address,value.Address.GetType(), options)!.WriteTo(writer);
 
         writer.WritePropertyName("reference");
-        JsonSerializer.SerializeToNode(value.Reference, options)!.WriteTo(writer);
+        JsonSerializer.SerializeToNode(value.Reference, value.Reference.GetType(), options)!.WriteTo(writer);
         writer.WriteNumber("version", value.Version);
         writer.WriteString("changeType", value.ChangeType.ToString());
         if (value.ChangedBy != null)
         {
             writer.WritePropertyName("changedBy");
-            JsonSerializer.SerializeToNode(value.ChangedBy, options)!.WriteTo(writer);
+            JsonSerializer.SerializeToNode(value.ChangedBy, value.ChangedBy.GetType(), options)!.WriteTo(writer);
         }
 
 
@@ -47,10 +47,10 @@ public class DataChangedEventConverter : JsonConverter<DataChangedEvent>
         switch (value.ChangeType)
         {
             case ChangeType.Patch:
-                JsonSerializer.SerializeToNode(value.Change)!.WriteTo(writer);
+                JsonSerializer.SerializeToNode(value.Change, typeof(JsonPatch))!.WriteTo(writer);
                 break;
             default:
-                JsonSerializer.SerializeToNode(value.Change, options)!.WriteTo(writer);
+                JsonSerializer.SerializeToNode(value.Change, value.Change.GetType(), options)!.WriteTo(writer);
                 break;
         }
         // Handle other ChangeType values similarly
