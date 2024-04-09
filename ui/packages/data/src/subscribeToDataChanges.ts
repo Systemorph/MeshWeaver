@@ -1,7 +1,7 @@
 import { Dispatch } from "@reduxjs/toolkit";
 import { MessageHub } from "@open-smc/messaging/src/api/MessageHub";
 import { sendMessage } from "@open-smc/messaging/src/sendMessage";
-import { initState, patch } from "./workspaceReducer";
+import { setState, patch } from "./workspaceReducer";
 import { messageOfType } from "@open-smc/messaging/src/operators/messageOfType";
 import { filter, map } from "rxjs";
 import { SubscribeRequest } from "./contract/SubscribeRequest";
@@ -25,7 +25,7 @@ export function subscribeToDataChanges(
             .pipe(filter(message => isEqual(message.reference, reference)))
             .subscribe(({change, changeType}) => {
                 if (changeType === "Full") {
-                    dispatch(initState(change));
+                    dispatch(setState(change));
                 }
                 else if (changeType === "Patch") {
                     dispatch(patch(change as JsonPatch))

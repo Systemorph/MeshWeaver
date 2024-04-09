@@ -3,5 +3,7 @@ import { WorkspaceReference } from "./WorkspaceReference";
 
 @type("OpenSmc.Data.EntireWorkspace")
 export class EntireWorkspace extends WorkspaceReference {
-    toJsonPath: () => "$";
+    constructor() {
+        super(`$`);
+    }
 }

@@ -8,12 +8,13 @@ export const basicStoreExample = {
         "OpenSmc.Layout.UiControl": [
             {
                 $type: "OpenSmc.Layout.Composition.LayoutStackControl",
+                $id: "MainWindow",
                 skin: "MainWindow",
                 areas: [
                     {
                         $type: "OpenSmc.Data.EntityReference",
                         collection: "OpenSmc.Layout.UiControl",
-                        $id: "Main"
+                        id: "Main"
                     },
                     {
                         $type: "OpenSmc.Data.EntityReference",
@@ -24,11 +25,13 @@ export const basicStoreExample = {
             },
             {
                 $type: "OpenSmc.Layout.Composition.SpinnerControl",
+                $id: "Main",
                 message: "processing...",
                 progress: 0.5
             },
             {
                 $type: "OpenSmc.Layout.TextBoxControl",
+                $id: "Toolbar",
                 dataContext: {
                     $type: "OpenSmc.Data.EntityReference",
                     collection: "DataCube",
@@ -55,11 +58,13 @@ export const basicStoreExample = {
         ],
         DataCube: [
             {
-                value: 42,
+                $type: "DataCube",
                 $id: {
                     lineOfBusiness: "1",
                     currency: "CHF"
-                }
+                },
+                DisplayName: "1",
+                Value: 42,
             }
         ]
     }

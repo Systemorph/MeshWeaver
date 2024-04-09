@@ -1,4 +1,3 @@
-export class Request<out T> {
-    constructor(public responseType: abstract new (...args: any) => T) {
-    }
+export class Request<T> {
+    constructor(public readonly responseType: abstract new (...args: any) => T) {}
 }

@@ -1,15 +1,18 @@
-import { distinctUntilChanged, map, Observable, Subscription } from "rxjs";
+import { combineLatest, distinctUntilChanged, map, merge, skip, Subscription, switchMap } from "rxjs";
 import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
-import { controls$, instances$ } from "./entityStore";
+import { controls$ } from "./entityStore";
 import { app$, appStore } from "./appStore";
 import { LayoutStackControl } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
 import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
-import { selectByReference } from "@open-smc/data/src/selectByReference";
-import { isEqual, keys } from "lodash-es";
-import { removeArea } from "./appReducer";
+import { selectByReference } from "@open-smc/data/src/operators/selectByReference";
+import { isEqual, keys, pickBy, toPairs, omit } from "lodash-es";
+import { removeArea, setArea } from "./appReducer";
 import { effect } from "@open-smc/utils/src/operators/effect";
-import { dataBinding } from "./dataBinding";
-import { reverseDataBinding } from "./reverseDataBinding";
+import { nestedAreasToIds } from "./dataBinding";
+import { Workspace } from "@open-smc/data/src/Workspace";
+import { expandBindings } from "./expandBindings";
+import { Binding, isBinding } from "@open-smc/layout/src/contract/Binding";
+import { bindingToPatchAction } from "./bindingToPatchAction";
 
 export const syncControl = (
     areaId: string,
@@ -42,13 +45,87 @@ export const syncControl = (
             )
     );
 
-    subscription.add(
+    // subscription.add(
+    //     control$
+    //         .pipe(distinctUntilChanged<UiControl>(isEqual))
+    //         .pipe(effect(dataBinding(areaId, parentDataContext)))
+    //         .pipe(effect(reverseDataBinding(areaId)))
+    //         .subscribe()
+    // );
+
+    // const props$ =
+    //     control$
+    //         .pipe(map(({dataContext, ...props}) => props))
+    //         .pipe(distinctUntilChanged(isEqual));
+
+    const dataContext$ =
         control$
-            .pipe(distinctUntilChanged<UiControl>(isEqual))
-            .pipe(effect(dataBinding(areaId, parentDataContext)))
-            // .pipe(effect(reverseDataBinding(app$, data$, entityStoreDispatch)))
+            .pipe(map(({dataContext}) => dataContext))
+            .pipe(distinctUntilChanged(isEqual));
+
+    const props$ =
+        control$
+            .pipe(map(({dataContext, ...props}) => props))
+            .pipe(distinctUntilChanged(isEqual));
+
+    subscription.add(
+        dataContext$
+            .pipe(
+                effect(
+                    dataContext => {
+                        const subscription = new Subscription();
+
+                        const dataContextWorkspace = new Workspace(dataContext);
+
+                        subscription.add(
+                            combineLatest([dataContextWorkspace, control$.pipe(distinctUntilChanged<UiControl>(isEqual))])
+                                .subscribe(([dataContextState, control]) => {
+                                    const componentTypeName = control.constructor.name;
+                                    const {dataContext, ...props} = control;
+                                    const boundProps =
+                                        expandBindings(nestedAreasToIds(props), parentDataContext)(dataContextState);
+
+                                    return appStore.dispatch(
+                                        setArea({
+                                            id: areaId,
+                                            control: {
+                                                componentTypeName,
+                                                props: boundProps
+                                            }
+                                        })
+                                    );
+                                })
+                        );
+
+                        subscription.add(
+                            props$
+                                .pipe(
+                                    switchMap(
+                                        props => {
+                                            const bindings: Record<string, Binding> = pickBy(props, isBinding);
+
+                                            return merge(
+                                                ...toPairs(bindings)
+                                                    .map(
+                                                        ([key, binding]) =>
+                                                            app$
+                                                                .pipe(map(appState => appState.areas[areaId].control.props[key]))
+                                                                .pipe(distinctUntilChanged(isEqual))
+                                                                .pipe(skip(1))
+                                                                .pipe(map(bindingToPatchAction(binding)))
+                                                    )
+                                            );
+                                        })
+                                )
+                                .subscribe(dataContextWorkspace)
+                        );
+
+                        return subscription;
+                    }
+                )
+            )
             .subscribe()
-    );
+    )
 
     subscription.add(
         nestedAreas$

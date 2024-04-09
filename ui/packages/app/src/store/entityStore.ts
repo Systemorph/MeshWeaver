@@ -1,12 +1,14 @@
 import { configureStore } from "@reduxjs/toolkit";
 import { workspaceReducer } from "@open-smc/data/src/workspaceReducer";
-import { distinctUntilChanged, from, map } from "rxjs";
+import { from, map } from "rxjs";
 import { deserialize } from "@open-smc/serialization/src/deserialize";
 import { serializeMiddleware } from "@open-smc/data/src/middleware/serializeMiddleware";
 import { EntityStore } from "@open-smc/data/src/contract/EntityStore";
-import { selectByReference } from "@open-smc/data/src/selectByReference";
+import { selectByReference } from "@open-smc/data/src/operators/selectByReference";
 import { CollectionReference } from "@open-smc/data/src/contract/CollectionReference";
 import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
+import { patchRequestMiddleware } from "./middleware/patchRequestMiddleware";
+import { sampleApp } from "@open-smc/backend/src/SampleApp";
 
 export const entityStore =
     configureStore<EntityStore>({
@@ -16,7 +18,10 @@ export const entityStore =
         },
         middleware: getDefaultMiddleware =>
             getDefaultMiddleware()
-                .prepend(serializeMiddleware) as any,
+                .prepend(
+                    patchRequestMiddleware(sampleApp),
+                    serializeMiddleware
+                ) as any,
     });
 
 export const entityStore$ =

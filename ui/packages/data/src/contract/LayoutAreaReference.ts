@@ -1,15 +1,16 @@
 import { type } from "@open-smc/serialization/src/type";
 import { WorkspaceReference } from "./WorkspaceReference";
+import { EntityStore } from "./EntityStore";
 
 @type("OpenSmc.Data.LayoutAreaReference")
-export class LayoutAreaReference extends WorkspaceReference {
+export class LayoutAreaReference extends WorkspaceReference<EntityStore> {
     constructor(public area: string) {
-        super();
+        super(null);
     }
 
     options: {}
 
-    toJsonPath(): string {
-        throw 'This reference should never be resolved on UI';
+    apply = () => {
+        throw "Should never be resolved by ui"
     }
 }
