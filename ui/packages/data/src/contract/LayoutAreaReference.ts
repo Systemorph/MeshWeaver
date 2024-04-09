@@ -10,7 +10,7 @@ export class LayoutAreaReference extends WorkspaceReference<EntityStore> {
 
     options: {}
 
-    apply = () => {
+    select = () => {
         throw "Should never be resolved by ui"
     }
 }

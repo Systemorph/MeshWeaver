@@ -7,5 +7,5 @@ export class EntityReference<T = unknown> extends WorkspaceReference<T> {
         super(`$.${collection}.${id}`);
     }
 
-    apply = (data: any) => data?.[this.collection]?.[this.id];
+    select = (data: any) => data?.[this.collection]?.[this.id];
 }

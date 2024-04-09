@@ -1,12 +1,12 @@
 import { distinctUntilChanged, map} from "rxjs";
 import { expandBindings } from "./expandBindings";
 import { cloneDeepWith, isEqual } from "lodash-es";
-import { selectDeep } from "@open-smc/data/src/operators/selectDeep";
 import { setArea } from "./appReducer";
 import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
 import { instances$ } from "./entityStore";
 import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
 import { appStore } from "./appStore";
+import { selectDeep } from "@open-smc/data/src/operators/selectDeep";
 
 export const dataBinding = (id: string, parentDataContext: unknown) =>
     (previous: UiControl, control: UiControl) => {

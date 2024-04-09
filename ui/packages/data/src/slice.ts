@@ -6,7 +6,7 @@ import { referenceToPatchAction } from "./operators/referenceToPatchAction";
 import { Workspace } from "./Workspace";
 
 export function slice<S, T>(workspace: Workspace<S>, reference: WorkspaceReference<T>) {
-    const slice = new Workspace<S>();
+    const slice = new Workspace<T>();
 
     workspace
         .pipe(map(selectByReference(reference)))

@@ -4,7 +4,7 @@ export abstract class WorkspaceReference<T = unknown> {
     protected constructor(public path: string) {
     }
 
-    apply(data: any): T {
+    select(data: any): T {
         // jsonpath-plus returns undefined if data is empty string or 0
         if (this.path === "$") {
             return data;

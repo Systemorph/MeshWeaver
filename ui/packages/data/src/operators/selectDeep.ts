@@ -1,15 +1,14 @@
 import { cloneDeepWith } from "lodash-es";
-import { selectByReference } from "./selectByReference";
 import { WorkspaceReference } from "../contract/WorkspaceReference";
-import { DataInput } from "../contract/DataInput";
+import { ValueOrReference } from "../contract/ValueOrReference";
 
-export const selectDeep = <T extends DataInput>(data: T) =>
+export const selectDeep = <T>(data: ValueOrReference<T>) =>
     (source: unknown): T =>
         cloneDeepWith(
             data,
             value =>
                 value instanceof WorkspaceReference
-                    ? (selectByReference(value)(source) ?? null)
+                    ? (value.select(source) ?? null)
                     : undefined
         );
 

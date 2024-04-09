@@ -1,18 +1,6 @@
-import { patch } from "../workspaceReducer";
 import { toPointer } from "../toPointer";
 import { WorkspaceReference } from "../contract/WorkspaceReference";
-import { JsonPatch } from "../contract/JsonPatch";
+import { pathToPatchAction } from "./pathToPatchAction";
 
 export const referenceToPatchAction = (reference: WorkspaceReference) =>
-    (value: unknown) =>
-        patch(
-            new JsonPatch(
-                [
-                    {
-                        op: "replace",
-                        path: toPointer(reference.path),
-                        value
-                    }
-                ]
-            )
-        );
+    pathToPatchAction(toPointer(reference.path));

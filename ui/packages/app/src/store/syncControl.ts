@@ -9,7 +9,6 @@ import { isEqual, keys, pickBy, toPairs, omit } from "lodash-es";
 import { removeArea, setArea } from "./appReducer";
 import { effect } from "@open-smc/utils/src/operators/effect";
 import { nestedAreasToIds } from "./dataBinding";
-import { Workspace } from "@open-smc/data/src/Workspace";
 import { expandBindings } from "./expandBindings";
 import { Binding, isBinding } from "@open-smc/layout/src/contract/Binding";
 import { bindingToPatchAction } from "./bindingToPatchAction";
@@ -45,19 +44,6 @@ export const syncControl = (
             )
     );
 
-    // subscription.add(
-    //     control$
-    //         .pipe(distinctUntilChanged<UiControl>(isEqual))
-    //         .pipe(effect(dataBinding(areaId, parentDataContext)))
-    //         .pipe(effect(reverseDataBinding(areaId)))
-    //         .subscribe()
-    // );
-
-    // const props$ =
-    //     control$
-    //         .pipe(map(({dataContext, ...props}) => props))
-    //         .pipe(distinctUntilChanged(isEqual));
-
     const dataContext$ =
         control$
             .pipe(map(({dataContext}) => dataContext))
@@ -75,29 +61,31 @@ export const syncControl = (
                     dataContext => {
                         const subscription = new Subscription();
 
-                        const dataContextWorkspace = new Workspace(dataContext);
+                        const [dataContextWorkspace, dataContextWorkspaceSubscription] =
+                            collectionsWorkspace.map(dataContext);
 
-                        subscription.add(
+                        const setArea$ =
                             combineLatest([dataContextWorkspace, control$.pipe(distinctUntilChanged<UiControl>(isEqual))])
-                                .subscribe(([dataContextState, control]) => {
-                                    const componentTypeName = control.constructor.name;
-                                    const {dataContext, ...props} = control;
-                                    const boundProps =
-                                        expandBindings(nestedAreasToIds(props), parentDataContext)(dataContextState);
+                                .pipe(
+                                    map(
+                                        ([dataContextState, control]) => {
+                                            const componentTypeName = control.constructor.name;
+                                            const {dataContext, ...props} = control;
+                                            const boundProps =
+                                                expandBindings(nestedAreasToIds(props), parentDataContext)(dataContextState);
 
-                                    return appStore.dispatch(
-                                        setArea({
-                                            id: areaId,
-                                            control: {
-                                                componentTypeName,
-                                                props: boundProps
-                                            }
-                                        })
-                                    );
-                                })
-                        );
+                                            return setArea({
+                                                    id: areaId,
+                                                    control: {
+                                                        componentTypeName,
+                                                        props: boundProps
+                                                    }
+                                                });
+                                        }
+                                    )
+                                );
 
-                        subscription.add(
+                        const dataContextPatch$ =
                             props$
                                 .pipe(
                                     switchMap(
@@ -116,9 +104,11 @@ export const syncControl = (
                                                     )
                                             );
                                         })
-                                )
-                                .subscribe(dataContextWorkspace)
-                        );
+                                );
+
+                        subscription.add(dataContextWorkspaceSubscription);
+                        subscription.add(setArea$.subscribe(appStore.dispatch));
+                        subscription.add(dataContextPatch$.subscribe(dataContextWorkspace));
 
                         return subscription;
                     }
