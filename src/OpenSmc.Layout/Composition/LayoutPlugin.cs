@@ -53,21 +53,20 @@ public class LayoutPlugin(IMessageHub hub)
             };
         }
 
-        layoutArea.UpdateView(area, control, deferUpdate:true);
+        layoutArea.UpdateView(area, control);
         return layoutArea;
     }
 
     private LayoutArea RenderArea(LayoutArea layoutArea, string area, ViewElementWithViewDefinition viewDefinition)
     {
         var stream = viewDefinition.ViewDefinition;
-        layoutArea.UpdateView(area, new SpinnerControl(), deferUpdate:true);
+        layoutArea.UpdateView(area, new SpinnerControl());
         stream.Subscribe(
             f => layoutHub.Schedule(async ct =>
             {
                 ct.ThrowIfCancellationRequested();
                 var control = await f.Invoke(layoutArea);
                 RenderArea(layoutArea, area, control);
-                layoutArea.Commit();
             })
         );
         return layoutArea;
@@ -94,8 +93,7 @@ public class LayoutPlugin(IMessageHub hub)
     public IObservable<EntityStore> Render(LayoutAreaReference reference)
     {
         var ret = RenderArea(new LayoutArea(reference), reference.Area, layoutDefinition.GetViewElement(reference));
-        ret.Commit();
-        return ret.Subject;
+        return ret.Stream;
     }
 }
 

@@ -1,29 +1,32 @@
-﻿using System.Reactive.Subjects;
+﻿using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using OpenSmc.Data;
 
 namespace OpenSmc.Layout.Composition;
 
-public record LayoutArea(LayoutAreaReference Reference)
+public record LayoutArea
 {
     public static readonly string ControlsCollection = typeof(UiControl).FullName;
 
-    public EntityStore Store { get; private set; } = new();
-    public ReplaySubject<EntityStore> Subject { get; } = new(1);
+    public IObservable<EntityStore> Stream { get; }
+    public LayoutAreaReference Reference { get; init; }
 
-    public void Commit()
+
+    private readonly Subject<Func<EntityStore, EntityStore>> updateStream = new();
+    public void UpdateView(string area, UiControl control)
     {
-        Subject.OnNext(Store);
+        updateStream.OnNext(store => store.UpdateCollection(ControlsCollection, i => i.SetItem(area, control)));
     }
 
-    public void UpdateView(string area, UiControl control, bool deferUpdate = false)
+
+    public LayoutArea(LayoutAreaReference Reference)
     {
-        Store = Store.UpdateCollection(ControlsCollection, i => i.SetItem(area, control));
-        if (!deferUpdate)
-            Commit();
+        this.Reference = Reference;
+        Stream = updateStream
+            .Scan(new EntityStore(), (currentState, updateFunc) => updateFunc(currentState))
+            .Sample(TimeSpan.FromMilliseconds(100))
+            .Replay(1)
+            .RefCount();
     }
 
-    private readonly Subject<ProgressControl> progressStream = new();
-
-    public void UpdateProgress(object message, object progress)
-        => progressStream.OnNext(new ProgressControl(message, progress));
 }

@@ -13,29 +13,23 @@ public class InstancesInCollectionConverter : JsonConverter<InstanceCollection>
 
     private JsonNode Serialize(InstanceCollection instances, JsonSerializerOptions options)
     {
-        return new JsonArray(instances.Instances.Values.Zip(
-            instances.Instances.Keys.Select(k => JsonSerializer.SerializeToNode(k, options)),
-            (o, k) =>
-            {
-                var obj = JsonSerializer.SerializeToNode(o, o.GetType(), options)!;
-                obj[IdName] = k;
-                return obj;
-            }).ToArray());
-
+        return new JsonObject(instances.Instances.Select(x =>
+            new KeyValuePair<string, JsonNode>(JsonSerializer.Serialize(x.Key, options),
+                JsonSerializer.SerializeToNode(x.Value, options))));
     }
 
     public override InstanceCollection Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         using JsonDocument doc = JsonDocument.ParseValue(ref reader);
-        var array = (JsonArray)doc.RootElement.AsNode();
-        if (array == null)
+        var obj = (JsonObject)doc.RootElement.AsNode();
+        if (obj == null)
             return null;
         return new InstanceCollection
         {
-            Instances = array.Select(i =>
+            Instances = obj.Select(i =>
                     new KeyValuePair<object, object>(
-                        ((JsonObject)i)[IdName].Deserialize<object>(options),
-                        i.Deserialize<object>(options)
+                        JsonSerializer.Deserialize<object>(i.Key, options),
+                        i.Value.Deserialize<object>(options)
                     )
                 )
                 .ToImmutableDictionary()

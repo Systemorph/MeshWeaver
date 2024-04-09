@@ -1,16 +1,20 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
+using OpenSmc.ServiceProvider;
 using Xunit.Abstractions;
 
 namespace OpenSmc.Layout.Test;
 
 public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    //[Inject] private ILogger<LayoutTest> logger;
+    [Inject] private ILogger<LayoutTest> logger;
 
 
     private const string StaticView = nameof(StaticView);
@@ -22,15 +26,29 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 .AddData(data => data
                     .FromConfigurableDataSource("Local",
                         ds => ds
-                            .WithType<TestLayoutPlugin.DataRecord>(t => t.WithInitialData([new("Hello", "World")]))))
+                            .WithType<TestLayoutPlugin.DataRecord>(t => t.WithInitialData([new("Hello", "World")]))
+                            .WithType<Toolbar>(t => t.WithInitialData([new(2024)]))
+                        ))
                 .AddLayout(
                     layout => layout
                         .WithView(StaticView, Controls.Stack().WithView("Hello", "Hello").WithView("World", "World"))
-                        .WithView(nameof(ViewWithProgress), ViewWithProgress)
+                        .WithViewDefinition(nameof(ViewWithProgress), ViewWithProgress)
+                        .WithViewDefinition(nameof(UpdatingView), layout.Hub.ServiceProvider.GetRequiredService<IWorkspace>().Stream.Select(ws => (Func<LayoutArea, UiControl>)(_ => UpdatingView(GetToolbar(ws)))))
+
                 )
             ;
 
 
+    }
+
+    private record Toolbar(int Year)
+    {
+        [Key]
+        public string Id { get; } = nameof(Toolbar);
+    }
+    private Toolbar GetToolbar(WorkspaceState ws)
+    {
+        return ws.GetData<Toolbar>().Single();
     }
 
 
@@ -40,13 +58,18 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var progress = Controls.Progress("Processing", percentage);
         for (int i = 0; i < 10; i++)
         {
-            await Task.Delay(10);
+            await Task.Delay(30);
             area.UpdateView(nameof(ViewWithProgress),
                 progress = progress with { Progress = percentage += 10 });
 
         }
 
         return Controls.HtmlView("Report");
+    }
+    private static UiControl UpdatingView(Toolbar toolbar)
+    {
+
+        return Controls.HtmlView($"Report for year {toolbar.Year}");
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -88,21 +111,20 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream(new HostAddress(), reference);
         var controls = await stream.GetControl(reference.Area).TakeUntil(o => o is HtmlControl).ToArray();
-        controls.Should().HaveCount(12);
+        controls.Should().HaveCountGreaterThan(1).And.HaveCountLessThan(12);
     }
 
-    //    public async Task LayoutStackUpdateTest()
-    //    {
-    //        var client = GetClient();
-    //        var area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.MainStackId));
-    //        area.Control.Should().BeOfType<Composition.LayoutStackControl>().Which.Areas.Should().BeEmpty();
-    //        await client.ClickAsync(_ => area);
+    [HubFact]
+    public async Task TestUpdatingView()
+    {
+        var reference = new LayoutAreaReference(nameof(UpdatingView));
 
-    //        await client.GetAreaAsync(state => state.GetById("HelloId"));
-    //        area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.MainStackId));
-    //        area.Control.Should().BeOfType<Composition.LayoutStackControl>().Which.Areas.Should().HaveCount(1);
-
-    //    }
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream(new HostAddress(), reference);
+        var controls = await stream.GetControl(reference.Area).TakeUntil(o => o is HtmlControl).ToArray();
+        controls.Should().HaveCount(2);
+        controls.Last().Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
+    }
 
     //#if CIRun
     //    [Fact(Skip = "Hangs")]
@@ -186,6 +208,24 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
     //    }
 
+    [HubFact]
+    public async Task TestTest()
+    {
+        int count = 0;
+        // Simulating user submissions (e.g., button clicks, form submissions)
+        var userSubmissions = Observable.Interval(TimeSpan.FromMilliseconds(1)).Take(100).Select(_ => ++count);//.TakeUntil(Observable.Timer(DateTimeOffset.FromUnixTimeSeconds(1))).Select(i => ++count);
+        
+        // Define your minimum timeout (adjust as needed)
+        var minimumTimeout = TimeSpan.FromMilliseconds(30);
+
+
+        // Merge user submissions with the minimum timeout observable
+        var sampled = userSubmissions.Sample(minimumTimeout);
+
+        var received = await sampled.ToArray();
+
+        received.Last().Should().Be(count);
+    }
 }
 
 public record ToolbarEntity(int Year)
