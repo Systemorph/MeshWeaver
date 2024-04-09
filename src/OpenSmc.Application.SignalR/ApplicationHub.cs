@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.SignalR;
+﻿using JetBrains.Annotations;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Messaging;
 using OpenSmc.Serialization;
@@ -19,6 +20,7 @@ public class ApplicationHub(ILogger<ApplicationHub> logger) : Hub
         return base.OnConnectedAsync();
     }
 
+    [UsedImplicitly]
     public void DeliverMessage(MessageDelivery<RawJson> delivery)
     {
         logger.LogTrace("Received incoming message in SignalR Hub to deliver: {delivery}", delivery);
