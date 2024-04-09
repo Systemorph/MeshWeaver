@@ -9,8 +9,9 @@ import { JsonPatch, PatchOperation } from "./contract/JsonPatch";
 enablePatches();
 
 export const patch = createAction<JsonPatch>('patch');
+export const setState = createAction<unknown>('setState');
+
 export const patchRequest = createAction<JsonPatch>('patchRequest');
-export const initState = createAction<unknown>('initState');
 
 export const workspaceReducer = createReducer(
     undefined,
@@ -23,7 +24,7 @@ export const workspaceReducer = createReducer(
                     applyPatches(state, action.payload.operations.map(toImmerPatch))
             )
             .addCase(
-                initState,
+                setState,
                 (state, action) => action.payload
             );
     }

@@ -1,15 +1,15 @@
 import { distinctUntilChanged, map} from "rxjs";
 import { expandBindings } from "./expandBindings";
 import { cloneDeepWith, isEqual } from "lodash-es";
-import { selectDeep } from "@open-smc/data/src/selectDeep";
-import { removeArea, setArea } from "./appReducer";
+import { selectDeep } from "@open-smc/data/src/operators/selectDeep";
+import { setArea } from "./appReducer";
 import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
 import { instances$ } from "./entityStore";
 import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
 import { appStore } from "./appStore";
 
 export const dataBinding = (id: string, parentDataContext: unknown) =>
-    (control: UiControl) => {
+    (previous: UiControl, control: UiControl) => {
         if (control) {
             const componentTypeName = control.constructor.name;
             const {dataContext, ...props} = control;
@@ -40,7 +40,7 @@ export const dataBinding = (id: string, parentDataContext: unknown) =>
         );
     }
 
-const nestedAreasToIds = <T>(props: T): T =>
+export const nestedAreasToIds = <T>(props: T): T =>
     cloneDeepWith(
         props,
         value => value instanceof EntityReference

@@ -2,12 +2,10 @@ import { type } from "@open-smc/serialization/src/type";
 import { WorkspaceReference } from "./WorkspaceReference";
 
 @type("OpenSmc.Data.CollectionReference")
-export class CollectionReference extends WorkspaceReference {
+export class CollectionReference<T> extends WorkspaceReference<T> {
     constructor(public collection: string) {
-        super();
+        super(`$.${collection}`);
     }
 
-    toJsonPath(): string {
-        return `$.${this.collection}`;
-    }
+    apply = (data: any) => data?.[this.collection];
 }
