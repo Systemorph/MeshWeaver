@@ -13,13 +13,11 @@ public class InstancesInCollectionConverter : JsonConverter<InstanceCollection>
 
     private JsonNode Serialize(InstanceCollection instances, JsonSerializerOptions options)
     {
-
-
         return new JsonArray(instances.Instances.Values.Zip(
             instances.Instances.Keys.Select(k => JsonSerializer.SerializeToNode(k, options)),
             (o, k) =>
             {
-                var obj = JsonSerializer.SerializeToNode(o, options)!;
+                var obj = JsonSerializer.SerializeToNode(o, o.GetType(), options)!;
                 obj[IdName] = k;
                 return obj;
             }).ToArray());
@@ -32,7 +30,7 @@ public class InstancesInCollectionConverter : JsonConverter<InstanceCollection>
         var array = (JsonArray)doc.RootElement.AsNode();
         if (array == null)
             return null;
-        return new InstanceCollection()
+        return new InstanceCollection
         {
             Instances = array.Select(i =>
                     new KeyValuePair<object, object>(

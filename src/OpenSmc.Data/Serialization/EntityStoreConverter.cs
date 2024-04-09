@@ -26,9 +26,11 @@ public class EntityStoreConverter(ITypeRegistry typeRegistry) : JsonConverter<En
         var ret = new JsonObject(
             store.Collections.ToDictionary(
                 x => x.Key,
-                x => JsonSerializer.SerializeToNode(x.Value,  options)
-            ));
-        ret["$type"] = typeof(EntityStore).FullName;
+                x => JsonSerializer.SerializeToNode(x.Value,  typeof(InstanceCollection), options)
+            ))
+        {
+            ["$type"] = typeof(EntityStore).FullName
+        };
         return ret;
     }
 

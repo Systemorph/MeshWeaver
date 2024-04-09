@@ -88,11 +88,11 @@ public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry)
 
 }
 
-public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry, Type exlude) : JsonConverter<object>{
+public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry, Type exclude) : JsonConverter<object>{
     private const string TypeProperty = "$type";
 
     public override bool CanConvert(Type typeToConvert)
-        => typeToConvert == typeof(object);
+        => typeToConvert != exclude;
 
     public override object Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
