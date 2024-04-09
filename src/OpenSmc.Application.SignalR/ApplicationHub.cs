@@ -1,5 +1,7 @@
 ﻿using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
+using OpenSmc.Messaging;
+using OpenSmc.Serialization;
 
 namespace OpenSmc.Application.SignalR;
 
@@ -15,5 +17,10 @@ public class ApplicationHub(ILogger<ApplicationHub> logger) : Hub
     {
         logger.LogDebug("Attempt to make new SignalR connection {ConnectionId} ", Context.ConnectionId);
         return base.OnConnectedAsync();
+    }
+
+    public void DeliverMessage(MessageDelivery<RawJson> delivery)
+    {
+        logger.LogTrace("Received incoming message in SignalR Hub to deliver: {delivery}", delivery);
     }
 }
