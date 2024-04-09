@@ -55,3 +55,5 @@ export const rootControl$ =
                 }
             )
         );
+
+export const collectionsWorkspace =

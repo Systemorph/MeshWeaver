@@ -7,5 +7,5 @@ export class CollectionReference<T> extends WorkspaceReference<T> {
         super(`$.${collection}`);
     }
 
-    apply = (data: any) => data?.[this.collection];
+    select = (data: any) => data?.[this.collection];
 }

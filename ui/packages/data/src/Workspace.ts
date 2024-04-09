@@ -1,7 +1,15 @@
 import { Action } from "redux";
 import { configureStore, Store } from "@reduxjs/toolkit";
-import { from, Observable, Observer } from "rxjs";
+import { distinctUntilChanged, from, map, merge, Observable, Observer, skip, Subscription } from "rxjs";
 import { workspaceReducer } from "./workspaceReducer";
+import { ValueOrReference } from "./contract/ValueOrReference";
+import { extractReferences } from "./operators/extractReferences";
+import { selectByPath } from "./operators/selectByPath";
+import { isEqual } from "lodash-es";
+import { referenceToPatchAction } from "./operators/referenceToPatchAction";
+import { selectByReference } from "./operators/selectByReference";
+import { selectDeep } from "./operators/selectDeep";
+import { pathToPatchAction } from "./operators/pathToPatchAction";
 
 export class Workspace<S> extends Observable<S> implements Observer<Action> {
     private readonly store: Store<S>;
@@ -24,9 +32,53 @@ export class Workspace<S> extends Observable<S> implements Observer<Action> {
     error(err: any) {
     }
 
-    next(value: Action): void {
+    next(value: Action) {
         this.store.dispatch(value);
     }
 
-    getState = () => this.store.getState();
+    getState() {
+        return this.store.getState();
+    }
+
+    map<T>(projection: ValueOrReference<T>) {
+        const state = selectDeep(projection)(this.getState());
+
+        const workspace = new Workspace(state);
+
+        const subscription = new Subscription();
+
+        const references = extractReferences(projection);
+
+        const patchChild$ =
+            merge(
+                ...references
+                    .map(
+                        ([path, reference]) =>
+                            this
+                                .pipe(map(selectByReference(reference)))
+                                .pipe(distinctUntilChanged(isEqual))
+                                .pipe(skip(1))
+                                .pipe(map(pathToPatchAction(path)))
+                    )
+            );
+
+        const patchParent$ =
+            merge(
+                ...references
+                    .map(
+                        ([path, reference]) =>
+                            workspace
+                                .pipe(map(selectByPath(path)))
+                                .pipe(distinctUntilChanged(isEqual))
+                                .pipe(skip(1))
+                                .pipe(map(referenceToPatchAction(reference)))
+                    )
+            );
+
+        subscription.add(patchChild$.subscribe(workspace));
+
+        subscription.add(patchParent$.subscribe(this));
+
+        return [workspace, subscription] as const;
+    }
 }

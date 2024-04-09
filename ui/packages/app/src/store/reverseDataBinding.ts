@@ -62,7 +62,7 @@ export const reverseDataBinding = (
                                     merge(
                                         ...extractReferences(dataContext)
                                             .map(
-                                                ({path, reference}) =>
+                                                ([path, reference]) =>
                                                     dataContext$
                                                         .pipe(map(selectByPath(path)))
                                                         .pipe(distinctUntilChanged(isEqual))
