@@ -6,14 +6,12 @@ namespace OpenSmc.Fixture;
 
 public class ServiceSetup
 {
-    public readonly ModulesBuilder Modules = new();
     public readonly ServiceCollection Services = new();
     public readonly List<Action<IServiceProvider>> Initializations = new();
     public IServiceProvider ServiceProvider { get; private set; }
 
     public ServiceSetup()
     {
-        Modules.Add(GetType().Assembly);
         Services.AddLogging(logging => logging.AddXUnitLogger());
         Services.AddOptions();
     }
@@ -26,7 +24,7 @@ public class ServiceSetup
 
     protected virtual void BuildServiceProvider()
     {
-        ServiceProvider = Services.SetupModules(Modules);
+        ServiceProvider = Services.SetupModules();
 
         foreach (var initialize in Initializations)
             initialize(ServiceProvider);

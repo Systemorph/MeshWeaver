@@ -5,7 +5,6 @@ using Microsoft.Extensions.Logging;
 using OpenSmc.Messaging.Serialization;
 using OpenSmc.Serialization;
 using OpenSmc.ServiceProvider;
-using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Messaging;
 
@@ -99,7 +98,7 @@ public record MessageHubConfiguration
         services.Replace(ServiceDescriptor.Singleton<IMessageHub>(sp => new MessageHub<TAddress>(sp, sp.GetRequiredService<HostedHubsCollection>(), this, parent)));
         services.Replace(ServiceDescriptor.Singleton<HostedHubsCollection, HostedHubsCollection>());
         services.Replace(ServiceDescriptor.Singleton(typeof(ITypeRegistry),
-            sp => new TypeRegistry(ParentServiceProvider.GetService<ITypeRegistry>())));
+            _ => new TypeRegistry(ParentServiceProvider.GetService<ITypeRegistry>())));
         services.Replace(ServiceDescriptor.Singleton<IMessageService>(sp => new MessageService(Address,sp.GetRequiredService<ILogger<MessageService>>())));
         services.Replace(ServiceDescriptor.Singleton(sp => new ParentMessageHub(sp.GetRequiredService<IMessageHub>())));
         Services.Invoke(services);
@@ -123,7 +122,7 @@ public record MessageHubConfiguration
     {
 
         ServiceProvider = ConfigureServices<TAddress>(parent)
-            .SetupModules(ParentServiceProvider, new ModulesBuilder().Add(GetType().Assembly), Guid.NewGuid().AsString());
+            .SetupModules(ParentServiceProvider);
     }
 
     public virtual IMessageHub Build<TAddress>(IServiceProvider serviceProvider, TAddress address)

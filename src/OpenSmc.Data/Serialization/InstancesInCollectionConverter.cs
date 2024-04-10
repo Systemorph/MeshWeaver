@@ -8,7 +8,6 @@ namespace OpenSmc.Data.Serialization;
 
 public class InstancesInCollectionConverter : JsonConverter<InstanceCollection>
 {
-    private const string IdName = "$id";
 
 
     private JsonNode Serialize(InstanceCollection instances, JsonSerializerOptions options)
