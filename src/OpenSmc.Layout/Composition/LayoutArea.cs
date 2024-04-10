@@ -8,7 +8,7 @@ public record LayoutArea
 {
     public static readonly string ControlsCollection = typeof(UiControl).FullName;
 
-    public IObservable<EntityStore> Stream { get; }
+    public ReplaySubject<EntityStore> Stream { get; } = new ReplaySubject<EntityStore>(1);
     public LayoutAreaReference Reference { get; init; }
 
 
@@ -22,11 +22,9 @@ public record LayoutArea
     public LayoutArea(LayoutAreaReference Reference)
     {
         this.Reference = Reference;
-        Stream = updateStream
-            .Scan(new EntityStore(), (currentState, updateFunc) => updateFunc(currentState))
+        updateStream.Scan(new EntityStore(), (currentState, updateFunc) => updateFunc(currentState))
             .Sample(TimeSpan.FromMilliseconds(100))
-            .Replay(1)
-            .RefCount();
+            .Subscribe(Stream);
     }
 
 }
