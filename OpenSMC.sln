@@ -155,6 +155,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Application.Orleans
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Application.Orleans", "src\OpenSmc.Application.Orleans\OpenSmc.Application.Orleans.csproj", "{E0F16065-8788-4AF8-9FA6-CB03DECE2FC0}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Hosting", "src\OpenSmc.Hosting\OpenSmc.Hosting.csproj", "{3A6BD0D9-7DB9-49E5-B654-BCDB3C586DBA}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -441,6 +443,10 @@ Global
 		{E0F16065-8788-4AF8-9FA6-CB03DECE2FC0}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{E0F16065-8788-4AF8-9FA6-CB03DECE2FC0}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{E0F16065-8788-4AF8-9FA6-CB03DECE2FC0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3A6BD0D9-7DB9-49E5-B654-BCDB3C586DBA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3A6BD0D9-7DB9-49E5-B654-BCDB3C586DBA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3A6BD0D9-7DB9-49E5-B654-BCDB3C586DBA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3A6BD0D9-7DB9-49E5-B654-BCDB3C586DBA}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
