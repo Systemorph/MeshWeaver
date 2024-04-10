@@ -9,51 +9,58 @@ import { CollectionReference } from "@open-smc/data/src/contract/CollectionRefer
 import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
 import { patchRequestMiddleware } from "./middleware/patchRequestMiddleware";
 import { sampleApp } from "@open-smc/backend/src/SampleApp";
+import { Workspace } from "@open-smc/data/src/Workspace";
+import { WorkspaceReference } from "@open-smc/data/src/contract/WorkspaceReference";
+import { JsonPathReference } from "@open-smc/data/src/contract/JsonPathReference";
+import { Collection } from "@open-smc/data/src/contract/Collection";
+
+// export const entityStore =
+//     configureStore<EntityStore>({
+//         reducer: workspaceReducer,
+//         devTools: {
+//             name: "entityStore"
+//         },
+//         middleware: getDefaultMiddleware =>
+//             getDefaultMiddleware()
+//                 .prepend(
+//                     patchRequestMiddleware(sampleApp),
+//                     serializeMiddleware
+//                 ) as any,
+//     });
 
 export const entityStore =
-    configureStore<EntityStore>({
-        reducer: workspaceReducer,
-        devTools: {
-            name: "entityStore"
-        },
-        middleware: getDefaultMiddleware =>
-            getDefaultMiddleware()
-                .prepend(
-                    patchRequestMiddleware(sampleApp),
-                    serializeMiddleware
-                ) as any,
-    });
-
-export const entityStore$ =
-    from(entityStore)
-        .pipe(map(deserialize));
+    new Workspace<EntityStore>(undefined, "entityStore");
 
 export const rootArea$ =
-    entityStore$
-        .pipe(map(store => store.reference.area));
+    entityStore
+        .pipe(map(store => store?.reference?.area));
 
 export const instances$ =
-    entityStore$
+    entityStore
         .pipe(map(store => store.instances));
 
-export type Collection<T> = Record<string, T>;
+const uiControlType = (UiControl as any).$type;
 
 const controlsCollectionReference =
-    new CollectionReference((UiControl as any).$type);
+    new CollectionReference<UiControl>(uiControlType);
 
 export const controls$ =
     instances$
-        .pipe(map(selectByReference<Collection<UiControl>>(controlsCollectionReference)));
+        .pipe(map(store => store.instances))
+        .pipe(map(selectByReference(controlsCollectionReference)));
 
 export const rootControl$ =
-    entityStore$
+    entityStore
         .pipe(
-            map(store => {
-                    const controls
-                        = selectByReference<Collection<UiControl>>(controlsCollectionReference)(store.instances);
-                    return controls[store.reference.area];
+            map(state => {
+                    const controls = state.instances?.[uiControlType]
+                    return controls[state.reference.area];
                 }
             )
         );
 
-export const collectionsWorkspace =
+const collectionsReference = 
+    new JsonPathReference<Record<string, Collection>>("$.collections");
+
+export const [collectionsWorkspace] =
+    entityStore.map(collectionsReference);

@@ -5,5 +5,5 @@ import { LayoutAreaReference } from "./LayoutAreaReference";
 @type("OpenSmc.Data.EntityStore")
 export class EntityStore {
     reference: LayoutAreaReference;
-    collections: Record<string, UiControl[]>;
+    instances: Record<string, Record<string, UiControl>>
 }
