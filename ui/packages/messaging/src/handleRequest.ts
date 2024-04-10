@@ -3,6 +3,7 @@ import { Request } from "./api/Request";
 import { filter, from, map, mergeMap, Observable, ObservableInput } from "rxjs";
 import { messageOfType } from "./operators/messageOfType";
 import { pack } from "./operators/pack";
+import { log } from "@open-smc/utils/src/operators/log";
 
 export const handleRequest =
     <TRequest extends Request<TResponse>, TResponse>(
@@ -18,5 +19,6 @@ export const handleRequest =
                             from(handler(message))
                                 .pipe(map(pack({id})))
                     )
-                );
+                )
+                // .pipe(log("handleRequest"));
 

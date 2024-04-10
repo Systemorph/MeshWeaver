@@ -1,5 +1,5 @@
 import { MessageHub } from "@open-smc/messaging/src/api/MessageHub";
-import { distinctUntilChanged, Subscription } from "rxjs";
+import { distinctUntilChanged, map, Subscription } from "rxjs";
 import { subscribeToDataChanges } from "@open-smc/data/src/subscribeToDataChanges";
 import { removeArea, setRoot } from "./appReducer";
 import { appStore } from "./appStore";
@@ -12,7 +12,7 @@ import { withPreviousValue } from "@open-smc/utils/src/operators/withPreviousVal
 export const startSynchronization = (hub: MessageHub) => {
     const subscription = new Subscription();
 
-    subscription.add(subscribeToDataChanges(hub, new LayoutAreaReference("/"), entityStore.dispatch));
+    subscription.add(subscribeToDataChanges(hub, new LayoutAreaReference("/"), entityStore));
 
     subscription.add(
         rootArea$
@@ -26,19 +26,6 @@ export const startSynchronization = (hub: MessageHub) => {
                 appStore.dispatch(setRoot(current));
             })
     );
-
-    // subscription.add(
-    //     entityStore$
-    //         .pipe(syncLayoutArea(data$, appStore.dispatch, app$, dataStore.dispatch))
-    //         .pipe(distinctUntilKeyChanged("id"))
-    //         .pipe(withPreviousValue())
-    //         .subscribe(([previous, current]) => {
-    //             if (previous?.id) {
-    //                 appStore.dispatch(removeArea(previous.id));
-    //             }
-    //             appStore.dispatch(setRoot(current?.id ? current.id : null));
-    //         })
-    // );
 
     return () => subscription.unsubscribe();
 }

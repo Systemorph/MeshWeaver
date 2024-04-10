@@ -14,13 +14,13 @@ import { pathToPatchAction } from "./operators/pathToPatchAction";
 export class Workspace<S> extends Observable<S> implements Observer<Action> {
     private readonly store: Store<S>;
 
-    constructor(state?: S) {
+    constructor(state?: S, name?: string) {
         super(subscriber => from(this.store).subscribe(subscriber));
 
         this.store = configureStore<S>({
             preloadedState: state,
             reducer: workspaceReducer,
-            devTools: false,
+            devTools: name ? {name} : false,
             middleware: getDefaultMiddleware =>
                 getDefaultMiddleware({serializableCheck: false})
         });
@@ -40,10 +40,10 @@ export class Workspace<S> extends Observable<S> implements Observer<Action> {
         return this.store.getState();
     }
 
-    map<T>(projection: ValueOrReference<T>) {
+    map<T>(projection: ValueOrReference<T>, name?: string) {
         const state = selectDeep(projection)(this.getState());
 
-        const workspace = new Workspace(state);
+        const workspace = new Workspace(state, name);
 
         const subscription = new Subscription();
 
