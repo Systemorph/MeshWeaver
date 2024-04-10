@@ -247,3 +247,26 @@ const layoutStore = {
         ]
     }
 }
+
+// map serialization
+
+const myMap = new Map();
+
+const objectKey = {name: "foo"};
+
+myMap.set(objectKey, "1");
+myMap.set("bar", "2");
+
+const path = [objectKey];
+
+const path2 = "myType/hello"; // ["myType", "hello"]
+
+"myType/hello" => ["myType", "hello"]
+
+const myMapSerialized = {
+    $type: "Map",
+    entries: [
+        [{name: "foo"}, "1"],
+        ["bar", "2"]
+    ]
+}

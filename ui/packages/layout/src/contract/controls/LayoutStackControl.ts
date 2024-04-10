@@ -4,5 +4,7 @@ import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
 
 @type("OpenSmc.Layout.Composition.LayoutStackControl")
 export class LayoutStackControl extends UiControl {
-    areas: EntityReference[];
+    constructor(public areas: EntityReference<UiControl>[]) {
+        super();
+    }
 }

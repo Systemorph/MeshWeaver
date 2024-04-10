@@ -1,4 +1,4 @@
 import { WorkspaceReference } from "../contract/WorkspaceReference";
 
 export const selectByReference = <T>(reference: WorkspaceReference<T>) =>
-    (data: any) => reference.select(data)
+    (data: any) => reference.get(data)

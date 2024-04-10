@@ -8,7 +8,7 @@ export const selectDeep = <T>(data: ValueOrReference<T>) =>
             data,
             value =>
                 value instanceof WorkspaceReference
-                    ? (value.select(source) ?? null)
+                    ? (value.get(source) ?? null)
                     : undefined
         );
 

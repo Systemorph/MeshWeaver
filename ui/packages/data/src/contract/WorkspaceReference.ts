@@ -1,21 +1,12 @@
-import { JSONPath } from "jsonpath-plus";
+import { get, trimStart } from "lodash-es";
+import { WorkspaceReferenceBase } from "./WorkspaceReferenceBase";
 
-export abstract class WorkspaceReference<T = unknown> {
-    protected constructor(public path: string) {
+export class WorkspaceReference<T = unknown> extends WorkspaceReferenceBase<T> {
+    constructor(public path: string) {
+        super();
     }
 
-    select(data: any): T {
-        // jsonpath-plus returns undefined if data is empty string or 0
-        if (this.path === "$") {
-            return data;
-        }
-
-        return JSONPath(
-            {
-                json: data,
-                path: this.path,
-                wrap: false
-            }
-        );
-    }
+    get = (data: unknown): T => get(data, pointerToPath(this.path));
 }
+
+const pointerToPath = (path: string) => trimStart(path, "/").split("/");

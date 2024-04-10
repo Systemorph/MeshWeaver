@@ -1,31 +1,26 @@
-import {
-    createAction,
-    createReducer
-} from '@reduxjs/toolkit';
+import { createAction, createReducer } from '@reduxjs/toolkit';
 import { applyPatches, enablePatches, Patch } from "immer";
 import { identity } from "lodash-es";
 import { JsonPatch, PatchOperation } from "./contract/JsonPatch";
 
 enablePatches();
 
-export const patch = createAction<JsonPatch>('patch');
-export const setState = createAction<unknown>('setState');
+export const patchActionCreator = createAction<JsonPatch>('patch');
+
+export type PatchAction = ReturnType<typeof patchActionCreator>;
 
 export const patchRequest = createAction<JsonPatch>('patchRequest');
+
+export type WorkspaceAction = PatchAction;
 
 export const workspaceReducer = createReducer(
     undefined,
     builder => {
         builder
             .addCase(
-                patch,
+                patchActionCreator,
                 (state, action) =>
-                    action.payload.operations &&
                     applyPatches(state, action.payload.operations.map(toImmerPatch))
-            )
-            .addCase(
-                setState,
-                (state, action) => action.payload
             );
     }
 );

@@ -4,8 +4,8 @@ import { WorkspaceReference } from "./WorkspaceReference";
 @type("OpenSmc.Data.EntityReference")
 export class EntityReference<T = unknown> extends WorkspaceReference<T> {
     constructor(public collection: string, public id: string) {
-        super(`$.${collection}.${id}`);
+        super(`/${collection}/${id}`);
     }
 
-    select = (data: any) => data?.[this.collection]?.[this.id];
+    get = (data: any) => data?.[this.collection]?.[this.id];
 }
