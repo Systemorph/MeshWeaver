@@ -7,7 +7,9 @@ export class JsonPatch {
 }
 
 export interface PatchOperation {
-    op: "replace" | "remove" | "add";
+    op: OperationType;
     path: string;
     value?: any;
 }
+
+export type OperationType = "replace" | "remove" | "add";

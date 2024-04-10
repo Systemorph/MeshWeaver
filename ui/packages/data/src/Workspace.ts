@@ -1,29 +1,27 @@
 import { Action } from "redux";
 import { configureStore, Store } from "@reduxjs/toolkit";
-import { distinctUntilChanged, from, map, merge, Observable, Observer, skip, Subscription } from "rxjs";
-import { workspaceReducer } from "./workspaceReducer";
+import { from, Observable, Observer } from "rxjs";
+import { PatchAction, workspaceReducer } from "./workspaceReducer";
 import { ValueOrReference } from "./contract/ValueOrReference";
-import { extractReferences } from "./operators/extractReferences";
-import { selectByPath } from "./operators/selectByPath";
-import { isEqual } from "lodash-es";
-import { referenceToPatchAction } from "./operators/referenceToPatchAction";
-import { selectByReference } from "./operators/selectByReference";
-import { selectDeep } from "./operators/selectDeep";
-import { pathToPatchAction } from "./operators/pathToPatchAction";
+import { WorkspaceSlice } from "./WorkspaceSlice";
+import { WorkspaceReference } from "./contract/WorkspaceReference";
 
-export class Workspace<S> extends Observable<S> implements Observer<Action> {
-    private readonly store: Store<S>;
+export class Workspace<S> extends Observable<S> implements Observer<PatchAction> {
+    protected store: Store<S>;
+    protected store$: Observable<S>;
 
-    constructor(state?: S, name?: string) {
-        super(subscriber => from(this.store).subscribe(subscriber));
+    constructor(protected state: S, public name?: string) {
+        super(subscriber => this.store$.subscribe(subscriber));
 
-        this.store = configureStore<S>({
+        this.store = configureStore({
             preloadedState: state,
             reducer: workspaceReducer,
             devTools: name ? {name} : false,
             middleware: getDefaultMiddleware =>
                 getDefaultMiddleware({serializableCheck: false})
         });
+
+        this.store$ = from(this.store);
     }
 
     complete() {
@@ -38,47 +36,5 @@ export class Workspace<S> extends Observable<S> implements Observer<Action> {
 
     getState() {
         return this.store.getState();
-    }
-
-    map<T>(projection: ValueOrReference<T>, name?: string) {
-        const state = selectDeep(projection)(this.getState());
-
-        const workspace = new Workspace(state, name);
-
-        const subscription = new Subscription();
-
-        const references = extractReferences(projection);
-
-        const patchChild$ =
-            merge(
-                ...references
-                    .map(
-                        ([path, reference]) =>
-                            this
-                                .pipe(map(selectByReference(reference)))
-                                .pipe(distinctUntilChanged(isEqual))
-                                .pipe(skip(1))
-                                .pipe(map(pathToPatchAction(path)))
-                    )
-            );
-
-        const patchParent$ =
-            merge(
-                ...references
-                    .map(
-                        ([path, reference]) =>
-                            workspace
-                                .pipe(map(selectByPath(path)))
-                                .pipe(distinctUntilChanged(isEqual))
-                                .pipe(skip(1))
-                                .pipe(map(referenceToPatchAction(reference)))
-                    )
-            );
-
-        subscription.add(patchChild$.subscribe(workspace));
-
-        subscription.add(patchParent$.subscribe(this));
-
-        return [workspace, subscription] as const;
     }
 }

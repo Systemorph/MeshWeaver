@@ -1,6 +1,6 @@
 import { MessageHub } from "@open-smc/messaging/src/api/MessageHub";
 import { sendMessage } from "@open-smc/messaging/src/sendMessage";
-import { setState, patch } from "./workspaceReducer";
+import { patchActionCreator } from "./workspaceReducer";
 import { messageOfType } from "@open-smc/messaging/src/operators/messageOfType";
 import { filter, map, Observer } from "rxjs";
 import { SubscribeRequest } from "./contract/SubscribeRequest";
@@ -27,12 +27,16 @@ export function subscribeToDataChanges(
             .pipe(filter(message => isEqual(message.reference, reference)))
             .subscribe(({change, changeType}) => {
                 if (changeType === "Full") {
-                    observer.next(setState(change));
-                }
-                else if (changeType === "Patch") {
-                    observer.next(patch(change as JsonPatch))
-                }
-                else {
+                    observer.next(
+                        patchActionCreator(
+                            new JsonPatch([
+                                {op: "replace", path: "", value: change}
+                            ])
+                        )
+                    );
+                } else if (changeType === "Patch") {
+                    observer.next(patchActionCreator(change as JsonPatch))
+                } else {
                     console.warn(`Unknown change type ${changeType}`)
                 }
             });

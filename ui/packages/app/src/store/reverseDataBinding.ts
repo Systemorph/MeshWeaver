@@ -13,7 +13,7 @@ import { serializeMiddleware } from "@open-smc/data/src/middleware/serializeMidd
 import { referenceToPatchAction } from "@open-smc/data/src/operators/referenceToPatchAction";
 import { bindingToPatchAction } from "./bindingToPatchAction";
 import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
-import { instances$ } from "./entityStore";
+import { collections } from "./entityStore";
 
 export const reverseDataBinding = (
     areaId: string
@@ -38,7 +38,7 @@ export const reverseDataBinding = (
                             )
                     );
 
-                return instances$
+                return collections
                     .pipe(map(selectDeep(dataContext)))
                     .pipe(distinctUntilChanged(isEqual))
                     .pipe(
