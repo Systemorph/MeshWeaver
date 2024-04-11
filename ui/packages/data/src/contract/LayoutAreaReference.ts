@@ -1,12 +1,15 @@
 import { type } from "@open-smc/serialization/src/type";
-import { WorkspaceReference } from "./WorkspaceReference";
-import { EntityStore } from "./EntityStore";
+import { WorkspaceReferenceBase } from "./WorkspaceReferenceBase";
 
 @type("OpenSmc.Data.LayoutAreaReference")
-export class LayoutAreaReference extends WorkspaceReference<EntityStore> {
+export class LayoutAreaReference extends WorkspaceReferenceBase {
+    options: {}
+
     constructor(public area: string) {
-        super(null);
+        super();
     }
 
-    options: {}
+    get(data: unknown) {
+        throw 'Should never be used';
+    }
 }

@@ -1,5 +1,5 @@
 import { Middleware } from "@reduxjs/toolkit";
-import { patchActionCreator, patchRequest } from "@open-smc/data/src/workspaceReducer";
+import { patchActionCreator, patchRequest } from "@open-smc/data/src/jsonPatchReducer";
 import { MessageHub } from "@open-smc/messaging/src/api/MessageHub";
 import { PatchChangeRequest } from "@open-smc/data/src/contract/PatchChangeRequest";
 import { sendRequest } from "@open-smc/messaging/src/sendRequest";

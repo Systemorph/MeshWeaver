@@ -1,6 +1,6 @@
 import { type } from "@open-smc/serialization/src/type";
-import { WorkspaceReference } from "./WorkspaceReference";
 import { JSONPath } from "jsonpath-plus";
+import { WorkspaceReference } from "./WorkspaceReference";
 
 @type("OpenSmc.Data.JsonPathReference")
 export class JsonPathReference<T> extends WorkspaceReference<T> {

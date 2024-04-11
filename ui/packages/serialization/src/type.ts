@@ -1,4 +1,9 @@
-type Constructor = { new (...args: any): {} };
+import {immerable} from "immer"
+
+type Constructor<T = unknown> = {
+    new (...args: any): T;
+    deserialize?(props: T): T;
+}
 
 const typeRegistry = new Map<string, Constructor>();
 
@@ -8,6 +13,7 @@ export function type(typeName: string) {
     return function<T extends Constructor>(constructor: T) {
         typeRegistry.set(typeName, constructor);
         (constructor as any).$type = typeName;
+        (constructor as any)[immerable] = true;
         return constructor;
     }
 }

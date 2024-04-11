@@ -1,5 +1,5 @@
 import { map, Observable, Observer } from "rxjs";
-import { PatchAction, patchActionCreator } from "./workspaceReducer";
+import { PatchAction, patchActionCreator } from "./jsonPatchReducer";
 import { Workspace } from "./Workspace";
 import { WorkspaceReference } from "./contract/WorkspaceReference";
 import { selectByReference } from "./operators/selectByReference";

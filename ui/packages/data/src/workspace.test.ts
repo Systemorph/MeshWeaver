@@ -1,6 +1,6 @@
 import { expect, test, describe, jest } from "@jest/globals";
 import { configureStore } from "@reduxjs/toolkit";
-import { patchActionCreator, workspaceReducer } from "./workspaceReducer";
+import { patchActionCreator, jsonPatchReducer } from "./jsonPatchReducer";
 
 import { JsonPatch } from "./contract/JsonPatch";
 
@@ -8,7 +8,7 @@ describe("workspace", () => {
     test("subscribe and patch", () => {
         const workspace = configureStore(
             {
-                reducer: workspaceReducer,
+                reducer: jsonPatchReducer,
                 preloadedState: {
                     users: [
                         {

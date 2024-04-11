@@ -1,4 +1,4 @@
-import { patchActionCreator } from "../workspaceReducer";
+import { patchActionCreator } from "../jsonPatchReducer";
 import { JsonPatch } from "../contract/JsonPatch";
 
 export const pathToPatchAction = (path: string) =>

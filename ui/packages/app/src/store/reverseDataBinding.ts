@@ -2,7 +2,7 @@ import { distinctUntilChanged, from, map, merge, skip, Subscription } from "rxjs
 import { app$ } from "./appStore";
 import { configureStore } from "@reduxjs/toolkit";
 import { isEqual } from "lodash";
-import { workspaceReducer } from "@open-smc/data/src/workspaceReducer";
+import { jsonPatchReducer } from "@open-smc/data/src/jsonPatchReducer";
 import { isBinding } from "@open-smc/layout/src/contract/Binding";
 import { pickBy, toPairs } from "lodash-es";
 import { selectDeep } from "@open-smc/data/src/operators/selectDeep";
@@ -46,7 +46,7 @@ export const reverseDataBinding = (
                             dataContextState => {
                                 const dataContextWorkspace =
                                     configureStore({
-                                        reducer: workspaceReducer,
+                                        reducer: jsonPatchReducer,
                                         preloadedState: dataContextState,
                                         devTools: {
                                             name: areaId

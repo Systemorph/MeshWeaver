@@ -1,5 +1,5 @@
 import { configureStore } from "@reduxjs/toolkit";
-import { workspaceReducer } from "@open-smc/data/src/workspaceReducer";
+import { jsonPatchReducer } from "@open-smc/data/src/jsonPatchReducer";
 import { from } from "rxjs";
 import { serializeMiddleware } from "@open-smc/data/src/middleware/serializeMiddleware";
 import { sampleApp } from "@open-smc/backend/src/SampleApp";
@@ -7,7 +7,7 @@ import { patchRequestMiddleware } from "./middleware/patchRequestMiddleware";
 
 export const dataStore =
     configureStore({
-        reducer: workspaceReducer,
+        reducer: jsonPatchReducer,
         devTools: {
             name: "data"
         },

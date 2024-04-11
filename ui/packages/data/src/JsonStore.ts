@@ -1,20 +1,22 @@
 import { configureStore, Store } from "@reduxjs/toolkit";
 import { from, Observable, Observer } from "rxjs";
-import { WorkspaceAction, workspaceReducer } from "./workspaceReducer";
+import { PatchAction, jsonPatchReducer } from "./jsonPatchReducer";
+import { serializeMiddleware } from "./middleware/serializeMiddleware";
 
-export class Workspace<T> extends Observable<T> implements Observer<WorkspaceAction> {
-    protected store: Store<T>;
+export class JsonStore<T = unknown> extends Observable<T> implements Observer<PatchAction> {
+    protected store: Store;
     protected store$: Observable<T>;
 
-    constructor(protected state?: T, public name?: string) {
+    constructor(protected state: T, public name?: string) {
         super(subscriber => this.store$.subscribe(subscriber));
 
         this.store = configureStore({
             preloadedState: state,
-            reducer: workspaceReducer,
+            reducer: jsonPatchReducer,
             devTools: name ? {name} : false,
             middleware: getDefaultMiddleware =>
-                getDefaultMiddleware({serializableCheck: false})
+                getDefaultMiddleware()
+                    .prepend(serializeMiddleware)
         });
 
         this.store$ = from(this.store);
@@ -26,7 +28,7 @@ export class Workspace<T> extends Observable<T> implements Observer<WorkspaceAct
     error(err: any) {
     }
 
-    next(value: WorkspaceAction) {
+    next(value: PatchAction) {
         this.store.dispatch(value);
     }
 

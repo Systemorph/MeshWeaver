@@ -8,5 +8,11 @@ export class CollectionReference<T> extends WorkspaceReference<Collection<T>> {
         super(`/${collection}`);
     }
 
-    get = (data: any) => data?.[this.collection] as Collection<T>;
+    get(data: any) {
+        return data?.[this.collection] as Collection<T>;
+    }
+
+    static create<T>(props: CollectionReference<T>) {
+        return new CollectionReference<T>(props.collection);
+    }
 }

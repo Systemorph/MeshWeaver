@@ -1,11 +1,11 @@
 import { type } from "@open-smc/serialization/src/type";
 import { Request } from "@open-smc/messaging/src/api/Request";
 import { DataChangedEvent } from "./DataChangedEvent";
-import { WorkspaceReference } from "./WorkspaceReference";
+import { WorkspaceReferenceBase } from "./WorkspaceReferenceBase";
 
 @type("OpenSmc.Data.SubscribeRequest")
 export class SubscribeRequest extends Request<DataChangedEvent> {
-    constructor(public reference: WorkspaceReference) {
+    constructor(public reference: WorkspaceReferenceBase) {
         super(DataChangedEvent)
     }
 }

@@ -1,20 +1,18 @@
 import { distinctUntilChanged, map, merge, skip, Subscription } from "rxjs";
-import { PatchAction } from "./workspaceReducer";
 import { Workspace } from "./Workspace";
 import { selectByReference } from "./operators/selectByReference";
 import { ValueOrReference } from "./contract/ValueOrReference";
 import { extractReferences } from "./operators/extractReferences";
-import { isEqual } from "lodash-es";
-import { pathToPatchAction } from "./operators/pathToPatchAction";
 import { selectDeep } from "./operators/selectDeep";
 import { selectByPath } from "./operators/selectByPath";
-import { referenceToPatchAction } from "./operators/referenceToPatchAction";
+import { pathToUpdateAction } from "./operators/pathToUpdateAction";
+import { referenceToUpdateAction } from "./operators/referenceToUpdateAction";
 
-export class WorkspaceSlice<S, P> extends Workspace<P> {
+export class WorkspaceSlice<S, T> extends Workspace<T> {
     readonly subscription: Subscription;
 
-    constructor(workspace: Workspace<S>, projection: ValueOrReference<P>, name?: string) {
-        super(selectDeep(projection)(workspace.getState()), name);
+    constructor(source: Workspace<S>, projection: ValueOrReference<T>, name?: string) {
+        super(selectDeep(projection)(source.getState()), name);
 
         const references = extractReferences(projection);
 
@@ -23,11 +21,11 @@ export class WorkspaceSlice<S, P> extends Workspace<P> {
                 ...references
                     .map(
                         ([path, reference]) =>
-                            workspace
+                            source
                                 .pipe(map(selectByReference(reference)))
-                                .pipe(distinctUntilChanged(isEqual))
+                                .pipe(distinctUntilChanged())
                                 .pipe(skip(1))
-                                .pipe(map(pathToPatchAction(path)))
+                                .pipe(map(pathToUpdateAction(path)))
                     )
             );
 
@@ -38,25 +36,15 @@ export class WorkspaceSlice<S, P> extends Workspace<P> {
                         ([path, reference]) =>
                             this.store$
                                 .pipe(map(selectByPath(path)))
-                                .pipe(distinctUntilChanged(isEqual))
+                                .pipe(distinctUntilChanged())
                                 .pipe(skip(1))
-                                .pipe(map(referenceToPatchAction(reference)))
+                                .pipe(map(referenceToUpdateAction(reference)))
                     )
             );
 
         this.subscription = new Subscription();
 
         this.subscription.add(source$.subscribe(this.store.dispatch));
-        this.subscription.add(slice$.subscribe(workspace));
-    }
-
-    complete(): void {
-    }
-
-    error(err: any): void {
-    }
-
-    next(value: PatchAction) {
-        this.store.dispatch(value);
+        this.subscription.add(slice$.subscribe(source));
     }
 }
