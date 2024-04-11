@@ -5,6 +5,7 @@ export type Serializable = {
     constructor: {
         $type: string;
     }
+    serialize?: () => {}
 }
 
 export const isSerializable = (value: any): value is Serializable =>
@@ -17,6 +18,11 @@ export const serialize =
             value => {
                 if (isSerializable(value)) {
                     const {$type} = value.constructor;
+
+                    if (value.serialize !== undefined) {
+                        return value.serialize();
+                    }
+
                     return {
                         $type,
                         ...mapValues(value, serialize)

@@ -1,8 +1,7 @@
-import { get, trimStart } from "lodash-es";
+import { get } from "lodash-es";
+import { pointerToArray } from "./pointerToArray";
 
-export const selectByPath = (path: string) => {
-    const lodashPath = jsonPointerToLodashPath(path);
-    return (value: unknown) => lodashPath ? get(value, lodashPath) : value;
+export const selectByPath = <T>(path: string): (data: unknown) => T => {
+    const array = pointerToArray(path);
+    return (value: unknown) => array ? get(value, array) : value;
 }
-
-const jsonPointerToLodashPath = (path: string) => trimStart(path, "/").split("/").join(".");

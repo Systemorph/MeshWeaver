@@ -1,44 +1,62 @@
-import { MessageHub } from "@open-smc/messaging/src/api/MessageHub";
-import { distinctUntilChanged, map, Observable, of, Subscription } from "rxjs";
-import { subscribeToDataChanges } from "@open-smc/data/src/subscribeToDataChanges";
-import { removeArea, setRoot } from "./appReducer";
-import { appStore } from "./appStore";
-import { entityStore, rootArea } from "./entityStore";
+import { distinctUntilChanged, map, Observable, of, Subscription, switchMap } from "rxjs";
+import { subscribeToBackend } from "@open-smc/data/src/subscribeToBackend";
+import { controls, entityStore, jsonStore, rootArea } from "./entityStore";
 import { LayoutAreaReference } from "@open-smc/data/src/contract/LayoutAreaReference";
 import { syncControl } from "./syncControl";
 import { effect } from "@open-smc/utils/src/operators/effect";
-import { withPreviousValue } from "@open-smc/utils/src/operators/withPreviousValue";
-import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
-import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
-import { LayoutStackControl } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
+import { Transport } from "@open-smc/serialization/src/Transport";
+import { sampleApp } from "@open-smc/backend/src/SampleApp";
+import { selectByPath } from "@open-smc/data/src/operators/selectByPath";
 
-export const startSynchronization = (hub: MessageHub) => {
+const backendHub = new Transport(sampleApp);
+
+export const startSynchronization = () => {
     const subscription = new Subscription();
 
-    subscription.add(subscribeToDataChanges(hub, new LayoutAreaReference("/"), entityStore));
+    subscription.add(subscribeToBackend(backendHub, new LayoutAreaReference("/"), jsonStore));
+
+    // subscription.add(synchronizeWorkspace(jsonStore, entityStore));
 
     subscription.add(
         rootArea
             .pipe(distinctUntilChanged())
             .pipe(
                 effect(
-                    rootArea =>
-                        syncControl(
-                            null,
-                            of(
-                                new LayoutStackControl(
-                                    [
-                                        new EntityReference<UiControl>((UiControl as any).$type, rootArea)
-                                    ]
-                                )
+                    rootArea => {
+                        const control$ =
+                            controls.pipe(
+                                map(selectByPath(`/${rootArea}`))
                             )
-                        )
+
+                        return syncControl(rootArea, control$);
+                    }
                 )
             )
-            .subscribe(rootArea => {
-                appStore.dispatch(setRoot(rootArea));
-            })
-    );
+            .subscribe()
+    )
+
+    // subscription.add(
+    //     rootArea
+    //         .pipe(distinctUntilChanged())
+    //         .pipe(
+    //             effect(
+    //                 rootArea =>
+    //                     syncControl(
+    //                         null,
+    //                         of(
+    //                             new LayoutStackControl(
+    //                                 [
+    //                                     new EntityReference<UiControl>((UiControl as any).$type, rootArea)
+    //                                 ]
+    //                             )
+    //                         )
+    //                     )
+    //             )
+    //         )
+    //         .subscribe(rootArea => {
+    //             appStore.dispatch(setRoot(rootArea));
+    //         })
+    // );
 
     return () => subscription.unsubscribe();
 }

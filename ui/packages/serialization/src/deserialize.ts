@@ -14,9 +14,28 @@ export const deserialize = <T = unknown>(value: T | Deserializable<T>): T => {
             if (isDeserializable(value)) {
                 const {$type, ...props} = value;
                 const constructor = getConstructor($type);
-                const instance = constructor ? new constructor() : {};
-                return assign(instance, mapValues(props, deserialize));
+
+                if (constructor) {
+                    if (constructor.deserialize) {
+                        return constructor.deserialize(props);
+                    }
+
+                    return assign(new constructor(), plainObjectDeserializer(props));
+                }
+
+                return plainObjectDeserializer(props);
             }
         }
     )
 }
+
+const plainObjectDeserializer = (props: {}) => mapValues(props, deserialize);
+
+// function canDeserialize<T>(ctor: new (...args: any[]) => any): ctor is CanDeserialize<T> {
+//     return (ctor as CanDeserialize<T>).deserialize !== undefined;
+// }
+//
+// type CanDeserialize<T> = {
+//     new (...args: any[]): T;
+//     deserialize(props: T): T;
+// }

@@ -1,36 +1,27 @@
 import { createAction, createReducer } from '@reduxjs/toolkit';
-import { applyPatches, enablePatches, Patch } from "immer";
-import { identity } from "lodash-es";
-import { JsonPatch, PatchOperation } from "./contract/JsonPatch";
+import { WorkspaceReferenceBase } from "./contract/WorkspaceReferenceBase";
 
-enablePatches();
+export type UpdateByReferencePayload<T = unknown> = {
+    reference: WorkspaceReferenceBase<T>;
+    value: T;
+}
 
-export const patchActionCreator = createAction<JsonPatch>('patch');
+export const updateByReferenceActionCreator = createAction<UpdateByReferencePayload>('update');
 
-export type PatchAction = ReturnType<typeof patchActionCreator>;
+export type UpdateByReferenceAction = ReturnType<typeof updateByReferenceActionCreator>;
 
-export const patchRequest = createAction<JsonPatch>('patchRequest');
-
-export type WorkspaceAction = PatchAction;
+export type WorkspaceAction = UpdateByReferenceAction;
 
 export const workspaceReducer = createReducer(
     undefined,
     builder => {
         builder
             .addCase(
-                patchActionCreator,
-                (state, action) =>
-                    applyPatches(state, action.payload.operations.map(toImmerPatch))
+                updateByReferenceActionCreator,
+                (state, action) => {
+                    const {reference, value} = action.payload;
+                    reference.set(state, value);
+                }
             );
     }
 );
-
-function toImmerPatch(patch: PatchOperation): Patch {
-    const {op, path, value} = patch;
-
-    return {
-        op,
-        path: path?.split("/").filter(identity),
-        value
-    }
-}

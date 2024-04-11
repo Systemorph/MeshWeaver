@@ -1,5 +1,5 @@
 import { configureStore } from "@reduxjs/toolkit";
-import { workspaceReducer } from "@open-smc/data/src/workspaceReducer";
+import { jsonPatchReducer } from "@open-smc/data/src/jsonPatchReducer";
 import { from, map } from "rxjs";
 import { deserialize } from "@open-smc/serialization/src/deserialize";
 import { serializeMiddleware } from "@open-smc/data/src/middleware/serializeMiddleware";
@@ -16,6 +16,8 @@ import { Collection } from "@open-smc/data/src/contract/Collection";
 import { WorkspaceProjection } from "@open-smc/data/src/WorkspaceProjection";
 import { WorkspaceSlice } from "@open-smc/data/src/WorkspaceSlice";
 import { sliceByPath } from "@open-smc/data/src/sliceByPath";
+import { JsonStore } from "@open-smc/data/src/JsonStore";
+import { selectByPath } from "@open-smc/data/src/operators/selectByPath";
 
 // export const store =
 //     configureStore<EntityStore>({
@@ -31,11 +33,12 @@ import { sliceByPath } from "@open-smc/data/src/sliceByPath";
 //                 ) as any,
 //     });
 
-export const entityStore =
-    new Workspace<EntityStore>(undefined, "entityStore");
+export const jsonStore = new JsonStore<EntityStore>(undefined, "jsonStore");
+
+export const entityStore = new Workspace<EntityStore>(undefined, "entityStore");
 
 export const rootArea =
-    sliceByPath<EntityStore, string>(entityStore, "/reference/area");
+    entityStore.pipe(map(selectByPath<string>("/reference/area")));
 
 export const collections =
     sliceByPath<EntityStore, Collection<Collection>>(entityStore, "/collections");
@@ -43,4 +46,4 @@ export const collections =
 const uiControlType = (UiControl as any).$type;
 
 export const controls =
-    sliceByPath<Collection, Collection<UiControl>>(collections, `/${uiControlType}`);
+    collections.pipe(map(selectByPath<Collection<UiControl>>(`/${uiControlType}`)));

@@ -1,12 +1,16 @@
-import { get, trimStart } from "lodash-es";
+import { set } from "lodash-es";
 import { WorkspaceReferenceBase } from "./WorkspaceReferenceBase";
+import { selectByPath } from "../operators/selectByPath";
+import { pointerToArray } from "../operators/pointerToArray";
 
 export class WorkspaceReference<T = unknown> extends WorkspaceReferenceBase<T> {
     constructor(public path: string) {
         super();
     }
 
-    get = (data: unknown): T => get(data, pointerToPath(this.path));
-}
+    get = selectByPath(this.path);
 
-const pointerToPath = (path: string) => trimStart(path, "/").split("/");
+    set(data: object, value: T) {
+        set(data, pointerToArray(this.path), value);
+    }
+}

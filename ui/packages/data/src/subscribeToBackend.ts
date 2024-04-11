@@ -1,6 +1,6 @@
 import { MessageHub } from "@open-smc/messaging/src/api/MessageHub";
 import { sendMessage } from "@open-smc/messaging/src/sendMessage";
-import { patchActionCreator } from "./workspaceReducer";
+import { PatchAction, patchActionCreator } from "./jsonPatchReducer";
 import { messageOfType } from "@open-smc/messaging/src/operators/messageOfType";
 import { filter, map, Observer } from "rxjs";
 import { SubscribeRequest } from "./contract/SubscribeRequest";
@@ -8,16 +8,15 @@ import { UnsubscribeDataRequest } from "./contract/UnsubscribeDataRequest";
 import { DataChangedEvent } from "./contract/DataChangedEvent";
 import { JsonPatch } from "./contract/JsonPatch";
 import { sendRequest } from "@open-smc/messaging/src/sendRequest";
-import { WorkspaceReference } from "./contract/WorkspaceReference";
 import { isEqual } from "lodash-es";
 import { unpack } from "@open-smc/messaging/src/operators/unpack";
-import { Action } from "redux";
 import { log } from "@open-smc/utils/src/operators/log";
+import { WorkspaceReferenceBase } from "./contract/WorkspaceReferenceBase";
 
-export function subscribeToDataChanges(
+export function subscribeToBackend(
     hub: MessageHub,
-    reference: WorkspaceReference,
-    observer: Observer<Action>
+    reference: WorkspaceReferenceBase,
+    observer: Observer<PatchAction>
 ) {
     const subscription =
         hub

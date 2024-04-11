@@ -1,5 +1,5 @@
 import { JsonPatch, OperationType } from "../contract/JsonPatch";
-import { patchActionCreator } from "../workspaceReducer";
+import { patchActionCreator } from "../jsonPatchReducer";
 
 export const toPatch = (path: string, op: OperationType) =>
     (value: unknown) =>
@@ -8,3 +8,4 @@ export const toPatch = (path: string, op: OperationType) =>
                 {op, path, value}
             ])
         );
+

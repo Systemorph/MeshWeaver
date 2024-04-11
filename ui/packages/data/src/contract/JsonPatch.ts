@@ -4,6 +4,16 @@ import { type } from "@open-smc/serialization/src/type";
 export class JsonPatch {
     constructor(public operations: PatchOperation[]) {
     }
+
+    serialize() {
+        return {...this};
+    }
+
+    // keep raw operations
+    static deserialize(props: JsonPatch) {
+        const {operations} = props;
+        return new JsonPatch(operations);
+    }
 }
 
 export interface PatchOperation {
