@@ -1,4 +1,6 @@
-﻿namespace OpenSmc.Application.Host;
+﻿using OpenSmc.Application.SignalR;
+
+namespace OpenSmc.Application.Host;
 
 public class Program
 {
@@ -6,7 +8,13 @@ public class Program
     {
         var builder = WebApplication.CreateBuilder(args);
 
+        builder.Services.ConfigureApplicationSignalR();
+
         using var app = builder.Build();
+
+        app
+            .UseRouting()
+            .UseApplicationSignalR();
 
         await app.RunAsync();
     }
