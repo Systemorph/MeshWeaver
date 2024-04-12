@@ -1,5 +1,7 @@
 ﻿using FluentAssertions;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Application.Host;
 using OpenSmc.Fixture;
 using OpenSmc.Messaging;
 using OpenSmc.ServiceProvider;
@@ -8,15 +10,17 @@ using Xunit.Abstractions;
 
 namespace OpenSmc.Application.SignalR.Integration.Test;
 
-public class SignalRBasicTest : TestBase
+public class SignalRBasicTest : TestBase, IClassFixture<WebApplicationFactory<Program>>
 {
+    private readonly WebApplicationFactory<Program> webAppFactory;
     private static readonly UiAddress ClientAddress = new(Guid.NewGuid().ToString());
     private static readonly ApplicationAddress ApplicationAddress = new("testApp", "dev");
 
     [Inject] private IMessageHub Client;
 
-    public SignalRBasicTest(ITestOutputHelper toh) : base(toh)
+    public SignalRBasicTest(WebApplicationFactory<Program> webAppFactory, ITestOutputHelper toh) : base(toh)
     {
+        this.webAppFactory = webAppFactory;
         Services.AddSingleton<IMessageHub>(sp => sp.CreateMessageHub(ClientAddress, ConfigureClient));
     }
 
