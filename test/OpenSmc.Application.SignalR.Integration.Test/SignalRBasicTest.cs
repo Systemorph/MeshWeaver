@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Fixture;
 using OpenSmc.Messaging;
+using OpenSmc.ServiceProvider;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -9,6 +10,8 @@ namespace OpenSmc.Application.SignalR.Integration.Test;
 public class SignalRBasicTest : TestBase
 {
     private static readonly UiAddress ClientAddress = new(Guid.NewGuid().ToString());
+
+    [Inject] private IMessageHub Client;
 
     public SignalRBasicTest(ITestOutputHelper toh) : base(toh)
     {
