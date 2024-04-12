@@ -9,6 +9,7 @@ using OpenSmc.Messaging;
 using OpenSmc.ServiceProvider;
 using Xunit;
 using Xunit.Abstractions;
+using static OpenSmc.Application.SignalR.Integration.Test.TestSetup.SignalRTestClientConfig;
 using static OpenSmc.Application.SignalR.SignalRExtensions;
 
 namespace OpenSmc.Application.SignalR.Integration.Test;
@@ -30,7 +31,11 @@ public class SignalRBasicTest : TestBase, IClassFixture<WebApplicationFactory<Pr
         Services.AddSingleton<IMessageHub>(sp => sp.CreateMessageHub(ClientAddress, ConfigureClient));
     }
 
-    private MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) => configuration;
+    private MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+        => configuration
+            .WithRoutes(forward => forward
+                .RouteAddress<object>((_, d, cancellationToken) => SendThroughSignalR(d.Package(forward.Hub.SerializationOptions), Connection, cancellationToken))
+            );
 
     [Fact]
     public async Task RequestResponse()
