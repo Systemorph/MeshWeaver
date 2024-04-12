@@ -1,4 +1,6 @@
-﻿using OpenSmc.Fixture;
+﻿using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Fixture;
+using OpenSmc.Messaging;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -10,7 +12,10 @@ public class SignalRBasicTest : TestBase
 
     public SignalRBasicTest(ITestOutputHelper toh) : base(toh)
     {
+        Services.AddSingleton<IMessageHub>(sp => sp.CreateMessageHub(ClientAddress, ConfigureClient));
     }
+
+    private MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) => configuration;
 
     [Fact]
     public void RequestResponse()
