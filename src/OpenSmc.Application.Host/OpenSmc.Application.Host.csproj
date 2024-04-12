@@ -2,4 +2,7 @@
   <PropertyGroup>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\OpenSmc.Application.SignalR\OpenSmc.Application.SignalR.csproj" />
+  </ItemGroup>
 </Project>
