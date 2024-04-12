@@ -1,4 +1,5 @@
-﻿using FluentAssertions;
+﻿using System.Diagnostics;
+using FluentAssertions;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,6 +18,8 @@ public class SignalRBasicTest : TestBase, IClassFixture<WebApplicationFactory<Pr
     private readonly WebApplicationFactory<Program> webAppFactory;
     private static readonly UiAddress ClientAddress = new(Guid.NewGuid().ToString());
     private static readonly ApplicationAddress ApplicationAddress = new("testApp", "dev");
+
+    private static readonly TimeSpan signalRServerDebugTimeout = TimeSpan.FromMinutes(7);
 
     [Inject] private IMessageHub Client;
     private HubConnection Connection { get; set; }
@@ -54,6 +57,9 @@ public class SignalRBasicTest : TestBase, IClassFixture<WebApplicationFactory<Pr
                 }
             )
             .Build();
+
+        if (Debugger.IsAttached)
+            Connection.ServerTimeout = signalRServerDebugTimeout;
 
         await Connection.StartAsync();
     }
