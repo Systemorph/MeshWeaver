@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Fixture;
 using OpenSmc.Messaging;
 using OpenSmc.ServiceProvider;
@@ -30,6 +31,7 @@ public class SignalRBasicTest : TestBase
         var response = await Client.AwaitResponse(new TestRequest(), o => o.WithTarget(ApplicationAddress));
 
         // assert
+        response.Should().BeAssignableTo<IMessageDelivery<TestResponse>>();
     }
 
     record TestRequest : IRequest<TestResponse>;
