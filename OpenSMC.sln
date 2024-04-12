@@ -149,6 +149,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Application.Host", 
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Application.SignalR", "src\OpenSmc.Application.SignalR\OpenSmc.Application.SignalR.csproj", "{0A6B31C9-1504-4858-ADF4-1011423D5639}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Application.SignalR.Integration.Test", "test\OpenSmc.Application.SignalR.Integration.Test\OpenSmc.Application.SignalR.Integration.Test.csproj", "{5FC1539E-CC4F-48F0-ABFB-3939DA57F349}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -423,6 +425,10 @@ Global
 		{0A6B31C9-1504-4858-ADF4-1011423D5639}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{0A6B31C9-1504-4858-ADF4-1011423D5639}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{0A6B31C9-1504-4858-ADF4-1011423D5639}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5FC1539E-CC4F-48F0-ABFB-3939DA57F349}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5FC1539E-CC4F-48F0-ABFB-3939DA57F349}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5FC1539E-CC4F-48F0-ABFB-3939DA57F349}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5FC1539E-CC4F-48F0-ABFB-3939DA57F349}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -448,6 +454,7 @@ Global
 		{8B2F6D70-4F8D-41D1-A902-BF1F080CB13B} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{DBC408AF-DE28-4B73-AC2E-8E451F2B9EF2} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{F1320357-8306-4633-A651-D8C190AF1189} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
+		{5FC1539E-CC4F-48F0-ABFB-3939DA57F349} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {331ADDC7-02A4-4F0E-8C47-2060003082F2}
