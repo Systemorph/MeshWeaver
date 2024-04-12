@@ -22,11 +22,12 @@ public class SignalRBasicTest : TestBase
     private MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) => configuration;
 
     [Fact]
-    public void RequestResponse()
+    public async Task RequestResponse()
     {
         // arrange
 
         // act
+        var response = await Client.AwaitResponse(new TestRequest(), o => o.WithTarget(ApplicationAddress));
 
         // assert
     }
