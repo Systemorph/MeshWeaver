@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Application.Host;
 using OpenSmc.Fixture;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 using OpenSmc.ServiceProvider;
 using Xunit;
 using Xunit.Abstractions;
@@ -33,6 +34,7 @@ public class SignalRBasicTest : TestBase, IClassFixture<WebApplicationFactory<Pr
 
     private MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => configuration
+            .WithTypes(typeof(TestRequest), typeof(ApplicationAddress), typeof(UiAddress))
             .WithRoutes(forward => forward
                 .RouteAddress<object>((_, d, cancellationToken) => SendThroughSignalR(d.Package(forward.Hub.SerializationOptions), Connection, cancellationToken))
             );
