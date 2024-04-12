@@ -34,6 +34,11 @@ public class SignalRBasicTest : TestBase
         response.Should().BeAssignableTo<IMessageDelivery<TestResponse>>();
     }
 
+    public async override Task InitializeAsync()
+    {
+        await base.InitializeAsync();
+    }
+
     record TestRequest : IRequest<TestResponse>;
     record TestResponse;
 }
