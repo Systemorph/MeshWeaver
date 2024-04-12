@@ -1,9 +1,15 @@
-﻿using Xunit;
+﻿using OpenSmc.Fixture;
+using Xunit;
+using Xunit.Abstractions;
 
 namespace OpenSmc.Application.SignalR.Integration.Test;
 
-public class SignalRBasicTest
+public class SignalRBasicTest : TestBase
 {
+    public SignalRBasicTest(ITestOutputHelper toh) : base(toh)
+    {
+    }
+
     [Fact]
     public void RequestResponse()
     {
