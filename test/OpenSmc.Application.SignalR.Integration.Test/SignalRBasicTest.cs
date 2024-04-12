@@ -30,4 +30,7 @@ public class SignalRBasicTest : TestBase
 
         // assert
     }
+
+    record TestRequest : IRequest<TestResponse>;
+    record TestResponse;
 }
