@@ -10,6 +10,7 @@ namespace OpenSmc.Application.SignalR.Integration.Test;
 public class SignalRBasicTest : TestBase
 {
     private static readonly UiAddress ClientAddress = new(Guid.NewGuid().ToString());
+    private static readonly ApplicationAddress ApplicationAddress = new("testApp", "dev");
 
     [Inject] private IMessageHub Client;
 
