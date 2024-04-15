@@ -1,6 +1,7 @@
 ﻿using JetBrains.Annotations;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
+using OpenSmc.Application.Orleans;
 using OpenSmc.Messaging;
 using OpenSmc.Serialization;
 
@@ -25,5 +26,6 @@ public class ApplicationHub(IClusterClient clusterClient, ILogger<ApplicationHub
     {
         logger.LogTrace("Received incoming message in SignalR Hub to deliver: {delivery}", delivery);
         var grainId = "{ApplicationAddress should be here}"; // TODO V10: put appropriate ApplicationAddress here (2024/04/15, Dmitry Kalabin)
+        var grain = clusterClient.GetGrain<IApplicationGrain>(grainId);
     }
 }
