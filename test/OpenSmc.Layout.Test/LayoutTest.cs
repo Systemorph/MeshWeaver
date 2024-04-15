@@ -126,10 +126,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream(new HostAddress(), reference);
-        var content = await stream.GetControl($"{reference.Area}/Content").FirstAsync();
+        var reportArea = $"{reference.Area}/Content";
+        var content = await stream.GetControl(reportArea).FirstAsync();
         content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
 
-        var toolbar = (TextBoxControl)await stream.GetControl($"{reference.Area}/Toolbar").FirstAsync();
+        var toolbarArea = $"{reference.Area}/Toolbar";
+        var toolbar = (TextBoxControl)await stream.GetControl(toolbarArea).FirstAsync();
         toolbar.Data.Should().BeOfType<Binding>().Which.Path.Should().Be("year");
         var toolbarDataReference = toolbar.DataContext.Should().BeOfType<EntityReference>().Which;
         var toolbarData = (Toolbar)await stream.GetData(toolbarDataReference).FirstAsync();
@@ -137,7 +139,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         stream.Update(store => store.Update(toolbarDataReference, toolbarData with{Year = 2025}));
 
-        var updatedControls = await stream.GetControl(reference.Area).TakeUntil(o => o is HtmlControl html && !html.Data.ToString()!.Contains("2024")).ToArray();
+        var updatedControls = await stream.GetControl(reportArea).TakeUntil(o => o is HtmlControl html && !html.Data.ToString()!.Contains("2024")).ToArray();
         updatedControls.Last().Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2025");
 
     }
