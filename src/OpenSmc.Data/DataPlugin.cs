@@ -113,7 +113,6 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
     private void Initialize(DataContext dataContext)
     {
 
-        var typeSources = new Dictionary<string, ITypeSource>();
 
         logger.LogDebug($"Starting data plugin at address {Address}");
         var dataContextStreams = dataContext.Initialize().ToArray();
@@ -124,7 +123,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
             typeSources[ts.CollectionName] = ts;
 
 
-        InitializeState(new(Hub, new EntityStore(), typeSources, (state, reference) => ReduceManager.Reduce(state, reference)));
+        InitializeState(CreateState(new EntityStore()));
 
 
 
@@ -145,6 +144,11 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
             initializeObserver.Disposables.Add(stream.Subscribe(initializeObserver));
         }
 
+    }
+
+    public WorkspaceState CreateState(EntityStore entityStore)
+    {
+        return new(Hub, new EntityStore(), typeSources, ReduceManager.Reduce);
     }
 
 
@@ -208,6 +212,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
     }
 
 
+
     private readonly Subject<DataChangedEvent> externalSynchronizationStream = new();
     IMessageDelivery IMessageHandler<DataChangedEvent>.HandleMessage(IMessageDelivery<DataChangedEvent> request)
     {
@@ -221,6 +226,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
 
 
     private readonly ILogger<DataPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<DataPlugin>>();
+    private readonly Dictionary<string, ITypeSource> typeSources = new();
 
     private IMessageDelivery Subscribe(IMessageDelivery<SubscribeRequest> request)
     {

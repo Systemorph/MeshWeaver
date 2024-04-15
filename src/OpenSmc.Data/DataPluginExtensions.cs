@@ -17,11 +17,12 @@ public static class DataPluginExtensions
             .WithServices(sc => sc.AddScoped<IWorkspace, DataPlugin>())
             .WithSerialization(serialization => serialization.WithOptions(options =>
             {
-                if(!options.Converters.Any(c => c is EntityStoreConverter))
+                if (!options.Converters.Any(c => c is WorkspaceConverter))
+                    options.Converters.Insert(0, new WorkspaceConverter(serialization.Hub));
+                if (!options.Converters.Any(c => c is EntityStoreConverter))
                     options.Converters.Insert(0, new EntityStoreConverter(serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()));
                 if (!options.Converters.Any(c => c is InstancesInCollectionConverter))
                     options.Converters.Insert(0, new InstancesInCollectionConverter());
-
                 if (!options.Converters.Any(c => c is DataChangedEventConverter))
                     options.Converters.Insert(0, new DataChangedEventConverter());
             }))

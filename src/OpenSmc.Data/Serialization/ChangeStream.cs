@@ -113,13 +113,13 @@ public record ChangeStream<TStream> : IDisposable,
             dataChangedStream.OnNext(dataChanged);
     }
 
-    private DataChangedEvent GetDataChanged(ChangeItem<TStream> value)
+    private DataChangedEvent GetDataChanged(ChangeItem<TStream> change)
     {
-        var node = JsonSerializer.SerializeToNode(value, Hub.SerializationOptions);
+        var node = JsonSerializer.SerializeToNode(change.Value, Hub.SerializationOptions);
 
 
         var dataChanged = LastSynchronized == null
-            ? GetFullDataChange(value)
+            ? GetFullDataChange(change)
             : GetPatch(node);
         LastSynchronized = node;
         return dataChanged;
