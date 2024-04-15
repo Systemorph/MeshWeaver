@@ -323,4 +323,5 @@ _ => throw new NotSupportedException()
     }
 
 
+    public ITypeSource GetTypeSource(Type type) => TypeSources.GetValueOrDefault(GetCollectionName(type));
 }

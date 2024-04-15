@@ -70,4 +70,6 @@ public static class DataPluginExtensions
 
     public static ChangeItem<TStream> SetValue<TStream>(this ChangeItem<WorkspaceState> changeItem, TStream value)
         => new(changeItem.Address, changeItem.Reference, value, changeItem.ChangedBy);
+    public static ChangeItem<TStream> SetValue<TStream>(this ChangeItem<EntityStore> changeItem, TStream value)
+        => new(changeItem.Address, changeItem.Reference, value, changeItem.ChangedBy);
 }

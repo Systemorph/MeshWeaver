@@ -23,6 +23,16 @@ public record EntityStore
         {
             Collections = Collections.SetItem(collection, update.Invoke(Collections.GetValueOrDefault(collection) ?? new InstanceCollection()))
         };
+
+    public EntityStore Update(WorkspaceReference reference, object value)
+    {
+        return reference switch
+        {
+            EntityReference entityReference => Update(entityReference.Collection, c => c.Update(entityReference.Id, value)),
+            CollectionReference collectionReference => Update(collectionReference.Collection, c => c.Merge((InstanceCollection)value)),
+            _ => throw new NotSupportedException($"reducer type {reference.GetType().FullName} not supported")
+        };
+    }
     public object Reduce(WorkspaceReference reference)
         => ReduceImpl((dynamic)reference);
 

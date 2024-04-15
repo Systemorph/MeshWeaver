@@ -20,13 +20,6 @@ public static class Template
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
         view = view with { DataContext = data };
-                //.WithBuildAction((c, sp) =>
-                //                 {
-                //                     var eventsRegistry = sp.GetService<ITypeRegistry>();
-                //                     foreach (var type in types)
-                //                         eventsRegistry.WithType(type);
-                //                     return c;
-                //                 });
         return view;
     }
 
