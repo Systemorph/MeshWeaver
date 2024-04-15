@@ -102,7 +102,8 @@ public record ChangeStream<TStream> : IDisposable,
     private void Update(ChangeItem<TStream> value)
     {
         var dataChanged = GetDataChanged(value);
-        changes.OnNext(new PatchChangeRequest(Address, Reference, (JsonPatch)dataChanged.Change));
+        if(dataChanged != null)
+            changes.OnNext(new PatchChangeRequest(Address, Reference, (JsonPatch)dataChanged.Change));
     }
 
     private void Synchronize(ChangeItem<TStream> value)
