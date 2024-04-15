@@ -1,0 +1,5 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>OpenSmc.Application.Orleans</RootNamespace>
+  </PropertyGroup>
+</Project>
