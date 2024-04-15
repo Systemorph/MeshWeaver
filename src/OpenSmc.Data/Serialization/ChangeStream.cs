@@ -2,7 +2,6 @@
 using System.Reactive.Subjects;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Humanizer;
 using Json.Patch;
 using OpenSmc.Messaging;
 
