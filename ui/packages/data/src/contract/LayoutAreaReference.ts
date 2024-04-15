@@ -1,8 +1,8 @@
 import { type } from "@open-smc/serialization/src/type";
-import { WorkspaceReferenceBase } from "./WorkspaceReferenceBase";
+import { WorkspaceReference } from "./WorkspaceReference";
 
 @type("OpenSmc.Data.LayoutAreaReference")
-export class LayoutAreaReference extends WorkspaceReferenceBase {
+export class LayoutAreaReference extends WorkspaceReference {
     options: {}
 
     constructor(public area: string) {
@@ -10,6 +10,10 @@ export class LayoutAreaReference extends WorkspaceReferenceBase {
     }
 
     get(data: unknown) {
+        throw 'Should never be used';
+    }
+
+    set(data: unknown) {
         throw 'Should never be used';
     }
 }

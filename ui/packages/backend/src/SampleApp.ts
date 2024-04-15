@@ -58,7 +58,7 @@ export class SampleApp extends Observable<MessageDelivery> implements Observer<M
                         produceWithPatches(
                             basicStoreExample,
                             state => {
-                                state.instances.LineOfBusiness["1"].DisplayName = "Hello";
+                                state.collections.LineOfBusiness["1"].DisplayName = "Hello";
                             }
                         );
 

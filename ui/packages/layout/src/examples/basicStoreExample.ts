@@ -4,7 +4,7 @@ export const basicStoreExample = {
         $type: "OpenSmc.Data.LayoutAreaReference",
         area: "MainWindow"
     },
-    instances: {
+    collections: {
         "OpenSmc.Layout.UiControl": {
             MainWindow: {
                 $type: "OpenSmc.Layout.Composition.LayoutStackControl",

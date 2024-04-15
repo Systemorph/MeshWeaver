@@ -5,4 +5,4 @@ import './JsonPathReference';
 import './LayoutAreaReference';
 import './SubscribeRequest';
 import './UnsubscribeDataRequest';
-import './WorkspaceReference';
+import './PathReferenceBase';

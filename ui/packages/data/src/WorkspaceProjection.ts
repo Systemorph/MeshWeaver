@@ -1,12 +1,12 @@
 import { map, Observable, Observer } from "rxjs";
-import { PatchAction, patchActionCreator } from "./jsonPatchReducer";
+import { JsonPatchAction, jsonPatchActionCreator } from "./jsonPatchReducer";
 import { Workspace } from "./Workspace";
-import { WorkspaceReference } from "./contract/WorkspaceReference";
+import { PathReferenceBase } from "./contract/PathReferenceBase";
 import { selectByReference } from "./operators/selectByReference";
 import { JsonPatch } from "./contract/JsonPatch";
 
-export class WorkspaceProjection<T, P> extends Observable<P> implements Observer<PatchAction> {
-    constructor(private workspace: Workspace<T>, private reference: WorkspaceReference<P>) {
+export class WorkspaceProjection<T, P> extends Observable<P> implements Observer<JsonPatchAction> {
+    constructor(private workspace: Workspace<T>, private reference: PathReferenceBase<P>) {
         super(
             subscriber =>
                 workspace
@@ -25,12 +25,12 @@ export class WorkspaceProjection<T, P> extends Observable<P> implements Observer
     error(err: any): void {
     }
 
-    next(value: PatchAction) {
+    next(value: JsonPatchAction) {
         this.workspace.next(mapPatch(value, this.reference));
     }
 }
 
-function mapPatch(patchAction: PatchAction, reference: WorkspaceReference) {
+function mapPatch(patchAction: JsonPatchAction, reference: PathReferenceBase) {
     const {payload} = patchAction;
 
     const mappedOperations =
@@ -40,5 +40,5 @@ function mapPatch(patchAction: PatchAction, reference: WorkspaceReference) {
             value
         }));
 
-    return patchActionCreator(new JsonPatch(mappedOperations));
+    return jsonPatchActionCreator(new JsonPatch(mappedOperations));
 }

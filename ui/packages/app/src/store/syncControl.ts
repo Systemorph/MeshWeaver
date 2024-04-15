@@ -3,7 +3,6 @@ import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
 import { collections, controls } from "./entityStore";
 import { app$, appStore } from "./appStore";
 import { LayoutStackControl } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
-import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
 import { isEqual, keys, pickBy, toPairs, omit } from "lodash-es";
 import { removeArea, setArea } from "./appReducer";
 import { effect } from "@open-smc/utils/src/operators/effect";
@@ -12,6 +11,7 @@ import { expandBindings } from "./expandBindings";
 import { Binding, isBinding } from "@open-smc/layout/src/contract/Binding";
 import { bindingToPatchAction } from "./bindingToPatchAction";
 import { sliceByReference } from "@open-smc/data/src/sliceByReference";
+import { distinctUntilEqual } from "@open-smc/data/src/operators/distinctUntilEqual";
 
 export const syncControl = (
     areaId: string,
@@ -25,7 +25,7 @@ export const syncControl = (
     const nestedAreas$ =
         control$
             .pipe(map(nestedAreas))
-            .pipe(distinctUntilChanged<EntityReference<UiControl>[]>(isEqual));
+            .pipe(distinctUntilChanged());
 
     subscription.add(
         nestedAreas$
@@ -47,12 +47,12 @@ export const syncControl = (
     const dataContext$ =
         control$
             .pipe(map(control => control?.dataContext))
-            .pipe(distinctUntilChanged(isEqual));
+            .pipe(distinctUntilChanged());
 
     const props$ =
         control$
             .pipe(map(control => control && omit(control, 'dataContext')))
-            .pipe(distinctUntilChanged(isEqual));
+            .pipe(distinctUntilEqual());
 
     subscription.add(
         dataContext$
@@ -65,7 +65,7 @@ export const syncControl = (
                             sliceByReference(collections, dataContext, areaId);
 
                         const setArea$ =
-                            combineLatest([dataContextWorkspace, control$.pipe(distinctUntilChanged<UiControl>(isEqual))])
+                            combineLatest([dataContextWorkspace, control$.pipe(distinctUntilChanged())])
                                 .pipe(
                                     map(
                                         ([dataContextState, control]) => {
@@ -105,7 +105,7 @@ export const syncControl = (
                                                         ([key, binding]) =>
                                                             app$
                                                                 .pipe(map(appState => appState.areas[areaId].control.props[key]))
-                                                                .pipe(distinctUntilChanged(isEqual))
+                                                                .pipe(distinctUntilChanged())
                                                                 .pipe(skip(1))
                                                                 .pipe(map(bindingToPatchAction(binding)))
                                                     )

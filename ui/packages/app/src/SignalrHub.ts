@@ -1,14 +1,15 @@
 import { SignalrConnection } from "./makeSignalrConnection";
-import { Observable } from "rxjs";
+import { Observable, Observer } from "rxjs";
 import { MessageDelivery } from "@open-smc/messaging/src/api/MessageDelivery";
-import { MessageHub } from "@open-smc/messaging/src/api/MessageHub";
+import { serialize } from "@open-smc/serialization/src/serialize";
+import { deserialize } from "@open-smc/serialization/src/deserialize";
 
 const methodName = "DeliverMessage";
 
-export class SignalrHub extends Observable<MessageDelivery> implements MessageHub {
+export class SignalrHub extends Observable<MessageDelivery> implements Observer<MessageDelivery> {
     constructor(private connection: SignalrConnection) {
         super(subscriber => {
-            const handler = (args: any) => subscriber.next(args);
+            const handler = (message: any) => subscriber.next(deserialize(message));
             connection.connection.on(methodName, handler);
             subscriber.add(() => connection.connection.off(methodName, handler));
         });
@@ -21,7 +22,7 @@ export class SignalrHub extends Observable<MessageDelivery> implements MessageHu
     }
 
     next(value: MessageDelivery) {
-        void this.connection.connection.invoke(methodName, value);
+        void this.connection.connection.invoke(methodName, serialize(value));
     }
 }
 

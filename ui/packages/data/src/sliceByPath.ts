@@ -1,9 +1,9 @@
 import { Workspace } from "./Workspace";
 import { WorkspaceSlice } from "./WorkspaceSlice";
-import { WorkspaceReference } from "./contract/WorkspaceReference";
+import { PathReference } from "./contract/PathReferenceBase";
 
 export const sliceByPath = <S, T>(workspace: Workspace<S>, path: Paths<S>) =>
-    new WorkspaceSlice(workspace, new WorkspaceReference<T>(path), `${workspace.name}${path}`);
+    new WorkspaceSlice(workspace, new PathReference<T>(path), `${workspace.name}${path}`);
 
 type Paths<T> =
     T extends object ? {

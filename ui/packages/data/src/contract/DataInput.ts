@@ -1,5 +1,5 @@
-import { WorkspaceReference } from "./WorkspaceReference";
+import { PathReferenceBase } from "./PathReferenceBase";
 
 export type DataInput = {
-    [key: string]: unknown | WorkspaceReference;
+    [key: string]: unknown | PathReferenceBase;
 }

@@ -1,6 +1,6 @@
 import { expect, test, describe, jest } from "@jest/globals";
 import { configureStore } from "@reduxjs/toolkit";
-import { patchActionCreator, jsonPatchReducer } from "./jsonPatchReducer";
+import { jsonPatchActionCreator, jsonPatchReducer } from "./jsonPatchReducer";
 
 import { JsonPatch } from "./contract/JsonPatch";
 
@@ -24,7 +24,7 @@ describe("workspace", () => {
         workspace.subscribe(listener);
 
         workspace.dispatch(
-            patchActionCreator(
+            jsonPatchActionCreator(
                 new JsonPatch(
                     [
                         {

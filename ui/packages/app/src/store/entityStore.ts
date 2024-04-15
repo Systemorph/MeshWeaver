@@ -10,13 +10,13 @@ import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
 import { patchRequestMiddleware } from "./middleware/patchRequestMiddleware";
 import { sampleApp } from "@open-smc/backend/src/SampleApp";
 import { Workspace } from "@open-smc/data/src/Workspace";
-import { WorkspaceReference } from "@open-smc/data/src/contract/WorkspaceReference";
+import { PathReferenceBase } from "@open-smc/data/src/contract/PathReferenceBase";
 import { JsonPathReference } from "@open-smc/data/src/contract/JsonPathReference";
 import { Collection } from "@open-smc/data/src/contract/Collection";
 import { WorkspaceProjection } from "@open-smc/data/src/WorkspaceProjection";
 import { WorkspaceSlice } from "@open-smc/data/src/WorkspaceSlice";
 import { sliceByPath } from "@open-smc/data/src/sliceByPath";
-import { JsonStore } from "@open-smc/data/src/JsonStore";
+import { ObjectStore } from "@open-smc/data/src/ObjectStore";
 import { selectByPath } from "@open-smc/data/src/operators/selectByPath";
 
 // export const store =
@@ -33,7 +33,7 @@ import { selectByPath } from "@open-smc/data/src/operators/selectByPath";
 //                 ) as any,
 //     });
 
-export const jsonStore = new JsonStore<EntityStore>(undefined, "jsonStore");
+// export const jsonStore = new ObjectStore<EntityStore>(undefined, "jsonStore");
 
 export const entityStore = new Workspace<EntityStore>(undefined, "entityStore");
 
