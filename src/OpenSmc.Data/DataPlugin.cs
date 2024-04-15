@@ -202,9 +202,9 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
         State.Rollback();
     }
 
-    public IObservable<TReference> GetStream<TReference>(WorkspaceReference<TReference> reference)
+    public IObservable<ChangeItem<TStream>> GetStream<TStream>(WorkspaceReference<TStream> reference)
     {
-        return ReduceManager.ReduceStream(Stream.Select(s => s.Value), reference);
+        return ReduceManager.ReduceStream(Stream, reference);
     }
 
 

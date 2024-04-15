@@ -18,5 +18,5 @@ public interface IWorkspace
 
     void Commit();
     void Rollback();
-    IObservable<TReference> GetStream<TReference>(WorkspaceReference<TReference> reference);
+    IObservable<ChangeItem<TReference>> GetStream<TReference>(WorkspaceReference<TReference> reference);
 }

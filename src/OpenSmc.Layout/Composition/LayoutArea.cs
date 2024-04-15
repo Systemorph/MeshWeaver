@@ -28,7 +28,7 @@ public record LayoutArea
         updateStream.Scan(new ChangeItem<WorkspaceState>(
                 hub.Address,
                 Reference,
-                new WorkspaceState(state.Hub, new(), state.TypeSources, (ci,r) => ci.SetValue(ci.Value.Reduce(r))), 
+                new WorkspaceState(state.Hub, new(), state.TypeSources, (ci,r) => ci.Reduce(r)), 
                 hub.Address),
             (currentState, updateFunc) => updateFunc(currentState))
             .Sample(TimeSpan.FromMilliseconds(100))

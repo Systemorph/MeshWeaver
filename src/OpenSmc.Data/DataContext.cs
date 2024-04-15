@@ -24,7 +24,7 @@ public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace) : IAsync
     public DataContext AddWorkspaceReferenceStream<TReference, TStream>(Func<IObservable<ChangeItem<WorkspaceState>>, TReference, IObservable<ChangeItem<TStream>>> referenceDefinition)
     where TReference : WorkspaceReference<TStream>
         => this with { ReduceManager = ReduceManager.AddWorkspaceReferenceStream(referenceDefinition) };
-    public DataContext AddWorkspaceReference<TReference, TStream>(Func<ChangeItem<WorkspaceState>, TReference, ChangeItem<TStream>> referenceDefinition)
+    public DataContext AddWorkspaceReference<TReference, TStream>(Func<WorkspaceState, TReference, TStream> referenceDefinition)
         where TReference : WorkspaceReference<TStream>
         => this with { ReduceManager = ReduceManager.AddWorkspaceReference(referenceDefinition) };
 

@@ -55,7 +55,7 @@ namespace OpenSmc.TestDomain
             throw new NotImplementedException();
         }
 
-        public IObservable<TReference> GetStream<TReference>(WorkspaceReference<TReference> reference)
+        public IObservable<ChangeItem<TReference>> GetStream<TReference>(WorkspaceReference<TReference> reference)
         {
             throw new NotImplementedException();
         }
