@@ -3,6 +3,9 @@
     <RootNamespace>OpenSmc.Application.Orleans</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.Orleans.Sdk" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\OpenSmc.Messaging.Contract\OpenSmc.Messaging.Contract.csproj" />
   </ItemGroup>
 </Project>
