@@ -1,5 +1,4 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using OpenSmc.Data;
+﻿using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 
@@ -7,7 +6,10 @@ namespace OpenSmc.Layout.Composition;
 
 public interface ILayout
 {
+    IMessageHub Hub { get; }
     IObservable<ChangeItem<EntityStore>> Render(LayoutAreaReference reference);
+    internal void RenderArea(LayoutArea layoutArea, string area, UiControl control);
+
 }
 
 public record LayoutAddress(object Host) : IHostedAddress;
@@ -24,7 +26,6 @@ public class LayoutPlugin(IMessageHub hub)
     private readonly IMessageHub layoutHub =
         hub.GetHostedHub(new LayoutAddress(hub.Address));
 
-    private readonly IWorkspace workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
     public override async Task StartAsync(CancellationToken cancellationToken)
     {
         await base.StartAsync(cancellationToken);
@@ -33,22 +34,23 @@ public class LayoutPlugin(IMessageHub hub)
             return;
         var control = layoutDefinition.InitialState;
         if(control != null)
-            RenderArea(new(Hub,new(string.Empty)), string.Empty, control);
+            RenderArea(new(this,new(string.Empty)), string.Empty, control);
 
         foreach (var initialization in layoutDefinition.Initializations)
             await initialization.Invoke(cancellationToken);
     }
 
+    void ILayout.RenderArea(LayoutArea layoutArea, string area, UiControl control)
+        => RenderArea(layoutArea, area, control);
 
-
-    private LayoutArea RenderArea(LayoutArea layoutArea, string area, UiControl control)
+    private void RenderArea(LayoutArea layoutArea, string area, UiControl control)
     {
-        if (control == null)
-            return null;
+        if (control == null) return;
 
         if (control is LayoutStackControl stack)
         {
-            layoutArea = stack.ViewElements.Aggregate(layoutArea, (c, ve) => RenderArea(c, $"{area}/{ve.Area}", ve));
+            foreach (var ve in stack.ViewElements)
+                RenderArea(layoutArea, $"{area}/{ve.Area}", ve);
             control = stack with
             {
                 Areas = stack.ViewElements
@@ -60,10 +62,9 @@ public class LayoutPlugin(IMessageHub hub)
             control = control with { DataContext = layoutArea.UpdateData(control.DataContext) };
 
         layoutArea.UpdateView(area, control);
-        return layoutArea;
     }
 
-    private LayoutArea RenderArea(LayoutArea layoutArea, string area, ViewElementWithViewDefinition viewDefinition)
+    private void RenderArea(LayoutArea layoutArea, string area, ViewElementWithViewDefinition viewDefinition)
     {
         var stream = viewDefinition.ViewDefinition;
         layoutArea.UpdateView(area, new SpinnerControl());
@@ -75,21 +76,28 @@ public class LayoutPlugin(IMessageHub hub)
                 RenderArea(layoutArea, area, control);
             })
         );
-        return layoutArea;
     }
 
-
-    //private LayoutArea RenderArea(LayoutArea collection, string area, object view)
-    //    => RenderArea(collection, area, layoutDefinition.ControlsManager.Get(view));
-
-    private LayoutArea RenderArea(LayoutArea collection, string area, ViewElement viewElement)
-        => viewElement switch
+    private void RenderArea(LayoutArea layoutArea, string area, ViewElement viewElement)
+    {
+         switch(viewElement)
         {
-            ViewElementWithView view => RenderArea(collection, area, layoutDefinition.ControlsManager.Get(view.View)),
-            ViewElementWithViewDefinition viewDefinition => RenderArea(collection, area, viewDefinition),
-            _ => throw new NotSupportedException($"Unknown type: {viewElement.GetType().FullName}")
-        };
+            case ViewElementWithView view:
+                RenderArea(layoutArea, area,
+                    layoutDefinition.ControlsManager.Get(view.View));
+                break;
+            case ViewElementWithViewDefinition viewDefinition:
+                RenderArea(layoutArea, area, viewDefinition);
+                    break;
+            case ViewElementWithViewStream s:
+                s.Stream.Invoke(layoutArea)
+                    .Subscribe(c => RenderArea(layoutArea, area, c));
+                break;
+            default: throw new NotSupportedException($"Unknown type: {viewElement.GetType().FullName}");
 
+        }
+
+    }
 
 
 
@@ -98,8 +106,10 @@ public class LayoutPlugin(IMessageHub hub)
 
     public IObservable<ChangeItem<EntityStore>> Render(LayoutAreaReference reference)
     {
-        var ret = RenderArea(new LayoutArea(Hub,reference), reference.Area, layoutDefinition.GetViewElement(reference));
-        return ret.Stream;
+        var viewElement = layoutDefinition.GetViewElement(reference);
+        var area = new LayoutArea(this, reference);
+        RenderArea(area, reference.Area, viewElement);
+        return area.Stream;
     }
 }
 
