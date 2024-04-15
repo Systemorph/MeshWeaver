@@ -24,5 +24,6 @@ public class ApplicationHub(IClusterClient clusterClient, ILogger<ApplicationHub
     public void DeliverMessage(MessageDelivery<RawJson> delivery)
     {
         logger.LogTrace("Received incoming message in SignalR Hub to deliver: {delivery}", delivery);
+        var grainId = "{ApplicationAddress should be here}"; // TODO V10: put appropriate ApplicationAddress here (2024/04/15, Dmitry Kalabin)
     }
 }
