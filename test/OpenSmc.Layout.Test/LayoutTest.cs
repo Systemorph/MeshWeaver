@@ -40,6 +40,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
 
     }
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureClient(configuration)
+            .AddLayout(d => d)
+            .AddData(data => data.FromHub(new HostAddress(), source => source.WithType<Toolbar>()));
+    }
 
     private record Toolbar(int Year)
     {
@@ -72,11 +78,6 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         return Controls.HtmlView($"Report for year {toolbar.Year}");
     }
 
-    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
-    {
-        return base.ConfigureClient(configuration)
-            .AddLayout(d => d);
-    }
 
     [HubFact]
     public async Task BasicArea()
@@ -124,9 +125,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var stream = workspace.GetRemoteStream(new HostAddress(), reference);
         var controls = await stream.GetControl(reference.Area).TakeUntil(o => o is HtmlControl).ToArray();
         controls.Last().Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
-        stream.Update(x => x.SetValue(x.Value.Update(new Toolbar(2025))));
+        stream.Update(x => x.Update(new Toolbar(2025)));
         var updatedControls = await stream.GetControl(reference.Area).TakeUntil(o => o is HtmlControl html && !html.Data.ToString()!.Contains("2024")).ToArray();
-        controls.Last().Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2025");
+        updatedControls.Last().Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2025");
 
     }
 
