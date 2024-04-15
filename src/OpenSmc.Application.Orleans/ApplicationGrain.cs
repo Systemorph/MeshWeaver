@@ -2,7 +2,7 @@
 
 namespace OpenSmc.Application.Orleans;
 
-public class ApplicationGrain : IApplicationGrain
+public class ApplicationGrain : Grain, IApplicationGrain
 {
     public Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
     {
