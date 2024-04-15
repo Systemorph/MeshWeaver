@@ -18,20 +18,22 @@ public record EntityStore
                 kvp => kvp.Value.Merge(Collections.GetValueOrDefault(kvp.Key))))
         };
 
-    public EntityStore UpdateCollection(string collection, Func<InstanceCollection, InstanceCollection> update)
+    public EntityStore Update(string collection, Func<InstanceCollection, InstanceCollection> update)
         => this with
         {
             Collections = Collections.SetItem(collection, update.Invoke(Collections.GetValueOrDefault(collection) ?? new InstanceCollection()))
         };
-
     public object Reduce(WorkspaceReference reference)
         => ReduceImpl((dynamic)reference);
+
+    public TReference Reduce<TReference>(WorkspaceReference<TReference> reference)
+        => (TReference)ReduceImpl((dynamic)reference);
 
     internal object ReduceImpl(WorkspaceReference reference)
         => throw new NotSupportedException($"Reducer type {reference.GetType().FullName} not supported");
 
     internal object ReduceImpl(EntityReference reference) => GetCollection(reference.Collection)?.GetData(reference.Id);
-    internal object ReduceImpl(EntireWorkspace _) => this;
+    internal EntityStore ReduceImpl(EntireWorkspace _) => this;
 
     internal InstanceCollection ReduceImpl(CollectionReference reference) =>
         GetCollection(reference.Collection); 

@@ -15,12 +15,12 @@ public static class WorkspaceExtensions
     public static T GetData<T>(this IWorkspace workspace, object id)
         => workspace.State.GetData<T>(id);
     public static IObservable<T> GetObservable<T>(this IWorkspace workspace, object id)
-        => workspace.Stream.Select(ws => ws.GetData<T>(id));
+        => workspace.Stream.Select(ws => ws.Value.GetData<T>(id));
     public static IObservable<IReadOnlyCollection<T>> GetObservable<T>(this IWorkspace workspace)
     {
         var stream = workspace.Stream;
 
-        return stream.Select(ws => ws.GetData<T>());
+        return stream.Select(ws => ws.Value.GetData<T>());
     }
 
 

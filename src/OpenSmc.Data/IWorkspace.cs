@@ -5,8 +5,8 @@ namespace OpenSmc.Data;
 public interface IWorkspace
 {
     ChangeStream<TReference> GetRemoteStream<TReference>(object address, WorkspaceReference<TReference> reference);
-    IObservable<WorkspaceState> Stream { get; }
-    IObservable<WorkspaceState> ChangeStream { get; }
+    IObservable<ChangeItem<WorkspaceState>> Stream { get; }
+    IObservable<ChangeItem<WorkspaceState>> ChangeStream { get; }
     WorkspaceState State { get; }
     Task Initialized { get; }
     IEnumerable<Type> MappedTypes { get;  }

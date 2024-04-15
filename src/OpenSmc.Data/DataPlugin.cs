@@ -1,7 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Data.Serialization;
@@ -18,10 +17,10 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
     IMessageHandler<PatchChangeRequest>
 {
 
-    public IObservable<WorkspaceState> Stream => synchronizationStream;
-    private readonly ReplaySubject<WorkspaceState> synchronizationStream = new(1);
-    private readonly Subject<WorkspaceState> subject = new();
-    public IObservable<WorkspaceState> ChangeStream => changeStream;
+    public IObservable<ChangeItem<WorkspaceState>> Stream => synchronizationStream;
+    private readonly ReplaySubject<ChangeItem<WorkspaceState>> synchronizationStream = new(1);
+    private readonly Subject<ChangeItem<WorkspaceState>> subject = new();
+    public IObservable<ChangeItem<WorkspaceState>> ChangeStream => changeStream;
     public IEnumerable<Type> MappedTypes => State.MappedTypes;
     private readonly ConcurrentDictionary<(object Address, WorkspaceReference Reference), IDisposable> streams = new ();
 
@@ -109,7 +108,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
         Initialize(DataContext);
     }
 
-    private readonly Subject<WorkspaceState> changeStream = new();
+    private readonly Subject<ChangeItem<WorkspaceState>> changeStream = new();
 
     private void Initialize(DataContext dataContext)
     {
@@ -125,7 +124,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
             typeSources[ts.CollectionName] = ts;
 
 
-        InitializeState(new(Hub, new EntityStore(), typeSources, ReduceManager));
+        InitializeState(new(Hub, new EntityStore(), typeSources, (state, reference) => ReduceManager.Reduce(state, reference)));
 
 
 
@@ -134,7 +133,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
             () =>
             {
                 subject.Subscribe(synchronizationStream);
-                subject.OnNext(State);
+                subject.OnNext(new ChangeItem<WorkspaceState>(Address, new EntireWorkspace(),State, Address));
 
                 initializeTaskCompletionSource.SetResult();
             });
@@ -173,7 +172,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
     private IMessageDelivery RequestChange(IMessageDelivery request, DataChangeRequest change)
     {
         UpdateState(s => s.Change(change) with{Version = Hub.Version});
-        changeStream.OnNext(State);
+        changeStream.OnNext(new ChangeItem<WorkspaceState>(Address, new EntireWorkspace(), State, request?.Sender));
         if (request != null)
         {
             Hub.Post(new DataChangeResponse(Hub.Version, DataChangeStatus.Committed), o => o.ResponseFor(request));
@@ -195,7 +194,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
 
     public void Commit()
     {
-        subject.OnNext(State);
+        subject.OnNext(new ChangeItem<WorkspaceState>(Address, new EntireWorkspace(), State, Address));
     }
 
     public void Rollback()
@@ -205,7 +204,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
 
     public IObservable<TReference> GetStream<TReference>(WorkspaceReference<TReference> reference)
     {
-        return ReduceManager.ReduceStream(Stream, reference);
+        return ReduceManager.ReduceStream(Stream.Select(s => s.Value), reference);
     }
 
 

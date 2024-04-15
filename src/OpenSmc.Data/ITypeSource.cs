@@ -1,4 +1,6 @@
-﻿namespace OpenSmc.Data;
+﻿using OpenSmc.Data.Serialization;
+
+namespace OpenSmc.Data;
 
 public interface ITypeSource : IDisposable
 {
@@ -15,7 +17,7 @@ public interface ITypeSource : IDisposable
 
     Task<InstanceCollection> InitializeAsync(CancellationToken cancellationToken);
 
-    InstanceCollection Update(WorkspaceState ws);
+    InstanceCollection Update(ChangeItem<WorkspaceState> ws);
 }
 
 public interface IPartitionedTypeSource : ITypeSource

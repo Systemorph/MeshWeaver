@@ -1,11 +1,13 @@
-﻿using OpenSmc.Data;
+﻿using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Data;
+using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Layout.Composition;
 
 public interface ILayout
 {
-    IObservable<EntityStore> Render(LayoutAreaReference reference);
+    IObservable<ChangeItem<WorkspaceState>> Render(LayoutAreaReference reference);
 }
 
 public record LayoutAddress(object Host) : IHostedAddress;
@@ -22,6 +24,7 @@ public class LayoutPlugin(IMessageHub hub)
     private readonly IMessageHub layoutHub =
         hub.GetHostedHub(new LayoutAddress(hub.Address));
 
+    private readonly IWorkspace workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
     public override async Task StartAsync(CancellationToken cancellationToken)
     {
         await base.StartAsync(cancellationToken);
@@ -30,7 +33,7 @@ public class LayoutPlugin(IMessageHub hub)
             return;
         var control = layoutDefinition.InitialState;
         if(control != null)
-            RenderArea(new(new(string.Empty)), string.Empty, control);
+            RenderArea(new(Hub,new(string.Empty), workspace.State), string.Empty, control);
 
         foreach (var initialization in layoutDefinition.Initializations)
             await initialization.Invoke(cancellationToken);
@@ -90,9 +93,9 @@ public class LayoutPlugin(IMessageHub hub)
 
 
 
-    public IObservable<EntityStore> Render(LayoutAreaReference reference)
+    public IObservable<ChangeItem<WorkspaceState>> Render(LayoutAreaReference reference)
     {
-        var ret = RenderArea(new LayoutArea(reference), reference.Area, layoutDefinition.GetViewElement(reference));
+        var ret = RenderArea(new LayoutArea(Hub,reference, workspace.State), reference.Area, layoutDefinition.GetViewElement(reference));
         return ret.Stream;
     }
 }

@@ -148,7 +148,7 @@ public record GenericDataSource(object Id, IMessageHub Hub) : DataSource<Generic
         return base.Initialize();
     }
 
-    private void Update(WorkspaceState ws)
+    private void Update(ChangeItem<WorkspaceState> ws)
     {
         foreach (var ts in TypeSources.Values)
         {

@@ -5,7 +5,6 @@ using OpenSmc.Data.Persistence;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
-using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
 
@@ -68,4 +67,6 @@ public static class DataPluginExtensions
         );
 
 
+    public static ChangeItem<TStream> SetValue<TStream>(this ChangeItem<WorkspaceState> changeItem, TStream value)
+        => new(changeItem.Address, changeItem.Reference, value, changeItem.ChangedBy);
 }
