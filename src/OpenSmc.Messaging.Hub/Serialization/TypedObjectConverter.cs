@@ -1,4 +1,6 @@
-﻿using System.Globalization;
+﻿using System;
+using System.Collections;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -61,7 +63,7 @@ public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry)
 
         if (node is JsonArray jArray)
         {
-            return jArray.Select(e => e.Deserialize(typeof(object), options));
+            return jArray.Select(e => e.Deserialize(typeof(object), options)).ToArray();
         }
 
         return node.Deserialize(typeToConvert, options);
@@ -92,7 +94,7 @@ public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry, Type excl
     private const string TypeProperty = "$type";
 
     public override bool CanConvert(Type typeToConvert)
-        => typeToConvert != exclude;
+        => typeToConvert != exclude && !typeof(JsonNode).IsAssignableFrom(typeToConvert);
 
     public override object Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
@@ -104,8 +106,10 @@ public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry, Type excl
         var clonedOptions = CloneOptions(options);
         clonedOptions.Converters.Add(new TypedObjectSerializeConverter(typeRegistry, value.GetType()));
         var serialized = JsonSerializer.SerializeToNode(value, value.GetType(), clonedOptions);
-        serialized = Traverse(serialized, value, null);
-        serialized.WriteTo(writer);
+        if(serialized is JsonObject obj)
+            obj[TypeProperty] = typeRegistry.GetOrAddTypeName(value.GetType()); ;
+
+        serialized!.WriteTo(writer);
     }
 
     private JsonSerializerOptions CloneOptions(JsonSerializerOptions options)
@@ -115,26 +119,6 @@ public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry, Type excl
         return clonedOptions;
     }
 
-    private JsonNode Traverse(JsonNode serialized, object value, Type type)
-    {
-        if (value == null || serialized is not JsonObject obj)
-            return serialized;
-
-        var valueType = value.GetType();
-        if (valueType != type)
-            obj[TypeProperty] = typeRegistry.GetOrAddTypeName(valueType) ;
-
-        type = valueType;
-
-        foreach (var prop in type.GetProperties())
-        {
-            var jsonName = prop.Name.ToCamelCase();
-            if(obj.TryGetPropertyValue(jsonName, out var node))
-                obj[jsonName] = Traverse(node, prop.GetValue(value), prop.PropertyType);
-        }
-
-        return obj;
-    }
 
 }
 

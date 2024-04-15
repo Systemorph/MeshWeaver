@@ -1,9 +1,8 @@
-﻿using System.Reactive.Linq;
+﻿using System.Collections;
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Runtime.InteropServices.ComTypes;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
-using OpenSmc.Messaging;
 
 namespace OpenSmc.Layout.Composition;
 
@@ -20,13 +19,17 @@ public record LayoutArea
 
     public void UpdateView(string area, UiControl control)
     {
-        updateStream.OnNext(ws => ws.SetValue(ws.Value.Update(ControlsCollection, i => i.SetItem(area, control))));
+        updateStream.OnNext(ws => ws
+            .SetValue(ws
+                .Value
+                .Update(ControlsCollection, i => i.SetItem(area, control))));
     }
 
 
-    public LayoutArea(IMessageHub hub, LayoutAreaReference Reference)
+    public LayoutArea(ILayout layout, LayoutAreaReference Reference)
     {
         this.Reference = Reference;
+        var hub = layout.Hub;
         workspace = hub.GetWorkspace();
         updateStream.Scan(new ChangeItem<EntityStore>(
                 hub.Address,
@@ -38,8 +41,11 @@ public record LayoutArea
             .Subscribe(Stream);
     }
 
-    public EntityReference UpdateData(object data)
+    public object UpdateData(object data)
     {
+        if (data is IEnumerable enumerable)
+            return enumerable.Cast<object>().Select(UpdateData).ToArray();
+
         var typeSource = workspace.State.GetTypeSource(data.GetType());
         if(typeSource == null)
             throw new ArgumentOutOfRangeException($"No type source found for {data.GetType().FullName}");

@@ -1,24 +1,20 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿using System.Collections;
+using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using FluentAssertions;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.DataBinding;
 using OpenSmc.Messaging;
-using OpenSmc.ServiceProvider;
 using Xunit.Abstractions;
 
 namespace OpenSmc.Layout.Test;
 
 public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    [Inject] private ILogger<LayoutTest> logger;
-
-
     private const string StaticView = nameof(StaticView);
+    public record DataRecord([property: Key] string SystemName, string DisplayName);
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
@@ -27,25 +23,49 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 .AddData(data => data
                     .FromConfigurableDataSource("Local",
                         ds => ds
-                            .WithType<TestLayoutPlugin.DataRecord>(t => t.WithInitialData([new("Hello", "World")]))
+                            .WithType<DataRecord>(
+                                t => t.WithInitialData([new("Hello", "Hello"), new("World", "World")]))
                             .WithType<Toolbar>(t => t.WithInitialData([new(2024)]))
-                        ))
+                    ))
                 .AddLayout(
                     layout => layout
                         .WithView(StaticView, Controls.Stack().WithView("Hello", "Hello").WithView("World", "World"))
                         .WithViewDefinition(nameof(ViewWithProgress), ViewWithProgress)
-                        .WithViewDefinition(nameof(UpdatingView), layout.Hub.ServiceProvider.GetRequiredService<IWorkspace>().Stream.Select(ws => (Func<LayoutArea, UiControl>)(_ => UpdatingView(GetToolbar(ws.Value)))))
-
+                        .WithViewStream(nameof(UpdatingView),
+                            _ => layout.Hub.GetWorkspace()
+                                .Stream
+                                .Select(ws => GetToolbar(ws.Value))
+                                .DistinctUntilChanged()
+                                .Select(UpdatingView)
+                        )
+                        .WithViewStream(nameof(ItemTemplate), _ =>
+                            layout.Hub.GetWorkspace()
+                                .Stream
+                                .Select(x => x.Value.GetData<DataRecord>())
+                                .DistinctUntilChanged()
+                                .Select(ItemTemplate)
+                        )
                 )
+
             ;
 
 
     }
+
+    private UiControl ItemTemplate(IReadOnlyCollection<DataRecord> data) =>
+        Controls.Bind(data, record =>
+            Controls
+                .TextBox(record.DisplayName)
+                .WithId(record.SystemName)
+        );
+
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
         return base.ConfigureClient(configuration)
             .AddLayout(d => d)
-            .AddData(data => data.FromHub(new HostAddress(), source => source.WithType<Toolbar>()));
+            .AddData(data => data.FromHub(new HostAddress(), source => source
+                .WithType<Toolbar>()
+                .WithType<DataRecord>()));
     }
 
     private record Toolbar(int Year)
@@ -77,7 +97,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     {
 
         return Controls.Stack()
-            .WithView("Toolbar", Template.Bind(toolbar, tb => Controls.TextBox(tb.Year)))
+            .WithView("Toolbar", Controls.Bind(toolbar, tb => Controls.TextBox(tb.Year)))
             .WithView("Content", Controls.HtmlView($"Report for year {toolbar.Year}"));
     }
 
@@ -130,6 +150,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var content = await stream.GetControl(reportArea).FirstAsync();
         content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
 
+        // Get toolbar and change value.
         var toolbarArea = $"{reference.Area}/Toolbar";
         var toolbar = (TextBoxControl)await stream.GetControl(toolbarArea).FirstAsync();
         toolbar.Data.Should().BeOfType<Binding>().Which.Path.Should().Be("year");
@@ -144,111 +165,33 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
     }
 
-    //#if CIRun
-    //    [Fact(Skip = "Hangs")]
-    //#else
-    //    [Fact(Timeout = 5000)]
-    //#endif
-
-    //public async Task GetSimpleArea()
-    //{
-    //var client = GetClient();
-    //client.Post(new RefreshRequest { Area = TestLayoutPlugin.NamedArea }, o => o.WithTarget(new HostAddress()));
-    //var area = await client.GetAreaAsync(state => state.GetByIdAndArea(TestLayoutPlugin.MainStackId, TestLayoutPlugin.NamedArea));
-    //area.Control.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(TestLayoutPlugin.NamedArea);
-    //area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.NamedArea));
-    //area.Control.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(TestLayoutPlugin.NamedArea);
-    //var address = ((IUiControl)area.Control).Address;
-    //area = await client.GetAreaAsync(state => state.GetByAddress(address));
-    //area.Control.Should().BeOfType<TextBoxControl>().Which.Data.Should().Be(TestLayoutPlugin.NamedArea);
-
-    //}
-
-
-
-    //#if CIRun
-    //    [Fact(Skip = "Hangs")]
-    //#else
-    //    [Fact(Timeout = 5000)]
-    //#endif
-
-    //    public async Task UpdatingView()
-    //    {
-
-    //        var client = GetClient();
-    //        client.Post(new AreaReference(TestLayoutPlugin.UpdatingView), o => o.WithTarget(new HostAddress()));
-    //        var area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.UpdatingView));
-    //        area.Control
-    //            .Should().BeOfType<TextBoxControl>()
-    //            .Which.Data.Should().Be(TestLayoutPlugin.SomeString);
-
-    //        await client.ClickAsync(_ => area);
-
-    //        LayoutArea IsUpdatedView(LayoutClientState layoutClientState)
-    //        {
-    //            var ret = layoutClientState.GetById(TestLayoutPlugin.UpdatingView);
-    //            if (ret?.Control is TextBoxControl { Data: not TestLayoutPlugin.SomeString })
-    //                return ret;
-
-    //            logger.LogInformation($"Found view: {ret?.Control}");
-    //            return null;
-    //        }
-
-    //        var changedArea = await client.GetAreaAsync(IsUpdatedView);
-    //        changedArea.Control
-    //            .Should().BeOfType<TextBoxControl>()
-    //            .Which.Data.Should().Be(TestLayoutPlugin.NewString);
-
-
-    //    }
-
-    //#if CIRun
-    //    [Fact(Skip = "Hangs")]
-    //#else
-    //    [Fact(Timeout = 5000)]
-    //#endif
-
-    //    public async Task DataBoundView()
-    //    {
-
-    //        var client = GetClient();
-    //        var observer = client.AddObservable();
-    //        client.Post(new AreaReference { Area = TestLayoutPlugin.DataBoundView }, o => o.WithTarget(new HostAddress()));
-    //        var area = await client.GetAreaAsync(state => state.GetById(TestLayoutPlugin.DataBoundView));
-    //        area.Control
-    //            .Should().BeOfType<MenuItemControl>()
-    //            .Which.Title.Should().BeOfType<Binding>()
-    //            .Which.Path.Should().Be(nameof(TestLayoutPlugin.DataRecord.DisplayName).ToCamelCase());
-
-    //        client.Click(area);
-    //        var dataChanged = await observer.OfType<DataChangedEvent>().FirstAsync();
-
-
-    //    }
-
     [HubFact]
-    public async Task TestTest()
+    public async Task TestItemTemplate()
     {
-        int count = 0;
-        // Simulating user submissions (e.g., button clicks, form submissions)
-        var userSubmissions = Observable.Interval(TimeSpan.FromMilliseconds(1)).Take(100).Select(_ => ++count);//.TakeUntil(Observable.Timer(DateTimeOffset.FromUnixTimeSeconds(1))).Select(i => ++count);
-        
-        // Define your minimum timeout (adjust as needed)
-        var minimumTimeout = TimeSpan.FromMilliseconds(30);
+        var reference = new LayoutAreaReference(nameof(ItemTemplate));
 
+        var hub = GetClient();
+        var workspace = hub.GetWorkspace();
+        var stream = workspace.GetRemoteStream(new HostAddress(), reference);
+        var controlArea = $"{reference.Area}";
+        var content = await stream.GetControl(controlArea).FirstAsync();
+        var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
+        var workspaceReferences = await itemTemplate
+            .DataContext
+            .Should()
+            .BeAssignableTo<IEnumerable>()
+            .Which
+            .OfType<EntityReference>()
+            .ToAsyncEnumerable()
+            .SelectAwait(async r => (DataRecord)await stream.GetData(r).FirstAsync())
+            .ToArrayAsync();
 
-        // Merge user submissions with the minimum timeout observable
-        var sampled = userSubmissions.Sample(minimumTimeout);
+        workspaceReferences.Should().HaveCount(2).And.Contain(r => r.SystemName == "Hello").And.Contain(r => r.SystemName == "World");
 
-        var received = await sampled.ToArray();
-
-        received.Last().Should().Be(count);
     }
+
 }
 
-public record ToolbarEntity(int Year)
-{
-}
 
 public static class TestAreas
 {

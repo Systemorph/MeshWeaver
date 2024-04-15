@@ -10,6 +10,10 @@ public record LayoutDefinition(IMessageHub Hub)
     internal ImmutableList<ViewGenerator> ViewGenerators { get; init; } = ImmutableList<ViewGenerator>.Empty;
     public LayoutDefinition WithInitialState(UiControl initialState) => this with { InitialState = initialState };
     public LayoutDefinition WithViewGenerator(Func<LayoutAreaReference, bool> filter, ViewElement viewElement) => this with { ViewGenerators = ViewGenerators.Add(new(filter, viewElement)) };
+    public LayoutDefinition WithViewStream(string area, Func<LayoutArea, IObservable<object>> generator)
+        => WithViewStream(area, a => generator.Invoke(a).Select(o => ControlsManager.Get(o)));
+    public LayoutDefinition WithViewStream(string area, Func<LayoutArea, IObservable<UiControl>> generator)
+    => WithViewGenerator(r => r.Area == area, new ViewElementWithViewStream(area,a => generator(a)));
 
     public LayoutDefinition WithViewDefinition(string area,  Func<LayoutArea, object> generator)
         => WithViewDefinition(area,  Observable.Return(generator));

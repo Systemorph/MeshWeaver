@@ -6,6 +6,9 @@ namespace OpenSmc.Messaging.Serialization;
 
 public class JsonNodeConverter : JsonConverter<JsonNode>
 {
+    public override bool CanConvert(Type typeToConvert)
+        => typeof(JsonNode).IsAssignableFrom(typeToConvert);
+
     public override JsonNode Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         throw new NotImplementedException();
