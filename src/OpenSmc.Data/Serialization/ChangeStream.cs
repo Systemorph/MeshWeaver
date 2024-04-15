@@ -31,6 +31,7 @@ public record ChangeStream<TStream> : IDisposable,
     private IMessageHub Hub { get; }
     private readonly ReplaySubject<ChangeItem<TStream>> store = new(1);
     private readonly Subject<Func<ChangeItem<TStream>, ChangeItem<TStream>>> updates = new();
+    private readonly Subject<ChangeItem<TStream>> updatedInstances = new();
 
 
     public ChangeStream(IWorkspace Workspace,
@@ -47,7 +48,13 @@ public record ChangeStream<TStream> : IDisposable,
         this.GetVersion = GetVersion;
 
         this.isExternalStream = isExternalStream;
-        Disposables.Add(Workspace.GetStream(Reference).DistinctUntilChanged().Subscribe(Synchronize));
+
+        updatedInstances.CombineLatest(updates.StartWith(x => x), (value, update) => update(value)).Subscribe(store);
+
+        if (isExternalStream)
+            Disposables.Add(Workspace.ChangeStream.Subscribe(i => Update(i.SetValue(i.Value.Reduce(Reference)))));
+        else
+            Disposables.Add(Workspace.GetStream(Reference).DistinctUntilChanged().Subscribe(Synchronize));
     }
 
 
@@ -92,16 +99,18 @@ public record ChangeStream<TStream> : IDisposable,
         });
 
 
+    private void Update(ChangeItem<TStream> value)
+    {
+        var dataChanged = GetDataChanged(value);
+        changes.OnNext(new PatchChangeRequest(Address, Reference, (JsonPatch)dataChanged.Change));
+    }
+
     private void Synchronize(ChangeItem<TStream> value)
     {
         var dataChanged = GetDataChanged(value);
 
         if (dataChanged != null)
-            if (isExternalStream)
-                changes.OnNext(new PatchChangeRequest(Address, Reference, (JsonPatch)dataChanged.Change));
-            else
-                dataChangedStream.OnNext(dataChanged);
-
+            dataChangedStream.OnNext(dataChanged);
     }
 
     private DataChangedEvent GetDataChanged(ChangeItem<TStream> value)
@@ -119,7 +128,7 @@ public record ChangeStream<TStream> : IDisposable,
 
     private void Synchronize(DataChangedEvent request)
     {
-        updates.OnNext(_ => new(Address, Reference, ParseDataChanged(request), request.ChangedBy));
+        updatedInstances.OnNext(new ChangeItem<TStream>(request.Address,(WorkspaceReference)request.Reference,ParseDataChanged(request), request.ChangedBy));
     }
 
     private TStream ParseDataChanged(DataChangedEvent request)
@@ -144,13 +153,7 @@ public record ChangeStream<TStream> : IDisposable,
         if (initial == null)
             throw new ArgumentNullException(nameof(initial));
         var start = new ChangeItem<TStream>(Address, Reference, initial, Address);
-        updates
-            .Scan(start,
-                (x,update) => update.Invoke(x))
-            .StartWith(start)
-            .Sample(TimeSpan.FromMilliseconds(30))
-            .Subscribe(store);
-
+        updatedInstances.OnNext(start);
         LastSynchronized = JsonSerializer.SerializeToNode(initial, Hub.SerializationOptions);
         dataChangedStream.OnNext(GetFullDataChange(start));
         return this;
