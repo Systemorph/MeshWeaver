@@ -87,11 +87,15 @@ public record ChangeStream<TStream> : IDisposable,
     }
 
 
-    public void Update(Func<ChangeItem<TStream>, ChangeItem<TStream>> change)
+    public void Update(Func<TStream, TStream> change)
         => updates.OnNext(x =>
         {
-            var ret = change(x);
-            Synchronize(ret);
+            var newValue = change(x.Value);
+            var ret = new ChangeItem<TStream>(Address, Reference, newValue, Hub.Address);
+            if(isExternalStream)
+                Update(ret);
+            else
+                Synchronize(ret);
             return ret;
         });
 
