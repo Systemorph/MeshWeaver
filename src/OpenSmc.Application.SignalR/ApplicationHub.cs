@@ -27,5 +27,8 @@ public class ApplicationHub(IClusterClient clusterClient, ILogger<ApplicationHub
         logger.LogTrace("Received incoming message in SignalR Hub to deliver: {delivery}", delivery);
         var grainId = "{ApplicationAddress should be here}"; // TODO V10: put appropriate ApplicationAddress here (2024/04/15, Dmitry Kalabin)
         var grain = clusterClient.GetGrain<IApplicationGrain>(grainId);
+
+        // HACK V10: get rid of this hardcoding as soon as deserialization for SignalR would work (2024/04/15, Dmitry Kalabin)
+        var workaroundDelivery = delivery with { Sender = new UiAddress(TestUiIds.HardcodedUiId), Target = new ApplicationAddress(TestApplication.Name, TestApplication.Environment), };
     }
 }

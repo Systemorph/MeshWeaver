@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Application.Host;
+using OpenSmc.Application.Orleans;
 using OpenSmc.Fixture;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
@@ -18,7 +19,7 @@ namespace OpenSmc.Application.SignalR.Integration.Test;
 public class SignalRBasicTest : TestBase, IClassFixture<WebApplicationFactory<Program>>
 {
     private readonly WebApplicationFactory<Program> webAppFactory;
-    private static readonly UiAddress ClientAddress = new(Guid.NewGuid().ToString());
+    private static readonly UiAddress ClientAddress = new(TestUiIds.HardcodedUiId);
     private static readonly ApplicationAddress ApplicationAddress = new("testApp", "dev");
 
     private static readonly TimeSpan signalRServerDebugTimeout = TimeSpan.FromMinutes(7);
