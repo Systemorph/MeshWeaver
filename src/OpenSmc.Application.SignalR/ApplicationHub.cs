@@ -6,7 +6,7 @@ using OpenSmc.Serialization;
 
 namespace OpenSmc.Application.SignalR;
 
-public class ApplicationHub(ILogger<ApplicationHub> logger) : Hub
+public class ApplicationHub(IClusterClient clusterClient, ILogger<ApplicationHub> logger) : Hub
 {
     public override Task OnDisconnectedAsync(Exception exception)
     {
