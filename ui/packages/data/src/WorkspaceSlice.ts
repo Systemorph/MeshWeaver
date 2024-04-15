@@ -9,7 +9,7 @@ import { pathToUpdateAction } from "./operators/pathToUpdateAction";
 import { referenceToUpdateAction } from "./operators/referenceToUpdateAction";
 
 export class WorkspaceSlice<S, T> extends Workspace<T> {
-    readonly subscription: Subscription;
+    readonly subscription = new Subscription();
 
     constructor(source: Workspace<S>, projection: ValueOrReference<T>, name?: string) {
         super(selectDeep(projection)(source.getState()), name);
@@ -29,6 +29,8 @@ export class WorkspaceSlice<S, T> extends Workspace<T> {
                     )
             );
 
+        this.subscription.add(source$.subscribe(this.store.dispatch));
+
         const slice$ =
             merge(
                 ...references
@@ -42,9 +44,6 @@ export class WorkspaceSlice<S, T> extends Workspace<T> {
                     )
             );
 
-        this.subscription = new Subscription();
-
-        this.subscription.add(source$.subscribe(this.store.dispatch));
         this.subscription.add(slice$.subscribe(source));
     }
 }

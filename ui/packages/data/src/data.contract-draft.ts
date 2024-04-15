@@ -6,7 +6,7 @@
 import { ClickedEvent, LayoutAddress } from "@open-smc/layout/src/contract/application.contract";
 import { SubscribeRequest } from "./contract/SubscribeRequest";
 import { DataChangedEvent } from "./contract/DataChangedEvent";
-import { WorkspaceReference } from "./contract/WorkspaceReference";
+import { PathReferenceBase } from "./contract/PathReferenceBase";
 import { EntireWorkspace } from "./contract/EntireWorkspace";
 import { LayoutAreaReference } from "./contract/LayoutAreaReference";
 
@@ -194,7 +194,7 @@ new SubscribeRequest("any string", new EntireWorkspace()); // sent to layout add
 //                 {
 //                     $type: "InputBoxControl",
 //                     dataContext: {
-//                         playJson: 123,
+//                         plainJson: 123,
 //                         ref: new WorkspaceReference(), // always reference to the main store
 //                     },
 //                     value: makeBinding("ref.property") // json path

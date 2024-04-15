@@ -1,8 +1,9 @@
 import { createAction, createReducer } from '@reduxjs/toolkit';
-import { WorkspaceReferenceBase } from "./contract/WorkspaceReferenceBase";
+import { WorkspaceReference } from "./contract/WorkspaceReference";
+import { JsonPatchAction, jsonPatchActionCreator, jsonPatchReducer } from "./jsonPatchReducer";
 
 export type UpdateByReferencePayload<T = unknown> = {
-    reference: WorkspaceReferenceBase<T>;
+    reference: WorkspaceReference<T>;
     value: T;
 }
 
@@ -10,7 +11,7 @@ export const updateByReferenceActionCreator = createAction<UpdateByReferencePayl
 
 export type UpdateByReferenceAction = ReturnType<typeof updateByReferenceActionCreator>;
 
-export type WorkspaceAction = UpdateByReferenceAction;
+export type WorkspaceAction = UpdateByReferenceAction | JsonPatchAction;
 
 export const workspaceReducer = createReducer(
     undefined,
@@ -22,6 +23,10 @@ export const workspaceReducer = createReducer(
                     const {reference, value} = action.payload;
                     reference.set(state, value);
                 }
+            )
+            .addCase(
+                jsonPatchActionCreator,
+                jsonPatchReducer
             );
     }
 );

@@ -1,14 +1,14 @@
 import { walk, WalkNode } from 'walkjs';
-import { WorkspaceReferenceBase } from "../contract/WorkspaceReferenceBase";
+import { WorkspaceReference } from "../contract/WorkspaceReference";
 
 export const extractReferences = (data: unknown) => {
-    const references: Array<[path: string, reference: WorkspaceReferenceBase]> = [];
+    const references: Array<[path: string, reference: WorkspaceReference]> = [];
 
     walk(
         data,
         {
             onVisit: {
-                filters: node => node.val instanceof WorkspaceReferenceBase,
+                filters: node => node.val instanceof WorkspaceReference,
                 callback:
                     node =>
                         references.push([

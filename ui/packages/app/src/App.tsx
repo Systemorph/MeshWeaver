@@ -8,8 +8,6 @@ import '@open-smc/data/src/contract';
 export default function App() {
     const rootAreaId = useAppSelector(state => state.rootArea);
 
-    useEffect(() => startSynchronization(), []);
-
     return (
         <div className="App">
             <RenderArea id={rootAreaId}/>

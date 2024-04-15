@@ -1,6 +1,6 @@
 import { MessageHub } from "@open-smc/messaging/src/api/MessageHub";
 import { sendMessage } from "@open-smc/messaging/src/sendMessage";
-import { PatchAction, patchActionCreator } from "./jsonPatchReducer";
+import { JsonPatchAction, jsonPatchActionCreator } from "./jsonPatchReducer";
 import { messageOfType } from "@open-smc/messaging/src/operators/messageOfType";
 import { filter, map, Observer } from "rxjs";
 import { SubscribeRequest } from "./contract/SubscribeRequest";
@@ -11,12 +11,12 @@ import { sendRequest } from "@open-smc/messaging/src/sendRequest";
 import { isEqual } from "lodash-es";
 import { unpack } from "@open-smc/messaging/src/operators/unpack";
 import { log } from "@open-smc/utils/src/operators/log";
-import { WorkspaceReferenceBase } from "./contract/WorkspaceReferenceBase";
+import { WorkspaceReference } from "./contract/WorkspaceReference";
 
 export function subscribeToBackend(
     hub: MessageHub,
-    reference: WorkspaceReferenceBase,
-    observer: Observer<PatchAction>
+    reference: WorkspaceReference,
+    observer: Observer<JsonPatchAction>
 ) {
     const subscription =
         hub
@@ -27,14 +27,14 @@ export function subscribeToBackend(
             .subscribe(({change, changeType}) => {
                 if (changeType === "Full") {
                     observer.next(
-                        patchActionCreator(
+                        jsonPatchActionCreator(
                             new JsonPatch([
                                 {op: "replace", path: "", value: change}
                             ])
                         )
                     );
                 } else if (changeType === "Patch") {
-                    observer.next(patchActionCreator(change as JsonPatch))
+                    observer.next(jsonPatchActionCreator(change as JsonPatch))
                 } else {
                     console.warn(`Unknown change type ${changeType}`)
                 }

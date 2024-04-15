@@ -2,7 +2,8 @@
   "name": "@open-smc/serialization",
   "version": "0.0.0",
   "dependencies": {
-    "lodash-es": "^4.17.21"
+    "lodash-es": "^4.17.21",
+    "immer": "10.0.3"
   },
   "devDependencies": {
     "@jest/globals": "^29.6.1",

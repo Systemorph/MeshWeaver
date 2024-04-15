@@ -1,5 +1,5 @@
-import { WorkspaceReference } from "./WorkspaceReference";
+import { PathReferenceBase } from "./PathReferenceBase";
 
-export type ValueOrReference<T> = WorkspaceReference<T> | {
+export type ValueOrReference<T> = PathReferenceBase<T> | {
     [TKey in keyof T]: ValueOrReference<T[TKey]>;
 }

@@ -1,4 +1,4 @@
-import { WorkspaceReferenceBase } from "../contract/WorkspaceReferenceBase";
+import { WorkspaceReference } from "../contract/WorkspaceReference";
 
-export const selectByReference = <T>(reference: WorkspaceReferenceBase<T>) =>
+export const selectByReference = <T>(reference: WorkspaceReference<T>) =>
     (data: any) => reference.get(data)

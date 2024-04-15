@@ -5,9 +5,9 @@ import { JsonPatch, PatchOperation } from "./contract/JsonPatch";
 
 enablePatches();
 
-export const patchActionCreator = createAction<JsonPatch>('patch');
+export const jsonPatchActionCreator = createAction<JsonPatch>('patch');
 
-export type PatchAction = ReturnType<typeof patchActionCreator>;
+export type JsonPatchAction = ReturnType<typeof jsonPatchActionCreator>;
 
 export const patchRequest = createAction<JsonPatch>('patchRequest');
 
@@ -16,7 +16,7 @@ export const jsonPatchReducer = createReducer(
     builder => {
         builder
             .addCase(
-                patchActionCreator,
+                jsonPatchActionCreator,
                 (state, action) =>
                     applyPatches(state, action.payload.operations.map(toImmerPatch))
             );

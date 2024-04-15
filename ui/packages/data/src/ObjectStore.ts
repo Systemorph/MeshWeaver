@@ -1,9 +1,9 @@
 import { configureStore, Store } from "@reduxjs/toolkit";
 import { from, Observable, Observer } from "rxjs";
-import { PatchAction, jsonPatchReducer } from "./jsonPatchReducer";
+import { JsonPatchAction, jsonPatchReducer } from "./jsonPatchReducer";
 import { serializeMiddleware } from "./middleware/serializeMiddleware";
 
-export class JsonStore<T = unknown> extends Observable<T> implements Observer<PatchAction> {
+export class ObjectStore<T = unknown> extends Observable<T> implements Observer<JsonPatchAction> {
     protected store: Store;
     protected store$: Observable<T>;
 
@@ -28,7 +28,7 @@ export class JsonStore<T = unknown> extends Observable<T> implements Observer<Pa
     error(err: any) {
     }
 
-    next(value: PatchAction) {
+    next(value: JsonPatchAction) {
         this.store.dispatch(value);
     }
 

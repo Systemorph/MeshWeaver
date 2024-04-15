@@ -1,6 +1,6 @@
 import { toPointer } from "../toPointer";
-import { WorkspaceReference } from "../contract/WorkspaceReference";
+import { PathReferenceBase } from "../contract/PathReferenceBase";
 import { pathToPatchAction } from "./pathToPatchAction";
 
-export const referenceToPatchAction = (reference: WorkspaceReference) =>
+export const referenceToPatchAction = (reference: PathReferenceBase) =>
     pathToPatchAction(toPointer(reference.path));

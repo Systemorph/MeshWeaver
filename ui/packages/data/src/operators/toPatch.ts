@@ -1,9 +1,9 @@
 import { JsonPatch, OperationType } from "../contract/JsonPatch";
-import { patchActionCreator } from "../jsonPatchReducer";
+import { jsonPatchActionCreator } from "../jsonPatchReducer";
 
 export const toPatch = (path: string, op: OperationType) =>
     (value: unknown) =>
-        patchActionCreator(
+        jsonPatchActionCreator(
             new JsonPatch([
                 {op, path, value}
             ])
