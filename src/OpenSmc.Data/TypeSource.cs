@@ -2,10 +2,10 @@
 using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
 using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
 using OpenSmc.Reflection;
-using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
 
@@ -50,9 +50,9 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
 
 
 
-    public virtual InstanceCollection Update(WorkspaceState workspace)
+    public virtual InstanceCollection Update(ChangeItem<WorkspaceState> workspace)
     {
-        var myCollection = workspace.Reduce(new CollectionReference(CollectionName));
+        var myCollection = workspace.Value.Reduce(new CollectionReference(CollectionName));
 
         return UpdateImpl(myCollection);
     }

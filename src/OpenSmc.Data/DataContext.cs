@@ -21,11 +21,11 @@ public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace) : IAsync
     public ImmutableDictionary<object, DataSourceBuilder> DataSourceBuilders { get; set; } = ImmutableDictionary<object, DataSourceBuilder>.Empty;
     internal ReduceManager ReduceManager { get; init; }
 
-    public DataContext AddWorkspaceReferenceStream<TReference>(Func<IObservable<WorkspaceState>, TReference, IObservable<object>> referenceDefinition)
-        where TReference : WorkspaceReference
+    public DataContext AddWorkspaceReferenceStream<TReference, TStream>(Func<IObservable<ChangeItem<WorkspaceState>>, TReference, IObservable<ChangeItem<TStream>>> referenceDefinition)
+    where TReference : WorkspaceReference<TStream>
         => this with { ReduceManager = ReduceManager.AddWorkspaceReferenceStream(referenceDefinition) };
-    public DataContext AddWorkspaceReference<TReference>(Func<WorkspaceState, TReference, object> referenceDefinition)
-        where TReference : WorkspaceReference
+    public DataContext AddWorkspaceReference<TReference, TStream>(Func<ChangeItem<WorkspaceState>, TReference, ChangeItem<TStream>> referenceDefinition)
+        where TReference : WorkspaceReference<TStream>
         => this with { ReduceManager = ReduceManager.AddWorkspaceReference(referenceDefinition) };
 
     public delegate IDataSource DataSourceBuilder(IMessageHub hub); 

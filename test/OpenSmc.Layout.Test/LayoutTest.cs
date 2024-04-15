@@ -33,7 +33,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     layout => layout
                         .WithView(StaticView, Controls.Stack().WithView("Hello", "Hello").WithView("World", "World"))
                         .WithViewDefinition(nameof(ViewWithProgress), ViewWithProgress)
-                        .WithViewDefinition(nameof(UpdatingView), layout.Hub.ServiceProvider.GetRequiredService<IWorkspace>().Stream.Select(ws => (Func<LayoutArea, UiControl>)(_ => UpdatingView(GetToolbar(ws)))))
+                        .WithViewDefinition(nameof(UpdatingView), layout.Hub.ServiceProvider.GetRequiredService<IWorkspace>().Stream.Select(ws => (Func<LayoutArea, UiControl>)(_ => UpdatingView(GetToolbar(ws.Value)))))
 
                 )
             ;
@@ -119,11 +119,13 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var reference = new LayoutAreaReference(nameof(UpdatingView));
 
-        var workspace = GetClient().GetWorkspace();
+        var hub = GetClient();
+        var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream(new HostAddress(), reference);
         var controls = await stream.GetControl(reference.Area).TakeUntil(o => o is HtmlControl).ToArray();
-        controls.Should().HaveCount(2);
         controls.Last().Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
+        stream.Update(x => x.SetValue(x.Value.Update(new Toolbar(2025))));
+
     }
 
     //#if CIRun

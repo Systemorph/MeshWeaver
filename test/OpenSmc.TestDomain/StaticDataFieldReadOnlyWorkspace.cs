@@ -25,9 +25,9 @@ namespace OpenSmc.TestDomain
         }
 
 
-        public IObservable<WorkspaceState> Stream => throw new NotImplementedException();
+        public IObservable<ChangeItem<WorkspaceState>> Stream => throw new NotImplementedException();
 
-        public IObservable<WorkspaceState> ChangeStream => throw new NotImplementedException();
+        public IObservable<ChangeItem<WorkspaceState>> ChangeStream => throw new NotImplementedException();
 
         public WorkspaceState State => throw new NotImplementedException();
 

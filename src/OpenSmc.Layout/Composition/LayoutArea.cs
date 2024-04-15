@@ -1,6 +1,8 @@
 ﻿using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using OpenSmc.Data;
+using OpenSmc.Data.Serialization;
+using OpenSmc.Messaging;
 
 namespace OpenSmc.Layout.Composition;
 
@@ -8,21 +10,27 @@ public record LayoutArea
 {
     public static readonly string ControlsCollection = typeof(UiControl).FullName;
 
-    public ReplaySubject<EntityStore> Stream { get; } = new ReplaySubject<EntityStore>(1);
+    public ReplaySubject<ChangeItem<WorkspaceState>> Stream { get; } = new(1);
     public LayoutAreaReference Reference { get; init; }
+    public IObservable<WorkspaceState> Workspace { get; set; }
 
 
-    private readonly Subject<Func<EntityStore, EntityStore>> updateStream = new();
+    private readonly Subject<Func<ChangeItem<WorkspaceState>, ChangeItem<WorkspaceState>>> updateStream = new();
     public void UpdateView(string area, UiControl control)
     {
-        updateStream.OnNext(store => store.UpdateCollection(ControlsCollection, i => i.SetItem(area, control)));
+        updateStream.OnNext(ws => ws.SetValue(ws.Value.Update(ControlsCollection, i => i.SetItem(area, control))));
     }
 
 
-    public LayoutArea(LayoutAreaReference Reference)
+    public LayoutArea(IMessageHub hub, LayoutAreaReference Reference, WorkspaceState state)
     {
         this.Reference = Reference;
-        updateStream.Scan(new EntityStore(), (currentState, updateFunc) => updateFunc(currentState))
+        updateStream.Scan(new ChangeItem<WorkspaceState>(
+                hub.Address,
+                Reference,
+                new WorkspaceState(state.Hub, new(), state.TypeSources, (ci,r) => ci.SetValue(ci.Value.Reduce(r))), 
+                hub.Address),
+            (currentState, updateFunc) => updateFunc(currentState))
             .Sample(TimeSpan.FromMilliseconds(100))
             .Subscribe(Stream);
     }
