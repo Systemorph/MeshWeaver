@@ -2,7 +2,7 @@
 
 namespace OpenSmc.Application.Orleans;
 
-public interface IApplicationGrain
+public interface IApplicationGrain : IGrainWithStringKey
 {
     Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery);
 }
