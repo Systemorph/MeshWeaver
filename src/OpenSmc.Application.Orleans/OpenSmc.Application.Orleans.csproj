@@ -1,2 +1,5 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\OpenSmc.Application.Orleans.Abstractions\OpenSmc.Application.Orleans.Abstractions.csproj" />
+  </ItemGroup>
 </Project>
