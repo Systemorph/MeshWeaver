@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout.Composition;
+using OpenSmc.Layout.DataBinding;
 using OpenSmc.Messaging;
 using OpenSmc.ServiceProvider;
 using Xunit.Abstractions;
@@ -75,7 +76,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     private static UiControl UpdatingView(Toolbar toolbar)
     {
 
-        return Controls.HtmlView($"Report for year {toolbar.Year}");
+        return Controls.Stack()
+            .WithView("Toolbar", Template.Bind(toolbar, tb => Controls.TextBox(tb.Year)))
+            .WithView("Content", Controls.HtmlView($"Report for year {toolbar.Year}"));
     }
 
 
@@ -123,9 +126,17 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream(new HostAddress(), reference);
-        var controls = await stream.GetControl(reference.Area).TakeUntil(o => o is HtmlControl).ToArray();
-        controls.Last().Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
-        stream.Update(x => x.Update(new Toolbar(2025)));
+        var content = await stream.GetControl($"{reference.Area}/Content").FirstAsync();
+        content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
+
+        var toolbar = (TextBoxControl)await stream.GetControl($"{reference.Area}/Toolbar").FirstAsync();
+        toolbar.Data.Should().BeOfType<Binding>().Which.Path.Should().Be("year");
+        var toolbarDataReference = toolbar.DataContext.Should().BeOfType<EntityReference>().Which;
+        var toolbarData = (Toolbar)await stream.GetData(toolbarDataReference).FirstAsync();
+        toolbarData.Year.Should().Be(2024);
+
+        stream.Update(store => store.Update(toolbarDataReference, toolbarData with{Year = 2025}));
+
         var updatedControls = await stream.GetControl(reference.Area).TakeUntil(o => o is HtmlControl html && !html.Data.ToString()!.Contains("2024")).ToArray();
         updatedControls.Last().Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2025");
 

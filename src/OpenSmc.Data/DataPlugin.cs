@@ -152,6 +152,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
     }
 
 
+
     private void Synchronize(ChangeItem<EntityStore> item)
     {
         if (Hub.Address.Equals(item.ChangedBy))
