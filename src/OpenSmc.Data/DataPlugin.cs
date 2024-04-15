@@ -148,7 +148,7 @@ public class DataPlugin(IMessageHub hub) : MessageHubPlugin<WorkspaceState>(hub)
 
     public WorkspaceState CreateState(EntityStore entityStore)
     {
-        return new(Hub, new EntityStore(), typeSources, ReduceManager.Reduce);
+        return new(Hub, entityStore, typeSources, ReduceManager.Reduce);
     }
 
 

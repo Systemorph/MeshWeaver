@@ -49,6 +49,7 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
             CreateSerializationConfiguration(), (c, f) => f.Invoke(c)).Options;
         var typeRegistry = serviceProvider.GetRequiredService<ITypeRegistry>();
         DeserializationOptions = new JsonSerializerOptions(SerializationOptions);
+        SerializationOptions.Converters.Add(new JsonNodeConverter());
         SerializationOptions.Converters.Add(new TypedObjectSerializeConverter(typeRegistry, null));
         DeserializationOptions.Converters.Add(new TypedObjectDeserializeConverter(typeRegistry));
 

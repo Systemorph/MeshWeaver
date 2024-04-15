@@ -125,6 +125,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var controls = await stream.GetControl(reference.Area).TakeUntil(o => o is HtmlControl).ToArray();
         controls.Last().Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
         stream.Update(x => x.SetValue(x.Value.Update(new Toolbar(2025))));
+        var updatedControls = await stream.GetControl(reference.Area).TakeUntil(o => o is HtmlControl html && !html.Data.ToString()!.Contains("2024")).ToArray();
+        controls.Last().Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2025");
 
     }
 
