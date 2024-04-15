@@ -19,4 +19,5 @@ public interface IWorkspace
     void Commit();
     void Rollback();
     IObservable<ChangeItem<TReference>> GetStream<TReference>(WorkspaceReference<TReference> reference);
+    WorkspaceState CreateState(EntityStore deserialize);
 }

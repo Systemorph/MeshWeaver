@@ -60,6 +60,11 @@ namespace OpenSmc.TestDomain
             throw new NotImplementedException();
         }
 
+        public WorkspaceState CreateState(EntityStore deserialize)
+        {
+            throw new NotImplementedException();
+        }
+
         public void Update(IEnumerable<object> instances, UpdateOptions updateOptions)
         {
             throw new NotImplementedException();
