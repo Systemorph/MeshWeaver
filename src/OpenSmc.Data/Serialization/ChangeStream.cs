@@ -2,6 +2,7 @@
 using System.Reactive.Subjects;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Humanizer;
 using Json.Patch;
 using OpenSmc.Messaging;
 
@@ -26,7 +27,6 @@ public record ChangeStream<TStream> : IDisposable,
     private IDisposable updateSubscription;
 
     protected JsonNode LastSynchronized { get; set; }
-    protected TStream Current { get; set; }
 
     private IMessageHub Hub { get; }
     private readonly ReplaySubject<ChangeItem<TStream>> store = new(1);
@@ -67,11 +67,8 @@ public record ChangeStream<TStream> : IDisposable,
     {
         IObservable<DataChangedEvent> stream = dataChangedStream;
 
-        if (Current != null)
-        {
-            stream = stream
-                .StartWith(GetFullDataChange(new ChangeItem<TStream>(Address, Reference, Current, Address)));
-        }
+        if (LastSynchronized != null)
+            observer.OnNext(new DataChangedEvent(Address, Reference, Hub.Version, LastSynchronized, ChangeType.Full, Address));
         return stream.Subscribe(observer);
     }
 
@@ -116,7 +113,7 @@ public record ChangeStream<TStream> : IDisposable,
 
     private DataChangedEvent GetDataChanged(ChangeItem<TStream> change)
     {
-        var node = JsonSerializer.SerializeToNode(change.Value, Hub.SerializationOptions);
+        var node = JsonSerializer.SerializeToNode(change.Value, typeof(TStream), Hub.SerializationOptions);
 
 
         var dataChanged = LastSynchronized == null
@@ -171,7 +168,7 @@ public record ChangeStream<TStream> : IDisposable,
 
     private DataChangedEvent GetFullDataChange(ChangeItem<TStream> value)
     {
-        return new DataChangedEvent(Address, Reference, GetVersion(), Current = value.Value, ChangeType.Full, value.ChangedBy);
+        return new DataChangedEvent(Address, Reference, GetVersion(), value.Value, ChangeType.Full, value.ChangedBy);
     }
 
 

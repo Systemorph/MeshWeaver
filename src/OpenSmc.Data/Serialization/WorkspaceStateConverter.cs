@@ -6,7 +6,7 @@ using OpenSmc.Messaging;
 
 namespace OpenSmc.Data.Serialization;
 
-public class WorkspaceConverter(IMessageHub hub) : JsonConverter<WorkspaceState>
+public class WorkspaceStateConverter(IMessageHub hub) : JsonConverter<WorkspaceState>
 {
     public override WorkspaceState Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
@@ -36,7 +36,7 @@ public class WorkspaceConverter(IMessageHub hub) : JsonConverter<WorkspaceState>
 
         if(!obj.TryGetPropertyValue("store", out var storeSerialized))
             throw new ArgumentException("Invalid serialized workspace. No store property set.");
-        return hub.GetWorkspace().CreateState(storeSerialized.Deserialize<EntityStore>());
+        return hub.GetWorkspace().CreateState(storeSerialized.Deserialize<EntityStore>(hub.DeserializationOptions));
     }
 
 }

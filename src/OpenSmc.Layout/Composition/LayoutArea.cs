@@ -12,7 +12,6 @@ public record LayoutArea
 
     public ReplaySubject<ChangeItem<WorkspaceState>> Stream { get; } = new(1);
     public LayoutAreaReference Reference { get; init; }
-    public IObservable<WorkspaceState> Workspace { get; set; }
 
 
     private readonly Subject<Func<ChangeItem<WorkspaceState>, ChangeItem<WorkspaceState>>> updateStream = new();
@@ -25,10 +24,11 @@ public record LayoutArea
     public LayoutArea(IMessageHub hub, LayoutAreaReference Reference, WorkspaceState state)
     {
         this.Reference = Reference;
+        var workspace = hub.GetWorkspace();
         updateStream.Scan(new ChangeItem<WorkspaceState>(
                 hub.Address,
                 Reference,
-                new WorkspaceState(state.Hub, new(), state.TypeSources, (ci,r) => ci.Reduce(r)), 
+                workspace.CreateState(new()), 
                 hub.Address),
             (currentState, updateFunc) => updateFunc(currentState))
             .Sample(TimeSpan.FromMilliseconds(100))
