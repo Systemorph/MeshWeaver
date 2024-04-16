@@ -1,4 +1,5 @@
-﻿using OpenSmc.Messaging;
+﻿using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Messaging;
 
 namespace OpenSmc.Application.Orleans;
 
@@ -9,12 +10,13 @@ public class ApplicationGrain : Grain, IApplicationGrain
     public override async Task OnActivateAsync(CancellationToken cancellationToken)
     {
         await base.OnActivateAsync(cancellationToken);
-        Hub = CreateHub();
+        Hub = ServiceProvider.GetRequiredService<IMessageHub>();
+        //Hub = CreateHub();
     }
 
     public override async Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
     {
-        await Hub.DisposeAsync();
+        //await Hub.DisposeAsync();
         await base.OnDeactivateAsync(reason, cancellationToken);
     }
 
