@@ -146,7 +146,7 @@ public record ChangeStream<TStream> : IDisposable,
     private  TStream GetFullState(DataChangedEvent request)
     {
         LastSynchronized = JsonSerializer.SerializeToNode(request.Change, request.Change.GetType(), Hub.SerializationOptions);
-        return (TStream)request.Change;
+        return request.Change is JsonNode node ? node.Deserialize<TStream>(Hub.DeserializationOptions) : (TStream)request.Change;
     }
 
     public ChangeStream<TStream> Initialize(TStream initial)
