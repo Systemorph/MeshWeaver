@@ -34,6 +34,7 @@
     <PackageVersion Include="Microsoft.Extensions.Options" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Orleans.Core" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Orleans.Sdk" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Orleans.Serialization.SystemTextJson" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Orleans.Server" Version="8.0.0" />
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageVersion Include="System.Interactive" Version="6.0.1" />
