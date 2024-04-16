@@ -1,11 +1,11 @@
-import { updateByReferenceActionCreator } from "../workspaceReducer";
-import { PathReferenceBase } from "../contract/PathReferenceBase";
+import { changeReference } from "../workspaceReducer";
+import { PathReference } from "../contract/PathReference";
 
 export const pathToUpdateAction = (path: string) =>
     (value: unknown) =>
-        updateByReferenceActionCreator(
+        changeReference(
             {
-                reference: new PathReferenceBase(path),
+                reference: new PathReference(path),
                 value
             }
         );

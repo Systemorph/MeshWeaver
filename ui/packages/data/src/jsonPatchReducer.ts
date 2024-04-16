@@ -1,9 +1,8 @@
 import { createAction, createReducer } from '@reduxjs/toolkit';
-import { applyPatches, enablePatches, Patch } from "immer";
-import { identity } from "lodash-es";
 import { JsonPatch, PatchOperation } from "./contract/JsonPatch";
-
-enablePatches();
+import jsonPatch, { Operation } from "fast-json-patch";
+import { applyPatches, Patch } from "immer";
+import { identity } from "rxjs";
 
 export const jsonPatchActionCreator = createAction<JsonPatch>('patch');
 
@@ -18,13 +17,14 @@ export const jsonPatchReducer = createReducer(
             .addCase(
                 jsonPatchActionCreator,
                 (state, action) =>
+                    // TODO: use fast-json-patch (4/16/2024, akravets)
                     applyPatches(state, action.payload.operations.map(toImmerPatch))
             );
     }
 );
 
-function toImmerPatch(patch: PatchOperation): Patch {
-    const {op, path, value} = patch;
+function toImmerPatch(patch: Operation): Patch {
+    const {op, path, value} = patch as PatchOperation;
 
     return {
         op,

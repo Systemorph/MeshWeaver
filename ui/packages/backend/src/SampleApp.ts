@@ -1,4 +1,4 @@
-import { produceWithPatches } from "immer";
+import { enablePatches, produceWithPatches } from "immer";
 import { SubscribeRequest } from "@open-smc/data/src/contract/SubscribeRequest";
 import { DataChangedEvent } from "@open-smc/data/src/contract/DataChangedEvent";
 import { JsonPatch } from "@open-smc/data/src/contract/JsonPatch";
@@ -14,6 +14,8 @@ import { basicStoreExample } from "@open-smc/layout/src/examples/basicStoreExamp
 import { log } from "@open-smc/utils/src/operators/log";
 import { serialize } from "@open-smc/serialization/src/serialize";
 import { deserialize } from "@open-smc/serialization/src/deserialize";
+
+enablePatches();
 
 export class SampleApp extends Observable<MessageDelivery> implements Observer<MessageDelivery> {
     protected input = new Subject<MessageDelivery>();
@@ -66,7 +68,7 @@ export class SampleApp extends Observable<MessageDelivery> implements Observer<M
                         this.output,
                         new DataChangedEvent(reference, new JsonPatch(patches.map(toPatchOperation)), "Patch")
                     )
-                }, 1000);
+                }, 2000);
 
                 return of(new DataChangedEvent(reference, basicStoreExample, "Full"));
             }

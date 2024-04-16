@@ -1,8 +1,9 @@
 import { type } from "@open-smc/serialization/src/type";
+import { Operation } from "fast-json-patch";
 
 @type("Json.Patch.JsonPatch")
 export class JsonPatch {
-    constructor(public operations: PatchOperation[]) {
+    constructor(public operations: Operation[]) {
     }
 
     // serialize() {
