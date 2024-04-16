@@ -1,4 +1,5 @@
 ﻿using OpenSmc.Application.SignalR;
+using OpenSmc.Messaging;
 using Orleans.Serialization;
 using static OpenSmc.Hosting.HostBuilderExtensions;
 
@@ -31,6 +32,20 @@ public class Program
 
         await app.RunAsync();
     }
+}
+
+public static class OrleansMessageHubExtensions
+{
+    public static IServiceCollection AddOrleansHub(this IServiceCollection services)
+    {
+        services.AddSingleton(sp => sp.GetOrleansHub());
+        return services;
+    }
+
+    public static IMessageHub GetOrleansHub(this IServiceProvider serviceProvider) 
+        => serviceProvider.CreateMessageHub(new OrleansAddress(), conf => 
+            conf
+        );
 }
 
 record OrleansAddress;
