@@ -57,7 +57,7 @@ public static class Controls
     internal static UiControl BindObject<T, TView>(object data, Expression<Func<T, TView>> dataTemplate)
         where TView : UiControl
     {
-        var view = dataTemplate.Build("", out var types);
+        var view = dataTemplate.Build("$", out var types);
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
         view = view with { DataContext = data };
@@ -71,12 +71,12 @@ public static class Controls
     internal static ItemTemplateControl BindEnumerable<T, TView>(object data, Expression<Func<T, TView>> dataTemplate)
         where TView : UiControl
     {
-        var view = dataTemplate.Build("item", out var types);
+        var view = dataTemplate.Build("$", out var types);
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
         var ret = data is Binding
             ? new ItemTemplateControl(view, data)
-            : new ItemTemplateControl(view, new Binding("")) { DataContext = data };
+            : new ItemTemplateControl(view, new Binding("$")) { DataContext = data };
 
         return ret;
 

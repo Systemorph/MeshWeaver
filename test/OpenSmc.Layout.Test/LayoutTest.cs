@@ -153,7 +153,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         // Get toolbar and change value.
         var toolbarArea = $"{reference.Area}/Toolbar";
         var toolbar = (TextBoxControl)await stream.GetControl(toolbarArea).FirstAsync();
-        toolbar.Data.Should().BeOfType<Binding>().Which.Path.Should().Be("year");
+        toolbar.Data.Should().BeOfType<Binding>().Which.Path.Should().Be("$.year");
         var toolbarDataReference = toolbar.DataContext.Should().BeOfType<EntityReference>().Which;
         var toolbarData = (Toolbar)await stream.GetData(toolbarDataReference).FirstAsync();
         toolbarData.Year.Should().Be(2024);
@@ -186,6 +186,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .SelectAwait(async r => (DataRecord)await stream.GetData(r).FirstAsync())
             .ToArrayAsync();
 
+        itemTemplate.Data.Should().BeOfType<Binding>().Which.Path.Should().Be("$");
+        itemTemplate.View.Should().BeOfType<TextBoxControl>().Which.Data.Should().BeOfType<Binding>().Which.Path.Should().Be("$.displayName");
         workspaceReferences.Should().HaveCount(2).And.Contain(r => r.SystemName == "Hello").And.Contain(r => r.SystemName == "World");
 
     }
