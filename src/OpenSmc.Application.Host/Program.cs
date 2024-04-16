@@ -22,6 +22,8 @@ public class Program
                 {
                     serializerBuilder.AddJsonSerializer(isSupported: type => true);
                 });
+                
+                siloBuilder.Services.AddOrleansHub();
             });
 
         using var app = builder.Build();
