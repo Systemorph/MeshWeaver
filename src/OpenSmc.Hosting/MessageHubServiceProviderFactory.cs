@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Hosting;
 
@@ -8,6 +9,7 @@ internal class MessageHubServiceProviderFactory : IServiceProviderFactory<IServi
 
     public IServiceProvider CreateServiceProvider(IServiceCollection services)
     {
-        throw new NotImplementedException();
+        var serviceProvider = services.SetupModules();
+        return serviceProvider;
     }
 }
