@@ -18,4 +18,10 @@ public class ApplicationGrain : Grain, IApplicationGrain
     {
         throw new NotImplementedException();
     }
+
+    private static ApplicationAddress ParseAddress(string serializedAddress)
+    {
+        // HACK V10: the real parsing should be here instead of this hardcoding (2024/04/15, Dmitry Kalabin)
+        return new(TestApplication.Name, TestApplication.Environment);
+    }
 }
