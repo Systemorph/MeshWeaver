@@ -1,5 +1,6 @@
 ﻿using OpenSmc.Application.SignalR;
 using Orleans.Serialization;
+using static OpenSmc.Hosting.HostBuilderExtensions;
 
 namespace OpenSmc.Application.Host;
 
@@ -12,6 +13,7 @@ public class Program
         builder.Services.ConfigureApplicationSignalR();
 
         builder.Host
+            .ConfigureServiceProvider()
             .UseOrleans(static siloBuilder =>
             {
                 siloBuilder.UseLocalhostClustering();
