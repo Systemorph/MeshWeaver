@@ -9,5 +9,6 @@
   <ItemGroup>
     <ProjectReference Include="..\OpenSmc.Application.Orleans\OpenSmc.Application.Orleans.csproj" />
     <ProjectReference Include="..\OpenSmc.Application.SignalR\OpenSmc.Application.SignalR.csproj" />
+    <ProjectReference Include="..\OpenSmc.Hosting\OpenSmc.Hosting.csproj" />
   </ItemGroup>
 </Project>
