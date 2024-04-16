@@ -22,7 +22,7 @@ public class DataChangedEventConverter : JsonConverter<DataChangedEvent>
             _ => root.GetProperty("change").Deserialize<object>(options)
         };
 
-        return new DataChangedEvent(address, reference, version, change, (ChangeType)changeType, changedBy);
+        return new DataChangedEvent(address, reference, version, change, changeType, changedBy);
     }
 
     public override void Write(Utf8JsonWriter writer, DataChangedEvent value, JsonSerializerOptions options)
