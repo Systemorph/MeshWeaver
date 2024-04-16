@@ -32,3 +32,5 @@ public class Program
         await app.RunAsync();
     }
 }
+
+record OrleansAddress;
