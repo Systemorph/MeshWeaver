@@ -11,23 +11,23 @@ export class JsonPathReference<T> extends WorkspaceReference<T> {
         super();
     }
 
-    get(data: any): T {
-        // jsonpath-plus returns undefined if data is empty string or 0
-        if (this.jsonPath === "$") {
-            return data;
-        }
-
-        return JSONPath(
-            {
-                json: data,
-                path: this.jsonPath,
-                wrap: false
-            }
-        );
-    }
-
-    set(data: object, value: T) {
-        const pointer = toPointer(this.jsonPath);
-        set(data, pointerToArray(pointer), value);
-    }
+    // get(data: any): T {
+    //     // jsonpath-plus returns undefined if data is empty string or 0
+    //     if (this.jsonPath === "$") {
+    //         return data;
+    //     }
+    //
+    //     return JSONPath(
+    //         {
+    //             json: data,
+    //             path: this.jsonPath,
+    //             wrap: false
+    //         }
+    //     );
+    // }
+    //
+    // set(data: object, value: T) {
+    //     const pointer = toPointer(this.jsonPath);
+    //     set(data, pointerToArray(pointer), value);
+    // }
 }

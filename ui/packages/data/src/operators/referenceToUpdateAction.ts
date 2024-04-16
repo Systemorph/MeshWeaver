@@ -1,9 +1,9 @@
 import { WorkspaceReference } from "../contract/WorkspaceReference";
-import { updateByReferenceActionCreator } from "../workspaceReducer";
+import { changeReference } from "../workspaceReducer";
 
 export const referenceToUpdateAction = (reference: WorkspaceReference) =>
     (value: unknown) =>
-        updateByReferenceActionCreator({
+        changeReference({
             reference,
             value
         });

@@ -1,7 +1,5 @@
 import { RenderArea } from "./store/RenderArea";
 import { useAppSelector } from "./store/hooks";
-import { useEffect } from "react";
-import { startSynchronization } from "./store/startSynchronization";
 import '@open-smc/layout/src/contract';
 import '@open-smc/data/src/contract';
 

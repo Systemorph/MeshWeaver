@@ -1,5 +1,5 @@
 import { configureStore, Store } from "@reduxjs/toolkit";
-import { from, Observable, Observer, pipe } from "rxjs";
+import { from, Observable, Observer } from "rxjs";
 import { WorkspaceAction, workspaceReducer } from "./workspaceReducer";
 
 export class Workspace<T = unknown> extends Observable<T> implements Observer<WorkspaceAction> {

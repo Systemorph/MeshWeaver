@@ -270,3 +270,14 @@ const myMapSerialized = {
         ["bar", "2"]
     ]
 }
+
+
+
+const state = {
+    child1: {
+        foo: "2",
+    },
+    child2: {
+        foo: "2"
+    }
+}

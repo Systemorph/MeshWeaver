@@ -1,13 +1,9 @@
 import { type } from "@open-smc/serialization/src/type";
-import { PathReferenceBase } from "./PathReferenceBase";
+import { WorkspaceReference } from "./WorkspaceReference";
 
 @type("OpenSmc.Data.EntireWorkspace")
-export class EntireWorkspace extends PathReferenceBase {
+export class EntireWorkspace extends WorkspaceReference {
     constructor() {
         super();
-    }
-
-    protected get path() {
-        return "";
     }
 }
