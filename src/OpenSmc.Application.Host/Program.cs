@@ -1,4 +1,5 @@
 ﻿using OpenSmc.Application.SignalR;
+using Orleans.Serialization;
 
 namespace OpenSmc.Application.Host;
 
@@ -14,6 +15,10 @@ public class Program
             .UseOrleans(static siloBuilder =>
             {
                 siloBuilder.UseLocalhostClustering();
+                siloBuilder.Services.AddSerializer(serializerBuilder =>
+                {
+                    serializerBuilder.AddJsonSerializer(isSupported: type => true);
+                });
             });
 
         using var app = builder.Build();
