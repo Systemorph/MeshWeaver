@@ -20,7 +20,11 @@ public class ApplicationGrain : Grain, IApplicationGrain
         await base.OnDeactivateAsync(reason, cancellationToken);
     }
 
-    public Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery) => Task.FromResult(Hub.DeliverMessage(delivery));
+    public Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery) => Task.FromResult(Hub.DeliverMessage(FixAddresses(delivery)));
+
+    // HACK V10: this is here as a temporal workaround for deserialization issues and should be removed as soon as we fix deserialization (2024/04/17, Dmitry Kalabin)
+    private static IMessageDelivery FixAddresses(IMessageDelivery delivery) 
+        => (MessageDelivery)delivery with { Sender = new UiAddress(TestUiIds.HardcodedUiId), Target = new ApplicationAddress(TestApplication.Name, TestApplication.Environment), };
 
     private IMessageHub CreateHub()
     {
