@@ -1,4 +1,4 @@
-﻿namespace OpenSmc.Layout.Composition;
+﻿namespace OpenSmc.Layout;
 
 public record SpinnerControl()
     : UiControl<SpinnerControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion,

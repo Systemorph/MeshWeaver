@@ -12,7 +12,7 @@ public interface ILayout
 
 }
 
-public record LayoutAddress(object Host) : IHostedAddress;
+public record LayoutExecutionAddress(object Host) : IHostedAddress;
 
 public class LayoutPlugin(IMessageHub hub) 
     : MessageHubPlugin(hub), 
@@ -24,7 +24,7 @@ public class LayoutPlugin(IMessageHub hub)
         hub.Configuration.GetListOfLambdas().Aggregate(new LayoutDefinition(hub), (x, y) => y.Invoke(x));
 
     private readonly IMessageHub layoutHub =
-        hub.GetHostedHub(new LayoutAddress(hub.Address));
+        hub.GetHostedHub(new LayoutExecutionAddress(hub.Address));
 
     public override async Task StartAsync(CancellationToken cancellationToken)
     {
