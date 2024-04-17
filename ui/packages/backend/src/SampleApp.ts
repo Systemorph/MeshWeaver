@@ -68,7 +68,7 @@ export class SampleApp extends Observable<MessageDelivery> implements Observer<M
                         this.output,
                         new DataChangedEvent(reference, new JsonPatch(patches.map(toPatchOperation)), "Patch")
                     )
-                }, 2000);
+                }, 1000);
 
                 return of(new DataChangedEvent(reference, basicStoreExample, "Full"));
             }

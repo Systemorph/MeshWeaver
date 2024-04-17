@@ -16,6 +16,7 @@ import { app$, appStore } from "./appStore";
 import { LayoutStackControl } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
 import { cloneDeepWith } from "lodash";
 import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
+import { withPreviousValue } from "@open-smc/utils/src/operators/withPreviousValue";
 import { bindingToUpdateAction } from "./bindingToUpdateAction";
 
 const uiControlType = (UiControl as any).$type;
@@ -32,38 +33,45 @@ export class EntityStoreRenderer {
 
         this.controls$ = collectionsWorkspace.pipe(map(selectByPath(`/${uiControlType}`)));
 
-        const rootArea$ = entityStore.pipe(map(selectByPath<string>("/reference/area")));
+        const rootArea$ =
+            entityStore
+                .pipe(map(selectByPath<string>("/reference/area")))
+                .pipe(distinctUntilChanged());
 
         this.subscription.add(collectionsWorkspace.subscription);
+
         this.subscription.add(
             rootArea$
-                .pipe(distinctUntilChanged())
                 .pipe(
                     effect(
                         rootArea => {
-                            const control$ =
-                                this.controls$.pipe(
-                                    map(selectByPath(`/${rootArea}`))
-                                )
-
-                            return this.renderControl(rootArea, control$);
+                            if (rootArea) {
+                                return this.renderControl(rootArea)
+                            }
                         }
                     )
                 )
-                .subscribe(rootArea => {
-                    appStore.dispatch(setRoot(rootArea));
+                .pipe(withPreviousValue())
+                .subscribe(([previous, current]) => {
+                    if (current) {
+                        appStore.dispatch(setRoot(current));
+                    } else {
+                        appStore.dispatch(removeArea(previous))
+                    }
                 })
         );
     }
 
-    private renderControl(area: string, control$: Observable<UiControl>, parentDataContext?: unknown) {
+    private renderControl(area: string, parentDataContext?: unknown) {
         const state: Record<string, Subscription> = {};
 
         const subscription = new Subscription();
 
+        const control$ = this.controls$.pipe(map(selectByPath<UiControl>(`/${area}`)));
+
         const nestedAreas$ =
             control$
-                .pipe(map(this.nestedAreas))
+                .pipe(map(nestedAreas))
                 .pipe(distinctUntilChanged());
 
         subscription.add(
@@ -72,12 +80,7 @@ export class EntityStoreRenderer {
                     references => {
                         references?.filter(reference => !state[reference.id])
                             .forEach(reference => {
-                                state[reference.id] = this.renderControl(
-                                    reference.id,
-                                    this.controls$.pipe(
-                                        map(controls => controls?.[reference.id])
-                                    )
-                                );
+                                state[reference.id] = this.renderControl(reference.id);
                             });
                     }
                 )
@@ -121,8 +124,8 @@ export class EntityStoreRenderer {
                                                             props: boundProps
                                                         }
                                                     });
-                                                }
-                                                else {
+                                                } else {
+                                                    // TODO: removeArea for previous value if it's not empty (4/17/2024, akravets)
                                                     return setArea({
                                                         id: area
                                                     })
@@ -131,7 +134,7 @@ export class EntityStoreRenderer {
                                         )
                                     );
 
-                            const dataContextPatch$ =
+                            const dataContextUpdate$ =
                                 props$
                                     .pipe(
                                         switchMap(
@@ -154,7 +157,8 @@ export class EntityStoreRenderer {
 
                             subscription.add(dataContextWorkspace.subscription);
                             subscription.add(setArea$.subscribe(appStore.dispatch));
-                            subscription.add(dataContextPatch$.subscribe(dataContextWorkspace));
+                            // TODO: the following should happen asynchronously, as a side effect (4/17/2024, akravets)
+                            subscription.add(dataContextUpdate$.subscribe(dataContextWorkspace));
 
                             return subscription;
                         }
@@ -180,11 +184,11 @@ export class EntityStoreRenderer {
 
         return subscription;
     }
+}
 
-    private nestedAreas(control: UiControl) {
-        if (control instanceof LayoutStackControl) {
-            return control?.areas;
-        }
+const nestedAreas = (control: UiControl) => {
+    if (control instanceof LayoutStackControl) {
+        return control.areas;
     }
 }
 

@@ -12,14 +12,14 @@ export const selectByReference = <T>(reference: WorkspaceReference<T>) =>
         }
         if (reference instanceof JsonPathReference) {
             // jsonpath-plus returns undefined if data is empty string or 0
-            if (reference.jsonPath === "$") {
+            if (reference.path === "$") {
                 return data;
             }
 
             return JSONPath(
                 {
                     json: data,
-                    path: reference.jsonPath,
+                    path: reference.path,
                     wrap: false
                 }
             );
