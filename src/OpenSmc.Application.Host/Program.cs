@@ -2,6 +2,7 @@
 using OpenSmc.Application.SignalR;
 using OpenSmc.Messaging;
 using Orleans.Serialization;
+using Orleans.Streams;
 using static OpenSmc.Hosting.HostBuilderExtensions;
 
 namespace OpenSmc.Application.Host;
@@ -23,6 +24,9 @@ public class Program
                 {
                     serializerBuilder.AddJsonSerializer(isSupported: type => true);
                 });
+                siloBuilder
+                    .AddMemoryStreams(ApplicationStreamProviders.AppStreamProvider)
+                    .AddMemoryGrainStorage("PubSubStore");
                 
                 siloBuilder.Services.AddOrleansHub();
             });
