@@ -53,7 +53,7 @@ export class RemoteWorkspace<T = unknown> extends Workspace<T> {
                     if (response.status === "Failed") {
                         // TODO: handle rejection (4/16/2024, akravets)
                     }
-                })
+                });
         }
     }
 }

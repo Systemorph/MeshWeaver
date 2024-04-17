@@ -1,5 +1,5 @@
 import { Observable, tap } from "rxjs";
 
 export const log = (name?: string) =>
-    (source: Observable<any>) =>
-        source.pipe(tap(value => console.log(name, value)));
+    <T>(source: Observable<T>) =>
+        source.pipe(tap(value => void console.log(name, value)));
