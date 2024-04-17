@@ -51,3 +51,7 @@ public static class OrleansMessageHubExtensions
 }
 
 record OrleansAddress;
+
+// HACK V10: these TestRequest/TestResponse should not be a part of Prod setup (2024/04/17, Dmitry Kalabin)
+public record TestRequest : IRequest<TestResponse>;
+public record TestResponse;
