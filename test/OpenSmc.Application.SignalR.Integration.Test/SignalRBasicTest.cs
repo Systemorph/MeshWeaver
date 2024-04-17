@@ -64,6 +64,20 @@ public class SignalRBasicTest : TestBase, IClassFixture<WebApplicationFactory<Pr
         await Connection.StartAsync();
     }
 
+    public override async Task DisposeAsync()
+    {
+        try
+        {
+            await Connection.StopAsync(); // TODO V10: think about timeout for this (2023/09/27, Dmitry Kalabin)
+        }
+        finally
+        {
+            await Connection.DisposeAsync();
+        }
+
+        await base.DisposeAsync();
+    }
+
     record TestRequest : IRequest<TestResponse>;
     record TestResponse;
 }
