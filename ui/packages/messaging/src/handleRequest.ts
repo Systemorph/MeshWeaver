@@ -17,7 +17,15 @@ export const handleRequest =
                     mergeMap(
                         ({id, message}) =>
                             from(handler(message))
-                                .pipe(map(pack({id})))
+                                .pipe(
+                                    map(
+                                        pack({
+                                            properties: {
+                                                requestId: id
+                                            }
+                                        })
+                                    )
+                                )
                     )
                 )
                 // .pipe(log("handleRequest"));

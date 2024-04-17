@@ -14,6 +14,7 @@ import { basicStoreExample } from "@open-smc/layout/src/examples/basicStoreExamp
 import { log } from "@open-smc/utils/src/operators/log";
 import { serialize } from "@open-smc/serialization/src/serialize";
 import { deserialize } from "@open-smc/serialization/src/deserialize";
+import { DataChangeResponse } from "@open-smc/data/src/contract/DataChangeResponse";
 
 enablePatches();
 
@@ -77,7 +78,7 @@ export class SampleApp extends Observable<MessageDelivery> implements Observer<M
     patchChangeRequestHandler = () =>
         (message: PatchChangeRequest) => {
             console.log(message);
-            return EMPTY as any;
+            return of(new DataChangeResponse("Committed"));
         }
 }
 
