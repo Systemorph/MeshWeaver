@@ -4,6 +4,7 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="JetBrains.Annotations" />
+    <PackageReference Include="Microsoft.Orleans.Streaming" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\OpenSmc.Application.Contract\OpenSmc.Application.Contract.csproj" />
