@@ -1,12 +1,15 @@
 ﻿using System.Reactive.Linq;
+
 using FluentAssertions;
 using FluentAssertions.Execution;
+
 using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.Data.TestDomain;
 using OpenSmc.DataStructures;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
+
 using Xunit;
 using Xunit.Abstractions;
 
@@ -15,7 +18,7 @@ namespace OpenSmc.Import.Test;
 public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
 {
     private const string RemappingTestFormat = nameof(RemappingTestFormat);
-    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration) 
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         => base.ConfigureHost(configuration)
             .AddData(
                 data => data.FromConfigurableDataSource(nameof(GenericDataSource),
@@ -25,12 +28,13 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
             )
             .WithHostedHub(new TestDomain.ImportAddress(configuration.Address),
                 config => config
-                    .AddImport(
-                        data => data.FromHub(
+                    .AddData(data => data.FromHub(
                             configuration.Address,
                             source => source
                                 .ConfigureCategory(TestDomain.TestRecordsDomain)
-                            ),
+                            )
+                    )
+                    .AddImport(
                         import => import
                             //// TODO V10: There is no way to override behavior for Default format (2024/02/15, Dmitry Kalabin)
                             //.WithFormat(ImportFormat.Default,
@@ -38,25 +42,26 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
                             //)
                             .WithFormat(RemappingTestFormat,
                                 format => format.WithAutoMappings(ti => ti.WithTableMapping(nameof(MyRecord), MapMyRecord))
-                        )
+                            )
                     )
             )
+
         ;
 
     private IEnumerable<object> MapMyRecord(IDataSet set, IDataTable table)
     {
         const string systemNameColumn = Prefix + nameof(MyRecord.SystemName);
         const string displayNameColumn = nameof(MyRecord.DisplayName);
-        const string strArrColumn  = Prefix + nameof(MyRecord.StringsArray);
+        const string strArrColumn = Prefix + nameof(MyRecord.StringsArray);
         const string strListColumn = nameof(MyRecord.StringsList);
         const string intListColumn = Prefix + nameof(MyRecord.IntList);
 
         foreach (var row in table)
         {
-            yield return new MyRecord() 
+            yield return new MyRecord()
             {
-                SystemName =   row[$"{systemNameColumn}"]?.ToString(),
-                DisplayName =  row[$"{displayNameColumn}"]?.ToString(),
+                SystemName = row[$"{systemNameColumn}"]?.ToString(),
+                DisplayName = row[$"{displayNameColumn}"]?.ToString(),
                 StringsArray = Enumerable.Range(0, 3)
                     .Select(i => row[$"{strArrColumn}{i}"])
                     .Where(x => x is not null)
@@ -116,7 +121,7 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
             resRecord.StringsArray.Should().NotBeNull().And.HaveCount(3).And.Equal("a1", "a2", "a3");
             resRecord.StringsList.Should().NotBeNull().And.ContainSingle().Which.Should().Be("null");
             resRecord.IntArray.Should().BeNull();
-            resRecord.IntList.Should().NotBeNull().And.HaveCount(2).And.Equal(5,8);
+            resRecord.IntList.Should().NotBeNull().And.HaveCount(2).And.Equal(5, 8);
         }
     }
 }
