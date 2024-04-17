@@ -19,6 +19,11 @@ export const basicStoreExample = {
                         $type: "OpenSmc.Data.EntityReference",
                         collection: "OpenSmc.Layout.UiControl",
                         id: "Toolbar"
+                    },
+                    {
+                        $type: "OpenSmc.Data.EntityReference",
+                        collection: "OpenSmc.Layout.UiControl",
+                        id: "ContextMenu"
                     }
                 ]
             },
@@ -38,6 +43,18 @@ export const basicStoreExample = {
                     $type: "OpenSmc.Layout.DataBinding.Binding",
                     path: "$.DisplayName"
                 }
+            },
+            "ContextMenu": {
+                $type: "OpenSmc.Layout.Views.MenuItemControl",
+                dataContext: {
+                    $type: "OpenSmc.Data.JsonPathReference",
+                    path: "$.LineOfBusiness.1"
+                },
+                title: {
+                    $type: "OpenSmc.Layout.DataBinding.Binding",
+                    path: "$.DisplayName"
+                },
+                icon: "systemorph-fill"
             }
         },
         LineOfBusiness: {

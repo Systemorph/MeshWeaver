@@ -15,6 +15,7 @@ import { log } from "@open-smc/utils/src/operators/log";
 import { serialize } from "@open-smc/serialization/src/serialize";
 import { deserialize } from "@open-smc/serialization/src/deserialize";
 import { DataChangeResponse } from "@open-smc/data/src/contract/DataChangeResponse";
+import { TransportEmulation } from "./TransportEmulation";
 
 enablePatches();
 
@@ -82,4 +83,4 @@ export class SampleApp extends Observable<MessageDelivery> implements Observer<M
         }
 }
 
-export const sampleApp = new SampleApp();
+export const sampleApp = new TransportEmulation(new SampleApp());
