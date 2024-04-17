@@ -60,7 +60,15 @@ public static class OrleansMessageHubExtensions
                         return request.Processed();
                     })
                 )
+                .WithRoutes(forward =>
+                    forward.RouteAddress<UiAddress>((routedAddress, d, _) => SendToStreamAsync(forward.Hub, routedAddress, ApplicationStreamNamespaces.Ui, d.Package(forward.Hub.SerializationOptions)))
+                )
         );
+
+    private static async Task<IMessageDelivery> SendToStreamAsync(IMessageHub hub, UiAddress routedAddress, string streamNamespace, IMessageDelivery delivery)
+    {
+        return delivery.Forwarded();
+    }
 }
 
 record OrleansAddress;
