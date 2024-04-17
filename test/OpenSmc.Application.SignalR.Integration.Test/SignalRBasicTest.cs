@@ -85,7 +85,4 @@ public class SignalRBasicTest : TestBase, IClassFixture<WebApplicationFactory<Pr
 
         await base.DisposeAsync();
     }
-
-    record TestRequest : IRequest<TestResponse>;
-    record TestResponse;
 }
