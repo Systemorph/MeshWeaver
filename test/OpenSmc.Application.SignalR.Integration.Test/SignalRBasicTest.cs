@@ -8,6 +8,7 @@ using OpenSmc.Application.Orleans;
 using OpenSmc.Fixture;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
+using OpenSmc.Serialization;
 using OpenSmc.ServiceProvider;
 using Xunit;
 using Xunit.Abstractions;
@@ -26,6 +27,7 @@ public class SignalRBasicTest : TestBase, IClassFixture<WebApplicationFactory<Pr
 
     [Inject] private IMessageHub Client;
     private HubConnection Connection { get; set; }
+    private IDisposable onMessageReceivedSubscription;
 
     public SignalRBasicTest(WebApplicationFactory<Program> webAppFactory, ITestOutputHelper toh) : base(toh)
     {
@@ -70,10 +72,15 @@ public class SignalRBasicTest : TestBase, IClassFixture<WebApplicationFactory<Pr
             Connection.ServerTimeout = signalRServerDebugTimeout;
 
         await Connection.StartAsync();
+
+        onMessageReceivedSubscription = Connection.On<MessageDelivery<RawJson>>("HandleEvent", args =>
+        {
+        });
     }
 
     public override async Task DisposeAsync()
     {
+        onMessageReceivedSubscription?.Dispose();
         try
         {
             await Connection.StopAsync(); // TODO V10: think about timeout for this (2023/09/27, Dmitry Kalabin)
