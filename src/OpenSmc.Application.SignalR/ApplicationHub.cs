@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using OpenSmc.Application.Orleans;
 using OpenSmc.Messaging;
 using OpenSmc.Serialization;
+using Orleans.Streams;
 
 namespace OpenSmc.Application.SignalR;
 
@@ -15,10 +16,14 @@ public class ApplicationHub(IClusterClient clusterClient, ILogger<ApplicationHub
         return base.OnDisconnectedAsync(exception);
     }
 
-    public override Task OnConnectedAsync()
+    public override async Task OnConnectedAsync()
     {
         logger.LogDebug("Attempt to make new SignalR connection {ConnectionId} ", Context.ConnectionId);
-        return base.OnConnectedAsync();
+
+        await base.OnConnectedAsync();
+
+        var streamProvider = clusterClient.GetStreamProvider(ApplicationStreamProviders.AppStreamProvider);
+        var stream = streamProvider.GetStream<IMessageDelivery>(ApplicationStreamNamespaces.Ui, TestUiIds.HardcodedUiId);
     }
 
     [UsedImplicitly]
