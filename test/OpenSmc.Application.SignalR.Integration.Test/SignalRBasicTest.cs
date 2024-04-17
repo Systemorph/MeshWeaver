@@ -28,6 +28,7 @@ public class SignalRBasicTest : TestBase, IClassFixture<WebApplicationFactory<Pr
     [Inject] private IMessageHub Client;
     private HubConnection Connection { get; set; }
     private IDisposable onMessageReceivedSubscription;
+    private event Action<IMessageDelivery> MessageReceived;
 
     public SignalRBasicTest(WebApplicationFactory<Program> webAppFactory, ITestOutputHelper toh) : base(toh)
     {
@@ -46,12 +47,15 @@ public class SignalRBasicTest : TestBase, IClassFixture<WebApplicationFactory<Pr
     public async Task RequestResponse()
     {
         // arrange
+        MessageReceived += d => Client.DeliverMessage(d);
 
         // act
         var response = await Client.AwaitResponse(new TestRequest(), o => o.WithTarget(ApplicationAddress));
 
         // assert
         response.Should().BeAssignableTo<IMessageDelivery<TestResponse>>();
+
+        MessageReceived -= d => Client.DeliverMessage(d);
     }
 
     public async override Task InitializeAsync()
@@ -77,6 +81,7 @@ public class SignalRBasicTest : TestBase, IClassFixture<WebApplicationFactory<Pr
         {
             // HACK V10: one more hack while having issues with deserialization of addresses (2023/09/27, Dmitry Kalabin)
             var delivery = args with { Target = ClientAddress, Sender = ApplicationAddress, };
+            MessageReceived?.Invoke(delivery);
         });
     }
 
