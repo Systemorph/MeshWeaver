@@ -63,7 +63,7 @@ public static class TestHubSetup
         params string[] businessUnits)
         => parent.WithHostedHub(new ImportAddress(year, parent.Address),
             config => config
-                .AddImport(data =>
+            .AddData(data =>
                         data
                             .FromPartitionedHubs(nameof(TransactionalData), c => c
                                 .InitializingPartitions(businessUnits.Select(bu =>
@@ -82,7 +82,8 @@ public static class TestHubSetup
                                 dataSource => dataSource
                                     .WithType<BusinessUnit>()
                                     .WithType<LineOfBusiness>()
-                            ),
+                            ))
+                .AddImport(
                     import => import.WithFormat(CashflowImportFormat, format => format
                         .WithAutoMappings()
                         .WithImportFunction(ImportFunction))

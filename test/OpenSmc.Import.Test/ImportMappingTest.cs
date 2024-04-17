@@ -1,10 +1,13 @@
 ﻿using System.Reactive.Linq;
+
 using FluentAssertions;
+
 using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.Data.TestDomain;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
+
 using Xunit;
 using Xunit.Abstractions;
 
@@ -12,7 +15,7 @@ namespace OpenSmc.Import.Test;
 
 public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration) 
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         => base.ConfigureHost(configuration)
             .AddData(
                 data => data.FromConfigurableDataSource
@@ -24,12 +27,12 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
             )
             .WithHostedHub(new TestDomain.ImportAddress(configuration.Address),
                 config => config
-                    .AddImport(
-                        data => data.FromHub(configuration.Address,
+                .AddData(data => data.FromHub(configuration.Address,
                             source => source
                                 .ConfigureCategory(TestDomain.TestRecordsDomain)
-                        ),
-                        import => import
+                        ))
+                .AddImport(
+                    import => import
                         .WithFormat("Test", format => format
                             .WithImportFunction(CustomImportFunction)
                         )
@@ -37,7 +40,7 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
                             .WithImportFunction(CustomImportFunction)
                             .WithAutoMappings()
                         )
-                    )
+                )
             )
         ;
 
@@ -156,10 +159,10 @@ Record3SystemName,Record3DisplayName";
         CustomImportFunction = (request, set, hub, workspace) =>
         {
             return set.Tables[nameof(MyRecord)].Rows.Select(dsRow => new MyRecord()
-                {
-                    SystemName = dsRow[nameof(MyRecord.SystemName)].ToString()?.Replace("Old", "New"),
-                    DisplayName = "test"
-                }
+            {
+                SystemName = dsRow[nameof(MyRecord.SystemName)].ToString()?.Replace("Old", "New"),
+                DisplayName = "test"
+            }
             );
         };
 
