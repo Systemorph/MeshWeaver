@@ -10,6 +10,8 @@ namespace OpenSmc.Application.SignalR;
 
 public class ApplicationHub(IClusterClient clusterClient, IHubContext<ApplicationHub> hubContext, ILogger<ApplicationHub> logger) : Hub
 {
+    public const string HandleEvent = nameof(HandleEvent); // TODO V10: This name is to be clarified with Ui side (2024/04/17, Dmitry Kalabin)
+
     private StreamSubscriptionHandle<IMessageDelivery> subscriptionHandle; // HACK V10: it doesn't work this way and need to be saved somewhere externally (for example within the component retrieved from DI) (2023/09/27, Dmitry Kalabin)
 
     public override async Task OnDisconnectedAsync(Exception exception)
@@ -29,10 +31,12 @@ public class ApplicationHub(IClusterClient clusterClient, IHubContext<Applicatio
         var stream = streamProvider.GetStream<IMessageDelivery>(ApplicationStreamNamespaces.Ui, TestUiIds.HardcodedUiId);
 
         // TODO V10: change to handle subscriptions per ConnectionId (2024/04/17, Dmitry Kalabin)
+        var connectionId = Context.ConnectionId;
         subscriptionHandle = await stream
             .SubscribeAsync(async(delivery, _) => 
                 {
                     logger.LogTrace("Received {Event}, sending to client.", delivery);
+                    await hubContext.Clients.Client(connectionId).SendAsync(HandleEvent, delivery); // TODO V10: need to think about avoiding closure usages here to let SignalR Hubs to be disposed and recreated when necessary (2024/04/17, Dmitry Kalabin)
                 });
     }
 
