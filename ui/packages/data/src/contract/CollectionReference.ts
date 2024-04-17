@@ -1,5 +1,4 @@
 import { type } from "@open-smc/serialization/src/type";
-import { PathReferenceBase } from "./PathReferenceBase";
 import { Collection } from "./Collection";
 import { WorkspaceReference } from "./WorkspaceReference";
 

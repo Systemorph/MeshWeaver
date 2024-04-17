@@ -6,7 +6,6 @@
 import { ClickedEvent, LayoutAddress } from "@open-smc/layout/src/contract/application.contract";
 import { SubscribeRequest } from "./contract/SubscribeRequest";
 import { DataChangedEvent } from "./contract/DataChangedEvent";
-import { PathReferenceBase } from "./contract/PathReferenceBase";
 import { EntireWorkspace } from "./contract/EntireWorkspace";
 import { LayoutAreaReference } from "./contract/LayoutAreaReference";
 
