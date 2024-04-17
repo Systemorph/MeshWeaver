@@ -13,10 +13,10 @@ import { expandBindings } from "./expandBindings";
 import { removeArea, setArea, setRoot } from "./appReducer";
 import { Binding, isBinding } from "@open-smc/layout/src/contract/Binding";
 import { app$, appStore } from "./appStore";
-import { bindingToPatchAction } from "./bindingToPatchAction";
 import { LayoutStackControl } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
 import { cloneDeepWith } from "lodash";
 import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
+import { bindingToUpdateAction } from "./bindingToUpdateAction";
 
 const uiControlType = (UiControl as any).$type;
 
@@ -146,7 +146,7 @@ export class EntityStoreRenderer {
                                                                     .pipe(map(appState => appState.areas[area].control.props[key]))
                                                                     .pipe(distinctUntilChanged())
                                                                     .pipe(skip(1))
-                                                                    .pipe(map(bindingToPatchAction(binding)))
+                                                                    .pipe(map((bindingToUpdateAction(binding))))
                                                         )
                                                 );
                                             })
