@@ -67,6 +67,9 @@ public static class OrleansMessageHubExtensions
 
     private static async Task<IMessageDelivery> SendToStreamAsync(IMessageHub hub, UiAddress routedAddress, string streamNamespace, IMessageDelivery delivery)
     {
+        var streamProvider = hub.ServiceProvider.GetRequiredKeyedService<IStreamProvider>(ApplicationStreamProviders.AppStreamProvider);
+        var stream = streamProvider.GetStream<IMessageDelivery>(streamNamespace, routedAddress.Id);
+        await stream.OnNextAsync(delivery);
         return delivery.Forwarded();
     }
 }
