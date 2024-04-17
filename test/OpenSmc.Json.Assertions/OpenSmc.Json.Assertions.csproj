@@ -8,7 +8,6 @@
 	<ItemGroup>
 	  <ProjectReference Include="..\..\src\OpenSmc.Messaging.Hub\OpenSmc.Messaging.Hub.csproj" />
 	  <ProjectReference Include="..\..\src\OpenSmc.Reflection\OpenSmc.Reflection.csproj" />
-	  <ProjectReference Include="..\..\src\OpenSmc.Serialization.Abstractions\OpenSmc.Serialization.Abstractions.csproj" />
 	  <ProjectReference Include="..\..\src\OpenSmc.Utils\OpenSmc.Utils.csproj" />
 	</ItemGroup>
 

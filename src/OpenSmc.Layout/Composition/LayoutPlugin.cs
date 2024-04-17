@@ -1,14 +1,15 @@
-﻿using System.Reactive.Linq;
-using System.Reactive.Subjects;
-using Microsoft.Extensions.DependencyInjection;
-using OpenSmc.Data;
+﻿using OpenSmc.Data;
+using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Layout.Composition;
 
-public interface ILayout : IObservable<LayoutAreaCollection>
+public interface ILayout
 {
-    IObservable<LayoutAreaCollection> Render(IObservable<WorkspaceState> state, LayoutAreaReference reference);
+    IMessageHub Hub { get; }
+    IObservable<ChangeItem<EntityStore>> Render(LayoutAreaReference reference);
+    internal void RenderArea(LayoutArea layoutArea, string area, UiControl control);
+
 }
 
 public record LayoutAddress(object Host) : IHostedAddress;
@@ -17,15 +18,14 @@ public class LayoutPlugin(IMessageHub hub)
     : MessageHubPlugin(hub), 
     ILayout
 {
-    //private ImmutableDictionary<string, UiControl> Areas { get; set; } = ImmutableDictionary<string, UiControl>.Empty;
 
+    //private ImmutableDictionary<string, UiControl> Areas { get; set; } = ImmutableDictionary<string, UiControl>.Empty;
     private readonly LayoutDefinition layoutDefinition =
         hub.Configuration.GetListOfLambdas().Aggregate(new LayoutDefinition(hub), (x, y) => y.Invoke(x));
 
     private readonly IMessageHub layoutHub =
         hub.GetHostedHub(new LayoutAddress(hub.Address));
 
-    private readonly IWorkspace workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
     public override async Task StartAsync(CancellationToken cancellationToken)
     {
         await base.StartAsync(cancellationToken);
@@ -34,79 +34,82 @@ public class LayoutPlugin(IMessageHub hub)
             return;
         var control = layoutDefinition.InitialState;
         if(control != null)
-            RenderArea(new LayoutAreaCollection(new(string.Empty)), string.Empty, control);
+            RenderArea(new(this,new(string.Empty)), string.Empty, control);
 
         foreach (var initialization in layoutDefinition.Initializations)
             await initialization.Invoke(cancellationToken);
     }
 
-    private void RenderArea(IObservable<WorkspaceState> state, LayoutAreaReference reference)
-    {
-        var ret = new LayoutAreaCollection(reference);
-        areaSubject.OnNext(RenderArea(ret, reference.Area, layoutDefinition.GetViewElement(reference)));
-    }
+    void ILayout.RenderArea(LayoutArea layoutArea, string area, UiControl control)
+        => RenderArea(layoutArea, area, control);
 
-
-    private LayoutAreaCollection RenderArea(LayoutAreaCollection collection, string area, UiControl control)
+    private void RenderArea(LayoutArea layoutArea, string area, UiControl control)
     {
-        if (control == null)
-            return null;
+        if (control == null) return;
 
         if (control is LayoutStackControl stack)
-            collection = stack.ViewElements.Aggregate(collection, (c, ve) => RenderArea(c, $"{area}/{ve.Area}", ve));
-        return collection with{Areas = collection.Areas.SetItem(area, control)};
-    }
-
-    private LayoutAreaCollection RenderArea(LayoutAreaCollection collection, string area, ViewElementWithViewDefinition viewDefinition)
-    {
-        var ret = collection with { Areas = collection.Areas.SetItem(area, new SpinnerControl()) };
-        layoutHub.Schedule(ct =>
         {
-            ct.ThrowIfCancellationRequested();
-            var stream = viewDefinition.ViewDefinition.Invoke(workspace.Stream, collection.Reference with {Area = area});
-            stream.Select(view => RenderArea(collection, area, view))
-                .DistinctUntilChanged()
-                .Subscribe(areaSubject);
-            return Task.CompletedTask;
-        });
-        return ret;
+            foreach (var ve in stack.ViewElements)
+                RenderArea(layoutArea, $"{area}/{ve.Area}", ve);
+            control = stack with
+            {
+                Areas = stack.ViewElements
+                    .Select(ve => new EntityReference(LayoutArea.ControlsCollection, $"{area}/{ve.Area}")).ToArray()
+            };
+        }
+
+        if (control.DataContext != null) 
+            control = control with { DataContext = layoutArea.UpdateData(control.DataContext) };
+
+        layoutArea.UpdateView(area, control);
     }
 
+    private void RenderArea(LayoutArea layoutArea, string area, ViewElementWithViewDefinition viewDefinition)
+    {
+        var stream = viewDefinition.ViewDefinition;
+        layoutArea.UpdateView(area, new SpinnerControl());
+        stream.Subscribe(
+            f => layoutHub.Schedule(async ct =>
+            {
+                ct.ThrowIfCancellationRequested();
+                var control = await f.Invoke(layoutArea);
+                RenderArea(layoutArea, area, control);
+            })
+        );
+    }
 
-    private LayoutAreaCollection RenderArea(LayoutAreaCollection collection, string area, object view)
-        => RenderArea(collection, area, layoutDefinition.ControlsManager.Get(view));
-
-    private LayoutAreaCollection RenderArea(LayoutAreaCollection collection, string area, ViewElement viewElement)
-        => viewElement switch
+    private void RenderArea(LayoutArea layoutArea, string area, ViewElement viewElement)
+    {
+         switch(viewElement)
         {
-            ViewElementWithView view => RenderArea(collection, area, layoutDefinition.ControlsManager.Get(view.View)),
-            ViewElementWithViewDefinition viewDefinition => RenderArea(collection, area, viewDefinition),
-            _ => throw new NotSupportedException($"Unknown type: {viewElement.GetType().FullName}")
-        };
+            case ViewElementWithView view:
+                RenderArea(layoutArea, area,
+                    layoutDefinition.ControlsManager.Get(view.View));
+                break;
+            case ViewElementWithViewDefinition viewDefinition:
+                RenderArea(layoutArea, area, viewDefinition);
+                    break;
+            case ViewElementWithViewStream s:
+                s.Stream.Invoke(layoutArea)
+                    .Subscribe(c => RenderArea(layoutArea, area, c));
+                break;
+            default: throw new NotSupportedException($"Unknown type: {viewElement.GetType().FullName}");
 
+        }
 
-    //private UiControl GetControl(LayoutAreaReference request)
-    //{
-    //    var generator = layoutDefinition.ViewGenerators.FirstOrDefault(g => g.Filter(request));
-    //    if (generator == null)
-    //        return null;
-    //    var control = layoutDefinition.ControlsManager.Get(generator.Generator.Invoke(request));
-    //    return control;
-    //}
-
-
-    public IObservable<LayoutAreaCollection> Render(IObservable<WorkspaceState> state, LayoutAreaReference reference)
-    {
-        RenderArea(state, reference);
-        return areaSubject;
     }
 
 
 
-    private readonly ReplaySubject<LayoutAreaCollection> areaSubject = new(1);
-    public IDisposable Subscribe(IObserver<LayoutAreaCollection> observer)
+
+
+
+    public IObservable<ChangeItem<EntityStore>> Render(LayoutAreaReference reference)
     {
-        return areaSubject.Subscribe(observer);
+        var viewElement = layoutDefinition.GetViewElement(reference);
+        var area = new LayoutArea(this, reference);
+        RenderArea(area, reference.Area, viewElement);
+        return area.Stream;
     }
 }
 

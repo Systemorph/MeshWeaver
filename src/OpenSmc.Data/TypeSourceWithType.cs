@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;

@@ -4,6 +4,7 @@ using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 using OpenSmc.Serialization;
 
 namespace OpenSmc.Data.Persistence;
@@ -54,12 +55,10 @@ public record PartitionedHubDataSource(object Id, IMessageHub Hub) : HubDataSour
 public abstract record HubDataSourceBase<TDataSource> : DataSource<TDataSource> where TDataSource : HubDataSourceBase<TDataSource>
 {
     private readonly ITypeRegistry typeRegistry;
-    protected JsonSerializerOptions Options => Hub.JsonSerializerOptions;
-    private readonly ISerializationService serializationService;
+    protected JsonSerializerOptions Options => Hub.SerializationOptions;
 
     protected HubDataSourceBase(object Id, IMessageHub Hub) : base(Id, Hub)
     {
-        serializationService = Hub.ServiceProvider.GetRequiredService<ISerializationService>();
         typeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
     }
 
@@ -67,8 +66,8 @@ public abstract record HubDataSourceBase<TDataSource> : DataSource<TDataSource> 
 
     protected override WorkspaceReference<EntityStore> GetReference()
     {
-        typeRegistry.WithTypes(TypeSources.Values.Select(t => t.ElementType));
-        typeRegistry.WithType<JsonPatch>();
+        foreach (var typeSource in TypeSources.Values)
+            typeRegistry.WithType(typeSource.ElementType, typeSource.CollectionName, typeSource.GetKey);
         return SyncAll
             ? new EntireWorkspace()
             : base.GetReference();

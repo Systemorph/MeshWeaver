@@ -2,20 +2,19 @@
 using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
 using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 using OpenSmc.Reflection;
-using OpenSmc.Serialization;
 
 namespace OpenSmc.Data;
 
 public abstract record TypeSource<TTypeSource> : ITypeSource
     where TTypeSource : TypeSource<TTypeSource>
 {
-    private readonly IMessageHub hub;
 
     protected TypeSource(IMessageHub hub, Type ElementType, object DataSource)
     {
-        this.hub = hub;
         this.ElementType = ElementType;
         this.DataSource = DataSource;
         var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>().WithType(ElementType);
@@ -51,9 +50,9 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
 
 
 
-    public virtual InstanceCollection Update(WorkspaceState workspace)
+    public virtual InstanceCollection Update(ChangeItem<WorkspaceState> workspace)
     {
-        var myCollection = workspace.Reduce(new CollectionReference(CollectionName));
+        var myCollection = workspace.Value.Reduce(new CollectionReference(CollectionName));
 
         return UpdateImpl(myCollection);
     }
@@ -86,7 +85,7 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
     public virtual async Task<InstanceCollection> InitializeAsync(CancellationToken cancellationToken)
     {
         var initialData = await InitializeDataAsync(cancellationToken);
-        return new(initialData.ToImmutableDictionary(GetKey, x => x)){GetKey = GetKey};
+        return new(){Instances = initialData.ToImmutableDictionary(GetKey, x => x), GetKey = GetKey};
     }
 
     private Task<IEnumerable<object>> InitializeDataAsync(CancellationToken cancellationToken) 

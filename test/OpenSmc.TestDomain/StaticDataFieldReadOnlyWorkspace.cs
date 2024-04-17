@@ -25,9 +25,9 @@ namespace OpenSmc.TestDomain
         }
 
 
-        public IObservable<WorkspaceState> Stream => throw new NotImplementedException();
+        public IObservable<ChangeItem<WorkspaceState>> Stream => throw new NotImplementedException();
 
-        public IObservable<WorkspaceState> ChangeStream => throw new NotImplementedException();
+        public IObservable<ChangeItem<WorkspaceState>> ChangeStream => throw new NotImplementedException();
 
         public WorkspaceState State => throw new NotImplementedException();
 
@@ -55,7 +55,12 @@ namespace OpenSmc.TestDomain
             throw new NotImplementedException();
         }
 
-        public IObservable<TReference> GetStream<TReference>(WorkspaceReference<TReference> reference)
+        public IObservable<ChangeItem<TReference>> GetStream<TReference>(WorkspaceReference<TReference> reference)
+        {
+            throw new NotImplementedException();
+        }
+
+        public WorkspaceState CreateState(EntityStore deserialize)
         {
             throw new NotImplementedException();
         }

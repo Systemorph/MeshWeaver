@@ -3,10 +3,11 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Json.More;
+using OpenSmc.Messaging.Serialization;
 
 namespace OpenSmc.Data.Serialization;
 
-public class EntityStoreConverter : JsonConverter<EntityStore>
+public class EntityStoreConverter(ITypeRegistry typeRegistry) : JsonConverter<EntityStore>
 {
     public override EntityStore Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
@@ -22,10 +23,13 @@ public class EntityStoreConverter : JsonConverter<EntityStore>
     private JsonNode Serialize(EntityStore store, JsonSerializerOptions options)
     {
         var ret = new JsonObject(
-            store.Instances.ToDictionary(
+            store.Collections.ToDictionary(
                 x => x.Key,
-                x => JsonSerializer.SerializeToNode(x.Value, options)
-            ));
+                x => JsonSerializer.SerializeToNode(x.Value,  typeof(InstanceCollection), options)
+            ))
+        {
+            ["$type"] = typeof(EntityStore).FullName
+        };
         return ret;
     }
 
@@ -37,7 +41,10 @@ public class EntityStoreConverter : JsonConverter<EntityStore>
             throw new ArgumentException("Invalid serialized workspace");
 
         var newStore =
-            new EntityStore(obj.Select(kvp => DeserializeCollection(kvp.Key, kvp.Value, options)).ToImmutableDictionary());
+            new EntityStore()
+            {
+                Collections = obj.Where(kvp => kvp.Key != "$type").Select(kvp => DeserializeCollection(kvp.Key, kvp.Value, options)).ToImmutableDictionary(),
+            };
 
         return newStore;
     }
@@ -47,7 +54,11 @@ public class EntityStoreConverter : JsonConverter<EntityStore>
         return
             new(
                 collection,
-                node.Deserialize<InstanceCollection>(options)
+                node.Deserialize<InstanceCollection>(options) with
+                {
+                    GetKey = typeRegistry.GetKeyFunction(collection)
+                }
             );
     }
+
 }

@@ -1,6 +1,5 @@
 ﻿using System.Reactive.Linq;
 using FluentAssertions;
-using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.Data.TestDomain;
@@ -50,7 +49,8 @@ B4,B,4
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
-        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var host = GetHost();
+        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress())).GetWorkspace();
         var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
         ret.Should().HaveCount(4);
@@ -89,7 +89,8 @@ B4,B,4
         var importRequest = new ImportRequest(content1);
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
-        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var host = GetHost();
+        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress())).GetWorkspace();
         var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
         ret.Should().HaveCount(4);
@@ -147,7 +148,8 @@ B4,B,4
         var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
-        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var host = GetHost();
+        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress())).GetWorkspace();
         var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
         ret.Should().HaveCount(4);
@@ -166,5 +168,4 @@ SystemName,DisplayName,Number
 
         ret.Should().BeEmpty();
     }
-
 }

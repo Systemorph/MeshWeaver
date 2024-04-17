@@ -31,8 +31,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.ShortGuid", "src\Op
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Reflection", "src\OpenSmc.Reflection\OpenSmc.Reflection.csproj", "{4797CE01-7D7F-48A9-9BFE-67E9867F9755}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Serialization.Abstractions", "src\OpenSmc.Serialization.Abstractions\OpenSmc.Serialization.Abstractions.csproj", "{BA802439-A5D0-4A95-A238-D1F75DA9BF78}"
-EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Serialization.Test", "test\OpenSmc.Serialization.Test\OpenSmc.Serialization.Test.csproj", "{6AB262EB-D721-46B6-9987-BF93EDA0FA24}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Disposables", "src\OpenSmc.Disposables\OpenSmc.Disposables.csproj", "{724898BF-A43E-438A-8AAA-FD8235771CA4}"
@@ -54,10 +52,6 @@ EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DataCubes.Abstractions", "src\OpenSmc.DataCubes.Abstractions\OpenSmc.DataCubes.Abstractions.csproj", "{73452FD0-E16B-49D2-B070-23ECF4930437}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Collections", "src\OpenSmc.Collections\OpenSmc.Collections.csproj", "{224D7712-F6AA-465A-B68A-EE68A7B88D2E}"
-EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Application.Scope.Contract", "src\OpenSmc.Application.Scope.Contract\OpenSmc.Application.Scope.Contract.csproj", "{13B467C4-375D-4002-A683-58DE071F8668}"
-EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Application.Scope", "src\OpenSmc.Application.Scope\OpenSmc.Application.Scope.csproj", "{0767636F-41AB-4569-AA05-77BDB6318FDF}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Equality", "src\OpenSmc.Equality\OpenSmc.Equality.csproj", "{CD1B76FE-031D-4448-B53D-2064AFDA7B10}"
 EndProject
@@ -189,10 +183,6 @@ Global
 		{4797CE01-7D7F-48A9-9BFE-67E9867F9755}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{4797CE01-7D7F-48A9-9BFE-67E9867F9755}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{4797CE01-7D7F-48A9-9BFE-67E9867F9755}.Release|Any CPU.Build.0 = Release|Any CPU
-		{BA802439-A5D0-4A95-A238-D1F75DA9BF78}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{BA802439-A5D0-4A95-A238-D1F75DA9BF78}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{BA802439-A5D0-4A95-A238-D1F75DA9BF78}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{BA802439-A5D0-4A95-A238-D1F75DA9BF78}.Release|Any CPU.Build.0 = Release|Any CPU
 		{6AB262EB-D721-46B6-9987-BF93EDA0FA24}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{6AB262EB-D721-46B6-9987-BF93EDA0FA24}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{6AB262EB-D721-46B6-9987-BF93EDA0FA24}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -237,14 +227,6 @@ Global
 		{224D7712-F6AA-465A-B68A-EE68A7B88D2E}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{224D7712-F6AA-465A-B68A-EE68A7B88D2E}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{224D7712-F6AA-465A-B68A-EE68A7B88D2E}.Release|Any CPU.Build.0 = Release|Any CPU
-		{13B467C4-375D-4002-A683-58DE071F8668}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{13B467C4-375D-4002-A683-58DE071F8668}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{13B467C4-375D-4002-A683-58DE071F8668}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{13B467C4-375D-4002-A683-58DE071F8668}.Release|Any CPU.Build.0 = Release|Any CPU
-		{0767636F-41AB-4569-AA05-77BDB6318FDF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{0767636F-41AB-4569-AA05-77BDB6318FDF}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{0767636F-41AB-4569-AA05-77BDB6318FDF}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{0767636F-41AB-4569-AA05-77BDB6318FDF}.Release|Any CPU.Build.0 = Release|Any CPU
 		{CD1B76FE-031D-4448-B53D-2064AFDA7B10}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{CD1B76FE-031D-4448-B53D-2064AFDA7B10}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{CD1B76FE-031D-4448-B53D-2064AFDA7B10}.Release|Any CPU.ActiveCfg = Release|Any CPU

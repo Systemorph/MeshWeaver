@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using OpenSmc.Messaging.Serialization;
 
 namespace OpenSmc.Serialization;
 
@@ -6,14 +7,25 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
 {
     private readonly ConcurrentDictionary<string, Type> typeByName = new();
     private readonly ConcurrentDictionary<Type, string> nameByType = new();
+    private readonly ConcurrentDictionary<string, Func<object,object>> keysByType = new();
 
     public ITypeRegistry WithType(Type type)
+        => WithType(type, FormatType(type));
+
+    public ITypeRegistry WithType(Type type, string typeName)
+        => WithType(type, typeName, null);
+
+    public ITypeRegistry WithType(Type type, string typeName, Func<object, object> key)
     {
-        var typeName = FormatType(type);
         typeByName[typeName] = type;
         nameByType[type] = typeName;
+        if(key != null)
+            keysByType[typeName] = key;
         return this;
     }
+
+    public Func<object,object> GetKeyFunction(string collection)
+    => keysByType.GetValueOrDefault(collection);
 
     public bool TryGetType(string name, out Type type)
     {
@@ -29,8 +41,8 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
         if (nameByType.TryGetValue(type, out var typeName))
             return typeName;
 
-        WithType(type);
-        return nameByType[type];
+        typeByName[type.AssemblyQualifiedName!] = type;
+        return nameByType[type] = type.AssemblyQualifiedName;
     }
 
     public ITypeRegistry WithTypesFromAssembly(Type type, Func<Type, bool> filter)

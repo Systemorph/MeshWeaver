@@ -69,12 +69,12 @@ public static class TemplateBuilder
         private static readonly Dictionary<MethodInfo, MethodInfo> ReplacementMethods = new()
                                                                         {
                                                                             {
-                                                                                ReflectionHelper.GetStaticMethodGeneric(() => Template.Bind<object, UiControl>((object)null, default)),
-                                                                                ReflectionHelper.GetStaticMethodGeneric(() => Template.BindObject<object, UiControl>(default, default))
+                                                                                ReflectionHelper.GetStaticMethodGeneric(() => Controls.Bind<object, UiControl>((object)null, default)),
+                                                                                ReflectionHelper.GetStaticMethodGeneric(() => Controls.BindObject<object, UiControl>(default, default))
                                                                             },
                                                                             {
-                                                                                ReflectionHelper.GetStaticMethodGeneric(() => Template.Bind<object, UiControl>(null, default)),
-                                                                                ReflectionHelper.GetStaticMethodGeneric(() => Template.BindEnumerable<object, UiControl>(default, default))
+                                                                                ReflectionHelper.GetStaticMethodGeneric(() => Controls.Bind<object, UiControl>(null, default)),
+                                                                                ReflectionHelper.GetStaticMethodGeneric(() => Controls.BindEnumerable<object, UiControl>(default, default))
                                                                             },
 
                                                                         };

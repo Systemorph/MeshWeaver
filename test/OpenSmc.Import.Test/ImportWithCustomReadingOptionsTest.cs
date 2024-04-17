@@ -9,7 +9,6 @@ using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using Xunit;
 using Xunit.Abstractions;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace OpenSmc.Import.Test;
 
@@ -58,7 +57,8 @@ public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubT
 
         // assert
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
-        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var host = GetHost();
+        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress())).GetWorkspace();
         var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
         var resRecord = ret.Should().ContainSingle().Which;

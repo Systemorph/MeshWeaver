@@ -1,13 +1,12 @@
 ﻿using System.Collections.Immutable;
 using Newtonsoft.Json;
 using OpenSmc.Messaging;
-using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Layout;
 
 public interface IUiControl : IDisposable
 {
-    string Id { get; }
+    object Id { get; }
     //object Data { get; init; }
     IUiControl WithBuildAction(Func<IUiControl, IServiceProvider, IUiControl> buildFunction);
     bool IsClickable { get; }
@@ -27,7 +26,7 @@ public interface IUiControl<out TControl> : IUiControl
 
 public abstract record UiControl(object Data) : IUiControl
 {
-    public string Id { get; init; } = Guid.NewGuid().AsString();
+    public object Id { get; init; }
 
 
     IUiControl IUiControl.WithBuildAction(Func<IUiControl, IServiceProvider, IUiControl> buildFunction) => WithBuild(buildFunction);
@@ -65,7 +64,7 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion,
 
     protected TControl This => (TControl)this;
 
-    public TControl WithId(string id) => This with { Id = id };
+    public TControl WithId(object id) => This with { Id = id };
     public TControl WithLabel(object label)
     {
         return This with { Label = label };

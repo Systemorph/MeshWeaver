@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Messaging.Serialization;
@@ -44,10 +45,15 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         var configurations =
             Configuration.Get<ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>>() ??
             ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>.Empty;
-        JsonSerializerOptions = configurations.Aggregate(
+        SerializationOptions = configurations.Aggregate(
             CreateSerializationConfiguration(), (c, f) => f.Invoke(c)).Options;
+        var typeRegistry = serviceProvider.GetRequiredService<ITypeRegistry>();
+        DeserializationOptions = new JsonSerializerOptions(SerializationOptions);
+        SerializationOptions.Converters.Add(new JsonNodeConverter());
+        SerializationOptions.Converters.Add(new TypedObjectSerializeConverter(typeRegistry, null));
+        DeserializationOptions.Converters.Add(new TypedObjectDeserializeConverter(typeRegistry));
 
-        MessageService.Initialize(DeliverMessageAsync, JsonSerializerOptions);
+        MessageService.Initialize(DeliverMessageAsync, DeserializationOptions);
 
         disposeActions.AddRange(configuration.DisposeActions);
 
@@ -76,8 +82,7 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
             .WithOptions(o =>
             {
                 o.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
-
-                o.Converters.Insert(0, new TypedObjectConverter(ServiceProvider));
+                o.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault;
             });
     }
 
@@ -256,7 +261,8 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         return this;
     }
 
-    public JsonSerializerOptions JsonSerializerOptions { get; }
+    public JsonSerializerOptions SerializationOptions { get; }
+    public JsonSerializerOptions DeserializationOptions { get; }
 
     private bool IsDisposing => disposingTaskCompletionSource != null;
 

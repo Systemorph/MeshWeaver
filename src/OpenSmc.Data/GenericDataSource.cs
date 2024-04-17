@@ -83,7 +83,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
                 .ToImmutableDictionary(x => x.TypeSource.CollectionName, x => x.Instances);
 
             foreach (var changeStream in ret)
-                changeStream.Initialize(new(instances));
+                changeStream.Initialize(new(){Collections = instances});
         });
         return ret;
     }
@@ -94,7 +94,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
             Workspace, 
             Id, 
             new EntireWorkspace(), 
-            Hub.JsonSerializerOptions, 
+            Hub, 
             () => Hub.Version,
              true);
         return [ret];
@@ -148,7 +148,7 @@ public record GenericDataSource(object Id, IMessageHub Hub) : DataSource<Generic
         return base.Initialize();
     }
 
-    private void Update(WorkspaceState ws)
+    private void Update(ChangeItem<WorkspaceState> ws)
     {
         foreach (var ts in TypeSources.Values)
         {
