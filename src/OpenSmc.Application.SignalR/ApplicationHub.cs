@@ -8,7 +8,7 @@ using Orleans.Streams;
 
 namespace OpenSmc.Application.SignalR;
 
-public class ApplicationHub(IClusterClient clusterClient, ILogger<ApplicationHub> logger) : Hub
+public class ApplicationHub(IClusterClient clusterClient, IHubContext<ApplicationHub> hubContext, ILogger<ApplicationHub> logger) : Hub
 {
     private StreamSubscriptionHandle<IMessageDelivery> subscriptionHandle; // HACK V10: it doesn't work this way and need to be saved somewhere externally (for example within the component retrieved from DI) (2023/09/27, Dmitry Kalabin)
 
