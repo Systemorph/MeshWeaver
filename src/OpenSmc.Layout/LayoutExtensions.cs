@@ -19,8 +19,8 @@ public static class LayoutExtensions
         return config
             .WithServices(services => services.AddScoped<ILayout, LayoutPlugin>())
             .AddData(data => data
-                .AddWorkspaceReferenceStream<LayoutAreaReference>((ws, a) =>
-                    data.Hub.ServiceProvider.GetRequiredService<ILayout>().Render(ws, a))
+                .AddWorkspaceReferenceStream<LayoutAreaReference, EntityStore>((_, a) =>
+                    data.Hub.ServiceProvider.GetRequiredService<ILayout>().Render(a))
             )
             .AddLayoutTypes()
             .Set(config.GetListOfLambdas().Add(layoutDefinition))
@@ -35,14 +35,16 @@ public static class LayoutExtensions
         => configuration
             .WithTypes(typeof(UiControl).Assembly.GetTypes()
                 .Where(t => typeof(IUiControl).IsAssignableFrom(t) && !t.IsAbstract))
-            .WithTypes(typeof(MessageAndAddress), typeof(LayoutAreaCollection), typeof(LayoutAreaReference))
+            .WithTypes(typeof(MessageAndAddress), typeof(LayoutAreaReference))
         ;
 
 
 
-    public static IObservable<UiControl> GetControl(this ChangeStream<LayoutAreaCollection> changeItems,
-        LayoutAreaReference reference)
-        => ((IObservable<ChangeItem<LayoutAreaCollection>>)changeItems).Select(i => i.Value.Areas.GetValueOrDefault(reference.Area))
+    public static IObservable<object> GetControl(this ChangeStream<EntityStore> changeItems, string area)
+        => ((IObservable<ChangeItem<EntityStore>>)changeItems).Select(i => i.Value.Reduce(new EntityReference(typeof(UiControl).FullName, area)))
+            .Where(x => x != null);
+    public static IObservable<object> GetData(this ChangeStream<EntityStore> changeItems, WorkspaceReference reference)
+        => ((IObservable<ChangeItem<EntityStore>>)changeItems).Select(i => i.Value.Reduce(reference))
             .Where(x => x != null);
 
 }

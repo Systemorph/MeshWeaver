@@ -51,9 +51,9 @@ public class Hierarchy<T> : IHierarchy<T>
 
     public T[] Children(string systemName)
     {
-        systemName ??= "";
+        var targetKey = systemName ?? "<null>";
 
-        return children.GetOrAdd(systemName, _ => elementsBySystemName.Values.Where(x => x.Parent == systemName).ToArray());
+        return children.GetOrAdd(targetKey, _ => elementsBySystemName.Values.Where(x => x.Parent == systemName).ToArray());
     }
 
     private readonly Dictionary<string, T[]> descendants = new();

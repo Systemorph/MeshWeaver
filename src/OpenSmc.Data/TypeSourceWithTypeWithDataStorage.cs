@@ -34,7 +34,7 @@ public record TypeSourceWithTypeWithDataStorage<T> : TypeSourceWithType<T, TypeS
     {
         await using var transaction = await Storage.StartTransactionAsync(cancellationToken);
         await base.InitializeAsync(cancellationToken);
-        return LastSaved = new((await Storage.Query<T>().ToDictionaryAsync(GetKey, x => (object)x, cancellationToken)).ToImmutableDictionary()){GetKey = GetKey};
+        return LastSaved = new(){Instances = (await Storage.Query<T>().ToDictionaryAsync(GetKey, x => (object)x, cancellationToken)).ToImmutableDictionary(), GetKey = GetKey};
     }
 
     public IDataStorage Storage { get; init; }

@@ -6,9 +6,11 @@ using System.Collections.Immutable;
 
 namespace OpenSmc.Data;
 
-public record InstanceCollection(ImmutableDictionary<object, object> Instances)
+public record InstanceCollection
 {
+    public ImmutableDictionary<object, object> Instances { get; init; } = ImmutableDictionary<object, object>.Empty;
     internal Func<object,object> GetKey { get; init; }
+    public InstanceCollection SetItem(object key, object value) => this with { Instances = Instances.SetItem(key, value) };
     public InstanceCollection Change(DataChangeRequest request)
     {
         switch (request)
@@ -52,8 +54,13 @@ public record InstanceCollection(ImmutableDictionary<object, object> Instances)
             Instances = Instances.RemoveRange(ids)
         };
 
+    public InstanceCollection Update(object id, object instance) =>
+        this with
+        {
+            Instances = Instances.SetItem(id, instance)
+        };
 
-    private InstanceCollection Update(ImmutableDictionary<object, object> entities, bool snapshot = false)
+    public InstanceCollection Update(ImmutableDictionary<object, object> entities, bool snapshot = false)
     {
         return snapshot
             ? this with

@@ -1,6 +1,8 @@
-﻿using OpenSmc.Application.Styles;
+﻿using System.Linq.Expressions;
+using OpenSmc.Application.Styles;
 using OpenSmc.Layout.Api;
 using OpenSmc.Layout.Composition;
+using OpenSmc.Layout.DataBinding;
 using OpenSmc.Layout.Views;
 
 namespace OpenSmc.Layout;
@@ -41,4 +43,45 @@ public static class Controls
     public static Composition.LayoutStackControl ApplicationWindow() => Stack().WithSkin(Skin.MainWindow); 
 
     public static Composition.LayoutStackControl SideMenu() => Stack().WithSkin(Skin.SideMenu);
+
+    #region DataBinding
+
+    
+    /// <summary>
+    /// Takes expression tree of data template and replaces all property getters by binding instances and sets data context property
+    /// </summary>
+    public static UiControl Bind<T, TView>(T data, Expression<Func<T, TView>> dataTemplate)
+        where TView : UiControl
+        => BindObject(data, dataTemplate);
+
+    internal static UiControl BindObject<T, TView>(object data, Expression<Func<T, TView>> dataTemplate)
+        where TView : UiControl
+    {
+        var view = dataTemplate.Build("$", out var types);
+        if (view == null)
+            throw new ArgumentException("Data template was not specified.");
+        view = view with { DataContext = data };
+        return view;
+    }
+
+    public static ItemTemplateControl Bind<T, TView>(IEnumerable<T> data, Expression<Func<T, TView>> dataTemplate)
+        where TView : UiControl
+        => BindEnumerable(data, dataTemplate);
+
+    internal static ItemTemplateControl BindEnumerable<T, TView>(object data, Expression<Func<T, TView>> dataTemplate)
+        where TView : UiControl
+    {
+        var view = dataTemplate.Build("$", out var types);
+        if (view == null)
+            throw new ArgumentException("Data template was not specified.");
+        var ret = data is Binding
+            ? new ItemTemplateControl(view, data)
+            : new ItemTemplateControl(view, new Binding("$")) { DataContext = data };
+
+        return ret;
+
+    }
+
+    #endregion
+
 }

@@ -1,7 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
 using System.Text.Json;
-using OpenSmc.Messaging.Serialization;
 using OpenSmc.Serialization;
 using OpenSmc.ShortGuid;
 
@@ -115,4 +114,3 @@ public record MessageDelivery<TMessage>(object Sender, object Target, TMessage M
         return Message;
     }
 }
-

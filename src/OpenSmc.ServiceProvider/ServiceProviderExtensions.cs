@@ -8,10 +8,9 @@ namespace OpenSmc.ServiceProvider;
 public static class ServiceProviderExtensions
 {
 
-    public static IServiceProvider SetupModules(this IServiceCollection services, ModulesBuilder modulesBuilder) => SetupModules(services, null, modulesBuilder);
-    public static IServiceProvider SetupModules(this IServiceCollection services, IServiceProvider parent, ModulesBuilder modulesBuilder, string tag = null)
+    public static IServiceProvider SetupModules(this IServiceCollection services) => SetupModules(services, null);
+    public static IServiceProvider SetupModules(this IServiceCollection services, IServiceProvider parent, string tag = null)
     {
-        Modules modules = modulesBuilder.Build();
 
         services ??= new ServiceCollection();
 
@@ -21,10 +20,6 @@ public static class ServiceProviderExtensions
             loadedModulesService = new LoadedModulesService();
             services.AddSingleton(loadedModulesService);
         }
-
-        foreach (var moduleRegistry in modules.Registries.Where(x => !loadedModulesService.Types.Contains(x.GetType())))
-            moduleRegistry.Register(services);
-
 
         IServiceProvider ret;
         if (parent != null)
@@ -44,16 +39,6 @@ public static class ServiceProviderExtensions
 
             ret = new AutofacServiceProvider(containerBuilder.Build());
         }
-
-        var loadedModulesCopy = loadedModulesService.Types.ToHashSet();
-
-        // must be called before module.AddScopesDataCubes() to exclude double registration/initialization
-        loadedModulesService.Types.UnionWith(modules.Registries.Select(x => x.GetType()));
-        loadedModulesService.Types.UnionWith(modules.Initializations.Select(x => x.GetType()));
-
-
-        foreach (var moduleInitialization in modules.Initializations.Where(x => !loadedModulesCopy.Contains(x.GetType())))
-            moduleInitialization.AddScopesDataCubes(ret);
 
 
         return ret;

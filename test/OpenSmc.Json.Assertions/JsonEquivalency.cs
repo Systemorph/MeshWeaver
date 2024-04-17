@@ -4,7 +4,6 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
-using OpenSmc.Messaging.Serialization;
 using OpenSmc.Serialization;
 
 namespace OpenSmc.Json.Assertions;
@@ -134,7 +133,13 @@ public class JsonEquivalency : IEquivalencyStep
             DefaultValueHandling = DefaultValueHandling.Ignore,
             ContractResolver = new CamelCasePropertyNamesContractResolver(),
             MetadataPropertyHandling = MetadataPropertyHandling.ReadAhead,
-            Converters = new List<JsonConverter> { new StringEnumConverter(), new RawJsonNewtonsoftConverter(), new JsonNodeNewtonsoftConverter() },
+            Converters = new List<JsonConverter>
+            {
+                new StringEnumConverter(),
+                // TODO V10: Understand the idea of this and replace by something else. (08.04.2024, Roland Bürgi)
+                //new RawJsonNewtonsoftConverter(), 
+                //new JsonNodeNewtonsoftConverter()
+            },
             SerializationBinder = new BenchmarkSerializationBinder()
         };
     }

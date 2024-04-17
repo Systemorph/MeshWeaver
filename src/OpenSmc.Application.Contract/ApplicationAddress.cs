@@ -3,7 +3,7 @@ using OpenSmc.Messaging;
 
 namespace OpenSmc.Application
 {
-    public record ApplicationAddress(string Id, string Project);
+    public record ApplicationAddress(string Name, string Environment);
 
     public abstract record ApplicationHostedAddress(ApplicationAddress ApplicationAddress) : IHostedAddressSettable
     {

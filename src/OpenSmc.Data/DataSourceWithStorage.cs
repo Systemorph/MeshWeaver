@@ -31,13 +31,13 @@ public abstract record DataSourceWithStorage<TDataSource>(object Id, IMessageHub
         return base.Initialize();
     }
 
-    private void Update(WorkspaceState workspace)
+    private void Update(ChangeItem<WorkspaceState> workspace)
     {
         // TODO V10: Should see that there are actual changes ==> no reducer applied here. (25.03.2024, Roland Bürgi)
         persistenceHub.Schedule(ct => UpdateAsync(workspace, ct));
     }
 
-    protected virtual async Task UpdateAsync(WorkspaceState workspace, CancellationToken cancellationToken)
+    protected virtual async Task UpdateAsync(ChangeItem<WorkspaceState> workspace, CancellationToken cancellationToken)
     {
         await using ITransaction transaction = await StartTransactionAsync(cancellationToken);
         try
