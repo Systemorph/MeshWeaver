@@ -1,6 +1,6 @@
-import { Style } from "../../layout/src/contract/controls/Style";
+import { Style } from "@open-smc/layout/src/contract/controls/Style";
 import { MessageAndAddress } from "@open-smc/layout/src/contract/controls/UiControl";
-import { MessageAndAddressAndArea } from "@open-smc/layout/src/controls/ExpandableControl";
+import { MessageAndAddressAndArea } from "@open-smc/layout/src/contract/controls/ExpandableControl";
 
 export interface ControlView {
     readonly id?: string;
@@ -16,12 +16,4 @@ export interface ControlView {
 
 export interface ExpandableView extends ControlView {
     readonly expandMessage?: MessageAndAddressAndArea;
-}
-
-export type ControlDef<TView extends ControlView = unknown> = TView & {
-    readonly $type: string;
-    readonly moduleName: string;
-    readonly apiVersion: string;
-    readonly address?: unknown;
-    readonly dataContext?: unknown;
 }

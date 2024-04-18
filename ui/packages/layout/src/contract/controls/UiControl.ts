@@ -1,20 +1,20 @@
 import { Style } from "./Style";
-import { Bindable } from "../Binding";
-import { DataInput } from "@open-smc/data/src/contract/DataInput";
+import { ValueOrBinding } from "@open-smc/data/src/contract/Binding";
 import { type } from "@open-smc/serialization/src/type";
+import { ValueOrReference } from "@open-smc/data/src/contract/ValueOrReference";
 
-@type("OpenSmc.Layout.UiControl")
-export class UiControl {
-    id?: Bindable<string>;
-    isReadonly?: Bindable<boolean>;
-    clickMessage?: Bindable<MessageAndAddress>;
-    style?: Bindable<Style>;
-    className?: Bindable<string>;
-    skin?: Bindable<string>;
-    tooltip?: Bindable<string>;
-    data?: Bindable<unknown>;
-    label?: Bindable<string>;
-    dataContext?: DataInput;
+// @type("OpenSmc.Layout.UiControl")
+export abstract class UiControl {
+    id?: ValueOrBinding<string>;
+    isReadonly?: ValueOrBinding<boolean>;
+    clickMessage?: ValueOrBinding<MessageAndAddress>;
+    style?: ValueOrBinding<Style>;
+    className?: ValueOrBinding<string>;
+    skin?: ValueOrBinding<string>;
+    tooltip?: ValueOrBinding<string>;
+    data?: ValueOrBinding<unknown>;
+    label?: ValueOrBinding<string>;
+    dataContext?: ValueOrReference;
 }
 
 export interface MessageAndAddress {

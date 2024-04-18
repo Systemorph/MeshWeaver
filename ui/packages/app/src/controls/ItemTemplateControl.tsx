@@ -1,16 +1,13 @@
-import { renderControl } from "../renderControl";
-import { DataContextProvider, useDataContext } from "../dataBinding/DataContextProvider";
 import { PropsWithChildren, useMemo } from "react";
-import { getStackClassNames, StackSkin } from "./LayoutStackControl";
-import { ControlDef, ControlView } from "../ControlDef";
-import { makeBinding } from "../dataBinding/resolveBinding";
+import { getStackClassNames } from "./LayoutStackControl";
+import { ControlView } from "../ControlDef";
 import { useControlContext } from "../ControlContext";
-import { DataContext } from "../dataBinding/DataContext";
+import { LayoutStackSkin } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
 
 export interface ItemTemplateView extends ControlView {
-    view?: ControlDef;
+    view: string;
     data?: unknown[];
-    skin: StackSkin;
+    skin?: LayoutStackSkin;
 }
 
 export default function ItemTemplateControl({data, view, style, skin}: ItemTemplateView) {

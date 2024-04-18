@@ -1,4 +1,4 @@
 import './controls';
 import './application.contract';
-import './Binding';
+import '@open-smc/data/src/contract/Binding';
 import './LayoutArea';

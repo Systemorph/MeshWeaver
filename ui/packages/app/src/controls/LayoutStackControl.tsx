@@ -4,23 +4,11 @@ import styles from "./layoutStackControl.module.scss";
 import { ModalWindow } from "./ModalWindow";
 import { ControlView } from "../ControlDef";
 import { RenderArea } from "../store/RenderArea";
-
-export type StackSkin =
-    "VerticalPanel"
-    | "HorizontalPanel"
-    | "HorizontalPanelEqualCols"
-    | "Toolbar"
-    | "SideMenu"
-    | "ContextMenu"
-    | "MainWindow"
-    |
-    "Action"
-    | "Modal"
-    | "GridLayout";
+import { LayoutStackSkin } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
 
 export interface StackView extends ControlView {
     areas: string[];
-    skin?: StackSkin;
+    skin?: LayoutStackSkin;
     highlightNewAreas?: boolean;
     columnCount?: number;
 }

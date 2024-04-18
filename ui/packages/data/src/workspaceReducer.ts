@@ -39,7 +39,13 @@ export const workspaceReducer = createReducer(
                     else if (reference instanceof JsonPathReference) {
                         try {
                             const path = toPointer(reference.path);
-                            updateByPath(state, path, value);
+
+                            if (path === "") {
+                                return action.payload.value;
+                            }
+                            else {
+                                updateByPath(state, path, value);
+                            }
                         }
                         catch (error) {
                             console.warn(`Update by jsonPath "${reference.path} failed`);

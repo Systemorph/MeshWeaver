@@ -1,3 +1,4 @@
+import './Binding';
 import './DataChangedEvent';
 import './EntireWorkspace';
 import './JsonPatch';

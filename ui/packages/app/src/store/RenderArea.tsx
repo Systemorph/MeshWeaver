@@ -18,7 +18,7 @@ export function RenderArea({id, className, render}: RenderAreaProps) {
         return null;
     }
 
-    const {control, style} = layoutAreaModel;
+    const {control} = layoutAreaModel;
 
     const onChange = (prop: string, value: any) => {
         dispatch(setProp({areaId: id, prop, value}));
@@ -30,7 +30,7 @@ export function RenderArea({id, className, render}: RenderAreaProps) {
 
     const renderedControl = (
         <Suspense fallback={<div>Loading...</div>}>
-            <div style={style} className={className} key={id}>
+            <div className={className} key={id}>
                 {
                     createElement(componentType, {
                         ...props,

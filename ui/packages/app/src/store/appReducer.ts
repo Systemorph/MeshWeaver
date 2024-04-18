@@ -12,6 +12,13 @@ export const setArea = createAction<LayoutAreaModel>('setArea');
 export const removeArea = createAction<string>('removeArea');
 export const setRoot = createAction<string>('setRoot');
 
+export type SetProp = ReturnType<typeof setProp>;
+export type SetArea = ReturnType<typeof setArea>;
+export type RemoveArea = ReturnType<typeof removeArea>;
+export type SetRoot = ReturnType<typeof setRoot>;
+
+export type AppAction = SetProp | SetArea | RemoveArea | SetRoot;
+
 export const appReducer = createReducer<AppState>(
     null,
     builder => {
@@ -22,7 +29,7 @@ export const appReducer = createReducer<AppState>(
             })
             .addCase(setArea, (state, action) => {
                 const area = action.payload;
-                state.areas[area.id] = area;
+                state.areas[area.area] = area;
             })
             .addCase(removeArea, (state, action) => {
                 delete state.areas[action.payload];
