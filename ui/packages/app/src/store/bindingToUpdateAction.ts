@@ -1,4 +1,4 @@
-import { Binding } from "@open-smc/layout/src/contract/Binding";
+import { Binding } from "@open-smc/data/src/contract/Binding";
 import { updateByReferenceActionCreator } from "@open-smc/data/src/workspaceReducer";
 import { JsonPathReference } from "@open-smc/data/src/contract/JsonPathReference";
 

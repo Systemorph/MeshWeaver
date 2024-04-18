@@ -175,7 +175,7 @@ const workspace = {
     ]
 }
 // main store init
-new SubscribeRequest("any string", new EntireWorkspace()); // sent to layout address (to be clarified)
+new SubscribeRequest(new EntireWorkspace()); // sent to layout address (to be clarified)
 
 
 // layout store

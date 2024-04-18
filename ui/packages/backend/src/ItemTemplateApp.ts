@@ -15,10 +15,11 @@ import { serialize } from "@open-smc/serialization/src/serialize";
 import { deserialize } from "@open-smc/serialization/src/deserialize";
 import { DataChangeResponse } from "@open-smc/data/src/contract/DataChangeResponse";
 import { TransportEmulation } from "./TransportEmulation";
+import { itemTemplateExample } from "@open-smc/layout/src/examples/itemTemplateExample";
 
 enablePatches();
 
-export class SampleApp extends Observable<MessageDelivery> implements Observer<MessageDelivery> {
+export class ItemTemplateApp extends Observable<MessageDelivery> implements Observer<MessageDelivery> {
     protected input = new Subject<MessageDelivery>();
     protected output = new Subject<MessageDelivery>();
 
@@ -27,12 +28,10 @@ export class SampleApp extends Observable<MessageDelivery> implements Observer<M
             subscriber =>
                 this.output
                     .pipe(map(serialize))
-                    .pipe(log("server output"))
                     .subscribe(subscriber)
         );
 
         this.input
-            .pipe(log("server input"))
             .pipe(handleRequest(SubscribeRequest, this.subscribeRequestHandler()))
             .subscribe(this.output);
 
@@ -56,30 +55,14 @@ export class SampleApp extends Observable<MessageDelivery> implements Observer<M
             const {reference} = message;
 
             if (reference instanceof LayoutAreaReference) {
-                setTimeout(() => {
-                    const [nextState, patches] =
-                        produceWithPatches(
-                            basicStoreExample,
-                            state => {
-                                state.collections.LineOfBusiness["1"].DisplayName = "Hello";
-                            }
-                        );
-
-                    sendMessage(
-                        this.output,
-                        new DataChangedEvent(reference, new JsonPatch(patches.map(toPatchOperation)), "Patch")
-                    )
-                }, 1000);
-
-                return of(new DataChangedEvent(reference, basicStoreExample, "Full"));
+                return of(new DataChangedEvent(reference, itemTemplateExample, "Full"));
             }
         }
 
     patchChangeRequestHandler = () =>
         (message: PatchChangeRequest) => {
-            console.log(message);
             return of(new DataChangeResponse("Committed"));
         }
 }
 
-export const sampleApp = new TransportEmulation(new SampleApp());
+export const itemTemplateApp = new TransportEmulation(new ItemTemplateApp());

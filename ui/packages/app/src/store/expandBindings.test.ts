@@ -1,5 +1,5 @@
 import { expect, test, describe, jest } from "@jest/globals";
-import { Binding } from "@open-smc/layout/src/contract/Binding";
+import { Binding } from "@open-smc/data/src/contract/Binding";
 import { expandBindings } from "./expandBindings";
 
 describe("expandBindings", () => {

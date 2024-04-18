@@ -1,5 +1,5 @@
 import { cloneDeepWith } from "lodash-es";
-import { Binding } from "@open-smc/layout/src/contract/Binding";
+import { Binding } from "@open-smc/data/src/contract/Binding";
 import { selectByReference } from "@open-smc/data/src/operators/selectByReference";
 import { JsonPathReference } from "@open-smc/data/src/contract/JsonPathReference";
 

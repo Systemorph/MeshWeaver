@@ -9,10 +9,8 @@ export type AppState = {
 }
 
 export type LayoutAreaModel = {
-    id: string;
+    area: string;
     control?: ControlModel;
-    options?: any;
-    style?: Style;
 }
 
 export type ControlModel = {
