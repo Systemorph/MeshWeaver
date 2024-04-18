@@ -7,7 +7,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\OpenSmc.Pivot\OpenSmc.Pivot.csproj" />
-    <ProjectReference Include="..\..\src\OpenSmc.Scopes.DataCubes\OpenSmc.Scopes.DataCubes.csproj" />
     <ProjectReference Include="..\OpenSmc.Fixture\OpenSmc.Fixture.csproj" />
     <ProjectReference Include="..\OpenSmc.TestDomain\OpenSmc.TestDomain.csproj" />
   </ItemGroup>

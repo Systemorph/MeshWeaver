@@ -9,5 +9,6 @@
   <ItemGroup>
     <ProjectReference Include="..\OpenSmc.DataCubes.Abstractions\OpenSmc.DataCubes.Abstractions.csproj" />
     <ProjectReference Include="..\OpenSmc.Utils\OpenSmc.Utils.csproj" />
+    <ProjectReference Include="..\OpenSmc.DataCubes\OpenSmc.DataCubes.csproj" />
   </ItemGroup>
 </Project>
