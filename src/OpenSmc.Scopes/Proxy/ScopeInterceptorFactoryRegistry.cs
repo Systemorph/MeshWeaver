@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using OpenSmc.Scopes.DataCubes;
 using OpenSmc.Scopes.Operations;
 
 namespace OpenSmc.Scopes.Proxy;
@@ -10,17 +11,20 @@ public interface IScopeInterceptorFactoryRegistry
     IReadOnlyCollection<IScopeInterceptorFactory> GetFactories();
 }
 
-public class ScopeInterceptorFactoryRegistry: IScopeInterceptorFactoryRegistry
+public class ScopeInterceptorFactoryRegistry : IScopeInterceptorFactoryRegistry
 {
-    private ImmutableList<IScopeInterceptorFactory> factories = ImmutableList<IScopeInterceptorFactory>.Empty
-        .AddRange(new IScopeInterceptorFactory[]
-        {
-            new ScopeRegistryInterceptorFactory(),
-            new CachingInterceptorFactory(),
-            new ApplicabilityInterceptorFactory(),
-            new FilterableScopeInterceptorFactory(),
-            new DelegateToInterfaceDefaultImplementationInterceptorFactory(),
-        });
+    private ImmutableList<IScopeInterceptorFactory> factories =
+        ImmutableList<IScopeInterceptorFactory>.Empty.AddRange(
+            new IScopeInterceptorFactory[]
+            {
+                new DataCubeScopeInterceptorFactory(),
+                new ScopeRegistryInterceptorFactory(),
+                new CachingInterceptorFactory(),
+                new ApplicabilityInterceptorFactory(),
+                new FilterableScopeInterceptorFactory(),
+                new DelegateToInterfaceDefaultImplementationInterceptorFactory(),
+            }
+        );
 
     public IScopeInterceptorFactoryRegistry RegisterBefore<T>(IScopeInterceptorFactory factory)
     {

@@ -1,12 +1,16 @@
 ﻿using Castle.DynamicProxy;
 using OpenSmc.Collections;
 using OpenSmc.Reflection;
+using OpenSmc.Scopes.DataCubes;
 
 namespace OpenSmc.Scopes.Proxy
 {
     public class ScopeRegistryInterceptorFactory : IScopeInterceptorFactory
     {
-        public IEnumerable<IScopeInterceptor> GetInterceptors(Type tScope, IInternalScopeFactory scopeFactory)
+        public IEnumerable<IScopeInterceptor> GetInterceptors(
+            Type tScope,
+            IInternalScopeFactory scopeFactory
+        )
         {
             yield return new ScopeRegistryInterceptor(scopeFactory);
         }
@@ -40,21 +44,35 @@ namespace OpenSmc.Scopes.Proxy
                     var tScope = invocation.Method.GetGenericArguments().First();
                     var identities = invocation.Arguments[0];
                     var builder = invocation.Arguments[1];
-                    invocation.ReturnValue = GetScopesMethod.MakeGenericMethod(tScope).InvokeAsFunction(this, identities, builder, invocation.Proxy);
+                    invocation.ReturnValue = GetScopesMethod
+                        .MakeGenericMethod(tScope)
+                        .InvokeAsFunction(this, identities, builder, invocation.Proxy);
                     break;
                 case nameof(IScope.GetScope):
                     tScope = invocation.Method.GetGenericArguments().First();
                     var identity = invocation.Arguments[0];
                     if (identity == null)
                     {
-                        var tIdentity = tScope.GetGenericArgumentTypes(typeof(IScope<>))?.FirstOrDefault();
+                        var tIdentity = tScope
+                            .GetGenericArgumentTypes(typeof(IScope<>))
+                            ?.FirstOrDefault();
                         if (tIdentity == null)
                             identity = IScopeRegistry.SingletonIdentity;
                         else
                             identity = scopeRegistry.GetIdentity(invocation.Proxy);
                     }
                     builder = invocation.Arguments[1];
-                    invocation.ReturnValue = ((IEnumerable<object>)GetScopesMethod.MakeGenericMethod(tScope).InvokeAsFunction(this, identity.RepeatOnce(), builder, invocation.Proxy)).First();
+                    invocation.ReturnValue = (
+                        (IEnumerable<object>)
+                            GetScopesMethod
+                                .MakeGenericMethod(tScope)
+                                .InvokeAsFunction(
+                                    this,
+                                    identity.RepeatOnce(),
+                                    builder,
+                                    invocation.Proxy
+                                )
+                    ).First();
                     break;
                 case nameof(IScope.GetContext):
                     invocation.ReturnValue = scopeRegistry.GetContext(invocation.Proxy);
@@ -70,10 +88,17 @@ namespace OpenSmc.Scopes.Proxy
             }
         }
 
-        private static IGenericMethodCache GetScopesMethod = GenericCaches.GetMethodCache<ScopeRegistryInterceptor>(x => x.GetScopes<object>(null, null, null));
+        private static IGenericMethodCache GetScopesMethod =
+            GenericCaches.GetMethodCache<ScopeRegistryInterceptor>(x =>
+                x.GetScopes<object>(null, null, null)
+            );
 
         // ReSharper disable once UnusedMethodReturnValue.Local
-        private IList<TScope> GetScopes<TScope>(IEnumerable<object> identities, Func<ScopeBuilderForScope<TScope>, ScopeBuilderForScope<TScope>> options, object scope)
+        private IList<TScope> GetScopes<TScope>(
+            IEnumerable<object> identities,
+            Func<ScopeBuilderForScope<TScope>, ScopeBuilderForScope<TScope>> options,
+            object scope
+        )
         {
             var ctx = scopeRegistry.GetContext(scope);
             var storage = scopeRegistry.GetStorage(scope);
@@ -82,11 +107,23 @@ namespace OpenSmc.Scopes.Proxy
                 builder = options(builder);
             return builder.ToScopes().ToArray();
         }
-        internal static readonly HashSet<Type> ScopeInterfaces = new() { typeof(IScope<>), typeof(IScopeWithStorage<>) };
+
+        internal static readonly HashSet<Type> ScopeInterfaces =
+            new() { typeof(IScope<>), typeof(IScopeWithStorage<>) };
 
         private static readonly AspectPredicate[] SPredicates =
+
             // ReSharper disable once PossibleNullReferenceException
-            { x => x.IsAbstract && (x.DeclaringType == typeof(IScope) || x.DeclaringType == typeof(IDisposable) || x.DeclaringType.IsGenericType && ScopeInterfaces.Contains(x.DeclaringType.GetGenericTypeDefinition())) };
+            {
+                x =>
+                    x.IsAbstract
+                    && (
+                        x.DeclaringType == typeof(IScope)
+                        || x.DeclaringType == typeof(IDisposable)
+                        || x.DeclaringType.IsGenericType
+                            && ScopeInterfaces.Contains(x.DeclaringType.GetGenericTypeDefinition())
+                    )
+            };
 
         public override IEnumerable<AspectPredicate> Predicates => SPredicates;
     }

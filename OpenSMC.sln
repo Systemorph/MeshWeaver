@@ -95,8 +95,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DataCubes", "src\Op
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.GridModel", "src\OpenSmc.GridModel\OpenSmc.GridModel.csproj", "{E8C81053-3B97-4862-B7EC-112A0B6CAEDD}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Scopes.DataCubes", "src\OpenSmc.Scopes.DataCubes\OpenSmc.Scopes.DataCubes.csproj", "{127C5840-E91E-4073-A406-F17F99CFC046}"
-EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Project.Contract", "src\OpenSmc.Project.Contract\OpenSmc.Project.Contract.csproj", "{14F37AC8-41AC-4F42-8A64-B673FB48D104}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Activities", "src\OpenSmc.Activities\OpenSmc.Activities.csproj", "{DA956DA1-471F-4B92-A8E0-A10E632A4336}"
@@ -313,10 +311,6 @@ Global
 		{E8C81053-3B97-4862-B7EC-112A0B6CAEDD}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{E8C81053-3B97-4862-B7EC-112A0B6CAEDD}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{E8C81053-3B97-4862-B7EC-112A0B6CAEDD}.Release|Any CPU.Build.0 = Release|Any CPU
-		{127C5840-E91E-4073-A406-F17F99CFC046}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{127C5840-E91E-4073-A406-F17F99CFC046}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{127C5840-E91E-4073-A406-F17F99CFC046}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{127C5840-E91E-4073-A406-F17F99CFC046}.Release|Any CPU.Build.0 = Release|Any CPU
 		{14F37AC8-41AC-4F42-8A64-B673FB48D104}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{14F37AC8-41AC-4F42-8A64-B673FB48D104}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{14F37AC8-41AC-4F42-8A64-B673FB48D104}.Release|Any CPU.ActiveCfg = Release|Any CPU
