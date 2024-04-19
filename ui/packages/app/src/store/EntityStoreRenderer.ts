@@ -7,6 +7,10 @@ import { selectByPath } from "@open-smc/data/src/operators/selectByPath";
 import { setRoot } from "./appReducer";
 import { appStore } from "./appStore";
 import { AreaCollectionRenderer } from "./AreaCollectionRenderer";
+import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
+import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
+
+const uiControlType = (UiControl as any).$type;
 
 export class EntityStoreRenderer {
     readonly subscription = new Subscription();
@@ -23,7 +27,12 @@ export class EntityStoreRenderer {
                 .pipe(distinctUntilChanged());
 
         const rootAreaCollection$ =
-            rootArea$.pipe(map(rootArea => rootArea ? [rootArea] : []));
+            rootArea$.pipe(
+                map(
+                    rootArea => rootArea ?
+                        [new EntityReference(uiControlType, rootArea)] : []
+                )
+            );
 
         this.subscription.add(new AreaCollectionRenderer(rootAreaCollection$, collections).subscription);
 
