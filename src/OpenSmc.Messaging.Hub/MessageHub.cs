@@ -53,6 +53,9 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         SerializationOptions.Converters.Add(new TypedObjectSerializeConverter(typeRegistry, null));
         DeserializationOptions.Converters.Add(new TypedObjectDeserializeConverter(typeRegistry));
 
+        JsonSerializerOptions = new JsonSerializerOptions();
+        JsonSerializerOptions.Converters.Add(new SerializationConverter(SerializationOptions, DeserializationOptions));
+
         MessageService.Initialize(DeliverMessageAsync, DeserializationOptions);
 
         disposeActions.AddRange(configuration.DisposeActions);
@@ -260,6 +263,8 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         return this;
     }
 
+    // TODO V10: expose this as IMessageHub interface and replace two ser/des to this single one (2023/09/27, Dmitry Kalabin)
+    public JsonSerializerOptions JsonSerializerOptions { get; }
     public JsonSerializerOptions SerializationOptions { get; }
     public JsonSerializerOptions DeserializationOptions { get; }
 
