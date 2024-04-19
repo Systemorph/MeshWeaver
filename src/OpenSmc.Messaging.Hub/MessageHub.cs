@@ -48,15 +48,15 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         SerializationOptions = configurations.Aggregate(
             CreateSerializationConfiguration(), (c, f) => f.Invoke(c)).Options;
         var typeRegistry = serviceProvider.GetRequiredService<ITypeRegistry>();
-        DeserializationOptions = new JsonSerializerOptions(SerializationOptions);
+        var deserializationOptions = new JsonSerializerOptions(SerializationOptions);
         SerializationOptions.Converters.Add(new JsonNodeConverter());
         SerializationOptions.Converters.Add(new TypedObjectSerializeConverter(typeRegistry, null));
-        DeserializationOptions.Converters.Add(new TypedObjectDeserializeConverter(typeRegistry));
+        deserializationOptions.Converters.Add(new TypedObjectDeserializeConverter(typeRegistry));
 
         JsonSerializerOptions = new JsonSerializerOptions();
-        JsonSerializerOptions.Converters.Add(new SerializationConverter(SerializationOptions, DeserializationOptions));
+        JsonSerializerOptions.Converters.Add(new SerializationConverter(SerializationOptions, deserializationOptions));
 
-        MessageService.Initialize(DeliverMessageAsync, DeserializationOptions);
+        MessageService.Initialize(DeliverMessageAsync, deserializationOptions);
 
         disposeActions.AddRange(configuration.DisposeActions);
 
@@ -266,7 +266,6 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
     // TODO V10: replace two ser/des to this single one (2023/09/27, Dmitry Kalabin)
     public JsonSerializerOptions JsonSerializerOptions { get; }
     public JsonSerializerOptions SerializationOptions { get; }
-    public JsonSerializerOptions DeserializationOptions { get; }
 
     private bool IsDisposing => disposingTaskCompletionSource != null;
 

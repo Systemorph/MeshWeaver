@@ -199,7 +199,7 @@ public record WorkspaceState
         return this with
         {
             LastSynchronized = newState.Result,
-            Store = newState.Result.Deserialize<EntityStore>(Hub.DeserializationOptions)
+            Store = newState.Result.Deserialize<EntityStore>(Hub.JsonSerializerOptions),
         };
     }
 
