@@ -1,28 +1,32 @@
-import { distinctUntilChanged, distinctUntilKeyChanged, map, Observable, Subscription } from "rxjs";
 import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
-import { Workspace } from "@open-smc/data/src/Workspace";
-import { Collection } from "@open-smc/data/src/contract/Collection";
-import { effect } from "@open-smc/utils/src/operators/effect";
-import { pathToUpdateAction } from "@open-smc/data/src/operators/pathToUpdateAction";
-import { setArea } from "./appReducer";
 import { omit } from "lodash-es";
-import { LayoutStackControl } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
+import { ValueOrReference } from "@open-smc/data/src/contract/ValueOrReference";
 import { cloneDeepWith } from "lodash";
-import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
-import { app$, appStore, ControlModel } from "./appStore";
-import { distinctUntilEqual } from "@open-smc/data/src/operators/distinctUntilEqual";
 import { Binding } from "@open-smc/data/src/contract/Binding";
 import { JsonPathReference } from "@open-smc/data/src/contract/JsonPathReference";
-import { ValueOrReference } from "@open-smc/data/src/contract/ValueOrReference";
-import { AreaCollectionRenderer } from "./AreaCollectionRenderer";
+import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
+import { Workspace } from "@open-smc/data/src/Workspace";
+import { ControlModel } from "./appStore";
+import { distinctUntilChanged, map, Observable, Subscription } from "rxjs";
+import { Collection } from "@open-smc/data/src/contract/Collection";
+import { effect } from "@open-smc/utils/src/operators/effect";
+import { syncWorkspaces } from "./syncWorkspaces";
 import { sliceByReference } from "@open-smc/data/src/sliceByReference";
+import { distinctUntilEqual } from "@open-smc/data/src/operators/distinctUntilEqual";
+import { LayoutStackControl } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
 
-export class ControlRenderer {
-    readonly subscription = new Subscription();
-    private dataContextWorkspace: Workspace;
+export class ControlRenderer extends Workspace<ControlModel> {
+    subscription = new Subscription();
+    protected dataContextWorkspace: Workspace;
 
-    constructor(private control$: Observable<UiControl>, private collections: Workspace<Collection<Collection>>, private area: string) {
-        this.dataContextWorkspace = new Workspace(null, `${area}/dataContext`);
+    constructor(
+        protected control$: Observable<UiControl>,
+        protected collections: Workspace<Collection<Collection>>,
+        name?: string
+    ) {
+        super(null);
+
+        this.dataContextWorkspace = new Workspace(null, name && `${name}/dataContext`);
 
         this.subscription.add(
             this.control$
@@ -40,9 +44,10 @@ export class ControlRenderer {
                 .subscribe()
         );
 
-        const controlModelWorkspace =
-            new Workspace<ControlModel>(null, `${area}/model`);
+        this.render();
+    }
 
+    protected render() {
         this.subscription.add(
             this.control$
                 .pipe(distinctUntilEqual())
@@ -50,15 +55,12 @@ export class ControlRenderer {
                     effect(
                         control => {
                             if (control) {
-                                if (control instanceof LayoutStackControl) {
-                                    // render stack
-                                }
-
-                                const controlModel = controlToModel(control);
+                                const controlModel =
+                                    this.getModel(control);
 
                                 return syncWorkspaces(
                                     sliceByReference(this.dataContextWorkspace, controlModel),
-                                    controlModelWorkspace
+                                    this
                                 );
                             }
                         }
@@ -66,78 +68,31 @@ export class ControlRenderer {
                 )
                 .subscribe()
         );
-
-        this.subscription.add(
-            controlModelWorkspace
-                .pipe(distinctUntilEqual())
-                .subscribe(control => {
-                    appStore.dispatch(setArea({
-                        area,
-                        control
-                    }))
-                })
-        );
-
-        this.subscription.add(
-            app$
-                .pipe(map(appState => appState.areas[area]?.control))
-                .pipe(distinctUntilChanged())
-                .pipe(map(pathToUpdateAction("")))
-                .subscribe(controlModelWorkspace)
-        );
-
-        const nestedAreas$ =
-            this.control$.pipe(map(nestedAreas));
-
-        const nestedAreasRenderer =
-            new AreaCollectionRenderer(nestedAreas$, collections);
-
-        this.subscription.add(nestedAreasRenderer.subscription);
     }
-}
 
-function syncWorkspaces(workspace1: Workspace, workspace2: Workspace) {
-    const subscription = new Subscription();
+    protected getModel(control: UiControl) {
+        if (control) {
+            const componentTypeName = control.constructor.name;
+            const props = bindingsToReferences(
+                nestedAreasToIds(
+                    extractProps(control)
+                )
+            );
 
-    subscription.add(
-        workspace1
-            .pipe(distinctUntilEqual())
-            .pipe(map(pathToUpdateAction("")))
-            .subscribe(workspace2)
-    );
-
-    subscription.add(
-        workspace2
-            .pipe(distinctUntilEqual())
-            .pipe(map(pathToUpdateAction("")))
-            .subscribe(workspace1)
-    );
-
-    return subscription;
-}
-
-const controlToModel = (control: UiControl) => {
-    if (control) {
-        const componentTypeName = control.constructor.name;
-        const props = bindingsToReferences(
-            nestedAreasToIds(
-                extractProps(control)
-            )
-        );
-
-        return {
-            componentTypeName,
-            props
+            return {
+                componentTypeName,
+                props
+            }
         }
     }
-};
+}
 
 const extractProps = (control: UiControl) =>
     omit(control, 'dataContext');
 
 type UiControlProps = ReturnType<typeof extractProps>;
 
-const bindingsToReferences = (props: UiControlProps): ValueOrReference =>
+export const bindingsToReferences = (props: UiControlProps): ValueOrReference =>
     cloneDeepWith(
         props,
         value =>
@@ -145,7 +100,7 @@ const bindingsToReferences = (props: UiControlProps): ValueOrReference =>
                 ? new JsonPathReference(value.path) : undefined
     );
 
-const nestedAreas = (control: UiControl) => {
+export const nestedAreas = (control: UiControl) => {
     if (control instanceof LayoutStackControl) {
         return control.areas;
     }
