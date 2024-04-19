@@ -56,7 +56,7 @@ export class AreaRenderer {
 
         this.subscription.add(
             app$
-                .pipe(map(appState => appState.areas[area]))
+                .pipe(map(appState => appState.areas[area]?.control))
                 .pipe(distinctUntilChanged())
                 .pipe(map(pathToUpdateAction("")))
                 .subscribe(controlModelWorkspace)

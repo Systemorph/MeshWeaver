@@ -6,7 +6,7 @@ export class Workspace<T = unknown> extends Observable<T> implements Observer<Wo
     protected store: Store<T>;
     protected store$: Observable<T>;
 
-    constructor(protected state?: T, public name?: string) {
+    constructor(state?: T, public name?: string) {
         super(subscriber => this.store$.subscribe(subscriber));
 
         this.store = configureStore({
