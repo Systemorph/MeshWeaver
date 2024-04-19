@@ -70,6 +70,11 @@ public class SignalRBasicTest : TestBase, IClassFixture<WebApplicationFactory<Pr
                     o.HttpMessageHandlerFactory = _ => webAppFactory.Server.CreateHandler();
                 }
             )
+            .AddJsonProtocol(options =>
+                {
+                    options.PayloadSerializerOptions = Client.SerializationOptions;
+                }
+            )
             .Build();
 
         if (Debugger.IsAttached)
