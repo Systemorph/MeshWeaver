@@ -10,7 +10,7 @@ export const startSynchronization = () => {
     const subscription = new Subscription();
 
     const entityStore =
-        new RemoteWorkspace<EntityStore>(sampleApp, new LayoutAreaReference("/"), "entityStore");
+        new RemoteWorkspace<EntityStore>(itemTemplateApp, new LayoutAreaReference("/"), "entityStore");
 
     const entityStoreRenderer = new EntityStoreRenderer(entityStore);
 

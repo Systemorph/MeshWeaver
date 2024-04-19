@@ -10,7 +10,7 @@ import { AreaCollectionRenderer } from "./AreaCollectionRenderer";
 import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
 import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
 
-const uiControlType = (UiControl as any).$type;
+export const uiControlType = (UiControl as any).$type;
 
 export class EntityStoreRenderer {
     readonly subscription = new Subscription();

@@ -1,6 +1,6 @@
 import { Style } from "./Style";
 import { ValueOrBinding } from "@open-smc/data/src/contract/Binding";
-import { type } from "@open-smc/serialization/src/type";
+import { type, TypeConstructor } from "@open-smc/serialization/src/type";
 import { ValueOrReference } from "@open-smc/data/src/contract/ValueOrReference";
 
 @type("OpenSmc.Layout.UiControl")
