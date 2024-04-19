@@ -1,6 +1,5 @@
-import { distinctUntilChanged, map, Observable, Subscription } from "rxjs";
+import { distinctUntilChanged, distinctUntilKeyChanged, map, Observable, Subscription } from "rxjs";
 import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
-import { selectByPath } from "@open-smc/data/src/operators/selectByPath";
 import { Workspace } from "@open-smc/data/src/Workspace";
 import { Collection } from "@open-smc/data/src/contract/Collection";
 import { effect } from "@open-smc/utils/src/operators/effect";
@@ -18,71 +17,12 @@ import { ValueOrReference } from "@open-smc/data/src/contract/ValueOrReference";
 import { AreaCollectionRenderer } from "./AreaCollectionRenderer";
 import { sliceByReference } from "@open-smc/data/src/sliceByReference";
 
-const uiControlType = (UiControl as any).$type;
-
-export class AreaRenderer {
+export class ControlRenderer {
     readonly subscription = new Subscription();
-    private control$: Observable<UiControl>;
     private dataContextWorkspace: Workspace;
 
-    constructor(public area: string, private collections: Workspace<Collection<Collection>>) {
-        this.control$ =
-            collections
-                .pipe(map(selectByPath(`/${uiControlType}/${area}`)));
-
-        this.initDataContextWorkspace();
-
-        const controlModelWorkspace =
-            new Workspace<ControlModel>(null, `${area}/model`);
-
-        this.subscription.add(
-            this.control$
-                .pipe(map(controlToModel))
-                .pipe(distinctUntilEqual())
-                .pipe(
-                    effect(
-                        controlModel => {
-                            if (controlModel) {
-                                return syncWorkspaces(
-                                    sliceByReference(this.dataContextWorkspace, controlModel),
-                                    controlModelWorkspace
-                                );
-                            }
-                        }
-                    )
-                )
-                .subscribe()
-        );
-
-        this.subscription.add(
-            app$
-                .pipe(map(appState => appState.areas[area]?.control))
-                .pipe(distinctUntilChanged())
-                .pipe(map(pathToUpdateAction("")))
-                .subscribe(controlModelWorkspace)
-        );
-
-        this.subscription.add(
-            controlModelWorkspace
-                .subscribe(control => {
-                    appStore.dispatch(setArea({
-                        area,
-                        control
-                    }))
-                })
-        );
-
-        const nestedAreas$ =
-            this.control$.pipe(map(nestedAreas));
-
-        const nestedAreasRenderer =
-            new AreaCollectionRenderer(nestedAreas$, collections);
-
-        this.subscription.add(nestedAreasRenderer.subscription);
-    }
-
-    private initDataContextWorkspace() {
-        this.dataContextWorkspace = new Workspace(null, `${this.area}/dataContext`);
+    constructor(private control$: Observable<UiControl>, private collections: Workspace<Collection<Collection>>, private area: string) {
+        this.dataContextWorkspace = new Workspace(null, `${area}/dataContext`);
 
         this.subscription.add(
             this.control$
@@ -99,6 +39,60 @@ export class AreaRenderer {
                 )
                 .subscribe()
         );
+
+        const controlModelWorkspace =
+            new Workspace<ControlModel>(null, `${area}/model`);
+
+        this.subscription.add(
+            this.control$
+                .pipe(distinctUntilEqual())
+                .pipe(
+                    effect(
+                        control => {
+                            if (control) {
+                                if (control instanceof LayoutStackControl) {
+                                    // render stack
+                                }
+
+                                const controlModel = controlToModel(control);
+
+                                return syncWorkspaces(
+                                    sliceByReference(this.dataContextWorkspace, controlModel),
+                                    controlModelWorkspace
+                                );
+                            }
+                        }
+                    )
+                )
+                .subscribe()
+        );
+
+        this.subscription.add(
+            controlModelWorkspace
+                .pipe(distinctUntilEqual())
+                .subscribe(control => {
+                    appStore.dispatch(setArea({
+                        area,
+                        control
+                    }))
+                })
+        );
+
+        this.subscription.add(
+            app$
+                .pipe(map(appState => appState.areas[area]?.control))
+                .pipe(distinctUntilChanged())
+                .pipe(map(pathToUpdateAction("")))
+                .subscribe(controlModelWorkspace)
+        );
+
+        const nestedAreas$ =
+            this.control$.pipe(map(nestedAreas));
+
+        const nestedAreasRenderer =
+            new AreaCollectionRenderer(nestedAreas$, collections);
+
+        this.subscription.add(nestedAreasRenderer.subscription);
     }
 }
 
@@ -153,7 +147,7 @@ const bindingsToReferences = (props: UiControlProps): ValueOrReference =>
 
 const nestedAreas = (control: UiControl) => {
     if (control instanceof LayoutStackControl) {
-        return control.areas?.map(area => area.id);
+        return control.areas;
     }
 }
 
