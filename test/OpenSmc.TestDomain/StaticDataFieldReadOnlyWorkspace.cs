@@ -6,9 +6,13 @@ namespace OpenSmc.TestDomain
 {
     public class StaticDataFieldReadOnlyWorkspace : IWorkspace
     {
-        public IReadOnlyCollection<T> GetData<T>() where T : class
+        public IReadOnlyCollection<T> GetData<T>()
+            where T : class
         {
-            var dataProperty = typeof(T).GetField("Data", BindingFlags.Public | BindingFlags.Static);
+            var dataProperty = typeof(T).GetField(
+                "Data",
+                BindingFlags.Public | BindingFlags.Static
+            );
             if (dataProperty == null)
                 return null;
 
@@ -19,15 +23,19 @@ namespace OpenSmc.TestDomain
 
         #region Not Implemented support for IWorkspace
 
-        public ChangeStream<TReference> GetRemoteStream<TReference>(object address, WorkspaceReference<TReference> reference)
+        public ChangeStream<TReference> GetRemoteStream<TReference>(
+            object address,
+            WorkspaceReference<TReference> reference
+        )
         {
             throw new NotImplementedException();
         }
 
+        public IObservable<ChangeItem<WorkspaceState>> Stream =>
+            throw new NotImplementedException();
 
-        public IObservable<ChangeItem<WorkspaceState>> Stream => throw new NotImplementedException();
-
-        public IObservable<ChangeItem<WorkspaceState>> ChangeStream => throw new NotImplementedException();
+        public IObservable<ChangeItem<WorkspaceState>> ChangeStream =>
+            throw new NotImplementedException();
 
         public WorkspaceState State => throw new NotImplementedException();
 
@@ -55,7 +63,9 @@ namespace OpenSmc.TestDomain
             throw new NotImplementedException();
         }
 
-        public IObservable<ChangeItem<TReference>> GetStream<TReference>(WorkspaceReference<TReference> reference)
+        public IObservable<ChangeItem<TReference>> GetStream<TReference>(
+            WorkspaceReference<TReference> reference
+        )
         {
             throw new NotImplementedException();
         }
@@ -66,6 +76,36 @@ namespace OpenSmc.TestDomain
         }
 
         public void Update(IEnumerable<object> instances, UpdateOptions updateOptions)
+        {
+            throw new NotImplementedException();
+        }
+
+        public void RequestChange(DataChangeRequest change, object changedBy)
+        {
+            throw new NotImplementedException();
+        }
+
+        public void Synchronize(DataChangedEvent message)
+        {
+            throw new NotImplementedException();
+        }
+
+        public void Initialize()
+        {
+            throw new NotImplementedException();
+        }
+
+        public void Subscribe(object sender, WorkspaceReference reference)
+        {
+            throw new NotImplementedException();
+        }
+
+        public void Unsubscribe(object sender, WorkspaceReference reference)
+        {
+            throw new NotImplementedException();
+        }
+
+        public ValueTask DisposeAsync()
         {
             throw new NotImplementedException();
         }

@@ -28,5 +28,6 @@
   <ItemGroup>
     <ProjectReference Include="..\OpenSmc.Messaging.Hub\OpenSmc.Messaging.Hub.csproj" />
     <ProjectReference Include="..\OpenSmc.Data\OpenSmc.Data.csproj" />
+    <ProjectReference Include="..\OpenSmc.Import\OpenSmc.Import.csproj" />
   </ItemGroup>
 </Project>
