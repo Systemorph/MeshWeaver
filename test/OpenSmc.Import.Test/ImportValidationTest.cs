@@ -102,7 +102,7 @@ FoundationYear,ContractType
             .Should()
             .BeEquivalentTo(
                 "The field FoundationYear must be between 1999 and 2023.",
-                ImportPlugin.ValidationStageFailed
+                ImportManager.ValidationStageFailed
             );
 
         var workspace = GetHost().ServiceProvider.GetRequiredService<IWorkspace>();
@@ -132,7 +132,7 @@ FoundationYear,ContractType
             .Message.Log.Messages.Should()
             .ContainSingle(x => x.LogLevel == LogLevel.Error)
             .Which.Message.Should()
-            .Be(ImportPlugin.ValidationStageFailed);
+            .Be(ImportManager.ValidationStageFailed);
         var workspace = GetHost().ServiceProvider.GetRequiredService<IWorkspace>();
         var ret = await workspace.GetObservable<TestDomain.Country>().FirstAsync();
 
@@ -162,7 +162,7 @@ FoundationYear,ContractType
             .BeEquivalentTo(
                 "The IntValue field must have type from these: System.Double, System.Decimal, System.Single.",
                 "The DecimalValue field value should be in interval from 10 to 20.",
-                ImportPlugin.ValidationStageFailed
+                ImportManager.ValidationStageFailed
             );
 
         var workspace = GetHost().ServiceProvider.GetRequiredService<IWorkspace>();
@@ -191,7 +191,7 @@ FoundationYear,ContractType
             .Message.Log.Messages.Should()
             .ContainSingle(x => x.LogLevel == LogLevel.Error)
             .Which.Message.Should()
-            .Be(ImportPlugin.ValidationStageFailed);
+            .Be(ImportManager.ValidationStageFailed);
 
         await Task.Delay(300);
 
@@ -229,7 +229,7 @@ Blue,FR";
             .Should()
             .ContainSingle(x => x.LogLevel == LogLevel.Error)
             .Which.Message.Should()
-            .Be(ImportPlugin.ValidationStageFailed);
+            .Be(ImportManager.ValidationStageFailed);
 
         var workspace = client.GetWorkspace();
 

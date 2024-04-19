@@ -16,7 +16,8 @@ public interface IDataSource : IAsyncDisposable
     IEnumerable<ChangeStream<EntityStore>> Initialize();
 }
 
-public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDataSource where TDataSource : DataSource<TDataSource>
+public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDataSource
+    where TDataSource : DataSource<TDataSource>
 {
     protected readonly IWorkspace Workspace = Hub.ServiceProvider.GetRequiredService<IWorkspace>();
 
@@ -24,66 +25,64 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
 
     IEnumerable<ITypeSource> IDataSource.TypeSources => TypeSources.Values;
 
-    protected ImmutableDictionary<Type, ITypeSource> TypeSources { get; init; } = ImmutableDictionary<Type, ITypeSource>.Empty;
+    protected ImmutableDictionary<Type, ITypeSource> TypeSources { get; init; } =
+        ImmutableDictionary<Type, ITypeSource>.Empty;
 
-    public TDataSource WithTypeSource(Type type, ITypeSource typeSource)
-        => This with
+    public TDataSource WithTypeSource(Type type, ITypeSource typeSource) =>
+        This with
         {
             TypeSources = TypeSources.SetItem(type, typeSource)
         };
-
-
 
     public IEnumerable<Type> MappedTypes => TypeSources.Keys;
 
     public ITypeSource GetTypeSource(string collectionName) =>
         TypeSources.Values.FirstOrDefault(x => x.CollectionName == collectionName);
 
-
-
     public virtual IReadOnlyCollection<DataChangeRequest> Change(DataChangeRequest request)
     {
         if (request is DataChangeRequestWithElements requestWithElements)
             return Change(requestWithElements);
 
-        throw new ArgumentOutOfRangeException($"No implementation found for {request.GetType().FullName}");
+        throw new ArgumentOutOfRangeException(
+            $"No implementation found for {request.GetType().FullName}"
+        );
     }
-
-
 
     public ITypeSource GetTypeSource(Type type) => TypeSources.GetValueOrDefault(type);
 
+    public virtual TDataSource WithType(Type type, Func<ITypeSource, ITypeSource> config) =>
+        (TDataSource)WithTypeMethod.MakeGenericMethod(type).InvokeAsFunction(this, config);
 
-    public virtual TDataSource WithType(Type type, Func<ITypeSource, ITypeSource> config)
-        => (TDataSource)WithTypeMethod.MakeGenericMethod(type).InvokeAsFunction(this, config);
+    private static readonly MethodInfo WithTypeMethod = ReflectionHelper.GetMethodGeneric<
+        DataSource<TDataSource>
+    >(x => x.WithType<object>(default));
 
-    private static readonly MethodInfo WithTypeMethod =
-        ReflectionHelper.GetMethodGeneric<DataSource<TDataSource>>(x => x.WithType<object>(default));
     public TDataSource WithType<T>()
-        where T : class
-        => WithType<T>(d => d);
+        where T : class => WithType<T>(d => d);
 
-    protected abstract TDataSource WithType<T>(Func<ITypeSource, ITypeSource> config) where T : class;
+    protected abstract TDataSource WithType<T>(Func<ITypeSource, ITypeSource> config)
+        where T : class;
 
     public virtual IEnumerable<ChangeStream<EntityStore>> Initialize()
     {
-
         //return TypeSources.Values.Select(ts => ts.InitializeAsync(workspaceStream));
         var ret = GetInitialChangeStream();
         Hub.Schedule(async cancellationToken =>
         {
-
-
-            var instances = (await TypeSources
-                    .Values
-                    .ToAsyncEnumerable()
+            var instances = (
+                await TypeSources
+                    .Values.ToAsyncEnumerable()
                     .SelectAwait(async ts => new
-                        { TypeSource = ts, Instances = await ts.InitializeAsync(cancellationToken) })
-                    .ToArrayAsync(cancellationToken: cancellationToken))
-                .ToImmutableDictionary(x => x.TypeSource.CollectionName, x => x.Instances);
+                    {
+                        TypeSource = ts,
+                        Instances = await ts.InitializeAsync(cancellationToken)
+                    })
+                    .ToArrayAsync(cancellationToken: cancellationToken)
+            ).ToImmutableDictionary(x => x.TypeSource.CollectionName, x => x.Instances);
 
             foreach (var changeStream in ret)
-                changeStream.Initialize(new(){Collections = instances});
+                changeStream.Initialize(new() { Collections = instances });
         });
         return ret;
     }
@@ -91,38 +90,36 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
     protected virtual IReadOnlyCollection<ChangeStream<EntityStore>> GetInitialChangeStream()
     {
         var ret = new ChangeStream<EntityStore>(
-            Workspace, 
-            Id, 
-            new EntireWorkspace(), 
-            Hub, 
+            Workspace,
+            Id,
+            new EntireWorkspace(),
+            Hub,
             () => Hub.Version,
-             true);
+            true
+        );
         return [ret];
     }
 
-
     protected virtual WorkspaceReference<EntityStore> GetReference()
     {
-        WorkspaceReference<EntityStore> collections = new CollectionsReference
-                (
-                    TypeSources
-                        .Values
-                        .Select(ts => ts.CollectionName).ToArray()
-                );
+        WorkspaceReference<EntityStore> collections = new CollectionsReference(
+            TypeSources.Values.Select(ts => ts.CollectionName).ToArray()
+        );
         return collections;
     }
-
 
     public virtual ValueTask DisposeAsync()
     {
         return default;
     }
-
-
 }
 
+public record GenericDataSource(object Id, IMessageHub Hub)
+    : GenericDataSource<GenericDataSource>(Id, Hub) { }
 
-public record GenericDataSource(object Id, IMessageHub Hub) : DataSource<GenericDataSource>(Id, Hub)
+public record GenericDataSource<TDataSource>(object Id, IMessageHub Hub)
+    : DataSource<TDataSource>(Id, Hub)
+    where TDataSource : GenericDataSource<TDataSource>
 {
     private IDisposable changesSubscription;
 
@@ -132,15 +129,11 @@ public record GenericDataSource(object Id, IMessageHub Hub) : DataSource<Generic
         return base.DisposeAsync();
     }
 
-    protected override GenericDataSource WithType<T>(Func<ITypeSource, ITypeSource> config)
-    => WithType<T>(x => (TypeSourceWithType<T>)config(x));
+    protected override TDataSource WithType<T>(Func<ITypeSource, ITypeSource> config) =>
+        WithType<T>(x => (TypeSourceWithType<T>)config(x));
 
-
-
-    public GenericDataSource WithType<T>(
-        Func<TypeSourceWithType<T>, TypeSourceWithType<T>> configurator)
-        where T : class
-        => WithTypeSource(typeof(T), configurator.Invoke(new(Hub, Id)));
+    public TDataSource WithType<T>(Func<TypeSourceWithType<T>, TypeSourceWithType<T>> configurator)
+        where T : class => WithTypeSource(typeof(T), configurator.Invoke(new(Hub, Id)));
 
     public override IEnumerable<ChangeStream<EntityStore>> Initialize()
     {
