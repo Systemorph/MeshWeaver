@@ -40,7 +40,7 @@ public class SignalRBasicTest : TestBase, IClassFixture<WebApplicationFactory<Pr
         => configuration
             .WithTypes(typeof(TestRequest), typeof(ApplicationAddress), typeof(UiAddress))
             .WithRoutes(forward => forward
-                .RouteAddress<object>((_, d, cancellationToken) => SendThroughSignalR(d.Package(forward.Hub.SerializationOptions), Connection, cancellationToken))
+                .RouteAddress<object>((_, d, cancellationToken) => SendThroughSignalR(d.Package(forward.Hub.JsonSerializerOptions), Connection, cancellationToken))
             );
 
     [Fact]
@@ -72,7 +72,7 @@ public class SignalRBasicTest : TestBase, IClassFixture<WebApplicationFactory<Pr
             )
             .AddJsonProtocol(options =>
                 {
-                    options.PayloadSerializerOptions = Client.SerializationOptions;
+                    options.PayloadSerializerOptions = Client.JsonSerializerOptions;
                 }
             )
             .Build();
