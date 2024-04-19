@@ -19,7 +19,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
-                .WithRoutes(r => r.RouteAddress<ClientAddress>((a, d) => d.Package(r.Hub.SerializationOptions)))
+                .WithRoutes(r => r.RouteAddress<ClientAddress>((a, d) => d.Package(r.Hub.JsonSerializerOptions)))
                 .AddData(data => data
                     .FromConfigurableDataSource("Local",
                         ds => ds
@@ -46,10 +46,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                                 .Select(ItemTemplate)
                         )
                 )
-
             ;
-
-
     }
 
     private UiControl ItemTemplate(IReadOnlyCollection<DataRecord> data) =>

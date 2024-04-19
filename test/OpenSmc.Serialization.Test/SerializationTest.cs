@@ -4,7 +4,6 @@ using Newtonsoft.Json.Linq;
 using OpenSmc.Fixture;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
-using OpenSmc.Messaging.Serialization;
 using OpenSmc.ServiceProvider;
 using Xunit.Abstractions;
 
@@ -25,14 +24,14 @@ public class SerializationTest : TestBase
                 .RouteAddress<HostAddress>((routedAddress, d) =>
                     {
                         var hostedHub = f.Hub.GetHostedHub(routedAddress, ConfigureHost);
-                        var packagedDelivery = d.Package(f.Hub.SerializationOptions);
+                        var packagedDelivery = d.Package(f.Hub.JsonSerializerOptions);
                         hostedHub.DeliverMessage(packagedDelivery);
                         return d.Forwarded();
                     })
                 .RouteAddress<ClientAddress>((routedAddress, d) =>
                 {
                     var hostedHub = f.Hub.GetHostedHub(routedAddress, ConfigureClient);
-                    var packagedDelivery = d.Package(f.Hub.SerializationOptions);
+                    var packagedDelivery = d.Package(f.Hub.JsonSerializerOptions);
                     hostedHub.DeliverMessage(packagedDelivery);
                     return d.Forwarded();
 

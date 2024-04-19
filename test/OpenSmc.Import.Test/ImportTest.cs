@@ -1,5 +1,4 @@
 ﻿using System.Reactive.Linq;
-using System.Reflection.Metadata;
 using System.Text.Json;
 using FluentAssertions;
 using FluentAssertions.Equivalency;
@@ -32,7 +31,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var client = GetClient();
         var transactionalData = new TransactionalData2("1", 2014, "lob", "bu", 1.23);
-        var serialized = JsonSerializer.Serialize(transactionalData, client.SerializationOptions);
+        var serialized = JsonSerializer.Serialize(transactionalData, client.JsonSerializerOptions);
         var deserialized = JsonSerializer.Deserialize<TransactionalData2>(serialized, client.JsonSerializerOptions);
 
         deserialized.Should().Be(transactionalData);
