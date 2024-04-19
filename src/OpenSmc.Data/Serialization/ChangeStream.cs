@@ -136,7 +136,7 @@ public record ChangeStream<TStream> : IDisposable,
     {
         var newState = request.ChangeType switch
         {
-            ChangeType.Patch => (LastSynchronized = ((JsonPatch)request.Change).Apply(LastSynchronized).Result).Deserialize<TStream>(Hub.DeserializationOptions),
+            ChangeType.Patch => (LastSynchronized = ((JsonPatch)request.Change).Apply(LastSynchronized).Result).Deserialize<TStream>(Hub.JsonSerializerOptions),
             ChangeType.Full => GetFullState(request),
             _ => throw new ArgumentOutOfRangeException()
         };
@@ -146,7 +146,7 @@ public record ChangeStream<TStream> : IDisposable,
     private  TStream GetFullState(DataChangedEvent request)
     {
         LastSynchronized = JsonSerializer.SerializeToNode(request.Change, request.Change.GetType(), Hub.SerializationOptions);
-        return request.Change is JsonNode node ? node.Deserialize<TStream>(Hub.DeserializationOptions) : (TStream)request.Change;
+        return request.Change is JsonNode node ? node.Deserialize<TStream>(Hub.JsonSerializerOptions) : (TStream)request.Change;
     }
 
     public ChangeStream<TStream> Initialize(TStream initial)

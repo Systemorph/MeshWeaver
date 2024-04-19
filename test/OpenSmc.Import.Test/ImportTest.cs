@@ -33,7 +33,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
         var transactionalData = new TransactionalData2("1", 2014, "lob", "bu", 1.23);
         var serialized = JsonSerializer.Serialize(transactionalData, client.SerializationOptions);
-        var deserialized = JsonSerializer.Deserialize<TransactionalData2>(serialized, client.DeserializationOptions);
+        var deserialized = JsonSerializer.Deserialize<TransactionalData2>(serialized, client.JsonSerializerOptions);
 
         deserialized.Should().Be(transactionalData);
     }
