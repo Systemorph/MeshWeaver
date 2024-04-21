@@ -22,8 +22,10 @@ public static class HierarchicalDimensionExtensions
         where T : class, IHierarchicalDimension
     {
         var ret = cache.Get<T>(id);
+        if (ret.Level < level)
+            return null;
         while (ret.Level > level)
-            ret = cache.Get<T>(ret.Id);
-        return ret.Parent;
+            ret = cache.Get<T>(ret.ParentId);
+        return ret.Element;
     }
 }
