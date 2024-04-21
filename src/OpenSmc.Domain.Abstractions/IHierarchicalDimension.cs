@@ -2,8 +2,4 @@
 
 namespace OpenSmc.Domain.Abstractions;
 
-public interface IHierarchicalDimension : INamed, IWithParent
-{
-    [IdentityProperty]
-    new string SystemName { get; init; }
-}
+public interface IHierarchicalDimension : INamed, IWithParent { }

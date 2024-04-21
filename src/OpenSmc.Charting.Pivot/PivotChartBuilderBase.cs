@@ -9,16 +9,43 @@ using OpenSmc.Pivot.Models;
 
 namespace OpenSmc.Charting.Pivot;
 
-public abstract record PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, TChartBuilder, TDataSet, TOptionsBuilder, TDataSetBuilder>
-    (PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder) : IPivotChartBuilder
-    where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-    where TChartBuilder : ChartBuilderBase<TChartBuilder, TDataSet, TOptionsBuilder, TDataSetBuilder>, new()
+public abstract record PivotChartBuilderBase<
+    T,
+    TTransformed,
+    TIntermediate,
+    TAggregate,
+    TPivotBuilder,
+    TChartBuilder,
+    TDataSet,
+    TOptionsBuilder,
+    TDataSetBuilder
+>(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
+    : IPivotChartBuilder
+    where TPivotBuilder : PivotBuilderBase<
+            T,
+            TTransformed,
+            TIntermediate,
+            TAggregate,
+            TPivotBuilder
+        >
+    where TChartBuilder : ChartBuilderBase<
+            TChartBuilder,
+            TDataSet,
+            TOptionsBuilder,
+            TDataSetBuilder
+        >,
+        new()
     where TDataSet : DataSet, new()
     where TOptionsBuilder : OptionsBuilderBase<TOptionsBuilder>
     where TDataSetBuilder : DataSetBuilderBase<TDataSetBuilder, TDataSet>, new()
 {
-
-    private readonly PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder = pivotBuilder;
+    private readonly PivotBuilderBase<
+        T,
+        TTransformed,
+        TIntermediate,
+        TAggregate,
+        TPivotBuilder
+    > pivotBuilder = pivotBuilder;
     protected TChartBuilder ChartBuilder;
     protected PivotChartModelBuilder PivotChartModelBuilder { get; init; } = new();
 
@@ -33,7 +60,7 @@ public abstract record PivotChartBuilderBase<T, TTransformed, TIntermediate, TAg
         ChartBuilder = ChartBuilder.WithSubTitle(title, titleModifier);
         return this;
     }
-    
+
     public IPivotChartBuilder WithColorScheme(string[] scheme)
     {
         ChartBuilder = ChartBuilder.WithColorPalette(scheme);
@@ -55,7 +82,7 @@ public abstract record PivotChartBuilderBase<T, TTransformed, TIntermediate, TAg
 
         return ChartBuilder.ToChart();
     }
-    
+
     public IPivotChartBuilder WithOptions(Func<PivotChartModel, PivotChartModel> postProcessor)
     {
         PivotChartModelBuilder.AddPostProcessor(postProcessor);
@@ -64,18 +91,23 @@ public abstract record PivotChartBuilderBase<T, TTransformed, TIntermediate, TAg
 
     public IPivotChartBuilder WithRows(params string[] lineRows)
     {
-        PivotChartModelBuilder.AddPostProcessor(model => model with
-                                                         {
-                                                             Rows = model.Rows
-                                                                         .Where(row => lineRows.Contains(row.Descriptor.SystemName) ||
-                                                                                       lineRows.Contains(row.Descriptor.DisplayName))
-                                                                         .ToList()
-                                                         });
+        PivotChartModelBuilder.AddPostProcessor(model =>
+            model with
+            {
+                Rows = model
+                    .Rows.Where(row =>
+                        lineRows.Contains(row.Descriptor.Id)
+                        || lineRows.Contains(row.Descriptor.DisplayName)
+                    )
+                    .ToList()
+            }
+        );
         return this;
     }
 
-
     protected abstract PivotChartModel CreatePivotModel(PivotModel pivotModel);
+
     protected abstract void AddDataSets(PivotChartModel pivotChartModel);
+
     protected abstract void AddOptions(PivotChartModel pivotChartModel);
 }

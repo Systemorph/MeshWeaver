@@ -1,13 +1,20 @@
 ﻿using System.Collections.Immutable;
 
-namespace OpenSmc.Pivot.Models.Interfaces
+namespace OpenSmc.Pivot.Models.Interfaces;
+
+public interface IItemWithCoordinates
 {
-    public interface IItemWithCoordinates
-    {
-        // why init?
-        string SystemName { get; init; }
-        string DisplayName { get; init; }
-        IImmutableList<string> Coordinates { get; init; }
-        string GrouperName { get; init; }
-    }
+    object Id { get; init; }
+    string DisplayName { get; init; }
+    ImmutableList<object> Coordinates { get; init; }
+    object GrouperId { get; init; }
+}
+
+public abstract record ItemWithCoordinates() : IItemWithCoordinates
+{
+    public object Id { get; init; }
+    public string DisplayName { get; init; }
+    public ImmutableList<object> Coordinates { get; init; }
+
+    public object GrouperId { get; init; }
 }

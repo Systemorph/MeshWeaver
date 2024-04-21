@@ -1,4 +1,6 @@
-﻿using OpenSmc.DataCubes;
+﻿using System.Data;
+using OpenSmc.Data;
+using OpenSmc.DataCubes;
 using OpenSmc.Domain.Abstractions;
 using OpenSmc.Hierarchies;
 using OpenSmc.Pivot.Aggregations;
@@ -10,37 +12,38 @@ namespace OpenSmc.Pivot.Grouping
     public interface IHierarchicalGrouper<TGroup, T>
         where TGroup : class, IGroup, new()
     {
-        void InitializeHierarchies(IHierarchicalDimensionCache hierarchicalDimensionCache, IHierarchicalDimensionOptions hierarchicalDimensionOptions);
-        PivotGroupManager<T, TIntermediate, TAggregate, TGroup> GetPivotGroupManager<TIntermediate, TAggregate>(PivotGroupManager<T, TIntermediate, TAggregate, TGroup> subGroup,
-                                                                                                                Aggregations<T, TIntermediate, TAggregate> aggregationFunctions);
+        PivotGroupManager<T, TIntermediate, TAggregate, TGroup> GetPivotGroupManager<
+            TIntermediate,
+            TAggregate
+        >(
+            PivotGroupManager<T, TIntermediate, TAggregate, TGroup> subGroup,
+            Aggregations<T, TIntermediate, TAggregate> aggregationFunctions
+        );
 
         void UpdateMaxLevel(T element);
     }
 
-    public class HierarchyLevelDimensionPivotGrouper<T, TDimension, TGroup> : DimensionPivotGrouper<T, TDimension, TGroup>
+    public class HierarchyLevelDimensionPivotGrouper<T, TDimension, TGroup>(
+        WorkspaceState state,
+        Func<T, int, object> selector,
+        DimensionDescriptor dimensionDescriptor,
+        IHierarchicalDimensionCache hierarchicalDimensionCache,
+        int level
+    ) : DimensionPivotGrouper<T, TDimension, TGroup>(state, selector, dimensionDescriptor)
         where TGroup : class, IGroup, new()
         where TDimension : class, IHierarchicalDimension
     {
-        private readonly int level;
-        private readonly IHierarchicalDimensionCache hierarchicalDimensionCache;
-
-
-        public HierarchyLevelDimensionPivotGrouper(Func<T, int, string> selector, DimensionDescriptor dimensionDescriptor, IDimensionCache dimensionCache, IHierarchicalDimensionCache hierarchicalDimensionCache, int level)
-            : base(selector, dimensionDescriptor)
-        {
-            this.level = level;
-            Name += level;
-            this.hierarchicalDimensionCache = hierarchicalDimensionCache;
-            DimensionCache = dimensionCache;
-        }
-
         // TODO V10: fix order of groups in the group manager (2022/04/21, Ekaterina Mishina)
-        public override ICollection<PivotGrouping<TGroup, ICollection<T>>> CreateGroupings(ICollection<T> objects, TGroup nullGroup)
+        public override IReadOnlyCollection<
+            PivotGrouping<TGroup, IReadOnlyCollection<T>>
+        > CreateGroupings(IReadOnlyCollection<T> objects, TGroup nullGroup)
         {
-            var selectedObjects = objects.Select((x, i) => new { Key = hierarchicalDimensionCache.Get<TDimension>(Selector(x, i)).AncestorAtLevel(level)?.SystemName, Object = x });
+            var selectedObjects = objects.Select(
+                (x, i) => new { Key = GetAncestor(x, i), Object = x }
+            );
 
             var grouped = selectedObjects.GroupBy(x => x.Key, x => x.Object);
-         
+
             var ordered = Order(grouped).ToArray();
 
             // stop parsing if there are no more data on the lower levels
@@ -48,20 +51,37 @@ namespace OpenSmc.Pivot.Grouping
             //    return new List<PivotGrouping<TGroup, ICollection<T>>>();
 
             var nullGroupPrivate = new TGroup
-                                   {
-                                       SystemName = nullGroup.SystemName,
-                                       DisplayName = nullGroup.DisplayName,
-                                       Coordinates = nullGroup.Coordinates,
-                                       GrouperName = Name
-                                   };
+            {
+                Id = nullGroup.Id,
+                DisplayName = nullGroup.DisplayName,
+                Coordinates = nullGroup.Coordinates,
+                GrouperId = Id
+            };
 
             return ordered
-                   .Select(x => new PivotGrouping<TGroup, ICollection<T>>(x.Key == null ? nullGroupPrivate : CreateGroupDefinition(x.Key), x.ToArray(), x.Key))
-                   .ToArray();
+                .Select(x => new PivotGrouping<TGroup, IReadOnlyCollection<T>>(
+                    x.Key == null ? nullGroupPrivate : CreateGroupDefinition(x.Key),
+                    x.ToArray(),
+                    x.Key
+                ))
+                .ToArray();
+        }
+
+        private object GetAncestor(T element, int i)
+        {
+            var el = Selector(element, i);
+            var hierarchy = hierarchicalDimensionCache.Get<TDimension>(el);
+
+            while (hierarchy.Level > level)
+                hierarchy = hierarchicalDimensionCache.Get<TDimension>(hierarchy.ParentId);
+
+            return hierarchy.Element;
         }
     }
 
-    public class HierarchicalDimensionPivotGrouper<T, TDimension, TGroup> : DimensionPivotGrouper<T, TDimension, TGroup>, IHierarchicalGrouper<TGroup, T>
+    public class HierarchicalDimensionPivotGrouper<T, TDimension, TGroup>
+        : DimensionPivotGrouper<T, TDimension, TGroup>,
+            IHierarchicalGrouper<TGroup, T>
         where TGroup : class, IGroup, new()
         where TDimension : class, IHierarchicalDimension
     {
@@ -71,12 +91,17 @@ namespace OpenSmc.Pivot.Grouping
         private int maxLevelData;
         private bool flat;
 
-        public HierarchicalDimensionPivotGrouper(Func<T, string> selector, DimensionDescriptor dimensionDescriptor)
-            : base(selector, dimensionDescriptor)
-        {
-        }
+        public HierarchicalDimensionPivotGrouper(
+            WorkspaceState state,
+            Func<T, object> selector,
+            DimensionDescriptor dimensionDescriptor
+        )
+            : base(state, selector, dimensionDescriptor) { }
 
-        public void InitializeHierarchies(IHierarchicalDimensionCache hierarchicalDimensionCache, IHierarchicalDimensionOptions hierarchicalDimensionOptions)
+        public void InitializeHierarchies(
+            IHierarchicalDimensionCache hierarchicalDimensionCache,
+            IHierarchicalDimensionOptions hierarchicalDimensionOptions
+        )
         {
             HierarchicalDimensionCache = hierarchicalDimensionCache;
             if (HierarchicalDimensionCache == null)
@@ -85,14 +110,18 @@ namespace OpenSmc.Pivot.Grouping
                 return;
             }
 
-            HierarchicalDimensionCache.Initialize(DimensionDescriptor);
             minLevel = hierarchicalDimensionOptions.GetLevelMin<TDimension>();
             maxLevel = hierarchicalDimensionOptions.GetLevelMax<TDimension>();
             flat = hierarchicalDimensionOptions.IsFlat<TDimension>();
         }
 
-        public PivotGroupManager<T, TIntermediate, TAggregate, TGroup> GetPivotGroupManager<TIntermediate, TAggregate>(PivotGroupManager<T, TIntermediate, TAggregate, TGroup> subGroup,
-                                                                                                                       Aggregations<T, TIntermediate, TAggregate> aggregationFunctions)
+        public PivotGroupManager<T, TIntermediate, TAggregate, TGroup> GetPivotGroupManager<
+            TIntermediate,
+            TAggregate
+        >(
+            PivotGroupManager<T, TIntermediate, TAggregate, TGroup> subGroup,
+            Aggregations<T, TIntermediate, TAggregate> aggregationFunctions
+        )
         {
             if (flat)
                 return new(this, subGroup, aggregationFunctions);
@@ -110,14 +139,28 @@ namespace OpenSmc.Pivot.Grouping
             if (flat)
                 return;
             var dimSystemName = Selector(element, 0);
-            maxLevelData = Math.Max(maxLevelData, Math.Min(maxLevel, HierarchicalDimensionCache.Get<TDimension>(dimSystemName).Level()));
+            maxLevelData = Math.Max(
+                maxLevelData,
+                Math.Min(maxLevel, HierarchicalDimensionCache.Get<TDimension>(dimSystemName).Level)
+            );
         }
 
-        private PivotGroupManager<T, TIntermediate, TAggregate, TGroup> AddChildren<TIntermediate, TAggregate>(int level,
-                                                                                                               PivotGroupManager<T, TIntermediate, TAggregate, TGroup> subGroup,
-                                                                                                               Aggregations<T, TIntermediate, TAggregate> aggregationFunctions)
+        private PivotGroupManager<T, TIntermediate, TAggregate, TGroup> AddChildren<
+            TIntermediate,
+            TAggregate
+        >(
+            int level,
+            PivotGroupManager<T, TIntermediate, TAggregate, TGroup> subGroup,
+            Aggregations<T, TIntermediate, TAggregate> aggregationFunctions
+        )
         {
-            var grouper = new HierarchyLevelDimensionPivotGrouper<T, TDimension, TGroup>(Selector, DimensionDescriptor, DimensionCache, HierarchicalDimensionCache, level);
+            var grouper = new HierarchyLevelDimensionPivotGrouper<T, TDimension, TGroup>(
+                State,
+                Selector,
+                DimensionDescriptor,
+                HierarchicalDimensionCache,
+                level
+            );
 
             return new(grouper, subGroup, aggregationFunctions);
         }

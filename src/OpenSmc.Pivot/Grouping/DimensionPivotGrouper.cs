@@ -1,33 +1,39 @@
 ﻿using System.Collections.Immutable;
 using System.Data;
 using OpenSmc.Collections;
+using OpenSmc.Data;
 using OpenSmc.DataCubes;
 using OpenSmc.Domain.Abstractions;
 using OpenSmc.Pivot.Models.Interfaces;
 
 namespace OpenSmc.Pivot.Grouping
 {
-    public class DimensionPivotGrouper<T, TDimension, TGroup> : SelectorPivotGrouper<T, string, TGroup>
+    public class DimensionPivotGrouper<T, TDimension, TGroup>(
+        WorkspaceState state,
+        Func<T, int, object> selector,
+        DimensionDescriptor DimensionDescriptor
+    ) : SelectorPivotGrouper<T, object, TGroup>(selector, DimensionDescriptor)
         where TGroup : class, IGroup, new()
         where TDimension : class, INamed
     {
-        protected IDimensionCache DimensionCache;
-        protected readonly DimensionDescriptor DimensionDescriptor;
+        protected WorkspaceState State { get; } = state;
+        public DimensionDescriptor DimensionDescriptor { get; }
 
-        public DimensionPivotGrouper(Func<T, string> selector, DimensionDescriptor dimensionDescriptor)
-            : base(selector, dimensionDescriptor.SystemName)
+        public DimensionPivotGrouper(
+            WorkspaceState state,
+            Func<T, object> selector,
+            DimensionDescriptor dimensionDescriptor
+        )
+            : this(state, (x, _) => selector(x), dimensionDescriptor)
         {
-            DimensionDescriptor = dimensionDescriptor;
+            this.DimensionDescriptor = dimensionDescriptor;
         }
 
-        protected DimensionPivotGrouper(Func<T, int, string> selector, DimensionDescriptor dimensionDescriptor)
-            :base(selector, dimensionDescriptor.SystemName)
+        protected override IOrderedEnumerable<IGrouping<object, T>> Order(
+            IEnumerable<IGrouping<object, T>> groups
+        )
         {
-            DimensionDescriptor = dimensionDescriptor;
-        }
-
-        protected override IOrderedEnumerable<IGrouping<string, T>> Order(IEnumerable<IGrouping<string, T>> groups)
-        {
+            base.Order(groups);
             if (typeof(IOrdered).IsAssignableFrom(typeof(TDimension)))
                 return groups.OrderBy(g => g.Key == null).ThenBy(g => GetOrder(g.Key));
             return groups.OrderBy(g => g.Key == null).ThenBy(g => GetDisplayName(g.Key));
@@ -36,49 +42,46 @@ namespace OpenSmc.Pivot.Grouping
         public override IEnumerable<TGroup> Order(IEnumerable<IdentityWithOrderKey<TGroup>> groups)
         {
             if (typeof(IOrdered).IsAssignableFrom(typeof(TDimension)))
-                return groups.OrderBy(x => (string)x.OrderKey == null).ThenBy(g => GetOrder((string)g.OrderKey)).Select(x => x.Identity);
-            return groups.OrderBy(x => (string)x.OrderKey == null).ThenBy(g => GetDisplayName((string)g.OrderKey)).Select(x => x.Identity);
+                return groups
+                    .OrderBy(x => (string)x.OrderKey == null)
+                    .ThenBy(g => GetOrder((string)g.OrderKey))
+                    .Select(x => x.Identity);
+            return groups
+                .OrderBy(x => (string)x.OrderKey == null)
+                .ThenBy(g => GetDisplayName((string)g.OrderKey))
+                .Select(x => x.Identity);
         }
-        
-        protected override TGroup CreateGroupDefinition(string value)
+
+        protected override TGroup CreateGroupDefinition(object value)
         {
             if (value == null)
                 throw new NoNullAllowedException();
 
             var displayName = GetDisplayName(value);
             return new TGroup
-                   {
-                       SystemName = value,
-                       DisplayName = displayName,
-                       GrouperName = Name,
-                       Coordinates = ImmutableList<string>.Empty.Add(value)
-                   };
+            {
+                Id = value,
+                DisplayName = displayName?.ToString(),
+                GrouperId = Id,
+                Coordinates = ImmutableList<object>.Empty.Add(value)
+            };
         }
 
-        public override void Initialize(IDimensionCache cache)
-        {
-            DimensionCache = cache;
-            if (DimensionCache == null)
-                return;
-
-            DimensionCache.Initialize(DimensionDescriptor.RepeatOnce());
-        }
-
-        private int GetOrder(string dim)
+        private int GetOrder(object dim)
         {
             if (dim == null)
                 // TODO: what to return? (2021/05/22, Roland Buergi)
                 return int.MaxValue;
             // ReSharper disable once SuspiciousTypeConversion.Global
-            var ordered = DimensionCache?.Get<TDimension>(dim) as IOrdered;
+            var ordered = State.GetData<TDimension>(dim) as IOrdered;
             return ordered?.Order ?? int.MaxValue;
         }
 
-        private string GetDisplayName(string dim)
+        private object GetDisplayName(object id)
         {
-            if (dim == null)
+            if (id == null)
                 return IPivotGrouper<T, TGroup>.NullGroup.DisplayName;
-            return DimensionCache?.Get<TDimension>(dim)?.DisplayName ?? dim;
+            return State.GetData<TDimension>(id)?.DisplayName ?? id;
         }
     }
 }

@@ -1,4 +1,6 @@
-﻿using OpenSmc.Collections;
+﻿using AngleSharp.Common;
+using AngleSharp.Dom;
+using OpenSmc.Collections;
 using OpenSmc.Data;
 using OpenSmc.Domain.Abstractions;
 
@@ -7,158 +9,173 @@ namespace OpenSmc.Hierarchies;
 public class Hierarchy<T> : IHierarchy<T>
     where T : class, IHierarchicalDimension
 {
-    private IDictionary<string, T> elementsBySystemName;
-    private readonly IDictionary<string, IDictionary<int, string>> elementsBySystemNameAndLevels;
-    private readonly IDictionary<int, IList<string>> dimensionsByLevel;
-    private readonly IWorkspace readOnlyWorkspace;
+    private IReadOnlyDictionary<object, object> elementsById;
+    private Dictionary<object, HierarchyNode<T>> hierarchy;
 
-    public Hierarchy(IWorkspace readOnlyWorkspace)
+    public Hierarchy(IReadOnlyDictionary<object, object> elementsById)
     {
-        this.readOnlyWorkspace = readOnlyWorkspace;
-        dimensionsByLevel = new Dictionary<int, IList<string>>();
-        elementsBySystemNameAndLevels = new Dictionary<string, IDictionary<int, string>>();
+        this.elementsById = elementsById;
+        hierarchy = elementsById
+            .Select(kvp => new KeyValuePair<object, T>(kvp.Key, (T)kvp.Value))
+            .Select(dim => new HierarchyNode<T>(
+                dim.Key,
+                (T)dim.Value,
+                dim.Value.Parent,
+                (T)elementsById[dim.Value.Parent]
+            ))
+            .ToDictionary(x => x.Id);
+
+        AddLevels();
     }
 
-    public void Initialize()
+    private void AddLevels()
     {
-        elementsBySystemName = readOnlyWorkspace.GetData<T>().ToDictionary(x => x.SystemName);
-        AddChildren(0, GetPairs());
+        foreach (var id in hierarchy.Values.Select(x => x.Id).ToArray())
+            GetLevel(id);
     }
 
-    private IEnumerable<ChildParent> GetPairs()
+    private int GetLevel(object id)
     {
-        return from dim in elementsBySystemName.Values
-               join parent in elementsBySystemName.Values on dim.Parent equals parent.SystemName into joined
-               from parent in joined.DefaultIfEmpty()
-               select new ChildParent { Child = dim, Parent = parent };
+        var node = hierarchy[id];
+        if (node.ParentId == null || node.ParentId.Equals(string.Empty) || node.Level > 0)
+            return node.Level;
+
+        return (hierarchy[node.Id] = node with { Level = GetLevel(node.ParentId) + 1 }).Level;
     }
 
-    public T Get(string systemName)
+    public T Get(object id)
     {
-        if (systemName == null || !elementsBySystemName.TryGetValue(systemName, out var ret))
+        if (id == null || !elementsById.TryGetValue(id, out var ret))
             return null;
-        return ret;
+        return (T)ret;
     }
 
-    public IHierarchyNode<T> GetHierarchyNode(string systemName)
+    public HierarchyNode<T> GetHierarchyNode(object id)
     {
-        if (systemName == null || !elementsBySystemName.ContainsKey(systemName))
-            return null;
-        return new HierarchyNode<T>(systemName, this);
+        return hierarchy.GetValueOrDefault(id);
     }
 
-    private readonly Dictionary<string, T[]> children = new(); 
-
-    public T[] Children(string systemName)
+    public T[] Children(object id)
     {
-        var targetKey = systemName ?? "<null>";
-
-        return children.GetOrAdd(targetKey, _ => elementsBySystemName.Values.Where(x => x.Parent == systemName).ToArray());
+        var targetKey = id ?? "<null>";
+        return elementsById.Values.Cast<T>().Where(x => x.Parent == id).ToArray();
     }
 
-    private readonly Dictionary<string, T[]> descendants = new();
-    private readonly Dictionary<string, T[]> descendantWithSelf = new();
+    // public T[] Descendants(object id, bool includeSelf = false)
+    // {
+    //     id ??= "";
 
-    public T[] Descendants(string systemName, bool includeSelf = false)
-    {
-        systemName ??= "";
+    //     if (includeSelf)
+    //         elementsBySystemNameAndLevels
+    //             .Where(x => x.Value.Values.Contains(id))
+    //             .Select(x => elementsById[x.Key])
+    //             .ToArray();
 
-        if (includeSelf) return descendantWithSelf.GetOrAdd(systemName, _ => elementsBySystemNameAndLevels.Where(x => x.Value.Values.Contains(systemName))
-                                                                                                          .Select(x => elementsBySystemName[x.Key])
-                                                                                                          .ToArray());
+    //     return elementsBySystemNameAndLevels
+    //                 .Where(x => !x.Key.Equals(id) && x.Value.Values.Contains(id))
+    //                 .Select(x => elementsById[x.Key])
+    //                 .ToArray();
+    // }
 
-        return descendants.GetOrAdd(systemName, _ => elementsBySystemNameAndLevels.Where(x => x.Key != systemName && x.Value.Values.Contains(systemName))
-                                                                                      .Select(x => elementsBySystemName[x.Key])
-                                                                                      .ToArray());
-    }
+    // public T[] Ancestors(object id, bool includeSelf = false)
+    // {
+    //     id ??= "";
 
-    private readonly Dictionary<string, T[]> ancestors = new();
-    private readonly Dictionary<string, T[]> ancestorsSelf = new();
+    //     if (!elementsBySystemNameAndLevels.TryGetValue(id, out var levels))
+    //         return default;
 
-    public T[] Ancestors(string systemName, bool includeSelf = false)
-    {
-        systemName ??= "";
+    //     if (includeSelf)
+    //         return levels.Select(x => elementsById[x.Value]).Cast<T>().ToArray();
 
-        if (!elementsBySystemNameAndLevels.TryGetValue(systemName, out var levels)) return default;
+    //     return levels
+    //         .Where(x => x.Value != id)
+    //         .Select(x => elementsById[x.Value])
+    //         .Cast<T>()
+    //         .ToArray();
+    // }
 
-        if (includeSelf) return ancestorsSelf.GetOrAdd(systemName, _ => levels.Select(x => elementsBySystemName[x.Value]).ToArray());
+    // public T[] Siblings(object id, bool includeSelf = false)
+    // {
+    //     id ??= "";
 
-        return ancestors.GetOrAdd(systemName, _ => levels.Where(x => x.Value != systemName).Select(x => elementsBySystemName[x.Value]).ToArray());
-    }
+    //     if (includeSelf)
+    //         elementsById
+    //             .Values.Cast<T>()
+    //             .Where(x => x.Parent == Get(id).Parent)
+    //             .ToArray();
 
-    private readonly Dictionary<string, T[]> siblings = new();
-    private readonly Dictionary<string, T[]> siblingsSelf = new();
+    //     return elementsById
+    //         .Values.Cast<T>()
+    //         .Where(x => x.Parent == Get(id).Parent && x.id != id)
+    //         .ToArray();
+    // }
 
-    public T[] Siblings(string systemName, bool includeSelf = false)
-    {
-        systemName ??= "";
+    // public int Level(object id)
+    // {
+    //     if (!hierarchy.TryGetValue(id, out var levels))
+    //         return 0;
+    //     return levels.Keys.Max();
+    // }
 
-        if (includeSelf) return siblingsSelf.GetOrAdd(systemName, _ => elementsBySystemName.Values.Where(x => x.Parent == Get(systemName).Parent).ToArray());
+    // public T AncestorAtLevel(object id, int level)
+    // {
+    //     if (!elementsBySystemNameAndLevels.TryGetValue(id, out var levels))
+    //         return null;
+    //     if (!levels.TryGetValue(level, out var dimName))
+    //         return null;
+    //     elementsById.TryGetValue(dimName, out var dim);
+    //     return dim;
+    // }
 
-        return siblings.GetOrAdd(systemName, _ => elementsBySystemName.Values.Where(x => x.Parent == Get(systemName).Parent && x.SystemName != systemName).ToArray());
-    }
+    // public T[] DescendantsAtLevel(object id, int level)
+    // {
+    //     id ??= "";
 
-    public int Level(string systemName)
-    {
-        if (!elementsBySystemNameAndLevels.TryGetValue(systemName, out var levels)) return 0;
-        return levels.Keys.Max();
-    }
+    //     return elementsBySystemNameAndLevels
+    //         .Where(x => x.Value.Values.Contains(id) && x.Value.Keys.Max() == level)
+    //         .Select(x => elementsById[x.Key])
+    //         .Cast<T>()
+    //         .ToArray();
+    // }
 
-    public T AncestorAtLevel(string systemName, int level)
-    {
-        if (!elementsBySystemNameAndLevels.TryGetValue(systemName, out var levels)) return null;
-        if (!levels.TryGetValue(level, out var dimName)) return null;
-        elementsBySystemName.TryGetValue(dimName, out var dim);
-        return dim;
-    }
+    // private record HierarchyNode(object ChildId, T Child, object ParentId, T Parent)
+    // {
+    //     public int Level { get; internal set; }
+    // }
 
-    private readonly Dictionary<(string, int), T[]> descendantsAtLevel = new();
+    // private void AddChildren(int level, IEnumerable<HierarchyNode> pairs)
+    // {
+    //     var dimensionsFormPreviousLevel =
+    //         level == 0 ? new List<string>() : dimensionsByLevel[level - 1];
 
-    public T[] DescendantsAtLevel(string systemName, int level)
-    {
-        systemName ??= "";
+    //     var dimensionsByThisLevel = pairs
+    //         .GroupBy(x =>
+    //             level == 0 ? x.Parent == null : dimensionsFormPreviousLevel.Contains(x.ParentId)
+    //         )
+    //         .ToDictionary(x => x.Key, y => y);
 
-        return descendantsAtLevel.GetOrAdd((systemName, level),
-                                           _ => elementsBySystemNameAndLevels.Where(x => x.Value.Values.Contains(systemName) && x.Value.Keys.Max() == level)
-                                                                             .Select(x => elementsBySystemName[x.Key])
-                                                                             .ToArray());
-    }
+    //     if (dimensionsByThisLevel.TryGetValue(true, out var dimensionsOnThisLevel))
+    //     {
+    //         foreach (var dim in dimensionsOnThisLevel)
+    //         {
+    //             elementsBySystemNameAndLevels[dim.ChildId] = new Dictionary<int, string>
+    //             {
+    //                 { level, dim.ChildId }
+    //             };
 
-    private class ChildParent
-    {
-        public T Child { get; init; }
-        public T Parent { get; init; }
-    }
+    //             if (dim.Parent != null)
+    //             {
+    //                 foreach (var element in elementsBySystemNameAndLevels[dim.ParentId])
+    //                     elementsBySystemNameAndLevels[dim.ChildId].Add(element.Key, element.Value);
+    //             }
+    //         }
 
-    private void AddChildren(int level, IEnumerable<ChildParent> pairs)
-    {
-        var dimensionsFormPreviousLevel = level == 0
-                                              ? new List<string>()
-                                              : dimensionsByLevel[level - 1];
+    //         dimensionsByLevel[level] = dimensionsOnThisLevel
+    //             .Select(x => x.Child.id)
+    //             .ToList();
+    //     }
 
-        var dimensionsByThisLevel = pairs.GroupBy(x => level == 0 ? x.Parent == null : dimensionsFormPreviousLevel.Contains(x.Parent.SystemName))
-                                         .ToDictionary(x => x.Key, y => y);
-
-        if (dimensionsByThisLevel.TryGetValue(true, out var dimensionsOnThisLevel))
-        {
-            foreach (var dim in dimensionsOnThisLevel)
-            {
-                elementsBySystemNameAndLevels[dim.Child.SystemName] = new Dictionary<int, string>
-                                                                      {
-                                                                          { level, dim.Child.SystemName }
-                                                                      };
-
-                if (dim.Parent != null)
-                {
-                    foreach (var element in elementsBySystemNameAndLevels[dim.Parent.SystemName])
-                        elementsBySystemNameAndLevels[dim.Child.SystemName].Add(element.Key,element.Value);
-                }
-            }
-
-            dimensionsByLevel[level] = dimensionsOnThisLevel.Select(x => x.Child.SystemName).ToList();
-        }
-
-        if (dimensionsByThisLevel.TryGetValue(false, out var otherDimensions))
-            AddChildren(level + 1, otherDimensions);
-    }
+    //     if (dimensionsByThisLevel.TryGetValue(false, out var otherDimensions))
+    //         AddChildren(level + 1, otherDimensions);
+    // }
 }

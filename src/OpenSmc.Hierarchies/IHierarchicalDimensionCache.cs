@@ -5,14 +5,9 @@ namespace OpenSmc.Hierarchies;
 
 public interface IHierarchicalDimensionCache
 {
-    IHierarchyNode<T> Get<T>(string systemName)
+    HierarchyNode<T> Get<T>(object id)
         where T : class, IHierarchicalDimension;
-    
+
     IHierarchy<T> Get<T>()
         where T : class, IHierarchicalDimension;
-
-    void Initialize<T>()
-        where T : class, IHierarchicalDimension;
-
-    void Initialize(params DimensionDescriptor[] dimensionDescriptors);
 }

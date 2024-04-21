@@ -9,7 +9,8 @@ using OpenSmc.Pivot.Models.Interfaces;
 
 namespace OpenSmc.Pivot.Builder
 {
-    public abstract record PivotGroupingConfiguration<T, TGroup> : IEnumerable<PivotGroupingConfigItem<T, TGroup>>
+    public abstract record PivotGroupingConfiguration<T, TGroup>
+        : IEnumerable<PivotGroupingConfigItem<T, TGroup>>
         where TGroup : class, IGroup, new()
     {
         internal ImmutableList<PivotGroupingConfigItem<T, TGroup>> ConfigItems { get; init; }
@@ -19,31 +20,34 @@ namespace OpenSmc.Pivot.Builder
             // TODO V10: this should be a new Column(){ Field = "", HeaderName = "Name", ValueGetter = "node.id"}  (2021/10/05, Ekaterina Mishina)
             if (typeof(INamed).IsAssignableFrom(typeof(T)))
             {
-                var grouper =
-                    Activator.CreateInstance(
-                                             typeof(NamedPivotGrouper<,>).MakeGenericType(typeof(T), typeof(TGroup)), PivotConst.AutomaticEnumerationPivotGrouperName);
+                var grouper = Activator.CreateInstance(
+                    typeof(NamedPivotGrouper<,>).MakeGenericType(typeof(T), typeof(TGroup)),
+                    PivotConst.AutomaticEnumerationPivotGrouperName
+                );
                 return new((IPivotGrouper<T, TGroup>)grouper);
             }
 
             return new(new AutomaticEnumerationPivotGrouper<T, TGroup>());
         }
 
-        public PivotGroupingConfiguration<T, TGroup> GroupBy<TSelected>(Expression<Func<T, TSelected>> selector)
+        public PivotGroupingConfiguration<T, TGroup> GroupBy<TSelected>(
+            Expression<Func<T, TSelected>> selector
+        )
         {
             var reportRowGroupConfig = CreateReportGroupConfig(selector);
-            return this with
-                   {
-                       ConfigItems = PrependGrouping(reportRowGroupConfig)
-                   };
+            return this with { ConfigItems = PrependGrouping(reportRowGroupConfig) };
         }
 
-        private PivotGroupingConfigItem<T, TGroup> CreateReportGroupConfig<TSelected>(Expression<Func<T, TSelected>> selector)
+        private PivotGroupingConfigItem<T, TGroup> CreateReportGroupConfig<TSelected>(
+            Expression<Func<T, TSelected>> selector
+        )
         {
             return new(PivotGroupingExtensions<TGroup>.GetPivotGrouper(selector));
         }
 
-
-        protected ImmutableList<PivotGroupingConfigItem<T, TGroup>> PrependGrouping(PivotGroupingConfigItem<T, TGroup> configItem)
+        protected ImmutableList<PivotGroupingConfigItem<T, TGroup>> PrependGrouping(
+            PivotGroupingConfigItem<T, TGroup> configItem
+        )
         {
             return ConfigItems?.Insert(0, configItem) ?? ImmutableList.Create(configItem);
         }
@@ -65,8 +69,15 @@ namespace OpenSmc.Pivot.Builder
 
     public record PivotRowsGroupingConfiguration<T> : PivotGroupingConfiguration<T, RowGroup>
     {
-        private static readonly PivotGroupingConfigItem<T, RowGroup> DefaultRowGrouping = CreateDefaultAutomaticNumbering();
-        private static readonly PivotGroupingConfigItem<T, RowGroup> DefaultTransposedRowGrouping = new(new DirectPivotGrouper<T, RowGroup>(x => x.GroupBy(_ => IPivotGrouper<T, RowGroup>.TopGroup), IPivotGrouper<T, RowGroup>.TopGroup.GrouperName));
+        private static readonly PivotGroupingConfigItem<T, RowGroup> DefaultRowGrouping =
+            CreateDefaultAutomaticNumbering();
+        private static readonly PivotGroupingConfigItem<T, RowGroup> DefaultTransposedRowGrouping =
+            new(
+                new DirectPivotGrouper<T, RowGroup>(
+                    x => x.GroupBy(_ => IPivotGrouper<T, RowGroup>.TopGroup),
+                    IPivotGrouper<T, RowGroup>.TopGroup.GrouperId
+                )
+            );
 
         public PivotRowsGroupingConfiguration()
         {
@@ -81,8 +92,15 @@ namespace OpenSmc.Pivot.Builder
 
     public record PivotColumnsGroupingConfiguration<T> : PivotGroupingConfiguration<T, ColumnGroup>
     {
-        private static readonly PivotGroupingConfigItem<T, ColumnGroup> DefaultColumnGrouping = new(new DirectPivotGrouper<T, ColumnGroup>(x => x.GroupBy(_ => IPivotGrouper<T, ColumnGroup>.TopGroup), IPivotGrouper<T, ColumnGroup>.TopGroup.GrouperName));
-        private static readonly PivotGroupingConfigItem<T, ColumnGroup> DefaultTransposedGrouping = CreateDefaultAutomaticNumbering();
+        private static readonly PivotGroupingConfigItem<T, ColumnGroup> DefaultColumnGrouping =
+            new(
+                new DirectPivotGrouper<T, ColumnGroup>(
+                    x => x.GroupBy(_ => IPivotGrouper<T, ColumnGroup>.TopGroup),
+                    IPivotGrouper<T, ColumnGroup>.TopGroup.GrouperId
+                )
+            );
+        private static readonly PivotGroupingConfigItem<T, ColumnGroup> DefaultTransposedGrouping =
+            CreateDefaultAutomaticNumbering();
 
         public PivotColumnsGroupingConfiguration()
         {

@@ -193,7 +193,6 @@ public record ImportConfiguration(IMessageHub Hub, IWorkspace Workspace)
     private bool IsElementExists<T>(IWorkspace workspace, string value)
         where T : class
     {
-        var data = workspace.GetData<T>();
-        return data.OfType<INamed>().Select(x => x.SystemName).Contains(value);
+        return workspace.State.GetDataById<T>().ContainsKey(value);
     }
 }
