@@ -39,6 +39,17 @@ indent_size = 2
 # Dotnet code style settings:
 [*.{cs,vb}]
 
+// no underscore prefix for private fields
+dotnet_naming_rule.private_members_should_not_start_with_underscore.severity = suggestion
+dotnet_naming_rule.private_members_should_not_start_with_underscore.symbols  = private_fields
+dotnet_naming_rule.private_members_should_not_start_with_underscore.style    = non_underscore_style
+
+dotnet_naming_symbols.private_fields.applicable_kinds   = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private
+
+dotnet_naming_style.non_underscore_style.required_prefix = 
+dotnet_naming_style.non_underscore_style.capitalization = camel_case
+
 # Sort using and Import directives with System.* appearing first
 dotnet_sort_system_directives_first = true
 dotnet_separate_import_directive_groups = false

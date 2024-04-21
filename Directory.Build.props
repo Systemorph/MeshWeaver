@@ -16,4 +16,11 @@
   <Target Name="CleanAllBins" AfterTargets="Clean">
     <Delete Files="@(filesToDelete)" />
   </Target>
+  <ItemGroup>
+    <PackageReference Include="Roslynator.Analyzers"  />
+    <PackageReference Include="Roslynator.Formatting.Analyzers"  />
+    <PackageReference Include="Roslynator.CodeFixes"  />
+    <PackageReference Include="Roslynator.CodeAnalysis.Analyzers"  />
+    <PackageReference Include="Roslynator.Refactorings"  />
+  </ItemGroup>
 </Project>
