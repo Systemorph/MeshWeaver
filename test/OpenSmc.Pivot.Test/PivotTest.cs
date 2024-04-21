@@ -1,19 +1,21 @@
 ﻿using FluentAssertions;
 using OpenSmc.Arithmetics;
 using OpenSmc.Collections;
+using OpenSmc.Data;
 using OpenSmc.DataCubes;
-using OpenSmc.Fixture;
+using OpenSmc.Hub.Fixture;
 using OpenSmc.Pivot.Aggregations;
 using OpenSmc.Pivot.Builder;
 using OpenSmc.Pivot.Models;
 using OpenSmc.Scopes;
-using OpenSmc.Scopes.DataCubes;
 using OpenSmc.Scopes.Proxy;
 using OpenSmc.ServiceProvider;
 using OpenSmc.TestDomain;
 using OpenSmc.TestDomain.Cubes;
 using OpenSmc.TestDomain.Scopes;
 using OpenSmc.TestDomain.SimpleData;
+using VerifyXunit;
+using Xunit;
 using Xunit.Abstractions;
 
 namespace OpenSmc.Pivot.Test;
@@ -26,7 +28,7 @@ public static class VerifyExtension
     }
 }
 
-public class PivotTest : TestBase //HubTestBase
+public class PivotTest : HubTestBase
 {
     [Inject]
     protected IScopeFactory ScopeFactory;
@@ -37,9 +39,11 @@ public class PivotTest : TestBase //HubTestBase
         Services.AddScopes();
     }
 
-    protected override void Initialize()
+    private async Task<WorkspaceState> GetStateAsync()
     {
-        base.Initialize();
+        var workspace = GetHost().GetWorkspace();
+        await workspace.Initialized;
+        return workspace.State;
     }
 
     [Theory]
@@ -50,9 +54,7 @@ public class PivotTest : TestBase //HubTestBase
         Func<PivotBuilder<T, T, T>, PivotBuilder<T, TAggregate, TAggregate>> builder
     )
     {
-        var initial = PivotFactory
-            .ForObjects(data)
-            .WithQuerySource(new StaticDataFieldReadOnlyWorkspace());
+        var initial = PivotFactory.ForObjects(data).WithState(await GetStateAsync());
 
         var pivotBuilder = builder(initial);
 
@@ -68,9 +70,7 @@ public class PivotTest : TestBase //HubTestBase
         Func<PivotBuilder<T, T, T>, PivotBuilder<T, int, int>> builder
     )
     {
-        var initial = PivotFactory
-            .ForObjects(data)
-            .WithQuerySource(new StaticDataFieldReadOnlyWorkspace());
+        var initial = PivotFactory.ForObjects(data).WithState(await GetStateAsync());
 
         var pivotBuilder = builder(initial);
 
@@ -1057,9 +1057,7 @@ public class PivotTest : TestBase //HubTestBase
         > builder
     )
     {
-        var initial = PivotFactory
-            .ForDataCubes(data)
-            .WithQuerySource(new StaticDataFieldReadOnlyWorkspace());
+        var initial = PivotFactory.ForDataCubes(data).WithState(await GetStateAsync());
 
         var pivotBuilder = builder(initial);
 
@@ -1076,9 +1074,7 @@ public class PivotTest : TestBase //HubTestBase
         > builder
     )
     {
-        var initial = PivotFactory
-            .ForDataCubes(data)
-            .WithQuerySource(new StaticDataFieldReadOnlyWorkspace());
+        var initial = PivotFactory.ForDataCubes(data).WithState(await GetStateAsync());
 
         var pivotBuilder = builder(initial);
 
@@ -1095,9 +1091,7 @@ public class PivotTest : TestBase //HubTestBase
         > builder
     )
     {
-        var initial = PivotFactory
-            .ForDataCubes(data)
-            .WithQuerySource(new StaticDataFieldReadOnlyWorkspace());
+        var initial = PivotFactory.ForDataCubes(data).WithState(await GetStateAsync());
 
         var pivotBuilder = builder(initial);
 

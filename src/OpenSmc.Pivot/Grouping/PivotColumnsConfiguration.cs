@@ -5,7 +5,8 @@ using OpenSmc.Pivot.Processors;
 
 namespace OpenSmc.Pivot.Grouping
 {
-    public record PivotColumnsConfiguration<TAggregate> : IPivotConfiguration<TAggregate, ColumnGroup>
+    public record PivotColumnsConfiguration<TAggregate>
+        : IPivotConfiguration<TAggregate, ColumnGroup>
     {
         public IReadOnlyCollection<Column> Columns { get; init; }
         private Type ValueType { get; }
@@ -20,15 +21,16 @@ namespace OpenSmc.Pivot.Grouping
         {
             // TODO V10: introduce AutoGroupColumnDef = new Column { DisplayName = "Name", SystemName = "Name", CellRendererParams = new CellRendererParams { SuppressCount = true } } in the GridModel instead (2021/10/06, Ekaterina Mishina)
             foreach (var c in Columns)
-                    yield return c;
+                yield return c;
         }
 
         private IEnumerable<Column> CreateColumns(params string[] propertiesToHide)
         {
             var propertiesToHideHashSet = new HashSet<string>(propertiesToHide);
-            var propertiesForProcessing = ValueType.GetPropertiesForProcessing(null)
-                                                  .Where(p => !propertiesToHideHashSet.Contains(p.SystemName))
-                                                  .ToArray();
+            var propertiesForProcessing = ValueType
+                .GetPropertiesForProcessing(null)
+                .Where(p => !propertiesToHideHashSet.Contains(p.SystemName))
+                .ToArray();
             if (propertiesForProcessing.Length == 0)
             {
                 var defaultValueName = PivotConst.DefaultValueName;
@@ -45,17 +47,27 @@ namespace OpenSmc.Pivot.Grouping
         {
             foreach (var column in Columns)
             {
-                var prop = ValueType.GetProperty(column.SystemName);
+                var prop = ValueType.GetProperty(column.Id.ToString());
                 if (prop != null)
-                    yield return (new ColumnGroup(column.SystemName, column.DisplayName, prop.Name), x =>
-                                                                                                {
-                                                                                                    if (x == null)
-                                                                                                        return null;
-                                                                                                    var reflector = prop.GetReflector();
-                                                                                                    return reflector.GetValue(x);
-                                                                                                });
+                    yield return (
+                        new ColumnGroup(column.Id, column.DisplayName, prop.Name),
+                        x =>
+                        {
+                            if (x == null)
+                                return null;
+                            var reflector = prop.GetReflector();
+                            return reflector.GetValue(x);
+                        }
+                    );
                 else
-                    yield return (new ColumnGroup(column.SystemName, column.DisplayName, PivotConst.PropertyPivotGrouperName), x => x);
+                    yield return (
+                        new ColumnGroup(
+                            column.Id,
+                            column.DisplayName,
+                            PivotConst.PropertyPivotGrouperName
+                        ),
+                        x => x
+                    );
             }
         }
     }

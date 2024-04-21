@@ -8,16 +8,46 @@ namespace OpenSmc.TestDomain.SimpleData
     {
         public string SystemName { get; init; }
         public string DisplayName { get; init; }
-        public string Parent { get; init; }
+        public object Parent { get; init; }
 
         public static TestHierarchicalDimensionA[] Data =
         {
-            new() { SystemName = "A1",   DisplayName = "A 1",   Parent = null },
-            new() { SystemName = "A2",   DisplayName = "A 2",   Parent = null },
-            new() { SystemName = "A11",  DisplayName = "A 11",  Parent = "A1" },
-            new() { SystemName = "A12",  DisplayName = "A 12",  Parent = "A1" },
-            new() { SystemName = "A111", DisplayName = "A 111", Parent = "A11" },
-            new() { SystemName = "A112", DisplayName = "A 112", Parent = "A11" },
+            new()
+            {
+                SystemName = "A1",
+                DisplayName = "A 1",
+                Parent = null
+            },
+            new()
+            {
+                SystemName = "A2",
+                DisplayName = "A 2",
+                Parent = null
+            },
+            new()
+            {
+                SystemName = "A11",
+                DisplayName = "A 11",
+                Parent = "A1"
+            },
+            new()
+            {
+                SystemName = "A12",
+                DisplayName = "A 12",
+                Parent = "A1"
+            },
+            new()
+            {
+                SystemName = "A111",
+                DisplayName = "A 111",
+                Parent = "A11"
+            },
+            new()
+            {
+                SystemName = "A112",
+                DisplayName = "A 112",
+                Parent = "A11"
+            },
         };
     }
 
@@ -25,23 +55,53 @@ namespace OpenSmc.TestDomain.SimpleData
     {
         public string SystemName { get; init; }
         public string DisplayName { get; init; }
-        public string Parent { get; init; }
-        
+        public object Parent { get; init; }
+
         public static TestHierarchicalDimensionB[] Data =
         {
-            new() { SystemName = "B1",   DisplayName = "B 1",   Parent = null },
-            new() { SystemName = "B2",   DisplayName = "B 2",   Parent = null },
-            new() { SystemName = "B11",  DisplayName = "B 11",  Parent = "B1" },
-            new() { SystemName = "B12",  DisplayName = "B 12",  Parent = "B1" },
-            new() { SystemName = "B111", DisplayName = "B 111", Parent = "B11" },
-            new() { SystemName = "B112", DisplayName = "B 112", Parent = "B11" },
+            new()
+            {
+                SystemName = "B1",
+                DisplayName = "B 1",
+                Parent = null
+            },
+            new()
+            {
+                SystemName = "B2",
+                DisplayName = "B 2",
+                Parent = null
+            },
+            new()
+            {
+                SystemName = "B11",
+                DisplayName = "B 11",
+                Parent = "B1"
+            },
+            new()
+            {
+                SystemName = "B12",
+                DisplayName = "B 12",
+                Parent = "B1"
+            },
+            new()
+            {
+                SystemName = "B111",
+                DisplayName = "B 111",
+                Parent = "B11"
+            },
+            new()
+            {
+                SystemName = "B112",
+                DisplayName = "B 112",
+                Parent = "B11"
+            },
         };
     }
 
     public record ValueWithHierarchicalDimension
     {
         [NotVisible]
-        [Dimension(typeof(TestHierarchicalDimensionA),nameof(DimA))]
+        [Dimension(typeof(TestHierarchicalDimensionA), nameof(DimA))]
         public string DimA { get; init; }
 
         public double Value { get; init; }
@@ -50,15 +110,15 @@ namespace OpenSmc.TestDomain.SimpleData
         {
             new() { DimA = "A111", Value = 1 },
             new() { DimA = "A112", Value = 2 },
-            new() { DimA = "A12",  Value = 3 },
-            new() { DimA = "A2",   Value = 4 }
+            new() { DimA = "A12", Value = 3 },
+            new() { DimA = "A2", Value = 4 }
         };
     }
-    
+
     public record ValueWithAggregateByHierarchicalDimension
     {
         [NotVisible]
-        [Dimension(typeof(TestHierarchicalDimensionA),nameof(DimA))]
+        [Dimension(typeof(TestHierarchicalDimensionA), nameof(DimA))]
         [AggregateBy]
         public string DimA { get; init; }
 
@@ -68,29 +128,49 @@ namespace OpenSmc.TestDomain.SimpleData
         {
             new() { DimA = "A111", Value = 1 },
             new() { DimA = "A112", Value = 2 },
-            new() { DimA = "A12",  Value = 3 },
-            new() { DimA = "A2",   Value = 4 }
+            new() { DimA = "A12", Value = 3 },
+            new() { DimA = "A2", Value = 4 }
         };
     }
-    
+
     public record ValueWithTwoHierarchicalDimensions
     {
         [NotVisible]
-        [Dimension(typeof(TestHierarchicalDimensionA),nameof(DimA))]
+        [Dimension(typeof(TestHierarchicalDimensionA), nameof(DimA))]
         public string DimA { get; init; }
-        
+
         [NotVisible]
-        [Dimension(typeof(TestHierarchicalDimensionB),nameof(DimB))]
+        [Dimension(typeof(TestHierarchicalDimensionB), nameof(DimB))]
         public string DimB { get; init; }
 
         public double Value { get; init; }
 
         public static ValueWithTwoHierarchicalDimensions[] Data =
         {
-            new() { DimA = "A111", DimB = "B2",  Value = 1 },
-            new() { DimA = "A112", DimB = "B11", Value = 2 },
-            new() { DimA = "A111", DimB = "B12", Value = 3 },
-            new() { DimA = "A112", DimB = "B1",  Value = 4 }
+            new()
+            {
+                DimA = "A111",
+                DimB = "B2",
+                Value = 1
+            },
+            new()
+            {
+                DimA = "A112",
+                DimB = "B11",
+                Value = 2
+            },
+            new()
+            {
+                DimA = "A111",
+                DimB = "B12",
+                Value = 3
+            },
+            new()
+            {
+                DimA = "A112",
+                DimB = "B1",
+                Value = 4
+            }
         };
     }
 
@@ -108,10 +188,30 @@ namespace OpenSmc.TestDomain.SimpleData
 
         public static ValueWithMixedDimensions[] Data =
         {
-            new() { DimA = "A111", DimD = "D1", Value = 1 },
-            new() { DimA = "A112", DimD = "D1", Value = 2 },
-            new() { DimA = "A111", DimD = "D2", Value = 3 },
-            new() { DimA = "A112", DimD = "D3", Value = 4 }
+            new()
+            {
+                DimA = "A111",
+                DimD = "D1",
+                Value = 1
+            },
+            new()
+            {
+                DimA = "A112",
+                DimD = "D1",
+                Value = 2
+            },
+            new()
+            {
+                DimA = "A111",
+                DimD = "D2",
+                Value = 3
+            },
+            new()
+            {
+                DimA = "A112",
+                DimD = "D3",
+                Value = 4
+            }
         };
     }
 
@@ -131,10 +231,30 @@ namespace OpenSmc.TestDomain.SimpleData
 
         public static ValueWithTwoAggregateByHierarchicalDimensions[] Data =
         {
-            new() { DimA = "A111", DimB = "B2", Value = 1 },
-            new() { DimA = "A112", DimB = "B11", Value = 2 },
-            new() { DimA = "A111", DimB = "B12", Value = 3 },
-            new() { DimA = "A112", DimB = "B1", Value = 4 }
+            new()
+            {
+                DimA = "A111",
+                DimB = "B2",
+                Value = 1
+            },
+            new()
+            {
+                DimA = "A112",
+                DimB = "B11",
+                Value = 2
+            },
+            new()
+            {
+                DimA = "A111",
+                DimB = "B12",
+                Value = 3
+            },
+            new()
+            {
+                DimA = "A112",
+                DimB = "B1",
+                Value = 4
+            }
         };
     }
 
@@ -154,13 +274,36 @@ namespace OpenSmc.TestDomain.SimpleData
 
         public double Value { get; init; }
 
-
         public static ValueWithLevelDimensions[] Data =
         {
-            new() { Level1 = "A1", Level2 = "A11", Level3 = "A111", Value = 1 },
-            new() { Level1 = "A1", Level2 = "A11", Level3 = "A112", Value = 2 },
-            new() { Level1 = "A1", Level2 = "A12", Level3 = null,   Value = 3 },
-            new() { Level1 = "A2", Level2 = null,  Level3 = null,   Value = 4 }
+            new()
+            {
+                Level1 = "A1",
+                Level2 = "A11",
+                Level3 = "A111",
+                Value = 1
+            },
+            new()
+            {
+                Level1 = "A1",
+                Level2 = "A11",
+                Level3 = "A112",
+                Value = 2
+            },
+            new()
+            {
+                Level1 = "A1",
+                Level2 = "A12",
+                Level3 = null,
+                Value = 3
+            },
+            new()
+            {
+                Level1 = "A2",
+                Level2 = null,
+                Level3 = null,
+                Value = 4
+            }
         };
     }
 }

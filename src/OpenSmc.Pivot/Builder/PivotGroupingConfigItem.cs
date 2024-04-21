@@ -15,13 +15,20 @@ namespace OpenSmc.Pivot.Builder
 
         internal IPivotGrouper<T, TGroup> Grouping { get; init; }
 
-
-        public virtual PivotGroupManager<T, TIntermediate, TAggregate, TGroup> GetGroupManager<TIntermediate, TAggregate>(PivotGroupManager<T, TIntermediate, TAggregate, TGroup> subGroup,
-                                                                                                                          Aggregations<T, TIntermediate, TAggregate> aggregationFunctions, IDimensionCache dimensionCache)
+        public virtual PivotGroupManager<T, TIntermediate, TAggregate, TGroup> GetGroupManager<
+            TIntermediate,
+            TAggregate
+        >(
+            PivotGroupManager<T, TIntermediate, TAggregate, TGroup> subGroup,
+            Aggregations<T, TIntermediate, TAggregate> aggregationFunctions
+        )
         {
             if (Grouping is IHierarchicalGrouper<TGroup, T> hierarchicalGrouper)
             {
-                var groupManager = hierarchicalGrouper.GetPivotGroupManager(subGroup, aggregationFunctions);
+                var groupManager = hierarchicalGrouper.GetPivotGroupManager(
+                    subGroup,
+                    aggregationFunctions
+                );
                 return groupManager;
             }
             return new(Grouping, subGroup, aggregationFunctions);

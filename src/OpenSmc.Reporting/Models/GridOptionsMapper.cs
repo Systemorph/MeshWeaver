@@ -53,23 +53,23 @@ namespace OpenSmc.Reporting.Models
             return gridRows;
         }
 
-        public static ColDef TransformToColDef(this IItemWithCoordinates item)
+        public static ColDef TransformToColDef(this ItemWithCoordinates item)
         {
             return new()
-                   {
-                       ColId = item.SystemName,
-                       HeaderName = item.DisplayName,
-                       ValueGetter = ValueGetter(item)
-                   };
+            {
+                ColId = item.Id,
+                HeaderName = item.DisplayName,
+                ValueGetter = ValueGetter(item)
+            };
         }
 
-        private static string ValueGetter(IItemWithCoordinates item)
+        private static string ValueGetter(ItemWithCoordinates item)
         {
             var dataBinding = $"{GridBindings.Data}";
             var ret = dataBinding;
             foreach (var coordinate in item.Coordinates)
             {
-                dataBinding = $"{dataBinding}{coordinate.Accessor()}";
+                dataBinding = $"{dataBinding}{coordinate.ToString().Accessor()}";
                 ret += " && " + dataBinding;
             }
             return ret;
@@ -77,20 +77,24 @@ namespace OpenSmc.Reporting.Models
 
         public static ColGroupDef TransformToColGroupDef(this ColumnGroup item)
         {
-            IImmutableList<ColDef> children = item.Children.Select(x => x is ColumnGroup g
-                                                                            ? g.TransformToColGroupDef()
-                                                                            : x.TransformToColDef())
-                                                  .ToImmutableList();
+            IImmutableList<ColDef> children = item
+                .Children.Select(x =>
+                    x is ColumnGroup g ? g.TransformToColGroupDef() : x.TransformToColDef()
+                )
+                .ToImmutableList();
 
-            var show = item.Coordinates.Last() == IPivotGrouper<object, ColumnGroup>.TotalGroup.SystemName ? "closed" : "open";
+            var show =
+                item.Coordinates.Last() == IPivotGrouper<object, ColumnGroup>.TotalGroup.Id
+                    ? "closed"
+                    : "open";
 
             var colGroupDef = new ColGroupDef
-                              {
-                                  ColumnGroupShow = show,
-                                  GroupId = item.SystemName,
-                                  HeaderName = item.DisplayName,
-                                  Children = children
-                              };
+            {
+                ColumnGroupShow = show,
+                GroupId = item.Id,
+                HeaderName = item.DisplayName,
+                Children = children
+            };
 
             return colGroupDef;
         }
@@ -98,32 +102,35 @@ namespace OpenSmc.Reporting.Models
         private static GridOptions DefaultGridOptions(this GridOptions options)
         {
             var gridOptions = options.WithDefaultSettings() with
-                              {
-                                  GetRowStyle = GridBindings.GetRowStyle
-                              };
+            {
+                GetRowStyle = GridBindings.GetRowStyle
+            };
             return gridOptions;
         }
 
         private static GridOptions AsTreeModel(this GridOptions options)
         {
             var gridOptions = options with
-                              {
-                                  Components = options.Components.SetItem(GridBindings.DisplayNameGroupColumnRenderer.Name, GridBindings.DisplayNameGroupColumnRenderer.Component),
-                                  TreeData = true,
-                                  GetDataPath = GridBindings.GetDataPath,
-                                  AutoGroupColumnDef = new ColDef
-                                                       {
-                                                           HeaderName = PivotConst.DefaultGroupName,
-                                                           ColId = PivotConst.DefaultGroupName,
-                                                           Resizable = true,
-                                                           CellStyle = new CellStyle { TextAlign = "left" },
-                                                           CellRendererParams = new CellRendererParams
-                                                                                {
-                                                                                    SuppressCount = true,
-                                                                                    InnerRenderer = GridBindings.DisplayNameGroupColumnRenderer.Name
-                                                                                }
-                                                       }
-                              };
+            {
+                Components = options.Components.SetItem(
+                    GridBindings.DisplayNameGroupColumnRenderer.Name,
+                    GridBindings.DisplayNameGroupColumnRenderer.Component
+                ),
+                TreeData = true,
+                GetDataPath = GridBindings.GetDataPath,
+                AutoGroupColumnDef = new ColDef
+                {
+                    HeaderName = PivotConst.DefaultGroupName,
+                    ColId = PivotConst.DefaultGroupName,
+                    Resizable = true,
+                    CellStyle = new CellStyle { TextAlign = "left" },
+                    CellRendererParams = new CellRendererParams
+                    {
+                        SuppressCount = true,
+                        InnerRenderer = GridBindings.DisplayNameGroupColumnRenderer.Name
+                    }
+                }
+            };
             return gridOptions;
         }
     }
