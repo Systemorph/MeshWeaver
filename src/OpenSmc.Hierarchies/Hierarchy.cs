@@ -21,7 +21,9 @@ public class Hierarchy<T> : IHierarchy<T>
                 dim.Key,
                 (T)dim.Value,
                 dim.Value.Parent,
-                (T)elementsById[dim.Value.Parent]
+                dim.Value.Parent == null
+                    ? null
+                    : (T)elementsById.GetValueOrDefault(dim.Value.Parent)
             ))
             .ToDictionary(x => x.Id);
 
@@ -52,7 +54,7 @@ public class Hierarchy<T> : IHierarchy<T>
 
     public HierarchyNode<T> GetHierarchyNode(object id)
     {
-        return hierarchy.GetValueOrDefault(id);
+        return id == null ? null : hierarchy.GetValueOrDefault(id);
     }
 
     public T[] Children(object id)

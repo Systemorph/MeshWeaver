@@ -37,11 +37,6 @@ public class HierarchicalDimensionCacheTest(ITestOutputHelper output) : HubTestB
         var hierarchies = workspace.State.ToHierarchicalDimensionCache();
         using (new AssertionScope())
         {
-            hierarchies.Get<TestHierarchicalDimensionA>().Should().BeNull();
-            hierarchies.Get<TestHierarchicalDimensionA>("A111").Should().BeNull();
-        }
-        using (new AssertionScope())
-        {
             hierarchies.Get<TestHierarchicalDimensionA>().Should().NotBeNull();
             hierarchies.Get<TestHierarchicalDimensionA>("A111").Should().NotBeNull();
             hierarchies.Get<TestHierarchicalDimensionA>("A_Unknown").Should().BeNull();

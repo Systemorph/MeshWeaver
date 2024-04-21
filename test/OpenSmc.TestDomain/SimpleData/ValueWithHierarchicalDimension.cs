@@ -1,4 +1,5 @@
-﻿using OpenSmc.Arithmetics;
+﻿using System.ComponentModel.DataAnnotations;
+using OpenSmc.Arithmetics;
 using OpenSmc.Domain.Abstractions;
 using OpenSmc.Domain.Abstractions.Attributes;
 
@@ -6,6 +7,7 @@ namespace OpenSmc.TestDomain.SimpleData
 {
     public record TestHierarchicalDimensionA : IHierarchicalDimension
     {
+        [Key]
         public string SystemName { get; init; }
         public string DisplayName { get; init; }
         public object Parent { get; init; }
@@ -53,6 +55,7 @@ namespace OpenSmc.TestDomain.SimpleData
 
     public record TestHierarchicalDimensionB : IHierarchicalDimension
     {
+        [Key]
         public string SystemName { get; init; }
         public string DisplayName { get; init; }
         public object Parent { get; init; }
