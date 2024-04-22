@@ -1,4 +1,4 @@
-﻿using OpenSmc.Domain.Abstractions;
+﻿using OpenSmc.Domain;
 
 namespace OpenSmc.Pivot.Builder;
 

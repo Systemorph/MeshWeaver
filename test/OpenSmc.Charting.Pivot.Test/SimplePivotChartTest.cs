@@ -1,8 +1,7 @@
 using OpenSmc.Charting.Enums;
 using OpenSmc.Data;
 using OpenSmc.DataCubes;
-using OpenSmc.Domain.Abstractions;
-using OpenSmc.Domain.Abstractions.Attributes;
+using OpenSmc.Domain;
 using OpenSmc.Fixture;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Pivot.Builder;

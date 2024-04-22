@@ -4,8 +4,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using OpenSmc.Data;
 using OpenSmc.DataCubes;
-using OpenSmc.Domain.Abstractions;
-using OpenSmc.Domain.Abstractions.Attributes;
+using OpenSmc.Domain;
 using OpenSmc.Pivot.Models.Interfaces;
 using OpenSmc.Reflection;
 

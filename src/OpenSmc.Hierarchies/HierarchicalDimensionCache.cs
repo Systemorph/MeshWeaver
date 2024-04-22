@@ -1,5 +1,5 @@
 ﻿using OpenSmc.Data;
-using OpenSmc.Domain.Abstractions;
+using OpenSmc.Domain;
 
 namespace OpenSmc.Hierarchies;
 

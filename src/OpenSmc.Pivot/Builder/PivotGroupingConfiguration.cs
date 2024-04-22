@@ -2,7 +2,7 @@
 using System.Collections.Immutable;
 using System.Linq.Expressions;
 using OpenSmc.Collections;
-using OpenSmc.Domain.Abstractions;
+using OpenSmc.Domain;
 using OpenSmc.Pivot.Grouping;
 using OpenSmc.Pivot.Models;
 using OpenSmc.Pivot.Models.Interfaces;

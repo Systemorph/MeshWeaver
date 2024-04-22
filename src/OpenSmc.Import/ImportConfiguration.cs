@@ -10,8 +10,7 @@ using OpenSmc.Data;
 using OpenSmc.DataSetReader;
 using OpenSmc.DataSetReader.Csv;
 using OpenSmc.DataSetReader.Excel;
-using OpenSmc.Domain.Abstractions;
-using OpenSmc.Domain.Abstractions.Attributes;
+using OpenSmc.Domain;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 

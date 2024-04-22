@@ -1,7 +1,7 @@
 ﻿using System.Data;
 using OpenSmc.Data;
 using OpenSmc.DataCubes;
-using OpenSmc.Domain.Abstractions;
+using OpenSmc.Domain;
 using OpenSmc.Hierarchies;
 using OpenSmc.Pivot.Aggregations;
 using OpenSmc.Pivot.Builder;

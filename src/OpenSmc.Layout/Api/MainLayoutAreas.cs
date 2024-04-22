@@ -1,6 +1,6 @@
 ﻿namespace OpenSmc.Layout.Api;
 
-public class Area
+public static class Area
 {
     public const string SideMenu = nameof(SideMenu);
     public const string Main = nameof(Main);
@@ -10,5 +10,13 @@ public class Area
     public const string Modal = nameof(Modal);
     public const string Window = nameof(Window);
 
-    internal static readonly IReadOnlyCollection<string> All = new HashSet<string> { SideMenu, Toolbar, Main, ContextMenu, StatusBar, Modal };
+    internal static readonly IReadOnlyCollection<string> All = new HashSet<string>
+    {
+        SideMenu,
+        Toolbar,
+        Main,
+        ContextMenu,
+        StatusBar,
+        Modal
+    };
 }
