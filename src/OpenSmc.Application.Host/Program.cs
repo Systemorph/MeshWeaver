@@ -28,7 +28,7 @@ public class Program
                     .AddMemoryStreams(ApplicationStreamProviders.AppStreamProvider)
                     .AddMemoryGrainStorage("PubSubStore");
                 
-                siloBuilder.Services.AddOrleansHub();
+                siloBuilder.Services.AddRouterHub();
             });
 
         using var app = builder.Build();
@@ -43,14 +43,14 @@ public class Program
 
 public static class OrleansMessageHubExtensions
 {
-    public static IServiceCollection AddOrleansHub(this IServiceCollection services)
+    public static IServiceCollection AddRouterHub(this IServiceCollection services)
     {
-        services.AddSingleton(sp => sp.GetOrleansHub());
+        services.AddSingleton(sp => sp.GetRouterHub());
         return services;
     }
 
-    public static IMessageHub GetOrleansHub(this IServiceProvider serviceProvider) 
-        => serviceProvider.CreateMessageHub(new OrleansAddress(), conf => 
+    public static IMessageHub GetRouterHub(this IServiceProvider serviceProvider) 
+        => serviceProvider.CreateMessageHub(new RouterAddress(), conf => 
             conf
                 .WithHostedHub(new ApplicationAddress(TestApplication.Name, TestApplication.Environment), config =>
                     // HACK V10: this is just for testing and should not be a part of Prod setup (2024/04/17, Dmitry Kalabin)
@@ -74,7 +74,7 @@ public static class OrleansMessageHubExtensions
     }
 }
 
-record OrleansAddress;
+record RouterAddress;
 
 // HACK V10: these TestRequest/TestResponse should not be a part of Prod setup (2024/04/17, Dmitry Kalabin)
 public record TestRequest : IRequest<TestResponse>;
