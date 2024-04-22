@@ -14,7 +14,7 @@ public abstract record ItemWithCoordinates() : IItemWithCoordinates
 {
     public object Id { get; init; }
     public string DisplayName { get; init; }
-    public ImmutableList<object> Coordinates { get; init; }
+    public ImmutableList<object> Coordinates { get; init; } = ImmutableList<object>.Empty;
 
     public object GrouperId { get; init; }
 }

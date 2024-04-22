@@ -8,24 +8,19 @@ using static System.String;
 
 namespace OpenSmc.Pivot.Grouping
 {
-    public class PivotGroupManager<T, TIntermediate, TAggregate, TGroup>
+    public class PivotGroupManager<T, TIntermediate, TAggregate, TGroup>(
+        IPivotGrouper<T, TGroup> grouper,
+        PivotGroupManager<T, TIntermediate, TAggregate, TGroup> subGroup,
+        Aggregations<T, TIntermediate, TAggregate> aggregationFunctions
+    )
         where TGroup : IGroup, IItemWithCoordinates, new()
     {
-        protected readonly PivotGroupManager<T, TIntermediate, TAggregate, TGroup> SubGroup;
-        protected readonly IPivotGrouper<T, TGroup> Grouper;
-        private readonly Aggregations<T, TIntermediate, TAggregate> aggregationFunctions;
+        protected readonly PivotGroupManager<T, TIntermediate, TAggregate, TGroup> SubGroup =
+            subGroup;
+        protected readonly IPivotGrouper<T, TGroup> Grouper = grouper;
+        private readonly Aggregations<T, TIntermediate, TAggregate> aggregationFunctions =
+            aggregationFunctions;
         private readonly Dictionary<object, HashSet<IdentityWithOrderKey<TGroup>>> groups = new();
-
-        public PivotGroupManager(
-            IPivotGrouper<T, TGroup> grouper,
-            PivotGroupManager<T, TIntermediate, TAggregate, TGroup> subGroup,
-            Aggregations<T, TIntermediate, TAggregate> aggregationFunctions
-        )
-        {
-            Grouper = grouper;
-            SubGroup = subGroup;
-            this.aggregationFunctions = aggregationFunctions;
-        }
 
         public IList<ColumnGroup> GetColumnGroups(IReadOnlyCollection<Column> valueColumns)
         {
@@ -257,15 +252,16 @@ namespace OpenSmc.Pivot.Grouping
                 .ToDictionary(x => x, x => parentCoordinates.Concat(x.RepeatOnce()).ToArray());
         }
 
+        private readonly TGroup nullGroup =
+            typeof(TGroup).IsAssignableFrom(typeof(RowGroup))
+            && grouper.GetType().IsAssignableFrom(typeof(PropertyPivotGrouper<T, RowGroup>))
+                ? IPivotGrouper<T, TGroup>.TopGroup
+                : IPivotGrouper<T, TGroup>.NullGroup;
+
         private IReadOnlyCollection<PivotGrouping<TGroup, IReadOnlyCollection<T>>> GetMyGroups(
             IReadOnlyCollection<T> objects
         )
         {
-            var nullGroup =
-                typeof(TGroup).IsAssignableFrom(typeof(RowGroup))
-                && Grouper.GetType().IsAssignableFrom(typeof(PropertyPivotGrouper<T, RowGroup>))
-                    ? IPivotGrouper<T, TGroup>.TopGroup
-                    : IPivotGrouper<T, TGroup>.NullGroup;
             var ret = Grouper.CreateGroupings(objects, nullGroup);
             return ret;
         }

@@ -14,15 +14,11 @@ namespace OpenSmc.Pivot.Builder
         public (
             DimensionDescriptor Dim,
             IPivotGrouper<DataSlice<TElement>, TGroup> Grouper
-        )[] Dimensions { get; init; }
+        )[] Dimensions { get; }
 
-        public SlicePivotGroupingConfigItem(DimensionDescriptor[] dimensions)
-            : base(default(IPivotGrouper<DataSlice<TElement>, TGroup>))
-        {
-            Dimensions = dimensions
-                .Select(d => (d, default(IPivotGrouper<DataSlice<TElement>, TGroup>)))
-                .ToArray();
-        }
+        public SlicePivotGroupingConfigItem(DimensionDescriptor[] dimensions, WorkspaceState state)
+            : base(default(IPivotGrouper<DataSlice<TElement>, TGroup>)) =>
+            Dimensions = dimensions.Select(d => (d, GetGroupingFunction(d, state))).ToArray();
 
         public PivotGroupManager<
             DataSlice<TElement>,
@@ -111,6 +107,18 @@ namespace OpenSmc.Pivot.Builder
         )
         {
             return PivotGroupingExtensions<TGroup>.GetPivotGrouper<TElement>(dimension, state);
+        }
+
+        public void UpdateMaxLevelForHierarchicalGroupers(DataSlice<TElement>[] transformed)
+        {
+            for (int i = 0; i < Dimensions.Length; i++)
+            {
+                if (Dimensions[i].Grouper is IHierarchicalGrouper<TGroup, DataSlice<TElement>> hgr)
+                    foreach (var element in transformed)
+                    {
+                        hgr.UpdateMaxLevel(element);
+                    }
+            }
         }
     }
 }

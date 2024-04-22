@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
 using OpenSmc.Arithmetics;
+using OpenSmc.Data;
 using OpenSmc.DataCubes;
 using OpenSmc.Domain;
 using OpenSmc.Pivot.Aggregations;
@@ -41,13 +42,6 @@ namespace OpenSmc.Pivot.Builder
             : base(cubes)
         {
             AggregateByDimensionDescriptors = GetAggregationPropertiesDescriptors().ToArray();
-
-            SliceRows = new SlicePivotGroupingConfigItem<TElement, RowGroup>(
-                GetAggregateBySliceRowsDimensionDescriptors(this)
-            );
-            SliceColumns = new SlicePivotGroupingConfigItem<TElement, ColumnGroup>(
-                Array.Empty<DimensionDescriptor>()
-            );
         }
 
         public DataCubePivotBuilder<TCube, TElement, TIntermediate, TAggregate> SliceRowsBy(
@@ -71,7 +65,8 @@ namespace OpenSmc.Pivot.Builder
             builder = builder with
             {
                 SliceRows = new SlicePivotGroupingConfigItem<TElement, RowGroup>(
-                    GetSliceRowsDimensionDescriptors(builder)
+                    GetSliceRowsDimensionDescriptors(builder),
+                    builder.State
                 ),
                 PropertiesToHide = dimensions.ToImmutableList()
             };
@@ -95,10 +90,15 @@ namespace OpenSmc.Pivot.Builder
             builder = builder with
             {
                 SliceColumns = new SlicePivotGroupingConfigItem<TElement, ColumnGroup>(
-                    SliceColumns.Dimensions.Select(d => d.Dim).Union(dimensionDescriptors).ToArray()
+                    SliceColumns
+                        .Dimensions.Select(d => d.Dim)
+                        .Union(dimensionDescriptors)
+                        .ToArray(),
+                    State
                 ),
                 SliceRows = new SlicePivotGroupingConfigItem<TElement, RowGroup>(
-                    GetSliceRowsDimensionDescriptors(builder)
+                    GetSliceRowsDimensionDescriptors(builder),
+                    State
                 )
             };
 
@@ -289,7 +289,17 @@ namespace OpenSmc.Pivot.Builder
                 TransposedValue != null
                     ? new TransposedPivotRowsConfiguration<TAggregate>(TransposedValue)
                     : null,
-                this
+                this with
+                {
+                    SliceRows = new SlicePivotGroupingConfigItem<TElement, RowGroup>(
+                        GetAggregateBySliceRowsDimensionDescriptors(this),
+                        State
+                    ),
+                    SliceColumns = new SlicePivotGroupingConfigItem<TElement, ColumnGroup>(
+                        Array.Empty<DimensionDescriptor>(),
+                        State
+                    )
+                }
             );
         }
     }
