@@ -44,7 +44,7 @@ public class ApplicationHub(IClusterClient clusterClient, IHubContext<Applicatio
     public void DeliverMessage(MessageDelivery<RawJson> delivery)
     {
         logger.LogTrace("Received incoming message in SignalR Hub to deliver: {delivery}", delivery);
-        var grainId = "{ApplicationAddress should be here}"; // TODO V10: put appropriate ApplicationAddress here (2024/04/15, Dmitry Kalabin)
+        var grainId = delivery.Target.ToString(); // TODO V10: need to make this deterministic (2024/04/22, Dmitry Kalabin)
         var grain = clusterClient.GetGrain<IApplicationGrain>(grainId);
 
         var task = grain.DeliverMessage(delivery); // TODO V10: This is async and we might think about passing this through a Hub to make it better (2024/04/15, Dmitry Kalabin)
