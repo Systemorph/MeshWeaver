@@ -2,10 +2,10 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Json.More;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Messaging.Serialization;
-using OpenSmc.Serialization;
 
 namespace OpenSmc.Messaging;
 
@@ -45,15 +45,18 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         var configurations =
             Configuration.Get<ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>>() ??
             ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>.Empty;
-        SerializationOptions = configurations.Aggregate(
+        var serializationOptions = configurations.Aggregate(
             CreateSerializationConfiguration(), (c, f) => f.Invoke(c)).Options;
         var typeRegistry = serviceProvider.GetRequiredService<ITypeRegistry>();
-        DeserializationOptions = new JsonSerializerOptions(SerializationOptions);
-        SerializationOptions.Converters.Add(new JsonNodeConverter());
-        SerializationOptions.Converters.Add(new TypedObjectSerializeConverter(typeRegistry, null));
-        DeserializationOptions.Converters.Add(new TypedObjectDeserializeConverter(typeRegistry));
+        var deserializationOptions = new JsonSerializerOptions(serializationOptions);
+        serializationOptions.Converters.Add(new JsonNodeConverter());
+        serializationOptions.Converters.Add(new TypedObjectSerializeConverter(typeRegistry, null));
+        deserializationOptions.Converters.Add(new TypedObjectDeserializeConverter(typeRegistry));
 
-        MessageService.Initialize(DeliverMessageAsync, DeserializationOptions);
+        JsonSerializerOptions = new JsonSerializerOptions();
+        JsonSerializerOptions.Converters.Add(new SerializationConverter(serializationOptions, deserializationOptions));
+
+        MessageService.Initialize(DeliverMessageAsync, deserializationOptions);
 
         disposeActions.AddRange(configuration.DisposeActions);
 
@@ -73,7 +76,6 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
 
         Schedule(StartAsync);
         logger.LogInformation("Message hub {address} initialized", Address);
-
     }
 
     private SerializationConfiguration CreateSerializationConfiguration()
@@ -261,8 +263,8 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         return this;
     }
 
-    public JsonSerializerOptions SerializationOptions { get; }
-    public JsonSerializerOptions DeserializationOptions { get; }
+    // TODO V10: replace two ser/des to this single one (2023/09/27, Dmitry Kalabin)
+    public JsonSerializerOptions JsonSerializerOptions { get; }
 
     private bool IsDisposing => disposingTaskCompletionSource != null;
 
@@ -390,16 +392,27 @@ public sealed class MessageHub<TAddress> : MessageHubBase<TAddress>, IMessageHub
         });
     }
 
- 
+    #region combined serialization/deserialization converter
 
+    private class SerializationConverter(JsonSerializerOptions serializationOptions, JsonSerializerOptions deserializationOptions) : JsonConverter<object>
+    {
+        public override bool CanConvert(Type typeToConvert) => true; // TODO V10: this might be a bit problematic in case none of the sub-converters has a support for this type (2023/09/27, Dmitry Kalabin)
 
+        public override object Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            using JsonDocument doc = JsonDocument.ParseValue(ref reader);
+            var node = doc.RootElement.AsNode();
+            return node.Deserialize(typeToConvert, deserializationOptions);
+        }
 
+        public override void Write(Utf8JsonWriter writer, object value, JsonSerializerOptions options)
+        {
+            var node = JsonSerializer.SerializeToNode(value, serializationOptions);
+            node.WriteTo(writer);
+        }
+    }
 
+    #endregion combined serialization/deserialization converter
 
     public ILogger Logger => logger;
-
 }
-
-
-
-

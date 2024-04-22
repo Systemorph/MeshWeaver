@@ -116,7 +116,7 @@ public record ChangeStream<TStream> : IDisposable,
 
     private DataChangedEvent GetDataChanged(ChangeItem<TStream> change)
     {
-        var node = JsonSerializer.SerializeToNode(change.Value, typeof(TStream), Hub.SerializationOptions);
+        var node = JsonSerializer.SerializeToNode(change.Value, typeof(TStream), Hub.JsonSerializerOptions);
 
 
         var dataChanged = LastSynchronized == null
@@ -136,7 +136,7 @@ public record ChangeStream<TStream> : IDisposable,
     {
         var newState = request.ChangeType switch
         {
-            ChangeType.Patch => (LastSynchronized = ((JsonPatch)request.Change).Apply(LastSynchronized).Result).Deserialize<TStream>(Hub.DeserializationOptions),
+            ChangeType.Patch => (LastSynchronized = ((JsonPatch)request.Change).Apply(LastSynchronized).Result).Deserialize<TStream>(Hub.JsonSerializerOptions),
             ChangeType.Full => GetFullState(request),
             _ => throw new ArgumentOutOfRangeException()
         };
@@ -145,8 +145,8 @@ public record ChangeStream<TStream> : IDisposable,
 
     private  TStream GetFullState(DataChangedEvent request)
     {
-        LastSynchronized = JsonSerializer.SerializeToNode(request.Change, request.Change.GetType(), Hub.SerializationOptions);
-        return request.Change is JsonNode node ? node.Deserialize<TStream>(Hub.DeserializationOptions) : (TStream)request.Change;
+        LastSynchronized = JsonSerializer.SerializeToNode(request.Change, request.Change.GetType(), Hub.JsonSerializerOptions);
+        return request.Change is JsonNode node ? node.Deserialize<TStream>(Hub.JsonSerializerOptions) : (TStream)request.Change;
     }
 
     public ChangeStream<TStream> Initialize(TStream initial)
@@ -155,7 +155,7 @@ public record ChangeStream<TStream> : IDisposable,
             throw new ArgumentNullException(nameof(initial));
         var start = new ChangeItem<TStream>(Address, Reference, initial, Address);
         updatedInstances.OnNext(start);
-        LastSynchronized = JsonSerializer.SerializeToNode(initial, Hub.SerializationOptions);
+        LastSynchronized = JsonSerializer.SerializeToNode(initial, Hub.JsonSerializerOptions);
         dataChangedStream.OnNext(GetFullDataChange(start));
         return this;
     }
