@@ -16,6 +16,7 @@ namespace OpenSmc.Pivot.Grouping
         where TGroup : class, IGroup, new()
     {
         public static IPivotGrouper<TTransformed, TGroup> GetPivotGrouper<TTransformed, TSelected>(
+            WorkspaceState state,
             Expression<Func<TTransformed, TSelected>> selector
         )
         {
@@ -39,7 +40,7 @@ namespace OpenSmc.Pivot.Grouping
                     dimensionAttribute.Name,
                     dimensionAttribute.Type
                 );
-                return GetPivotGrouper(dimensionDescriptor, compiledSelector);
+                return GetPivotGrouper(state, dimensionDescriptor, compiledSelector);
             }
 
             // TODO V10: find use cases (2022/03/08, Ekaterina Mishina)
@@ -88,6 +89,7 @@ namespace OpenSmc.Pivot.Grouping
         {
             if (typeof(INamed).IsAssignableFrom(descriptor.Type))
                 return GetPivotGrouper<DataSlice<TElement>, string>(
+                    state,
                     descriptor,
                     x => x.Tuple.GetValue(descriptor.SystemName)?.ToString()
                 );
@@ -115,10 +117,11 @@ namespace OpenSmc.Pivot.Grouping
 
         private static readonly MethodInfo GetReportGrouperMethod =
             ReflectionHelper.GetStaticMethodGeneric(
-                () => GetPivotGrouper<object, object>(null, null)
+                () => GetPivotGrouper<object, object>(null, null, null)
             );
 
         private static IPivotGrouper<TTransformed, TGroup> GetPivotGrouper<TTransformed, TSelected>(
+            WorkspaceState state,
             DimensionDescriptor descriptor,
             Func<TTransformed, TSelected> selector
         )
@@ -136,6 +139,7 @@ namespace OpenSmc.Pivot.Grouping
                     GetDimensionReportGroupConfigMethod
                         .MakeGenericMethod(typeof(TTransformed), descriptor.Type)
                         .InvokeAsFunction(
+                            state,
                             selector,
                             new DimensionDescriptor(descriptor.SystemName, descriptor.Type)
                         );
