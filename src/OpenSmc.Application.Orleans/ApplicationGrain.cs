@@ -1,4 +1,6 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using System.Text.Json;
+using System.Text.Json.Nodes;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Application.Orleans;
@@ -23,8 +25,24 @@ public class ApplicationGrain : Grain, IApplicationGrain
     public Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery) => Task.FromResult(Hub.DeliverMessage(FixAddresses(delivery)));
 
     // HACK V10: this is here as a temporal workaround for deserialization issues and should be removed as soon as we fix deserialization (2024/04/17, Dmitry Kalabin)
-    private static IMessageDelivery FixAddresses(IMessageDelivery delivery) 
-        => (MessageDelivery)delivery with { Sender = new UiAddress(TestUiIds.HardcodedUiId), Target = new ApplicationAddress(TestApplication.Name, TestApplication.Environment), };
+    private IMessageDelivery FixAddresses(IMessageDelivery delivery)
+    {
+        if (delivery.Target is JsonElement jsonTarget)
+        {
+            var target = JsonSerializer.Deserialize(jsonTarget, typeof(object), Hub.JsonSerializerOptions);
+            if (target is not JsonObject)
+                delivery = (MessageDelivery)delivery with { Target = target, };
+        }
+
+        if (delivery.Sender is JsonElement jsonSender)
+        {
+            var sender = JsonSerializer.Deserialize(jsonSender, typeof(object), Hub.JsonSerializerOptions);
+            if (sender is not JsonObject)
+                delivery = (MessageDelivery)delivery with { Sender = sender, };
+        }
+
+        return delivery;
+    }
 
     private IMessageHub CreateHub()
     {
