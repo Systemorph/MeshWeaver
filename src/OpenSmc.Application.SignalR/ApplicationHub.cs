@@ -47,10 +47,7 @@ public class ApplicationHub(IClusterClient clusterClient, IHubContext<Applicatio
         var grainId = "{ApplicationAddress should be here}"; // TODO V10: put appropriate ApplicationAddress here (2024/04/15, Dmitry Kalabin)
         var grain = clusterClient.GetGrain<IApplicationGrain>(grainId);
 
-        // HACK V10: get rid of this hardcoding as soon as deserialization for SignalR would work (2024/04/15, Dmitry Kalabin)
-        var workaroundDelivery = delivery with { Sender = new UiAddress(TestUiIds.HardcodedUiId), Target = new ApplicationAddress(TestApplication.Name, TestApplication.Environment), };
-
-        var task = grain.DeliverMessage(workaroundDelivery); // TODO V10: This is async and we might think about passing this through a Hub to make it better (2024/04/15, Dmitry Kalabin)
+        var task = grain.DeliverMessage(delivery); // TODO V10: This is async and we might think about passing this through a Hub to make it better (2024/04/15, Dmitry Kalabin)
         var result = task.Result;
     }
 }
