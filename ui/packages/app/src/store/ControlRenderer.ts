@@ -2,7 +2,7 @@ import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
 import { omit } from "lodash-es";
 import { ValueOrReference } from "@open-smc/data/src/contract/ValueOrReference";
 import { cloneDeepWith } from "lodash";
-import { Binding } from "@open-smc/data/src/contract/Binding";
+import { Binding, ValueOrBinding } from "@open-smc/data/src/contract/Binding";
 import { JsonPathReference } from "@open-smc/data/src/contract/JsonPathReference";
 import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
 import { Workspace } from "@open-smc/data/src/Workspace";
@@ -13,20 +13,19 @@ import { effect } from "@open-smc/utils/src/operators/effect";
 import { syncWorkspaces } from "./syncWorkspaces";
 import { sliceByReference } from "@open-smc/data/src/sliceByReference";
 import { distinctUntilEqual } from "@open-smc/data/src/operators/distinctUntilEqual";
-import { LayoutStackControl } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
+import { renderControlTo } from "./renderControlTo";
 
-export class ControlRenderer extends Workspace<ControlModel> {
+export class ControlRenderer<T extends UiControl = UiControl> {
     subscription = new Subscription();
     protected dataContextWorkspace: Workspace;
 
     constructor(
-        protected control$: Observable<UiControl>,
+        protected control$: Observable<T>,
         protected collections: Workspace<Collection<Collection>>,
-        name?: string
+        protected area: string,
+        protected parentDataContextWorkspace?: Workspace
     ) {
-        super(null);
-
-        this.dataContextWorkspace = new Workspace(null, name && `${name}/dataContext`);
+        this.dataContextWorkspace = new Workspace(null, `${area}/dataContext`);
 
         this.subscription.add(
             this.control$
@@ -36,7 +35,8 @@ export class ControlRenderer extends Workspace<ControlModel> {
                     effect(
                         dataContext =>
                             syncWorkspaces(
-                                sliceByReference(this.collections, dataContext),
+                                dataContext ? sliceByReference(this.collections, dataContext)
+                                    : parentDataContextWorkspace,
                                 this.dataContextWorkspace
                             )
                     )
@@ -58,10 +58,10 @@ export class ControlRenderer extends Workspace<ControlModel> {
                                 const controlModel =
                                     this.getModel(control);
 
-                                return syncWorkspaces(
-                                    sliceByReference(this.dataContextWorkspace, controlModel),
-                                    this
-                                );
+                                const controlModelWorkspace =
+                                    sliceByReference(this.dataContextWorkspace, controlModel);
+
+                                return renderControlTo(controlModelWorkspace, this.area);
                             }
                         }
                     )
@@ -70,7 +70,7 @@ export class ControlRenderer extends Workspace<ControlModel> {
         );
     }
 
-    protected getModel(control: UiControl) {
+    protected getModel(control: UiControl): ControlModel {
         if (control) {
             const componentTypeName = control.constructor.name;
             const props = bindingsToReferences(
@@ -90,21 +90,13 @@ export class ControlRenderer extends Workspace<ControlModel> {
 const extractProps = (control: UiControl) =>
     omit(control, 'dataContext');
 
-type UiControlProps = ReturnType<typeof extractProps>;
-
-export const bindingsToReferences = (props: UiControlProps): ValueOrReference =>
+export const bindingsToReferences = <T>(props: ValueOrBinding<T>): ValueOrReference<T> =>
     cloneDeepWith(
         props,
         value =>
             value instanceof Binding
                 ? new JsonPathReference(value.path) : undefined
     );
-
-export const nestedAreas = (control: UiControl) => {
-    if (control instanceof LayoutStackControl) {
-        return control.areas;
-    }
-}
 
 const nestedAreasToIds = <T>(props: T): T =>
     cloneDeepWith(

@@ -47,7 +47,7 @@ function LayoutStack({id, skin, areas, style, highlightNewAreas, columnCount}: S
     const className = getStackClassNames(skin, highlightNewAreas);
 
     const cssVars = {
-        ["--columnNumber"]: `${areas.length}`,
+        ["--columnNumber"]: `${areas?.length}`,
         ["--columnCount"]: columnCount,
     };
 
@@ -58,7 +58,7 @@ function LayoutStack({id, skin, areas, style, highlightNewAreas, columnCount}: S
     );
 }
 
-export function getStackClassNames(skin: StackSkin, highlightNewAreas: boolean) {
+export function getStackClassNames(skin: LayoutStackSkin, highlightNewAreas: boolean) {
     return classNames(styles.container, {
         [`skin-${skin}`]: skin,
         highlightNewAreas
