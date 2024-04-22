@@ -1,6 +1,7 @@
 ﻿using OpenSmc.Application.Orleans;
 using OpenSmc.Application.SignalR;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 using Orleans.Serialization;
 using Orleans.Streams;
 using static OpenSmc.Hosting.HostBuilderExtensions;
@@ -52,6 +53,7 @@ public static class OrleansMessageHubExtensions
     public static IMessageHub GetRouterHub(this IServiceProvider serviceProvider) 
         => serviceProvider.CreateMessageHub(new RouterAddress(), conf => 
             conf
+                .WithTypes(typeof(UiAddress), typeof(ApplicationAddress))
                 .WithHostedHub(new ApplicationAddress(TestApplication.Name, TestApplication.Environment), config =>
                     // HACK V10: this is just for testing and should not be a part of Prod setup (2024/04/17, Dmitry Kalabin)
                     config.WithHandler<TestRequest>((hub, request) =>
