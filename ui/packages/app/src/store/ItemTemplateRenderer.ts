@@ -4,19 +4,19 @@ import { effect } from "@open-smc/utils/src/operators/effect";
 import { syncWorkspaces } from "./syncWorkspaces";
 import { sliceByReference } from "@open-smc/data/src/sliceByReference";
 import { Workspace } from "@open-smc/data/src/Workspace";
-import { map, of, Subscription } from "rxjs";
+import { map, Subscription } from "rxjs";
 import { ItemTemplateControl } from "@open-smc/layout/src/contract/controls/ItemTemplateControl";
-import { renderControlTo } from "./renderControlTo";
-import { ControlModelWorkspace } from "./ControlModelWorkspace";
 import { PathReference } from "@open-smc/data/src/contract/PathReference";
-import { LayoutStackRenderer } from "./LayoutStackRenderer";
-import { LayoutStackControl } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
-import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
-import { uiControlType } from "./EntityStoreRenderer";
+import { renderControl } from "./renderControl";
+import { renderControlTo } from "./renderControlTo";
+import { ControlModel } from "./appStore";
+import { updateByReferenceActionCreator } from "@open-smc/data/src/workspaceReducer";
+import { Collection } from "@open-smc/data/src/contract/Collection";
+import { keys } from "lodash-es";
 
-export class ItemTemplateRenderer extends ControlRenderer {
+export class ItemTemplateRenderer extends ControlRenderer<ItemTemplateControl> {
     protected render() {
-        const dataWorkspace = new Workspace<unknown[]>(null);
+        const dataWorkspace = new Workspace<Collection>(null, "template");
 
         this.subscription.add(
             this.control$
@@ -36,7 +36,12 @@ export class ItemTemplateRenderer extends ControlRenderer {
 
         const view$ =
             this.control$
-                .pipe(map(control => (control as ItemTemplateControl)?.view));
+                .pipe(map(control => control?.view));
+
+        const controlModelWorkspace = new Workspace<ControlModel>({
+            componentTypeName: "LayoutStackControl",
+            props: {}
+        }, "model");
 
         this.subscription.add(
             dataWorkspace
@@ -44,48 +49,38 @@ export class ItemTemplateRenderer extends ControlRenderer {
                 .pipe(
                     effect(
                         data => {
-                            const subscriptions =
-                                data.map((item, index) => {
-                                    const subscription = new Subscription();
-
-                                    const itemDataContext =
-                                        sliceByReference(dataWorkspace, new PathReference(`/${index}`));
-
-                                    subscription.add(itemDataContext.subscription);
-
-                                    const area = `${this.name}/${index}`;
-
-                                    // TODO: pass itemDataContext down (4/19/2024, akravets)
-                                    subscription.add(
-                                        renderControlTo(
-                                            new ControlModelWorkspace(view$, this.collections, area),
-                                            area
-                                        )
-                                    );
-
-                                    return subscription;
-                                });
-
                             const subscription = new Subscription();
-                            subscriptions.forEach(s => subscription.add(s));
+                            const areas: string[] = [];
 
-                            const stack = of(
-                                new LayoutStackControl(
-                                    data.map(
-                                        (item, index) =>
-                                            new EntityReference(uiControlType, `${this.name}/${index}`)
-                                    )
-                                )
-                            );
+                            data && keys(data).forEach(id => {
+                                const itemDataContext =
+                                    sliceByReference(dataWorkspace, new PathReference(`/${id}`));
 
-                            // TODO: render stack (4/19/2024, akravets)
+                                subscription.add(itemDataContext.subscription);
 
+                                const area = `${this.area}/${id}`;
+
+                                subscription.add(
+                                    renderControl(view$, this.collections, area, itemDataContext)
+                                );
+
+                                areas.push(area);
+                            });
+
+                            controlModelWorkspace.next(updateByReferenceActionCreator({
+                                reference: new PathReference("/props/areas"),
+                                value: areas
+                            }));
 
                             return subscription;
                         }
                     )
                 )
                 .subscribe()
+        );
+
+        this.subscription.add(
+            renderControlTo(controlModelWorkspace, this.area)
         );
     }
 }

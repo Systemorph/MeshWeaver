@@ -1,22 +1,23 @@
-import { ControlRenderer, nestedAreas } from "./ControlRenderer";
-import { map, Observable } from "rxjs";
-import { AreaCollectionRenderer } from "./AreaCollectionRenderer";
-import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
+import { ControlRenderer } from "./ControlRenderer";
+import { map } from "rxjs";
+import { LayoutStackControl } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
+import { EntityReferenceCollectionRenderer } from "./EntityReferenceCollectionRenderer";
 
-export class LayoutStackRenderer extends ControlRenderer {
+export class LayoutStackRenderer extends ControlRenderer<LayoutStackControl> {
     protected render() {
+        const collectionRenderer =
+            new EntityReferenceCollectionRenderer(
+                this.control$.pipe(map(stack => stack?.areas)),
+                this.collections,
+                this.dataContextWorkspace
+            );
+
+        this.subscription.add(collectionRenderer.subscription);
+
+        collectionRenderer.renderAddedReferences();
+
         super.render();
 
-        const nestedAreas$ =
-            this.control$.pipe(map(nestedAreas));
-
-        this.renderNestedAreas(nestedAreas$);
-    }
-
-    protected renderNestedAreas(nestedAreas$: Observable<EntityReference[]>) {
-        const nestedAreasRenderer =
-            new AreaCollectionRenderer(nestedAreas$, this.collections);
-
-        this.subscription.add(nestedAreasRenderer.subscription);
+        collectionRenderer.renderRemovedReferences();
     }
 }

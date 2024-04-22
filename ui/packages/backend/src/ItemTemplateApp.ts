@@ -9,7 +9,6 @@ import { MessageDelivery } from "@open-smc/messaging/src/api/MessageDelivery";
 import { toPatchOperation } from "./toPatchOperation";
 import { handleRequest } from "@open-smc/messaging/src/handleRequest";
 import { sendMessage } from "@open-smc/messaging/src/sendMessage";
-import { basicStoreExample } from "@open-smc/layout/src/examples/basicStoreExample";
 import { log } from "@open-smc/utils/src/operators/log";
 import { serialize } from "@open-smc/serialization/src/serialize";
 import { deserialize } from "@open-smc/serialization/src/deserialize";
