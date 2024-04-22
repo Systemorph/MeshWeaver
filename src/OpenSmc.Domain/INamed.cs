@@ -1,4 +1,4 @@
-﻿namespace OpenSmc.Domain.Abstractions
+﻿namespace OpenSmc.Domain
 {
     public interface INamed
     {

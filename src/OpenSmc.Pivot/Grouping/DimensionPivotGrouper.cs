@@ -3,7 +3,7 @@ using System.Data;
 using OpenSmc.Collections;
 using OpenSmc.Data;
 using OpenSmc.DataCubes;
-using OpenSmc.Domain.Abstractions;
+using OpenSmc.Domain;
 using OpenSmc.Pivot.Models.Interfaces;
 
 namespace OpenSmc.Pivot.Grouping

@@ -1,4 +1,4 @@
-﻿namespace OpenSmc.Domain.Abstractions.Attributes;
+﻿namespace OpenSmc.Domain;
 
 [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
 public class CategoryAttribute<T>(string category = null) : Attribute

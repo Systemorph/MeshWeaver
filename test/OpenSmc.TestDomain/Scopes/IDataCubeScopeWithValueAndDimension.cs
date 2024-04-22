@@ -1,11 +1,13 @@
 ﻿using OpenSmc.DataCubes;
-using OpenSmc.Domain.Abstractions.Attributes;
+using OpenSmc.Domain;
 using OpenSmc.Scopes;
 using OpenSmc.TestDomain.Cubes;
 
 namespace OpenSmc.TestDomain.Scopes;
 
-public interface IDataCubeScopeWithValueAndDimension : IScope<YearQuarterAndCompany, YearAndQuarterAndCompanyIdentityStorage>, IDataCube<IDataCubeScopeWithValueAndDimension>
+public interface IDataCubeScopeWithValueAndDimension
+    : IScope<YearQuarterAndCompany, YearAndQuarterAndCompanyIdentityStorage>,
+        IDataCube<IDataCubeScopeWithValueAndDimension>
 {
     [Dimension(typeof(Country))]
     [NotVisible]
@@ -14,7 +16,9 @@ public interface IDataCubeScopeWithValueAndDimension : IScope<YearQuarterAndComp
     public double Value => 1;
 }
 
-public interface IDataCubeScopeWithValueAndDimensionErr : IScope<YearQuarterAndCompany, YearAndQuarterAndCompanyIdentityStorage>, IDataCube<CashflowElement>
+public interface IDataCubeScopeWithValueAndDimensionErr
+    : IScope<YearQuarterAndCompany, YearAndQuarterAndCompanyIdentityStorage>,
+        IDataCube<CashflowElement>
 {
     [Dimension(typeof(Country), nameof(Country))]
     [NotVisible]
@@ -23,12 +27,14 @@ public interface IDataCubeScopeWithValueAndDimensionErr : IScope<YearQuarterAndC
     public double Value => 1;
 }
 
-public interface IDataCubeScopeWithValueAndDimensionErr1 : IScope<YearQuarterAndCompany, YearAndQuarterAndCompanyIdentityStorage>, IDataCube<CashflowElement>
+public interface IDataCubeScopeWithValueAndDimensionErr1
+    : IScope<YearQuarterAndCompany, YearAndQuarterAndCompanyIdentityStorage>,
+        IDataCube<CashflowElement>
 {
     [Dimension(typeof(Country), "MyCountry")]
     [NotVisible]
     public string Country1 => Identity.Company;
-    
+
     [Dimension(typeof(Country), "MyCountry")]
     [NotVisible]
     public string Country2 => Identity.Company;
@@ -50,31 +56,53 @@ public interface IDataCubeScopeWithValueAndDimensionErr1 : IScope<YearQuarterAnd
 //    public double Value => 1;
 //}
 
-public interface IDataCubeScopeWithValueAndDimension2 : IScope<YearQuarterAndCompany, YearAndQuarterAndCompanyIdentityStorage>, IDataCube<CashflowElement>
+public interface IDataCubeScopeWithValueAndDimension2
+    : IScope<YearQuarterAndCompany, YearAndQuarterAndCompanyIdentityStorage>,
+        IDataCube<CashflowElement>
 {
     [Dimension(typeof(Country), nameof(ScopeCountry))]
     [NotVisible]
     public string ScopeCountry => Identity.Company;
 
-    CashflowElement ElementProperty => new CashflowElement { Country = Country.Data.First().SystemName, AmountType = AmountType.Data.First().SystemName, Currency = Currency.Data.First().SystemName, Value = 1 };
+    CashflowElement ElementProperty =>
+        new CashflowElement
+        {
+            Country = Country.Data.First().SystemName,
+            AmountType = AmountType.Data.First().SystemName,
+            Currency = Currency.Data.First().SystemName,
+            Value = 1
+        };
 
-    IDataCube<CashflowElement> DataCubeScopeProperty => CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube();
+    IDataCube<CashflowElement> DataCubeScopeProperty =>
+        CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube();
 }
 
-public interface IDataCubeScopeWithValueAndDimension3 : IScope<YearQuarterAndCompany, YearAndQuarterAndCompanyIdentityStorage>, IDataCube<CashflowElement>
+public interface IDataCubeScopeWithValueAndDimension3
+    : IScope<YearQuarterAndCompany, YearAndQuarterAndCompanyIdentityStorage>,
+        IDataCube<CashflowElement>
 {
     [Dimension(typeof(Country), nameof(ScopeCountry))]
     [NotVisible]
     public string ScopeCountry => Identity.Company;
 
-    IDataCube<CashflowElement> DataCubeScopeProperty => CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube();
+    IDataCube<CashflowElement> DataCubeScopeProperty =>
+        CashflowFactory.GenerateEquallyWeightedAllPopulated().ToDataCube();
 }
 
-public interface IDataCubeScopeWithValueAndDimension4 : IScope<YearQuarterAndCompany, YearAndQuarterAndCompanyIdentityStorage>, IDataCube<CashflowElement>
+public interface IDataCubeScopeWithValueAndDimension4
+    : IScope<YearQuarterAndCompany, YearAndQuarterAndCompanyIdentityStorage>,
+        IDataCube<CashflowElement>
 {
     [Dimension(typeof(Country), nameof(ScopeCountry))]
     [NotVisible]
     public string ScopeCountry => Identity.Company;
 
-    CashflowElement ElementProperty => new CashflowElement { Country = Country.Data.First().SystemName, AmountType = AmountType.Data.First().SystemName, Currency = Currency.Data.First().SystemName, Value = 1 };
+    CashflowElement ElementProperty =>
+        new CashflowElement
+        {
+            Country = Country.Data.First().SystemName,
+            AmountType = AmountType.Data.First().SystemName,
+            Currency = Currency.Data.First().SystemName,
+            Value = 1
+        };
 }

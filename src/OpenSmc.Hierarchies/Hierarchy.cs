@@ -2,7 +2,7 @@
 using AngleSharp.Dom;
 using OpenSmc.Collections;
 using OpenSmc.Data;
-using OpenSmc.Domain.Abstractions;
+using OpenSmc.Domain;
 
 namespace OpenSmc.Hierarchies;
 

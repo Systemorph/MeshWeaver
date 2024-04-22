@@ -2,7 +2,7 @@
 using System.Linq.Expressions;
 using System.Reflection;
 using OpenSmc.Collections;
-using OpenSmc.Domain.Abstractions.Attributes;
+using OpenSmc.Domain;
 using OpenSmc.Reflection;
 
 namespace OpenSmc.Equality

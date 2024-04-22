@@ -1,4 +1,4 @@
-﻿namespace OpenSmc.Domain.Abstractions.Attributes
+﻿namespace OpenSmc.Domain
 {
     [AttributeUsage(AttributeTargets.Property, AllowMultiple = false)]
     public class MapToAttribute : Attribute

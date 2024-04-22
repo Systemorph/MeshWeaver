@@ -47,7 +47,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Arithmetics", "src\
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Arithmetics.Abstractions", "src\OpenSmc.Arithmetics.Abstractions\OpenSmc.Arithmetics.Abstractions.csproj", "{886CD405-9A41-4328-9BD5-BAA08983E53A}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Domain.Abstractions", "src\OpenSmc.Domain.Abstractions\OpenSmc.Domain.Abstractions.csproj", "{D1807EB2-9295-4DF2-A208-835043966AD3}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Domain", "src\OpenSmc.Domain\OpenSmc.Domain.csproj", "{D1807EB2-9295-4DF2-A208-835043966AD3}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DataCubes.Abstractions", "src\OpenSmc.DataCubes.Abstractions\OpenSmc.DataCubes.Abstractions.csproj", "{73452FD0-E16B-49D2-B070-23ECF4930437}"
 EndProject
