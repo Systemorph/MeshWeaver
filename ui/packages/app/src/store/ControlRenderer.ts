@@ -1,14 +1,11 @@
 import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
-import { omit } from "lodash-es";
+import { cloneDeepWith, omit } from "lodash-es";
 import { ValueOrReference } from "@open-smc/data/src/contract/ValueOrReference";
-import { cloneDeepWith } from "lodash";
 import { Binding, ValueOrBinding } from "@open-smc/data/src/contract/Binding";
 import { JsonPathReference } from "@open-smc/data/src/contract/JsonPathReference";
-import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
 import { Workspace } from "@open-smc/data/src/Workspace";
 import { app$, appStore, ControlModel } from "./appStore";
 import { distinctUntilChanged, map, Observable, Subscription } from "rxjs";
-import { Collection } from "@open-smc/data/src/contract/Collection";
 import { effect } from "@open-smc/utils/src/operators/effect";
 import { syncWorkspaces } from "./syncWorkspaces";
 import { sliceByReference } from "@open-smc/data/src/sliceByReference";
@@ -16,18 +13,18 @@ import { distinctUntilEqual } from "@open-smc/data/src/operators/distinctUntilEq
 import { setArea } from "./appReducer";
 import { pathToUpdateAction } from "@open-smc/data/src/operators/pathToUpdateAction";
 import { Renderer } from "./Renderer";
+import { RendererStackTrace } from "./RendererStackTrace";
 
-export class ControlRenderer<T extends UiControl = UiControl> implements Renderer {
+export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
     readonly subscription = new Subscription();
-    readonly dataContextWorkspace: Workspace;
+    readonly namespace: string;
 
     constructor(
-        protected control$: Observable<T>,
-        protected collections: Workspace<Collection<Collection>>,
+        public readonly control$: Observable<T>,
         public readonly area: string,
-        public readonly parentRenderer?: Renderer
+        stackTrace: RendererStackTrace
     ) {
-        this.dataContextWorkspace = new Workspace(null, `${area}/dataContext`);
+        super(new Workspace(null, `${area}/dataContext`), stackTrace);
 
         this.subscription.add(
             this.control$
@@ -37,9 +34,9 @@ export class ControlRenderer<T extends UiControl = UiControl> implements Rendere
                     effect(
                         dataContext =>
                             syncWorkspaces(
-                                dataContext ? sliceByReference(this.collections, dataContext)
-                                    : this.parentRenderer.dataContextWorkspace,
-                                this.dataContextWorkspace
+                                dataContext ? sliceByReference(this.rootContext, dataContext)
+                                    : this.parentContext,
+                                this.dataContext
                             )
                     )
                 )
@@ -61,7 +58,7 @@ export class ControlRenderer<T extends UiControl = UiControl> implements Rendere
                                     this.getModel(control);
 
                                 const controlModelWorkspace =
-                                    sliceByReference(this.dataContextWorkspace, controlModel);
+                                    sliceByReference(this.dataContext, controlModel);
 
                                 return this.renderControlTo(controlModelWorkspace);
                             }
@@ -72,13 +69,11 @@ export class ControlRenderer<T extends UiControl = UiControl> implements Rendere
         );
     }
 
-    protected getModel(control: UiControl): ControlModel {
+    protected getModel(control: T): ControlModel {
         if (control) {
             const componentTypeName = control.constructor.name;
             const props = bindingsToReferences(
-                nestedAreasToIds(
-                    extractProps(control)
-                )
+                extractProps(control)
             );
 
             return {
@@ -116,7 +111,7 @@ export class ControlRenderer<T extends UiControl = UiControl> implements Rendere
     }
 }
 
-const extractProps = (control: UiControl) =>
+export const extractProps = (control: UiControl) =>
     omit(control, 'dataContext');
 
 export const bindingsToReferences = <T>(props: ValueOrBinding<T>): ValueOrReference<T> =>
@@ -125,11 +120,4 @@ export const bindingsToReferences = <T>(props: ValueOrBinding<T>): ValueOrRefere
         value =>
             value instanceof Binding
                 ? new JsonPathReference(value.path) : undefined
-    );
-
-const nestedAreasToIds = <T>(props: T): T =>
-    cloneDeepWith(
-        props,
-        value => value instanceof EntityReference
-            ? value.id : undefined
     );
