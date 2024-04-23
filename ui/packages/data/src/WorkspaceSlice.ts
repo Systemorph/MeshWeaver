@@ -8,7 +8,7 @@ import { selectByPath } from "./operators/selectByPath";
 import { pathToUpdateAction } from "./operators/pathToUpdateAction";
 import { referenceToUpdateAction } from "./operators/referenceToUpdateAction";
 
-export class WorkspaceSlice<S, T> extends Workspace<T> {
+export class WorkspaceSlice<S = unknown, T = unknown> extends Workspace<T> {
     readonly subscription = new Subscription();
 
     constructor(source: Workspace<S>, projection: ValueOrReference<T>, name?: string) {

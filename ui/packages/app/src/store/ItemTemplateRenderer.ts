@@ -4,15 +4,17 @@ import { effect } from "@open-smc/utils/src/operators/effect";
 import { syncWorkspaces } from "./syncWorkspaces";
 import { sliceByReference } from "@open-smc/data/src/sliceByReference";
 import { Workspace } from "@open-smc/data/src/Workspace";
-import { map, Subscription } from "rxjs";
+import { map, Observable, Subscription } from "rxjs";
 import { ItemTemplateControl } from "@open-smc/layout/src/contract/controls/ItemTemplateControl";
 import { PathReference } from "@open-smc/data/src/contract/PathReference";
 import { renderControl } from "./renderControl";
-import { renderControlTo } from "./renderControlTo";
 import { ControlModel } from "./appStore";
 import { updateByReferenceActionCreator } from "@open-smc/data/src/workspaceReducer";
 import { Collection } from "@open-smc/data/src/contract/Collection";
 import { keys } from "lodash-es";
+import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
+import { WorkspaceSlice } from "@open-smc/data/src/WorkspaceSlice";
+import { Renderer } from "./Renderer";
 
 export class ItemTemplateRenderer extends ControlRenderer<ItemTemplateControl> {
     protected render() {
@@ -53,16 +55,12 @@ export class ItemTemplateRenderer extends ControlRenderer<ItemTemplateControl> {
                             const areas: string[] = [];
 
                             data && keys(data).forEach(id => {
-                                const itemDataContext =
-                                    sliceByReference(dataWorkspace, new PathReference(`/${id}`));
+                                const itemRenderer =
+                                    new ItemRenderer(view$, this.collections, this, id);
 
-                                subscription.add(itemDataContext.subscription);
+                                subscription.add(itemRenderer.subscription);
 
                                 const area = `${this.area}/${id}`;
-
-                                subscription.add(
-                                    renderControl(view$, this.collections, area, itemDataContext)
-                                );
 
                                 areas.push(area);
                             });
@@ -80,7 +78,27 @@ export class ItemTemplateRenderer extends ControlRenderer<ItemTemplateControl> {
         );
 
         this.subscription.add(
-            renderControlTo(controlModelWorkspace, this.area)
+            this.renderControlTo(controlModelWorkspace)
+        );
+    }
+}
+
+class ItemRenderer implements Renderer {
+    readonly subscription = new Subscription();
+    readonly dataContextWorkspace: WorkspaceSlice;
+
+    constructor(view$: Observable<UiControl>, collections: any, parentRenderer: ItemTemplateRenderer, id: string) {
+        this.dataContextWorkspace =
+            sliceByReference(parentRenderer.dataContextWorkspace, new PathReference(`/${id}`));
+
+        this.subscription.add(
+            this.dataContextWorkspace.subscription
+        );
+
+        const area = `${parentRenderer.area}/${id}`;
+
+        this.subscription.add(
+            renderControl(view$, collections, area, this)
         );
     }
 }

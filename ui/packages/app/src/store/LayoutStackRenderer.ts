@@ -9,7 +9,7 @@ export class LayoutStackRenderer extends ControlRenderer<LayoutStackControl> {
             new EntityReferenceCollectionRenderer(
                 this.control$.pipe(map(stack => stack?.areas)),
                 this.collections,
-                this.dataContextWorkspace
+                this
             );
 
         this.subscription.add(collectionRenderer.subscription);
