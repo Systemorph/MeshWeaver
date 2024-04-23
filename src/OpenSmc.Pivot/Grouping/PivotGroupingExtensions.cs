@@ -5,6 +5,8 @@ using System.Reflection;
 using OpenSmc.Data;
 using OpenSmc.DataCubes;
 using OpenSmc.Domain;
+using OpenSmc.Hierarchies;
+using OpenSmc.Pivot.Builder;
 using OpenSmc.Pivot.Models.Interfaces;
 using OpenSmc.Reflection;
 
@@ -17,6 +19,8 @@ namespace OpenSmc.Pivot.Grouping
     {
         public static IPivotGrouper<TTransformed, TGroup> GetPivotGrouper<TTransformed, TSelected>(
             WorkspaceState state,
+            HierarchicalDimensionCache hierarchicalDimensionCache,
+            HierarchicalDimensionOptions hierarchicalDimensionOptions,
             Expression<Func<TTransformed, TSelected>> selector
         )
         {
@@ -40,7 +44,13 @@ namespace OpenSmc.Pivot.Grouping
                     dimensionAttribute.Name,
                     dimensionAttribute.Type
                 );
-                return GetPivotGrouper(state, dimensionDescriptor, compiledSelector);
+                return GetPivotGrouper(
+                    state,
+                    hierarchicalDimensionCache,
+                    hierarchicalDimensionOptions,
+                    dimensionDescriptor,
+                    compiledSelector
+                );
             }
 
             // TODO V10: find use cases (2022/03/08, Ekaterina Mishina)
@@ -84,12 +94,16 @@ namespace OpenSmc.Pivot.Grouping
 
         public static IPivotGrouper<DataSlice<TElement>, TGroup> GetPivotGrouper<TElement>(
             DimensionDescriptor descriptor,
-            WorkspaceState state
+            WorkspaceState state,
+            IHierarchicalDimensionCache hierarchicalDimensionCache,
+            IHierarchicalDimensionOptions hierarchicalDimensionOptions
         )
         {
             if (typeof(INamed).IsAssignableFrom(descriptor.Type))
                 return GetPivotGrouper<DataSlice<TElement>, string>(
                     state,
+                    hierarchicalDimensionCache,
+                    hierarchicalDimensionOptions,
                     descriptor,
                     x => x.Tuple.GetValue(descriptor.SystemName)?.ToString()
                 );
@@ -100,7 +114,17 @@ namespace OpenSmc.Pivot.Grouping
             return (IPivotGrouper<DataSlice<TElement>, TGroup>)
                 GetReportGrouperMethod
                     .MakeGenericMethod(typeof(DataSlice<TElement>), descriptor.Type)
-                    .Invoke(null, new[] { state, descriptor, convertedLambda });
+                    .Invoke(
+                        null,
+                        new[]
+                        {
+                            state,
+                            hierarchicalDimensionCache,
+                            hierarchicalDimensionOptions,
+                            descriptor,
+                            convertedLambda
+                        }
+                    );
         }
 
         private static readonly MethodInfo GetValueMethod = ReflectionHelper.GetStaticMethodGeneric(
@@ -117,11 +141,13 @@ namespace OpenSmc.Pivot.Grouping
 
         private static readonly MethodInfo GetReportGrouperMethod =
             ReflectionHelper.GetStaticMethodGeneric(
-                () => GetPivotGrouper<object, object>(null, null, null)
+                () => GetPivotGrouper<object, object>(null, null, null, null, null)
             );
 
         private static IPivotGrouper<TTransformed, TGroup> GetPivotGrouper<TTransformed, TSelected>(
             WorkspaceState state,
+            IHierarchicalDimensionCache hierarchicalDimensionCache,
+            IHierarchicalDimensionOptions hierarchicalDimensionOptions,
             DimensionDescriptor descriptor,
             Func<TTransformed, TSelected> selector
         )
@@ -140,6 +166,8 @@ namespace OpenSmc.Pivot.Grouping
                         .MakeGenericMethod(typeof(TTransformed), descriptor.Type)
                         .InvokeAsFunction(
                             state,
+                            hierarchicalDimensionCache,
+                            hierarchicalDimensionOptions,
                             selector,
                             new DimensionDescriptor(descriptor.SystemName, descriptor.Type)
                         );
@@ -152,21 +180,33 @@ namespace OpenSmc.Pivot.Grouping
 
         private static readonly MethodInfo GetDimensionReportGroupConfigMethod =
             ReflectionHelper.GetStaticMethodGeneric(
-                () => GetDimensionReportGroupConfig<object, INamed>(null, null, null)
+                () => GetDimensionReportGroupConfig<object, INamed>(null, null, null, null, null)
             );
 
         // ReSharper disable once UnusedMethodReturnValue.Local
         private static IPivotGrouper<TTransformed, TGroup> GetDimensionReportGroupConfig<
             TTransformed,
             TDimension
-        >(WorkspaceState state, Func<TTransformed, string> selector, DimensionDescriptor descriptor)
+        >(
+            WorkspaceState state,
+            IHierarchicalDimensionCache hierarchicalDimensionCache,
+            IHierarchicalDimensionOptions hierarchicalDimensionOptions,
+            Func<TTransformed, string> selector,
+            DimensionDescriptor descriptor
+        )
             where TDimension : class, INamed
         {
             if (typeof(IWithParent).IsAssignableFrom(typeof(TDimension)))
                 return (IPivotGrouper<TTransformed, TGroup>)
                     CreateHierarchicalDimensionPivotGrouperMethod
                         .MakeGenericMethod(typeof(TTransformed), typeof(TDimension))
-                        .InvokeAsFunction(state, selector, descriptor);
+                        .InvokeAsFunction(
+                            state,
+                            hierarchicalDimensionCache,
+                            hierarchicalDimensionOptions,
+                            selector,
+                            descriptor
+                        );
 
             return new DimensionPivotGrouper<TTransformed, TDimension, TGroup>(
                 state,
@@ -181,6 +221,8 @@ namespace OpenSmc.Pivot.Grouping
                     CreateHierarchicalDimensionPivotGrouper<object, IHierarchicalDimension>(
                         default,
                         default,
+                        default,
+                        default,
                         default
                     )
             );
@@ -192,12 +234,20 @@ namespace OpenSmc.Pivot.Grouping
             TGroup
         > CreateHierarchicalDimensionPivotGrouper<TTransformed, TDimension>(
             WorkspaceState state,
+            IHierarchicalDimensionCache hierarchicalDimensionCache,
+            IHierarchicalDimensionOptions hierarchicalDimensionOptions,
             Func<TTransformed, string> selector,
             DimensionDescriptor descriptor
         )
             where TDimension : class, IHierarchicalDimension
         {
-            return new(state, selector, descriptor);
+            return new(
+                state,
+                hierarchicalDimensionCache,
+                hierarchicalDimensionOptions,
+                selector,
+                descriptor
+            );
         }
 
         public static PropertyInfo GetProperty<TTransformed, TSelected>(

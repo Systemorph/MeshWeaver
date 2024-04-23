@@ -14,25 +14,25 @@ namespace OpenSmc.Pivot.Grouping
         static readonly TGroup NullGroup =
             new()
             {
-                Id = "NullGroup",
+                SystemName = "NullGroup",
                 DisplayName = " ",
-                GrouperId = "Null",
+                GrouperName = "Null",
                 Coordinates = ImmutableList<object>.Empty.Add("NullGroup")
             };
         static readonly TGroup TopGroup =
             new()
             {
-                Id = "TopGroup",
+                SystemName = "TopGroup",
                 DisplayName = "Total",
-                GrouperId = "Total",
+                GrouperName = "Total",
                 Coordinates = ImmutableList<object>.Empty.Add("TopGroup")
             };
         static readonly TGroup TotalGroup =
             new()
             {
-                Id = "TotalGroup",
+                SystemName = "TotalGroup",
                 DisplayName = " ",
-                GrouperId = "Aggregate",
+                GrouperName = "Aggregate",
                 Coordinates = ImmutableList<object>.Empty.Add("TotalGroup")
             };
     }

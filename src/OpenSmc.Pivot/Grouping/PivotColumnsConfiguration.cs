@@ -47,10 +47,10 @@ namespace OpenSmc.Pivot.Grouping
         {
             foreach (var column in Columns)
             {
-                var prop = ValueType.GetProperty(column.Id.ToString());
+                var prop = ValueType.GetProperty(column.SystemName.ToString());
                 if (prop != null)
                     yield return (
-                        new ColumnGroup(column.Id, column.DisplayName, prop.Name),
+                        new ColumnGroup(column.SystemName, column.DisplayName, prop.Name),
                         x =>
                         {
                             if (x == null)
@@ -62,7 +62,7 @@ namespace OpenSmc.Pivot.Grouping
                 else
                     yield return (
                         new ColumnGroup(
-                            column.Id,
+                            column.SystemName,
                             column.DisplayName,
                             PivotConst.PropertyPivotGrouperName
                         ),

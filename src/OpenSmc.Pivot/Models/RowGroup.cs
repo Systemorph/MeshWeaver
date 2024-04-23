@@ -6,15 +6,15 @@ namespace OpenSmc.Pivot.Models
     public record RowGroup : IGroup
     {
         public ImmutableList<object> Coordinates { get; init; } = ImmutableList<object>.Empty;
-        public object Id { get; init; }
+        public object SystemName { get; init; }
         public string DisplayName { get; init; }
-        public object GrouperId { get; init; }
+        public object GrouperName { get; init; }
 
         public RowGroup(object systemName, string displayName, object grouperName)
         {
-            Id = systemName;
+            SystemName = systemName;
             DisplayName = displayName;
-            GrouperId = grouperName;
+            GrouperName = grouperName;
             Coordinates = Coordinates.Add(systemName);
         }
 
@@ -26,7 +26,7 @@ namespace OpenSmc.Pivot.Models
                 return false;
             if (ReferenceEquals(this, other))
                 return true;
-            if (Id != other.Id || DisplayName != other.DisplayName)
+            if (SystemName != other.SystemName || DisplayName != other.DisplayName)
                 return false;
             return Coordinates.SequenceEqual(other.Coordinates);
         }
@@ -34,7 +34,7 @@ namespace OpenSmc.Pivot.Models
         public override int GetHashCode()
         {
             var hashCode = new HashCode();
-            hashCode.Add(Id);
+            hashCode.Add(SystemName);
             hashCode.Add(DisplayName);
             foreach (var coordinate in Coordinates)
             {

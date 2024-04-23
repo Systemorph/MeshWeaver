@@ -52,10 +52,10 @@ namespace OpenSmc.Pivot.Grouping
 
             var nullGroupPrivate = new TGroup
             {
-                Id = nullGroup.Id,
+                SystemName = nullGroup.SystemName,
                 DisplayName = nullGroup.DisplayName,
                 Coordinates = nullGroup.Coordinates,
-                GrouperId = Id
+                GrouperName = Id
             };
 
             return ordered
@@ -93,10 +93,15 @@ namespace OpenSmc.Pivot.Grouping
 
         public HierarchicalDimensionPivotGrouper(
             WorkspaceState state,
+            IHierarchicalDimensionCache hierarchicalDimensionCache,
+            IHierarchicalDimensionOptions hierarchicalDimensionOptions,
             Func<T, object> selector,
             DimensionDescriptor dimensionDescriptor
         )
-            : base(state, selector, dimensionDescriptor) { }
+            : base(state, selector, dimensionDescriptor)
+        {
+            InitializeHierarchies(hierarchicalDimensionCache, hierarchicalDimensionOptions);
+        }
 
         public void InitializeHierarchies(
             IHierarchicalDimensionCache hierarchicalDimensionCache,

@@ -12,7 +12,7 @@ namespace OpenSmc.Pivot.Grouping
         WorkspaceState state,
         Func<T, int, object> selector,
         DimensionDescriptor DimensionDescriptor
-    ) : SelectorPivotGrouper<T, object, TGroup>(selector, DimensionDescriptor)
+    ) : SelectorPivotGrouper<T, object, TGroup>(selector, DimensionDescriptor.SystemName)
         where TGroup : class, IGroup, new()
         where TDimension : class, INamed
     {
@@ -60,9 +60,9 @@ namespace OpenSmc.Pivot.Grouping
             var displayName = GetDisplayName(value);
             return new TGroup
             {
-                Id = value,
+                SystemName = value,
                 DisplayName = displayName?.ToString(),
-                GrouperId = Id,
+                GrouperName = Id,
                 Coordinates = ImmutableList<object>.Empty.Add(value)
             };
         }

@@ -7,13 +7,13 @@ namespace OpenSmc.Pivot.Models
     {
         public Column()
         {
-            GrouperId = PivotConst.ColumnGrouperName;
+            GrouperName = PivotConst.ColumnGrouperName;
         }
 
         public Column(string id, string displayName)
             : this()
         {
-            Id = id;
+            SystemName = id;
             DisplayName = displayName;
             Coordinates = ImmutableList<object>.Empty.Add(id);
         }

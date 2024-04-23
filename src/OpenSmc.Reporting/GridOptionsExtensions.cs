@@ -25,7 +25,8 @@ namespace OpenSmc.Reporting
         public bool TrueFor(GridRow gridRow)
         {
             var ret =
-                gridRow.RowGroup.GrouperId is DimensionDescriptor dd && dd.SystemName == dimension;
+                gridRow.RowGroup.GrouperName is DimensionDescriptor dd
+                && dd.SystemName == dimension;
 
             return orConditions.Count == 0 ? ret : ret && orConditions.Any(x => x(gridRow));
         }
@@ -264,7 +265,7 @@ namespace OpenSmc.Reporting
                     x.RowGroup != null
                     && Regex
                         .Match(
-                            x.RowGroup.Id.ToString(),
+                            x.RowGroup.SystemName.ToString(),
                             systemNameRegex ?? string.Empty,
                             RegexOptions.IgnoreCase
                         )

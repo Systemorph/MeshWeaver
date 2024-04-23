@@ -30,10 +30,10 @@ namespace OpenSmc.Pivot.Grouping
 
             var nullGroupPrivate = new TGroup
             {
-                Id = nullGroup.Id,
+                SystemName = nullGroup.SystemName,
                 DisplayName = nullGroup.DisplayName,
                 Coordinates = nullGroup.Coordinates,
-                GrouperId = Id
+                GrouperName = Id
             };
 
             return ordered
@@ -66,8 +66,8 @@ namespace OpenSmc.Pivot.Grouping
             return new TGroup
             {
                 DisplayName = systemName,
-                Id = systemName,
-                GrouperId = Id,
+                SystemName = systemName,
+                GrouperName = Id,
                 Coordinates = ImmutableList<object>.Empty.Add(systemName)
             };
         }

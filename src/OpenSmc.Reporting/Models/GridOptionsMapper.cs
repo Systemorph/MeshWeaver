@@ -57,7 +57,7 @@ namespace OpenSmc.Reporting.Models
         {
             return new()
             {
-                ColId = item.Id,
+                ColId = item.SystemName,
                 HeaderName = item.DisplayName,
                 ValueGetter = ValueGetter(item)
             };
@@ -84,14 +84,14 @@ namespace OpenSmc.Reporting.Models
                 .ToImmutableList();
 
             var show =
-                item.Coordinates.Last() == IPivotGrouper<object, ColumnGroup>.TotalGroup.Id
+                item.Coordinates.Last() == IPivotGrouper<object, ColumnGroup>.TotalGroup.SystemName
                     ? "closed"
                     : "open";
 
             var colGroupDef = new ColGroupDef
             {
                 ColumnGroupShow = show,
-                GroupId = item.Id,
+                GroupId = item.SystemName,
                 HeaderName = item.DisplayName,
                 Children = children
             };

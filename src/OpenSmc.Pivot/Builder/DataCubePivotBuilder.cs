@@ -66,7 +66,9 @@ namespace OpenSmc.Pivot.Builder
             {
                 SliceRows = new SlicePivotGroupingConfigItem<TElement, RowGroup>(
                     GetSliceRowsDimensionDescriptors(builder),
-                    builder.State
+                    builder.State,
+                    HierarchicalDimensionCache,
+                    HierarchicalDimensionOptions
                 ),
                 PropertiesToHide = dimensions.ToImmutableList()
             };
@@ -94,11 +96,15 @@ namespace OpenSmc.Pivot.Builder
                         .Dimensions.Select(d => d.Dim)
                         .Union(dimensionDescriptors)
                         .ToArray(),
-                    State
+                    State,
+                    HierarchicalDimensionCache,
+                    HierarchicalDimensionOptions
                 ),
                 SliceRows = new SlicePivotGroupingConfigItem<TElement, RowGroup>(
                     GetSliceRowsDimensionDescriptors(builder),
-                    State
+                    State,
+                    HierarchicalDimensionCache,
+                    HierarchicalDimensionOptions
                 )
             };
 
@@ -291,14 +297,22 @@ namespace OpenSmc.Pivot.Builder
                     : null,
                 this with
                 {
-                    SliceRows = new SlicePivotGroupingConfigItem<TElement, RowGroup>(
-                        GetAggregateBySliceRowsDimensionDescriptors(this),
-                        State
-                    ),
-                    SliceColumns = new SlicePivotGroupingConfigItem<TElement, ColumnGroup>(
-                        Array.Empty<DimensionDescriptor>(),
-                        State
-                    )
+                    SliceRows =
+                        SliceRows
+                        ?? new SlicePivotGroupingConfigItem<TElement, RowGroup>(
+                            GetAggregateBySliceRowsDimensionDescriptors(this),
+                            State,
+                            HierarchicalDimensionCache,
+                            HierarchicalDimensionOptions
+                        ),
+                    SliceColumns =
+                        SliceColumns
+                        ?? new SlicePivotGroupingConfigItem<TElement, ColumnGroup>(
+                            Array.Empty<DimensionDescriptor>(),
+                            State,
+                            HierarchicalDimensionCache,
+                            HierarchicalDimensionOptions
+                        )
                 }
             );
         }
