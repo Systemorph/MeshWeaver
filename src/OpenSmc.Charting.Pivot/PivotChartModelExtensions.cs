@@ -93,7 +93,7 @@ public static class PivotChartModelExtensions
     {
         return descriptor.Coordinates.Any(c =>
             c.GrouperName.Equals(grouperName)
-            && c.Id == IPivotGrouper<object, ColumnGroup>.TotalGroup.Id
+            && c.Id == IPivotGrouper<object, ColumnGroup>.TotalGroup.SystemName
         );
     }
 

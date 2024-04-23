@@ -37,7 +37,7 @@ namespace OpenSmc.Charting.Pivot
         private void MapPivotToChartModel(ChartType defaultChartType)
         {
             PivotChartModel.RowGroupings.UnionWith(
-                PivotModel.Rows.Select(x => x.RowGroup?.GrouperId).ToHashSet()
+                PivotModel.Rows.Select(x => x.RowGroup?.GrouperName).ToHashSet()
             );
 
             //build column coordinate map
@@ -100,16 +100,16 @@ namespace OpenSmc.Charting.Pivot
                     if (
                         !WithTotals
                         && colGroup.Coordinates.Last()
-                            == IPivotGrouper<object, ColumnGroup>.TotalGroup.Id
+                            == IPivotGrouper<object, ColumnGroup>.TotalGroup.SystemName
                     )
                         continue; // we do not want to export aggregated values
                     var item = new Tuple<object, string, object>(
                         colGroup.Coordinates.Last(),
                         colGroup.DisplayName,
-                        colGroup.GrouperId
+                        colGroup.GrouperName
                     );
                     displayNameToDimensions.Add(item);
-                    PivotChartModel.ColumnGroupings.Add(colGroup.GrouperId);
+                    PivotChartModel.ColumnGroupings.Add(colGroup.GrouperName);
                     displayNameToDimensions = BuildColumnCoordinateMap(
                         colGroup.Children,
                         headerDimensions,
@@ -159,7 +159,7 @@ namespace OpenSmc.Charting.Pivot
                     DataSetType = defaultChartType,
                     Descriptor = new PivotElementDescriptor
                     {
-                        Id = rowGroup.Id,
+                        Id = rowGroup.SystemName,
                         Coordinates = rowGroup
                             .Coordinates.Select(
                                 (_, j) =>
@@ -169,7 +169,11 @@ namespace OpenSmc.Charting.Pivot
                                     );
                                     return cRow != null
                                         ? cRow.Descriptor.Coordinates.Last()
-                                        : (rowGroup.Id, rowGroup.DisplayName, rowGroup.GrouperId);
+                                        : (
+                                            rowGroup.SystemName,
+                                            rowGroup.DisplayName,
+                                            rowGroup.GrouperName
+                                        );
                                 }
                             )
                             .ToList()

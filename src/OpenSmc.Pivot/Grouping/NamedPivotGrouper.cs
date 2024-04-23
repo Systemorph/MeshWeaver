@@ -16,9 +16,9 @@ namespace OpenSmc.Pivot.Grouping
                         var id = keySelector(o);
                         return new TGroup
                         {
-                            Id = id,
+                            SystemName = id,
                             DisplayName = o.DisplayName,
-                            GrouperId = name,
+                            GrouperName = name,
                             Coordinates = [id]
                         };
                     }),

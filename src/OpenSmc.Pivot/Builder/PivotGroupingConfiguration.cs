@@ -45,7 +45,7 @@ public abstract record PivotGroupingConfiguration<T, TGroup>
         Expression<Func<T, TSelected>> selector
     )
     {
-        return new(PivotGroupingExtensions<TGroup>.GetPivotGrouper(state, selector));
+        return new(PivotGroupingExtensions<TGroup>.GetPivotGrouper(state, null, null, selector));
     }
 
     protected ImmutableList<PivotGroupingConfigItem<T, TGroup>> PrependGrouping(
@@ -78,7 +78,7 @@ public record PivotRowsGroupingConfiguration<T> : PivotGroupingConfiguration<T, 
         new(
             new DirectPivotGrouper<T, RowGroup>(
                 x => x.GroupBy(_ => IPivotGrouper<T, RowGroup>.TopGroup),
-                IPivotGrouper<T, RowGroup>.TopGroup.GrouperId
+                IPivotGrouper<T, RowGroup>.TopGroup.GrouperName
             )
         );
 
@@ -99,7 +99,7 @@ public record PivotColumnsGroupingConfiguration<T> : PivotGroupingConfiguration<
         new(
             new DirectPivotGrouper<T, ColumnGroup>(
                 x => x.GroupBy(_ => IPivotGrouper<T, ColumnGroup>.TopGroup),
-                IPivotGrouper<T, ColumnGroup>.TopGroup.GrouperId
+                IPivotGrouper<T, ColumnGroup>.TopGroup.GrouperName
             )
         );
     private static readonly PivotGroupingConfigItem<T, ColumnGroup> DefaultTransposedGrouping =

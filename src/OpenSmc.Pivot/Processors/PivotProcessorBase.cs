@@ -107,7 +107,7 @@ namespace OpenSmc.Pivot.Processors
                 .Select((o, i) => new Row(MergeRows(rowGroup, rowDefinitions[i]), o))
                 .ToArray();
 
-            if (rowGroup.Id != IPivotGrouper<T, RowGroup>.TopGroup.Id)
+            if (rowGroup.SystemName != IPivotGrouper<T, RowGroup>.TopGroup.SystemName)
                 yield return new Row(rowGroup, null);
 
             foreach (var row in rows)
@@ -147,7 +147,7 @@ namespace OpenSmc.Pivot.Processors
         {
             var columnRendering =
                 (Func<TAggregate, object>)(
-                    obj => getAccessors.ToDictionary(x => x.group.Id, x => x.accessor(obj))
+                    obj => getAccessors.ToDictionary(x => x.group.SystemName, x => x.accessor(obj))
                 );
             var accessors = new[] { columnRendering };
             return accessors;
@@ -155,11 +155,11 @@ namespace OpenSmc.Pivot.Processors
 
         private RowGroup MergeRows(RowGroup rowGroup, RowGroup row)
         {
-            if (rowGroup.Id == IPivotGrouper<T, RowGroup>.TopGroup.Id)
+            if (rowGroup.SystemName == IPivotGrouper<T, RowGroup>.TopGroup.SystemName)
                 return row;
             return row with
             {
-                Id = $"{rowGroup.Id}.{row.Id}",
+                SystemName = $"{rowGroup.SystemName}.{row.SystemName}",
                 Coordinates = rowGroup.Coordinates.Concat(row.Coordinates).ToImmutableList(),
             };
         }

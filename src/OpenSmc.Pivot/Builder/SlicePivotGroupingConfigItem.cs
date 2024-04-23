@@ -16,9 +16,26 @@ namespace OpenSmc.Pivot.Builder
             IPivotGrouper<DataSlice<TElement>, TGroup> Grouper
         )[] Dimensions { get; }
 
-        public SlicePivotGroupingConfigItem(DimensionDescriptor[] dimensions, WorkspaceState state)
+        public SlicePivotGroupingConfigItem(
+            DimensionDescriptor[] dimensions,
+            WorkspaceState state,
+            IHierarchicalDimensionCache hierarchicalDimensionCache,
+            IHierarchicalDimensionOptions hierarchicalDimensionOptions
+        )
             : base(default(IPivotGrouper<DataSlice<TElement>, TGroup>)) =>
-            Dimensions = dimensions.Select(d => (d, GetGroupingFunction(d, state))).ToArray();
+            Dimensions = dimensions
+                .Select(d =>
+                    (
+                        d,
+                        GetGroupingFunction(
+                            d,
+                            state,
+                            hierarchicalDimensionCache,
+                            hierarchicalDimensionOptions
+                        )
+                    )
+                )
+                .ToArray();
 
         public PivotGroupManager<
             DataSlice<TElement>,
@@ -39,7 +56,7 @@ namespace OpenSmc.Pivot.Builder
                 >(
                     new DirectPivotGrouper<DataSlice<TElement>, TGroup>(
                         slices => slices.GroupBy(_ => IPivotGrouper<TElement, TGroup>.TopGroup),
-                        IPivotGrouper<TElement, TGroup>.TopGroup.GrouperId
+                        IPivotGrouper<TElement, TGroup>.TopGroup.GrouperName
                     ),
                     null,
                     aggregationFunctions
@@ -103,10 +120,17 @@ namespace OpenSmc.Pivot.Builder
 
         protected IPivotGrouper<DataSlice<TElement>, TGroup> GetGroupingFunction(
             DimensionDescriptor dimension,
-            WorkspaceState state
+            WorkspaceState state,
+            IHierarchicalDimensionCache hierarchicalDimensionCache,
+            IHierarchicalDimensionOptions hierarchicalDimensionOptions
         )
         {
-            return PivotGroupingExtensions<TGroup>.GetPivotGrouper<TElement>(dimension, state);
+            return PivotGroupingExtensions<TGroup>.GetPivotGrouper<TElement>(
+                dimension,
+                state,
+                hierarchicalDimensionCache,
+                hierarchicalDimensionOptions
+            );
         }
 
         public void UpdateMaxLevelForHierarchicalGroupers(DataSlice<TElement>[] transformed)

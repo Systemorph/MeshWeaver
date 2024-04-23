@@ -38,9 +38,9 @@ namespace OpenSmc.Pivot.Grouping
             var systemName = value.Name;
             return new TGroup
             {
-                Id = systemName,
+                SystemName = systemName,
                 DisplayName = displayName,
-                GrouperId = Id,
+                GrouperName = Id,
                 Coordinates = ImmutableList<object>.Empty.Add(systemName)
             };
         }

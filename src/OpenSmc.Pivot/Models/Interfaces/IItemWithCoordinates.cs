@@ -4,17 +4,17 @@ namespace OpenSmc.Pivot.Models.Interfaces;
 
 public interface IItemWithCoordinates
 {
-    object Id { get; init; }
+    object SystemName { get; init; }
     string DisplayName { get; init; }
     ImmutableList<object> Coordinates { get; init; }
-    object GrouperId { get; init; }
+    object GrouperName { get; init; }
 }
 
 public abstract record ItemWithCoordinates() : IItemWithCoordinates
 {
-    public object Id { get; init; }
+    public object SystemName { get; init; }
     public string DisplayName { get; init; }
     public ImmutableList<object> Coordinates { get; init; } = ImmutableList<object>.Empty;
 
-    public object GrouperId { get; init; }
+    public object GrouperName { get; init; }
 }

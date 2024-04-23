@@ -30,10 +30,10 @@ namespace OpenSmc.Pivot.Grouping
 
             var nullGroupPrivate = new TGroup
             {
-                Id = nullGroup.Id,
+                SystemName = nullGroup.SystemName,
                 DisplayName = nullGroup.DisplayName,
                 Coordinates = nullGroup.Coordinates,
-                GrouperId = Name
+                GrouperName = Name
             };
             return ordered
                 .Select(x => new PivotGrouping<TGroup, IReadOnlyCollection<T>>(

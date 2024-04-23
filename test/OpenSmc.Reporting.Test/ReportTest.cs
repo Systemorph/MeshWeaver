@@ -328,14 +328,6 @@ namespace OpenSmc.Reporting.Test
                                 )
                         )
             );
-            // moved to control style
-            //yield return new ReportTestCase<CashflowElement>
-            //    (
-            //     "FixedHeightGrid.json",
-            //     CashflowFactory.GenerateEquallyWeightedAllPopulated(),
-            //     x => x.ToTable()
-            //           .WithOptions(rm => rm.WithHeight(200))
-            //    );
         }
 
         private class ReportTestCase<T>
