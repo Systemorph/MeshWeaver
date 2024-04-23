@@ -23,7 +23,6 @@ export class RemoteWorkspace<T = unknown> extends Workspace<T> {
 
         this.subscription.add(
             transportHub
-                .pipe(log('RemoteWorkspace input'))
                 .pipe(filter(messageOfType(DataChangedEvent)))
                 .pipe(map(unpack))
                 .pipe(filter(message => isEqual(message.reference, reference)))

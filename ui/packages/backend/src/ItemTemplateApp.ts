@@ -3,7 +3,7 @@ import { SubscribeRequest } from "@open-smc/data/src/contract/SubscribeRequest";
 import { DataChangedEvent } from "@open-smc/data/src/contract/DataChangedEvent";
 import { JsonPatch } from "@open-smc/data/src/contract/JsonPatch";
 import { LayoutAreaReference } from "@open-smc/data/src/contract/LayoutAreaReference";
-import { map, Observable, Observer, of, Subject } from "rxjs";
+import { filter, map, Observable, Observer, of, Subject } from "rxjs";
 import { PatchChangeRequest } from "@open-smc/data/src/contract/PatchChangeRequest";
 import { MessageDelivery } from "@open-smc/messaging/src/api/MessageDelivery";
 import { toPatchOperation } from "./toPatchOperation";
@@ -15,6 +15,7 @@ import { deserialize } from "@open-smc/serialization/src/deserialize";
 import { DataChangeResponse } from "@open-smc/data/src/contract/DataChangeResponse";
 import { TransportEmulation } from "./TransportEmulation";
 import { itemTemplateExample } from "@open-smc/layout/src/examples/itemTemplateExample";
+import { messageOfType } from "@open-smc/messaging/src/operators/messageOfType";
 
 enablePatches();
 
@@ -37,6 +38,11 @@ export class ItemTemplateApp extends Observable<MessageDelivery> implements Obse
         this.input
             .pipe(handleRequest(PatchChangeRequest, this.patchChangeRequestHandler()))
             .subscribe(this.output);
+
+        this.input
+            .pipe(filter(messageOfType(PatchChangeRequest)))
+            .pipe(log("patch request"))
+            .subscribe();
     }
 
     complete() {

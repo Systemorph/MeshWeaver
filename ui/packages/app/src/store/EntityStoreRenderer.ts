@@ -1,6 +1,5 @@
 import { distinctUntilChanged, map, Subscription } from "rxjs";
 import { Workspace } from "@open-smc/data/src/Workspace";
-import { Collection } from "@open-smc/data/src/contract/Collection";
 import { EntityStore } from "@open-smc/data/src/contract/EntityStore";
 import { sliceByPath } from "@open-smc/data/src/sliceByPath";
 import { selectByPath } from "@open-smc/data/src/operators/selectByPath";
@@ -9,17 +8,19 @@ import { appStore } from "./appStore";
 import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
 import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
 import { EntityReferenceCollectionRenderer } from "./EntityReferenceCollectionRenderer";
+import { RendererStackTrace } from "./RendererStackTrace";
+import { Renderer } from "./Renderer";
+import { WorkspaceSlice } from "@open-smc/data/src/WorkspaceSlice";
 
 export const uiControlType = (UiControl as any).$type;
 
-export class EntityStoreRenderer {
+export class EntityStoreRenderer extends Renderer {
     readonly subscription = new Subscription();
 
     constructor(entityStore: Workspace<EntityStore>) {
-        const collections =
-            sliceByPath<EntityStore, Collection<Collection>>(entityStore, "/collections");
+        super(sliceByPath(entityStore, "/collections"), new RendererStackTrace());
 
-        this.subscription.add(collections.subscription);
+        this.subscription.add((this.dataContext as WorkspaceSlice).subscription);
 
         const rootArea$ = entityStore
             .pipe(map(selectByPath<string>("/reference/area")))
@@ -31,7 +32,7 @@ export class EntityStoreRenderer {
                     map(rootArea =>
                         rootArea ? [new EntityReference(uiControlType, rootArea)] : [])
                 ),
-            collections
+            this.stackTrace.add(this)
         );
 
         this.subscription.add(collectionRenderer.subscription);
