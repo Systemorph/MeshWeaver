@@ -8,6 +8,7 @@ import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
 import { selectByReference } from "@open-smc/data/src/operators/selectByReference";
 import { values } from "lodash";
 import { renderControl } from "./renderControl";
+import { ControlRenderer } from "./ControlRenderer";
 
 export class EntityReferenceCollectionRenderer {
     subscription = new Subscription();
@@ -16,7 +17,7 @@ export class EntityReferenceCollectionRenderer {
     constructor(
         protected areaReferences$: Observable<EntityReference[]>,
         protected collections: Workspace<Collection<Collection>>,
-        protected dataContextWorkspace: Workspace
+        protected controlRenderer?: ControlRenderer
     ) {
         this.subscription.add(() => {
             values((this.state))
@@ -34,7 +35,7 @@ export class EntityReferenceCollectionRenderer {
                                 const control$ =
                                     this.collections.pipe(map(selectByReference(reference)));
                                 this.state[reference.id] =
-                                    renderControl(control$, this.collections, reference.id, this.dataContextWorkspace);
+                                    renderControl(control$, this.collections, reference.id, this.controlRenderer);
                             });
                     }
                 )

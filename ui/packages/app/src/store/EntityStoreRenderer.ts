@@ -31,8 +31,7 @@ export class EntityStoreRenderer {
                     map(rootArea =>
                         rootArea ? [new EntityReference(uiControlType, rootArea)] : [])
                 ),
-            collections,
-            null
+            collections
         );
 
         this.subscription.add(collectionRenderer.subscription);

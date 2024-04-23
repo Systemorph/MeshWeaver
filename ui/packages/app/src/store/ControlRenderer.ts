@@ -6,24 +6,26 @@ import { Binding, ValueOrBinding } from "@open-smc/data/src/contract/Binding";
 import { JsonPathReference } from "@open-smc/data/src/contract/JsonPathReference";
 import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
 import { Workspace } from "@open-smc/data/src/Workspace";
-import { ControlModel } from "./appStore";
+import { app$, appStore, ControlModel } from "./appStore";
 import { distinctUntilChanged, map, Observable, Subscription } from "rxjs";
 import { Collection } from "@open-smc/data/src/contract/Collection";
 import { effect } from "@open-smc/utils/src/operators/effect";
 import { syncWorkspaces } from "./syncWorkspaces";
 import { sliceByReference } from "@open-smc/data/src/sliceByReference";
 import { distinctUntilEqual } from "@open-smc/data/src/operators/distinctUntilEqual";
-import { renderControlTo } from "./renderControlTo";
+import { setArea } from "./appReducer";
+import { pathToUpdateAction } from "@open-smc/data/src/operators/pathToUpdateAction";
+import { Renderer } from "./Renderer";
 
-export class ControlRenderer<T extends UiControl = UiControl> {
-    subscription = new Subscription();
-    protected dataContextWorkspace: Workspace;
+export class ControlRenderer<T extends UiControl = UiControl> implements Renderer {
+    readonly subscription = new Subscription();
+    readonly dataContextWorkspace: Workspace;
 
     constructor(
         protected control$: Observable<T>,
         protected collections: Workspace<Collection<Collection>>,
-        protected area: string,
-        protected parentDataContextWorkspace?: Workspace
+        public readonly area: string,
+        public readonly parentRenderer?: Renderer
     ) {
         this.dataContextWorkspace = new Workspace(null, `${area}/dataContext`);
 
@@ -36,7 +38,7 @@ export class ControlRenderer<T extends UiControl = UiControl> {
                         dataContext =>
                             syncWorkspaces(
                                 dataContext ? sliceByReference(this.collections, dataContext)
-                                    : parentDataContextWorkspace,
+                                    : this.parentRenderer.dataContextWorkspace,
                                 this.dataContextWorkspace
                             )
                     )
@@ -61,7 +63,7 @@ export class ControlRenderer<T extends UiControl = UiControl> {
                                 const controlModelWorkspace =
                                     sliceByReference(this.dataContextWorkspace, controlModel);
 
-                                return renderControlTo(controlModelWorkspace, this.area);
+                                return this.renderControlTo(controlModelWorkspace);
                             }
                         }
                     )
@@ -84,6 +86,33 @@ export class ControlRenderer<T extends UiControl = UiControl> {
                 props
             }
         }
+    }
+
+    protected renderControlTo(controlModelWorkspace: Workspace<ControlModel>)  {
+        const subscription = new Subscription();
+
+        const area = this.area;
+
+        subscription.add(
+            controlModelWorkspace
+                .pipe(distinctUntilEqual())
+                .subscribe(control => {
+                    appStore.dispatch(setArea({
+                        area,
+                        control
+                    }))
+                })
+        );
+
+        subscription.add(
+            app$
+                .pipe(map(appState => appState.areas[area]?.control))
+                .pipe(distinctUntilChanged())
+                .pipe(map(pathToUpdateAction("")))
+                .subscribe(controlModelWorkspace)
+        );
+
+        return subscription;
     }
 }
 

@@ -5,28 +5,29 @@ import { LayoutStackRenderer } from "./LayoutStackRenderer";
 import { ItemTemplateRenderer } from "./ItemTemplateRenderer";
 import { ControlRenderer } from "./ControlRenderer";
 import { ItemTemplateControl } from "@open-smc/layout/src/contract/controls/ItemTemplateControl";
-import { Workspace } from "@open-smc/data/src/Workspace";
+import { Renderer } from "./Renderer";
 
 export function renderControl(
     control$: Observable<UiControl>,
     collections: any,
     area: string,
-    parentDataContextWorkspace: Workspace
+    parentRenderer: Renderer
 ) {
     const subject = new ReplaySubject<UiControl>(1);
     let lastValue: UiControl;
     let lastSubscription: Subscription;
+    let branches
 
     function getRenderer(value: UiControl) {
         if (value instanceof LayoutStackControl) {
-            return new LayoutStackRenderer(subject as any, collections, area, parentDataContextWorkspace);
+            return new LayoutStackRenderer(subject as any, collections, area, parentRenderer);
         }
 
         if (value instanceof ItemTemplateControl) {
-            return new ItemTemplateRenderer(subject as any, collections, area, parentDataContextWorkspace);
+            return new ItemTemplateRenderer(subject as any, collections, area, parentRenderer);
         }
 
-        return new ControlRenderer(subject, collections, area, parentDataContextWorkspace);
+        return new ControlRenderer(subject, collections, area, parentRenderer);
     }
 
     const subscription =
