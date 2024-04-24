@@ -102,7 +102,7 @@ public class SerializationTest : TestBase
     }
 
     [Fact]
-    public void FullMessageDeliveryTest()
+    public void MessageDeliveryPropertiesTest()
     {
         var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
 
@@ -110,6 +110,8 @@ public class SerializationTest : TestBase
             .WithTarget(new HostAddress())
             .WithProperties(new Dictionary<string, object> {
                 { "MyId", "394" },
+                { "MyAddress", new ClientAddress() },
+                { "NestedObjs", new Boomerang(new MyEvent("Hello nested")) },
                 { "MyId2", "22394" },
             });
 
@@ -121,7 +123,9 @@ public class SerializationTest : TestBase
 
         var deserialized = JsonSerializer.Deserialize<MessageDelivery<RawJson>>(serialized, client.JsonSerializerOptions);
 
-        deserialized.Should().NotBeNull();
+        deserialized.Should().NotBeNull()
+            .And.NotBeSameAs(packedDelivery)
+            .And.BeEquivalentTo(packedDelivery); ;
     }
 }
 
