@@ -1,5 +1,5 @@
 import { createContext, PropsWithChildren, useContext, useEffect, useState } from "react";
-import { makeSignalrConnection, SignalrConnection } from "./makeSignalrConnection";
+import { makeSignalrConnection, SignalrConnection } from "./signalr/makeSignalrConnection";
 import { createStore, Store } from "@open-smc/store/src/store";
 import { getAppId, setAppId } from "./appId";
 import { makeUseSelector } from "@open-smc/store/src/useSelector";

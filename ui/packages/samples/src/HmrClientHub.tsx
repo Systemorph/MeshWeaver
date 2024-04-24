@@ -1,7 +1,7 @@
 import { Observable } from "rxjs";
 import { MessageDelivery } from "@open-smc/messaging/src/api/MessageDelivery";
 import { MessageHub } from "@open-smc/messaging/src/api/MessageHub";
-import { methodName } from "../../playground-server/src/contract.ts";
+import { methodName } from "@open-smc/samples-server/src/contract";
 
 const hmr = import.meta.hot!;
 

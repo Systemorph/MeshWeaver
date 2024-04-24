@@ -13,7 +13,8 @@ export class WebSocketClientHub extends Observable<MessageDelivery> implements M
     constructor(private webSocketClient: WebSocketClient, webSocket: WebSocketServer) {
         super(subscriber => {
             const handler: WebSocketCustomListener<MessageDelivery> =
-                (data, client) => client === webSocketClient && subscriber.next(data);
+                (data, client) =>
+                    client === webSocketClient && subscriber.next(data);
             webSocket.on(methodName, handler);
             subscriber.add(() => webSocket.off(methodName, handler));
         });

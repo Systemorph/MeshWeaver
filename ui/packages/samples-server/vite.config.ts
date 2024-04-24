@@ -9,7 +9,7 @@ export default defineConfig({
         lib: {
             // Could also be a dictionary or array of multiple entry points
             entry: [
-                './src/playgroundServer.ts',
+                './src/samplesServerPlugin.ts',
                 './src/contract.ts'
             ],
             formats: ["es"],
@@ -25,7 +25,8 @@ export default defineConfig({
                 'rxjs',
                 'fs',
                 'lodash-es',
-                'uuid'
+                'uuid',
+                "immer"
             ],
         },
     }
