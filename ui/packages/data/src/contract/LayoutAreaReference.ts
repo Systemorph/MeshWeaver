@@ -8,12 +8,4 @@ export class LayoutAreaReference extends WorkspaceReference {
     constructor(public area: string) {
         super();
     }
-
-    get(data: unknown) {
-        throw 'Should never be used';
-    }
-
-    set(data: unknown) {
-        throw 'Should never be used';
-    }
 }

@@ -1,6 +1,6 @@
 import { WorkspaceReference } from "./WorkspaceReference";
 
-export class PathReference<T = unknown> extends WorkspaceReference {
+export class PathReference extends WorkspaceReference {
     constructor(public path: string) {
         super();
     }

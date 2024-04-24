@@ -14,8 +14,8 @@ import { serialize } from "@open-smc/serialization/src/serialize";
 import { deserialize } from "@open-smc/serialization/src/deserialize";
 import { DataChangeResponse } from "@open-smc/data/src/contract/DataChangeResponse";
 import { TransportEmulation } from "./TransportEmulation";
-import { itemTemplateExample } from "@open-smc/layout/src/examples/itemTemplateExample";
 import { messageOfType } from "@open-smc/messaging/src/operators/messageOfType";
+import { itemTemplateExample } from "./examples/itemTemplateExample";
 
 enablePatches();
 
