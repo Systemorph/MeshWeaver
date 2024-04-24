@@ -1,3 +1,4 @@
+import './HtmlControl';
 import './Icon';
 import './ItemTemplateControl';
 import './LayoutStackControl';
