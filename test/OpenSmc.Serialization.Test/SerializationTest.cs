@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using System.Text.Json;
 using FluentAssertions;
 using Newtonsoft.Json.Linq;
 using OpenSmc.Fixture;
@@ -100,7 +101,28 @@ public class SerializationTest : TestBase
 
     }
 
+    [Fact]
+    public void FullMessageDeliveryTest()
+    {
+        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
 
+        var postOptions = new PostOptions(client.Address, client)
+            .WithTarget(new HostAddress())
+            .WithProperties(new Dictionary<string, object> {
+                { "MyId", "394" },
+                { "MyId2", "22394" },
+            });
+
+        var delivery = new MessageDelivery<MyEvent>(new MyEvent("Hello Delivery"), postOptions);
+
+        var packedDelivery = delivery.Package(client.JsonSerializerOptions);
+
+        var serialized = JsonSerializer.Serialize(packedDelivery, client.JsonSerializerOptions);
+
+        var deserialized = JsonSerializer.Deserialize<MessageDelivery<RawJson>>(serialized, client.JsonSerializerOptions);
+
+        deserialized.Should().NotBeNull();
+    }
 }
 
 public record Boomerang(object Object) : IRequest<object>;
