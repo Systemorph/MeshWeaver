@@ -8,7 +8,7 @@ import { toPointer } from "./toPointer";
 import { updateByPath } from "./operators/updateByPath";
 
 export type UpdateByReferencePayload<T = unknown> = {
-    reference: WorkspaceReference<T>;
+    reference: WorkspaceReference;
     value: T;
 }
 

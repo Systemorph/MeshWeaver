@@ -8,10 +8,10 @@ import { selectByPath } from "./operators/selectByPath";
 import { pathToUpdateAction } from "./operators/pathToUpdateAction";
 import { referenceToUpdateAction } from "./operators/referenceToUpdateAction";
 
-export class WorkspaceSlice<S = unknown, T = unknown> extends Workspace<T> {
+export class WorkspaceSlice<T = unknown> extends Workspace<T> {
     readonly subscription = new Subscription();
 
-    constructor(source: Workspace<S>, projection: ValueOrReference<T>, name?: string) {
+    constructor(source: Workspace, projection: ValueOrReference<T>, name?: string) {
         super(selectDeep(projection)(source.getState()), name);
 
         const references = extractReferences(projection);

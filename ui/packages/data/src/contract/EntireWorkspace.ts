@@ -3,7 +3,4 @@ import { WorkspaceReference } from "./WorkspaceReference";
 
 @type("OpenSmc.Data.EntireWorkspace")
 export class EntireWorkspace extends WorkspaceReference {
-    constructor() {
-        super();
-    }
 }
