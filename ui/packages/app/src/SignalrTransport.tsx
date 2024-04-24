@@ -1,6 +1,6 @@
 import { PropsWithChildren, useMemo } from "react";
 import { SignalrConnectionProvider, useConnectionSelector } from "./SignalrConnectionProvider";
-import { SignalrHub } from "./SignalrHub";
+import { SignalrHub } from "./signalr/SignalrHub";
 import { LayoutAddress, UiAddress } from "@open-smc/layout/src/contract/application.contract";
 import { transportContext } from "./transportContext";
 

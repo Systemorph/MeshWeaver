@@ -4,7 +4,7 @@ import { MessageHub } from "@open-smc/messaging/src/api/MessageHub";
 import { deserialize } from "@open-smc/serialization/src/deserialize";
 import { serialize } from "@open-smc/serialization/src/serialize";
 
-export class TransportEmulation extends Observable<MessageDelivery> implements Observer<MessageDelivery> {
+export class SerializationMiddleware extends Observable<MessageDelivery> implements Observer<MessageDelivery> {
     constructor(private hub: MessageHub) {
         super(
             subscriber =>

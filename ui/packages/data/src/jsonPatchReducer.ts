@@ -1,8 +1,10 @@
 import { createAction, createReducer } from '@reduxjs/toolkit';
 import { JsonPatch, PatchOperation } from "./contract/JsonPatch";
 import jsonPatch, { Operation } from "fast-json-patch";
-import { applyPatches, Patch } from "immer";
+import { applyPatches, enablePatches, Patch } from "immer";
 import { identity } from "rxjs";
+
+enablePatches();
 
 export const jsonPatchActionCreator = createAction<JsonPatch>('patch');
 

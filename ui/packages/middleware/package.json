@@ -1,5 +1,5 @@
 {
-  "name": "@open-smc/backend",
+  "name": "@open-smc/middleware",
   "version": "0.0.0",
   "dependencies": {
     "@open-smc/serialization": "0.0.0",

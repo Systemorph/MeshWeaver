@@ -1,20 +1,17 @@
 import { enablePatches, produceWithPatches } from "immer";
-import { SubscribeRequest } from "@open-smc/data/src/contract/SubscribeRequest";
-import { DataChangedEvent } from "@open-smc/data/src/contract/DataChangedEvent";
-import { JsonPatch } from "@open-smc/data/src/contract/JsonPatch";
-import { LayoutAreaReference } from "@open-smc/data/src/contract/LayoutAreaReference";
+import { SubscribeRequest } from "@open-smc/data/src/contract/SubscribeRequest.ts";
+import { DataChangedEvent } from "@open-smc/data/src/contract/DataChangedEvent.ts";
+import { JsonPatch } from "@open-smc/data/src/contract/JsonPatch.ts";
+import { LayoutAreaReference } from "@open-smc/data/src/contract/LayoutAreaReference.ts";
 import { map, Observable, Observer, of, Subject } from "rxjs";
-import { PatchChangeRequest } from "@open-smc/data/src/contract/PatchChangeRequest";
-import { MessageDelivery } from "@open-smc/messaging/src/api/MessageDelivery";
-import { toPatchOperation } from "./toPatchOperation";
-import { handleRequest } from "@open-smc/messaging/src/handleRequest";
-import { sendMessage } from "@open-smc/messaging/src/sendMessage";
-import { log } from "@open-smc/utils/src/operators/log";
-import { serialize } from "@open-smc/serialization/src/serialize";
-import { deserialize } from "@open-smc/serialization/src/deserialize";
-import { DataChangeResponse } from "@open-smc/data/src/contract/DataChangeResponse";
-import { TransportEmulation } from "./TransportEmulation";
-import { basicStoreExample } from "./examples/basicStoreExample";
+import { PatchChangeRequest } from "@open-smc/data/src/contract/PatchChangeRequest.ts";
+import { MessageDelivery } from "@open-smc/messaging/src/api/MessageDelivery.ts";
+import { handleRequest } from "@open-smc/messaging/src/handleRequest.ts";
+import { sendMessage } from "@open-smc/messaging/src/sendMessage.ts";
+import { log } from "@open-smc/utils/src/operators/log.ts";
+import { DataChangeResponse } from "@open-smc/data/src/contract/DataChangeResponse.ts";
+import { toPatchOperation } from "../toPatchOperation.ts";
+import { basicStoreExample } from "./basicStoreExample.ts";
 
 enablePatches();
 
@@ -26,13 +23,10 @@ export class SampleApp extends Observable<MessageDelivery> implements Observer<M
         super(
             subscriber =>
                 this.output
-                    .pipe(map(serialize))
-                    .pipe(log("server output"))
                     .subscribe(subscriber)
         );
 
         this.input
-            .pipe(log("server input"))
             .pipe(handleRequest(SubscribeRequest, this.subscribeRequestHandler()))
             .subscribe(this.output);
 
@@ -48,7 +42,7 @@ export class SampleApp extends Observable<MessageDelivery> implements Observer<M
     }
 
     next(value: MessageDelivery) {
-        this.input.next(deserialize(value));
+        this.input.next(value);
     }
 
     subscribeRequestHandler = () =>
@@ -73,6 +67,8 @@ export class SampleApp extends Observable<MessageDelivery> implements Observer<M
 
                 return of(new DataChangedEvent(reference, basicStoreExample, "Full"));
             }
+
+            throw 'Reference type not supported';
         }
 
     patchChangeRequestHandler = () =>
@@ -81,5 +77,3 @@ export class SampleApp extends Observable<MessageDelivery> implements Observer<M
             return of(new DataChangeResponse("Committed"));
         }
 }
-
-export const sampleApp = new TransportEmulation(new SampleApp());

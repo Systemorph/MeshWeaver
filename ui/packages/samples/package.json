@@ -1,5 +1,5 @@
 {
-  "name": "playground",
+  "name": "@open-smc/samples",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -10,9 +10,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@open-smc/application": "0.0.0",
+    "@open-smc/app": "0.0.0",
     "@open-smc/messaging": "0.0.0",
-    "@open-smc/playground-server": "0.0.0",
+    "@open-smc/middleware": "0.0.0",
+    "@open-smc/samples-server": "0.0.0",
     "@open-smc/utils": "0.0.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
