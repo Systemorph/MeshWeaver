@@ -23,7 +23,7 @@ public class Program
                 siloBuilder.UseLocalhostClustering();
                 siloBuilder.Services.AddSerializer(serializerBuilder =>
                 {
-                    serializerBuilder.AddJsonSerializer(isSupported: type => true);
+                    serializerBuilder.AddJsonSerializer(type => true, type => true, ob => ob.PostConfigure<IMessageHub>((o, hub) => o.SerializerOptions = hub.JsonSerializerOptions));
                 });
                 siloBuilder
                     .AddMemoryStreams(ApplicationStreamProviders.AppStreamProvider)
