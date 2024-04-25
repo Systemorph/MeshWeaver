@@ -125,7 +125,7 @@ public class SerializationTest : TestBase
 
         deserialized.Should().NotBeNull()
             .And.NotBeSameAs(packedDelivery)
-            .And.BeEquivalentTo(packedDelivery); ;
+            .And.BeEquivalentTo(packedDelivery);
     }
 }
 
