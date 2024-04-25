@@ -69,7 +69,7 @@ export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
         );
     }
 
-    protected getModel(control: T): ControlModel {
+    protected getModel(control: T): ValueOrReference<ControlModel> {
         if (control) {
             const componentTypeName = control.constructor.name;
             const props = bindingsToReferences(
