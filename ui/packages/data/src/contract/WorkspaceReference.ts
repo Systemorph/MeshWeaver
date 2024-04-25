@@ -1,2 +1,2 @@
-export abstract class WorkspaceReference {
+export abstract class WorkspaceReference<T = unknown> {
 }

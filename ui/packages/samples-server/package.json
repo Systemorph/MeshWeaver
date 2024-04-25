@@ -3,11 +3,12 @@
   "private": true,
   "version": "0.0.0",
   "scripts": {
-    "build": "vite build",
-    "watch": "vite build --watch"
+    "build-samples-server": "vite build",
+    "watch-samples-server": "vite build --watch"
   },
   "dependencies": {
     "@open-smc/app": "0.0.0",
+    "@open-smc/data": "0.0.0",
     "@open-smc/messaging": "0.0.0",
     "@open-smc/middleware": "0.0.0",
     "@open-smc/utils": "0.0.0",
