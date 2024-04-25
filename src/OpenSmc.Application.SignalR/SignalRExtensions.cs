@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Messaging;
 
 namespace OpenSmc.Application.SignalR;
 
@@ -18,6 +19,9 @@ public static class SignalRExtensions
 
         return services;
     }
+
+    public static TBuilder AddJsonProtocolFromHub<TBuilder>(this TBuilder builder, Action<JsonHubProtocolOptions, IMessageHub> configuration) where TBuilder : ISignalRBuilder 
+        => builder.AddJsonProtocolFrom(configuration);
 
     private static TBuilder AddJsonProtocolFrom<TBuilder, TDep>(this TBuilder builder, Action<JsonHubProtocolOptions, TDep> configuration)
         where TBuilder : ISignalRBuilder
