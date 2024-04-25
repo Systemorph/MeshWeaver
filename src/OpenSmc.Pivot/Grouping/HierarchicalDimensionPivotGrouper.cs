@@ -24,12 +24,12 @@ namespace OpenSmc.Pivot.Grouping
     }
 
     public class HierarchyLevelDimensionPivotGrouper<T, TDimension, TGroup>(
+        string name,
+        int level,
         WorkspaceState state,
         Func<T, int, object> selector,
-        DimensionDescriptor dimensionDescriptor,
-        IHierarchicalDimensionCache hierarchicalDimensionCache,
-        int level
-    ) : DimensionPivotGrouper<T, TDimension, TGroup>(state, selector, dimensionDescriptor)
+        IHierarchicalDimensionCache hierarchicalDimensionCache
+    ) : DimensionPivotGrouper<T, TDimension, TGroup>(state, selector, name + level)
         where TGroup : class, IGroup, new()
         where TDimension : class, IHierarchicalDimension
     {
@@ -39,7 +39,15 @@ namespace OpenSmc.Pivot.Grouping
         > CreateGroupings(IReadOnlyCollection<T> objects, TGroup nullGroup)
         {
             var selectedObjects = objects.Select(
-                (x, i) => new { Key = GetAncestor(x, i), Object = x }
+                (x, i) =>
+                    new
+                    {
+                        Key = hierarchicalDimensionCache.AncestorIdAtLevel<TDimension>(
+                            Selector(x, i),
+                            level
+                        ),
+                        Object = x
+                    }
             );
 
             var grouped = selectedObjects.GroupBy(x => x.Key, x => x.Object);
@@ -65,17 +73,6 @@ namespace OpenSmc.Pivot.Grouping
                     x.Key
                 ))
                 .ToArray();
-        }
-
-        private object GetAncestor(T element, int i)
-        {
-            var el = Selector(element, i);
-            var hierarchy = hierarchicalDimensionCache.Get<TDimension>(el);
-
-            while (hierarchy.Level > level)
-                hierarchy = hierarchicalDimensionCache.Get<TDimension>(hierarchy.ParentId);
-
-            return hierarchy.Id;
         }
     }
 
@@ -160,11 +157,11 @@ namespace OpenSmc.Pivot.Grouping
         )
         {
             var grouper = new HierarchyLevelDimensionPivotGrouper<T, TDimension, TGroup>(
+                DimensionDescriptor.SystemName,
+                level,
                 State,
                 Selector,
-                DimensionDescriptor,
-                HierarchicalDimensionCache,
-                level
+                HierarchicalDimensionCache
             );
 
             return new(grouper, subGroup, aggregationFunctions);

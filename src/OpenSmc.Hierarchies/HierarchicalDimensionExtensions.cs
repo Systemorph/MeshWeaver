@@ -28,4 +28,19 @@ public static class HierarchicalDimensionExtensions
             ret = cache.Get<T>(ret.ParentId);
         return ret.Element;
     }
+
+    public static object AncestorIdAtLevel<T>(
+        this IHierarchicalDimensionCache cache,
+        object id,
+        int level
+    )
+        where T : class, IHierarchicalDimension
+    {
+        var ret = cache.Get<T>(id);
+        if (ret.Level < level)
+            return null;
+        while (ret.Level > level)
+            ret = cache.Get<T>(ret.ParentId);
+        return ret.Id;
+    }
 }

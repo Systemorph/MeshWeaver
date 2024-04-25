@@ -11,8 +11,8 @@ namespace OpenSmc.Pivot.Grouping
     public class DimensionPivotGrouper<T, TDimension, TGroup>(
         WorkspaceState state,
         Func<T, int, object> selector,
-        DimensionDescriptor DimensionDescriptor
-    ) : SelectorPivotGrouper<T, object, TGroup>(selector, DimensionDescriptor.SystemName)
+        string Name
+    ) : SelectorPivotGrouper<T, object, TGroup>(selector, Name)
         where TGroup : class, IGroup, new()
         where TDimension : class, INamed
     {
@@ -24,7 +24,7 @@ namespace OpenSmc.Pivot.Grouping
             Func<T, object> selector,
             DimensionDescriptor dimensionDescriptor
         )
-            : this(state, (x, _) => selector(x), dimensionDescriptor)
+            : this(state, (x, _) => selector(x), dimensionDescriptor.SystemName)
         {
             this.DimensionDescriptor = dimensionDescriptor;
         }
