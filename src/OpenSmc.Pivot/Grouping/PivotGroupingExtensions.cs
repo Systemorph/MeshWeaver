@@ -19,8 +19,8 @@ namespace OpenSmc.Pivot.Grouping
     {
         public static IPivotGrouper<TTransformed, TGroup> GetPivotGrouper<TTransformed, TSelected>(
             WorkspaceState state,
-            HierarchicalDimensionCache hierarchicalDimensionCache,
-            HierarchicalDimensionOptions hierarchicalDimensionOptions,
+            IHierarchicalDimensionCache hierarchicalDimensionCache,
+            IHierarchicalDimensionOptions hierarchicalDimensionOptions,
             Expression<Func<TTransformed, TSelected>> selector
         )
         {

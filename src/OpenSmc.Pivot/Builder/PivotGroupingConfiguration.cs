@@ -4,6 +4,7 @@ using System.Linq.Expressions;
 using OpenSmc.Collections;
 using OpenSmc.Data;
 using OpenSmc.Domain;
+using OpenSmc.Hierarchies;
 using OpenSmc.Pivot.Grouping;
 using OpenSmc.Pivot.Models;
 using OpenSmc.Pivot.Models.Interfaces;
@@ -33,19 +34,35 @@ public abstract record PivotGroupingConfiguration<T, TGroup>
 
     public PivotGroupingConfiguration<T, TGroup> GroupBy<TSelected>(
         WorkspaceState state,
-        Expression<Func<T, TSelected>> selector
+        Expression<Func<T, TSelected>> selector,
+        IHierarchicalDimensionCache hierarchicalDimensionCache,
+        IHierarchicalDimensionOptions hierarchicalDimensionOptions
     )
     {
-        var reportRowGroupConfig = CreateReportGroupConfig(state, selector);
+        var reportRowGroupConfig = CreateReportGroupConfig(
+            state,
+            selector,
+            hierarchicalDimensionCache,
+            hierarchicalDimensionOptions
+        );
         return this with { ConfigItems = PrependGrouping(reportRowGroupConfig) };
     }
 
     private PivotGroupingConfigItem<T, TGroup> CreateReportGroupConfig<TSelected>(
         WorkspaceState state,
-        Expression<Func<T, TSelected>> selector
+        Expression<Func<T, TSelected>> selector,
+        IHierarchicalDimensionCache hierarchicalDimensionCache,
+        IHierarchicalDimensionOptions hierarchicalDimensionOptions
     )
     {
-        return new(PivotGroupingExtensions<TGroup>.GetPivotGrouper(state, null, null, selector));
+        return new(
+            PivotGroupingExtensions<TGroup>.GetPivotGrouper(
+                state,
+                hierarchicalDimensionCache,
+                hierarchicalDimensionOptions,
+                selector
+            )
+        );
     }
 
     protected ImmutableList<PivotGroupingConfigItem<T, TGroup>> PrependGrouping(
