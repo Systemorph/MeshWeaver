@@ -84,9 +84,7 @@ public class SignalRBasicTest : TestBase, IClassFixture<WebApplicationFactory<Pr
 
         onMessageReceivedSubscription = Connection.On<MessageDelivery<RawJson>>("HandleEvent", args =>
         {
-            // HACK V10: one more hack while having issues with deserialization of addresses (2023/09/27, Dmitry Kalabin)
-            var delivery = args with { Target = ClientAddress, Sender = ApplicationAddress, };
-            MessageReceived?.Invoke(delivery);
+            MessageReceived?.Invoke(args);
         });
     }
 
