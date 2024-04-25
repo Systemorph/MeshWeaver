@@ -50,7 +50,11 @@ namespace OpenSmc.Pivot.Builder
 
         public TPivotBuilder WithState(WorkspaceState state)
         {
-            return (TPivotBuilder)this with { State = state };
+            return (TPivotBuilder)this with
+            {
+                State = state,
+                HierarchicalDimensionCache = new HierarchicalDimensionCache(state)
+            };
         }
 
         public virtual TPivotBuilder Transpose<TValue>()

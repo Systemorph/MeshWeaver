@@ -75,7 +75,7 @@ namespace OpenSmc.Pivot.Grouping
             while (hierarchy.Level > level)
                 hierarchy = hierarchicalDimensionCache.Get<TDimension>(hierarchy.ParentId);
 
-            return hierarchy.Element;
+            return hierarchy.Id;
         }
     }
 

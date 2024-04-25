@@ -26,7 +26,15 @@ public record PivotBuilder<T, TIntermediate, TAggregate>
         Expression<Func<T, TSelected>> selector
     )
     {
-        return this with { RowGroupConfig = RowGroupConfig.GroupBy(State, selector) };
+        return this with
+        {
+            RowGroupConfig = RowGroupConfig.GroupBy(
+                State,
+                selector,
+                HierarchicalDimensionCache,
+                HierarchicalDimensionOptions
+            )
+        };
     }
 
     public PivotBuilder<T, TIntermediate, TAggregate> GroupColumnsBy<TSelected>(
@@ -41,7 +49,12 @@ public record PivotBuilder<T, TIntermediate, TAggregate>
 
         return ret with
         {
-            ColumnGroupConfig = ColumnGroupConfig.GroupBy(State, selector)
+            ColumnGroupConfig = ColumnGroupConfig.GroupBy(
+                State,
+                selector,
+                HierarchicalDimensionCache,
+                HierarchicalDimensionOptions
+            )
         };
     }
 
