@@ -143,7 +143,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Charting.Test", "te
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Charting.Pivot.Test", "test\OpenSmc.Charting.Pivot.Test\OpenSmc.Charting.Pivot.Test.csproj", "{F1320357-8306-4633-A651-D8C190AF1189}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Northwind", "src\OpenSmc.Northwind\OpenSmc.Northwind.csproj", "{8466850B-5D40-471A-A305-4E89BA721931}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Northwind", "samples\OpenSmc.Northwind\OpenSmc.Northwind.csproj", "{8466850B-5D40-471A-A305-4E89BA721931}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
