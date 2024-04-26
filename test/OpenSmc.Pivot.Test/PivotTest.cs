@@ -4,6 +4,7 @@ using OpenSmc.Collections;
 using OpenSmc.Data;
 using OpenSmc.DataCubes;
 using OpenSmc.Hub.Fixture;
+using OpenSmc.Messaging;
 using OpenSmc.Pivot.Aggregations;
 using OpenSmc.Pivot.Builder;
 using OpenSmc.Pivot.Models;
@@ -37,6 +38,36 @@ public class PivotTest : HubTestBase
         : base(output)
     {
         Services.AddScopes();
+    }
+
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureHost(configuration)
+            .AddData(data =>
+                data.FromConfigurableDataSource(
+                    "TestData",
+                    dataSource =>
+                        dataSource
+                            .WithType<TestHierarchicalDimensionA>(type =>
+                                type.WithInitialData(TestHierarchicalDimensionA.Data)
+                            )
+                            .WithType<TestHierarchicalDimensionB>(type =>
+                                type.WithInitialData(TestHierarchicalDimensionB.Data)
+                            )
+                            .WithType<ValueWithHierarchicalDimension>(type =>
+                                type.WithInitialData(ValueWithHierarchicalDimension.Data)
+                            )
+                            .WithType<ValueWithAggregateByHierarchicalDimension>(type =>
+                                type.WithInitialData(ValueWithAggregateByHierarchicalDimension.Data)
+                            )
+                            .WithType<ValueWithMixedDimensions>(type =>
+                                type.WithInitialData(ValueWithMixedDimensions.Data)
+                            )
+                            .WithType<ValueWithTwoHierarchicalDimensions>(type =>
+                                type.WithInitialData(ValueWithTwoHierarchicalDimensions.Data)
+                            )
+                )
+            );
     }
 
     private async Task<WorkspaceState> GetStateAsync()
