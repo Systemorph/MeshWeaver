@@ -2,4 +2,5 @@
 
 public class GroupsSubscriptions<TIdentity>
 {
+    private readonly AsyncLock @lock = new();
 }
