@@ -4,10 +4,10 @@ var __publicField = (obj, key, value) => {
   __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
   return value;
 };
-import { Subscription, Observable, filter, mergeMap, from, map, identity, pairwise, Subject, of } from "rxjs";
+import { Subscription, Observable, filter, mergeMap, from, map, identity, pairwise, Subject, take, of } from "rxjs";
 import { methodName } from "./contract.mjs";
 import { immerable, isDraftable, produce, isDraft, current, enablePatches, applyPatches } from "immer";
-import { trimStart, set, isEmpty, identity as identity$1, keyBy, isEqual, cloneDeepWith, assign, mapValues, isFunction } from "lodash-es";
+import { trimStart, set, isEmpty, keyBy, isEqual, cloneDeepWith, assign, mapValues, isFunction } from "lodash-es";
 Subscription.prototype.toJSON = (key) => {
   return {};
 };
@@ -48,15 +48,15 @@ class Request {
     this.responseType = responseType;
   }
 }
-var __defProp$c = Object.defineProperty;
-var __getOwnPropDesc$c = Object.getOwnPropertyDescriptor;
-var __decorateClass$c = (decorators, target, key, kind) => {
-  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$c(target, key) : target;
+var __defProp$h = Object.defineProperty;
+var __getOwnPropDesc$h = Object.getOwnPropertyDescriptor;
+var __decorateClass$h = (decorators, target, key, kind) => {
+  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$h(target, key) : target;
   for (var i = decorators.length - 1, decorator; i >= 0; i--)
     if (decorator = decorators[i])
       result = (kind ? decorator(target, key, result) : decorator(result)) || result;
   if (kind && result)
-    __defProp$c(target, key, result);
+    __defProp$h(target, key, result);
   return result;
 };
 let DataChangedEvent = class {
@@ -71,18 +71,18 @@ let DataChangedEvent = class {
   //     return new DataChangedEvent(deserialize(reference), change, changeType);
   // }
 };
-DataChangedEvent = __decorateClass$c([
+DataChangedEvent = __decorateClass$h([
   type("OpenSmc.Data.DataChangedEvent")
 ], DataChangedEvent);
-var __defProp$b = Object.defineProperty;
-var __getOwnPropDesc$b = Object.getOwnPropertyDescriptor;
-var __decorateClass$b = (decorators, target, key, kind) => {
-  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$b(target, key) : target;
+var __defProp$g = Object.defineProperty;
+var __getOwnPropDesc$g = Object.getOwnPropertyDescriptor;
+var __decorateClass$g = (decorators, target, key, kind) => {
+  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$g(target, key) : target;
   for (var i = decorators.length - 1, decorator; i >= 0; i--)
     if (decorator = decorators[i])
       result = (kind ? decorator(target, key, result) : decorator(result)) || result;
   if (kind && result)
-    __defProp$b(target, key, result);
+    __defProp$g(target, key, result);
   return result;
 };
 let SubscribeRequest = class extends Request {
@@ -91,40 +91,18 @@ let SubscribeRequest = class extends Request {
     this.reference = reference;
   }
 };
-SubscribeRequest = __decorateClass$b([
+SubscribeRequest = __decorateClass$g([
   type("OpenSmc.Data.SubscribeRequest")
 ], SubscribeRequest);
-class WorkspaceReference {
-}
-var __defProp$a = Object.defineProperty;
-var __getOwnPropDesc$a = Object.getOwnPropertyDescriptor;
-var __decorateClass$a = (decorators, target, key, kind) => {
-  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$a(target, key) : target;
+var __defProp$f = Object.defineProperty;
+var __getOwnPropDesc$f = Object.getOwnPropertyDescriptor;
+var __decorateClass$f = (decorators, target, key, kind) => {
+  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$f(target, key) : target;
   for (var i = decorators.length - 1, decorator; i >= 0; i--)
     if (decorator = decorators[i])
       result = (kind ? decorator(target, key, result) : decorator(result)) || result;
   if (kind && result)
-    __defProp$a(target, key, result);
-  return result;
-};
-let LayoutAreaReference = class extends WorkspaceReference {
-  constructor(area) {
-    super();
-    this.area = area;
-  }
-};
-LayoutAreaReference = __decorateClass$a([
-  type("OpenSmc.Data.LayoutAreaReference")
-], LayoutAreaReference);
-var __defProp$9 = Object.defineProperty;
-var __getOwnPropDesc$9 = Object.getOwnPropertyDescriptor;
-var __decorateClass$9 = (decorators, target, key, kind) => {
-  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$9(target, key) : target;
-  for (var i = decorators.length - 1, decorator; i >= 0; i--)
-    if (decorator = decorators[i])
-      result = (kind ? decorator(target, key, result) : decorator(result)) || result;
-  if (kind && result)
-    __defProp$9(target, key, result);
+    __defProp$f(target, key, result);
   return result;
 };
 let DataChangeResponse = class {
@@ -132,7 +110,7 @@ let DataChangeResponse = class {
     this.status = status;
   }
 };
-DataChangeResponse = __decorateClass$9([
+DataChangeResponse = __decorateClass$f([
   type("OpenSmc.Data.DataChangeResponse")
 ], DataChangeResponse);
 class DataChangeRequest extends Request {
@@ -140,15 +118,15 @@ class DataChangeRequest extends Request {
     super(DataChangeResponse);
   }
 }
-var __defProp$8 = Object.defineProperty;
-var __getOwnPropDesc$8 = Object.getOwnPropertyDescriptor;
-var __decorateClass$8 = (decorators, target, key, kind) => {
-  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$8(target, key) : target;
+var __defProp$e = Object.defineProperty;
+var __getOwnPropDesc$e = Object.getOwnPropertyDescriptor;
+var __decorateClass$e = (decorators, target, key, kind) => {
+  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$e(target, key) : target;
   for (var i = decorators.length - 1, decorator; i >= 0; i--)
     if (decorator = decorators[i])
       result = (kind ? decorator(target, key, result) : decorator(result)) || result;
   if (kind && result)
-    __defProp$8(target, key, result);
+    __defProp$e(target, key, result);
   return result;
 };
 let PatchChangeRequest = class extends DataChangeRequest {
@@ -159,11 +137,11 @@ let PatchChangeRequest = class extends DataChangeRequest {
     this.change = change;
   }
 };
-PatchChangeRequest = __decorateClass$8([
+PatchChangeRequest = __decorateClass$e([
   type("OpenSmc.Data.PatchChangeRequest")
 ], PatchChangeRequest);
 const messageOfType = (ctor) => (envelope) => envelope.message instanceof ctor;
-const pack = (envelope) => (message) => ({ ...envelope, message });
+const pack = (envelope = {}) => (message) => ({ ...envelope, message });
 const handleRequest = (requestType, handler) => (source) => source.pipe(filter(messageOfType(requestType))).pipe(
   mergeMap(
     ({ id, message }) => from(handler(message)).pipe(
@@ -1570,15 +1548,17 @@ function toImmerPatch(patch) {
     value
   };
 }
-var __defProp$7 = Object.defineProperty;
-var __getOwnPropDesc$7 = Object.getOwnPropertyDescriptor;
-var __decorateClass$7 = (decorators, target, key, kind) => {
-  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$7(target, key) : target;
+class WorkspaceReference {
+}
+var __defProp$d = Object.defineProperty;
+var __getOwnPropDesc$d = Object.getOwnPropertyDescriptor;
+var __decorateClass$d = (decorators, target, key, kind) => {
+  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$d(target, key) : target;
   for (var i = decorators.length - 1, decorator; i >= 0; i--)
     if (decorator = decorators[i])
       result = (kind ? decorator(target, key, result) : decorator(result)) || result;
   if (kind && result)
-    __defProp$7(target, key, result);
+    __defProp$d(target, key, result);
   return result;
 };
 let EntityReference = class extends WorkspaceReference {
@@ -1588,18 +1568,18 @@ let EntityReference = class extends WorkspaceReference {
     this.id = id;
   }
 };
-EntityReference = __decorateClass$7([
+EntityReference = __decorateClass$d([
   type("OpenSmc.Data.EntityReference")
 ], EntityReference);
-var __defProp$6 = Object.defineProperty;
-var __getOwnPropDesc$6 = Object.getOwnPropertyDescriptor;
-var __decorateClass$6 = (decorators, target, key, kind) => {
-  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$6(target, key) : target;
+var __defProp$c = Object.defineProperty;
+var __getOwnPropDesc$c = Object.getOwnPropertyDescriptor;
+var __decorateClass$c = (decorators, target, key, kind) => {
+  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$c(target, key) : target;
   for (var i = decorators.length - 1, decorator; i >= 0; i--)
     if (decorator = decorators[i])
       result = (kind ? decorator(target, key, result) : decorator(result)) || result;
   if (kind && result)
-    __defProp$6(target, key, result);
+    __defProp$c(target, key, result);
   return result;
 };
 let CollectionReference = class extends WorkspaceReference {
@@ -1608,23 +1588,23 @@ let CollectionReference = class extends WorkspaceReference {
     this.collection = collection;
   }
 };
-CollectionReference = __decorateClass$6([
+CollectionReference = __decorateClass$c([
   type("OpenSmc.Data.CollectionReference")
 ], CollectionReference);
-var __defProp$5 = Object.defineProperty;
-var __getOwnPropDesc$5 = Object.getOwnPropertyDescriptor;
-var __decorateClass$5 = (decorators, target, key, kind) => {
-  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$5(target, key) : target;
+var __defProp$b = Object.defineProperty;
+var __getOwnPropDesc$b = Object.getOwnPropertyDescriptor;
+var __decorateClass$b = (decorators, target, key, kind) => {
+  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$b(target, key) : target;
   for (var i = decorators.length - 1, decorator; i >= 0; i--)
     if (decorator = decorators[i])
       result = (kind ? decorator(target, key, result) : decorator(result)) || result;
   if (kind && result)
-    __defProp$5(target, key, result);
+    __defProp$b(target, key, result);
   return result;
 };
 let EntireWorkspace = class extends WorkspaceReference {
 };
-EntireWorkspace = __decorateClass$5([
+EntireWorkspace = __decorateClass$b([
   type("OpenSmc.Data.EntireWorkspace")
 ], EntireWorkspace);
 class PathReference extends WorkspaceReference {
@@ -2382,15 +2362,15 @@ function getReferencePath(reference) {
   }
   throw `Cannot get path for reference ${reference}`;
 }
-var __defProp$4 = Object.defineProperty;
-var __getOwnPropDesc$4 = Object.getOwnPropertyDescriptor;
-var __decorateClass$4 = (decorators, target, key, kind) => {
-  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$4(target, key) : target;
+var __defProp$a = Object.defineProperty;
+var __getOwnPropDesc$a = Object.getOwnPropertyDescriptor;
+var __decorateClass$a = (decorators, target, key, kind) => {
+  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$a(target, key) : target;
   for (var i = decorators.length - 1, decorator; i >= 0; i--)
     if (decorator = decorators[i])
       result = (kind ? decorator(target, key, result) : decorator(result)) || result;
   if (kind && result)
-    __defProp$4(target, key, result);
+    __defProp$a(target, key, result);
   return result;
 };
 let JsonPathReference = class extends WorkspaceReference {
@@ -2399,7 +2379,7 @@ let JsonPathReference = class extends WorkspaceReference {
     this.path = path;
   }
 };
-JsonPathReference = __decorateClass$4([
+JsonPathReference = __decorateClass$a([
   type("OpenSmc.Data.JsonPathReference")
 ], JsonPathReference);
 function _callSuper(t, o, e) {
@@ -3194,12 +3174,71 @@ class Workspace extends Observable {
     return this.store.getState();
   }
 }
-const pathToUpdateAction = (path) => (value) => updateByReferenceActionCreator(
-  {
-    reference: new PathReference(path),
-    value
+var __defProp$9 = Object.defineProperty;
+var __getOwnPropDesc$9 = Object.getOwnPropertyDescriptor;
+var __decorateClass$9 = (decorators, target, key, kind) => {
+  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$9(target, key) : target;
+  for (var i = decorators.length - 1, decorator; i >= 0; i--)
+    if (decorator = decorators[i])
+      result = (kind ? decorator(target, key, result) : decorator(result)) || result;
+  if (kind && result)
+    __defProp$9(target, key, result);
+  return result;
+};
+let UnsubscribeDataRequest = class {
+  constructor(reference) {
+    this.reference = reference;
   }
-);
+};
+UnsubscribeDataRequest = __decorateClass$9([
+  type("OpenSmc.Data.UnsubscribeDataRequest")
+], UnsubscribeDataRequest);
+var __defProp$8 = Object.defineProperty;
+var __getOwnPropDesc$8 = Object.getOwnPropertyDescriptor;
+var __decorateClass$8 = (decorators, target, key, kind) => {
+  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$8(target, key) : target;
+  for (var i = decorators.length - 1, decorator; i >= 0; i--)
+    if (decorator = decorators[i])
+      result = (kind ? decorator(target, key, result) : decorator(result)) || result;
+  if (kind && result)
+    __defProp$8(target, key, result);
+  return result;
+};
+let UiControl = class {
+};
+UiControl = __decorateClass$8([
+  type("OpenSmc.Layout.UiControl")
+], UiControl);
+var __defProp$7 = Object.defineProperty;
+var __getOwnPropDesc$7 = Object.getOwnPropertyDescriptor;
+var __decorateClass$7 = (decorators, target, key, kind) => {
+  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$7(target, key) : target;
+  for (var i = decorators.length - 1, decorator; i >= 0; i--)
+    if (decorator = decorators[i])
+      result = (kind ? decorator(target, key, result) : decorator(result)) || result;
+  if (kind && result)
+    __defProp$7(target, key, result);
+  return result;
+};
+let HtmlControl = class extends UiControl {
+  constructor(data) {
+    super();
+    this.data = data;
+  }
+};
+HtmlControl = __decorateClass$7([
+  type("OpenSmc.Layout.HtmlControl")
+], HtmlControl);
+class Layout {
+  constructor() {
+    __publicField(this, "views", {});
+  }
+  addView(area, control) {
+    this.views[area] = control;
+    return this;
+  }
+}
+const uiControlType = UiControl.$type;
 /*!
  * https://github.com/Starcounter-Jack/JSON-Patch
  * (c) 2017-2022 Joachim Wester
@@ -3836,15 +3875,15 @@ Object.assign({}, core, duplex, {
   escapePathComponent,
   unescapePathComponent
 });
-var __defProp$3 = Object.defineProperty;
-var __getOwnPropDesc$3 = Object.getOwnPropertyDescriptor;
-var __decorateClass$3 = (decorators, target, key, kind) => {
-  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$3(target, key) : target;
+var __defProp$6 = Object.defineProperty;
+var __getOwnPropDesc$6 = Object.getOwnPropertyDescriptor;
+var __decorateClass$6 = (decorators, target, key, kind) => {
+  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$6(target, key) : target;
   for (var i = decorators.length - 1, decorator; i >= 0; i--)
     if (decorator = decorators[i])
       result = (kind ? decorator(target, key, result) : decorator(result)) || result;
   if (kind && result)
-    __defProp$3(target, key, result);
+    __defProp$6(target, key, result);
   return result;
 };
 let JsonPatch = class {
@@ -3861,21 +3900,72 @@ let JsonPatch = class {
   //     return new JsonPatch(operations);
   // }
 };
-JsonPatch = __decorateClass$3([
+JsonPatch = __decorateClass$6([
   type("Json.Patch.JsonPatch")
 ], JsonPatch);
-const toChangeStream = (reference) => (source) => source.pipe(pairwise()).pipe(
-  map(([a, b]) => {
-    if (a === void 0) {
-      return new DataChangedEvent(reference, b, "Full");
-    }
-    const operations = compare(a, b);
-    if (!isEmpty(operations)) {
-      return new DataChangedEvent(reference, new JsonPatch(operations), "Patch");
-    }
-  }),
-  filter(identity$1)
+const toJsonPatch = () => (source) => source.pipe(pairwise()).pipe(
+  map(([a, b]) => compare(a, b)),
+  filter((operations) => !isEmpty(operations)),
+  map((operations) => new JsonPatch(operations))
 );
+var __defProp$5 = Object.defineProperty;
+var __getOwnPropDesc$5 = Object.getOwnPropertyDescriptor;
+var __decorateClass$5 = (decorators, target, key, kind) => {
+  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$5(target, key) : target;
+  for (var i = decorators.length - 1, decorator; i >= 0; i--)
+    if (decorator = decorators[i])
+      result = (kind ? decorator(target, key, result) : decorator(result)) || result;
+  if (kind && result)
+    __defProp$5(target, key, result);
+  return result;
+};
+let TextBoxControl = class extends UiControl {
+  constructor(data) {
+    super();
+    this.data = data;
+  }
+};
+TextBoxControl = __decorateClass$5([
+  type("OpenSmc.Layout.TextBoxControl")
+], TextBoxControl);
+var __defProp$4 = Object.defineProperty;
+var __getOwnPropDesc$4 = Object.getOwnPropertyDescriptor;
+var __decorateClass$4 = (decorators, target, key, kind) => {
+  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$4(target, key) : target;
+  for (var i = decorators.length - 1, decorator; i >= 0; i--)
+    if (decorator = decorators[i])
+      result = (kind ? decorator(target, key, result) : decorator(result)) || result;
+  if (kind && result)
+    __defProp$4(target, key, result);
+  return result;
+};
+let Binding = class {
+  /**
+   * @param path JsonPath string
+   */
+  constructor(path) {
+    this.path = path;
+  }
+};
+Binding = __decorateClass$4([
+  type("OpenSmc.Layout.DataBinding.Binding")
+], Binding);
+var __defProp$3 = Object.defineProperty;
+var __getOwnPropDesc$3 = Object.getOwnPropertyDescriptor;
+var __decorateClass$3 = (decorators, target, key, kind) => {
+  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$3(target, key) : target;
+  for (var i = decorators.length - 1, decorator; i >= 0; i--)
+    if (decorator = decorators[i])
+      result = (kind ? decorator(target, key, result) : decorator(result)) || result;
+  if (kind && result)
+    __defProp$3(target, key, result);
+  return result;
+};
+let LayoutStackControl = class extends UiControl {
+};
+LayoutStackControl = __decorateClass$3([
+  type("OpenSmc.Layout.Composition.LayoutStackControl")
+], LayoutStackControl);
 var __defProp$2 = Object.defineProperty;
 var __getOwnPropDesc$2 = Object.getOwnPropertyDescriptor;
 var __decorateClass$2 = (decorators, target, key, kind) => {
@@ -3887,67 +3977,16 @@ var __decorateClass$2 = (decorators, target, key, kind) => {
     __defProp$2(target, key, result);
   return result;
 };
-let UnsubscribeDataRequest = class {
-  constructor(reference) {
-    this.reference = reference;
-  }
+let ItemTemplateControl = class extends UiControl {
 };
-UnsubscribeDataRequest = __decorateClass$2([
-  type("OpenSmc.Data.UnsubscribeDataRequest")
-], UnsubscribeDataRequest);
-var __defProp$1 = Object.defineProperty;
-var __getOwnPropDesc$1 = Object.getOwnPropertyDescriptor;
-var __decorateClass$1 = (decorators, target, key, kind) => {
-  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$1(target, key) : target;
-  for (var i = decorators.length - 1, decorator; i >= 0; i--)
-    if (decorator = decorators[i])
-      result = (kind ? decorator(target, key, result) : decorator(result)) || result;
-  if (kind && result)
-    __defProp$1(target, key, result);
-  return result;
-};
-let UiControl = class {
-};
-UiControl = __decorateClass$1([
-  type("OpenSmc.Layout.UiControl")
-], UiControl);
-var __defProp2 = Object.defineProperty;
-var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-var __decorateClass = (decorators, target, key, kind) => {
-  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc(target, key) : target;
-  for (var i = decorators.length - 1, decorator; i >= 0; i--)
-    if (decorator = decorators[i])
-      result = (kind ? decorator(target, key, result) : decorator(result)) || result;
-  if (kind && result)
-    __defProp2(target, key, result);
-  return result;
-};
-let HtmlControl = class extends UiControl {
-  constructor(data) {
-    super();
-    this.data = data;
-  }
-};
-HtmlControl = __decorateClass([
-  type("OpenSmc.Layout.HtmlControl")
-], HtmlControl);
-class Layout {
-  constructor() {
-    __publicField(this, "views", /* @__PURE__ */ new Map());
-  }
-  addView(area, control) {
-    this.views.set(area, control);
-    return this;
-  }
-  render(workspace, reference) {
-    const ret = new Workspace({ reference, collections: {} });
-    workspace.pipe(map(pathToUpdateAction("/collections"))).subscribe(ret);
-    return ret;
-  }
-}
+ItemTemplateControl = __decorateClass$2([
+  type("OpenSmc.Layout.ItemTemplateControl")
+], ItemTemplateControl);
 const todos = [
-  { name: "Go shopping", completed: false },
-  { name: "Cleanup the desk", completed: false }
+  { id: "1", name: "Task 1", status: "new" },
+  { id: "2", name: "Task 2", status: "new" },
+  { id: "3", name: "Task 3", status: "completed" },
+  { id: "4", name: "Task 4", status: "completed" }
 ];
 class SamplesServer extends Observable {
   constructor() {
@@ -3956,28 +3995,34 @@ class SamplesServer extends Observable {
     __publicField(this, "input", new Subject());
     __publicField(this, "output", new Subject());
     __publicField(this, "data", new Workspace({
-      todos: keyBy(todos, "name")
+      todos: keyBy(todos, "id")
     }));
-    __publicField(this, "layout");
     __publicField(this, "subscribeRequestHandler", () => (message) => {
       const { reference } = message;
-      if (reference instanceof LayoutAreaReference) {
-        const entityStoreWorkspace = new Workspace();
-        const subscription = new Subscription();
-        subscription.add(
-          this.layout.render(this.data, reference).pipe(map(pathToUpdateAction(""))).subscribe(entityStoreWorkspace)
-        );
-        subscription.add(
-          this.input.pipe(filter(({ message: message2 }) => message2 instanceof PatchChangeRequest && isEqual(message2.reference, reference))).pipe(handleRequest(PatchChangeRequest, this.handlePatchChangeRequest(entityStoreWorkspace))).subscribe(this.output)
-        );
-        subscription.add(
-          this.input.pipe(filter(({ message: message2 }) => message2 instanceof UnsubscribeDataRequest && isEqual(message2.reference, reference))).subscribe((request) => {
-            subscription.unsubscribe();
-          })
-        );
-        this.subscription.add(subscription);
-        return entityStoreWorkspace.pipe(toChangeStream(reference));
-      }
+      const subscription = new Subscription();
+      const entityStore = this.render(reference, subscription);
+      subscription.add(
+        this.input.pipe(filter(({ message: message2 }) => message2 instanceof PatchChangeRequest && isEqual(message2.reference, reference))).pipe(handleRequest(PatchChangeRequest, this.handlePatchChangeRequest(entityStore))).subscribe(this.output)
+      );
+      subscription.add(
+        this.input.pipe(filter(({ message: message2 }) => message2 instanceof UnsubscribeDataRequest && isEqual(message2.reference, reference))).subscribe((request) => {
+          subscription.unsubscribe();
+        })
+      );
+      const change$ = entityStore.pipe(toJsonPatch()).pipe(
+        map(
+          (patch) => new DataChangedEvent(reference, patch, "Patch")
+        )
+      );
+      subscription.add(
+        change$.pipe(map(pack())).subscribe(this.output)
+      );
+      this.subscription.add(subscription);
+      return entityStore.pipe(take(1)).pipe(
+        map(
+          (value) => new DataChangedEvent(reference, value, "Full")
+        )
+      );
     });
     __publicField(this, "handlePatchChangeRequest", (workspace) => (message) => {
       workspace.next(jsonPatchActionCreator(message.change));
@@ -3986,7 +4031,6 @@ class SamplesServer extends Observable {
     this.subscription.add(
       this.input.pipe(handleRequest(SubscribeRequest, this.subscribeRequestHandler())).subscribe(this.output)
     );
-    this.layout = new Layout().addView("Main", new HtmlControl("Hello world"));
   }
   complete() {
   }
@@ -3994,6 +4038,44 @@ class SamplesServer extends Observable {
   }
   next(value) {
     this.input.next(value);
+  }
+  render(reference, subscription) {
+    const layout = this.getLayout();
+    const entityStore = new Workspace(
+      {
+        reference,
+        collections: {
+          [uiControlType]: layout.views,
+          todos: this.data.getState().todos
+        }
+      }
+    );
+    return entityStore;
+  }
+  getLayout() {
+    const textBox = new TextBoxControl(new Binding("$.name"));
+    textBox.dataContext = new EntityReference("todos", "1");
+    const html = new HtmlControl(new Binding("$.name"));
+    html.dataContext = new EntityReference("todos", "1");
+    const stack = new LayoutStackControl();
+    stack.areas = [
+      new EntityReference(uiControlType, "/main/todos"),
+      new EntityReference(uiControlType, "/main/textBox")
+    ];
+    const todos2 = new ItemTemplateControl();
+    const todoItem = new LayoutStackControl();
+    todoItem.areas = [
+      new EntityReference(uiControlType, "/main/todo/name"),
+      new EntityReference(uiControlType, "/main/todo/status")
+    ];
+    todoItem.skin = "HorizontalPanel";
+    todos2.data = new Binding("$");
+    todos2.dataContext = new CollectionReference("todos");
+    todos2.view = todoItem;
+    const name = new HtmlControl(new Binding("$.name"));
+    const status = new HtmlControl(new Binding("$.status"));
+    const layout = new Layout().addView("/main/textBox", textBox).addView("/main/todos", todos2).addView("/main/todo", todoItem).addView("/main/todo/name", name).addView("/main/todo/status", status).addView("/main", stack);
+    return layout;
   }
 }
 const isDeserializable = (value) => (value == null ? void 0 : value.$type) !== void 0;
@@ -4051,6 +4133,42 @@ class SerializationMiddleware extends Observable {
     setTimeout(() => this.hub.next(serialize(value)));
   }
 }
+var __defProp$1 = Object.defineProperty;
+var __getOwnPropDesc$1 = Object.getOwnPropertyDescriptor;
+var __decorateClass$1 = (decorators, target, key, kind) => {
+  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$1(target, key) : target;
+  for (var i = decorators.length - 1, decorator; i >= 0; i--)
+    if (decorator = decorators[i])
+      result = (kind ? decorator(target, key, result) : decorator(result)) || result;
+  if (kind && result)
+    __defProp$1(target, key, result);
+  return result;
+};
+let EntityStore = class {
+};
+EntityStore = __decorateClass$1([
+  type("OpenSmc.Data.EntityStore")
+], EntityStore);
+var __defProp2 = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __decorateClass = (decorators, target, key, kind) => {
+  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc(target, key) : target;
+  for (var i = decorators.length - 1, decorator; i >= 0; i--)
+    if (decorator = decorators[i])
+      result = (kind ? decorator(target, key, result) : decorator(result)) || result;
+  if (kind && result)
+    __defProp2(target, key, result);
+  return result;
+};
+let LayoutAreaReference = class extends WorkspaceReference {
+  constructor(area) {
+    super();
+    this.area = area;
+  }
+};
+LayoutAreaReference = __decorateClass([
+  type("OpenSmc.Data.LayoutAreaReference")
+], LayoutAreaReference);
 function samplesServerPlugin() {
   return {
     name: "samplesServer",

@@ -3,6 +3,7 @@ import { WebSocketClientHub } from "./WebSocketClientHub";
 import { connect } from "@open-smc/messaging/src/middleware/connect";
 import { SamplesServer } from "./SamplesServer";
 import { SerializationMiddleware } from "@open-smc/middleware/src/SerializationMiddleware";
+import "@open-smc/data/src/contract";
 
 export function samplesServerPlugin() {
     return {

@@ -10,6 +10,6 @@ export class Binding {
 }
 
 export type ValueOrBinding<T = unknown> = Binding |
-    T extends object ? {[TKey in keyof T]: ValueOrBinding<T[TKey]>} : T;
+    (T extends object ? {[TKey in keyof T]: ValueOrBinding<T[TKey]>} : T);
 
 export const isBinding = (value: unknown): value is Binding => value instanceof Binding;
