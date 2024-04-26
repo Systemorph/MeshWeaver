@@ -8,7 +8,7 @@ using Orleans.Streams;
 
 namespace OpenSmc.Application.SignalR;
 
-public class ApplicationHub(IClusterClient clusterClient, IHubContext<ApplicationHub> hubContext, ILogger<ApplicationHub> logger) : Hub
+public class ApplicationHub(IClusterClient clusterClient, IHubContext<ApplicationHub> hubContext, GroupsSubscriptions<string> subscriptions, ILogger<ApplicationHub> logger) : Hub
 {
     public const string HandleEvent = nameof(HandleEvent); // TODO V10: This name is to be clarified with Ui side (2024/04/17, Dmitry Kalabin)
 
