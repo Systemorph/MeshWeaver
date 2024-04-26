@@ -172,12 +172,19 @@ namespace OpenSmc.Reporting
 
         public static IReadOnlyCollection<ColDef> Modify(
             this IReadOnlyCollection<ColDef> definitions,
-            object id,
+            string systemNameRegex,
             Func<ColDef, ColDef> definitionModifier
         )
         {
             return definitions.Modify(
-                x => object.Equals(x is ColGroupDef g ? g.GroupId : x.ColId, id),
+                x =>
+                    Regex
+                        .Match(
+                            x is ColGroupDef g ? g.GroupId.ToString() : x.ColId.ToString(),
+                            systemNameRegex ?? string.Empty,
+                            RegexOptions.IgnoreCase
+                        )
+                        .Success,
                 definitionModifier
             );
         }
