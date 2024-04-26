@@ -1,4 +1,4 @@
-import { filter, map, Observable, Observer, of, Subject, Subscription } from "rxjs";
+import { filter, map, Observable, Observer, of, skip, Subject, Subscription, take } from "rxjs";
 import { MessageDelivery } from "@open-smc/messaging/src/api/MessageDelivery";
 import { SubscribeRequest } from "@open-smc/data/src/contract/SubscribeRequest.ts";
 import { LayoutAreaReference } from "@open-smc/data/src/contract/LayoutAreaReference.ts";
@@ -7,18 +7,27 @@ import { isEqual, keyBy } from "lodash-es";
 import { handleRequest } from "@open-smc/messaging/src/handleRequest.ts";
 import { Workspace } from "@open-smc/data/src/Workspace.ts";
 import { EntityStore } from "@open-smc/data/src/contract/EntityStore.ts";
-import { Collection } from "@open-smc/data/src/contract/Collection.ts";
-import { pathToUpdateAction } from "@open-smc/data/src/operators/pathToUpdateAction.ts";
-import { toChangeStream } from "@open-smc/data/src/operators/toChangeStream.ts";
 import { DataChangeResponse } from "@open-smc/data/src/contract/DataChangeResponse.ts";
 import { UnsubscribeDataRequest } from "@open-smc/data/src/contract/UnsubscribeDataRequest.ts";
 import { HtmlControl } from "@open-smc/layout/src/contract/controls/HtmlControl.ts";
-import { Layout } from "./Layout.ts";
+import { Layout, LayoutRenderer, uiControlType } from "./Layout.ts";
 import { jsonPatchActionCreator } from "@open-smc/data/src/jsonPatchReducer.ts";
+import { toJsonPatch } from "@open-smc/data/src/operators/toJsonPatch.ts";
+import { DataChangedEvent } from "@open-smc/data/src/contract/DataChangedEvent.ts";
+import { pack } from "@open-smc/messaging/src/operators/pack.ts";
+import { TextBoxControl } from "@open-smc/layout/src/contract/controls/TextBoxControl.ts";
+import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl.ts";
+import { Binding } from "@open-smc/data/src/contract/Binding.ts";
+import { EntityReference } from "@open-smc/data/src/contract/EntityReference.ts";
+import { LayoutStackControl } from "@open-smc/layout/src/contract/controls/LayoutStackControl.ts";
+import { ItemTemplateControl } from "@open-smc/layout/src/contract/controls/ItemTemplateControl.ts";
+import { CollectionReference } from "@open-smc/data/src/contract/CollectionReference.ts";
 
 const todos = [
-    {name: "Go shopping", completed: false},
-    {name: "Cleanup the desk", completed: false},
+    {id: "1", name: "Task 1", status: "new" },
+    {id: "2", name: "Task 2", status: "new" },
+    {id: "3", name: "Task 3", status: "completed"},
+    {id: "4", name: "Task 4", status: "completed"},
 ]
 
 export class SamplesServer extends Observable<MessageDelivery> implements Observer<MessageDelivery> {
@@ -27,10 +36,8 @@ export class SamplesServer extends Observable<MessageDelivery> implements Observ
     protected output = new Subject<MessageDelivery>();
 
     private data = new Workspace({
-        todos: keyBy(todos, 'name')
+        todos: keyBy(todos, 'id')
     });
-
-    private layout: Layout;
 
     constructor() {
         super(subscriber => this.output.subscribe(subscriber));
@@ -40,10 +47,6 @@ export class SamplesServer extends Observable<MessageDelivery> implements Observ
                 .pipe(handleRequest(SubscribeRequest, this.subscribeRequestHandler()))
                 .subscribe(this.output)
         );
-
-        this.layout =
-            new Layout()
-                .addView("Main", new HtmlControl("Hello world"));
     }
 
     complete() {
@@ -59,43 +62,122 @@ export class SamplesServer extends Observable<MessageDelivery> implements Observ
     subscribeRequestHandler = () =>
         (message: SubscribeRequest) => {
             const {reference} = message;
-            if (reference instanceof LayoutAreaReference) {
-                const entityStoreWorkspace = new Workspace<EntityStore>();
 
-                const subscription = new Subscription();
+            const subscription = new Subscription();
 
-                subscription.add(
-                    this.layout.render(this.data, reference as LayoutAreaReference)
-                        .pipe(map(pathToUpdateAction("")))
-                        .subscribe(entityStoreWorkspace)
-                );
+            const entityStore =
+                this.render(reference as LayoutAreaReference, subscription);
 
-                subscription.add(
-                    this.input
-                        .pipe(filter(({message}) =>
-                            message instanceof PatchChangeRequest && isEqual(message.reference, reference)))
-                        .pipe(handleRequest(PatchChangeRequest, this.handlePatchChangeRequest(entityStoreWorkspace)))
-                        .subscribe(this.output)
-                );
+            subscription.add(
+                this.input
+                    .pipe(filter(({message}) =>
+                        message instanceof PatchChangeRequest && isEqual(message.reference, reference)))
+                    .pipe(handleRequest(PatchChangeRequest, this.handlePatchChangeRequest(entityStore)))
+                    .subscribe(this.output)
+            );
 
-                subscription.add(
-                    this.input
-                        .pipe(filter(({message}) =>
-                            message instanceof UnsubscribeDataRequest && isEqual(message.reference, reference)))
-                        .subscribe(request => {
-                            subscription.unsubscribe();
-                        })
-                );
+            subscription.add(
+                this.input
+                    .pipe(filter(({message}) =>
+                        message instanceof UnsubscribeDataRequest && isEqual(message.reference, reference)))
+                    .subscribe(request => {
+                        subscription.unsubscribe();
+                    })
+            );
 
-                this.subscription.add(subscription);
+            const change$ =
+                entityStore
+                    .pipe(toJsonPatch())
+                    .pipe(
+                        map(
+                            patch =>
+                                new DataChangedEvent(reference, patch, "Patch")
+                        )
+                    );
 
-                return entityStoreWorkspace.pipe(toChangeStream(reference));
+            subscription.add(
+                change$
+                    .pipe(map(pack()))
+                    .subscribe(this.output)
+            );
+
+            this.subscription.add(subscription);
+
+            return entityStore
+                .pipe(take(1))
+                .pipe(
+                    map(
+                        value =>
+                            new DataChangedEvent(reference, value, "Full")
+                    )
+                )
+        }
+
+    private handlePatchChangeRequest =
+        (workspace: Workspace<EntityStore>) =>
+            (message: PatchChangeRequest) => {
+                workspace.next(jsonPatchActionCreator(message.change));
+                return of(new DataChangeResponse("Committed"));
             }
-        }
 
-    private handlePatchChangeRequest = (workspace: Workspace<EntityStore>) =>
-        (message: PatchChangeRequest) => {
-            workspace.next(jsonPatchActionCreator(message.change));
-            return of(new DataChangeResponse("Committed"));
-        }
+
+    private render(reference: LayoutAreaReference, subscription: Subscription) {
+        const layout = this.getLayout();
+
+        const entityStore =
+            new Workspace<EntityStore>(
+                {
+                    reference,
+                    collections: {
+                        [uiControlType]: layout.views,
+                        todos: this.data.getState().todos
+                    }
+                }
+            );
+
+        return entityStore;
+    }
+
+    private getLayout() {
+        const textBox = new TextBoxControl(new Binding("$.name"));
+        textBox.dataContext = new EntityReference("todos", "1");
+
+        const html = new HtmlControl(new Binding("$.name"));
+        html.dataContext = new EntityReference("todos", "1");
+
+        const stack = new LayoutStackControl();
+
+        stack.areas = [
+            new EntityReference(uiControlType, "/main/todos"),
+            new EntityReference(uiControlType, "/main/textBox"),
+        ];
+
+        const todos = new ItemTemplateControl();
+
+        const todoItem = new LayoutStackControl();
+
+        todoItem.areas = [
+            new EntityReference(uiControlType, "/main/todo/name"),
+            new EntityReference(uiControlType, "/main/todo/status")
+        ];
+
+        todoItem.skin = "HorizontalPanel";
+
+        todos.data = new Binding("$");
+        todos.dataContext = new CollectionReference("todos");
+        todos.view = todoItem;
+
+        const name = new HtmlControl(new Binding("$.name"))
+        const status = new HtmlControl(new Binding("$.status"))
+
+        const layout = new Layout()
+            .addView("/main/textBox", textBox)
+            .addView("/main/todos", todos)
+            .addView("/main/todo", todoItem)
+            .addView("/main/todo/name", name)
+            .addView("/main/todo/status", status)
+            .addView("/main", stack);
+
+        return layout;
+    }
 }

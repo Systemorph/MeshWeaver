@@ -8,7 +8,7 @@ import { useLocation } from "react-router-dom";
 export function SamplesPage() {
     const {pathname} = useLocation();
 
-    useEffect(() => startSynchronization(pathname), [pathname]);
+    useEffect(() => startSynchronization("/main"), [pathname]);
 
     return (
         <Provider store={appStore}>
