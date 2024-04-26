@@ -20,6 +20,7 @@ public static class SignalRExtensions
             {
                 o.PayloadSerializerOptions = hub.JsonSerializerOptions;
             });
+        services.AddSingleton<GroupsSubscriptions<string>>();
 
         return services;
     }
