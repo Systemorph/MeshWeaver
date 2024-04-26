@@ -37,6 +37,14 @@ namespace OpenSmc.Reporting.Test
                         "TestData",
                         dataSource =>
                             dataSource
+                                .WithType<LineOfBusiness>(type =>
+                                    type.WithInitialData(LineOfBusiness.Data)
+                                )
+                                .WithType<Country>(type => type.WithInitialData(Country.Data))
+                                .WithType<AmountType>(type => type.WithInitialData(AmountType.Data))
+                                .WithType<Scenario>(type => type.WithInitialData(Scenario.Data))
+                                .WithType<Split>(type => type.WithInitialData(Split.Data))
+                                .WithType<Currency>(type => type.WithInitialData(Currency.Data))
                                 .WithType<TestHierarchicalDimensionA>(type =>
                                     type.WithInitialData(TestHierarchicalDimensionA.Data)
                                 )

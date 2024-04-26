@@ -24,9 +24,13 @@ namespace OpenSmc.Reporting
 
         public bool TrueFor(GridRow gridRow)
         {
-            var ret =
-                gridRow.RowGroup.GrouperName is DimensionDescriptor dd
-                && dd.SystemName == dimension;
+            var ret = Regex
+                .Match(
+                    gridRow.RowGroup.GrouperName.ToString(),
+                    $"{dimension}[0-9]{{0,}}$",
+                    RegexOptions.IgnoreCase
+                )
+                .Success;
 
             return orConditions.Count == 0 ? ret : ret && orConditions.Any(x => x(gridRow));
         }

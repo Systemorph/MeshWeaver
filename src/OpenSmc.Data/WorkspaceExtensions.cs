@@ -18,8 +18,16 @@ public static class WorkspaceExtensions
     public static IReadOnlyCollection<T> GetData<T>(this IWorkspace workspace) =>
         workspace.State.GetData<T>();
 
-    public static T GetData<T>(this WorkspaceState state, object id) =>
-        (T)state.Reduce(new EntityReference(state.GetCollectionName(typeof(T)), id));
+    public static T GetData<T>(this WorkspaceState state, object id)
+    {
+        var collection = state.GetCollectionName(typeof(T));
+        if (collection == null)
+            throw new ArgumentException(
+                $"Type {typeof(T).Name} is not registered in the workspace",
+                nameof(T)
+            );
+        return (T)state.Reduce(new EntityReference(collection, id));
+    }
 
     public static T GetData<T>(this IWorkspace workspace, object id) =>
         workspace.State.GetData<T>(id);
