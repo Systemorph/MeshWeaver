@@ -121,23 +121,6 @@ namespace OpenSmc.Reporting.Test
             await gridOptions.Verify(fileName);
         }
 
-        [Fact]
-        public async Task SimpleReport()
-        {
-            var data = ValueWithHierarchicalDimension.Data.ToDataCube().RepeatOnce();
-
-            var gridOptions = PivotFactory
-                .ForDataCubes(data)
-                .WithState(await GetWorkspaceStateAsync())
-                .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
-                .ToTable()
-                .WithOptions(rm => rm.HideRowValuesForDimension("DimA", x => x.ForLevel(1)))
-                .WithOptions(o => o.AutoHeight())
-                .Execute();
-
-            await gridOptions.Verify("HierarchicalDimensionHideAggregation0.json");
-        }
-
         public static IEnumerable<object[]> ReportDataCubeCases()
         {
             yield return new ReportDataCubeTestCase<ValueWithHierarchicalDimension>(
