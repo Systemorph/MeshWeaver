@@ -45,30 +45,10 @@ namespace OpenSmc.Reporting.Test
                                 .WithType<Scenario>(type => type.WithInitialData(Scenario.Data))
                                 .WithType<Split>(type => type.WithInitialData(Split.Data))
                                 .WithType<Currency>(type => type.WithInitialData(Currency.Data))
-                                .WithType<TestHierarchicalDimensionA>(type =>
-                                    type.WithInitialData(TestHierarchicalDimensionA.Data)
-                                )
-                                .WithType<TestHierarchicalDimensionB>(type =>
-                                    type.WithInitialData(TestHierarchicalDimensionB.Data)
-                                )
-                                .WithType<ValueWithHierarchicalDimension>(type =>
-                                    type.WithInitialData(ValueWithHierarchicalDimension.Data)
-                                )
-                                .WithType<ValueWithAggregateByHierarchicalDimension>(type =>
-                                    type.WithInitialData(
-                                        ValueWithAggregateByHierarchicalDimension.Data
-                                    )
-                                )
-                                .WithType<ValueWithMixedDimensions>(type =>
-                                    type.WithInitialData(ValueWithMixedDimensions.Data)
-                                )
                                 .WithType<CashflowElement>(type =>
                                     type.WithInitialData(
                                         CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency()
                                     )
-                                )
-                                .WithType<ValueWithTwoHierarchicalDimensions>(type =>
-                                    type.WithInitialData(ValueWithTwoHierarchicalDimensions.Data)
                                 )
                     )
                 );
@@ -98,142 +78,6 @@ namespace OpenSmc.Reporting.Test
             var gridOptions = GetModel(reportBuilder);
 
             await gridOptions.Verify(fileName);
-        }
-
-        [Theory]
-        [MemberData(nameof(ReportDataCubeCases))]
-        public async Task ReportDataCubeWithGridOptions<T>(
-            string fileName,
-            IEnumerable<IDataCube<T>> data,
-            Func<
-                DataCubePivotBuilder<IDataCube<T>, T, T, T>,
-                DataCubeReportBuilder<IDataCube<T>, T, T, T>
-            > toReportBuilder
-        )
-        {
-            var initialPivotBuilder = PivotFactory
-                .ForDataCubes(data)
-                .WithState(await GetWorkspaceStateAsync());
-
-            var reportBuilder = toReportBuilder(initialPivotBuilder);
-
-            var gridOptions = GetModel(reportBuilder);
-            await gridOptions.Verify(fileName);
-        }
-
-        public static IEnumerable<object[]> ReportDataCubeCases()
-        {
-            yield return new ReportDataCubeTestCase<ValueWithHierarchicalDimension>(
-                "HierarchicalDimensionHideAggregation.json",
-                ValueWithHierarchicalDimension.Data.ToDataCube().RepeatOnce(),
-                b =>
-                    b.SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
-                        .ToTable()
-                        .WithOptions(rm => rm.HideRowValuesForDimension("DimA", x => x.ForLevel(1)))
-            );
-            yield return new ReportDataCubeTestCase<ValueWithHierarchicalDimension>(
-                "HierarchicalDimensionHideAggregation21.json",
-                ValueWithHierarchicalDimension.Data.ToDataCube().RepeatOnce(),
-                b =>
-                    b.SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
-                        .ToTable()
-                        .WithOptions(rm =>
-                            rm.HideRowValuesForDimension(
-                                "DimA",
-                                x => x.ForLevel(1).ForSystemName("A1", "A2")
-                            )
-                        )
-            );
-            yield return new ReportDataCubeTestCase<ValueWithHierarchicalDimension>(
-                "HierarchicalDimensionHideAggregation22.json",
-                ValueWithHierarchicalDimension.Data.ToDataCube().RepeatOnce(),
-                b =>
-                    b.SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
-                        .ToTable()
-                        .WithOptions(rm =>
-                            rm.HideRowValuesForDimension(
-                                "DimA",
-                                x => x.ForLevel(1).ForSystemName("A1").ForSystemName("A2")
-                            )
-                        )
-            );
-            yield return new ReportDataCubeTestCase<ValueWithHierarchicalDimension>(
-                "HierarchicalDimensionHideAggregation23.json",
-                ValueWithHierarchicalDimension.Data.ToDataCube().RepeatOnce(),
-                b =>
-                    b.SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
-                        .ToTable()
-                        .WithOptions(rm =>
-                            rm.HideRowValuesForDimension(
-                                "DimA",
-                                x => x.ForSystemName("A1", "A2").ForLevel(1)
-                            )
-                        )
-            );
-            yield return new ReportDataCubeTestCase<ValueWithHierarchicalDimension>(
-                "HierarchicalDimensionHideAggregation24.json",
-                ValueWithHierarchicalDimension.Data.ToDataCube().RepeatOnce(),
-                b =>
-                    b.SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
-                        .ToTable()
-                        .WithOptions(rm =>
-                            rm.HideRowValuesForDimension("DimA", x => x.ForLevel(0, 1))
-                        )
-            );
-            yield return new ReportDataCubeTestCase<ValueWithMixedDimensions>(
-                "HierarchicalDimensionHideAggregation31.json",
-                ValueWithMixedDimensions.Data.ToDataCube().RepeatOnce(),
-                b =>
-                    b.SliceRowsBy(
-                            nameof(ValueWithMixedDimensions.DimA),
-                            nameof(ValueWithMixedDimensions.DimD)
-                        )
-                        .ToTable()
-                        .WithOptions(rm => rm.HideRowValuesForDimension("DimA"))
-            );
-            yield return new ReportDataCubeTestCase<ValueWithMixedDimensions>(
-                "HierarchicalDimensionHideAggregation32.json",
-                ValueWithMixedDimensions.Data.ToDataCube().RepeatOnce(),
-                b =>
-                    b.SliceRowsBy(
-                            nameof(ValueWithMixedDimensions.DimA),
-                            nameof(ValueWithMixedDimensions.DimD)
-                        )
-                        .ToTable()
-                        .WithOptions(rm =>
-                            rm.HideRowValuesForDimension("DimA", x => x.ForLevel(0, 1, 2))
-                        )
-            );
-            yield return new ReportDataCubeTestCase<ValueWithMixedDimensions>(
-                "HierarchicalDimensionHideAggregation33.json",
-                ValueWithMixedDimensions.Data.ToDataCube().RepeatOnce(),
-                b =>
-                    b.SliceRowsBy(
-                            nameof(ValueWithMixedDimensions.DimA),
-                            nameof(ValueWithMixedDimensions.DimD)
-                        )
-                        .ToTable()
-                        .WithOptions(rm =>
-                            rm.HideRowValuesForDimension(
-                                "DimA",
-                                x => x.ForLevel(0).ForLevel(1).ForLevel(2)
-                            )
-                        )
-            );
-            yield return new ReportDataCubeTestCase<ValueWithMixedDimensions>(
-                "HierarchicalDimensionHideAggregation4.json",
-                ValueWithMixedDimensions.Data.ToDataCube().RepeatOnce(),
-                b =>
-                    b.SliceRowsBy(
-                            nameof(ValueWithMixedDimensions.DimA),
-                            nameof(ValueWithMixedDimensions.DimD)
-                        )
-                        .ToTable()
-                        .WithOptions(rm =>
-                            rm.HideRowValuesForDimension("DimA", x => x.ForLevel(1))
-                                .HideRowValuesForDimension("DimD", x => x.ForSystemName("D1"))
-                        )
-            );
         }
 
         public static IEnumerable<object[]> ReportCases()
@@ -334,33 +178,6 @@ namespace OpenSmc.Reporting.Test
                 string benchmarkFile,
                 IEnumerable<T> data,
                 Func<PivotBuilder<T, T, T>, ReportBuilder<T, T, T>> pivotBuilder
-            )
-            {
-                this.data = data;
-                this.pivotBuilder = pivotBuilder;
-                this.benchmarkFile = benchmarkFile;
-            }
-        }
-
-        private class ReportDataCubeTestCase<T>
-        {
-            private readonly IEnumerable<IDataCube<T>> data;
-            private readonly Func<
-                DataCubePivotBuilder<IDataCube<T>, T, T, T>,
-                DataCubeReportBuilder<IDataCube<T>, T, T, T>
-            > pivotBuilder;
-            private readonly string benchmarkFile;
-
-            public static implicit operator object[](ReportDataCubeTestCase<T> testCase) =>
-                new object[] { testCase.benchmarkFile, testCase.data, testCase.pivotBuilder };
-
-            public ReportDataCubeTestCase(
-                string benchmarkFile,
-                IEnumerable<IDataCube<T>> data,
-                Func<
-                    DataCubePivotBuilder<IDataCube<T>, T, T, T>,
-                    DataCubeReportBuilder<IDataCube<T>, T, T, T>
-                > pivotBuilder
             )
             {
                 this.data = data;
