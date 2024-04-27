@@ -20,12 +20,19 @@ public class GroupsSubscriptions<TIdentity>
     private class GroupSubscription(TIdentity groupId)
     {
         private ImmutableHashSet<string> connections = [];
+        internal IReadOnlySet<string> Connections => connections;
+        private IAsyncDisposable Disposable;
 
         internal bool Add(string connectionId)
         {
             var wasEmpty = connections.Count == 0;
             connections = connections.Add(connectionId);
             return wasEmpty;
+        }
+
+        internal async Task SubscribeAsync(Func<TIdentity, Func<IReadOnlyCollection<string>>, Task<IAsyncDisposable>> subscribeAsync)
+        {
+            Disposable = await subscribeAsync(groupId, () => Connections);
         }
     }
 }
