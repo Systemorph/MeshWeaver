@@ -1,4 +1,6 @@
-﻿namespace OpenSmc.Application.SignalR;
+﻿using System.Collections.Immutable;
+
+namespace OpenSmc.Application.SignalR;
 
 public class GroupsSubscriptions<TIdentity>
 {
@@ -17,5 +19,13 @@ public class GroupsSubscriptions<TIdentity>
 
     private class GroupSubscription(TIdentity groupId)
     {
+        private ImmutableHashSet<string> connections = [];
+
+        internal bool Add(string connectionId)
+        {
+            var wasEmpty = connections.Count == 0;
+            connections = connections.Add(connectionId);
+            return wasEmpty;
+        }
     }
 }
