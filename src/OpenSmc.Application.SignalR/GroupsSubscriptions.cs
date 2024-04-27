@@ -8,12 +8,14 @@ public class GroupsSubscriptions<TIdentity>
 
     private readonly Dictionary<TIdentity, GroupSubscription> groupSubscriptions = new();
 
-    internal async ValueTask SubscribeAsync(string connectionId, TIdentity groupId)
+    internal async ValueTask SubscribeAsync(string connectionId, TIdentity groupId, Func<TIdentity, Func<IReadOnlyCollection<string>>, Task<IAsyncDisposable>> subscribeAsync)
     {
         using (await @lock.LockAsync()) // TODO V10: think about reducing locking for the cases when there is nothing to do (2024/04/26, Dmitry Kalabin)
         {
             if (!groupSubscriptions.TryGetValue(groupId, out subscription))
                 groupSubscriptions.Add(groupId, subscription = new GroupSubscription(groupId));
+            if (subscription.Add(connectionId))
+                await subscription.SubscribeAsync(subscribeAsync);
         }
     }
 
