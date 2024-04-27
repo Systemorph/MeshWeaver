@@ -10,4 +10,8 @@ public class GroupsSubscriptions<TIdentity>
         {
         }
     }
+
+    private class GroupSubscription(TIdentity groupId)
+    {
+    }
 }
