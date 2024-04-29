@@ -13,7 +13,7 @@ public interface IWorkspace : IAsyncDisposable
     IObservable<ChangeItem<WorkspaceState>> ChangeStream { get; }
     WorkspaceState State { get; }
     Task Initialized { get; }
-    IEnumerable<Type> MappedTypes { get; }
+    IReadOnlyCollection<Type> MappedTypes { get; }
     void Update(IEnumerable<object> instances) => Update(instances, new());
     void Update(IEnumerable<object> instances, UpdateOptions updateOptions);
     void Update(object instance) => Update(new[] { instance });

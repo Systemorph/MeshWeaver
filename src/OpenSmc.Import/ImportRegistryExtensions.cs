@@ -1,4 +1,5 @@
-﻿using System.Reflection;
+﻿using System.Data;
+using System.Reflection;
 using System.Security.Cryptography.X509Certificates;
 using AngleSharp.Io;
 using DocumentFormat.OpenXml.Bibliography;
@@ -26,28 +27,61 @@ public static class ImportExtensions
                 plugin.WithFactory(() => new(plugin.Hub, importConfiguration))
             );
 
-    public static DataContext FromImportSource(
+    /// <summary>
+    /// Describes an embedded resource.
+    /// </summary>
+    /// <typeparam name="T">A type contained in the assembly from which the resource is to be loaded</typeparam>
+    /// <param name="dataContext"></param>
+    /// <param name="resource">The path to the resource</param>
+    /// <param name="configuration">Additional configuration of the data source.</param>
+    /// <returns></returns>
+    public static DataContext FromEmbeddedResource<T>(
         this DataContext dataContext,
-        Source source,
+        string resource,
         Func<ImportDataSource, ImportDataSource> configuration
-    ) =>
-        dataContext.WithDataSourceBuilder(
+    )
+    {
+        var source = new EmbeddedResource(typeof(T).Assembly, resource);
+        return dataContext.WithDataSourceBuilder(
             source,
-            hub =>
-                configuration.Invoke(
-                    new(source, new ImportConfiguration(hub, new Workspace(hub, source)).Build())
-                )
+            hub => ConfigureDatgaSource(configuration, hub, source)
+        );
+    }
+
+    private static ImportDataSource ConfigureDatgaSource(
+        Func<ImportDataSource, ImportDataSource> configuration,
+        IMessageHub hub,
+        EmbeddedResource source
+    )
+    {
+        var ret = configuration.Invoke(
+            new(source, new ImportConfiguration(hub, new Workspace(hub, source)))
         );
 
-    public static StreamSource GetEmbeddedResource(this Assembly assembly, string resourceName) =>
-        new StreamSource(resourceName, assembly.GetManifestResourceStream(resourceName));
+        var mappedTypes = ret.MappedTypes;
+        if (!mappedTypes.Any())
+            throw new DataException("Data Source must contain sourced data types.");
+        if (mappedTypes.Count == 1)
+            ret = ret.WithRequest(r => r.WithEntityType(mappedTypes.First()));
+        if (ret.Configuration.GetFormat(ImportFormat.Default) == null)
+            ret = ret.WithImportConfiguration(config =>
+                config.WithFormat(
+                    ImportFormat.Default,
+                    f => f.WithAutoMappingsForTypes(mappedTypes)
+                )
+            );
+
+        // ret.Configuration.Workspace.Initialize(new(mappedTypes));
+
+        return ret;
+    }
 }
+
+public record EmbeddedResource(Assembly Assembly, string Resource) : Source;
 
 public record ImportDataSource(Source Source, ImportConfiguration Configuration)
     : GenericDataSource<ImportDataSource>(Source, Configuration.Hub)
 {
-    private readonly ImportManager importManager = new(Configuration);
-
     private ImportRequest ImportRequest { get; init; } = new(Source);
 
     public ImportDataSource WithRequest(Func<ImportRequest, ImportRequest> config) =>
@@ -58,6 +92,7 @@ public record ImportDataSource(Source Source, ImportConfiguration Configuration)
 
     public override IEnumerable<ChangeStream<EntityStore>> Initialize()
     {
+        ImportManager importManager = new(Configuration);
         var ret = GetInitialChangeStream();
         Hub.Schedule(async cancellationToken =>
         {
@@ -68,4 +103,8 @@ public record ImportDataSource(Source Source, ImportConfiguration Configuration)
         });
         return ret;
     }
+
+    public ImportDataSource WithImportConfiguration(
+        Func<ImportConfiguration, ImportConfiguration> config
+    ) => this with { Configuration = config.Invoke(Configuration) };
 }

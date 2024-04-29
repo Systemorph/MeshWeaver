@@ -9,7 +9,6 @@ namespace OpenSmc.Import;
 /// using the Import Plugin. See also AddImport method.
 /// </summary>
 /// <param name="Source">Content of the source to be imported, e.g. a string (shipping the entire content) or a file name (together with StreamType = File)</param>
-/// <param name="StreamType">Type of the source to be configured in the import plugin, e.g. a file share.</param>
 public record ImportRequest(Source Source) : IRequest<ImportResponse>
 {
     public ImportRequest(string Contennt)
@@ -24,6 +23,10 @@ public record ImportRequest(Source Source) : IRequest<ImportResponse>
     public object TargetDataSource { get; init; }
     public bool SnapshotMode { get; init; }
     public DataSetReaderOptions DataSetReaderOptions { get; init; } = new();
+
+    internal Type EntityType { get; init; }
+
+    public ImportRequest WithEntityType(Type entityType) => this with { EntityType = entityType };
 }
 
 public record ImportResponse(long Version, ActivityLog Log);

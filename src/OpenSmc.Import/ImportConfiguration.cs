@@ -16,12 +16,37 @@ using OpenSmc.Reflection;
 
 namespace OpenSmc.Import;
 
-public record ImportConfiguration(IMessageHub Hub, IWorkspace Workspace)
+public record ImportConfiguration
 {
-    public IActivityService ActivityService { get; } =
-        Hub.ServiceProvider.GetRequiredService<IActivityService>();
+    public IMessageHub Hub { get; }
+    public IWorkspace Workspace { get; }
 
-    internal ImmutableDictionary<string, ImportFormat> ImportFormats { get; init; }
+    public ImportConfiguration(
+        IMessageHub Hub,
+        IWorkspace Workspace,
+        IReadOnlyCollection<Type> mappedTypes
+    )
+    {
+        this.Hub = Hub;
+        this.Workspace = Workspace;
+
+        Validations = ImmutableList<ValidationFunction>
+            .Empty.Add(StandardValidations)
+            .Add(CategoriesValidation);
+        ActivityService = Hub.ServiceProvider.GetRequiredService<IActivityService>();
+        if (mappedTypes.Any())
+            ImportFormatBuilders = ImportFormatBuilders.Add(
+                ImportFormat.Default,
+                f => f.WithAutoMappingsForTypes(mappedTypes)
+            );
+    }
+
+    public ImportConfiguration(IMessageHub Hub, IWorkspace Workspace)
+        : this(Hub, Workspace, Array.Empty<Type>()) { }
+
+    public IActivityService ActivityService { get; }
+
+    private readonly ConcurrentDictionary<string, ImportFormat> ImportFormats = new();
 
     public ImportConfiguration WithFormat(
         string format,
@@ -32,24 +57,22 @@ public record ImportConfiguration(IMessageHub Hub, IWorkspace Workspace)
         string,
         Func<ImportFormat, ImportFormat>
     > ImportFormatBuilders { get; init; } =
-        ImmutableDictionary<string, Func<ImportFormat, ImportFormat>>.Empty.Add(
-            ImportFormat.Default,
-            f => f.WithAutoMappings(domain => domain)
-        );
+        ImmutableDictionary<string, Func<ImportFormat, ImportFormat>>.Empty;
 
-    public ImportConfiguration Build() =>
-        this with
-        {
-            ImportFormats = ImportFormatBuilders.ToImmutableDictionary(
-                x => x.Key,
-                x =>
-                    x.Value.Invoke(
-                        new ImportFormat(x.Key, Hub, Workspace, Validations)
-                            .WithValidation(StandardValidations)
-                            .WithValidation(CategoriesValidation)
-                    )
-            )
-        };
+    public ImportFormat GetFormat(string format)
+    {
+        if (ImportFormats.TryGetValue(format, out var ret))
+            return ret;
+
+        var builder = ImportFormatBuilders.GetValueOrDefault(format);
+        if (builder == null)
+            return null;
+
+        return ImportFormats.GetOrAdd(
+            format,
+            builder.Invoke(new ImportFormat(format, Hub, Workspace, Validations))
+        );
+    }
 
     internal ImmutableDictionary<string, ReadDataSet> DataSetReaders { get; init; } =
         ImmutableDictionary<string, ReadDataSet>
@@ -69,13 +92,23 @@ public record ImportConfiguration(IMessageHub Hub, IWorkspace Workspace)
             DataSetReaders = DataSetReaders.SetItem(fileType, dataSetReader)
         };
 
-    public ImportFormat GetFormat(string importRequestFormat) =>
-        ImportFormats.GetValueOrDefault(importRequestFormat);
-
     internal ImmutableDictionary<Type, Func<ImportRequest, Stream>> StreamProviders { get; init; } =
         ImmutableDictionary<Type, Func<ImportRequest, Stream>>
             .Empty.Add(typeof(StringStream), CreateMemoryStream)
-            .Add(typeof(StringStream), CreateMemoryStream);
+            .Add(typeof(EmbeddedResource), CreateEmbeddedResourceStream);
+
+    private static Stream CreateEmbeddedResourceStream(ImportRequest request)
+    {
+        var embeddedResource = (EmbeddedResource)request.Source;
+        var assembly = embeddedResource.Assembly;
+        var resourceName = $"{assembly.GetName().Name}.{embeddedResource.Resource}";
+        var stream = assembly.GetManifestResourceStream(resourceName);
+        if (stream == null)
+        {
+            throw new ArgumentException($"Resource '{resourceName}' not found.");
+        }
+        return stream;
+    }
 
     private static Stream CreateMemoryStream(ImportRequest request)
     {
@@ -92,8 +125,7 @@ public record ImportConfiguration(IMessageHub Hub, IWorkspace Workspace)
         Func<ImportRequest, Stream> reader
     ) => this with { StreamProviders = StreamProviders.SetItem(sourceType, reader) };
 
-    internal ImmutableList<ValidationFunction> Validations { get; init; } =
-        ImmutableList<ValidationFunction>.Empty;
+    internal ImmutableList<ValidationFunction> Validations { get; init; }
 
     public ImportConfiguration WithValidation(ValidationFunction validation) =>
         this with
@@ -124,7 +156,7 @@ public record ImportConfiguration(IMessageHub Hub, IWorkspace Workspace)
         (Type, string, Func<object, string>)[]
     > TypesWithCategoryAttributes = new();
 
-    public bool CategoriesValidation(object instance, ValidationContext validationContext)
+    private bool CategoriesValidation(object instance, ValidationContext validationContext)
     {
         var type = instance.GetType();
         var dimensions = TypesWithCategoryAttributes.GetOrAdd(

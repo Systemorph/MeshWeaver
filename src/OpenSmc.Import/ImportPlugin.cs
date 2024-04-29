@@ -25,7 +25,7 @@ public class ImportPlugin(
     )
     {
         var importManager = new ImportManager(
-            importConfiguration.Invoke(new(Hub, workspace)).Build()
+            importConfiguration.Invoke(new(Hub, workspace, workspace.MappedTypes))
         );
         var log = await importManager.ImportAsync(request.Message, cancellationToken);
         Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
