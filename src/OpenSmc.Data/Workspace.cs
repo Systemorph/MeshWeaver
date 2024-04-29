@@ -21,7 +21,7 @@ public class Workspace(IMessageHub hub, object id) : IWorkspace
     public IObservable<ChangeItem<WorkspaceState>> ChangeStream => changeStream;
     private readonly Dictionary<string, ITypeSource> typeSources = new();
 
-    public IEnumerable<Type> MappedTypes => State.MappedTypes;
+    public IReadOnlyCollection<Type> MappedTypes => State.MappedTypes.ToArray();
     private readonly ConcurrentDictionary<
         (object Address, WorkspaceReference Reference),
         IDisposable

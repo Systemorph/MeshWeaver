@@ -10,7 +10,7 @@ namespace OpenSmc.Data;
 public interface IDataSource : IAsyncDisposable
 {
     IEnumerable<ITypeSource> TypeSources { get; }
-    IEnumerable<Type> MappedTypes { get; }
+    IReadOnlyCollection<Type> MappedTypes { get; }
     object Id { get; }
     IReadOnlyCollection<DataChangeRequest> Change(DataChangeRequest request);
     IEnumerable<ChangeStream<EntityStore>> Initialize();
@@ -34,7 +34,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
             TypeSources = TypeSources.SetItem(type, typeSource)
         };
 
-    public IEnumerable<Type> MappedTypes => TypeSources.Keys;
+    public IReadOnlyCollection<Type> MappedTypes => TypeSources.Keys.ToArray();
 
     public ITypeSource GetTypeSource(string collectionName) =>
         TypeSources.Values.FirstOrDefault(x => x.CollectionName == collectionName);

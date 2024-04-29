@@ -75,9 +75,15 @@ public class ImportManager(ImportConfiguration configuration)
         if (!Configuration.DataSetReaders.TryGetValue(importRequest.MimeType, out var reader))
             throw new ImportException($"Cannot read mime type {importRequest.MimeType}");
 
+        var dataSetReaderOptions = importRequest.DataSetReaderOptions;
+        if (dataSetReaderOptions.EntityType == null)
+            dataSetReaderOptions = dataSetReaderOptions with
+            {
+                EntityType = importRequest.EntityType
+            };
         var (dataSet, format) = await reader.Invoke(
             stream,
-            importRequest.DataSetReaderOptions,
+            dataSetReaderOptions,
             cancellationToken
         );
 
