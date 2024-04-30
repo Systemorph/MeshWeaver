@@ -14,23 +14,29 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
-            .AddData(data => data.FromConfigurableDataSource("ReferenceData", dataSource => dataSource
-                    .WithType<LineOfBusiness>(t => t.WithInitialData(TestData.LinesOfBusiness))
-                    .WithType<BusinessUnit>(t => t.WithInitialData(TestData.BusinessUnits))
+            .AddData(data =>
+                data.FromConfigurableDataSource(
+                    "ReferenceData",
+                    dataSource =>
+                        dataSource
+                            .WithType<LineOfBusiness>(t =>
+                                t.WithInitialData(TestData.LinesOfBusiness)
+                            )
+                            .WithType<BusinessUnit>(t => t.WithInitialData(TestData.BusinessUnits))
                 )
             );
     }
 
-    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    protected override MessageHubConfiguration ConfigureClient(
+        MessageHubConfiguration configuration
+    )
     {
         return base.ConfigureClient(configuration)
-            .AddData(
-                data => data
-                    .FromHub(new HostAddress(),
-                        dataSource => dataSource
-                            .WithType<BusinessUnit>()
-                            .WithType<LineOfBusiness>()
-                    )
+            .AddData(data =>
+                data.FromHub(
+                    new HostAddress(),
+                    dataSource => dataSource.WithType<BusinessUnit>().WithType<LineOfBusiness>()
+                )
             );
     }
 
@@ -45,11 +51,14 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
         businessUnits.Should().HaveCountGreaterThan(1);
 
         var businessUnit = businessUnits.First();
+        var oldName = businessUnit.DisplayName;
         businessUnit = businessUnit with { DisplayName = NewName };
-        client.Post(new UpdateDataRequest(new []{ businessUnit }));
+        client.Post(new UpdateDataRequest(new[] { businessUnit }));
 
         // get the data from the client again
-        var loadedInstance = await workspace.GetObservable<BusinessUnit>(businessUnit.SystemName).FirstAsync();
+        var loadedInstance = await workspace
+            .GetObservable<BusinessUnit>(businessUnit.SystemName)
+            .FirstAsync(x => x.DisplayName != oldName);
         loadedInstance.Should().Be(businessUnit);
 
         // data sync is happening async in order not to block the client ==> we need to give it
@@ -57,7 +66,9 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
         await Task.Delay(100);
 
         var hostWorkspace = GetHost().ServiceProvider.GetRequiredService<IWorkspace>();
-        loadedInstance = await hostWorkspace.GetObservable<BusinessUnit>(businessUnit.SystemName).FirstAsync(); // we query directly the host to see that data sync worked
+        loadedInstance = await hostWorkspace
+            .GetObservable<BusinessUnit>(businessUnit.SystemName)
+            .FirstAsync(); // we query directly the host to see that data sync worked
         loadedInstance.Should().Be(businessUnit);
     }
 }
