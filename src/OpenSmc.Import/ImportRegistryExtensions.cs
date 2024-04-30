@@ -1,9 +1,11 @@
-﻿using System.Data;
+﻿using System.Collections.Immutable;
+using System.Data;
 using System.Reflection;
 using System.Security.Cryptography.X509Certificates;
 using AngleSharp.Io;
 using DocumentFormat.OpenXml.Bibliography;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
@@ -54,24 +56,16 @@ public static class ImportExtensions
         EmbeddedResource source
     )
     {
-        var ret = configuration.Invoke(
-            new(source, new ImportConfiguration(hub, new Workspace(hub, source)))
-        );
+        var ret = configuration.Invoke(new(source, hub));
 
         var mappedTypes = ret.MappedTypes;
         if (!mappedTypes.Any())
             throw new DataException("Data Source must contain sourced data types.");
         if (mappedTypes.Count == 1)
             ret = ret.WithRequest(r => r.WithEntityType(mappedTypes.First()));
-        if (ret.Configuration.GetFormat(ImportFormat.Default) == null)
-            ret = ret.WithImportConfiguration(config =>
-                config.WithFormat(
-                    ImportFormat.Default,
-                    f => f.WithAutoMappingsForTypes(mappedTypes)
-                )
-            );
-
-        // ret.Configuration.Workspace.Initialize(new(mappedTypes));
+        ret = ret.WithImportConfiguration(config =>
+            config.WithFormat(ImportFormat.Default, f => f.WithAutoMappingsForTypes(mappedTypes))
+        );
 
         return ret;
     }
@@ -79,9 +73,10 @@ public static class ImportExtensions
 
 public record EmbeddedResource(Assembly Assembly, string Resource) : Source;
 
-public record ImportDataSource(Source Source, ImportConfiguration Configuration)
-    : GenericDataSource<ImportDataSource>(Source, Configuration.Hub)
+public record ImportDataSource(Source Source, IMessageHub Hub)
+    : GenericDataSource<ImportDataSource>(Source, Hub)
 {
+    private ILogger logger = Hub.ServiceProvider.GetRequiredService<ILogger<ImportDataSource>>();
     private ImportRequest ImportRequest { get; init; } = new(Source);
 
     public ImportDataSource WithRequest(Func<ImportRequest, ImportRequest> config) =>
@@ -92,19 +87,35 @@ public record ImportDataSource(Source Source, ImportConfiguration Configuration)
 
     public override IEnumerable<ChangeStream<EntityStore>> Initialize()
     {
-        ImportManager importManager = new(Configuration);
+        var config = new ImportConfiguration(
+            Hub,
+            MappedTypes,
+            Hub.ServiceProvider.GetRequiredService<ILogger<ImportDataSource>>()
+        );
+        config = Configurations.Aggregate(config, (c, f) => f.Invoke(c));
+        ImportManager importManager = new(config);
         var ret = GetInitialChangeStream();
         Hub.Schedule(async cancellationToken =>
         {
-            var log = await importManager.ImportAsync(ImportRequest, cancellationToken);
+            var (state, hasError) = await importManager.ImportAsync(
+                ImportRequest,
+                new WorkspaceState(Hub, TypeSources.Values.ToDictionary(x => x.CollectionName)),
+                logger,
+                cancellationToken
+            );
 
             foreach (var changeStream in ret)
-                changeStream.Initialize(importManager.Configuration.Workspace.State.Store);
+                changeStream.Initialize(state.Store);
         });
         return ret;
     }
 
+    private ImmutableList<
+        Func<ImportConfiguration, ImportConfiguration>
+    > Configurations { get; init; } =
+        ImmutableList<Func<ImportConfiguration, ImportConfiguration>>.Empty;
+
     public ImportDataSource WithImportConfiguration(
         Func<ImportConfiguration, ImportConfiguration> config
-    ) => this with { Configuration = config.Invoke(Configuration) };
+    ) => this with { Configurations = Configurations.Add(config) };
 }

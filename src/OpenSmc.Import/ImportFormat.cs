@@ -9,7 +9,7 @@ namespace OpenSmc.Import;
 public record ImportFormat(
     string Format,
     IMessageHub Hub,
-    IWorkspace Workspace,
+    IReadOnlyCollection<Type> MappedTypes,
     ImmutableList<ValidationFunction> Validations
 )
 {
@@ -23,7 +23,11 @@ public record ImportFormat(
             ImportFunctions = ImportFunctions.Add(importFunction)
         };
 
-    public bool Import(ImportRequest importRequest, IDataSet dataSet)
+    public (WorkspaceState State, bool hasError) Import(
+        ImportRequest importRequest,
+        IDataSet dataSet,
+        WorkspaceState state
+    )
     {
         var updateOptions = new UpdateOptions().SnapshotMode(importRequest.SnapshotMode);
         bool hasError = false;
@@ -31,8 +35,7 @@ public record ImportFormat(
 
         foreach (var importFunction in ImportFunctions)
         {
-            var importedInstances = importFunction(importRequest, dataSet, Hub, Workspace)
-                .ToArray();
+            var importedInstances = importFunction(importRequest, dataSet, Hub, state).ToArray();
             foreach (var item in importedInstances)
             {
                 if (item == null)
@@ -44,17 +47,16 @@ public record ImportFormat(
                             new ValidationContext(item, Hub.ServiceProvider, validationCache)
                         ) || hasError;
             }
-            if (!hasError)
-                Workspace.Update(importedInstances, updateOptions);
+            state = state.Update(importedInstances, updateOptions);
         }
-        return hasError;
+        return (state, hasError);
     }
 
     public delegate IEnumerable<object> ImportFunction(
         ImportRequest importRequest,
         IDataSet dataSet,
         IMessageHub hub,
-        IWorkspace workspace
+        WorkspaceState state
     );
 
     public ImportFormat WithAutoMappingsForTypes(IReadOnlyCollection<Type> types) =>
@@ -63,7 +65,7 @@ public record ImportFormat(
                 new DomainTypeImporter { TableMappings = AutoMapper.Create(types) }.Import(ds)
         );
 
-    public ImportFormat WithAutoMappings() => WithAutoMappingsForTypes(Workspace.MappedTypes);
+    public ImportFormat WithAutoMappings() => WithAutoMappingsForTypes(MappedTypes);
 
     public ImportFormat WithMappings(Func<DomainTypeImporter, DomainTypeImporter> config) =>
         WithImportFunction((_, ds, _, _) => config(new DomainTypeImporter()).Import(ds));
@@ -73,13 +75,6 @@ public record ImportFormat(
         if (validationRule == null)
             return this;
         return this with { Validations = Validations.Add(validationRule) };
-    }
-
-    public bool SaveLog { get; init; }
-
-    public ImportFormat SaveLogs(bool save = true)
-    {
-        return this with { SaveLog = save };
     }
 }
 

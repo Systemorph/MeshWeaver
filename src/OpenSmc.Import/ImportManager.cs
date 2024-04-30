@@ -11,35 +11,19 @@ namespace OpenSmc.Import;
 public class ImportManager(ImportConfiguration configuration)
 {
     public ImportConfiguration Configuration { get; } = configuration;
-    private readonly IActivityService activityService =
-        configuration.Hub.ServiceProvider.GetRequiredService<IActivityService>();
 
-    public async Task<ActivityLog> ImportAsync(
+    public async Task<(WorkspaceState State, bool Error)> ImportAsync(
         ImportRequest importRequest,
+        WorkspaceState state,
+        ILogger activityLog,
         CancellationToken cancellationToken
     )
     {
-        activityService.Start();
-
         try
         {
             var (dataSet, format) = await ReadDataSetAsync(importRequest, cancellationToken);
 
-            var hasError = format.Import(importRequest, dataSet);
-
-            if (hasError)
-                activityService.LogError(ValidationStageFailed);
-
-            if (!activityService.HasErrors())
-                Configuration.Workspace.Commit();
-            else
-                Configuration.Workspace.Rollback();
-
-            if (format.SaveLog)
-                Configuration.Workspace.Update(activityService.GetCurrentActivityLog());
-            return activityService.Finish();
-
-            //activityService.Finish();
+            return format.Import(importRequest, dataSet, state);
         }
         catch (Exception e)
         {
@@ -50,12 +34,8 @@ public class ImportManager(ImportConfiguration configuration)
                 e = e.InnerException;
             }
 
-            activityService.LogError(message.ToString());
-            return activityService.Finish();
-        }
-        finally
-        {
-            activityService.LogInformation($"Import finished.");
+            activityLog.LogError(message.ToString());
+            return (state, true);
         }
     }
 
@@ -98,5 +78,5 @@ public class ImportManager(ImportConfiguration configuration)
         return (dataSet, importFormat);
     }
 
-    public static string ValidationStageFailed = "Validation stage has failed.";
+    public static string ImportFailed = "Import Failed. See Activity Log for Errors";
 }

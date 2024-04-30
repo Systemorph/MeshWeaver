@@ -19,32 +19,31 @@ namespace OpenSmc.Import;
 public record ImportConfiguration
 {
     public IMessageHub Hub { get; }
-    public IWorkspace Workspace { get; }
+    public WorkspaceState State { get; }
+    public IReadOnlyCollection<Type> MappedTypes { get; init; }
 
     public ImportConfiguration(
-        IMessageHub Hub,
-        IWorkspace Workspace,
-        IReadOnlyCollection<Type> mappedTypes
+        IMessageHub hub,
+        IReadOnlyCollection<Type> mappedTypes,
+        ILogger logger
     )
     {
-        this.Hub = Hub;
-        this.Workspace = Workspace;
-
+        this.Hub = hub;
+        this.State = State;
+        MappedTypes = mappedTypes;
         Validations = ImmutableList<ValidationFunction>
             .Empty.Add(StandardValidations)
             .Add(CategoriesValidation);
-        ActivityService = Hub.ServiceProvider.GetRequiredService<IActivityService>();
         if (mappedTypes.Any())
             ImportFormatBuilders = ImportFormatBuilders.Add(
                 ImportFormat.Default,
                 f => f.WithAutoMappingsForTypes(mappedTypes)
             );
+        Logger = logger;
     }
 
-    public ImportConfiguration(IMessageHub Hub, IWorkspace Workspace)
-        : this(Hub, Workspace, Array.Empty<Type>()) { }
-
-    public IActivityService ActivityService { get; }
+    public ImportConfiguration(IMessageHub Hub, ILogger logger)
+        : this(Hub, Array.Empty<Type>(), logger) { }
 
     private readonly ConcurrentDictionary<string, ImportFormat> ImportFormats = new();
 
@@ -70,7 +69,7 @@ public record ImportConfiguration
 
         return ImportFormats.GetOrAdd(
             format,
-            builder.Invoke(new ImportFormat(format, Hub, Workspace, Validations))
+            builder.Invoke(new ImportFormat(format, Hub, MappedTypes, Validations))
         );
     }
 
@@ -126,6 +125,7 @@ public record ImportConfiguration
     ) => this with { StreamProviders = StreamProviders.SetItem(sourceType, reader) };
 
     internal ImmutableList<ValidationFunction> Validations { get; init; }
+    public ILogger Logger { get; }
 
     public ImportConfiguration WithValidation(ValidationFunction validation) =>
         this with
@@ -141,7 +141,7 @@ public record ImportConfiguration
 
         foreach (var validation in validationResults)
         {
-            ActivityService.LogError(validation.ToString());
+            Logger.LogError(validation.ToString());
             ret = false;
         }
         return ret;
@@ -183,9 +183,9 @@ public record ImportConfiguration
         var ret = true;
         foreach (var (categoryType, propertyName, propGetter) in dimensions)
         {
-            if (!Workspace.MappedTypes.Contains(categoryType))
+            if (!State.MappedTypes.Contains(categoryType))
             {
-                ActivityService.LogError(string.Format(MissingCategoryErrorMessage, categoryType));
+                Logger.LogError(string.Format(MissingCategoryErrorMessage, categoryType));
                 ret = false;
                 continue;
             }
@@ -194,12 +194,12 @@ public record ImportConfiguration
             if (
                 !string.IsNullOrEmpty(value)
                 && !(bool)
-                    IsElementExistsMethod
+                    ExistsElementMethod
                         .MakeGenericMethod(categoryType)
-                        .InvokeAsFunction(this, Workspace, value)
+                        .InvokeAsFunction(this, State, value)
             )
             {
-                ActivityService.LogError(
+                Logger.LogError(
                     string.Format(UnknownValueErrorMessage, propertyName, type.FullName, value)
                 );
                 ret = false;
@@ -216,14 +216,14 @@ public record ImportConfiguration
         return Expression.Lambda<Func<object, string>>(propertyExpression, prm).Compile();
     }
 
-    private readonly MethodInfo IsElementExistsMethod =
+    private readonly MethodInfo ExistsElementMethod =
         ReflectionHelper.GetMethodGeneric<ImportConfiguration>(x =>
-            x.IsElementExists<object>(null, null)
+            x.ExistsElement<object>(null, null)
         );
 
-    private bool IsElementExists<T>(IWorkspace workspace, string value)
+    private bool ExistsElement<T>(WorkspaceState state, string value)
         where T : class
     {
-        return workspace.State.GetDataById<T>().ContainsKey(value);
+        return state.GetDataById<T>().ContainsKey(value);
     }
 }

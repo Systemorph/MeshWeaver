@@ -17,6 +17,7 @@ public interface IWorkspace : IAsyncDisposable
     void Update(IEnumerable<object> instances) => Update(instances, new());
     void Update(IEnumerable<object> instances, UpdateOptions updateOptions);
     void Update(object instance) => Update(new[] { instance });
+    void Update(WorkspaceState state);
     void Delete(IEnumerable<object> instances);
     void Delete(object instance) => Delete(new[] { instance });
 

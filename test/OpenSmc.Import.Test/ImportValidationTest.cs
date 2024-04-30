@@ -46,10 +46,7 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
                                 .WithFormat(
                                     "Test1",
                                     format =>
-                                        format
-                                            .WithAutoMappings()
-                                            .WithValidation((_, _) => false)
-                                            .SaveLogs()
+                                        format.WithAutoMappings().WithValidation((_, _) => false)
                                 )
                                 .WithFormat(
                                     "Test2",
@@ -102,7 +99,7 @@ FoundationYear,ContractType
             .Should()
             .BeEquivalentTo(
                 "The field FoundationYear must be between 1999 and 2023.",
-                ImportManager.ValidationStageFailed
+                ImportManager.ImportFailed
             );
 
         var workspace = GetHost().ServiceProvider.GetRequiredService<IWorkspace>();
@@ -121,7 +118,7 @@ FoundationYear,ContractType
     FR,France";
 
         var client = GetClient();
-        var importRequest = new ImportRequest(Content) { Format = "Test1" };
+        var importRequest = new ImportRequest(Content) { Format = "Test1", SaveLog = true };
         var importResponse = await client.AwaitResponse(
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
@@ -132,7 +129,7 @@ FoundationYear,ContractType
             .Message.Log.Messages.Should()
             .ContainSingle(x => x.LogLevel == LogLevel.Error)
             .Which.Message.Should()
-            .Be(ImportManager.ValidationStageFailed);
+            .Be(ImportManager.ImportFailed);
         var workspace = GetHost().ServiceProvider.GetRequiredService<IWorkspace>();
         var ret = await workspace.GetObservable<TestDomain.Country>().FirstAsync();
 
@@ -162,7 +159,7 @@ FoundationYear,ContractType
             .BeEquivalentTo(
                 "The IntValue field must have type from these: System.Double, System.Decimal, System.Single.",
                 "The DecimalValue field value should be in interval from 10 to 20.",
-                ImportManager.ValidationStageFailed
+                ImportManager.ImportFailed
             );
 
         var workspace = GetHost().ServiceProvider.GetRequiredService<IWorkspace>();
@@ -180,7 +177,7 @@ FoundationYear,ContractType
     A,B";
 
         var client = GetClient();
-        var importRequest = new ImportRequest(content) { Format = "Test1" };
+        var importRequest = new ImportRequest(content) { Format = "Test1", SaveLog = true };
         var importResponse = await client.AwaitResponse(
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
@@ -191,7 +188,7 @@ FoundationYear,ContractType
             .Message.Log.Messages.Should()
             .ContainSingle(x => x.LogLevel == LogLevel.Error)
             .Which.Message.Should()
-            .Be(ImportManager.ValidationStageFailed);
+            .Be(ImportManager.ImportFailed);
 
         await Task.Delay(300);
 
@@ -229,7 +226,7 @@ Blue,FR";
             .Should()
             .ContainSingle(x => x.LogLevel == LogLevel.Error)
             .Which.Message.Should()
-            .Be(ImportManager.ValidationStageFailed);
+            .Be(ImportManager.ImportFailed);
 
         var workspace = client.GetWorkspace();
 
