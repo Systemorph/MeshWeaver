@@ -1,4 +1,5 @@
-﻿using OpenSmc.DataStructures;
+﻿using OpenSmc.Activities;
+using OpenSmc.DataStructures;
 using OpenSmc.Import;
 using OpenSmc.Messaging;
 
@@ -124,6 +125,10 @@ public static class TestHubSetup
                                 new ReferenceDataAddress(parent.Address),
                                 dataSource =>
                                     dataSource.WithType<BusinessUnit>().WithType<LineOfBusiness>()
+                            )
+                            .FromConfigurableDataSource(
+                                nameof(ActivityLog),
+                                dataSource => dataSource.WithType<ActivityLog>(t => t)
                             )
                     )
                     .AddImport(import =>
