@@ -140,10 +140,19 @@ public class Workspace(IMessageHub hub, object id) : IWorkspace
     }
 
     public void Update(IEnumerable<object> instances, UpdateOptions updateOptions) =>
-        RequestChange(new UpdateDataRequest(instances.ToArray()) { Options = updateOptions }, null);
+        RequestChange(
+            new UpdateDataRequest(instances.ToArray()) { Options = updateOptions },
+            Hub.Address
+        );
+
+    public void Update(WorkspaceState state)
+    {
+        State = state;
+        PublishChange(Hub.Address);
+    }
 
     public void Delete(IEnumerable<object> instances) =>
-        RequestChange(new DeleteDataRequest(instances.ToArray()), null);
+        RequestChange(new DeleteDataRequest(instances.ToArray()), Hub.Address);
 
     private readonly TaskCompletionSource initializeTaskCompletionSource = new();
     public Task Initialized => initializeTaskCompletionSource.Task;
@@ -232,6 +241,11 @@ public class Workspace(IMessageHub hub, object id) : IWorkspace
     public void RequestChange(DataChangeRequest change, object changedBy)
     {
         State = State.Change(change) with { Version = Hub.Version };
+        PublishChange(changedBy);
+    }
+
+    private void PublishChange(object changedBy)
+    {
         changeStream.OnNext(
             new ChangeItem<WorkspaceState>(Id, new EntireWorkspace(), State, changedBy)
         );
@@ -269,6 +283,4 @@ public class Workspace(IMessageHub hub, object id) : IWorkspace
         if (externalSubscriptions.TryRemove((sender, reference), out var existing))
             existing.Dispose();
     }
-
-    public void Update(WorkspaceState state) => State = state;
 }

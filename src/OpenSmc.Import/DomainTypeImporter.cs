@@ -15,7 +15,8 @@ public record DomainTypeImporter
         }
     }
 
-    internal ImmutableDictionary<string, TableMapping> TableMappings { get; init; }
+    internal ImmutableDictionary<string, TableMapping> TableMappings { get; init; } =
+        ImmutableDictionary<string, TableMapping>.Empty;
     internal bool SnapshotModeEnabled { get; init; }
 
     //public DomainTypeImporter WithType<T>()
