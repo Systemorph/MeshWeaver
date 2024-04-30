@@ -81,9 +81,9 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
     {
         const string content =
             @"@@Contract
-FoundationYear,ContractType
-1900,Fixed-Price
-2020,Cost-Plus";
+SystemName,FoundationYear,ContractType
+1,1900,Fixed-Price
+2,2020,Cost-Plus";
 
         var client = GetClient();
         var importRequest = new ImportRequest(content);
@@ -113,9 +113,9 @@ FoundationYear,ContractType
     {
         const string Content =
             @"@@Country
-    SystemName,DisplayName
-    RU,Russia
-    FR,France";
+SystemName,DisplayName
+RU,Russia
+FR,France";
 
         var client = GetClient();
         var importRequest = new ImportRequest(Content) { Format = "Test1", SaveLog = true };
@@ -141,8 +141,8 @@ FoundationYear,ContractType
     {
         const string content =
             @"@@Discount
-    DoubleValue,Country
-    0.4,14,2,0";
+DoubleValue,Country
+0.4,14,2,0";
 
         var client = GetClient();
         var importRequest = new ImportRequest(content);
@@ -173,8 +173,8 @@ FoundationYear,ContractType
     {
         const string content =
             @"@@Country
-    SystemName,DisplayName
-    A,B";
+SystemName,DisplayName
+A,B";
 
         var client = GetClient();
         var importRequest = new ImportRequest(content) { Format = "Test1", SaveLog = true };

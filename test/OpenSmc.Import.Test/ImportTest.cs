@@ -1,5 +1,4 @@
 ﻿using System.Reactive.Linq;
-using System.Reflection.Metadata;
 using System.Text.Json;
 using FluentAssertions;
 using FluentAssertions.Equivalency;
@@ -45,6 +44,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // arrange
         var client = GetClient();
+        TimeSpan timeout = TimeSpan.FromSeconds(10);
         var importRequest = new ImportRequest(VanillaDistributedCsv)
         {
             Format = TestHubSetup.CashflowImportFormat,
@@ -63,11 +63,14 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
                 host.GetHostedHub(new TransactionalDataAddress(2024, "1", new HostAddress()))
             )
             .GetObservable<TransactionalData>()
+            .Timeout(timeout)
             .FirstAsync();
+
         var computedItems1 = await GetWorkspace(
                 host.GetHostedHub(new ComputedDataAddress(2024, "1", new HostAddress()))
             )
             .GetObservable<ComputedData>()
+            .Timeout(timeout)
             .FirstAsync();
 
         using (new AssertionScope())

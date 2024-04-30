@@ -124,7 +124,11 @@ internal class InitializeObserver : IObserver<ChangeItem<EntityStore>>
     public readonly List<IDisposable> Disposables;
     private readonly Dictionary<object, ChangeStream<EntityStore>> streams;
     private readonly Action onCompleteInitialization;
-    private static TimeSpan Timeout = TimeSpan.FromSeconds(5);
+#if DISABLE_TIMEOUT
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5)
+#else
+    private static readonly TimeSpan Timeout = TimeSpan.FromHours(99);
+#endif
 
     public InitializeObserver(
         Dictionary<object, ChangeStream<EntityStore>> streams,

@@ -56,7 +56,7 @@ public record ReduceManager
         where TReference : WorkspaceReference<TStream>
     {
         object Lambda(WorkspaceState ws, WorkspaceReference r, LinkedListNode<Reduce> node) =>
-            ReduceImpl(ws, r, reducer, node);
+            ReduceApplyRules(ws, r, reducer, node);
         Reducers.AddFirst(Lambda);
 
         object Stream(
@@ -98,7 +98,7 @@ public record ReduceManager
                 );
     }
 
-    private static object ReduceImpl<TReference, TStream>(
+    private static object ReduceApplyRules<TReference, TStream>(
         WorkspaceState state,
         WorkspaceReference @ref,
         Func<WorkspaceState, TReference, TStream> reducer,
@@ -352,13 +352,15 @@ public record WorkspaceState
         {
             var collection = CollectionsByType.GetValueOrDefault(g.Key);
             if (collection == null)
-                throw new InvalidOperationException(
-                    $"Type {g.Key.FullName} is not mapped to data source."
+                throw new ArgumentException(
+                    $"Type {g.Key.FullName} is not mapped to data source.",
+                    nameof(instances)
                 );
             var typeProvider = TypeSources.GetValueOrDefault(collection);
             if (typeProvider == null)
-                throw new InvalidOperationException(
-                    $"Type {g.Key.FullName} is not mapped to data source."
+                throw new ArgumentException(
+                    $"Type {g.Key.FullName} is not mapped to data source.",
+                    nameof(instances)
                 );
             yield return new(
                 typeProvider.CollectionName,

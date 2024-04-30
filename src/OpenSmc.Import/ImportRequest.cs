@@ -28,7 +28,7 @@ public record ImportRequest(Source Source) : IRequest<ImportResponse>
 
     public ImportRequest WithEntityType(Type entityType) => this with { EntityType = entityType };
 
-    public bool SaveLog { get; init; } = true;
+    public bool SaveLog { get; init; }
 }
 
 public record ImportResponse(long Version, ActivityLog Log);

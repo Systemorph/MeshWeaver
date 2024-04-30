@@ -65,6 +65,8 @@ public static class TestDomain
 
     public record Discount
     {
+        public Guid Id { get; init; } = Guid.NewGuid();
+
         [Percentage]
         public double DoubleValue { get; init; }
 
