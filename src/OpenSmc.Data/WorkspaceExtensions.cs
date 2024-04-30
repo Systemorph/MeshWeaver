@@ -9,11 +9,19 @@ public static class WorkspaceExtensions
     public static IReadOnlyDictionary<object, object> GetDataById<T>(this WorkspaceState state) =>
         state?.Reduce(new CollectionReference(state.GetCollectionName(typeof(T))))?.Instances;
 
-    public static IReadOnlyCollection<T> GetData<T>(this WorkspaceState state) =>
-        state
-            ?.Reduce(new CollectionReference(state.GetCollectionName(typeof(T))))
+    public static IReadOnlyCollection<T> GetData<T>(this WorkspaceState state)
+    {
+        var collection = state.GetCollectionName(typeof(T));
+        if (collection == null)
+            throw new ArgumentException(
+                $"Type {typeof(T).Name} is not registered in the workspace",
+                nameof(T)
+            );
+        return state
+            ?.Reduce(new CollectionReference(collection))
             ?.Instances.Values.Cast<T>()
             .ToArray();
+    }
 
     public static IReadOnlyCollection<T> GetData<T>(this IWorkspace workspace) =>
         workspace.State.GetData<T>();

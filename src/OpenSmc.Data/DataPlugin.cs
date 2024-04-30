@@ -99,10 +99,7 @@ public class DataPlugin(IMessageHub hub)
     }
 }
 
-internal class InitializeObserver(
-    Dictionary<object, ChangeStream<EntityStore>> streams,
-    Action onCompleteInitialization
-) : IObserver<ChangeItem<EntityStore>>
+internal class InitializeObserver : IObserver<ChangeItem<EntityStore>>
 {
     public void OnCompleted() { }
 
@@ -124,5 +121,29 @@ internal class InitializeObserver(
         onCompleteInitialization.Invoke();
     }
 
-    public readonly List<IDisposable> Disposables = new();
+    public readonly List<IDisposable> Disposables;
+    private readonly Dictionary<object, ChangeStream<EntityStore>> streams;
+    private readonly Action onCompleteInitialization;
+    private static TimeSpan Timeout = TimeSpan.FromSeconds(5);
+
+    public InitializeObserver(
+        Dictionary<object, ChangeStream<EntityStore>> streams,
+        Action onCompleteInitialization
+    )
+    {
+        this.streams = streams;
+        this.onCompleteInitialization = onCompleteInitialization;
+        Disposables = new() { CreateTimeout() };
+    }
+
+    private IDisposable CreateTimeout() =>
+        new Timer(
+            _ =>
+                throw new TimeoutException(
+                    $"Could not initialize data sources {string.Join(",", streams.Select(x => x.ToString()))}"
+                ),
+            null,
+            Timeout,
+            Timeout
+        );
 }

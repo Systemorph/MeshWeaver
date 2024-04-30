@@ -25,6 +25,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
                     .RouteAddressToHostedHub<OrderAddress>(c => c.AddNorthwindOrders())
                     .RouteAddressToHostedHub<SupplierAddress>(c => c.AddNorthwindSuppliers())
                     .RouteAddressToHostedHub<ProductAddress>(c => c.AddNorthwindProducts())
+                    .RouteAddressToHostedHub<CustomerAddress>(c => c.AddNorthwindCustomers())
             );
     }
 
@@ -34,7 +35,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             .AddData(data =>
                 data.FromHub(
                         new ReferenceDataAddress(),
-                        dataSource => dataSource.AddNorthwindDomain()
+                        dataSource => dataSource.AddNorthwindReferenceData()
                     )
                     .FromHub(new CustomerAddress(), c => c.WithType<Customer>())
                     .FromHub(new ProductAddress(), c => c.WithType<Product>())
@@ -52,21 +53,54 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
                 data.FromHub(new HostAddress(), dataSource => dataSource.AddNorthwindDomain())
             );
 
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(6);
+
     [Fact]
     public async Task DataInitialization()
     {
         var client = GetClient();
-        var categories = await client.GetWorkspace().GetObservable<Category>().FirstAsync();
+
+        var categories = await client
+            .GetWorkspace()
+            .GetObservable<Category>()
+            .Timeout(Timeout)
+            .FirstAsync();
         categories.Should().HaveCountGreaterThan(0);
-        var territories = await client.GetWorkspace().GetObservable<Territory>().FirstAsync();
+        var territories = await client
+            .GetWorkspace()
+            .GetObservable<Territory>()
+            .Timeout(Timeout)
+            .FirstAsync();
         territories.Should().HaveCountGreaterThan(0);
-        var employees = await client.GetWorkspace().GetObservable<Employee>().FirstAsync();
+        var employees = await client
+            .GetWorkspace()
+            .GetObservable<Employee>()
+            .Timeout(Timeout)
+            .FirstAsync();
         employees.Should().HaveCountGreaterThan(0);
-        var products = await client.GetWorkspace().GetObservable<Product>().FirstAsync();
+        var products = await client
+            .GetWorkspace()
+            .GetObservable<Product>()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .FirstAsync();
         products.Should().HaveCountGreaterThan(0);
-        var orders = await client.GetWorkspace().GetObservable<Order>().FirstAsync();
+        var orders = await client
+            .GetWorkspace()
+            .GetObservable<Order>()
+            .Timeout(Timeout)
+            .FirstAsync();
         orders.Should().HaveCountGreaterThan(0);
-        var suppliers = await client.GetWorkspace().GetObservable<Supplier>().FirstAsync();
+        var suppliers = await client
+            .GetWorkspace()
+            .GetObservable<Supplier>()
+            .Timeout(Timeout)
+            .FirstAsync();
         suppliers.Should().HaveCountGreaterThan(0);
+        var customers = await client
+            .GetWorkspace()
+            .GetObservable<Customer>()
+            .Timeout(Timeout)
+            .FirstAsync();
+        customers.Should().HaveCountGreaterThan(0);
     }
 }
