@@ -38,7 +38,7 @@ public record Employee(
     string Country,
     string HomePhone,
     string Extension,
-    byte[] Photo,
+    string Photo,
     string Notes,
     int ReportsTo,
     string PhotoPath
@@ -71,7 +71,7 @@ public record Product(
     short UnitsInStock,
     short UnitsOnOrder,
     short ReorderLevel,
-    bool Discontinued
+    int Discontinued
 );
 
 public record Region([property: Key] int RegionId, string RegionDescription);

@@ -58,7 +58,7 @@ namespace OpenSmc.Import
         )
         {
             var rowParameter = Expression.Parameter(typeof(IDataRow), "row");
-            var columnsDict = columns.ToDictionary(x => x.Key, x => x.Value);
+            var columnsDict = columns.ToDictionary(x => x.Key.ToLowerInvariant(), x => x.Value);
 
             var constructorInfo = type.GetConstructors().MinBy(x => x.GetParameters().Length);
             if (constructorInfo == null)
@@ -128,7 +128,7 @@ namespace OpenSmc.Import
                     var name =
                         parameter.GetCustomAttribute<MapToAttribute>()?.PropertyName
                         ?? parameter.Name;
-                    if (columns.Remove(name, out var matchedIndex)) // kick out parameters from columns to be processed in binding expressions
+                    if (columns.Remove(name.ToLowerInvariant(), out var matchedIndex)) // kick out parameters from columns to be processed in binding expressions
                         yield return new(
                             parameter.Name,
                             GetPropertyExpression(
@@ -180,7 +180,7 @@ namespace OpenSmc.Import
                     var propertyName =
                         propertyInfo.GetCustomAttribute<MapToAttribute>()?.PropertyName
                         ?? propertyInfo.Name;
-                    if (columns.TryGetValue(propertyName, out var matchedIndex))
+                    if (columns.TryGetValue(propertyName.ToLowerInvariant(), out var matchedIndex))
                         yield return Expression.Bind(
                             propertyInfo,
                             GetPropertyExpression(
@@ -198,7 +198,7 @@ namespace OpenSmc.Import
             Dictionary<string, int> columns
         )
         {
-            var regexp = new Regex($"^{name}\\d*$", RegexOptions.Compiled);
+            var regexp = new Regex($"^{name.ToLowerInvariant()}\\d*$", RegexOptions.Compiled);
             return columns.Where(c => regexp.IsMatch(c.Key)).ToArray();
         }
 

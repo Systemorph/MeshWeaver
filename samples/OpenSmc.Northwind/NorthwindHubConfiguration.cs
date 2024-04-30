@@ -88,6 +88,20 @@ public static class NorthwindHubConfiguration
             );
     }
 
+    public static MessageHubConfiguration AddNorthwindCustomers(
+        this MessageHubConfiguration configuration
+    )
+    {
+        return configuration
+            .AddImport()
+            .AddData(data =>
+                data.FromEmbeddedResource<Customer>(
+                    "Files.customers.csv",
+                    config => config.WithType<Customer>()
+                )
+            );
+    }
+
     public static TDataSource AddNorthwindDomain<TDataSource>(this TDataSource dataSource)
         where TDataSource : DataSource<TDataSource>
     {
@@ -96,7 +110,8 @@ public static class NorthwindHubConfiguration
             .WithType<Order>()
             .WithType<Supplier>()
             .WithType<Employee>()
-            .WithType<Product>();
+            .WithType<Product>()
+            .WithType<Customer>();
     }
 
     public static TDataSource AddNorthwindReferenceData<TDataSource>(this TDataSource dataSource)
