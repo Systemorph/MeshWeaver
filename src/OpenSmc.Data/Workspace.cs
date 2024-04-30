@@ -197,7 +197,8 @@ public class Workspace(IMessageHub hub, object id) : IWorkspace
                 LastCommitted = State;
 
                 initializeTaskCompletionSource.SetResult();
-            }
+            },
+            dataContext.InitializationTimeout
         );
 
         foreach (var stream in dataContextStreams)

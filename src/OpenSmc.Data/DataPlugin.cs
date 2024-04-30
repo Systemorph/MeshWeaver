@@ -124,19 +124,18 @@ internal class InitializeObserver : IObserver<ChangeItem<EntityStore>>
     public readonly List<IDisposable> Disposables;
     private readonly Dictionary<object, ChangeStream<EntityStore>> streams;
     private readonly Action onCompleteInitialization;
-#if DISABLE_TIMEOUT
-    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5)
-#else
-    private static readonly TimeSpan Timeout = TimeSpan.FromHours(99);
-#endif
+
+    private TimeSpan Timeout { get; }
 
     public InitializeObserver(
         Dictionary<object, ChangeStream<EntityStore>> streams,
-        Action onCompleteInitialization
+        Action onCompleteInitialization,
+        TimeSpan timeout
     )
     {
         this.streams = streams;
         this.onCompleteInitialization = onCompleteInitialization;
+        Timeout = timeout;
         Disposables = new() { CreateTimeout() };
     }
 
