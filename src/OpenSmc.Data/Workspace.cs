@@ -225,10 +225,7 @@ public class Workspace(IMessageHub hub, object id) : IWorkspace
 
     public IObservable<ChangeItem<TStream>> GetStream<TStream>(
         WorkspaceReference<TStream> reference
-    )
-    {
-        return ReduceManager.ReduceStream(Stream, reference);
-    }
+    ) => ReduceManager.ReduceStream(Stream, reference);
 
     private readonly Subject<DataChangedEvent> externalSynchronizationStream = new();
 
@@ -272,4 +269,6 @@ public class Workspace(IMessageHub hub, object id) : IWorkspace
         if (externalSubscriptions.TryRemove((sender, reference), out var existing))
             existing.Dispose();
     }
+
+    public void Update(WorkspaceState state) => State = state;
 }
