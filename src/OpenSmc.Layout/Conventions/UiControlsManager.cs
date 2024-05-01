@@ -5,11 +5,11 @@ using OpenSmc.Layout.DataBinding;
 using OpenSmc.TypeRelevance;
 using OpenSmc.Utils;
 
-namespace OpenSmc.Layout;
+namespace OpenSmc.Layout.Conventions;
 
 public record UiControlsManager
 {
-    private readonly SortByTypeRelevanceRegistry<Func<object, UiControl>> rules = new ();
+    private readonly SortByTypeRelevanceRegistry<Func<object, UiControl>> rules = new();
     private Func<object, UiControl> fallbackRule;
 
     public UiControlsManager()
@@ -22,16 +22,18 @@ public record UiControlsManager
 
         Register(typeof(Exception), o => Controls.Exception((Exception)o));
 
-
-        Register(typeof(Nullable<>), instance =>
-        {
-            // HACK V10: in case of nullable type has null value, we still have to show proper control, not html control (2023-08-31, Andrei Sirotenko)
-            return instance == null
-                ? Get(null)
-                : Get(instance, Nullable.GetUnderlyingType(instance.GetType()));
-        });
-
+        Register(
+            typeof(Nullable<>),
+            instance =>
+            {
+                // HACK V10: in case of nullable type has null value, we still have to show proper control, not html control (2023-08-31, Andrei Sirotenko)
+                return instance == null
+                    ? Get(null)
+                    : Get(instance, Nullable.GetUnderlyingType(instance.GetType()));
+            }
+        );
     }
+
     public void Register<T>(Func<T, UiControl> factory)
     {
         Register(typeof(T), instance => factory((T)instance));
@@ -49,7 +51,7 @@ public record UiControlsManager
     {
         fallbackRule = factory;
     }
-        
+
     public UiControl Get(object instance, Type type = null)
     {
         try
@@ -76,17 +78,21 @@ public record UiControlsManager
 
             var factory = rules.Get(type) ?? fallbackRule;
             if (factory == null)
-                throw new ApplicationException("No conversion from instance to UIControl was found.");
+                throw new ApplicationException(
+                    "No conversion from instance to UIControl was found."
+                );
 
             var ret = factory(instance);
             return ret;
         }
         catch (Exception e)
         {
-            throw new ApplicationException($"Error while trying to retrieve presenter. {e.Message}", e);
+            throw new ApplicationException(
+                $"Error while trying to retrieve presenter. {e.Message}",
+                e
+            );
         }
     }
-
 
     // TODO V10: Change to some other service where we ll be able to get property editor if property has setter or property viewer if it does not (2023.08.18, Armen Sirotenko)
     public PropertyLayout GetPropertyLayout(PropertyInfo propertyInfo)
@@ -94,13 +100,22 @@ public record UiControlsManager
         var dn = propertyInfo.GetCustomAttribute<DisplayAttribute>();
         var systemName = propertyInfo.Name.ToCamelCase();
         var displayName = string.IsNullOrEmpty(dn?.Name) ? propertyInfo.Name.Wordify() : dn.Name;
-        var attributes = propertyInfo.GetCustomAttributes().OfType<IPropertyWithUiControl>().ToList();
+        var attributes = propertyInfo
+            .GetCustomAttributes()
+            .OfType<IPropertyWithUiControl>()
+            .ToList();
 
-        var viewer = GetUiControlProperty(propertyInfo.PropertyType, attributes) with { Data = new Binding(propertyInfo.Name.ToCamelCase()) };
+        var viewer = GetUiControlProperty(propertyInfo.PropertyType, attributes) with
+        {
+            Data = new Binding(propertyInfo.Name.ToCamelCase())
+        };
         return new PropertyLayout(systemName, displayName, viewer);
     }
 
-    private UiControl GetUiControlProperty(Type type, IEnumerable<IPropertyWithUiControl> attributes)
+    private UiControl GetUiControlProperty(
+        Type type,
+        IEnumerable<IPropertyWithUiControl> attributes
+    )
     {
         //we ll get first or in it is empty we ll call fallback
         foreach (var propertyWithUiControl in attributes)
