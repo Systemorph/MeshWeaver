@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Security.Cryptography;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Data.Serialization;
@@ -19,7 +20,7 @@ public class Workspace(IMessageHub hub, object id) : IWorkspace
     private readonly ReplaySubject<ChangeItem<WorkspaceState>> synchronizationStream = new(1);
     private readonly Subject<ChangeItem<WorkspaceState>> subject = new();
     public IObservable<ChangeItem<WorkspaceState>> ChangeStream => changeStream;
-    private readonly Dictionary<string, ITypeSource> typeSources = new();
+    private readonly ConcurrentDictionary<string, ITypeSource> typeSources = new();
 
     public IReadOnlyCollection<Type> MappedTypes => State.MappedTypes.ToArray();
     private readonly ConcurrentDictionary<
@@ -30,40 +31,59 @@ public class Workspace(IMessageHub hub, object id) : IWorkspace
     private readonly ConcurrentDictionary<
         (object Address, WorkspaceReference Reference),
         IDisposable
-    > externalSubscriptions = new();
+    > subscription = new();
 
-    private void RegisterChangeFeed<TReference>(
+    private void RegisterChangeStream<TReference>(
         object address,
         WorkspaceReference<TReference> reference
     )
     {
-        if (externalSubscriptions.ContainsKey((address, reference)))
+        if (subscription.ContainsKey((address, reference)))
             return;
-        var stream =
-            (ChangeStream<TReference>)
-                streams.GetOrAdd(
-                    (Hub.Address, reference),
-                    key =>
-                    {
-                        return new ChangeStream<TReference>(
-                            this,
-                            key.Address,
-                            reference,
-                            Hub,
-                            () => Hub.Version,
-                            false
-                        );
-                    }
-                );
-        stream.Disposables.Add(
+        var stream = GetChangeStream(reference);
+        stream.AddDisposable(
             externalSynchronizationStream
                 .Where(x => x.Address.Equals(address) && x.Reference.Equals(reference))
                 .Subscribe(stream)
         );
-        externalSubscriptions.GetOrAdd(
+        subscription.GetOrAdd(
             (address, reference),
             _ => stream.Subscribe<DataChangedEvent>(dc => Hub.Post(dc, o => o.WithTarget(address)))
         );
+    }
+
+    private static readonly ConcurrentDictionary<
+        WorkspaceReference,
+        IChangeStream
+    > externalChangeStreams = new();
+
+    private IChangeStream GetChangeStream<TReference>(WorkspaceReference<TReference> reference)
+    {
+        return externalChangeStreams.GetOrAdd(
+            reference,
+            _ => CreateChangeStream<TReference>(reference)
+        );
+    }
+
+    private ChangeStream<TReference> CreateChangeStream<TReference>(
+        WorkspaceReference<TReference> reference
+    )
+    {
+        return (ChangeStream<TReference>)
+            streams.GetOrAdd(
+                (Hub.Address, reference),
+                key =>
+                {
+                    return new ChangeStream<TReference>(
+                        this,
+                        key.Address,
+                        reference,
+                        Hub,
+                        () => Hub.Version,
+                        false
+                    );
+                }
+            );
     }
 
     public ChangeStream<TReference> GetRemoteStream<TReference>(
@@ -172,6 +192,9 @@ public class Workspace(IMessageHub hub, object id) : IWorkspace
         Initialize(DataContext);
     }
 
+    /// <summary>
+    /// Change stream belonging to the workspace.
+    /// </summary>
     private readonly Subject<ChangeItem<WorkspaceState>> changeStream = new();
 
     private void Initialize(DataContext dataContext)
@@ -260,7 +283,7 @@ public class Workspace(IMessageHub hub, object id) : IWorkspace
 
     public async ValueTask DisposeAsync()
     {
-        foreach (var subscription in externalSubscriptions.Values)
+        foreach (var subscription in subscription.Values)
             subscription.Dispose();
 
         await DataContext.DisposeAsync();
@@ -276,12 +299,18 @@ public class Workspace(IMessageHub hub, object id) : IWorkspace
 
     public void Subscribe(object sender, WorkspaceReference reference)
     {
-        RegisterChangeFeed(sender, (dynamic)reference);
+        RegisterChangeStream(sender, (dynamic)reference);
     }
 
     public void Unsubscribe(object sender, WorkspaceReference reference)
     {
-        if (externalSubscriptions.TryRemove((sender, reference), out var existing))
+        if (subscription.TryRemove((sender, reference), out var existing))
             existing.Dispose();
+    }
+
+    public void SendMessage(IWorkspaceMessage message)
+    {
+        if (externalChangeStreams.TryGetValue(message.Reference, out var stream))
+            stream.SendMessage(message);
     }
 }

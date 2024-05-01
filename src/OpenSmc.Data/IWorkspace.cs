@@ -32,4 +32,5 @@ public interface IWorkspace : IAsyncDisposable
     void Initialize();
     void Subscribe(object sender, WorkspaceReference reference);
     void Unsubscribe(object sender, WorkspaceReference reference);
+    void SendMessage(IWorkspaceMessage message);
 }
