@@ -27,18 +27,6 @@ public class ApplicationHub(IClusterClient clusterClient, IHubContext<Applicatio
         logger.LogDebug("Attempt to make new SignalR connection {ConnectionId} ", Context.ConnectionId);
 
         await base.OnConnectedAsync();
-
-        var streamProvider = clusterClient.GetStreamProvider(ApplicationStreamProviders.AppStreamProvider);
-        var stream = streamProvider.GetStream<IMessageDelivery>(ApplicationStreamNamespaces.Ui, TestUiIds.HardcodedUiId);
-
-        // TODO V10: change to handle subscriptions per ConnectionId (2024/04/17, Dmitry Kalabin)
-        var connectionId = Context.ConnectionId;
-        subscriptionHandle = await stream
-            .SubscribeAsync(async(delivery, _) => 
-                {
-                    logger.LogTrace("Received {Event}, sending to client.", delivery);
-                    await hubContext.Clients.Client(connectionId).SendAsync(HandleEvent, delivery); // TODO V10: need to think about avoiding closure usages here to let SignalR Hubs to be disposed and recreated when necessary (2024/04/17, Dmitry Kalabin)
-                });
     }
 
     [UsedImplicitly]
@@ -47,6 +35,12 @@ public class ApplicationHub(IClusterClient clusterClient, IHubContext<Applicatio
         logger.LogTrace("Received incoming message in SignalR Hub to deliver: {delivery}", delivery);
         var grainId = delivery.Target.ToString(); // TODO V10: need to make this deterministic (2024/04/22, Dmitry Kalabin)
         var grain = clusterClient.GetGrain<IApplicationGrain>(grainId);
+
+        var uiId = (delivery.Sender as UiAddress)?.Id;
+        if (uiId != null)
+        {
+            await subscriptions.SubscribeAsync(Context.ConnectionId, uiId, SubscribeBackwardDelivery);
+        }
 
         await grain.DeliverMessage(delivery);
     }
