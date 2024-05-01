@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Application.Orleans;
+using OpenSmc.Application.SignalR.Streams;
 using OpenSmc.Messaging;
 using OpenSmc.Serialization;
 using Orleans.Streams;
@@ -49,4 +50,13 @@ public class ApplicationHub(IClusterClient clusterClient, IHubContext<Applicatio
 
         await grain.DeliverMessage(delivery);
     }
+
+    private Task<IAsyncDisposable> SubscribeBackwardDelivery(string uiId, Func<IReadOnlyCollection<string>> getConnections)
+        => clusterClient.GetStreamProvider(ApplicationStreamProviders.AppStreamProvider)
+            .GetStream<IMessageDelivery>(ApplicationStreamNamespaces.Ui, uiId)
+            .SubscribeDisposableAsync(async (delivery) =>
+            {
+                logger.LogTrace("Received {Event}, sending to client.", delivery);
+                await hubContext.Clients.Clients(getConnections()).SendAsync(HandleEvent, delivery);
+            });
 }
