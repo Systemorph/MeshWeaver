@@ -36,6 +36,27 @@ public class GroupsSubscriptions<TIdentity>
         }
     }
 
+    internal async Task UnsubscribeAllAsync(string connectionId)
+    {
+        using (await @lock.LockAsync())
+        {
+            if (connectionIdToGroupIds.TryGetValue(connectionId, out var connectionGroupIds))
+            {
+                foreach (var groupId in connectionGroupIds)
+                {
+                    if (!groupSubscriptions.TryGetValue(groupId, out var subscription))
+                        continue;
+                    if (await subscription.TryToUnsubscribeAsync(connectionId))
+                    {
+                        groupSubscriptions.Remove(groupId);
+                    }
+                }
+                connectionIdToGroupIds.Remove(connectionId);
+            }
+            // TODO V10: we might try to do the hard way through all the existed Groups in the case connectionId is not present in the reverse map (2024/04/26, Dmitry Kalabin)
+        }
+    }
+
     private class GroupSubscription(TIdentity groupId)
     {
         private ImmutableHashSet<string> connections = [];
