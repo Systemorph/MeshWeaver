@@ -7,6 +7,7 @@ public class GroupsSubscriptions<TIdentity>
     private readonly AsyncLock @lock = new();
 
     private readonly Dictionary<TIdentity, GroupSubscription> groupSubscriptions = new();
+    private readonly Dictionary<string, HashSet<TIdentity>> connectionIdToGroupIds = new();
 
     internal async ValueTask SubscribeAsync(string connectionId, TIdentity groupId, Func<TIdentity, Func<IReadOnlyCollection<string>>, Task<IAsyncDisposable>> subscribeAsync)
     {
@@ -21,6 +22,9 @@ public class GroupsSubscriptions<TIdentity>
                 groupSubscriptions.Add(groupId, subscription = new GroupSubscription(groupId));
             if (subscription.Add(connectionId))
                 await subscription.SubscribeAsync(subscribeAsync);
+            if (!connectionIdToGroupIds.TryGetValue(connectionId, out var connectionGroupIds))
+                connectionIdToGroupIds.Add(connectionId, connectionGroupIds = []);
+            connectionGroupIds.Add(groupId);
         }
     }
 
