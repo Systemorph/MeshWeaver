@@ -1,4 +1,4 @@
-﻿namespace OpenSmc.Layout.Api;
+﻿namespace OpenSmc.Layout;
 
 public static class ModalArea
 {

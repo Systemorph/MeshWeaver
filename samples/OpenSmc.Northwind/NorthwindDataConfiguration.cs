@@ -6,9 +6,10 @@ using static OpenSmc.Import.ImportExtensions;
 
 namespace OpenSmc.Northwind;
 
-public static class NorthwindHubConfiguration
+public static class NorthwindDataConfiguration
 {
-    private static readonly Assembly NorthwindAssembly = typeof(NorthwindHubConfiguration).Assembly;
+    private static readonly Assembly NorthwindAssembly =
+        typeof(NorthwindDataConfiguration).Assembly;
 
     public static MessageHubConfiguration AddNorthwindReferenceData(
         this MessageHubConfiguration configuration
@@ -125,17 +126,3 @@ public static class NorthwindHubConfiguration
         return serviceProvider.CreateMessageHub(address, config => config.AddData(data => data));
     }
 }
-
-public class ReferenceDataAddress;
-
-public class CustomerAddress;
-
-public class ProductAddress;
-
-public class EmployeeAddress;
-
-public class OrderAddress;
-
-public class ShipperAddress;
-
-public class SupplierAddress;

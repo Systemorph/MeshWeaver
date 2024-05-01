@@ -1,4 +1,6 @@
-﻿namespace OpenSmc.Layout;
+﻿using OpenSmc.Layout.Conventions;
+
+namespace OpenSmc.Layout;
 
 public interface IObjectWithUiControl
 {
