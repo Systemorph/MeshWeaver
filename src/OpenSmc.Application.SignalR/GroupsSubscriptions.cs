@@ -13,6 +13,14 @@ public class GroupsSubscriptions<TIdentity>
     {
         if (groupSubscriptions.TryGetValue(groupId, out var subscription) && subscription.Connections.Contains(connectionId))
         {
+            if (!connectionIdToGroupIds.ContainsKey(connectionId))
+            {
+                using (await @lock.LockAsync())
+                {
+                    if (!connectionIdToGroupIds.ContainsKey(connectionId))
+                        connectionIdToGroupIds.Add(connectionId, [groupId]);
+                }
+            }
             return;
         }
 
