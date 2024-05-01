@@ -53,5 +53,19 @@ public class GroupsSubscriptions<TIdentity>
         {
             Disposable = await subscribeAsync(groupId, () => Connections);
         }
+
+        internal async ValueTask<bool> TryToUnsubscribeAsync(string connectionId)
+        {
+            connections = connections.Remove(connectionId);
+            if (connections.Count > 0)
+                return false;
+
+            if (Disposable != null)
+            {
+                await Disposable.DisposeAsync();
+                Disposable = null;
+            }
+            return true;
+        }
     }
 }
