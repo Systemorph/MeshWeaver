@@ -12,7 +12,8 @@ public class DataPlugin(IMessageHub hub)
         IMessageHandler<DataChangedEvent>,
         IMessageHandler<SubscribeRequest>,
         IMessageHandler<UnsubscribeDataRequest>,
-        IMessageHandler<PatchChangeRequest>
+        IMessageHandler<PatchChangeRequest>,
+        IMessageHandler<IWorkspaceMessage>
 {
     private IWorkspace Workspace { get; set; } =
         hub.ServiceProvider.GetRequiredService<IWorkspace>();
@@ -97,6 +98,12 @@ public class DataPlugin(IMessageHub hub)
         await Workspace.DisposeAsync();
         await base.DisposeAsync();
     }
+
+    public IMessageDelivery HandleMessage(IMessageDelivery<IWorkspaceMessage> request)
+    {
+        Workspace.SendMessage(request.Message);
+        return request.Processed();
+    }
 }
 
 internal class InitializeObserver : IObserver<ChangeItem<EntityStore>>
@@ -135,7 +142,7 @@ internal class InitializeObserver : IObserver<ChangeItem<EntityStore>>
     {
         this.streams = streams;
         this.onCompleteInitialization = onCompleteInitialization;
-        Timeout = timeout;
+        Timeout = TimeSpan.FromHours(2);
         Disposables = new() { CreateTimeout() };
     }
 

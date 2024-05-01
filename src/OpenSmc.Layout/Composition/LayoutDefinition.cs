@@ -118,7 +118,7 @@ public record LayoutDefinition(IMessageHub Hub)
         return this;
     }
 
-    public ViewElement GetViewElement(LayoutAreaReference reference)
+    internal ViewElement GetViewElement(LayoutAreaReference reference)
     {
         foreach (var viewGenerator in ViewGenerators)
         {

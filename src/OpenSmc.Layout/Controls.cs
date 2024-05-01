@@ -48,6 +48,7 @@ public static class Controls
     public static SliderControl Slider(int min, int max, int step) => new(min, max, step);
 
     /// <summary>
+    /// Control representing a progress bar
     /// </summary>
     /// <param name="message"></param>
     /// <param name="progress">Percentage between 0 and 100</param>
@@ -60,10 +61,6 @@ public static class Controls
 
     public static RedirectControl Redirect(LayoutAreaReference message, object address) =>
         new(message, address, message.Area);
-
-    public static LayoutStackControl ApplicationWindow() => Stack().WithSkin(Skin.MainWindow);
-
-    public static LayoutStackControl SideMenu() => Stack().WithSkin(Skin.SideMenu);
 
     public record ExpandControl(object Data)
         : ExpandableUiControl<ExpandControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);

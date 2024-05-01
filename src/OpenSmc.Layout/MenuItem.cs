@@ -5,6 +5,7 @@ using OpenSmc.Reflection;
 namespace OpenSmc.Layout.Views;
 
 /// <summary>
+/// ActivityControl is a control that represents an activity in the system.
 /// </summary>
 /// <param name="User">UserInfo, for now populated with Email, DisplayName and Photo</param>
 /// <param name="Title">Text</param>
@@ -52,13 +53,10 @@ public record MenuItemControl(object Title, object Icon)
         return WithExpand(payload, async p => await ExpandSubMenu(p, subMenu));
     }*/
 
-    public MenuItemControl WithSubMenu(
-        object payload,
-        Func<object, IAsyncEnumerable<MenuItemControl>> subMenu
-    )
+    public MenuItemControl WithSubMenu(Func<object, IAsyncEnumerable<MenuItemControl>> subMenu)
     {
         // TODO V10: redirect to non generic method (2023.08.28, Armen Sirotenko)
-        return WithExpand(payload, async p => await ExpandSubMenu(p, subMenu));
+        return WithExpand(async p => await ExpandSubMenu(p, subMenu));
     }
 
 #pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
@@ -95,18 +93,13 @@ public record MenuItemControl(object Title, object Icon)
         throw new NotSupportedException();
     }
 
-    public MenuItemControl WithSubMenu(object payload, object view)
+    public MenuItemControl WithSubMenu(object view)
     {
         return this with
         {
             ExpandFunc = p => ExpandSubMenu(p, view),
             //ExpandMessage = new(new ExpandRequest(Expand){Payload = payload}, Address, Expand)
         };
-    }
-
-    public MenuItemControl WithSubMenu(object view)
-    {
-        return WithSubMenu(null, view);
     }
 
     public MenuItemControl WithSubMenu(params MenuItemControl[] children)
