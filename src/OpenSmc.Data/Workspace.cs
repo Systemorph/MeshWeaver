@@ -1,7 +1,8 @@
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Security.Cryptography;
+using System.Text.RegularExpressions;
+using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Data.Serialization;
@@ -9,78 +10,66 @@ using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
 
-public class Workspace(IMessageHub hub, object id) : IWorkspace
+public class Workspace : IWorkspace
 {
-    [ActivatorUtilitiesConstructor]
     public Workspace(IMessageHub hub)
-        : this(hub, hub.Address) { }
+    {
+        Hub = hub;
+        logger = hub.ServiceProvider.GetRequiredService<ILogger<Workspace>>();
+        myChangeStream = new(Hub.Address, new WorkspaceStateReference(), Hub, ReduceManager);
+    }
 
     private WorkspaceState State { get; set; }
-    public IObservable<ChangeItem<WorkspaceState>> Stream => synchronizationStream;
-    private readonly ReplaySubject<ChangeItem<WorkspaceState>> synchronizationStream = new(1);
-    private readonly Subject<ChangeItem<WorkspaceState>> subject = new();
-    public IObservable<ChangeItem<WorkspaceState>> ChangeStream => changeStream;
+
     private readonly ConcurrentDictionary<string, ITypeSource> typeSources = new();
+
+    IObservable<ChangeItem<WorkspaceState>> IWorkspace.Stream => myChangeStream;
 
     public IReadOnlyCollection<Type> MappedTypes => State.MappedTypes.ToArray();
     private readonly ConcurrentDictionary<
-        (object Address, WorkspaceReference Reference),
-        IDisposable
+        (object Address, object Reference),
+        IChangeStream
     > streams = new();
 
     private readonly ConcurrentDictionary<
-        (object Address, WorkspaceReference Reference),
+        (object Address, object Reference),
         IDisposable
-    > subscription = new();
+    > subscriptions = new();
+
+    /// <summary>
+    /// Change stream belonging to the workspace.
+    /// </summary>
+    private readonly ChangeStream<WorkspaceState> myChangeStream;
 
     private void RegisterChangeStream<TReference>(
         object address,
         WorkspaceReference<TReference> reference
     )
     {
-        if (subscription.ContainsKey((address, reference)))
+        if (subscriptions.ContainsKey((address, reference)))
             return;
-        var stream = GetChangeStream(reference);
-        stream.AddDisposable(
-            externalSynchronizationStream
-                .Where(x => x.Address.Equals(address) && x.Reference.Equals(reference))
-                .Subscribe(stream)
-        );
-        subscription.GetOrAdd(
+        var stream = GetChangeStream(address, reference);
+        subscriptions.GetOrAdd(
             (address, reference),
             _ => stream.Subscribe<DataChangedEvent>(dc => Hub.Post(dc, o => o.WithTarget(address)))
         );
     }
 
-    private static readonly ConcurrentDictionary<
-        WorkspaceReference,
-        IChangeStream
-    > externalChangeStreams = new();
-
-    private IChangeStream GetChangeStream<TReference>(WorkspaceReference<TReference> reference)
-    {
-        return externalChangeStreams.GetOrAdd(
-            reference,
-            _ => CreateChangeStream<TReference>(reference)
-        );
-    }
-
-    private ChangeStream<TReference> CreateChangeStream<TReference>(
+    private ChangeStream<TReference> GetChangeStream<TReference>(
+        object id,
         WorkspaceReference<TReference> reference
     )
     {
         return (ChangeStream<TReference>)
             streams.GetOrAdd(
-                (Hub.Address, reference),
+                (id, reference),
                 key =>
                 {
                     return new ChangeStream<TReference>(
-                        this,
-                        key.Address,
+                        id,
                         reference,
                         Hub,
-                        () => Hub.Version,
-                        false
+                        ReduceManager.CreateDerived<TReference>()
                     );
                 }
             );
@@ -106,57 +95,41 @@ public class Workspace(IMessageHub hub, object id) : IWorkspace
 
         var key = (address, reference);
         return (ChangeStream<TReference>)
-            streams.GetOrAdd(
-                key,
-                _ =>
-                {
-                    Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(address));
-                    var ret = new ChangeStream<TReference>(
-                        this,
-                        address,
-                        reference,
-                        Hub,
-                        () => Hub.Version,
-                        true
-                    );
+            streams.GetOrAdd(key, CreateExternalStream(address, reference));
+    }
 
-                    ret.Disposables.Add(
-                        ((IObservable<PatchChangeRequest>)ret)
-                            .Where(x => x.Address.Equals(address) && x.Reference.Equals(reference))
-                            .Subscribe(patch =>
-                                Hub.RegisterCallback(
-                                    Hub.Post(patch, o => o.WithTarget(address)),
-                                    HandleCommitResponse
-                                )
-                            )
-                    );
-                    ret.Disposables.Add(
-                        ret.Subscribe<DataChangedEvent>(dataChanged =>
-                            Hub.Post(dataChanged, o => o.WithTarget(address))
-                        )
-                    );
+    private ChangeStream<TReference> CreateExternalStream<TReference>(
+        object address,
+        WorkspaceReference<TReference> reference
+    )
+    {
+        Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(address));
+        var ret = new ChangeStream<TReference>(
+            address,
+            reference,
+            Hub,
+            ReduceManager.CreateDerived<TReference>()
+        );
 
-                    //ret.Disposables.Add(ret.Subscribe<ChangeItem<TReference>>(Synchronize));
-
-                    ret.Disposables.Add(
-                        externalSynchronizationStream
-                            .Where(x => x.Address.Equals(address) && x.Reference.Equals(reference))
-                            .DistinctUntilChanged()
-                            .Subscribe(ret)
+        ret.Disposables.Add(
+            ret.Subscribe<DataChangedEvent>(e =>
+            {
+                if (Hub.Address.Equals(e.Address))
+                    Hub.Post(@e, o => o.WithTarget(address));
+                else
+                    Hub.Post(
+                        new PatchChangeRequest(e.Reference, (JsonPatch)e.Change),
+                        o => o.WithTarget(address)
                     );
+            })
+        );
 
-                    ret.Disposables.Add(
-                        new Disposables.AnonymousDisposable(
-                            () =>
-                                Hub.Post(
-                                    new UnsubscribeDataRequest(reference),
-                                    o => o.WithTarget(address)
-                                )
-                        )
-                    );
-                    return ret;
-                }
-            );
+        ret.Disposables.Add(
+            new Disposables.AnonymousDisposable(
+                () => Hub.Post(new UnsubscribeDataRequest(reference), o => o.WithTarget(address))
+            )
+        );
+        return ret;
     }
 
     public void Update(IEnumerable<object> instances, UpdateOptions updateOptions) =>
@@ -168,7 +141,6 @@ public class Workspace(IMessageHub hub, object id) : IWorkspace
     public void Update(WorkspaceState state)
     {
         State = state;
-        PublishChange(Hub.Address);
     }
 
     public void Delete(IEnumerable<object> instances) =>
@@ -176,26 +148,45 @@ public class Workspace(IMessageHub hub, object id) : IWorkspace
 
     private readonly TaskCompletionSource initializeTaskCompletionSource = new();
     public Task Initialized => initializeTaskCompletionSource.Task;
-    private DataContext DataContext { get; set; }
 
-    private ReduceManager ReduceManager { get; } = new();
+    private ReduceManager<WorkspaceState> ReduceManager { get; } = CreateReduceManager();
+
+    private static ReduceManager<WorkspaceState> CreateReduceManager()
+    {
+        return new ReduceManager<WorkspaceState>()
+            .AddWorkspaceReference<EntityReference, object>(
+                (ws, reference) => ws.Store.ReduceImpl(reference)
+            )
+            .AddWorkspaceReference<PartitionedCollectionsReference, EntityStore>(
+                (ws, reference) => ws.ReduceImpl(reference)
+            )
+            .AddWorkspaceReference<CollectionReference, InstanceCollection>(
+                (ws, reference) => ws.Store.ReduceImpl(reference)
+            )
+            .AddWorkspaceReference<CollectionsReference, EntityStore>(
+                (ws, reference) => ws.Store.ReduceImpl(reference)
+            )
+            .AddWorkspaceReference<WorkspaceStoreReference, EntityStore>(
+                (ws, reference) => ws.Store
+            )
+            .AddWorkspaceReference<WorkspaceStateReference, WorkspaceState>((ws, reference) => ws);
+    }
+
     private WorkspaceState LastCommitted { get; set; }
-    public IMessageHub Hub { get; } = hub;
-    public object Id { get; } = id;
-    private ILogger logger = hub.ServiceProvider.GetRequiredService<ILogger<Workspace>>();
+    public IMessageHub Hub { get; }
+    public object Id { get; }
+    private ILogger logger;
 
     WorkspaceState IWorkspace.State => State;
+
+    public DataContext DataContext { get; private set; }
 
     public void Initialize() // This loads the persisted state
     {
         DataContext = Hub.GetDataConfiguration(ReduceManager);
+
         Initialize(DataContext);
     }
-
-    /// <summary>
-    /// Change stream belonging to the workspace.
-    /// </summary>
-    private readonly Subject<ChangeItem<WorkspaceState>> changeStream = new();
 
     private void Initialize(DataContext dataContext)
     {
@@ -210,12 +201,17 @@ public class Workspace(IMessageHub hub, object id) : IWorkspace
         State = CreateState(new EntityStore());
 
         var initializeObserver = new InitializeObserver(
-            dataContextStreams.ToDictionary(x => x.Address),
+            dataContextStreams.ToDictionary(x => x.Id),
             () =>
             {
-                subject.Subscribe(synchronizationStream);
-                subject.OnNext(
-                    new ChangeItem<WorkspaceState>(Id, new EntireWorkspace(), State, Id)
+                myChangeStream.Synchronize(
+                    new ChangeItem<WorkspaceState>(
+                        Id,
+                        new WorkspaceStoreReference(),
+                        State,
+                        Id,
+                        Hub.Version
+                    )
                 );
                 LastCommitted = State;
 
@@ -226,7 +222,7 @@ public class Workspace(IMessageHub hub, object id) : IWorkspace
 
         foreach (var stream in dataContextStreams)
         {
-            streams[(stream.Address, stream.Reference)] = stream;
+            streams[(stream.Id, stream.Reference)] = stream;
             stream.Disposables.Add(stream.Subscribe<ChangeItem<EntityStore>>(Synchronize));
             initializeObserver.Disposables.Add(stream.Subscribe(initializeObserver));
         }
@@ -234,7 +230,7 @@ public class Workspace(IMessageHub hub, object id) : IWorkspace
 
     public WorkspaceState CreateState(EntityStore entityStore)
     {
-        return new(Hub, entityStore, typeSources, ReduceManager.Reduce);
+        return new(Hub, entityStore, typeSources, ReduceManager);
     }
 
     private void Synchronize(ChangeItem<EntityStore> item)
@@ -247,7 +243,15 @@ public class Workspace(IMessageHub hub, object id) : IWorkspace
 
     public void Commit()
     {
-        subject.OnNext(new ChangeItem<WorkspaceState>(Id, new EntireWorkspace(), State, Id));
+        myChangeStream.Update(
+            new ChangeItem<WorkspaceState>(
+                Id,
+                new WorkspaceStoreReference(),
+                State,
+                Id,
+                Hub.Version
+            )
+        );
         LastCommitted = State;
     }
 
@@ -256,35 +260,35 @@ public class Workspace(IMessageHub hub, object id) : IWorkspace
         State = LastCommitted;
     }
 
-    public IObservable<ChangeItem<TStream>> GetStream<TStream>(
-        WorkspaceReference<TStream> reference
-    ) => ReduceManager.ReduceStream(Stream, reference);
-
-    private readonly Subject<DataChangedEvent> externalSynchronizationStream = new();
-
     public void RequestChange(DataChangeRequest change, object changedBy)
     {
         State = State.Change(change) with { Version = Hub.Version };
-        PublishChange(changedBy);
-    }
-
-    private void PublishChange(object changedBy)
-    {
-        changeStream.OnNext(
-            new ChangeItem<WorkspaceState>(Id, new EntireWorkspace(), State, changedBy)
+        myChangeStream.Update(
+            new ChangeItem<WorkspaceState>(
+                Hub.Address,
+                new WorkspaceStoreReference(),
+                State.Change(change),
+                changedBy,
+                Hub.Version
+            )
         );
     }
 
-    public void Synchronize(DataChangedEvent dataChangedEvent)
-    {
-        externalSynchronizationStream.OnNext(dataChangedEvent);
-        Commit();
-    }
+    private bool isDisposing;
 
     public async ValueTask DisposeAsync()
     {
-        foreach (var subscription in subscription.Values)
+        if (isDisposing)
+            return;
+        isDisposing = true;
+
+        foreach (var subscription in subscriptions.Values)
             subscription.Dispose();
+
+        foreach (var stream in streams.Values)
+            stream.Dispose();
+
+        myChangeStream.Dispose();
 
         await DataContext.DisposeAsync();
     }
@@ -304,13 +308,19 @@ public class Workspace(IMessageHub hub, object id) : IWorkspace
 
     public void Unsubscribe(object sender, WorkspaceReference reference)
     {
-        if (subscription.TryRemove((sender, reference), out var existing))
+        if (subscriptions.TryRemove((sender, reference), out var existing))
             existing.Dispose();
     }
 
-    public void SendMessage(IWorkspaceMessage message)
+    public IMessageDelivery DeliverMessage(IMessageDelivery<IWorkspaceMessage> delivery)
     {
-        if (externalChangeStreams.TryGetValue(message.Reference, out var stream))
-            stream.SendMessage(message);
+        if (streams.TryGetValue((Hub.Address, delivery.Message.Reference), out var stream))
+            return stream.DeliverMessage(delivery);
+        return delivery.Ignored();
     }
+
+    public ChangeStream<TReference> GetRawStream<TReference>(
+        object id,
+        WorkspaceReference<TReference> reference
+    ) => GetChangeStream<TReference>(id, reference);
 }

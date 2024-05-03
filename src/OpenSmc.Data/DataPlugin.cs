@@ -9,10 +9,8 @@ public class DataPlugin(IMessageHub hub)
     : MessageHubPlugin<WorkspaceState>(hub),
         IMessageHandler<UpdateDataRequest>,
         IMessageHandler<DeleteDataRequest>,
-        IMessageHandler<DataChangedEvent>,
         IMessageHandler<SubscribeRequest>,
         IMessageHandler<UnsubscribeDataRequest>,
-        IMessageHandler<PatchChangeRequest>,
         IMessageHandler<IWorkspaceMessage>
 {
     private IWorkspace Workspace { get; set; } =
@@ -29,10 +27,6 @@ public class DataPlugin(IMessageHub hub)
 
     IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(
         IMessageDelivery<UpdateDataRequest> request
-    ) => RequestChange(request, request.Message);
-
-    IMessageDelivery IMessageHandler<PatchChangeRequest>.HandleMessage(
-        IMessageDelivery<PatchChangeRequest> request
     ) => RequestChange(request, request.Message);
 
     IMessageDelivery IMessageHandler<DeleteDataRequest>.HandleMessage(
@@ -60,14 +54,6 @@ public class DataPlugin(IMessageHub hub)
 
         var ret = base.IsDeferred(delivery);
         return ret;
-    }
-
-    IMessageDelivery IMessageHandler<DataChangedEvent>.HandleMessage(
-        IMessageDelivery<DataChangedEvent> request
-    )
-    {
-        Workspace.Synchronize(request.Message);
-        return request.Processed();
     }
 
     IMessageDelivery IMessageHandler<SubscribeRequest>.HandleMessage(
@@ -99,10 +85,9 @@ public class DataPlugin(IMessageHub hub)
         await base.DisposeAsync();
     }
 
-    public IMessageDelivery HandleMessage(IMessageDelivery<IWorkspaceMessage> request)
+    public IMessageDelivery HandleMessage(IMessageDelivery<IWorkspaceMessage> delivery)
     {
-        Workspace.SendMessage(request.Message);
-        return request.Processed();
+        return Workspace.DeliverMessage(delivery);
     }
 }
 
@@ -142,7 +127,7 @@ internal class InitializeObserver : IObserver<ChangeItem<EntityStore>>
     {
         this.streams = streams;
         this.onCompleteInitialization = onCompleteInitialization;
-        Timeout = TimeSpan.FromHours(2);
+        Timeout = timeout;
         Disposables = new() { CreateTimeout() };
     }
 

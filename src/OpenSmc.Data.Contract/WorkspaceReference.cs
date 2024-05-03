@@ -63,8 +63,6 @@ public record EntityStore
     internal object ReduceImpl(EntityReference reference) =>
         GetCollection(reference.Collection)?.GetData(reference.Id);
 
-    internal EntityStore ReduceImpl(EntireWorkspace _) => this;
-
     internal InstanceCollection ReduceImpl(CollectionReference reference) =>
         GetCollection(reference.Collection);
 
@@ -82,13 +80,6 @@ public record EntityStore
 
     public InstanceCollection GetCollection(string collection) =>
         Collections.GetValueOrDefault(collection);
-}
-
-public record EntireWorkspace : WorkspaceReference<EntityStore>
-{
-    public string Path => "$";
-
-    public override string ToString() => Path;
 }
 
 public record JsonPathReference(string Path) : WorkspaceReference<JsonNode>

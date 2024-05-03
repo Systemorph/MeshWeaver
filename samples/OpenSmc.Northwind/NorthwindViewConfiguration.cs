@@ -29,8 +29,9 @@ public static class NorthwindViewConfiguration
                     )
             );
 
-    private static object Dashboard() =>
-        Stack()
+    private static object Dashboard()
+    {
+        return Stack()
             .WithSkin(Skin.VerticalPanel)
             .WithView(
                 Stack()
@@ -68,6 +69,47 @@ public static class NorthwindViewConfiguration
                             )
                     )
             );
+    }
+
+    // private static object Dashboard() =>
+    //     Stack()
+    //         .WithSkin(Skin.VerticalPanel)
+    //         .WithView(
+    //             Stack()
+    //                 .WithSkin(Skin.HorizontalPanel)
+    //                 .WithView(
+    //                     Stack()
+    //                         .WithSkin(Skin.VerticalPanel)
+    //                         .WithView(
+    //                             Stack()
+    //                                 .WithSkin(Skin.HorizontalPanel)
+    //                                 .WithView(HtmlView("Total Orders"))
+    //                                 .WithView(HtmlView("100"))
+    //                         )
+    //                         .WithView(
+    //                             Stack()
+    //                                 .WithSkin(Skin.HorizontalPanel)
+    //                                 .WithView(HtmlView("Total Customers"))
+    //                                 .WithView(HtmlView("100"))
+    //                         )
+    //                 )
+    //                 .WithView(
+    //                     Stack()
+    //                         .WithSkin(Skin.VerticalPanel)
+    //                         .WithView(
+    //                             Stack()
+    //                                 .WithSkin(Skin.HorizontalPanel)
+    //                                 .WithView(HtmlView("Total Products"))
+    //                                 .WithView(HtmlView("100"))
+    //                         )
+    //                         .WithView(
+    //                             Stack()
+    //                                 .WithSkin(Skin.HorizontalPanel)
+    //                                 .WithView(HtmlView("Total Employees"))
+    //                                 .WithView(HtmlView("100"))
+    //                         )
+    //                 )
+    //         );
 
     private const string MainContent = nameof(MainContent);
 }

@@ -31,7 +31,13 @@ public record LayoutArea
         workspace = hub.GetWorkspace();
         updateStream
             .Scan(
-                new ChangeItem<EntityStore>(hub.Address, Reference, new(), hub.Address),
+                new ChangeItem<EntityStore>(
+                    hub.Address,
+                    Reference,
+                    new(),
+                    hub.Address,
+                    hub.Version
+                ),
                 (currentState, updateFunc) => updateFunc(currentState)
             )
             .Sample(TimeSpan.FromMilliseconds(100))

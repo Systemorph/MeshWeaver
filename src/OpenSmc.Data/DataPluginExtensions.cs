@@ -46,7 +46,7 @@ public static class DataPluginExtensions
                 typeof(EntityReference),
                 typeof(CollectionReference),
                 typeof(CollectionsReference),
-                typeof(EntireWorkspace),
+                typeof(WorkspaceStoreReference),
                 typeof(JsonPathReference),
                 typeof(JsonPatch)
             )
@@ -65,7 +65,7 @@ public static class DataPluginExtensions
 
     internal static DataContext GetDataConfiguration(
         this IMessageHub hub,
-        ReduceManager reduceManager
+        ReduceManager<WorkspaceState> reduceManager
     )
     {
         var dataPluginConfig = hub.Configuration.GetListOfLambdas();
@@ -110,14 +110,4 @@ public static class DataPluginExtensions
             address,
             hub => configuration.Invoke(new GenericDataSource(address, hub))
         );
-
-    public static ChangeItem<TStream> SetValue<TStream>(
-        this ChangeItem<WorkspaceState> changeItem,
-        TStream value
-    ) => new(changeItem.Address, changeItem.Reference, value, changeItem.ChangedBy);
-
-    public static ChangeItem<TStream> SetValue<TStream>(
-        this ChangeItem<EntityStore> changeItem,
-        TStream value
-    ) => new(changeItem.Address, changeItem.Reference, value, changeItem.ChangedBy);
 }

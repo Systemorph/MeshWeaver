@@ -99,7 +99,7 @@ public record ImportDataSource(Source Source, IMessageHub Hub)
         {
             var (state, hasError) = await importManager.ImportAsync(
                 ImportRequest,
-                new WorkspaceState(Hub, TypeSources.Values.ToDictionary(x => x.CollectionName)),
+                Workspace.CreateState(Workspace.State.Store),
                 logger,
                 cancellationToken
             );
