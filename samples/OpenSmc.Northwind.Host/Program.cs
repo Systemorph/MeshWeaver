@@ -1,4 +1,6 @@
-﻿using static OpenSmc.Application.SignalR.SignalRExtensions;
+﻿using OpenSmc.Messaging;
+using Orleans.Serialization;
+using static OpenSmc.Application.SignalR.SignalRExtensions;
 using static OpenSmc.Hosting.HostBuilderExtensions;
 
 namespace OpenSmc.Northwind.Host;
@@ -16,6 +18,10 @@ public class Program
             .UseOrleans(static siloBuilder =>
             {
                 siloBuilder.UseLocalhostClustering();
+                siloBuilder.Services.AddSerializer(serializerBuilder =>
+                {
+                    serializerBuilder.AddJsonSerializer(_ => true, _ => true, ob => ob.PostConfigure<IMessageHub>((o, hub) => o.SerializerOptions = hub.JsonSerializerOptions));
+                });
             });
 
         await using var app = builder.Build();
