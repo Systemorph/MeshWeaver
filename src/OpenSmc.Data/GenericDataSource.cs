@@ -1,5 +1,9 @@
 ﻿using System.Collections.Immutable;
+using System.Net.WebSockets;
+using System.Reactive.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
@@ -64,10 +68,12 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
     protected abstract TDataSource WithType<T>(Func<ITypeSource, ITypeSource> config)
         where T : class;
 
+    private IReadOnlyCollection<IDisposable> changesSubscriptions;
+
     public virtual IEnumerable<ChangeStream<EntityStore>> Initialize()
     {
         //return TypeSources.Values.Select(ts => ts.InitializeAsync(workspaceStream));
-        var ret = GetInitialChangeStream();
+        var ret = GetInitialChangeStream().ToArray();
         Hub.Schedule(async cancellationToken =>
         {
             var instances = (
@@ -84,20 +90,19 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
             foreach (var changeStream in ret)
                 changeStream.Initialize(new() { Collections = instances });
         });
+
+        changesSubscriptions = TypeSources
+            .Values.Select(ts =>
+                Workspace.Stream.Where(x => !x.ChangedBy.Equals(Id)).Subscribe(ws => ts.Update(ws))
+            )
+            .ToArray();
+
         return ret;
     }
 
-    protected virtual IReadOnlyCollection<ChangeStream<EntityStore>> GetInitialChangeStream()
+    protected virtual IEnumerable<ChangeStream<EntityStore>> GetInitialChangeStream()
     {
-        var ret = new ChangeStream<EntityStore>(
-            Workspace,
-            Id,
-            new EntireWorkspace(),
-            Hub,
-            () => Hub.Version,
-            true
-        );
-        return [ret];
+        yield return Workspace.GetRawStream(Id, new WorkspaceStoreReference());
     }
 
     protected virtual WorkspaceReference<EntityStore> GetReference()
@@ -110,6 +115,9 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
 
     public virtual ValueTask DisposeAsync()
     {
+        if (changesSubscriptions != null)
+            foreach (var subscription in changesSubscriptions)
+                subscription.Dispose();
         return default;
     }
 }
@@ -121,31 +129,9 @@ public record GenericDataSource<TDataSource>(object Id, IMessageHub Hub)
     : DataSource<TDataSource>(Id, Hub)
     where TDataSource : GenericDataSource<TDataSource>
 {
-    private IDisposable changesSubscription;
-
-    public override ValueTask DisposeAsync()
-    {
-        changesSubscription?.Dispose();
-        return base.DisposeAsync();
-    }
-
     protected override TDataSource WithType<T>(Func<ITypeSource, ITypeSource> config) =>
         WithType<T>(x => (TypeSourceWithType<T>)config(x));
 
     public TDataSource WithType<T>(Func<TypeSourceWithType<T>, TypeSourceWithType<T>> configurator)
         where T : class => WithTypeSource(typeof(T), configurator.Invoke(new(Hub, Id)));
-
-    public override IEnumerable<ChangeStream<EntityStore>> Initialize()
-    {
-        changesSubscription = Workspace.ChangeStream.Subscribe(Update);
-        return base.Initialize();
-    }
-
-    private void Update(ChangeItem<WorkspaceState> ws)
-    {
-        foreach (var ts in TypeSources.Values)
-        {
-            ts.Update(ws);
-        }
-    }
 }

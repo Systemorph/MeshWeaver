@@ -9,8 +9,6 @@ public interface IWorkspace : IAsyncDisposable
         object address,
         WorkspaceReference<TReference> reference
     );
-    IObservable<ChangeItem<WorkspaceState>> Stream { get; }
-    IObservable<ChangeItem<WorkspaceState>> ChangeStream { get; }
     WorkspaceState State { get; }
     Task Initialized { get; }
     IReadOnlyCollection<Type> MappedTypes { get; }
@@ -23,14 +21,16 @@ public interface IWorkspace : IAsyncDisposable
 
     void Commit();
     void Rollback();
-    IObservable<ChangeItem<TReference>> GetStream<TReference>(
+    ChangeStream<TReference> GetRawStream<TReference>(
+        object id,
         WorkspaceReference<TReference> reference
     );
     WorkspaceState CreateState(EntityStore deserialize);
-    void RequestChange(DataChangeRequest change, object changedBy);
-    void Synchronize(DataChangedEvent message);
     void Initialize();
     void Subscribe(object sender, WorkspaceReference reference);
     void Unsubscribe(object sender, WorkspaceReference reference);
-    void SendMessage(IWorkspaceMessage message);
+    IMessageDelivery DeliverMessage(IMessageDelivery<IWorkspaceMessage> delivery);
+    void RequestChange(DataChangeRequest change, object changedBy);
+
+    IObservable<ChangeItem<WorkspaceState>> Stream { get; }
 }
