@@ -36,7 +36,7 @@ public class WorkspaceStateConverter(IMessageHub hub) : JsonConverter<WorkspaceS
 
         if(!obj.TryGetPropertyValue("store", out var storeSerialized))
             throw new ArgumentException("Invalid serialized workspace. No store property set.");
-        return hub.GetWorkspace().CreateState(storeSerialized.Deserialize<EntityStore>(hub.DeserializationOptions));
+        return hub.GetWorkspace().CreateState(storeSerialized.Deserialize<EntityStore>(hub.JsonSerializerOptions));
     }
 
 }

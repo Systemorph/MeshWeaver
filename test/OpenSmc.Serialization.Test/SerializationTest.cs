@@ -1,10 +1,10 @@
 ﻿using System.Reactive.Linq;
+using System.Text.Json;
 using FluentAssertions;
 using Newtonsoft.Json.Linq;
 using OpenSmc.Fixture;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
-using OpenSmc.Messaging.Serialization;
 using OpenSmc.ServiceProvider;
 using Xunit.Abstractions;
 
@@ -25,14 +25,14 @@ public class SerializationTest : TestBase
                 .RouteAddress<HostAddress>((routedAddress, d) =>
                     {
                         var hostedHub = f.Hub.GetHostedHub(routedAddress, ConfigureHost);
-                        var packagedDelivery = d.Package(f.Hub.SerializationOptions);
+                        var packagedDelivery = d.Package(f.Hub.JsonSerializerOptions);
                         hostedHub.DeliverMessage(packagedDelivery);
                         return d.Forwarded();
                     })
                 .RouteAddress<ClientAddress>((routedAddress, d) =>
                 {
                     var hostedHub = f.Hub.GetHostedHub(routedAddress, ConfigureClient);
-                    var packagedDelivery = d.Package(f.Hub.SerializationOptions);
+                    var packagedDelivery = d.Package(f.Hub.JsonSerializerOptions);
                     hostedHub.DeliverMessage(packagedDelivery);
                     return d.Forwarded();
 
@@ -101,7 +101,32 @@ public class SerializationTest : TestBase
 
     }
 
+    [Fact]
+    public void MessageDeliveryPropertiesTest()
+    {
+        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
 
+        var postOptions = new PostOptions(client.Address, client)
+            .WithTarget(new HostAddress())
+            .WithProperties(new Dictionary<string, object> {
+                { "MyId", "394" },
+                { "MyAddress", new ClientAddress() },
+                { "NestedObjs", new Boomerang(new MyEvent("Hello nested")) },
+                { "MyId2", "22394" },
+            });
+
+        var delivery = new MessageDelivery<MyEvent>(new MyEvent("Hello Delivery"), postOptions);
+
+        var packedDelivery = delivery.Package(client.JsonSerializerOptions);
+
+        var serialized = JsonSerializer.Serialize(packedDelivery, client.JsonSerializerOptions);
+
+        var deserialized = JsonSerializer.Deserialize<MessageDelivery<RawJson>>(serialized, client.JsonSerializerOptions);
+
+        deserialized.Should().NotBeNull()
+            .And.NotBeSameAs(packedDelivery)
+            .And.BeEquivalentTo(packedDelivery);
+    }
 }
 
 public record Boomerang(object Object) : IRequest<object>;
