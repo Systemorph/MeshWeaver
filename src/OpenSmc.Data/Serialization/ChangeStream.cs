@@ -189,7 +189,7 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
             Hub.JsonSerializerOptions
         );
         return request.Change is JsonNode node
-            ? node.Deserialize<TStream>(Hub.DeserializationOptions)
+            ? node.Deserialize<TStream>(Hub.JsonSerializerOptions)
             : (TStream)request.Change;
     }
 
