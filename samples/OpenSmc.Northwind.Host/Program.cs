@@ -10,6 +10,12 @@ public class Program
 
         builder.Services.ConfigureApplicationSignalR();
 
+        builder.Host
+            .UseOrleans(static siloBuilder =>
+            {
+                siloBuilder.UseLocalhostClustering();
+            });
+
         await using var app = builder.Build();
 
         app
