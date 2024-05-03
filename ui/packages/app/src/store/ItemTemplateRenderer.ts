@@ -8,7 +8,7 @@ import { map, Observable, Subscription } from "rxjs";
 import { ItemTemplateControl } from "@open-smc/layout/src/contract/controls/ItemTemplateControl";
 import { PathReference } from "@open-smc/data/src/contract/PathReference";
 import { renderControl } from "./renderControl";
-import { ControlModel } from "./appStore";
+import { appStore, ControlModel } from "./appStore";
 import { updateByReferenceActionCreator } from "@open-smc/data/src/workspaceReducer";
 import { Collection } from "@open-smc/data/src/contract/Collection";
 import { keys } from "lodash-es";
@@ -17,13 +17,21 @@ import { Renderer } from "./Renderer";
 import { RendererStackTrace } from "./RendererStackTrace";
 import { qualifyArea } from "./qualifyArea";
 import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
+import { removeArea } from "./appReducer";
+import { values } from "lodash";
 
 export class ItemTemplateRenderer extends ControlRenderer<ItemTemplateControl> {
     readonly data: Workspace<Collection>;
     readonly view$: Observable<UiControl>;
+    private state: Record<string, ItemTemplateItemRenderer> = {};
 
     constructor(control$: Observable<ItemTemplateControl>, area: string, stackTrace: RendererStackTrace) {
         super(control$, area, stackTrace);
+
+        this.subscription.add(
+            () => values((this.state))
+                .forEach(itemRenderer => itemRenderer.subscription.unsubscribe())
+        );
 
         this.data = new Workspace<Collection>(null, `${this.area}/data`);
 
@@ -54,28 +62,34 @@ export class ItemTemplateRenderer extends ControlRenderer<ItemTemplateControl> {
 
         this.subscription.add(
             this.data
-                .pipe(distinctUntilEqual())
                 .pipe(
                     effect(
                         data => {
-                            const subscription = new Subscription();
-                            const areas: string[] = [];
+                            data && keys(data)
+                                .filter(id => !this.state[id])
+                                .forEach(id => {
+                                    this.state[id] = new ItemTemplateItemRenderer(this, id, this.stackTrace);
+                                });
 
-                            data && keys(data).forEach(id => {
-                                const itemRenderer =
-                                    new ItemTemplateItemRenderer(this, id, this.stackTrace);
-
-                                subscription.add(itemRenderer.subscription);
-
-                                areas.push(qualifyArea(itemRenderer.area, itemRenderer.stackTrace));
-                            });
+                            const areas =
+                                data && keys(data).map(id => {
+                                    const itemRenderer = this.state[id];
+                                    return qualifyArea(itemRenderer.area, itemRenderer.stackTrace);
+                                });
 
                             controlModelWorkspace.next(updateByReferenceActionCreator({
                                 reference: new PathReference("/props/areas"),
                                 value: areas
                             }));
 
-                            return subscription;
+                            keys(this.state).forEach(id => {
+                                if (!data?.[id]) {
+                                    const itemRenderer = this.state[id];
+                                    appStore.dispatch(removeArea(itemRenderer.area));
+                                    itemRenderer.subscription.unsubscribe();
+                                    delete this.state[id];
+                                }
+                            })
                         }
                     )
                 )
