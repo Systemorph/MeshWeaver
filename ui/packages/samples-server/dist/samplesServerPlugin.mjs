@@ -28,11 +28,6 @@ class WebSocketClientHub extends Observable {
     this.webSocketClient.send(methodName, value);
   }
 }
-function connect(hub1, hub2) {
-  const subscription = hub1.subscribe(hub2);
-  subscription.add(hub2.subscribe(hub1));
-  return subscription;
-}
 const typeRegistry = /* @__PURE__ */ new Map();
 const getConstructor = (type2) => typeRegistry.get(type2);
 function type(typeName) {
@@ -60,10 +55,11 @@ var __decorateClass$h = (decorators, target, key, kind) => {
   return result;
 };
 let DataChangedEvent = class {
-  constructor(reference, change, changeType) {
+  constructor(reference, change, changeType, changedBy) {
     this.reference = reference;
     this.change = change;
     this.changeType = changeType;
+    this.changedBy = changedBy;
   }
   // // keeping change raw since the patch is meant to be applied to the json store as-is
   // static deserialize(props: DataChangedEvent) {
@@ -144,11 +140,11 @@ const messageOfType = (ctor) => (envelope) => envelope.message instanceof ctor;
 const pack = (envelope = {}) => (message) => ({ ...envelope, message });
 const handleRequest = (requestType, handler) => (source) => source.pipe(filter(messageOfType(requestType))).pipe(
   mergeMap(
-    ({ id, message }) => from(handler(message)).pipe(
+    (envelope) => from(handler(envelope)).pipe(
       map(
         pack({
           properties: {
-            requestId: id
+            requestId: envelope.id
           }
         })
       )
@@ -3997,21 +3993,28 @@ class SamplesServer extends Observable {
     __publicField(this, "data", new Workspace({
       todos: keyBy(todos, "id")
     }));
-    __publicField(this, "subscribeRequestHandler", () => (message) => {
+    __publicField(this, "subscribeRequestHandler", () => ({ message, sender }) => {
       const { reference } = message;
       const subscription = new Subscription();
       const entityStore = this.render(reference, subscription);
       subscription.add(
-        this.input.pipe(filter(({ message: message2 }) => message2 instanceof PatchChangeRequest && isEqual(message2.reference, reference))).pipe(handleRequest(PatchChangeRequest, this.handlePatchChangeRequest(entityStore))).subscribe(this.output)
+        this.input.pipe(
+          filter(messageOfType(PatchChangeRequest)),
+          filter(({ message: message2 }) => isEqual(message2.reference, reference)),
+          handleRequest(PatchChangeRequest, this.handlePatchChangeRequest(entityStore))
+        ).subscribe(this.output)
       );
       subscription.add(
-        this.input.pipe(filter(({ message: message2 }) => message2 instanceof UnsubscribeDataRequest && isEqual(message2.reference, reference))).subscribe((request) => {
+        this.input.pipe(
+          filter(messageOfType(UnsubscribeDataRequest)),
+          filter(({ message: message2 }) => isEqual(message2.reference, reference))
+        ).subscribe((request) => {
           subscription.unsubscribe();
         })
       );
       const change$ = entityStore.pipe(toJsonPatch()).pipe(
         map(
-          (patch) => new DataChangedEvent(reference, patch, "Patch")
+          (patch) => new DataChangedEvent(reference, patch, "Patch", sender)
         )
       );
       subscription.add(
@@ -4020,11 +4023,11 @@ class SamplesServer extends Observable {
       this.subscription.add(subscription);
       return entityStore.pipe(take(1)).pipe(
         map(
-          (value) => new DataChangedEvent(reference, value, "Full")
+          (value) => new DataChangedEvent(reference, value, "Full", null)
         )
       );
     });
-    __publicField(this, "handlePatchChangeRequest", (workspace) => (message) => {
+    __publicField(this, "handlePatchChangeRequest", (workspace) => ({ message, sender }) => {
       workspace.next(jsonPatchActionCreator(message.change));
       return of(new DataChangeResponse("Committed"));
     });
@@ -4092,7 +4095,7 @@ const deserialize = (value) => {
           }
           return assign(new constructor(), plainObjectDeserializer(props));
         }
-        return plainObjectDeserializer(props);
+        return plainObjectDeserializer(value2);
       }
     }
   );
@@ -4169,6 +4172,11 @@ let LayoutAreaReference = class extends WorkspaceReference {
 LayoutAreaReference = __decorateClass([
   type("OpenSmc.Data.LayoutAreaReference")
 ], LayoutAreaReference);
+function connectHubs(hub1, hub2) {
+  const subscription = hub1.subscribe(hub2);
+  subscription.add(hub2.subscribe(hub1));
+  return subscription;
+}
 function samplesServerPlugin() {
   return {
     name: "samplesServer",
@@ -4178,7 +4186,7 @@ function samplesServerPlugin() {
         ws.clients.forEach((client) => {
           if (client.socket === socket) {
             const clientHub = new WebSocketClientHub(client, ws);
-            connect(new SerializationMiddleware(clientHub), new SamplesServer());
+            connectHubs(new SerializationMiddleware(clientHub), new SamplesServer());
           }
         });
       });

@@ -10,18 +10,18 @@ import { EntityStore } from "@open-smc/data/src/contract/EntityStore.ts";
 import { DataChangeResponse } from "@open-smc/data/src/contract/DataChangeResponse.ts";
 import { UnsubscribeDataRequest } from "@open-smc/data/src/contract/UnsubscribeDataRequest.ts";
 import { HtmlControl } from "@open-smc/layout/src/contract/controls/HtmlControl.ts";
-import { Layout, LayoutRenderer, uiControlType } from "./Layout.ts";
+import { Layout, uiControlType } from "./Layout.ts";
 import { jsonPatchActionCreator } from "@open-smc/data/src/jsonPatchReducer.ts";
 import { toJsonPatch } from "@open-smc/data/src/operators/toJsonPatch.ts";
 import { DataChangedEvent } from "@open-smc/data/src/contract/DataChangedEvent.ts";
 import { pack } from "@open-smc/messaging/src/operators/pack.ts";
 import { TextBoxControl } from "@open-smc/layout/src/contract/controls/TextBoxControl.ts";
-import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl.ts";
 import { Binding } from "@open-smc/data/src/contract/Binding.ts";
 import { EntityReference } from "@open-smc/data/src/contract/EntityReference.ts";
 import { LayoutStackControl } from "@open-smc/layout/src/contract/controls/LayoutStackControl.ts";
 import { ItemTemplateControl } from "@open-smc/layout/src/contract/controls/ItemTemplateControl.ts";
 import { CollectionReference } from "@open-smc/data/src/contract/CollectionReference.ts";
+import { messageOfType } from "@open-smc/messaging/src/operators/messageOfType.ts";
 
 const todos = [
     {id: "1", name: "Task 1", status: "new" },
@@ -60,7 +60,7 @@ export class SamplesServer extends Observable<MessageDelivery> implements Observ
     }
 
     subscribeRequestHandler = () =>
-        (message: SubscribeRequest) => {
+        ({message, sender}: MessageDelivery<SubscribeRequest>) => {
             const {reference} = message;
 
             const subscription = new Subscription();
@@ -70,16 +70,20 @@ export class SamplesServer extends Observable<MessageDelivery> implements Observ
 
             subscription.add(
                 this.input
-                    .pipe(filter(({message}) =>
-                        message instanceof PatchChangeRequest && isEqual(message.reference, reference)))
-                    .pipe(handleRequest(PatchChangeRequest, this.handlePatchChangeRequest(entityStore)))
+                    .pipe(
+                        filter(messageOfType(PatchChangeRequest)),
+                        filter(({message}) => isEqual(message.reference, reference)),
+                        handleRequest(PatchChangeRequest, this.handlePatchChangeRequest(entityStore))
+                    )
                     .subscribe(this.output)
             );
 
             subscription.add(
                 this.input
-                    .pipe(filter(({message}) =>
-                        message instanceof UnsubscribeDataRequest && isEqual(message.reference, reference)))
+                    .pipe(
+                        filter(messageOfType(UnsubscribeDataRequest)),
+                        filter(({message}) => isEqual(message.reference, reference))
+                    )
                     .subscribe(request => {
                         subscription.unsubscribe();
                     })
@@ -91,7 +95,7 @@ export class SamplesServer extends Observable<MessageDelivery> implements Observ
                     .pipe(
                         map(
                             patch =>
-                                new DataChangedEvent(reference, patch, "Patch")
+                                new DataChangedEvent(reference, patch, "Patch", sender)
                         )
                     );
 
@@ -108,14 +112,14 @@ export class SamplesServer extends Observable<MessageDelivery> implements Observ
                 .pipe(
                     map(
                         value =>
-                            new DataChangedEvent(reference, value, "Full")
+                            new DataChangedEvent(reference, value, "Full", null)
                     )
                 )
         }
 
     private handlePatchChangeRequest =
         (workspace: Workspace<EntityStore>) =>
-            (message: PatchChangeRequest) => {
+            ({message, sender}: MessageDelivery<PatchChangeRequest>) => {
                 workspace.next(jsonPatchActionCreator(message.change));
                 return of(new DataChangeResponse("Committed"));
             }

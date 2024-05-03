@@ -7,20 +7,20 @@ import { pack } from "./operators/pack";
 export const handleRequest =
     <TRequest extends Request<TResponse>, TResponse>(
         requestType: new (...args: any) => TRequest,
-        handler: <T extends TRequest>(message: T) => ObservableInput<TResponse>
+        handler: <T extends MessageDelivery<TRequest>>(envelope: T) => ObservableInput<TResponse>
     ) =>
         (source: Observable<MessageDelivery>) =>
             source
                 .pipe(filter(messageOfType(requestType)))
                 .pipe(
                     mergeMap(
-                        ({id, message}) =>
-                            from(handler(message))
+                        envelope =>
+                            from(handler(envelope))
                                 .pipe(
                                     map(
                                         pack({
                                             properties: {
-                                                requestId: id
+                                                requestId: envelope.id
                                             }
                                         })
                                     )

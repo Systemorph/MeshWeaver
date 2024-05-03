@@ -3,17 +3,23 @@ import { LayoutAreaReference } from "@open-smc/data/src/contract/LayoutAreaRefer
 import { EntityStore } from "@open-smc/data/src/contract/EntityStore";
 import { RemoteWorkspace } from "@open-smc/data/src/RemoteWorkspace";
 import { EntityStoreRenderer } from "./EntityStoreRenderer";
-import { MessageHub } from "@open-smc/messaging/src/api/MessageHub";
+import { UiHub } from "../UiHub";
 
-export const startSynchronization = (signalrHub: MessageHub) => {
+export const renderLayoutAreaReference = (
+    uiHub: UiHub,
+    reference: LayoutAreaReference
+) => {
     const subscription = new Subscription();
 
-    const entityStore =
-        new RemoteWorkspace<EntityStore>(signalrHub, new LayoutAreaReference("/"), "entityStore");
+    const entityStoreWorkspace = new RemoteWorkspace<EntityStore>(
+        uiHub,
+        reference,
+        "entityStore"
+    );
 
-    const entityStoreRenderer = new EntityStoreRenderer(entityStore);
+    const entityStoreRenderer = new EntityStoreRenderer(entityStoreWorkspace);
 
-    subscription.add(entityStore.subscription);
+    subscription.add(entityStoreWorkspace.subscription);
     subscription.add(entityStoreRenderer.subscription);
 
     return () => subscription.unsubscribe();

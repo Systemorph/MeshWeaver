@@ -7,7 +7,8 @@ export class DataChangedEvent {
     constructor(
         public reference: WorkspaceReference,
         public change: unknown,
-        public changeType: ChangeType
+        public changeType: ChangeType,
+        public changedBy: unknown
     ) {
     }
 
