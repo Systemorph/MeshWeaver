@@ -103,7 +103,7 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
             new ChangeItem<TStream>(
                 Id,
                 Reference,
-                newState.Result.Deserialize<TStream>(Hub.DeserializationOptions),
+                newState.Result.Deserialize<TStream>(Hub.JsonSerializerOptions),
                 changedBy,
                 Hub.Version
             )

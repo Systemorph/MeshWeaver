@@ -21,7 +21,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return base.ConfigureHost(configuration)
             .WithRoutes(r =>
-                r.RouteAddress<ClientAddress>((a, d) => d.Package(r.Hub.SerializationOptions))
+                r.RouteAddress<ClientAddress>((a, d) => d.Package(r.Hub.JsonSerializerOptions))
             )
             .AddData(data =>
                 data.FromConfigurableDataSource(
