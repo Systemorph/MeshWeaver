@@ -3,6 +3,7 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\OpenSmc.Application.Orleans\OpenSmc.Application.Orleans.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Application.SignalR\OpenSmc.Application.SignalR.csproj" />
   </ItemGroup>
 </Project>
