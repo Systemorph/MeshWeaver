@@ -3,7 +3,6 @@ using OpenSmc.Application.SignalR;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
 using Orleans.Serialization;
-using Orleans.Streams;
 using static OpenSmc.Hosting.HostBuilderExtensions;
 
 namespace OpenSmc.Application.Host;
@@ -62,18 +61,8 @@ public static class OrleansMessageHubExtensions
                         return request.Processed();
                     })
                 )
-                .WithRoutes(forward =>
-                    forward.RouteAddress<UiAddress>((routedAddress, d, _) => SendToStreamAsync(forward.Hub, routedAddress, ApplicationStreamNamespaces.Ui, d.Package(forward.Hub.JsonSerializerOptions)))
-                )
+                .WithForwardThroughOrleansStream<UiAddress>(ApplicationStreamNamespaces.Ui, a => a.Id)
         );
-
-    private static async Task<IMessageDelivery> SendToStreamAsync(IMessageHub hub, UiAddress routedAddress, string streamNamespace, IMessageDelivery delivery)
-    {
-        var streamProvider = hub.ServiceProvider.GetRequiredKeyedService<IStreamProvider>(ApplicationStreamProviders.AppStreamProvider);
-        var stream = streamProvider.GetStream<IMessageDelivery>(streamNamespace, routedAddress.Id);
-        await stream.OnNextAsync(delivery);
-        return delivery.Forwarded();
-    }
 }
 
 record RouterAddress;
