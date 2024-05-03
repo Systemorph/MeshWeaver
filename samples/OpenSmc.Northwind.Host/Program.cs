@@ -1,4 +1,6 @@
-﻿namespace OpenSmc.Northwind.Host;
+﻿using static OpenSmc.Application.SignalR.SignalRExtensions;
+
+namespace OpenSmc.Northwind.Host;
 
 public class Program
 {
@@ -6,7 +8,13 @@ public class Program
     {
         var builder = WebApplication.CreateBuilder(args);
 
+        builder.Services.ConfigureApplicationSignalR();
+
         await using var app = builder.Build();
+
+        app
+            .UseRouting()
+            .UseApplicationSignalR();
 
         await app.RunAsync();
     }
