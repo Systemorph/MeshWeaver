@@ -1,4 +1,5 @@
 ﻿using static OpenSmc.Application.SignalR.SignalRExtensions;
+using static OpenSmc.Hosting.HostBuilderExtensions;
 
 namespace OpenSmc.Northwind.Host;
 
@@ -11,6 +12,7 @@ public class Program
         builder.Services.ConfigureApplicationSignalR();
 
         builder.Host
+            .ConfigureServiceProvider()
             .UseOrleans(static siloBuilder =>
             {
                 siloBuilder.UseLocalhostClustering();
