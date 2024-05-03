@@ -1,9 +1,9 @@
 import { PluginOption, ViteDevServer } from "vite";
 import { WebSocketClientHub } from "./WebSocketClientHub";
-import { connect } from "@open-smc/messaging/src/middleware/connect";
 import { SamplesServer } from "./SamplesServer";
 import { SerializationMiddleware } from "@open-smc/middleware/src/SerializationMiddleware";
 import "@open-smc/data/src/contract";
+import { connectHubs } from "@open-smc/messaging/src/middleware/connectHubs.ts";
 
 export function samplesServerPlugin() {
     return {
@@ -15,8 +15,7 @@ export function samplesServerPlugin() {
                 ws.clients.forEach(client => {
                     if (client.socket === socket) {
                         const clientHub = new WebSocketClientHub(client, ws);
-
-                        connect(new SerializationMiddleware(clientHub), new SamplesServer());
+                        connectHubs(new SerializationMiddleware(clientHub), new SamplesServer());
                         // const [uiHub, uiHubProxy] = makeProxy();
                         // connect(clientHub, uiHubProxy);
                         //

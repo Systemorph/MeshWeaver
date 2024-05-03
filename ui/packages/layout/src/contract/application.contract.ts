@@ -7,13 +7,6 @@ export class LayoutAddress {
     }
 }
 
-// TODO: fix namespace (2/21/2024, akravets)
-@type("OpenSmc.Portal.UiAddress")
-export class UiAddress {
-    constructor(public id: string) {
-    }
-}
-
 @type("OpenSmc.Layout.Views.ClickedEvent")
 export class ClickedEvent {
     constructor(public payload?: unknown) {

@@ -23,7 +23,7 @@ export const deserialize = <T = unknown>(value: T | Deserializable<T>): T => {
                     return assign(new constructor(), plainObjectDeserializer(props));
                 }
 
-                return plainObjectDeserializer(props);
+                return plainObjectDeserializer(value);
             }
         }
     )
