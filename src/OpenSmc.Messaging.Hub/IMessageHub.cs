@@ -62,8 +62,7 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
 
     IMessageHub WithDisposeAction(Action<IMessageHub> disposeAction);
     IMessageHub WithDisposeAction(Func<IMessageHub, Task> disposeAction);
-    JsonSerializerOptions SerializationOptions { get; }
-    JsonSerializerOptions DeserializationOptions { get; }
+    JsonSerializerOptions JsonSerializerOptions { get; }
 }
 
 

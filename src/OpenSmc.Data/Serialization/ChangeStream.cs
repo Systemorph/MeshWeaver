@@ -147,7 +147,7 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
         var node = JsonSerializer.SerializeToNode(
             change.Value,
             typeof(TStream),
-            Hub.SerializationOptions
+            Hub.JsonSerializerOptions
         );
 
         var dataChanged = LastSynchronized == null ? GetFullDataChange(change) : GetPatch(node);
@@ -174,7 +174,7 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
             ChangeType.Patch
                 => (
                     LastSynchronized = ((JsonPatch)request.Change).Apply(LastSynchronized).Result
-                ).Deserialize<TStream>(Hub.DeserializationOptions),
+                ).Deserialize<TStream>(Hub.JsonSerializerOptions),
             ChangeType.Full => GetFullState(request),
             _ => throw new ArgumentOutOfRangeException()
         };
@@ -186,7 +186,7 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
         LastSynchronized = JsonSerializer.SerializeToNode(
             request.Change,
             request.Change.GetType(),
-            Hub.SerializationOptions
+            Hub.JsonSerializerOptions
         );
         return request.Change is JsonNode node
             ? node.Deserialize<TStream>(Hub.DeserializationOptions)
@@ -199,7 +199,7 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
             throw new ArgumentNullException(nameof(initial));
         var start = new ChangeItem<TStream>(Address, Reference, initial, Address);
         updatedInstances.OnNext(start);
-        LastSynchronized = JsonSerializer.SerializeToNode(initial, Hub.SerializationOptions);
+        LastSynchronized = JsonSerializer.SerializeToNode(initial, Hub.JsonSerializerOptions);
         dataChangedStream.OnNext(GetFullDataChange(start));
         return this;
     }

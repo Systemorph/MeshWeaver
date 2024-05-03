@@ -260,7 +260,7 @@ public record WorkspaceState
         return this with
         {
             LastSynchronized = newState.Result,
-            Store = newState.Result.Deserialize<EntityStore>(Hub.DeserializationOptions)
+            Store = newState.Result.Deserialize<EntityStore>(Hub.JsonSerializerOptions),
         };
     }
 
@@ -278,7 +278,7 @@ public record WorkspaceState
             Store = newElements,
             LastSynchronized = JsonSerializer.SerializeToNode(
                 newElements,
-                Hub.SerializationOptions
+                Hub.JsonSerializerOptions
             ),
             Version = Hub.Version
         };
@@ -386,7 +386,7 @@ public record WorkspaceState
         return this with
         {
             Store = newStore,
-            LastSynchronized = JsonSerializer.SerializeToNode(newStore, Hub.SerializationOptions),
+            LastSynchronized = JsonSerializer.SerializeToNode(newStore, Hub.JsonSerializerOptions),
             Version = Hub.Version,
         };
     }
