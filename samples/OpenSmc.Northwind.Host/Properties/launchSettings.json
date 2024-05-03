@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "OpenSmc.Northwind.Host": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      },
+      "applicationUrl": "https://localhost:4055;http://localhost:4056"
+    }
+  }
+}
