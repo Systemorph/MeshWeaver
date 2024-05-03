@@ -1,4 +1,5 @@
-﻿using OpenSmc.Messaging;
+﻿using OpenSmc.Application.Orleans;
+using OpenSmc.Messaging;
 using Orleans.Serialization;
 using static OpenSmc.Application.SignalR.SignalRExtensions;
 using static OpenSmc.Hosting.HostBuilderExtensions;
@@ -22,6 +23,9 @@ public class Program
                 {
                     serializerBuilder.AddJsonSerializer(_ => true, _ => true, ob => ob.PostConfigure<IMessageHub>((o, hub) => o.SerializerOptions = hub.JsonSerializerOptions));
                 });
+                siloBuilder
+                    .AddMemoryStreams(ApplicationStreamProviders.AppStreamProvider)
+                    .AddMemoryGrainStorage("PubSubStore");
             });
 
         await using var app = builder.Build();
