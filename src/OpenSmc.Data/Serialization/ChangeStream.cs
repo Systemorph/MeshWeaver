@@ -10,8 +10,8 @@ using OpenSmc.Messaging;
 namespace OpenSmc.Data.Serialization;
 
 public interface IChangeStream
-    : IObserver<DataChangedEvent>,
-        IObservable<DataChangedEvent>,
+    : IObservable<DataChangedEvent>,
+        IObservable<PatchChangeRequest>,
         IDisposable
 {
     object Id { get; }
@@ -47,21 +47,6 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
     /// </summary>
     private readonly Subject<Func<TStream, TStream>> updates = new();
     private readonly Subject<ChangeItem<TStream>> updatedInstances = new();
-    private readonly Subject<DataChangedEvent> outgoingChanges = new();
-    private DataChangedEvent lastSynchronizedBacking;
-    private DataChangedEvent LastSynchronized
-    {
-        get { return lastSynchronizedBacking; }
-        set
-        {
-            lastSynchronizedBacking = value;
-            initialDataChanged.OnNext(value);
-        }
-    }
-    private readonly ReplaySubject<DataChangedEvent> initialDataChanged = new(1);
-    private readonly Subject<DataChangedEvent> incomingChanges = new();
-    private readonly Subject<IMessageDelivery<PatchChangeRequest>> incomingPatches = new();
-    private readonly Subject<JsonNode> incomingJson = new();
 
     public object Id { get; init; }
     public WorkspaceReference<TStream> Reference { get; init; }
@@ -69,6 +54,9 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
     WorkspaceReference IChangeStream.Reference => Reference;
 
     private readonly IReduceManager<TStream> reduceManager;
+    private JsonNode lastSynchronized;
+    private IObservable<DataChangedEvent> dataChangedStream;
+    private IObservable<PatchChangeRequest> patchRequestStream;
 
     public ChangeStream(
         object Id,
@@ -89,14 +77,6 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
             )
             .Subscribe(store);
 
-        // incoming changes
-        Disposables.Add(incomingPatches.Select(Change).Subscribe(incomingChanges));
-        Disposables.Add(incomingChanges.Select(x => ParseDataChanged(x)).Subscribe(store));
-        Disposables.Add(incomingChanges.Subscribe(outgoingChanges));
-        Disposables.Add(
-            updatedInstances.Select(GetDataChanged).Where(x => x != null).Subscribe(outgoingChanges)
-        );
-
         this.reduceManager = reduceManager;
 
         RegisterMessageHandler<DataChangedEvent>(delivery =>
@@ -106,12 +86,24 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
         });
         RegisterMessageHandler<PatchChangeRequest>(delivery =>
         {
-            incomingPatches.OnNext(delivery);
+            updatedInstances.OnNext(Change(delivery));
             return delivery.Processed();
         });
+
+        var baseChangeStream = store
+            .Select(r => GetDataChanged(r))
+            .Where(x => x != null && x.Change != null)
+            .GroupBy(x => Id.Equals(x.ChangedBy));
+
+        dataChangedStream = baseChangeStream.Where(x => x.Key).SelectMany(x => x);
+        patchRequestStream = baseChangeStream
+            .Where(x => !x.Key)
+            .SelectMany(x =>
+                x.Select(y => new PatchChangeRequest(y.Address, y.Reference, (JsonPatch)y.Change))
+            );
     }
 
-    private DataChangedEvent Change(IMessageDelivery<PatchChangeRequest> delivery)
+    private ChangeItem<TStream> Change(IMessageDelivery<PatchChangeRequest> delivery)
     {
         //TODO Roland Bürgi 2024-05-04: Check if patch is permitted or not
         var request = delivery.Message;
@@ -120,13 +112,12 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
             new DataChangeResponse(Hub.Version, DataChangeStatus.Committed),
             o => o.ResponseFor(delivery)
         );
-        return new DataChangedEvent(
+        return new ChangeItem<TStream>(
             Id,
             Reference,
-            Hub.Version,
-            request.Change,
-            ChangeType.Patch,
-            delivery.Sender
+            ApplyPatch(delivery.Message.Change).Deserialize<TStream>(Hub.JsonSerializerOptions),
+            delivery.Sender,
+            Hub.Version
         );
     }
 
@@ -164,7 +155,26 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
 
     public IDisposable Subscribe(IObserver<DataChangedEvent> observer)
     {
-        return initialDataChanged.Take(1).Merge(outgoingChanges).Subscribe(observer);
+        if (lastSynchronized == null)
+            return dataChangedStream.Subscribe(observer);
+        return Observable
+            .Return(
+                new DataChangedEvent(
+                    Id,
+                    Reference,
+                    Hub.Version,
+                    lastSynchronized,
+                    ChangeType.Full,
+                    null
+                )
+            )
+            .Merge(dataChangedStream.Where(x => x.ChangeType == ChangeType.Patch))
+            .Subscribe(observer);
+    }
+
+    public IDisposable Subscribe(IObserver<PatchChangeRequest> observer)
+    {
+        return patchRequestStream.Subscribe(observer);
     }
 
     public readonly List<IDisposable> Disposables = new();
@@ -185,17 +195,25 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
 
     private DataChangedEvent GetDataChanged(ChangeItem<TStream> change)
     {
-        var fullChange = GetFullDataChange(change);
+        var fullChange = JsonSerializer.SerializeToNode(change.Value, Hub.JsonSerializerOptions);
 
-        var dataChanged =
-            LastSynchronized == null ? LastSynchronized = fullChange : GetPatch(fullChange);
+        var dataChanged = new DataChangedEvent(
+            Id,
+            Reference,
+            change.Version,
+            lastSynchronized == null ? fullChange : GetPatch(fullChange),
+            lastSynchronized == null ? ChangeType.Full : ChangeType.Patch,
+            change.ChangedBy
+        );
+
+        lastSynchronized = fullChange;
 
         return dataChanged;
     }
 
     public void Synchronize(DataChangedEvent request)
     {
-        incomingChanges.OnNext(request);
+        updatedInstances.OnNext(ParseDataChanged(request));
     }
 
     private ChangeItem<TStream> ParseDataChanged(DataChangedEvent request)
@@ -203,27 +221,36 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
         var newState = request.ChangeType switch
         {
             ChangeType.Patch
-                => (ApplyPatch(request)).Deserialize<TStream>(Hub.JsonSerializerOptions),
-            ChangeType.Full => GetFullState(LastSynchronized = request),
+                => ApplyPatch((JsonPatch)request.Change)
+                    .Deserialize<TStream>(Hub.JsonSerializerOptions),
+            ChangeType.Full => GetFullState(request),
             _ => throw new ArgumentOutOfRangeException()
         };
         return new ChangeItem<TStream>(Id, Reference, newState, request.ChangedBy, Hub.Version);
     }
 
-    private JsonNode ApplyPatch(DataChangedEvent request)
+    private ChangeItem<TStream> ApplyPatchRequest(PatchChangeRequest request, object changedBy)
     {
-        var change =
-            LastSynchronized.Change as JsonNode
-            ?? JsonSerializer.SerializeToNode(LastSynchronized.Change, Hub.JsonSerializerOptions);
-        var ret = ((JsonPatch)request.Change).Apply(change).Result;
-        LastSynchronized = request with { Change = ret, ChangeType = ChangeType.Full };
-        return ret;
+        var newState = ApplyPatch((JsonPatch)request.Change)
+            .Deserialize<TStream>(Hub.JsonSerializerOptions);
+        ;
+        return new ChangeItem<TStream>(Id, Reference, newState, changedBy, Hub.Version);
+    }
+
+    private JsonNode ApplyPatch(JsonPatch patch)
+    {
+        var applied = patch.Apply(lastSynchronized);
+        if (applied.Error != null)
+            throw new InvalidOperationException(applied.Error);
+        ;
+        return lastSynchronized = applied.Result;
     }
 
     private TStream GetFullState(DataChangedEvent request)
     {
-        LastSynchronized = request;
-
+        lastSynchronized =
+            request.Change as JsonNode
+            ?? JsonSerializer.SerializeToNode(request.Change, Hub.JsonSerializerOptions);
         return request.Change is JsonNode node
             ? node.Deserialize<TStream>(Hub.JsonSerializerOptions)
             : (TStream)request.Change;
@@ -235,38 +262,28 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
             throw new ArgumentNullException(nameof(initial));
         var start = new ChangeItem<TStream>(Id, Reference, initial, Id, Hub.Version);
         updatedInstances.OnNext(start);
+
         return this;
     }
 
-    private DataChangedEvent GetPatch(DataChangedEvent fullChange)
+    private JsonPatch GetPatch(JsonNode fullChange)
     {
-        if (fullChange.Change == null)
-            throw new ArgumentNullException(nameof(fullChange.Change));
-        var change = fullChange.Change as JsonNode;
-        if (change == null)
-            fullChange = fullChange with
-            {
-                Change = change =
-                    JsonSerializer.SerializeToNode(fullChange.Change, Hub.JsonSerializerOptions)
-            };
-
-        if (change == null)
-            throw new NotSupportedException("Could not convert change to JsonNode");
-
-        var lastSynchronized =
-            LastSynchronized.Change as JsonNode
-            ?? JsonSerializer.SerializeToNode(LastSynchronized.Change, Hub.JsonSerializerOptions);
-
-        var jsonPatch = lastSynchronized.CreatePatch(change);
+        var jsonPatch = lastSynchronized.CreatePatch(fullChange);
         if (!jsonPatch.Operations.Any())
             return null;
-        LastSynchronized = fullChange;
-        return fullChange with { Change = jsonPatch, ChangeType = ChangeType.Patch };
+        return jsonPatch;
     }
 
     private DataChangedEvent GetFullDataChange(ChangeItem<TStream> value)
     {
-        return new DataChangedEvent(Id, Reference, Hub.Version, value.Value, ChangeType.Full, Id);
+        return new DataChangedEvent(
+            Id,
+            Reference,
+            Hub.Version,
+            value.Value,
+            ChangeType.Full,
+            value.ChangedBy
+        );
     }
 
     public void OnCompleted()
@@ -278,8 +295,6 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
     {
         store.OnError(error);
     }
-
-    public void OnNext(DataChangedEvent value) => incomingChanges.OnNext(value);
 
     public void AddDisposable(IDisposable disposable) => Disposables.Add(disposable);
 
@@ -294,7 +309,8 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
 
     public void Update(ChangeItem<TStream> changeItem)
     {
-        updatedInstances.OnNext(changeItem);
+        if (changeItem.ChangedBy != null)
+            updatedInstances.OnNext(changeItem);
     }
 
     public void Update(Func<TStream, TStream> update)

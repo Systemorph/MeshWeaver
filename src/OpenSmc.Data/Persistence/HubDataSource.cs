@@ -109,7 +109,14 @@ public record HubDataSource : HubDataSourceBase<HubDataSource>
 
     public override IEnumerable<ChangeStream<EntityStore>> Initialize()
     {
-        return [GetStream(Id, GetReference())];
+        var ret = GetStream(Id, GetReference());
+        ret.Disposables.Add(
+            ret.Subscribe<PatchChangeRequest>(e =>
+            {
+                Hub.Post(e, o => o.WithTarget(Id));
+            })
+        );
+        yield return ret;
     }
 
     protected IMessageDelivery Initialize(
