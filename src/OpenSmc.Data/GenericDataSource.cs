@@ -91,17 +91,19 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
                 changeStream.Initialize(new() { Collections = instances });
         });
 
-        changesSubscriptions = TypeSources
-            .Values.Select(ts =>
-                Workspace.Stream.Where(x => !x.ChangedBy.Equals(Id)).Subscribe(ws => ts.Update(ws))
-            )
-            .ToArray();
-
         return ret;
     }
 
     protected virtual IEnumerable<ChangeStream<EntityStore>> GetInitialChangeStream()
     {
+        changesSubscriptions = TypeSources
+            .Values.Select(ts =>
+                Workspace
+                    .Stream.Skip(1)
+                    .Where(x => !x.ChangedBy.Equals(Id))
+                    .Subscribe(ws => ts.Update(ws))
+            )
+            .ToArray();
         yield return Workspace.GetRawStream(Id, new WorkspaceStoreReference());
     }
 

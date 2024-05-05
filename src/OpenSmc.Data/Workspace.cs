@@ -51,8 +51,13 @@ public class Workspace : IWorkspace
         var stream = GetChangeStream(address, reference);
         subscriptions.GetOrAdd(
             (address, reference),
-            _ => stream.Subscribe<DataChangedEvent>(dc => Hub.Post(dc, o => o.WithTarget(address)))
+            _ => stream.Subscribe<DataChangedEvent>(e => OutgoingDataChangedEvent(e, address))
         );
+    }
+
+    private void OutgoingDataChangedEvent(DataChangedEvent e, object address)
+    {
+        Hub.Post(e, o => o.WithTarget(address));
     }
 
     private ChangeStream<TReference> GetChangeStream<TReference>(
@@ -76,14 +81,6 @@ public class Workspace : IWorkspace
     }
 
     public ChangeStream<TReference> GetRemoteStream<TReference>(
-        object address,
-        WorkspaceReference<TReference> reference
-    )
-    {
-        return GetRemoteStreamImpl(address, reference);
-    }
-
-    internal ChangeStream<TReference> GetRemoteStreamImpl<TReference>(
         object address,
         WorkspaceReference<TReference> reference
     )
@@ -122,6 +119,12 @@ public class Workspace : IWorkspace
                         o => o.WithTarget(address)
                     );
             })
+        );
+
+        ret.Disposables.Add(
+            myChangeStream.Subscribe<ChangeItem<WorkspaceState>>(x =>
+                ret.Synchronize(x.SetValue(x.Value.Reduce(reference)))
+            )
         );
 
         ret.Disposables.Add(
@@ -204,15 +207,7 @@ public class Workspace : IWorkspace
             dataContextStreams.ToDictionary(x => x.Id),
             () =>
             {
-                myChangeStream.Synchronize(
-                    new ChangeItem<WorkspaceState>(
-                        Id,
-                        new WorkspaceStoreReference(),
-                        State,
-                        Id,
-                        Hub.Version
-                    )
-                );
+                myChangeStream.Initialize(State);
                 LastCommitted = State;
 
                 initializeTaskCompletionSource.SetResult();
