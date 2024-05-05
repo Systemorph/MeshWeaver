@@ -187,6 +187,7 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
 
         var dataChanged = LastSynchronized == null ? fullChange : GetPatch(fullChange);
 
+        LastSynchronized = fullChange;
         return dataChanged;
     }
 
@@ -229,14 +230,6 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
             throw new ArgumentNullException(nameof(initial));
         var start = new ChangeItem<TStream>(Id, Reference, initial, Id, Hub.Version);
         updatedInstances.OnNext(start);
-        LastSynchronized = new DataChangedEvent(
-            Id,
-            Reference,
-            Hub.Version,
-            initial,
-            ChangeType.Full,
-            Id
-        );
         return this;
     }
 
