@@ -93,7 +93,9 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
         Disposables.Add(incomingPatches.Select(Change).Subscribe(incomingChanges));
         Disposables.Add(incomingChanges.Select(x => ParseDataChanged(x)).Subscribe(store));
         Disposables.Add(incomingChanges.Subscribe(outgoingChanges));
-        Disposables.Add(updatedInstances.Select(GetDataChanged).Subscribe(outgoingChanges));
+        Disposables.Add(
+            updatedInstances.Select(GetDataChanged).Where(x => x != null).Subscribe(outgoingChanges)
+        );
 
         this.reduceManager = reduceManager;
 
@@ -185,9 +187,9 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
     {
         var fullChange = GetFullDataChange(change);
 
-        var dataChanged = LastSynchronized == null ? fullChange : GetPatch(fullChange);
+        var dataChanged =
+            LastSynchronized == null ? LastSynchronized = fullChange : GetPatch(fullChange);
 
-        LastSynchronized = fullChange;
         return dataChanged;
     }
 
@@ -210,7 +212,10 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
 
     private JsonNode ApplyPatch(DataChangedEvent request)
     {
-        var ret = ((JsonPatch)request.Change).Apply((JsonNode)LastSynchronized.Change).Result;
+        var change =
+            LastSynchronized.Change as JsonNode
+            ?? JsonSerializer.SerializeToNode(LastSynchronized.Change, Hub.JsonSerializerOptions);
+        var ret = ((JsonPatch)request.Change).Apply(change).Result;
         LastSynchronized = request with { Change = ret, ChangeType = ChangeType.Full };
         return ret;
     }
@@ -235,9 +240,27 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
 
     private DataChangedEvent GetPatch(DataChangedEvent fullChange)
     {
-        var jsonPatch = LastSynchronized.CreatePatch(fullChange.Change);
+        if (fullChange.Change == null)
+            throw new ArgumentNullException(nameof(fullChange.Change));
+        var change = fullChange.Change as JsonNode;
+        if (change == null)
+            fullChange = fullChange with
+            {
+                Change = change =
+                    JsonSerializer.SerializeToNode(fullChange.Change, Hub.JsonSerializerOptions)
+            };
+
+        if (change == null)
+            throw new NotSupportedException("Could not convert change to JsonNode");
+
+        var lastSynchronized =
+            LastSynchronized.Change as JsonNode
+            ?? JsonSerializer.SerializeToNode(LastSynchronized.Change, Hub.JsonSerializerOptions);
+
+        var jsonPatch = lastSynchronized.CreatePatch(change);
         if (!jsonPatch.Operations.Any())
             return null;
+        LastSynchronized = fullChange;
         return fullChange with { Change = jsonPatch, ChangeType = ChangeType.Patch };
     }
 
