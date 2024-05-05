@@ -5,6 +5,7 @@ namespace OpenSmc.Data;
 
 public interface IWorkspaceMessage
 {
+    object Address { get; }
     object Reference { get; }
 }
 
@@ -22,7 +23,7 @@ public record UpdateDataRequest(IReadOnlyCollection<object> Elements)
 public record DeleteDataRequest(IReadOnlyCollection<object> Elements)
     : DataChangeRequestWithElements(Elements);
 
-public record PatchChangeRequest(object Reference, JsonPatch Change)
+public record PatchChangeRequest(object Address, object Reference, JsonPatch Change)
     : DataChangeRequest,
         IWorkspaceMessage;
 

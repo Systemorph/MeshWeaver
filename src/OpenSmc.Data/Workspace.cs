@@ -47,7 +47,7 @@ public class Workspace : IWorkspace
         var key = (Hub.Address, reference);
         if (subscriptions.ContainsKey(key))
             return;
-        var stream = GetChangeStream(Hub, reference);
+        var stream = GetChangeStream(Hub.Address, reference);
         subscriptions[key] = stream.Subscribe<DataChangedEvent>(e =>
             OutgoingDataChangedEvent(e, address)
         );
@@ -95,7 +95,7 @@ public class Workspace : IWorkspace
                         Hub.Post(@e, o => o.WithTarget(address));
                     else
                         Hub.Post(
-                            new PatchChangeRequest(e.Reference, (JsonPatch)e.Change),
+                            new PatchChangeRequest(e.Address, e.Reference, (JsonPatch)e.Change),
                             o => o.WithTarget(address)
                         );
                 })
@@ -120,8 +120,6 @@ public class Workspace : IWorkspace
         }
         return ret;
     }
-
-
 
     public void Update(IEnumerable<object> instances, UpdateOptions updateOptions) =>
         RequestChange(
@@ -165,7 +163,7 @@ public class Workspace : IWorkspace
 
     private WorkspaceState LastCommitted { get; set; }
     public IMessageHub Hub { get; }
-    public object Id { get; }
+    public object Id => Hub.Address;
     private ILogger logger;
 
     WorkspaceState IWorkspace.State => State;
@@ -297,7 +295,12 @@ public class Workspace : IWorkspace
 
     public IMessageDelivery DeliverMessage(IMessageDelivery<IWorkspaceMessage> delivery)
     {
-        if (streams.TryGetValue((Hub.Address, delivery.Message.Reference), out var stream))
+        if (
+            streams.TryGetValue(
+                (delivery.Message.Address, delivery.Message.Reference),
+                out var stream
+            )
+        )
             return stream.DeliverMessage(delivery);
         return delivery.Ignored();
     }
