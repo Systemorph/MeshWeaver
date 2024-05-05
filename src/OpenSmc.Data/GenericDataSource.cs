@@ -72,7 +72,6 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
 
     public virtual IEnumerable<ChangeStream<EntityStore>> Initialize()
     {
-        //return TypeSources.Values.Select(ts => ts.InitializeAsync(workspaceStream));
         var ret = GetInitialChangeStream().ToArray();
         Hub.Schedule(async cancellationToken =>
         {
@@ -94,7 +93,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
         return ret;
     }
 
-    protected virtual IEnumerable<ChangeStream<EntityStore>> GetInitialChangeStream()
+    protected IEnumerable<ChangeStream<EntityStore>> GetInitialChangeStream()
     {
         changesSubscriptions = TypeSources
             .Values.Select(ts =>

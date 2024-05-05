@@ -49,13 +49,8 @@ public class Workspace : IWorkspace
             return;
         var stream = GetChangeStream(Hub.Address, reference);
         subscriptions[key] = stream.Subscribe<DataChangedEvent>(e =>
-            OutgoingDataChangedEvent(e, address)
+            Hub.Post(e, o => o.WithTarget(address))
         );
-    }
-
-    private void OutgoingDataChangedEvent(DataChangedEvent e, object address)
-    {
-        Hub.Post(e, o => o.WithTarget(address));
     }
 
     public ChangeStream<TReference> GetChangeStream<TReference>(
@@ -87,19 +82,6 @@ public class Workspace : IWorkspace
                     ret.Synchronize(x.SetValue(x.Value.Reduce(reference)))
                 )
             );
-
-            ret.Disposables.Add(
-                ret.Subscribe<DataChangedEvent>(e =>
-                {
-                    if (Hub.Address.Equals(e.Address))
-                        Hub.Post(@e, o => o.WithTarget(address));
-                    else
-                        Hub.Post(
-                            new PatchChangeRequest(e.Address, e.Reference, (JsonPatch)e.Change),
-                            o => o.WithTarget(address)
-                        );
-                })
-            );
         }
         // registry for external workstreams. DataChanged and Update are fed directly to the stream.
         else
@@ -107,14 +89,15 @@ public class Workspace : IWorkspace
             Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(address));
 
             ret.Disposables.Add(
-                myChangeStream.Subscribe<ChangeItem<WorkspaceState>>(x =>
-                    ret.Update(x.SetValue(x.Value.Reduce(reference)))
-                )
-            );
-            ret.Disposables.Add(
                 new Disposables.AnonymousDisposable(
                     () =>
                         Hub.Post(new UnsubscribeDataRequest(reference), o => o.WithTarget(address))
+                )
+            );
+
+            ret.Disposables.Add(
+                myChangeStream.Subscribe<ChangeItem<WorkspaceState>>(x =>
+                    ret.Update(x.SetValue(x.Value.Reduce(reference)))
                 )
             );
         }
@@ -216,7 +199,7 @@ public class Workspace : IWorkspace
 
     private void Synchronize(ChangeItem<EntityStore> item)
     {
-        if (Hub.Address.Equals(item.ChangedBy))
+        if (Id.Equals(item.ChangedBy))
             return;
 
         State = State.Synchronize(item);
