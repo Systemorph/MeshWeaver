@@ -1,6 +1,5 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Nodes;
-using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;

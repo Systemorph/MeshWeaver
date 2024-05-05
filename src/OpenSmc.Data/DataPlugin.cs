@@ -127,7 +127,7 @@ internal class InitializeObserver : IObserver<ChangeItem<EntityStore>>
     {
         this.streams = streams;
         this.onCompleteInitialization = onCompleteInitialization;
-        Timeout = timeout;
+        Timeout = TimeSpan.FromHours(2);
         Disposables = new() { CreateTimeout() };
     }
 
