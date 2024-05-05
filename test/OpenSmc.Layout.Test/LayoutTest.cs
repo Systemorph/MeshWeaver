@@ -122,7 +122,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var reference = new LayoutAreaReference(StaticView);
 
         var workspace = GetClient().GetWorkspace();
-        var stream = workspace.GetRemoteStream(new HostAddress(), reference);
+        var stream = workspace.GetChangeStream(new HostAddress(), reference);
 
         var control = await stream.GetControl(reference.Area).FirstAsync();
         var areas = control
@@ -149,7 +149,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var reference = new LayoutAreaReference(nameof(ViewWithProgress));
 
         var workspace = GetClient().GetWorkspace();
-        var stream = workspace.GetRemoteStream(new HostAddress(), reference);
+        var stream = workspace.GetChangeStream(new HostAddress(), reference);
         var controls = await stream
             .GetControl(reference.Area)
             .TakeUntil(o => o is HtmlControl)
@@ -164,7 +164,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetRemoteStream(new HostAddress(), reference);
+        var stream = workspace.GetChangeStream(new HostAddress(), reference);
         var reportArea = $"{reference.Area}/Content";
         var content = await stream.GetControl(reportArea).FirstAsync();
         content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
@@ -199,7 +199,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetRemoteStream(new HostAddress(), reference);
+        var stream = workspace.GetChangeStream(new HostAddress(), reference);
         var controlArea = $"{reference.Area}";
         var content = await stream.GetControl(controlArea).FirstAsync();
         var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;

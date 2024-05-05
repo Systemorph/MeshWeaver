@@ -5,10 +5,11 @@ namespace OpenSmc.Data;
 
 public interface IWorkspace : IAsyncDisposable
 {
-    ChangeStream<TReference> GetRemoteStream<TReference>(
-        object address,
+    ChangeStream<TReference> GetChangeStream<TReference>(
+        object id,
         WorkspaceReference<TReference> reference
     );
+
     WorkspaceState State { get; }
     Task Initialized { get; }
     IReadOnlyCollection<Type> MappedTypes { get; }
@@ -21,14 +22,10 @@ public interface IWorkspace : IAsyncDisposable
 
     void Commit();
     void Rollback();
-    ChangeStream<TReference> GetRawStream<TReference>(
-        object id,
-        WorkspaceReference<TReference> reference
-    );
     WorkspaceState CreateState(EntityStore deserialize);
     void Initialize();
-    void Subscribe(object sender, WorkspaceReference reference);
-    void Unsubscribe(object sender, WorkspaceReference reference);
+    void Subscribe(object address, WorkspaceReference reference);
+    void Unsubscribe(object address, WorkspaceReference reference);
     IMessageDelivery DeliverMessage(IMessageDelivery<IWorkspaceMessage> delivery);
     void RequestChange(DataChangeRequest change, object changedBy);
 

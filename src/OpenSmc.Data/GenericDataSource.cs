@@ -104,7 +104,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
                     .Subscribe(ws => ts.Update(ws))
             )
             .ToArray();
-        yield return Workspace.GetRawStream(Id, new WorkspaceStoreReference());
+        yield return Workspace.GetChangeStream(Id, new WorkspaceStoreReference());
     }
 
     protected virtual WorkspaceReference<EntityStore> GetReference()

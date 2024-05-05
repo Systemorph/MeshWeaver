@@ -83,7 +83,7 @@ public abstract record HubDataSourceBase<TDataSource> : DataSource<TDataSource>
         WorkspaceReference<EntityStore> reference
     )
     {
-        return Workspace.GetRemoteStream(address, reference);
+        return Workspace.GetChangeStream(address, reference);
     }
 
     internal bool SyncAll { get; init; }
