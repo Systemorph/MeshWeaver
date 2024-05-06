@@ -26,9 +26,9 @@ public interface IWorkspace : IAsyncDisposable
     void Subscribe(object address, WorkspaceReference reference);
     void Unsubscribe(object address, WorkspaceReference reference);
     IMessageDelivery DeliverMessage(IMessageDelivery<IWorkspaceMessage> delivery);
-    void RequestChange(DataChangeRequest change, object changedBy);
-    void Synchronize(ChangeItem<EntityStore> value);
-    void Update(EntityStore store, object changedBy);
+    void RequestChange(DataChangeRequest change, object changedBy, WorkspaceReference reference);
+    void Synchronize(ChangeItem<EntityStore> changeItem);
+    void Update(ChangeItem<EntityStore> changeItem);
 
     IObservable<ChangeItem<WorkspaceState>> Stream { get; }
     ReduceManager<WorkspaceState> ReduceManager { get; }
