@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Serialization;
@@ -116,6 +117,17 @@ public record HubDataSource : HubDataSourceBase<HubDataSource>
                 Hub.Post(e, o => o.WithTarget(Id));
             })
         );
+        if (!Id.Equals(Hub.Address))
+            ret.AddDisposable(
+                ret.Subscribe<ChangeItem<EntityStore>>(x =>
+                {
+                    if (Id.Equals(x.ChangedBy))
+                    {
+                        Workspace.Update(x.Value);
+                        Workspace.Commit();
+                    }
+                })
+            );
         yield return ret;
     }
 

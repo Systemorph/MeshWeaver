@@ -103,7 +103,12 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
                     .Subscribe(ws => ts.Update(ws))
             )
             .ToArray();
-        yield return Workspace.GetChangeStream(Id, new WorkspaceStoreReference());
+        yield return new ChangeStream<EntityStore>(
+            Id,
+            new WorkspaceStoreReference(),
+            Hub,
+            Workspace.ReduceManager.CreateDerived<EntityStore>()
+        );
     }
 
     protected virtual WorkspaceReference<EntityStore> GetReference()

@@ -7,52 +7,37 @@ using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
 
-public record WorkspaceState
+public record WorkspaceState(
+    IMessageHub Hub,
+    EntityStore Store,
+    IReadOnlyDictionary<string, ITypeSource> TypeSources,
+    IReduceManager<WorkspaceState> ReduceManager
+)
 {
-    private readonly IReduceManager<WorkspaceState> reduce;
-
     //private readonly ISerializationService serializationService;
-    private ImmutableDictionary<Type, string> CollectionsByType { get; init; }
-    public ImmutableDictionary<string, ITypeSource> TypeSources { get; init; }
-    public IMessageHub Hub { get; }
-
-    public WorkspaceState(
-        IMessageHub hub,
-        EntityStore Store,
-        IReadOnlyDictionary<string, ITypeSource> typeSources,
-        IReduceManager<WorkspaceState> reduce
-    )
-    {
-        Hub = hub;
-        this.Store = Store;
-        this.reduce = reduce;
-        Version = hub.Version;
-        CollectionsByType = typeSources
+    private ImmutableDictionary<Type, string> CollectionsByType { get; init; } =
+        TypeSources
             .Values.Where(x => x.ElementType != null)
             .ToImmutableDictionary(x => x.ElementType, x => x.CollectionName);
-        TypeSources = typeSources.Values.ToImmutableDictionary(x => x.CollectionName);
-    }
 
     public string GetCollectionName(Type type) => CollectionsByType.GetValueOrDefault(type);
 
     public WorkspaceState(
-        IMessageHub hub,
-        IReadOnlyDictionary<string, ITypeSource> typeSources,
-        IReduceManager<WorkspaceState> reduce
+        IMessageHub Hub,
+        IReadOnlyDictionary<string, ITypeSource> TypeSources,
+        IReduceManager<WorkspaceState> Reduce
     )
-        : this(hub, new(), typeSources, reduce) { }
+        : this(Hub, new(), TypeSources, Reduce) { }
 
-    public long Version { get; init; }
-
-    public EntityStore Store { get; private init; }
+    public long Version { get; init; } = Hub.Version;
 
     #region Reducers
 
 
-    public object Reduce(WorkspaceReference reference) => reduce.Reduce(this, reference);
+    public object Reduce(WorkspaceReference reference) => ReduceManager.Reduce(this, reference);
 
     public TReference Reduce<TReference>(WorkspaceReference<TReference> reference) =>
-        reduce.Reduce(this, reference);
+        ReduceManager.Reduce(this, reference);
 
     internal EntityStore ReduceImpl(PartitionedCollectionsReference reference) =>
         new()

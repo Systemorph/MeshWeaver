@@ -1,6 +1,8 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Text.Json;
 using FluentAssertions;
+using Json.Patch;
 using Xunit;
 
 namespace OpenSmc.Hub.Data.Test;
@@ -19,5 +21,33 @@ public class Playground
 
         initialDataChanged.OnNext(1);
         lastValue.Should().Be(1);
+    }
+
+    private record MyData(string Id, double Value);
+
+    [Fact]
+    public void JsonPatchTest()
+    {
+        var instance = new MyData("1", 1);
+        var serialized = JsonSerializer.Serialize(instance);
+        var altered = instance with { Value = 2 };
+        var patch = instance.CreatePatch(altered);
+        var applied = patch.Apply(instance);
+        applied.Should().BeEquivalentTo(altered);
+    }
+
+    [Fact]
+    public void Changes()
+    {
+        var values = new Subject<int>();
+        var changes = new Subject<Func<int, int>>();
+        var output = values.CombineLatest(changes.StartWith(x => x), (i, c) => c.Invoke(i));
+        int lastValue = 0;
+        var sub = output.Subscribe(x => lastValue = x);
+
+        values.OnNext(2);
+        lastValue.Should().Be(2);
+        changes.OnNext(x => x + 1);
+        lastValue.Should().Be(3);
     }
 }

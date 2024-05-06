@@ -12,6 +12,7 @@ public interface IReduceManager<TStream>
 
     TReduced Reduce<TReduced>(TStream value, WorkspaceReference<TReduced> reference);
     object Reduce(TStream value, WorkspaceReference reference);
+    IReduceManager<TReduced> CreateDerived<TReduced>();
 }
 
 public record ReduceManager<TOriginalStream> : IReduceManager<TOriginalStream>
@@ -130,7 +131,7 @@ public record ReduceManager<TOriginalStream> : IReduceManager<TOriginalStream>
         return ((IObservable<ChangeItem<TReduced>>)first?.Value(workspaceState, reference, first)); //!.Cast<ChangeItem<TReference>>();
     }
 
-    internal IReduceManager<TReduced> CreateDerived<TReduced>() =>
+    public IReduceManager<TReduced> CreateDerived<TReduced>() =>
         typeof(TReduced) == typeof(TOriginalStream)
             ? (IReduceManager<TReduced>)this
             :

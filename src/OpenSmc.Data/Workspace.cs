@@ -21,7 +21,7 @@ public class Workspace : IWorkspace
 
     private readonly ConcurrentDictionary<string, ITypeSource> typeSources = new();
 
-    IObservable<ChangeItem<WorkspaceState>> IWorkspace.Stream => myChangeStream;
+    public IObservable<ChangeItem<WorkspaceState>> Stream => myChangeStream;
 
     public IReadOnlyCollection<Type> MappedTypes => State.MappedTypes.ToArray();
     private readonly ConcurrentDictionary<
@@ -77,10 +77,13 @@ public class Workspace : IWorkspace
         // registry for internal workstream ==> I own myChangeStream, it is my basis.
         if (Hub.Address.Equals(address))
         {
+            Stream.Take(1).Subscribe(x => ret.Initialize(x.Value.Reduce(reference)));
             ret.AddDisposable(
-                myChangeStream.Subscribe<ChangeItem<WorkspaceState>>(x =>
-                    ret.Synchronize(x.SetValue(x.Value.Reduce(reference)))
-                )
+                Stream
+                    .Skip(1)
+                    .Subscribe<ChangeItem<WorkspaceState>>(x =>
+                        ret.Synchronize(x.SetValue(x.Value.Reduce(reference)))
+                    )
             );
         }
         // registry for external workstreams. DataChanged and Update are fed directly to the stream.
@@ -95,10 +98,12 @@ public class Workspace : IWorkspace
                 )
             );
 
+            Stream.Take(1).Subscribe(x => ret.Initialize(x.Value.Reduce(reference)));
             ret.Disposables.Add(
-                myChangeStream.Subscribe<ChangeItem<WorkspaceState>>(x =>
-                    ret.Update(x.SetValue(x.Value.Reduce(reference)))
-                )
+                Stream
+                    .Skip(1)
+                    .Where(x => !address.Equals(x.ChangedBy))
+                    .Subscribe(x => ret.Update(x.SetValue(x.Value.Reduce(reference))))
             );
         }
         return ret;
@@ -110,18 +115,13 @@ public class Workspace : IWorkspace
             Hub.Address
         );
 
-    public void Update(WorkspaceState state)
-    {
-        State = state;
-    }
-
     public void Delete(IEnumerable<object> instances) =>
         RequestChange(new DeleteDataRequest(instances.ToArray()), Hub.Address);
 
     private readonly TaskCompletionSource initializeTaskCompletionSource = new();
     public Task Initialized => initializeTaskCompletionSource.Task;
 
-    private ReduceManager<WorkspaceState> ReduceManager { get; } = CreateReduceManager();
+    public ReduceManager<WorkspaceState> ReduceManager { get; } = CreateReduceManager();
 
     private static ReduceManager<WorkspaceState> CreateReduceManager()
     {
@@ -231,7 +231,7 @@ public class Workspace : IWorkspace
             new ChangeItem<WorkspaceState>(
                 Hub.Address,
                 new WorkspaceStoreReference(),
-                State.Change(change),
+                State,
                 changedBy,
                 Hub.Version
             )
@@ -285,6 +285,9 @@ public class Workspace : IWorkspace
             )
         )
             return stream.DeliverMessage(delivery);
+
         return delivery.Ignored();
     }
+
+    public void Update(EntityStore entityStore) => State = State.Update(s => s.Merge(entityStore));
 }
