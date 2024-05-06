@@ -98,12 +98,12 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
 
         dataChangedStream = store
             .Skip(1)
-            .Where(x => Id.Equals(x.ChangedBy))
+            .Where(x => !Hub.Address.Equals(x.ChangedBy))
             .Select(r => GetDataChanged(r))
             .Where(x => x?.Change != null);
         patchRequestStream = store
             .Skip(1)
-            .Where(x => !Id.Equals(x.ChangedBy))
+            .Where(x => Hub.Address.Equals(x.ChangedBy))
             .Select(r => GetDataChanged(r))
             .Where(x => x?.Change != null)
             .Select(x => new PatchChangeRequest(x.Address, x.Reference, (JsonPatch)x.Change));
@@ -111,7 +111,7 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
 
     private ChangeItem<TStream> Change(IMessageDelivery<PatchChangeRequest> delivery, TStream state)
     {
-        var patched = delivery.Message.Change.Apply(state);
+        var patched = delivery.Message.Change.Apply(state, Hub.JsonSerializerOptions);
         if (patched == null)
             throw new InvalidOperationException();
 

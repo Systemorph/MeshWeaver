@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Reactive.Linq;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -16,6 +17,7 @@ public class Workspace : IWorkspace
         myChangeStream = new(Hub.Address, new WorkspaceStateReference(), Hub, ReduceManager);
     }
 
+    private WorkspaceStateReference Reference { get; } = new();
     private WorkspaceState State { get; set; }
 
     private readonly ConcurrentDictionary<string, ITypeSource> typeSources = new();
@@ -96,6 +98,9 @@ public class Workspace : IWorkspace
                         Hub.Post(new UnsubscribeDataRequest(reference), o => o.WithTarget(address))
                 )
             );
+            ret.Disposables.Add(
+                ret.Subscribe<PatchChangeRequest>(e => Hub.Post(e, o => o.WithTarget(address)))
+            );
         }
         return ret;
     }
@@ -103,11 +108,12 @@ public class Workspace : IWorkspace
     public void Update(IEnumerable<object> instances, UpdateOptions updateOptions) =>
         RequestChange(
             new UpdateDataRequest(instances.ToArray()) { Options = updateOptions },
-            Hub.Address
+            Hub.Address,
+            Reference
         );
 
     public void Delete(IEnumerable<object> instances) =>
-        RequestChange(new DeleteDataRequest(instances.ToArray()), Hub.Address);
+        RequestChange(new DeleteDataRequest(instances.ToArray()), Hub.Address, Reference);
 
     private readonly TaskCompletionSource initializeTaskCompletionSource = new();
     public Task Initialized => initializeTaskCompletionSource.Task;
@@ -181,6 +187,7 @@ public class Workspace : IWorkspace
             stream.Disposables.Add(
                 ((IObservable<ChangeItem<EntityStore>>)stream)
                     .Skip(1)
+                    .Where(x => !x.ChangedBy.Equals(Id) || !Reference.Equals(x.Reference))
                     .Subscribe<ChangeItem<EntityStore>>(Synchronize)
             );
             initializeObserver.Disposables.Add(stream.Subscribe(initializeObserver));
@@ -194,9 +201,8 @@ public class Workspace : IWorkspace
 
     public void Synchronize(ChangeItem<EntityStore> item)
     {
-        if (Id.Equals(item.ChangedBy))
+        if (item.Address.Equals(Hub.Address) && item.Reference.Equals(Reference))
             return;
-
         myChangeStream.Synchronize(item.SetValue(State with { Store = item.Value }));
     }
 
@@ -217,11 +223,15 @@ public class Workspace : IWorkspace
         State = LastCommitted;
     }
 
-    public void RequestChange(DataChangeRequest change, object changedBy)
+    public void RequestChange(
+        DataChangeRequest change,
+        object changedBy,
+        WorkspaceReference reference
+    )
     {
         myChangeStream.Update(state => new ChangeItem<WorkspaceState>(
             Hub.Address,
-            new WorkspaceStoreReference(),
+            reference ?? Reference,
             state.Change(change) with
             {
                 Version = Hub.Version
@@ -282,6 +292,8 @@ public class Workspace : IWorkspace
         return delivery.Ignored();
     }
 
-    public void Update(EntityStore entityStore, object changedBy) =>
-        State = State.Update(s => s.Merge(entityStore));
+    public void Update(ChangeItem<EntityStore> changeItem) =>
+        myChangeStream.Update(s =>
+            changeItem.SetValue(s with { Store = s.Store.Merge(changeItem.Value) })
+        );
 }

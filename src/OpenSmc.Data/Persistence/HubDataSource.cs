@@ -1,4 +1,5 @@
-﻿using System.Runtime.CompilerServices;
+﻿using System.Reactive.Linq;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.DependencyInjection;
@@ -111,12 +112,6 @@ public record HubDataSource : HubDataSourceBase<HubDataSource>
     public override IEnumerable<ChangeStream<EntityStore>> Initialize()
     {
         var ret = GetStream(Id, GetReference());
-        ret.Disposables.Add(
-            ret.Subscribe<PatchChangeRequest>(e =>
-            {
-                Hub.Post(e, o => o.WithTarget(Id));
-            })
-        );
         if (Id.Equals(Hub.Address))
             throw new NotSupportedException(
                 "Cannot initialize the hub data source with the hub address"
@@ -124,12 +119,17 @@ public record HubDataSource : HubDataSourceBase<HubDataSource>
         ret.AddDisposable(
             ret.Subscribe<ChangeItem<EntityStore>>(x =>
             {
-                if (Id.Equals(x.ChangedBy))
+                if (Hub.Address.Equals(x.ChangedBy) && ret.Equals(x.Reference))
                 {
-                    Workspace.Update(x.Value, x.ChangedBy);
-                    Workspace.Commit();
+                    Workspace.Update(x);
                 }
             })
+        );
+        ret.AddDisposable(
+            Workspace
+                .Stream.Skip(1)
+                .Where(x => !Hub.Address.Equals(x.ChangedBy) || !ret.Reference.Equals(x.Reference))
+                .Subscribe(x => ret.Synchronize(x.SetValue(x.Value.Store)))
         );
         ret.AddDisposable(
             ret.Subscribe<PatchChangeRequest>(x =>
