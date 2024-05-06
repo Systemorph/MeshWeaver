@@ -8,7 +8,7 @@ import { map, Observable, Subscription } from "rxjs";
 import { ItemTemplateControl } from "@open-smc/layout/src/contract/controls/ItemTemplateControl";
 import { PathReference } from "@open-smc/data/src/contract/PathReference";
 import { renderControl } from "./renderControl";
-import { appStore, ControlModel } from "./appStore";
+import { appStore, LayoutAreaModel } from "./appStore";
 import { updateByReferenceActionCreator } from "@open-smc/data/src/workspaceReducer";
 import { Collection } from "@open-smc/data/src/contract/Collection";
 import { keys } from "lodash-es";
@@ -25,8 +25,8 @@ export class ItemTemplateRenderer extends ControlRenderer<ItemTemplateControl> {
     readonly view$: Observable<UiControl>;
     private state: Record<string, ItemTemplateItemRenderer> = {};
 
-    constructor(control$: Observable<ItemTemplateControl>, area: string, stackTrace: RendererStackTrace) {
-        super(control$, area, stackTrace);
+    constructor(area: string, control$: Observable<ItemTemplateControl>, stackTrace: RendererStackTrace) {
+        super(area, control$, stackTrace);
 
         this.subscription.add(
             () => values((this.state))
@@ -55,8 +55,9 @@ export class ItemTemplateRenderer extends ControlRenderer<ItemTemplateControl> {
             control$
                 .pipe(map(control => control?.view));
 
-        const controlModelWorkspace = new Workspace<ControlModel>({
-            componentTypeName: "LayoutStackControl",
+        const areaModelWorkspace = new Workspace<LayoutAreaModel>({
+            area,
+            controlName: "LayoutStackControl",
             props: {}
         });
 
@@ -77,7 +78,7 @@ export class ItemTemplateRenderer extends ControlRenderer<ItemTemplateControl> {
                                     return qualifyArea(itemRenderer.area, itemRenderer.stackTrace);
                                 });
 
-                            controlModelWorkspace.next(updateByReferenceActionCreator({
+                            areaModelWorkspace.next(updateByReferenceActionCreator({
                                 reference: new PathReference("/props/areas"),
                                 value: areas
                             }));
@@ -97,7 +98,7 @@ export class ItemTemplateRenderer extends ControlRenderer<ItemTemplateControl> {
         );
 
         this.subscription.add(
-            this.renderControlTo(controlModelWorkspace)
+            this.renderControlTo(areaModelWorkspace)
         );
     }
 
@@ -129,7 +130,7 @@ export class ItemTemplateItemRenderer extends Renderer {
         this.area = `${itemTemplateRenderer.area}/${itemId}`;
 
         this.subscription.add(
-            renderControl(itemTemplateRenderer.view$, this.area, this.stackTrace)
+            renderControl(this.area, itemTemplateRenderer.view$, this.stackTrace)
         );
     }
 }

@@ -9,8 +9,8 @@ import { RendererStackTrace } from "./RendererStackTrace";
 import { qualifyArea } from "./qualifyArea";
 
 export function renderControl(
-    control$: Observable<UiControl>,
     area: string,
+    control$: Observable<UiControl>,
     stackTrace: RendererStackTrace
 ) {
     const subject = new ReplaySubject<UiControl>(1);
@@ -21,14 +21,14 @@ export function renderControl(
 
     function getRenderer(value: UiControl) {
         if (value instanceof LayoutStackControl) {
-            return new LayoutStackRenderer(subject as any, area, stackTrace);
+            return new LayoutStackRenderer(area, subject as any, stackTrace);
         }
 
         if (value instanceof ItemTemplateControl) {
-            return new ItemTemplateRenderer(subject as any, area, stackTrace);
+            return new ItemTemplateRenderer(area, subject as any, stackTrace);
         }
 
-        return new ControlRenderer(subject, area, stackTrace);
+        return new ControlRenderer(area, subject, stackTrace);
     }
 
     const subscription =

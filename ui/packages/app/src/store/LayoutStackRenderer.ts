@@ -21,18 +21,17 @@ export class LayoutStackRenderer extends ControlRenderer<LayoutStackControl> {
         collectionRenderer.renderRemovedReferences();
     }
 
-    protected getModel(control: LayoutStackControl) {
-        if (control) {
-            const componentTypeName = control.constructor.name;
-            const {areas, dataContext: _, ...props} = control;
+    protected getAreaModel(area: string, control: LayoutStackControl) {
+        const controlName = control.constructor.name;
+        const {areas, dataContext: _, ...props} = control;
 
-            return {
-                componentTypeName,
-                props: {
-                    areas:
-                        areas.map(reference => qualifyArea(reference.id, this.stackTrace)),
-                    ...bindingsToReferences(props)
-                }
+        return {
+            area,
+            controlName,
+            props: {
+                areas:
+                    areas.map(reference => qualifyArea(reference.id, this.stackTrace)),
+                ...bindingsToReferences(props)
             }
         }
     }

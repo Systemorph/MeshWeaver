@@ -35,7 +35,7 @@ export class EntityReferenceCollectionRenderer extends Renderer {
                                 const control$ =
                                     this.rootContext.pipe(map(selectByReference(reference)));
                                 this.state[reference.id] =
-                                    renderControl(control$, reference.id, this.stackTrace);
+                                    renderControl(reference.id, control$, this.stackTrace);
                             });
                     }
                 )

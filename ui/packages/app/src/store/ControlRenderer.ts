@@ -4,7 +4,7 @@ import { ValueOrReference } from "@open-smc/data/src/contract/ValueOrReference";
 import { Binding, ValueOrBinding } from "@open-smc/data/src/contract/Binding";
 import { JsonPathReference } from "@open-smc/data/src/contract/JsonPathReference";
 import { Workspace } from "@open-smc/data/src/Workspace";
-import { app$, appStore, ControlModel } from "./appStore";
+import { app$, appStore, LayoutAreaModel } from "./appStore";
 import { distinctUntilChanged, map, Observable, Subscription } from "rxjs";
 import { effect } from "@open-smc/utils/src/operators/effect";
 import { syncWorkspaces } from "./syncWorkspaces";
@@ -20,8 +20,8 @@ export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
     readonly namespace: string;
 
     constructor(
-        public readonly control$: Observable<T>,
         public readonly area: string,
+        public readonly control$: Observable<T>,
         stackTrace: RendererStackTrace
     ) {
         super(new Workspace(null, `${area}/dataContext`), stackTrace);
@@ -54,13 +54,13 @@ export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
                     effect(
                         control => {
                             if (control) {
-                                const controlModel =
-                                    this.getModel(control);
+                                const areaModel =
+                                    this.getAreaModel(this.area, control);
 
-                                const controlModelWorkspace =
-                                    sliceByReference(this.dataContext, controlModel);
+                                const areaModelWorkspace =
+                                    sliceByReference(this.dataContext, areaModel);
 
-                                return this.renderControlTo(controlModelWorkspace);
+                                return this.renderControlTo(areaModelWorkspace);
                             }
                         }
                     )
@@ -69,42 +69,36 @@ export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
         );
     }
 
-    protected getModel(control: T): ValueOrReference<ControlModel> {
-        if (control) {
-            const componentTypeName = control.constructor.name;
-            const props = bindingsToReferences(
-                extractProps(control)
-            );
+    protected getAreaModel(area: string, control: T) {
+        const controlName = control.constructor.name;
+        const props = bindingsToReferences(
+            extractProps(control)
+        );
 
-            return {
-                componentTypeName,
-                props
-            }
+        return {
+            area,
+            controlName,
+            props
         }
     }
 
-    protected renderControlTo(controlModelWorkspace: Workspace<ControlModel>)  {
+    protected renderControlTo(areaModelWorkspace: Workspace<LayoutAreaModel>) {
         const subscription = new Subscription();
 
-        const area = this.area;
-
         subscription.add(
-            controlModelWorkspace
+            areaModelWorkspace
                 .pipe(distinctUntilEqual())
-                .subscribe(control => {
-                    appStore.dispatch(setArea({
-                        area,
-                        control
-                    }))
+                .subscribe(layoutAreaModel => {
+                    appStore.dispatch(setArea(layoutAreaModel))
                 })
         );
 
         subscription.add(
             app$
-                .pipe(map(appState => appState.areas[area]?.control))
+                .pipe(map(appState => appState.areas[this.area]))
                 .pipe(distinctUntilChanged())
                 .pipe(map(pathToUpdateAction("")))
-                .subscribe(controlModelWorkspace)
+                .subscribe(areaModelWorkspace)
         );
 
         return subscription;
