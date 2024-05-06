@@ -169,7 +169,7 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
     public virtual bool IsDeferred(IMessageDelivery delivery)
     {
         return (Hub.Address.Equals(delivery.Target) || delivery.Target == null)
-            && registeredTypes.Any(type => delivery.Message.GetType().IsInstanceOfType(type));
+            && registeredTypes.Any(type => type.IsInstanceOfType(delivery.Message));
     }
 
     public async Task<IMessageDelivery> DeliverMessageAsync(

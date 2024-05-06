@@ -17,7 +17,7 @@ public class Workspace : IWorkspace
         myChangeStream = new(Hub.Address, new WorkspaceStateReference(), Hub, ReduceManager);
     }
 
-    private WorkspaceStateReference Reference { get; } = new();
+    public WorkspaceReference Reference { get; } = new WorkspaceStateReference();
     private WorkspaceState State => myChangeStream.Current;
 
     private readonly ConcurrentDictionary<string, ITypeSource> typeSources = new();
