@@ -1,8 +1,7 @@
 import { createElement, JSX, Suspense } from "react";
-import { useAppDispatch, useAppSelector } from "./hooks";
+import { useAppSelector } from "./hooks";
 import { layoutAreaSelector } from "./appStore";
 import { getControlComponent } from "../controlRegistry";
-import { setProp } from "./appReducer";
 
 interface RenderAreaProps {
     id: string;
@@ -12,38 +11,24 @@ interface RenderAreaProps {
 
 export function RenderArea({id, className, render}: RenderAreaProps) {
     const layoutAreaModel = useAppSelector(layoutAreaSelector(id));
-    const dispatch = useAppDispatch();
 
-    if (!layoutAreaModel?.control) {
+    if (!layoutAreaModel?.controlName) {
         return null;
     }
 
-    const {control} = layoutAreaModel;
+    const {controlName} = layoutAreaModel;
 
-    const onChange = (prop: string, value: any) => {
-        dispatch(setProp({areaId: id, prop, value}));
-    }
-
-    const {componentTypeName, props} = control;
-
-    const componentType = getControlComponent(componentTypeName);
+    const componentType = getControlComponent(controlName);
 
     const renderedControl = (
         <Suspense fallback={<div>Loading...</div>}>
             <div className={className} key={id}>
                 {
-                    createElement(componentType, {
-                        ...props,
-                        onChange
-                    })
+                    createElement(componentType, layoutAreaModel)
                 }
             </div>
         </Suspense>
     );
 
     return render ? render(renderedControl) : renderedControl;
-}
-
-export interface ControlProps {
-    onChange: (prop: string, value: any) => void;
 }

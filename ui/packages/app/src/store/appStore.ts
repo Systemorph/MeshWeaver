@@ -1,21 +1,17 @@
 import { configureStore } from "@reduxjs/toolkit"
-import { Style } from "@open-smc/layout/src/contract/controls/Style";
 import { appReducer } from "./appReducer";
 import { from } from "rxjs";
+import { ControlView } from "../ControlDef";
 
 export type AppState = {
     rootArea: string;
     areas: Record<string, LayoutAreaModel>;
 }
 
-export type LayoutAreaModel = {
+export type LayoutAreaModel<T extends ControlView = unknown> = {
     area: string;
-    control?: ControlModel;
-}
-
-export type ControlModel = {
-    componentTypeName: string;
-    props: { [prop: string]: unknown };
+    controlName: string;
+    props: T
 }
 
 export const appStore = configureStore<AppState>({
