@@ -112,22 +112,26 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // arrange
         var client = GetClient();
-        var deleteItems = new object[] { new MyData("1", "Does not meter"), };
 
+        var data = await GetHost().GetWorkspace().GetObservable<MyData>().FirstOrDefaultAsync();
+        data.Should().BeEquivalentTo(initialData);
+
+        var toBeDeleted = data.Take(1).ToArray();
+        var expectedItems = data.Skip(1).ToArray();
         // act
         var deleteResponse = await client.AwaitResponse(
-            new DeleteDataRequest(deleteItems),
-            o => o.WithTarget(new HostAddress())
+            new DeleteDataRequest(toBeDeleted),
+            o => o.WithTarget(new ClientAddress())
         );
 
         await Task.Delay(200);
 
         // asserts
-        var expectedItems = new[] { new MyData("2", "B") };
-        var workspace = GetWorkspace(client);
-        var data = await workspace.GetObservable<MyData>().FirstOrDefaultAsync(x => x?.Count == 1);
-
+        data = await GetClient().GetWorkspace().GetObservable<MyData>().FirstOrDefaultAsync();
         data.Should().BeEquivalentTo(expectedItems);
+        data = await GetHost().GetWorkspace().GetObservable<MyData>().FirstOrDefaultAsync();
+        data.Should().BeEquivalentTo(expectedItems);
+
         storage.Values.Should().BeEquivalentTo(expectedItems);
     }
 
@@ -150,7 +154,6 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             Text = TextChange
         };
         workspace.Update(myInstance);
-        workspace.Commit();
 
         var hostWorkspace = GetWorkspace(GetHost());
 

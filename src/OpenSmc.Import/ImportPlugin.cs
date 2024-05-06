@@ -68,7 +68,6 @@ public class ImportPlugin : MessageHubPlugin, IMessageHandlerAsync<ImportRequest
             if (!activityService.HasErrors())
             {
                 workspace.Update(state);
-                workspace.Commit();
             }
 
             log = activityService.Finish();
@@ -76,7 +75,6 @@ public class ImportPlugin : MessageHubPlugin, IMessageHandlerAsync<ImportRequest
             if (request.Message.SaveLog)
             {
                 workspace.Update(log);
-                workspace.Commit();
             }
 
             //activityService.Finish();

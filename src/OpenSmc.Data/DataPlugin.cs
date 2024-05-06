@@ -42,7 +42,6 @@ public class DataPlugin(IMessageHub hub)
                 new DataChangeResponse(Hub.Version, DataChangeStatus.Committed),
                 o => o.ResponseFor(request)
             );
-            Workspace.Commit();
         }
         return request?.Processed();
     }
@@ -130,7 +129,7 @@ internal class InitializeObserver : IObserver<ChangeItem<EntityStore>>
     {
         this.streams = streams;
         this.onCompleteInitialization = onCompleteInitialization;
-        Timeout = TimeSpan.FromHours(2);
+        Timeout = timeout;
         Disposables = new() { CreateTimeout() };
     }
 
