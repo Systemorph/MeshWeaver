@@ -50,8 +50,10 @@ public class Workspace : IWorkspace
             return;
         var stream = GetChangeStream(Hub.Address, reference);
         subscriptions[key] = stream.Subscribe<DataChangedEvent>(e =>
-            Hub.Post(e, o => o.WithTarget(address))
-        );
+        {
+            if (!address.Equals(e.ChangedBy))
+                Hub.Post(e, o => o.WithTarget(address));
+        });
     }
 
     public ChangeStream<TReference> GetChangeStream<TReference>(
@@ -80,11 +82,15 @@ public class Workspace : IWorkspace
         {
             Stream.Take(1).Subscribe(x => ret.Initialize(x.Value.Reduce(reference)));
             ret.AddDisposable(
-                Stream
+                ((IObservable<ChangeItem<EntityStore>>)ret)
                     .Skip(1)
-                    .Subscribe<ChangeItem<WorkspaceState>>(x =>
-                        ret.Synchronize(x.SetValue(x.Value.Reduce(reference)))
-                    )
+                    .Subscribe(x =>
+                    {
+                        if (!Hub.Address.Equals(x.ChangedBy))
+                        {
+                            Synchronize(x);
+                        }
+                    })
             );
         }
         // registry for external workstreams. DataChanged and Update are fed directly to the stream.
