@@ -117,15 +117,6 @@ public record HubDataSource : HubDataSourceBase<HubDataSource>
                 "Cannot initialize the hub data source with the hub address"
             );
         ret.AddDisposable(
-            ret.Subscribe<ChangeItem<EntityStore>>(x =>
-            {
-                if (Hub.Address.Equals(x.ChangedBy) && ret.Equals(x.Reference))
-                {
-                    Workspace.Update(x);
-                }
-            })
-        );
-        ret.AddDisposable(
             Workspace
                 .Stream.Skip(1)
                 .Where(x => !Hub.Address.Equals(x.ChangedBy) || !ret.Reference.Equals(x.Reference))
