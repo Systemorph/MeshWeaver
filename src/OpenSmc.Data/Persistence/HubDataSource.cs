@@ -117,17 +117,26 @@ public record HubDataSource : HubDataSourceBase<HubDataSource>
                 Hub.Post(e, o => o.WithTarget(Id));
             })
         );
-        if (!Id.Equals(Hub.Address))
-            ret.AddDisposable(
-                ret.Subscribe<ChangeItem<EntityStore>>(x =>
-                {
-                    if (Id.Equals(x.ChangedBy))
-                    {
-                        Workspace.Update(x.Value);
-                        Workspace.Commit();
-                    }
-                })
+        if (Id.Equals(Hub.Address))
+            throw new NotSupportedException(
+                "Cannot initialize the hub data source with the hub address"
             );
+        ret.AddDisposable(
+            ret.Subscribe<ChangeItem<EntityStore>>(x =>
+            {
+                if (Id.Equals(x.ChangedBy))
+                {
+                    Workspace.Update(x.Value, x.ChangedBy);
+                    Workspace.Commit();
+                }
+            })
+        );
+        ret.AddDisposable(
+            ret.Subscribe<PatchChangeRequest>(x =>
+            {
+                Hub.Post(x, o => o.WithTarget(Id));
+            })
+        );
         yield return ret;
     }
 

@@ -87,7 +87,17 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
             ).ToImmutableDictionary(x => x.TypeSource.CollectionName, x => x.Instances);
 
             foreach (var changeStream in ret)
+            {
                 changeStream.Initialize(new() { Collections = instances });
+            }
+            changesSubscriptions = TypeSources
+                .Values.Select(ts =>
+                    Workspace
+                        .Stream.Skip(1)
+                        .Where(x => !x.ChangedBy.Equals(Id))
+                        .Subscribe(ws => ts.Update(ws))
+                )
+                .ToArray();
         });
 
         return ret;
@@ -95,14 +105,6 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
 
     protected IEnumerable<ChangeStream<EntityStore>> GetInitialChangeStream()
     {
-        changesSubscriptions = TypeSources
-            .Values.Select(ts =>
-                Workspace
-                    .Stream.Skip(1)
-                    .Where(x => !x.ChangedBy.Equals(Id))
-                    .Subscribe(ws => ts.Update(ws))
-            )
-            .ToArray();
         yield return new ChangeStream<EntityStore>(
             Id,
             new WorkspaceStoreReference(),

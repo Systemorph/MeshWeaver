@@ -15,7 +15,6 @@ public interface IWorkspace : IAsyncDisposable
     IReadOnlyCollection<Type> MappedTypes { get; }
     void Update(IEnumerable<object> instances) => Update(instances, new());
     void Update(IEnumerable<object> instances, UpdateOptions updateOptions);
-    void Update(EntityStore store);
     void Update(object instance) => Update(new[] { instance });
     void Delete(IEnumerable<object> instances);
     void Delete(object instance) => Delete(new[] { instance });
@@ -28,6 +27,8 @@ public interface IWorkspace : IAsyncDisposable
     void Unsubscribe(object address, WorkspaceReference reference);
     IMessageDelivery DeliverMessage(IMessageDelivery<IWorkspaceMessage> delivery);
     void RequestChange(DataChangeRequest change, object changedBy);
+    void Synchronize(ChangeItem<EntityStore> value);
+    void Update(EntityStore store, object changedBy);
 
     IObservable<ChangeItem<WorkspaceState>> Stream { get; }
     ReduceManager<WorkspaceState> ReduceManager { get; }

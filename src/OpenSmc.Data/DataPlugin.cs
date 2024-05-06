@@ -97,10 +97,13 @@ internal class InitializeObserver : IObserver<ChangeItem<EntityStore>>
 
     public void OnError(Exception error) { }
 
+    public EntityStore Store { get; private set; }
+
     public void OnNext(ChangeItem<EntityStore> value)
     {
         //if (streams.Remove(value.Address, out var stream))
         //    stream.Initialize(value.Value);
+        Store = Store == null ? value.Value : Store.Merge(value.Value);
         streams.Remove(value.Address);
         if (streams.Count == 0)
             Complete();
@@ -110,18 +113,18 @@ internal class InitializeObserver : IObserver<ChangeItem<EntityStore>>
     {
         foreach (var disposable in Disposables)
             disposable.Dispose();
-        onCompleteInitialization.Invoke();
+        onCompleteInitialization.Invoke(Store);
     }
 
     public readonly List<IDisposable> Disposables;
     private readonly Dictionary<object, ChangeStream<EntityStore>> streams;
-    private readonly Action onCompleteInitialization;
+    private readonly Action<EntityStore> onCompleteInitialization;
 
     private TimeSpan Timeout { get; }
 
     public InitializeObserver(
         Dictionary<object, ChangeStream<EntityStore>> streams,
-        Action onCompleteInitialization,
+        Action<EntityStore> onCompleteInitialization,
         TimeSpan timeout
     )
     {

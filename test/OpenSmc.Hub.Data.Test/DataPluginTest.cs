@@ -63,9 +63,11 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var updateItems = new object[] { new MyData("1", "AAA"), new MyData("3", "CCC"), };
 
         TimeSpan timeout = TimeSpan.FromSeconds(9999);
-        var workspace = GetWorkspace(client);
+        var clientWorkspace = GetWorkspace(client);
 
-        var data = (await workspace.GetObservable<MyData>().FirstOrDefaultAsync().Timeout(timeout))
+        var data = (
+            await clientWorkspace.GetObservable<MyData>().FirstOrDefaultAsync().Timeout(timeout)
+        )
             .OrderBy(a => a.Id)
             .ToArray();
 
@@ -74,7 +76,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var updateResponse = await client.AwaitResponse(
             new UpdateDataRequest(updateItems),
-            o => o.WithTarget(new HostAddress())
+            o => o.WithTarget(new ClientAddress())
         );
 
         // asserts
@@ -82,7 +84,18 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var expectedItems = new MyData[] { new("1", "AAA"), new("2", "B"), new("3", "CCC") };
 
         data = (
-            await workspace
+            await clientWorkspace
+                .GetObservable<MyData>()
+                .Timeout(timeout)
+                .FirstOrDefaultAsync(x => x?.Count == 3)
+        )
+            .OrderBy(a => a.Id)
+            .ToArray();
+
+        data.ToArray().Should().BeEquivalentTo(expectedItems);
+        data = (
+            await GetHost()
+                .GetWorkspace()
                 .GetObservable<MyData>()
                 .Timeout(timeout)
                 .FirstOrDefaultAsync(x => x?.Count == 3)

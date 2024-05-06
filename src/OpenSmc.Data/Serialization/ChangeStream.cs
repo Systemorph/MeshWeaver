@@ -2,6 +2,7 @@
 using System.Data;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Reflection.Metadata.Ecma335;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
@@ -54,7 +55,6 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
     WorkspaceReference IChangeStream.Reference => Reference;
 
     private readonly IReduceManager<TStream> reduceManager;
-    private JsonNode lastSynchronized;
     private IObservable<DataChangedEvent> dataChangedStream;
     private IObservable<PatchChangeRequest> patchRequestStream;
 
@@ -97,10 +97,12 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
         });
 
         dataChangedStream = store
+            .Skip(1)
             .Where(x => Id.Equals(x.ChangedBy))
             .Select(r => GetDataChanged(r))
             .Where(x => x?.Change != null);
         patchRequestStream = store
+            .Skip(1)
             .Where(x => !Id.Equals(x.ChangedBy))
             .Select(r => GetDataChanged(r))
             .Where(x => x?.Change != null)
@@ -180,7 +182,7 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
 
     private DataChangedEvent GetDataChanged(ChangeItem<TStream> change)
     {
-        var fullChange = JsonSerializer.SerializeToNode(change.Value, Hub.JsonSerializerOptions);
+        var fullChange = change.Value;
 
         var dataChanged = new DataChangedEvent(
             Id,
@@ -198,17 +200,8 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
 
     public void Synchronize(DataChangedEvent request)
     {
-        if (request.ChangeType == ChangeType.Full)
-        {
-            lastSynchronized =
-                request.Change as JsonNode
-                ?? JsonSerializer.SerializeToNode(request.Change, Hub.JsonSerializerOptions);
-            updatedInstances.OnNext(
-                request.Change is JsonNode node
-                    ? node.Deserialize<TStream>(Hub.JsonSerializerOptions)
-                    : (TStream)request.Change
-            );
-        }
+        if (lastSynchronized == null)
+            Initialize(GetFullState(request));
         else
             updates.OnNext(s => Merge(s, ParseDataChangedFromLastSynchronized(request)));
     }
@@ -217,9 +210,7 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
     {
         var newState = request.ChangeType switch
         {
-            ChangeType.Patch
-                => ApplyPatch((JsonPatch)request.Change)
-                    .Deserialize<TStream>(Hub.JsonSerializerOptions),
+            ChangeType.Patch => ApplyPatch((JsonPatch)request.Change),
             ChangeType.Full => GetFullState(request),
             _ => throw new ArgumentOutOfRangeException()
         };
@@ -228,43 +219,40 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
 
     private ChangeItem<TStream> ApplyPatchRequest(PatchChangeRequest request, object changedBy)
     {
-        var newState = ApplyPatch((JsonPatch)request.Change)
-            .Deserialize<TStream>(Hub.JsonSerializerOptions);
+        var newState = ApplyPatch((JsonPatch)request.Change);
         ;
         return new ChangeItem<TStream>(Id, Reference, newState, changedBy, Hub.Version);
     }
 
-    private JsonNode ApplyPatch(JsonPatch patch)
+    private TStream ApplyPatch(JsonPatch patch)
     {
-        var applied = patch.Apply(lastSynchronized);
-        if (applied.Error != null)
-            throw new InvalidOperationException(applied.Error);
-        ;
-        return lastSynchronized = applied.Result;
+        var applied = patch.Apply(lastSynchronized, Hub.JsonSerializerOptions);
+        return lastSynchronized = applied;
     }
 
     private TStream GetFullState(DataChangedEvent request)
     {
-        lastSynchronized =
-            request.Change as JsonNode
-            ?? JsonSerializer.SerializeToNode(request.Change, Hub.JsonSerializerOptions);
-        return request.Change is JsonNode node
-            ? node.Deserialize<TStream>(Hub.JsonSerializerOptions)
-            : (TStream)request.Change;
+        return lastSynchronized = request.Change is TStream s
+            ? s
+            : (request.Change as JsonNode).Deserialize<TStream>(Hub.JsonSerializerOptions)
+                ?? throw new InvalidOperationException();
     }
+
+    private TStream lastSynchronized;
 
     public ChangeStream<TStream> Initialize(TStream initial)
     {
         if (initial == null)
             throw new ArgumentNullException(nameof(initial));
+        lastSynchronized = initial;
         updatedInstances.OnNext(initial);
 
         return this;
     }
 
-    private JsonPatch GetPatch(JsonNode fullChange)
+    private JsonPatch GetPatch(TStream fullChange)
     {
-        var jsonPatch = lastSynchronized.CreatePatch(fullChange);
+        var jsonPatch = lastSynchronized.CreatePatch(fullChange, Hub.JsonSerializerOptions);
         if (!jsonPatch.Operations.Any())
             return null;
         return jsonPatch;
@@ -303,20 +291,14 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
             ?.Invoke(delivery);
     }
 
-    public void Update(ChangeItem<TStream> changeItem)
+    public void Update(Func<TStream, ChangeItem<TStream>> update)
     {
-        if (changeItem.ChangedBy != null)
-            updates.OnNext(s => Merge(s, changeItem));
+        updates.OnNext(update);
     }
 
     private ChangeItem<TStream> Merge(TStream _, ChangeItem<TStream> changeItem)
     {
         //TODO Roland Bürgi 2024-05-06: Apply some merge logic
         return changeItem;
-    }
-
-    public void Update(Func<TStream, ChangeItem<TStream>> update)
-    {
-        updates.OnNext(update);
     }
 }
