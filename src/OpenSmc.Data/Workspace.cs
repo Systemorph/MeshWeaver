@@ -18,7 +18,7 @@ public class Workspace : IWorkspace
     }
 
     private WorkspaceStateReference Reference { get; } = new();
-    private WorkspaceState State { get; set; }
+    private WorkspaceState State => myChangeStream.Current;
 
     private readonly ConcurrentDictionary<string, ITypeSource> typeSources = new();
 
@@ -147,7 +147,6 @@ public class Workspace : IWorkspace
             .AddWorkspaceReference<WorkspaceStateReference, WorkspaceState>((ws, reference) => ws);
     }
 
-    private WorkspaceState LastCommitted { get; set; }
     public IMessageHub Hub { get; }
     public object Id => Hub.Address;
     private ILogger logger;
@@ -173,14 +172,11 @@ public class Workspace : IWorkspace
         foreach (var ts in DataContext.DataSources.Values.SelectMany(ds => ds.TypeSources))
             typeSources[ts.CollectionName] = ts;
 
-        State = CreateState(new EntityStore());
-
         var initializeObserver = new InitializeObserver(
             dataContextStreams.ToDictionary(x => x.Id),
             store =>
             {
                 myChangeStream.Initialize(CreateState(store));
-                LastCommitted = State;
 
                 initializeTaskCompletionSource.SetResult();
             },
@@ -212,21 +208,9 @@ public class Workspace : IWorkspace
         myChangeStream.Synchronize(item.SetValue(State with { Store = item.Value }));
     }
 
-    public void Commit()
-    {
-        // myChangeStream.Update(current => new ChangeItem<WorkspaceState>(
-        //     Id,
-        //     new WorkspaceStoreReference(),
-        //     current.Update(State),
-        //     Id,
-        //     Hub.Version
-        // ));
-        LastCommitted = State;
-    }
-
     public void Rollback()
     {
-        State = LastCommitted;
+        //TODO Roland Bürgi 2024-05-06: Not sure yet how to implement
     }
 
     public void RequestChange(

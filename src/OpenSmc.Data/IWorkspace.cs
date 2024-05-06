@@ -19,7 +19,6 @@ public interface IWorkspace : IAsyncDisposable
     void Delete(IEnumerable<object> instances);
     void Delete(object instance) => Delete(new[] { instance });
 
-    void Commit();
     void Rollback();
     WorkspaceState CreateState(EntityStore deserialize);
     void Initialize();

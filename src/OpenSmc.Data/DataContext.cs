@@ -22,7 +22,7 @@ public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace) : IAsync
     public ImmutableDictionary<object, DataSourceBuilder> DataSourceBuilders { get; set; } =
         ImmutableDictionary<object, DataSourceBuilder>.Empty;
     internal ReduceManager<WorkspaceState> ReduceManager { get; init; }
-    internal TimeSpan InitializationTimeout { get; set; } = TimeSpan.FromSeconds(5);
+    internal TimeSpan InitializationTimeout { get; set; } = TimeSpan.FromSeconds(60);
 
     public DataContext WithInitializationTieout(TimeSpan timeout) =>
         this with

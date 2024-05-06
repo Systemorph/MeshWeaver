@@ -188,19 +188,19 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
             Id,
             Reference,
             change.Version,
-            lastSynchronized == null ? fullChange : GetPatch(fullChange),
-            lastSynchronized == null ? ChangeType.Full : ChangeType.Patch,
+            Current == null ? fullChange : GetPatch(fullChange),
+            Current == null ? ChangeType.Full : ChangeType.Patch,
             change.ChangedBy
         );
 
-        lastSynchronized = fullChange;
+        Current = fullChange;
 
         return dataChanged;
     }
 
     public void Synchronize(DataChangedEvent request)
     {
-        if (lastSynchronized == null)
+        if (Current == null)
             Initialize(GetFullState(request));
         else
             updates.OnNext(s => Merge(s, ParseDataChangedFromLastSynchronized(request)));
@@ -226,25 +226,25 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
 
     private TStream ApplyPatch(JsonPatch patch)
     {
-        var applied = patch.Apply(lastSynchronized, Hub.JsonSerializerOptions);
-        return lastSynchronized = applied;
+        var applied = patch.Apply(Current, Hub.JsonSerializerOptions);
+        return Current = applied;
     }
 
     private TStream GetFullState(DataChangedEvent request)
     {
-        return lastSynchronized = request.Change is TStream s
+        return Current = request.Change is TStream s
             ? s
             : (request.Change as JsonNode).Deserialize<TStream>(Hub.JsonSerializerOptions)
                 ?? throw new InvalidOperationException();
     }
 
-    private TStream lastSynchronized;
+    public TStream Current { get; private set; }
 
     public ChangeStream<TStream> Initialize(TStream initial)
     {
         if (initial == null)
             throw new ArgumentNullException(nameof(initial));
-        lastSynchronized = initial;
+        Current = initial;
         updatedInstances.OnNext(initial);
 
         return this;
@@ -252,7 +252,7 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
 
     private JsonPatch GetPatch(TStream fullChange)
     {
-        var jsonPatch = lastSynchronized.CreatePatch(fullChange, Hub.JsonSerializerOptions);
+        var jsonPatch = Current.CreatePatch(fullChange, Hub.JsonSerializerOptions);
         if (!jsonPatch.Operations.Any())
             return null;
         return jsonPatch;
