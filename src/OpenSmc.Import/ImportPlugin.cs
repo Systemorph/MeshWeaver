@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
 using OpenSmc.Data;
+using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 using OpenSmc.ServiceProvider;
 
@@ -67,7 +68,15 @@ public class ImportPlugin : MessageHubPlugin, IMessageHandlerAsync<ImportRequest
 
             if (!activityService.HasErrors())
             {
-                workspace.Update(state);
+                workspace.Update(
+                    new ChangeItem<EntityStore>(
+                        Hub.Address,
+                        workspace.Reference,
+                        state.Store,
+                        Hub.Address,
+                        Hub.Version
+                    )
+                );
             }
 
             log = activityService.Finish();

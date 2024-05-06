@@ -85,7 +85,24 @@ public abstract record HubDataSourceBase<TDataSource> : DataSource<TDataSource>
         WorkspaceReference<EntityStore> reference
     )
     {
-        return Workspace.GetChangeStream(address, reference);
+        var ret = Workspace.GetChangeStream(address, reference);
+        if (Id.Equals(Hub.Address))
+            throw new NotSupportedException(
+                "Cannot initialize the hub data source with the hub address"
+            );
+        ret.AddDisposable(
+            Workspace
+                .Stream.Skip(1)
+                .Where(x => !Hub.Address.Equals(x.ChangedBy) || !ret.Reference.Equals(x.Reference))
+                .Subscribe(x => ret.Synchronize(x.SetValue(x.Value.Reduce(ret.Reference))))
+        );
+        ret.AddDisposable(
+            ret.Subscribe<PatchChangeRequest>(x =>
+            {
+                Hub.Post(x, o => o.WithTarget(Id));
+            })
+        );
+        return ret;
     }
 
     internal bool SyncAll { get; init; }
@@ -111,37 +128,6 @@ public record HubDataSource : HubDataSourceBase<HubDataSource>
 
     public override IEnumerable<ChangeStream<EntityStore>> Initialize()
     {
-        var ret = GetStream(Id, GetReference());
-        if (Id.Equals(Hub.Address))
-            throw new NotSupportedException(
-                "Cannot initialize the hub data source with the hub address"
-            );
-        ret.AddDisposable(
-            Workspace
-                .Stream.Skip(1)
-                .Where(x => !Hub.Address.Equals(x.ChangedBy) || !ret.Reference.Equals(x.Reference))
-                .Subscribe(x => ret.Synchronize(x.SetValue(x.Value.Store)))
-        );
-        ret.AddDisposable(
-            ret.Subscribe<PatchChangeRequest>(x =>
-            {
-                Hub.Post(x, o => o.WithTarget(Id));
-            })
-        );
-        yield return ret;
-    }
-
-    protected IMessageDelivery Initialize(
-        IMessageDelivery<DataChangedEvent> response,
-        TaskCompletionSource<EntityStore> tcs
-    )
-    {
-        tcs.SetResult(
-            JsonNode
-                .Parse(((RawJson)response.Message.Change).Content)
-                .Deserialize<EntityStore>(Options)
-        );
-
-        return response.Processed();
+        yield return GetStream(Id, GetReference());
     }
 }

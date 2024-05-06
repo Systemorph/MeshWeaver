@@ -31,4 +31,5 @@ public interface IWorkspace : IAsyncDisposable
 
     IObservable<ChangeItem<WorkspaceState>> Stream { get; }
     ReduceManager<WorkspaceState> ReduceManager { get; }
+    WorkspaceReference Reference { get; }
 }
