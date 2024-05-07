@@ -1,6 +1,6 @@
 import { configureStore } from "@reduxjs/toolkit"
 import { appReducer } from "./appReducer";
-import { from } from "rxjs";
+import { from, Subject } from "rxjs";
 import { ControlView } from "../ControlDef";
 
 export type AppState = {
@@ -32,3 +32,5 @@ export type AppStore = typeof appStore;
 export type AppDispatch = AppStore["dispatch"];
 
 export const layoutAreaSelector = (id: string) => (state: AppState) => state.areas[id];
+
+export const appMessage$ = new Subject();

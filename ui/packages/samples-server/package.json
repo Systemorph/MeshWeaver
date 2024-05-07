@@ -14,7 +14,8 @@
     "@open-smc/utils": "0.0.0",
     "rxjs": "^7.8.1",
     "lodash-es": "^4.17.21",
-    "immer": "10.0.3"
+    "immer": "10.0.3",
+    "uuid": "8.3.2"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^6.14.0",

@@ -12,13 +12,13 @@ export const toChangeStream = <T>(reference: WorkspaceReference) =>
             .pipe(
                 map(([a, b]) => {
                     if (a === undefined) {
-                        return new DataChangedEvent(reference, b, "Full")
+                        return new DataChangedEvent(reference, b, "Full", null)
                     }
 
                     const operations = compare(a, b);
 
                     if (!isEmpty(operations)) {
-                        return new DataChangedEvent(reference, new JsonPatch(operations as any), "Patch")
+                        return new DataChangedEvent(reference, new JsonPatch(operations as any), "Patch", null)
                     }
                 }),
                 filter(identity)

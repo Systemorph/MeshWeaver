@@ -1,2 +1,2 @@
 import './controls';
-import './application.contract';
+// import './application.contract';
