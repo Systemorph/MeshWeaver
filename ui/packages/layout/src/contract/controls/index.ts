@@ -1,3 +1,4 @@
+import './CheckboxControl';
 import './HtmlControl';
 import './Icon';
 import './ItemTemplateControl';

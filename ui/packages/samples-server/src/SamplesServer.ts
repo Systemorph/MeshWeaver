@@ -22,12 +22,13 @@ import { LayoutStackControl } from "@open-smc/layout/src/contract/controls/Layou
 import { ItemTemplateControl } from "@open-smc/layout/src/contract/controls/ItemTemplateControl.ts";
 import { CollectionReference } from "@open-smc/data/src/contract/CollectionReference.ts";
 import { messageOfType } from "@open-smc/messaging/src/operators/messageOfType.ts";
+import { CheckboxControl } from "@open-smc/layout/src/contract/controls/CheckboxControl.ts";
 
 const todos = [
-    {id: "1", name: "Task 1", status: "new" },
-    {id: "2", name: "Task 2", status: "new" },
-    {id: "3", name: "Task 3", status: "completed"},
-    {id: "4", name: "Task 4", status: "completed"},
+    {id: "1", name: "Task 1", completed: true, },
+    {id: "2", name: "Task 2", completed: false },
+    {id: "3", name: "Task 3", completed: true},
+    {id: "4", name: "Task 4", completed: true},
 ]
 
 export class SamplesServer extends Observable<MessageDelivery> implements Observer<MessageDelivery> {
@@ -162,7 +163,7 @@ export class SamplesServer extends Observable<MessageDelivery> implements Observ
 
         todoItem.areas = [
             new EntityReference(uiControlType, "/main/todo/name"),
-            new EntityReference(uiControlType, "/main/todo/status")
+            new EntityReference(uiControlType, "/main/todo/completed"),
         ];
 
         todoItem.skin = "HorizontalPanel";
@@ -172,14 +173,14 @@ export class SamplesServer extends Observable<MessageDelivery> implements Observ
         todos.view = todoItem;
 
         const name = new HtmlControl(new Binding("$.name"))
-        const status = new HtmlControl(new Binding("$.status"))
+        const completed = new CheckboxControl(new Binding("$.completed"))
 
         const layout = new Layout()
             .addView("/main/textBox", textBox)
             .addView("/main/todos", todos)
             .addView("/main/todo", todoItem)
             .addView("/main/todo/name", name)
-            .addView("/main/todo/status", status)
+            .addView("/main/todo/completed", completed)
             .addView("/main", stack);
 
         return layout;

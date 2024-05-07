@@ -1,62 +1,52 @@
 import { ComponentType, createContext, PropsWithChildren, useContext, useMemo } from "react";
+import { LayoutAreaModel } from "./store/appStore";
+import { ControlView } from "./ControlDef";
 
-export type OnViewPropertyChange = (path: string, value: unknown) => void;
-
-interface ControlContextType<TView = any> {
-    controlName: string;
-    boundView: TView;
-    rawView: TView;
+interface ControlContextType<TView extends ControlView = ControlView> {
+    layoutAreaModel: LayoutAreaModel<TView>
     parentControlContext: ControlContextType;
-    onChange?: OnViewPropertyChange;
 }
 
 const context = createContext<ControlContextType>(null);
 
-export function useControlContext<TView = any>() {
-    return useContext<ControlContextType<TView>>(context);
+export const useControlContext = <TView extends ControlView>() =>
+    useContext<ControlContextType<TView>>(context as any);
+
+interface ControlContextProps {
+    layoutAreaModel: LayoutAreaModel;
 }
 
-export function isControlContextOfType<TView>(
-    context: ControlContextType,
-    componentType: ComponentType<TView>): context is ControlContextType<TView> {
-    return context?.controlName === (componentType as Function).name;
-}
-
-export function getParentContextOfType<TView>(
-    context: ControlContextType,
-    componentType: ComponentType<TView>,
-    predicate?: (context: ControlContextType<TView>) => boolean) {
-
-    while (context) {
-        if (isControlContextOfType(context, componentType) && predicate(context)) {
-            return context;
-        }
-
-        context = context.parentControlContext;
-    }
-}
-
-interface ControlContextProps<TView> {
-    controlName: string;
-    boundView: TView;
-    rawView: TView;
-    onChange: OnViewPropertyChange;
-}
-
-export function ControlContext<TView>({controlName, boundView, rawView, onChange, children}: PropsWithChildren<ControlContextProps<TView>>) {
+export function ControlContext({layoutAreaModel, children}: PropsWithChildren<ControlContextProps>) {
     const parentControlContext = useControlContext();
 
     const value = useMemo(() => {
         return {
-            controlName,
-            boundView,
-            rawView,
-            onChange,
+            layoutAreaModel,
             parentControlContext,
         }
-    }, [controlName, boundView, rawView, onChange, parentControlContext]);
+    }, [layoutAreaModel, parentControlContext]);
 
     return (
         <context.Provider value={value} children={children}/>
     );
 }
+
+// export function isControlContextOfType<TView>(
+//     context: ControlContextType,
+//     componentType: ComponentType<TView>): context is ControlContextType<TView> {
+//     return context?.controlName === (componentType as Function).name;
+// }
+//
+// export function getParentContextOfType<TView>(
+//     context: ControlContextType,
+//     componentType: ComponentType<TView>,
+//     predicate?: (context: ControlContextType<TView>) => boolean) {
+//
+//     while (context) {
+//         if (isControlContextOfType(context, componentType) && predicate(context)) {
+//             return context;
+//         }
+//
+//         context = context.parentControlContext;
+//     }
+// }

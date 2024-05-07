@@ -1,14 +1,15 @@
 import { InputText } from "@open-smc/ui-kit/src/components/InputText";
 import { ControlView } from "../ControlDef";
-import { LayoutAreaModel } from "../store/appStore";
 import { useAppDispatch } from "../store/hooks";
-import { setPropsActionCreator } from "../store/appReducer";
+import { updateAreaActionCreator } from "../store/appReducer";
+import { useControlContext } from "../ControlContext";
 
 export interface TextBoxView extends ControlView {
     data?: string;
 }
 
-export default function TextBoxControl({area, props: {data}}: LayoutAreaModel<TextBoxView>) {
+export default function TextBoxControl({data}: TextBoxView) {
+    const {layoutAreaModel: {area}} = useControlContext();
     const appDispatch = useAppDispatch();
 
     return (
@@ -17,7 +18,7 @@ export default function TextBoxControl({area, props: {data}}: LayoutAreaModel<Te
             onChange={
                 event => {
                     appDispatch(
-                        setPropsActionCreator({
+                        updateAreaActionCreator({
                             area,
                             props: {
                                 data: event.target.value
