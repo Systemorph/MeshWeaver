@@ -283,7 +283,5 @@ public class Workspace : IWorkspace
     }
 
     public void Update(ChangeItem<EntityStore> changeItem) =>
-        myChangeStream.Update(s =>
-            changeItem.SetValue(s with { Store = s.Store.Merge(changeItem.Value) })
-        );
+        myChangeStream.Update(s => changeItem.SetValue(s with { Store = changeItem.Value }));
 }
