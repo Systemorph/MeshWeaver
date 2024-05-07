@@ -38,4 +38,18 @@ public class Program
     }
 }
 
+internal static class RouterHubExtensions
+{
+    internal static IServiceCollection AddRouterHub(this IServiceCollection services)
+    {
+        services.AddSingleton(sp => sp.GetRouterHub());
+        return services;
+    }
+
+    private static IMessageHub GetRouterHub(this IServiceProvider serviceProvider)
+        => serviceProvider.CreateMessageHub(new RouterAddress(), conf =>
+            conf
+        );
+}
+
 internal record RouterAddress;
