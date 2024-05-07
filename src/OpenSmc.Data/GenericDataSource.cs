@@ -81,10 +81,11 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
                     .SelectAwait(async ts => new
                     {
                         TypeSource = ts,
-                        Instances = await ts.InitializeAsync(cancellationToken)
+                        Container = await ts.InitializeAsync(cancellationToken)
                     })
+                    .Where(x => x.Container.Instances.Count > 0)
                     .ToArrayAsync(cancellationToken: cancellationToken)
-            ).ToImmutableDictionary(x => x.TypeSource.CollectionName, x => x.Instances);
+            ).ToImmutableDictionary(x => x.TypeSource.CollectionName, x => x.Container);
 
             foreach (var changeStream in ret)
             {

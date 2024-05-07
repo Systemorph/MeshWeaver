@@ -21,7 +21,7 @@ public record ImportRequest(Source Source) : IRequest<ImportResponse>
 
     public string Format { get; init; } = ImportFormat.Default;
     public object TargetDataSource { get; init; }
-    public bool SnapshotMode { get; init; }
+    public bool Snapshot { get; init; }
     public DataSetReaderOptions DataSetReaderOptions { get; init; } = new();
 
     internal Type EntityType { get; init; }

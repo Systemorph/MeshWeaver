@@ -47,7 +47,6 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
     /// Pending change requests
     /// </summary>
     private readonly Subject<Func<TStream, ChangeItem<TStream>>> updates = new();
-    private readonly Subject<TStream> updatedInstances = new();
 
     public object Id { get; init; }
     public WorkspaceReference<TStream> Reference { get; init; }
@@ -68,20 +67,6 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
         this.Id = Id;
         this.Reference = Reference;
         this.Hub = Hub;
-
-        // updating instances
-        updatedInstances
-            .CombineLatest(
-                updates.StartWith(x => new ChangeItem<TStream>(
-                    Id,
-                    Reference,
-                    x,
-                    null,
-                    Hub.Version
-                )),
-                (value, update) => update(value)
-            )
-            .Subscribe(store);
 
         this.reduceManager = reduceManager;
 
@@ -245,7 +230,15 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
         if (initial == null)
             throw new ArgumentNullException(nameof(initial));
         Current = initial;
-        updatedInstances.OnNext(initial);
+        Disposables.Add(
+            updates
+                .StartWith(x => new ChangeItem<TStream>(Id, Reference, initial, null, Hub.Version))
+                .Scan(
+                    new ChangeItem<TStream>(Id, Reference, initial, null, Hub.Version),
+                    (value, update) => update(value.Value)
+                )
+                .Subscribe(store)
+        );
 
         return this;
     }
@@ -296,7 +289,7 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
         updates.OnNext(update);
     }
 
-    private ChangeItem<TStream> Merge(TStream _, ChangeItem<TStream> changeItem)
+    private ChangeItem<TStream> Merge(TStream current, ChangeItem<TStream> changeItem)
     {
         //TODO Roland Bürgi 2024-05-06: Apply some merge logic
         return changeItem;

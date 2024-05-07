@@ -1,13 +1,10 @@
 ﻿using System.Reactive.Linq;
-
 using FluentAssertions;
-
 using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.Data.TestDomain;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
-
 using Xunit;
 using Xunit.Abstractions;
 
@@ -15,34 +12,41 @@ namespace OpenSmc.Import.Test;
 
 public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
-        => base.ConfigureHost(configuration)
-            .AddData(
-                data => data.FromConfigurableDataSource
-                (
+    protected override MessageHubConfiguration ConfigureHost(
+        MessageHubConfiguration configuration
+    ) =>
+        base.ConfigureHost(configuration)
+            .AddData(data =>
+                data.FromConfigurableDataSource(
                     nameof(GenericDataSource),
-                    source => source
-                    .ConfigureCategory(TestDomain.TestRecordsDomain)
+                    source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
                 )
             )
-            .WithHostedHub(new TestDomain.ImportAddress(configuration.Address),
-                config => config
-                .AddData(data => data.FromHub(configuration.Address,
-                            source => source
-                                .ConfigureCategory(TestDomain.TestRecordsDomain)
-                        ))
-                .AddImport(
-                    import => import
-                        .WithFormat("Test", format => format
-                            .WithImportFunction(CustomImportFunction)
+            .WithHostedHub(
+                new TestDomain.ImportAddress(configuration.Address),
+                config =>
+                    config
+                        .AddData(data =>
+                            data.FromHub(
+                                configuration.Address,
+                                source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
+                            )
                         )
-                        .WithFormat("Test2", format => format
-                            .WithImportFunction(CustomImportFunction)
-                            .WithAutoMappings()
+                        .AddImport(import =>
+                            import
+                                .WithFormat(
+                                    "Test",
+                                    format => format.WithImportFunction(CustomImportFunction)
+                                )
+                                .WithFormat(
+                                    "Test2",
+                                    format =>
+                                        format
+                                            .WithImportFunction(CustomImportFunction)
+                                            .WithAutoMappings()
+                                )
                         )
-                )
-            )
-        ;
+            );
 
     private ImportFormat.ImportFunction CustomImportFunction = null;
 
@@ -50,7 +54,10 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var client = GetClient();
         var importRequest = new ImportRequest(content) { Format = format };
-        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
+        var importResponse = await client.AwaitResponse(
+            importRequest,
+            o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
+        );
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
         return client;
     }
@@ -58,16 +65,18 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public async Task DefaultMappingsTest()
     {
-        const string content = @"@@MyRecord
+        const string content =
+            @"@@MyRecord
 SystemName,DisplayName,Number,StringsArray0,StringsArray1,StringsArray2,StringsList0,StringsList1,StringsList2,IntArray0,IntArray1,IntArray2,IntList0,IntList1,IntList2
 SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
 
         _ = await DoImport(content);
         var host = GetHost();
-        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress())).GetWorkspace();
+        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress()))
+            .GetWorkspace();
         var ret2 = await workspace.GetObservable<MyRecord2>().FirstAsync();
 
-        ret2.Should().HaveCount(0);
+        ret2.Should().BeNull();
 
         var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
@@ -95,13 +104,15 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
         _ = await DoImport(string.Empty);
 
         var host = GetHost();
-        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress())).GetWorkspace();
+        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress()))
+            .GetWorkspace();
         var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
-        ret.Should().BeEmpty();
+        ret.Should().BeNull();
     }
 
-    const string ThreeTablesContent = @"@@MyRecord
+    const string ThreeTablesContent =
+        @"@@MyRecord
 SystemName,DisplayName
 OldName,OldName
 @@MyRecord2
@@ -111,33 +122,32 @@ Record2SystemName,Record2DisplayName
 SystemName,DisplayName
 Record3SystemName,Record3DisplayName";
 
-
     [Fact]
     public async Task SingleTableMappingTest()
     {
-
         CustomImportFunction = (request, set, hub, workspace) =>
         {
-            return set.Tables[nameof(MyRecord)].Rows.Select(dsRow => new MyRecord()
-            {
-                SystemName = dsRow[nameof(MyRecord.SystemName)].ToString()?.Replace("Old", "New"),
-                DisplayName = "test"
-            }
-            );
+            return set.Tables[nameof(MyRecord)]
+                .Rows.Select(dsRow => new MyRecord()
+                {
+                    SystemName = dsRow[nameof(MyRecord.SystemName)]
+                        .ToString()
+                        ?.Replace("Old", "New"),
+                    DisplayName = "test"
+                });
         };
 
         _ = await DoImport(ThreeTablesContent, "Test");
 
-
-        //Check that didn't appeared what we don't import 
+        //Check that didn't appeared what we don't import
         var host = GetHost();
-        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress())).GetWorkspace();
+        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress()))
+            .GetWorkspace();
         var ret2 = await workspace.GetObservable<MyRecord2>().FirstAsync();
 
-        ret2.Should().HaveCount(0);
+        ret2.Should().BeNull();
 
         var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
-
 
         ret.Should().HaveCount(1);
 
@@ -152,29 +162,30 @@ Record3SystemName,Record3DisplayName";
         resRecord.StringsList.Should().BeNull();
         resRecord.Number.Should().Be(0);
     }
+
     [Fact]
     public async Task TwoTablesMappingTest()
     {
-
         CustomImportFunction = (request, set, hub, workspace) =>
         {
-            return set.Tables[nameof(MyRecord)].Rows.Select(dsRow => new MyRecord()
-            {
-                SystemName = dsRow[nameof(MyRecord.SystemName)].ToString()?.Replace("Old", "New"),
-                DisplayName = "test"
-            }
-            );
+            return set.Tables[nameof(MyRecord)]
+                .Rows.Select(dsRow => new MyRecord()
+                {
+                    SystemName = dsRow[nameof(MyRecord.SystemName)]
+                        .ToString()
+                        ?.Replace("Old", "New"),
+                    DisplayName = "test"
+                });
         };
 
         _ = await DoImport(ThreeTablesContent, "Test2");
         var host = GetHost();
-        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress())).GetWorkspace();
+        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress()))
+            .GetWorkspace();
         var ret2 = await workspace.GetObservable<MyRecord2>().FirstAsync();
 
         ret2.Should().HaveCount(1);
         var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
-
-
 
         ret.Should().HaveCount(2);
 
@@ -189,5 +200,4 @@ Record3SystemName,Record3DisplayName";
         resRecord.StringsList.Should().BeNull();
         resRecord.Number.Should().Be(0);
     }
-
 }
