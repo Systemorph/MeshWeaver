@@ -16,10 +16,13 @@ public record EntityStore
         this with
         {
             Collections = Collections.SetItems(
-                s2.Collections.ToImmutableDictionary(
-                    kvp => kvp.Key,
-                    kvp => kvp.Value.Merge(Collections.GetValueOrDefault(kvp.Key))
-                )
+                Collections
+                    .Select(kvp => new KeyValuePair<string, InstanceCollection>(
+                        kvp.Key,
+                        kvp.Value.Merge(s2.Collections.GetValueOrDefault(kvp.Key))
+                    ))
+                    .Concat(s2.Collections.Where(kvp => !Collections.ContainsKey(kvp.Key)))
+                    .ToImmutableDictionary()
             )
         };
 
