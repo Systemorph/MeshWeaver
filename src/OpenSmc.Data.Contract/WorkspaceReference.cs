@@ -22,6 +22,7 @@ public record EntityStore
                         kvp.Value.Merge(s2.Collections.GetValueOrDefault(kvp.Key))
                     ))
                     .Concat(s2.Collections.Where(kvp => !Collections.ContainsKey(kvp.Key)))
+                    .Where(x => x.Value.Instances.Count > 0)
                     .ToImmutableDictionary()
             )
         };

@@ -29,7 +29,7 @@ public record ImportFormat(
         WorkspaceState state
     )
     {
-        var updateOptions = new UpdateOptions().SnapshotMode(importRequest.SnapshotMode);
+        var updateOptions = new UpdateOptions { Snapshot = importRequest.Snapshot };
         bool hasError = false;
         var validationCache = new Dictionary<object, object>();
 
