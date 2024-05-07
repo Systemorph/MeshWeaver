@@ -1,9 +1,9 @@
-import { filter, map, Observable, Observer, of, skip, Subject, Subscription, take } from "rxjs";
+import { distinctUntilChanged, filter, map, Observable, Observer, of, skip, Subject, Subscription, take } from "rxjs";
 import { MessageDelivery } from "@open-smc/messaging/src/api/MessageDelivery";
 import { SubscribeRequest } from "@open-smc/data/src/contract/SubscribeRequest.ts";
 import { LayoutAreaReference } from "@open-smc/data/src/contract/LayoutAreaReference.ts";
 import { PatchChangeRequest } from "@open-smc/data/src/contract/PatchChangeRequest.ts";
-import { isEqual, keyBy } from "lodash-es";
+import { isEqual, keyBy, omit } from "lodash-es";
 import { handleRequest } from "@open-smc/messaging/src/handleRequest.ts";
 import { Workspace } from "@open-smc/data/src/Workspace.ts";
 import { EntityStore } from "@open-smc/data/src/contract/EntityStore.ts";
@@ -23,10 +23,19 @@ import { ItemTemplateControl } from "@open-smc/layout/src/contract/controls/Item
 import { CollectionReference } from "@open-smc/data/src/contract/CollectionReference.ts";
 import { messageOfType } from "@open-smc/messaging/src/operators/messageOfType.ts";
 import { CheckboxControl } from "@open-smc/layout/src/contract/controls/CheckboxControl.ts";
+import { MenuItemControl } from "@open-smc/layout/src/contract/controls/MenuItemControl.ts";
+import { ClickedEvent } from "@open-smc/layout/src/contract/application.contract.ts";
+import { updateByReferenceActionCreator } from "@open-smc/data/src/workspaceReducer.ts";
+import { PathReference } from "@open-smc/data/src/contract/PathReference.ts";
+import { log } from "@open-smc/utils/src/operators/log.ts";
+import { sliceByReference } from "@open-smc/data/src/sliceByReference.ts";
+import { selectByPath } from "@open-smc/data/src/operators/selectByPath.ts";
+import { updateByPath } from "@open-smc/data/src/operators/updateByPath.ts";
+import { pathToUpdateAction } from "@open-smc/data/src/operators/pathToUpdateAction.ts";
 
 const todos = [
-    {id: "1", name: "Task 1", completed: true, },
-    {id: "2", name: "Task 2", completed: false },
+    {id: "1", name: "Task 1", completed: true,},
+    {id: "2", name: "Task 2", completed: false},
     {id: "3", name: "Task 3", completed: true},
     {id: "4", name: "Task 4", completed: true},
 ]
@@ -66,6 +75,19 @@ export class SamplesServer extends Observable<MessageDelivery> implements Observ
 
             const subscription = new Subscription();
 
+            subscription.add(
+                this.input
+                    .pipe(filter(messageOfType(ClickedEvent)))
+                    .subscribe(({message}) => {
+                        const {action, id} = message.payload as { action: 'delete' | 'edit', id: string };
+                        if (action === 'delete') {
+                            this.data.next(
+                                pathToUpdateAction("/todos")(omit(this.data.getState().todos, id))
+                            );
+                        }
+                    })
+            )
+
             const entityStore =
                 this.render(reference as LayoutAreaReference, subscription);
 
@@ -93,10 +115,16 @@ export class SamplesServer extends Observable<MessageDelivery> implements Observ
             const change$ =
                 entityStore
                     .pipe(toJsonPatch())
+                    .pipe(log('change'))
                     .pipe(
                         map(
                             patch =>
-                                new DataChangedEvent(reference, patch, "Patch", sender)
+                                new DataChangedEvent(
+                                    reference,
+                                    patch,
+                                    "Patch",
+                                     jsonPatchActionCreator.match(entityStore.lastAction) ? sender : null
+                                )
                         )
                     );
 
@@ -135,53 +163,89 @@ export class SamplesServer extends Observable<MessageDelivery> implements Observ
                     reference,
                     collections: {
                         [uiControlType]: layout.views,
-                        todos: this.data.getState().todos
                     }
                 }
             );
+
+        subscription.add(
+            this.data
+                .pipe(
+                    map(selectByPath("/todos")),
+                    distinctUntilChanged(),
+                    map(pathToUpdateAction("/collections/todos"))
+                )
+                .subscribe(entityStore)
+        );
 
         return entityStore;
     }
 
     private getLayout() {
-        const textBox = new TextBoxControl(new Binding("$.name"));
-        textBox.dataContext = new EntityReference("todos", "1");
+        const main =
+            new LayoutStackControl()
+                .with({
+                    areas: [
+                        new EntityReference(uiControlType, "/main/todos"),
+                    ]
+                });
 
-        const html = new HtmlControl(new Binding("$.name"));
-        html.dataContext = new EntityReference("todos", "1");
+        const todos =
+            new ItemTemplateControl()
+                .with({
+                    dataContext: new CollectionReference("todos"),
+                    data: new Binding("$"),
+                    view: new LayoutStackControl()
+                        .with({
+                            skin: "HorizontalPanel",
+                            areas: [
+                                new EntityReference(uiControlType, "/main/todo/name"),
+                                new EntityReference(uiControlType, "/main/todo/completed"),
+                                new EntityReference(uiControlType, "/main/todo/editButton"),
+                                new EntityReference(uiControlType, "/main/todo/deleteButton"),
+                            ]
+                        })
+                })
 
-        const stack = new LayoutStackControl();
+        const name =
+            new HtmlControl()
+                .with({
+                    data: new Binding("$.name")
+                })
 
-        stack.areas = [
-            new EntityReference(uiControlType, "/main/todos"),
-            new EntityReference(uiControlType, "/main/textBox"),
-        ];
+        const completed =
+            new CheckboxControl()
+                .with({
+                    data: new Binding("$.completed")
+                })
 
-        const todos = new ItemTemplateControl();
+        const editButton =
+            new MenuItemControl()
+                .with({
+                    icon: "sm sm-edit",
+                    clickMessage:
+                        new ClickedEvent({
+                            action: 'edit',
+                            id: new Binding("$.id")
+                        }) as any
+                });
 
-        const todoItem = new LayoutStackControl();
-
-        todoItem.areas = [
-            new EntityReference(uiControlType, "/main/todo/name"),
-            new EntityReference(uiControlType, "/main/todo/completed"),
-        ];
-
-        todoItem.skin = "HorizontalPanel";
-
-        todos.data = new Binding("$");
-        todos.dataContext = new CollectionReference("todos");
-        todos.view = todoItem;
-
-        const name = new HtmlControl(new Binding("$.name"))
-        const completed = new CheckboxControl(new Binding("$.completed"))
+        const deleteButton =
+            new MenuItemControl()
+                .with({
+                    icon: "sm sm-close",
+                    clickMessage: new ClickedEvent({
+                        action: 'delete',
+                        id: new Binding("$.id")
+                    }) as any
+                })
 
         const layout = new Layout()
-            .addView("/main/textBox", textBox)
             .addView("/main/todos", todos)
-            .addView("/main/todo", todoItem)
             .addView("/main/todo/name", name)
             .addView("/main/todo/completed", completed)
-            .addView("/main", stack);
+            .addView("/main/todo/editButton", editButton)
+            .addView("/main/todo/deleteButton", deleteButton)
+            .addView("/main", main);
 
         return layout;
     }

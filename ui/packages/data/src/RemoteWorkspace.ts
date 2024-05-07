@@ -36,7 +36,6 @@ export class RemoteWorkspace<T = unknown> extends Workspace<T> {
                         && !isEqual(message.changedBy, uiHub.address)
                     )
                 )
-                .pipe(log('uiHub input'))
                 .pipe(map(mapDataChangedEvent))
                 .pipe(map(jsonPatchActionCreator))
                 .subscribe(this.store.dispatch)
@@ -65,6 +64,10 @@ export class RemoteWorkspace<T = unknown> extends Workspace<T> {
                     }
                 });
         }
+    }
+
+    post(message: unknown) {
+        this.uiHub.post(message);
     }
 }
 

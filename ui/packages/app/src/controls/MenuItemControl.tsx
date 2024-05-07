@@ -41,7 +41,7 @@ export default function MenuItemControl({
 
     const isExpandable = !!expandMessage;
 
-    // const clickAction = useClickAction(clickMessage);
+    const clickAction = useClickAction(clickMessage);
 
     // const isSideMenu = isControlContextOfType(parentControlContext, LayoutStackControl)
     //     && parentControlContext.boundView.skin === "SideMenu";
@@ -90,7 +90,7 @@ export default function MenuItemControl({
                 label={title}
                 className={styles.button}
                 labelClassName={styles.label}
-                // onClick={clickAction}
+                onClick={clickAction}
             >
             </Button>
             {/*{isExpandable &&*/}

@@ -21,7 +21,11 @@ export abstract class Renderer {
         )
     }
 
+    public get root() {
+        return first(this.stackTrace);
+    }
+
     public get rootContext() {
-        return first(this.stackTrace).dataContext;
+        return this.root.dataContext;
     }
 }

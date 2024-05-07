@@ -1,6 +1,6 @@
 import { UiControl, MessageAndAddress } from "./UiControl";
 
-export class ExpandableControl extends UiControl {
+export class ExpandableControl<T = unknown> extends UiControl<T> {
     expandMessage?: MessageAndAddressAndArea;
 }
 

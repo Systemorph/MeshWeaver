@@ -4,7 +4,7 @@ import { ValueOrReference } from "@open-smc/data/src/contract/ValueOrReference";
 import { Binding, ValueOrBinding } from "@open-smc/data/src/contract/Binding";
 import { JsonPathReference } from "@open-smc/data/src/contract/JsonPathReference";
 import { Workspace } from "@open-smc/data/src/Workspace";
-import { app$, appStore, LayoutAreaModel } from "./appStore";
+import { app$, appMessage$, appStore, LayoutAreaModel } from "./appStore";
 import { distinctUntilChanged, map, Observable, Subscription } from "rxjs";
 import { effect } from "@open-smc/utils/src/operators/effect";
 import { syncWorkspaces } from "./syncWorkspaces";
@@ -14,6 +14,8 @@ import { setArea } from "./appReducer";
 import { pathToUpdateAction } from "@open-smc/data/src/operators/pathToUpdateAction";
 import { Renderer } from "./Renderer";
 import { RendererStackTrace } from "./RendererStackTrace";
+import { EntityStoreRenderer } from "./EntityStoreRenderer";
+import { serialize } from "@open-smc/serialization/src/serialize";
 
 export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
     readonly subscription = new Subscription();
@@ -88,6 +90,7 @@ export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
         subscription.add(
             areaModelWorkspace
                 .pipe(distinctUntilEqual())
+                // .pipe(map(serialize))
                 .subscribe(layoutAreaModel => {
                     appStore.dispatch(setArea(layoutAreaModel))
                 })

@@ -4,7 +4,5 @@ import { ValueOrBinding } from "@open-smc/data/src/contract/Binding";
 
 @type("OpenSmc.Layout.CheckBoxControl")
 export class CheckboxControl extends UiControl {
-    constructor(public data: ValueOrBinding<boolean>) {
-        super();
-    }
+    data: ValueOrBinding<boolean>
 }

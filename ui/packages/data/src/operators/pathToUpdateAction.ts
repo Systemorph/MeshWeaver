@@ -6,6 +6,6 @@ export const pathToUpdateAction = (path: string) =>
         updateByReferenceActionCreator(
             {
                 reference: new PathReference(path),
-                value
+                value,
             }
         );
