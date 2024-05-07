@@ -37,3 +37,5 @@ public class Program
         await app.RunAsync();
     }
 }
+
+internal record RouterAddress;
