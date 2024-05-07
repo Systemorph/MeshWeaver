@@ -2,6 +2,7 @@ import { createElement, JSX, Suspense } from "react";
 import { useAppSelector } from "./hooks";
 import { layoutAreaSelector } from "./appStore";
 import { getControlComponent } from "../controlRegistry";
+import { ControlContext } from "../ControlContext";
 
 interface RenderAreaProps {
     id: string;
@@ -23,9 +24,9 @@ export function RenderArea({id, className, render}: RenderAreaProps) {
     const renderedControl = (
         <Suspense fallback={<div>Loading...</div>}>
             <div className={className} key={id}>
-                {
-                    createElement(componentType, layoutAreaModel)
-                }
+                <ControlContext layoutAreaModel={layoutAreaModel}>
+                    {createElement(componentType, layoutAreaModel.props)}
+                </ControlContext>
             </div>
         </Suspense>
     );

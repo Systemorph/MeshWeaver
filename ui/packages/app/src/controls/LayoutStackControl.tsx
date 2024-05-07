@@ -5,7 +5,6 @@ import { ModalWindow } from "./ModalWindow";
 import { ControlView } from "../ControlDef";
 import { RenderArea } from "../store/RenderArea";
 import { LayoutStackSkin } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
-import { LayoutAreaModel } from "../store/appStore";
 
 export interface StackView extends ControlView {
     areas: string[];
@@ -14,7 +13,7 @@ export interface StackView extends ControlView {
     columnCount?: number;
 }
 
-export default function LayoutStackControl({props}: LayoutAreaModel<StackView>) {
+export default function LayoutStackControl(props: StackView) {
     const {skin} = props;
 
     if (skin === "MainWindow") {
