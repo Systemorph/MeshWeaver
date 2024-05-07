@@ -1,5 +1,6 @@
 ﻿using System.Collections;
 using System.ComponentModel.DataAnnotations;
+using System.Data.Common;
 using System.Reactive.Linq;
 using FluentAssertions;
 using OpenSmc.Data;
@@ -177,7 +178,13 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var toolbarData = (Toolbar)await stream.GetData(toolbarDataReference).FirstAsync();
         toolbarData.Year.Should().Be(2024);
 
-        stream.Update(ci => ci.Update(toolbarDataReference, toolbarData with { Year = 2025 }));
+        stream.Update(ci => new Data.Serialization.ChangeItem<EntityStore>(
+            stream.Id,
+            stream.Reference,
+            ci.Update(toolbarDataReference, toolbarData with { Year = 2025 }),
+            stream.Id,
+            hub.Version
+        ));
 
         var updatedControls = await stream
             .GetControl(reportArea)
