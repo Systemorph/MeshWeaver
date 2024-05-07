@@ -26,6 +26,8 @@ public class Program
                 siloBuilder
                     .AddMemoryStreams(ApplicationStreamProviders.AppStreamProvider)
                     .AddMemoryGrainStorage("PubSubStore");
+
+                siloBuilder.Services.AddRouterHub();
             });
 
         await using var app = builder.Build();
