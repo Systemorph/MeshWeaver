@@ -1,4 +1,16 @@
-import { distinctUntilChanged, filter, map, Observable, Observer, of, skip, Subject, Subscription, take } from "rxjs";
+import {
+    distinctUntilChanged,
+    filter,
+    map,
+    Observable,
+    Observer,
+    of,
+    skip,
+    Subject,
+    Subscription,
+    take,
+    tap
+} from "rxjs";
 import { MessageDelivery } from "@open-smc/messaging/src/api/MessageDelivery";
 import { SubscribeRequest } from "@open-smc/data/src/contract/SubscribeRequest.ts";
 import { LayoutAreaReference } from "@open-smc/data/src/contract/LayoutAreaReference.ts";
@@ -176,6 +188,16 @@ export class SamplesServer extends Observable<MessageDelivery> implements Observ
                 )
                 .subscribe(entityStore)
         );
+
+        subscription.add(
+            entityStore
+                .pipe(
+                    map(selectByPath("/collections/todos")),
+                    distinctUntilChanged(),
+                    map(pathToUpdateAction("/todos"))
+                )
+                .subscribe(this.data)
+        )
 
         return entityStore;
     }
