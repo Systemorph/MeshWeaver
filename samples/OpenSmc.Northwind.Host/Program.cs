@@ -1,6 +1,7 @@
 ﻿using OpenSmc.Application;
 using OpenSmc.Application.Orleans;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 using Orleans.Serialization;
 using static OpenSmc.Application.SignalR.SignalRExtensions;
 using static OpenSmc.Hosting.HostBuilderExtensions;
@@ -52,6 +53,7 @@ internal static class RouterHubExtensions
     private static IMessageHub GetRouterHub(this IServiceProvider serviceProvider)
         => serviceProvider.CreateMessageHub(new RouterAddress(), conf =>
             conf
+                .WithTypes(typeof(UiAddress), typeof(ApplicationAddress))
                 .WithRoutes(forward => forward
                     .RouteAddressToHostedHub<ApplicationAddress>(ConfigureApplication)
                 )
