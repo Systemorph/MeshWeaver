@@ -1,5 +1,6 @@
 ﻿using OpenSmc.Application;
 using OpenSmc.Application.Orleans;
+using OpenSmc.Data;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
 using Orleans.Serialization;
@@ -56,11 +57,15 @@ internal static class RouterHubExtensions
                 .WithTypes(typeof(UiAddress), typeof(ApplicationAddress))
                 .WithRoutes(forward => forward
                     .RouteAddressToHostedHub<ApplicationAddress>(ConfigureApplication)
+                    .RouteAddressToHostedHub<ReferenceDataAddress>(c => c.AddNorthwindReferenceData())
                 )
         );
 
     private static MessageHubConfiguration ConfigureApplication(MessageHubConfiguration configuration)
-        => configuration;
+        => configuration
+            .AddData(data => data
+                .FromHub(new ReferenceDataAddress(), ds => ds.AddNorthwindReferenceData())
+            );
 }
 
 internal record RouterAddress;
