@@ -4176,6 +4176,13 @@ class SamplesServer extends Observable {
         map(pathToUpdateAction("/collections/todos"))
       ).subscribe(entityStore)
     );
+    subscription.add(
+      entityStore.pipe(
+        map(selectByPath("/collections/todos")),
+        distinctUntilChanged(),
+        map(pathToUpdateAction("/todos"))
+      ).subscribe(this.data)
+    );
     return entityStore;
   }
   getLayout() {
