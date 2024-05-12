@@ -81,8 +81,15 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
         var reference = GetReference();
         var stream = Workspace.GetChangeStream(reference);
         Streams = Streams.Add(stream);
-        stream.AddDisposable(stream.Synchronization.Subscribe(Workspace.Synchronize));
+        stream.Synchronization.Subscribe(Synchronize);
         Hub.Schedule(cancellationToken => InitializeAsync(stream, cancellationToken));
+    }
+
+    private void Synchronize(ChangeItem<WorkspaceState> item)
+    {
+        if (!Id.Equals(item.ChangedBy))
+            foreach (var typeSource in TypeSources.Values)
+                typeSource.Update(item);
     }
 
     private async Task InitializeAsync(
@@ -104,7 +111,15 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
                 new EntityStore(),
                 (store, selected) => store.Merge(selected.Reference, selected.Initialized)
             );
-        stream.Initialize(initial);
+        Workspace.Synchronize(
+            new ChangeItem<WorkspaceState>(
+                Id,
+                GetReference(),
+                Workspace.CreateState(initial),
+                Id,
+                Hub.Version
+            )
+        );
     }
 
     protected virtual WorkspaceReference<EntityStore> GetReference()

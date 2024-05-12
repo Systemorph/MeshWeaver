@@ -77,10 +77,20 @@ public record ChangeStream<TStream, TOriginalStream>
     public ChangeStream(
         object Id,
         WorkspaceReference<TStream> Reference,
-        IObservable<ChangeItem<TStream>> store,
         IMessageHub Hub,
         ReduceManager<TStream> reduceManager,
         Func<TStream, TOriginalStream> backfeed
+    )
+        : this(Id, Reference, Hub, reduceManager, backfeed, Observable.Empty<ChangeItem<TStream>>())
+    { }
+
+    public ChangeStream(
+        object Id,
+        WorkspaceReference<TStream> Reference,
+        IMessageHub Hub,
+        ReduceManager<TStream> reduceManager,
+        Func<TStream, TOriginalStream> backfeed,
+        IObservable<ChangeItem<TStream>> store
     )
     {
         this.Id = Id;
