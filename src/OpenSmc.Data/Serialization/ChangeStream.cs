@@ -64,7 +64,7 @@ public record ChangeStream<TStream, TOriginalStream>
 
     WorkspaceReference IChangeStream.Reference => Reference;
 
-    private readonly IReduceManager<TStream> reduceManager;
+    private readonly ReduceManager<TStream> reduceManager;
     private readonly Func<TStream, TOriginalStream> backfeed;
     private IObservable<DataChangedEvent> dataChangedStream;
     private IObservable<PatchChangeRequest> patchRequestStream;
@@ -79,7 +79,7 @@ public record ChangeStream<TStream, TOriginalStream>
         WorkspaceReference<TStream> Reference,
         IObservable<ChangeItem<TStream>> store,
         IMessageHub Hub,
-        IReduceManager<TStream> reduceManager,
+        ReduceManager<TStream> reduceManager,
         Func<TStream, TOriginalStream> backfeed
     )
     {
@@ -100,15 +100,15 @@ public record ChangeStream<TStream, TOriginalStream>
             return delivery.Processed();
         });
 
-        dataChangedStream = store
-            .Skip(1)
+        dataChangedStream = this
+            .store.Skip(1)
             .Where(x => !Hub.Address.Equals(x.ChangedBy) || !Reference.Equals(x.Reference))
             .Select(r => GetDataChanged(r))
             .Where(x => x?.Change != null);
 
-        var myOutgoingUpdates = store
-            .Where(x => Id.Equals(x.ChangedBy) && Reference.Equals(x.Reference))
-            .Skip(1);
+        var myOutgoingUpdates = this.store.Where(x =>
+            Id.Equals(x.ChangedBy) && Reference.Equals(x.Reference)
+        );
 
         var backTransformation =
             backfeed ?? reduceManager?.GetBackTransformation<TOriginalStream>();
@@ -263,7 +263,7 @@ public record ChangeStream<TStream, TOriginalStream>
     public IObservable<ChangeItem<TOriginalStream>> Synchronization { get; }
 
     public void Initialize(TStream initial) =>
-        Initialize(new ChangeItem<TStream>(Id, Reference, initial, null, Hub.Version));
+        Initialize(new ChangeItem<TStream>(Id, Reference, initial, Id, Hub.Version));
 
     private void Initialize(ChangeItem<TStream> initial)
     {
@@ -326,7 +326,10 @@ public record ChangeStream<TStream, TOriginalStream>
 
     public void Synchronize(Func<TStream, ChangeItem<TStream>> update)
     {
-        incomingUpdates.OnNext(update);
+        if (Current == null)
+            Initialize(update(default));
+        else
+            incomingUpdates.OnNext(update);
     }
 
     private ChangeItem<TStream> Merge(TStream _, ChangeItem<TStream> changeItem)

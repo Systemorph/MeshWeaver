@@ -11,7 +11,7 @@ public record WorkspaceState(
     IMessageHub Hub,
     EntityStore Store,
     IReadOnlyDictionary<string, ITypeSource> TypeSources,
-    IReduceManager<WorkspaceState> ReduceManager
+    ReduceManager<WorkspaceState> ReduceManager
 )
 {
     //private readonly ISerializationService serializationService;
@@ -25,7 +25,7 @@ public record WorkspaceState(
     public WorkspaceState(
         IMessageHub Hub,
         IReadOnlyDictionary<string, ITypeSource> TypeSources,
-        IReduceManager<WorkspaceState> Reduce
+        ReduceManager<WorkspaceState> Reduce
     )
         : this(Hub, new(), TypeSources, Reduce) { }
 
