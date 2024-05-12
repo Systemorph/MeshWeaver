@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reflection.Metadata.Ecma335;
+using AngleSharp.Common;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
@@ -80,7 +81,7 @@ public class Workspace : IWorkspace
             reference,
             ret,
             Hub,
-            ReduceManager.CreateDerived<TReduced>(),
+            ReduceManager.ReduceTo<TReduced>(),
             backfeed
         );
 
@@ -155,6 +156,39 @@ public class Workspace : IWorkspace
             .AddWorkspaceReference<WorkspaceStateReference, WorkspaceState>(
                 (ws, reference) => ws,
                 ws => ws
+            )
+            .ForReducedStream<EntityStore>(reduced =>
+                reduced
+                    .AddWorkspaceReference<EntityReference, object>(
+                        (ws, reference) => ws.ReduceImpl(reference),
+                        null
+                    )
+                    // .AddWorkspaceReference<PartitionedCollectionsReference, EntityStore>(
+                    //     (ws, reference) => ws.ReduceImpl(reference),
+                    //     CreateState
+                    // )
+                    .AddWorkspaceReference<CollectionReference, InstanceCollection>(
+                        (ws, reference) => ws.ReduceImpl(reference),
+                        null
+                    )
+                    .AddWorkspaceReference<CollectionsReference, EntityStore>(
+                        (ws, reference) => ws.ReduceImpl(reference),
+                        x => x
+                    )
+                    .AddWorkspaceReference<WorkspaceStoreReference, EntityStore>(
+                        (ws, reference) => ws,
+                        x => x
+                    )
+            )
+            .ForReducedStream<InstanceCollection>(reduced =>
+                reduced.AddWorkspaceReference<EntityReference, object>(
+                    (ws, reference) => ws.Instances.GetValueOrDefault(reference.Id),
+                    x => new([x], State.GetTypeSource(x.GetType()).GetKey)
+                )
+            // .AddWorkspaceReference<PartitionedCollectionsReference, EntityStore>(
+            //     (ws, reference) => ws.ReduceImpl(reference),
+            //     CreateState
+            // )
             );
     }
 
@@ -303,9 +337,12 @@ public class Workspace : IWorkspace
     {
         return changeItem with
         {
-            Value = existing with
+            Value = changeItem.Value with
             {
-                Store = existing.Store.Merge(changeItem.Value.Store),
+                Store =
+                    existing == null
+                        ? changeItem.Value.Store
+                        : existing.Store.Merge(changeItem.Value.Store),
                 Version = Hub.Version
             }
         };

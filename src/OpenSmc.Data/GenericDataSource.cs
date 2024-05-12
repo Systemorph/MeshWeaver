@@ -29,8 +29,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
 
     protected virtual TDataSource This => (TDataSource)this;
 
-    protected ImmutableList<IChangeStream> Streams { get; set; } =
-        ImmutableList<IChangeStream>.Empty;
+    protected ImmutableList<IChangeStream> Streams { get; set; } = [];
 
     public Task Initialized => Task.WhenAll(Streams.Select(ts => ts.Initialized));
 
@@ -82,6 +81,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
         var reference = GetReference();
         var stream = Workspace.GetChangeStream(reference);
         Streams = Streams.Add(stream);
+        stream.AddDisposable(stream.Synchronization.Subscribe(Workspace.Synchronize));
         Hub.Schedule(cancellationToken => InitializeAsync(stream, cancellationToken));
     }
 
