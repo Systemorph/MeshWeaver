@@ -35,12 +35,6 @@ public record PartitionedHubDataSource(object Id, IMessageHub Hub)
         throw new NotSupportedException("Please use method with partition");
     }
 
-    public override IEnumerable<ChangeStream<EntityStore>> Initialize()
-    {
-        streams = InitializePartitions.Select(a => GetStream(a, GetReference(a))).ToArray();
-        return streams;
-    }
-
     protected WorkspaceReference<EntityStore> GetReference(object partition)
     {
         var ret = new PartitionedCollectionsReference(GetReference(), partition);
@@ -54,7 +48,15 @@ public record PartitionedHubDataSource(object Id, IMessageHub Hub)
         };
 
     private object[] InitializePartitions { get; init; } = Array.Empty<object>();
-    private ChangeStream<EntityStore>[] streams;
+
+    public override void Initialize()
+    {
+        foreach (var partition in InitializePartitions)
+        {
+            var reference = GetReference(partition);
+            Streams = Streams.Add(Workspace.Subscribe(Id, reference));
+        }
+    }
 }
 
 public abstract record HubDataSourceBase<TDataSource> : DataSource<TDataSource>
@@ -68,50 +70,6 @@ public abstract record HubDataSourceBase<TDataSource> : DataSource<TDataSource>
     {
         typeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
     }
-
-    protected override WorkspaceReference<EntityStore> GetReference()
-    {
-        foreach (var typeSource in TypeSources.Values)
-            typeRegistry.WithType(
-                typeSource.ElementType,
-                typeSource.CollectionName,
-                typeSource.GetKey
-            );
-        return SyncAll ? new WorkspaceStoreReference() : base.GetReference();
-    }
-
-    protected ChangeStream<EntityStore> GetStream(
-        object address,
-        WorkspaceReference<EntityStore> reference
-    )
-    {
-        var ret = Workspace.GetChangeStream(address, reference);
-        if (Id.Equals(Hub.Address))
-            throw new NotSupportedException(
-                "Cannot initialize the hub data source with the hub address"
-            );
-        ret.AddDisposable(
-            Workspace
-                .Stream.Skip(1)
-                .Where(x => !Hub.Address.Equals(x.ChangedBy) || !ret.Reference.Equals(x.Reference))
-                .Subscribe(x => ret.Synchronize(x.SetValue(x.Value.Reduce(ret.Reference))))
-        );
-        ret.AddDisposable(
-            ret.Subscribe<PatchChangeRequest>(x =>
-            {
-                Hub.Post(x, o => o.WithTarget(Id));
-            })
-        );
-        return ret;
-    }
-
-    internal bool SyncAll { get; init; }
-
-    public TDataSource SynchronizeAll(bool synchronizeAll = true) =>
-        This with
-        {
-            SyncAll = synchronizeAll
-        };
 }
 
 public record HubDataSource : HubDataSourceBase<HubDataSource>
@@ -126,8 +84,11 @@ public record HubDataSource : HubDataSourceBase<HubDataSource>
     public HubDataSource(object Id, IMessageHub Hub)
         : base(Id, Hub) { }
 
-    public override IEnumerable<ChangeStream<EntityStore>> Initialize()
+    public override void Initialize()
     {
-        yield return GetStream(Id, GetReference());
+        var reference = new CollectionsReference(
+            TypeSources.Values.Select(ts => ts.CollectionName).ToArray()
+        );
+        Streams = Streams.Add(Workspace.Subscribe(Id, reference));
     }
 }

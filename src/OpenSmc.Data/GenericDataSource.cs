@@ -1,4 +1,5 @@
-﻿using System.Collections.Immutable;
+﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Net.WebSockets;
 using System.Reactive.Linq;
 using System.Reflection;
@@ -17,7 +18,8 @@ public interface IDataSource : IAsyncDisposable
     IReadOnlyCollection<Type> MappedTypes { get; }
     object Id { get; }
     IReadOnlyCollection<DataChangeRequest> Change(DataChangeRequest request);
-    IEnumerable<ChangeStream<EntityStore>> Initialize();
+    void Initialize();
+    Task Initialized { get; }
 }
 
 public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDataSource
@@ -26,6 +28,11 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
     protected readonly IWorkspace Workspace = Hub.ServiceProvider.GetRequiredService<IWorkspace>();
 
     protected virtual TDataSource This => (TDataSource)this;
+
+    protected ImmutableList<IChangeStream> Streams { get; set; } =
+        ImmutableList<IChangeStream>.Empty;
+
+    public Task Initialized => Task.WhenAll(Streams.Select(ts => ts.Initialized));
 
     IEnumerable<ITypeSource> IDataSource.TypeSources => TypeSources.Values;
 
@@ -70,48 +77,34 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
 
     private IReadOnlyCollection<IDisposable> changesSubscriptions;
 
-    public virtual IEnumerable<ChangeStream<EntityStore>> Initialize()
+    public virtual void Initialize()
     {
-        var ret = GetInitialChangeStream().ToArray();
-        Hub.Schedule(async cancellationToken =>
-        {
-            var instances = (
-                await TypeSources
-                    .Values.ToAsyncEnumerable()
-                    .SelectAwait(async ts => new
-                    {
-                        TypeSource = ts,
-                        Container = await ts.InitializeAsync(cancellationToken)
-                    })
-                    .Where(x => x.Container.Instances.Count > 0)
-                    .ToArrayAsync(cancellationToken: cancellationToken)
-            ).ToImmutableDictionary(x => x.TypeSource.CollectionName, x => x.Container);
-
-            foreach (var changeStream in ret)
-            {
-                changeStream.Initialize(new() { Collections = instances });
-            }
-            changesSubscriptions = TypeSources
-                .Values.Select(ts =>
-                    Workspace
-                        .Stream.Skip(1)
-                        .Where(x => !x.ChangedBy.Equals(Id))
-                        .Subscribe(ws => ts.Update(ws))
-                )
-                .ToArray();
-        });
-
-        return ret;
+        var reference = GetReference();
+        var stream = Workspace.GetChangeStream(reference);
+        Streams = Streams.Add(stream);
+        Hub.Schedule(cancellationToken => InitializeAsync(stream, cancellationToken));
     }
 
-    protected IEnumerable<ChangeStream<EntityStore>> GetInitialChangeStream()
+    private async Task InitializeAsync(
+        IChangeStream<EntityStore, WorkspaceState> stream,
+        CancellationToken cancellationToken
+    )
     {
-        yield return new ChangeStream<EntityStore>(
-            Id,
-            new WorkspaceStoreReference(),
-            Hub,
-            Workspace.ReduceManager.CreateDerived<EntityStore>()
-        );
+        var initial = await TypeSources
+            .Values.ToAsyncEnumerable()
+            .SelectAwait(async ts => new
+            {
+                Reference = new CollectionReference(ts.CollectionName),
+                Initialized = await ts.InitializeAsync(
+                    new CollectionReference(ts.CollectionName),
+                    cancellationToken
+                )
+            })
+            .AggregateAsync(
+                new EntityStore(),
+                (store, selected) => store.Merge(selected.Reference, selected.Initialized)
+            );
+        stream.Initialize(initial);
     }
 
     protected virtual WorkspaceReference<EntityStore> GetReference()

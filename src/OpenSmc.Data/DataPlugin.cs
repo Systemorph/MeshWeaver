@@ -35,13 +35,10 @@ public class DataPlugin(IMessageHub hub)
 
     private IMessageDelivery RequestChange(IMessageDelivery request, DataChangeRequest change)
     {
-        Workspace.RequestChange(change, request?.Sender ?? Hub.Address, null);
+        var response = Workspace.RequestChange(change, request?.Sender ?? Hub.Address, null);
         if (request != null)
         {
-            Hub.Post(
-                new DataChangeResponse(Hub.Version, DataChangeStatus.Committed),
-                o => o.ResponseFor(request)
-            );
+            Hub.Post(response, o => o.ResponseFor(request));
         }
         return request?.Processed();
     }
@@ -65,7 +62,7 @@ public class DataPlugin(IMessageHub hub)
 
     private IMessageDelivery Subscribe(IMessageDelivery<SubscribeRequest> request)
     {
-        Workspace.Subscribe(request.Sender, request.Message.Reference);
+        Workspace.Subscribe(request.Sender, (dynamic)request.Message.Reference);
         return request.Processed();
     }
 
@@ -88,59 +85,4 @@ public class DataPlugin(IMessageHub hub)
     {
         return Workspace.DeliverMessage(delivery);
     }
-}
-
-internal class InitializeObserver : IObserver<ChangeItem<EntityStore>>
-{
-    public void OnCompleted() { }
-
-    public void OnError(Exception error) { }
-
-    public EntityStore Store { get; private set; }
-
-    public void OnNext(ChangeItem<EntityStore> value)
-    {
-        //if (streams.Remove(value.Address, out var stream))
-        //    stream.Initialize(value.Value);
-        Store = Store == null ? value.Value : Store.Merge(value.Value);
-        streams.Remove(value.Address);
-        if (streams.Count == 0)
-            Complete();
-    }
-
-    private void Complete()
-    {
-        foreach (var disposable in Disposables)
-            disposable.Dispose();
-        onCompleteInitialization.Invoke(Store);
-    }
-
-    public readonly List<IDisposable> Disposables;
-    private readonly Dictionary<object, ChangeStream<EntityStore>> streams;
-    private readonly Action<EntityStore> onCompleteInitialization;
-
-    private TimeSpan Timeout { get; }
-
-    public InitializeObserver(
-        Dictionary<object, ChangeStream<EntityStore>> streams,
-        Action<EntityStore> onCompleteInitialization,
-        TimeSpan timeout
-    )
-    {
-        this.streams = streams;
-        this.onCompleteInitialization = onCompleteInitialization;
-        Timeout = timeout;
-        Disposables = new() { CreateTimeout() };
-    }
-
-    private IDisposable CreateTimeout() =>
-        new Timer(
-            _ =>
-                throw new TimeoutException(
-                    $"Could not initialize data sources {string.Join(",", streams.Select(x => x.ToString()))}"
-                ),
-            null,
-            Timeout,
-            Timeout
-        );
 }

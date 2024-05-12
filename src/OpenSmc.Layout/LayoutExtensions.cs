@@ -20,7 +20,8 @@ public static class LayoutExtensions
             .WithServices(services => services.AddScoped<ILayout, LayoutPlugin>())
             .AddData(data =>
                 data.AddWorkspaceReferenceStream<LayoutAreaReference, EntityStore>(
-                    (_, a) => data.Hub.ServiceProvider.GetRequiredService<ILayout>().Render(a)
+                    (_, a) => data.Hub.ServiceProvider.GetRequiredService<ILayout>().Render(a),
+                    s => data.Workspace.CreateState(s)
                 )
             )
             .AddLayoutTypes()
@@ -46,7 +47,7 @@ public static class LayoutExtensions
             .WithTypes(typeof(MessageAndAddress), typeof(LayoutAreaReference));
 
     public static IObservable<object> GetControl(
-        this ChangeStream<EntityStore> changeItems,
+        this IChangeStream<EntityStore, WorkspaceState> changeItems,
         string area
     ) =>
         ((IObservable<ChangeItem<EntityStore>>)changeItems)
@@ -54,7 +55,7 @@ public static class LayoutExtensions
             .Where(x => x != null);
 
     public static IObservable<object> GetData(
-        this ChangeStream<EntityStore> changeItems,
+        this IChangeStream<EntityStore, WorkspaceState> changeItems,
         WorkspaceReference reference
     ) =>
         ((IObservable<ChangeItem<EntityStore>>)changeItems)

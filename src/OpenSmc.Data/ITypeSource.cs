@@ -1,4 +1,5 @@
-﻿using OpenSmc.Data.Serialization;
+﻿using System.Security.Cryptography;
+using OpenSmc.Data.Serialization;
 
 namespace OpenSmc.Data;
 
@@ -8,16 +9,26 @@ public interface ITypeSource : IDisposable
     string CollectionName { get; }
     object GetKey(object instance);
     ITypeSource WithKey(Func<object, object> key);
-    ITypeSource WithInitialData(Func<CancellationToken, Task<IEnumerable<object>>> loadInstancesAsync);
+    ITypeSource WithInitialData(
+        Func<
+            WorkspaceReference<InstanceCollection>,
+            CancellationToken,
+            Task<IEnumerable<object>>
+        > loadInstancesAsync
+    );
+    ITypeSource WithInitialData(
+        Func<CancellationToken, Task<IEnumerable<object>>> loadInstancesAsync
+    ) => WithInitialData((_, ct) => loadInstancesAsync(ct));
 
-    ITypeSource WithInitialData(IEnumerable<object> instances)
-        => WithInitialData(() => instances);
-    ITypeSource WithInitialData(Func<IEnumerable<object>> loadInstances)
-        => WithInitialData(_ => Task.FromResult(loadInstances()));
+    ITypeSource WithInitialData(IEnumerable<object> instances) => WithInitialData(() => instances);
+    ITypeSource WithInitialData(Func<IEnumerable<object>> loadInstances) =>
+        WithInitialData((_, _) => Task.FromResult(loadInstances()));
 
-    Task<InstanceCollection> InitializeAsync(CancellationToken cancellationToken);
-
-    InstanceCollection Update(ChangeItem<WorkspaceState> ws);
+    internal Task<InstanceCollection> InitializeAsync(
+        WorkspaceReference<InstanceCollection> reference,
+        CancellationToken cancellationToken
+    );
+    InstanceCollection Update(ChangeItem<WorkspaceState> workspace);
 }
 
 public interface IPartitionedTypeSource : ITypeSource
