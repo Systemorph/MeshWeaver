@@ -1,10 +1,5 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
-using System.Reflection.Metadata.Ecma335;
-using AngleSharp.Common;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
 using OpenSmc.Data.Serialization;
@@ -14,22 +9,13 @@ namespace OpenSmc.Data;
 
 public class Workspace : IWorkspace
 {
-    private readonly ReplaySubject<ChangeItem<WorkspaceState>> state = new();
-
     public Workspace(IMessageHub hub, ILogger<Workspace> logger, IActivityService activityService)
     {
         Hub = hub;
         this.activityService = activityService;
         this.logger = logger;
         ReduceManager = CreateReduceManager();
-        myChangeStream = new(
-            Hub.Address,
-            new WorkspaceStateReference(),
-            state,
-            Hub,
-            ReduceManager,
-            null
-        );
+        myChangeStream = new(Hub.Address, new WorkspaceStateReference(), Hub, ReduceManager, null);
     }
 
     public WorkspaceReference Reference { get; } = new WorkspaceStateReference();
@@ -79,10 +65,10 @@ public class Workspace : IWorkspace
         var changeStream = new ChangeStream<TReduced, WorkspaceState>(
             Hub.Address,
             reference,
-            ret,
             Hub,
             ReduceManager.ReduceTo<TReduced>(),
-            backfeed
+            backfeed,
+            ret
         );
 
         return changeStream;
