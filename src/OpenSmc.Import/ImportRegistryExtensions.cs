@@ -85,7 +85,7 @@ public record ImportDataSource(Source Source, IMessageHub Hub)
             ImportRequest = config.Invoke(ImportRequest)
         };
 
-    public override IEnumerable<ChangeStream<EntityStore>> Initialize()
+    public override void Initialize()
     {
         var config = new ImportConfiguration(
             Hub,
@@ -94,7 +94,7 @@ public record ImportDataSource(Source Source, IMessageHub Hub)
         );
         config = Configurations.Aggregate(config, (c, f) => f.Invoke(c));
         ImportManager importManager = new(config);
-        var ret = GetInitialChangeStream();
+        var ret = Workspace.Subscribe(Id, GetReference());
         Hub.Schedule(async cancellationToken =>
         {
             var (state, hasError) = await importManager.ImportAsync(
@@ -104,10 +104,9 @@ public record ImportDataSource(Source Source, IMessageHub Hub)
                 cancellationToken
             );
 
-            foreach (var changeStream in ret)
-                changeStream.Initialize(state.Store);
+            ret.Initialize(state.Store);
         });
-        return ret;
+        Streams = Streams.Add(ret);
     }
 
     private ImmutableList<

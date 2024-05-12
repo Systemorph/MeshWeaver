@@ -2,10 +2,10 @@
 using System.Data;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reflection.Metadata.Ecma335;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
+using OpenSmc.Activities;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data.Serialization;
@@ -22,9 +22,22 @@ public interface IChangeStream
     void AddDisposable(IDisposable disposable);
 
     void Synchronize(DataChangedEvent request);
+    Task Initialized { get; }
 }
 
-public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStream>>
+public interface IChangeStream<TStream, TOriginalStream>
+    : IChangeStream,
+        IObservable<ChangeItem<TStream>>
+{
+    IObservable<ChangeItem<TOriginalStream>> Synchronization { get; }
+    void Synchronize(Func<TStream, ChangeItem<TStream>> update);
+    IObservable<ChangeItem<TReduced>> Reduce<TReduced>(WorkspaceReference<TReduced> reference);
+    void Initialize(TStream value);
+}
+
+public record ChangeStream<TStream, TOriginalStream>
+    : IChangeStream<TStream, TOriginalStream>,
+        IObservable<ChangeItem<TStream>>
 {
     private IDisposable updateSubscription;
 
@@ -38,15 +51,13 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
 
     private IMessageHub Hub { get; }
 
-    /// <summary>
-    /// My current state
-    /// </summary>
-    private readonly ReplaySubject<ChangeItem<TStream>> store = new(1);
+    private readonly TaskCompletionSource initialized = new();
+    public Task Initialized => initialized.Task;
 
     /// <summary>
     /// Pending change requests
     /// </summary>
-    private readonly Subject<Func<TStream, ChangeItem<TStream>>> updates = new();
+    private readonly Subject<Func<TStream, ChangeItem<TStream>>> incomingUpdates = new();
 
     public object Id { get; init; }
     public WorkspaceReference<TStream> Reference { get; init; }
@@ -54,22 +65,30 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
     WorkspaceReference IChangeStream.Reference => Reference;
 
     private readonly IReduceManager<TStream> reduceManager;
+    private readonly Func<TStream, TOriginalStream> backfeed;
     private IObservable<DataChangedEvent> dataChangedStream;
     private IObservable<PatchChangeRequest> patchRequestStream;
+
+    /// <summary>
+    /// My current state
+    /// </summary>
+    private readonly ReplaySubject<ChangeItem<TStream>> store = new(1);
 
     public ChangeStream(
         object Id,
         WorkspaceReference<TStream> Reference,
+        IObservable<ChangeItem<TStream>> store,
         IMessageHub Hub,
-        IReduceManager<TStream> reduceManager
+        IReduceManager<TStream> reduceManager,
+        Func<TStream, TOriginalStream> backfeed
     )
     {
         this.Id = Id;
         this.Reference = Reference;
         this.Hub = Hub;
-
+        Disposables.Add(store.Subscribe(this.store));
         this.reduceManager = reduceManager;
-
+        this.backfeed = backfeed;
         RegisterMessageHandler<DataChangedEvent>(delivery =>
         {
             Synchronize(delivery.Message);
@@ -77,18 +96,28 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
         });
         RegisterMessageHandler<PatchChangeRequest>(delivery =>
         {
-            updates.OnNext(state => Change(delivery, state));
+            incomingUpdates.OnNext(state => Change(delivery, state));
             return delivery.Processed();
         });
 
         dataChangedStream = store
             .Skip(1)
-            .Where(x => !Hub.Address.Equals(x.ChangedBy))
+            .Where(x => !Hub.Address.Equals(x.ChangedBy) || !Reference.Equals(x.Reference))
             .Select(r => GetDataChanged(r))
             .Where(x => x?.Change != null);
-        patchRequestStream = store
-            .Skip(1)
-            .Where(x => Hub.Address.Equals(x.ChangedBy))
+
+        var myOutgoingUpdates = store
+            .Where(x => Id.Equals(x.ChangedBy) && Reference.Equals(x.Reference))
+            .Skip(1);
+
+        var backTransformation =
+            backfeed ?? reduceManager?.GetBackTransformation<TOriginalStream>();
+        Synchronization =
+            backTransformation == null
+                ? Observable.Empty<ChangeItem<TOriginalStream>>()
+                : myOutgoingUpdates.Select(x => x.SetValue(backTransformation(x.Value)));
+
+        patchRequestStream = myOutgoingUpdates
             .Select(r => GetDataChanged(r))
             .Where(x => x?.Change != null)
             .Select(x => new PatchChangeRequest(x.Address, x.Reference, (JsonPatch)x.Change));
@@ -96,11 +125,22 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
 
     private ChangeItem<TStream> Change(IMessageDelivery<PatchChangeRequest> delivery, TStream state)
     {
+        var log = new ActivityLog(ActivityCategory.DataUpdate);
         var patched = delivery.Message.Change.Apply(state, Hub.JsonSerializerOptions);
         if (patched == null)
-            throw new InvalidOperationException();
+        {
+            new ChangeItem<TStream>(Id, Reference, state, delivery.Sender, Hub.Version)
+            {
+                Log = log
+            };
+        }
 
-        return new ChangeItem<TStream>(Id, Reference, patched, delivery.Sender, Hub.Version);
+        return (
+            new ChangeItem<TStream>(Id, Reference, patched, delivery.Sender, Hub.Version)
+            {
+                Log = log.Finish()
+            }
+        );
     }
 
     public void RegisterMessageHandler<TMessage>(
@@ -160,11 +200,6 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
         updateSubscription?.Dispose();
     }
 
-    public void Synchronize(ChangeItem<TStream> changeItem)
-    {
-        updates.OnNext(s => Merge(s, changeItem));
-    }
-
     private DataChangedEvent GetDataChanged(ChangeItem<TStream> change)
     {
         var fullChange = change.Value;
@@ -188,7 +223,7 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
         if (Current == null)
             Initialize(GetFullState(request));
         else
-            updates.OnNext(s => Merge(s, ParseDataChangedFromLastSynchronized(request)));
+            incomingUpdates.OnNext(s => Merge(s, ParseDataChangedFromLastSynchronized(request)));
     }
 
     private ChangeItem<TStream> ParseDataChangedFromLastSynchronized(DataChangedEvent request)
@@ -225,22 +260,27 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
 
     public TStream Current { get; private set; }
 
-    public ChangeStream<TStream> Initialize(TStream initial)
+    public IObservable<ChangeItem<TOriginalStream>> Synchronization { get; }
+
+    public void Initialize(TStream initial) =>
+        Initialize(new ChangeItem<TStream>(Id, Reference, initial, null, Hub.Version));
+
+    private void Initialize(ChangeItem<TStream> initial)
     {
         if (initial == null)
             throw new ArgumentNullException(nameof(initial));
-        Current = initial;
+        if (Current != null)
+            throw new InvalidOperationException("Already initialized");
+
+        Current = initial.Value;
         Disposables.Add(
-            updates
-                .StartWith(x => new ChangeItem<TStream>(Id, Reference, initial, null, Hub.Version))
-                .Scan(
-                    new ChangeItem<TStream>(Id, Reference, initial, null, Hub.Version),
-                    (value, update) => update(value.Value)
-                )
+            incomingUpdates
+                .StartWith(_ => initial)
+                .Select(updateFunc => updateFunc(Current))
                 .Subscribe(store)
         );
 
-        return this;
+        initialized.SetResult();
     }
 
     private JsonPatch GetPatch(TStream fullChange)
@@ -284,12 +324,12 @@ public record ChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStr
             ?.Invoke(delivery);
     }
 
-    public void Update(Func<TStream, ChangeItem<TStream>> update)
+    public void Synchronize(Func<TStream, ChangeItem<TStream>> update)
     {
-        updates.OnNext(update);
+        incomingUpdates.OnNext(update);
     }
 
-    private ChangeItem<TStream> Merge(TStream current, ChangeItem<TStream> changeItem)
+    private ChangeItem<TStream> Merge(TStream _, ChangeItem<TStream> changeItem)
     {
         //TODO Roland Bürgi 2024-05-06: Apply some merge logic
         return changeItem;

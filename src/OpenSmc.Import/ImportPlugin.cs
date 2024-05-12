@@ -51,7 +51,7 @@ public class ImportPlugin : MessageHubPlugin, IMessageHandlerAsync<ImportRequest
         CancellationToken cancellationToken
     )
     {
-        activityService.Start();
+        activityService.Start(ActivityCategory.Import);
         ActivityLog log;
 
         try

@@ -2,4 +2,9 @@
 
 namespace OpenSmc.Activities;
 
-public record LogMessage(string Message, LogLevel LogLevel, DateTime Timestamp, string CategoryName, IDictionary<string, object> Scopes);
+public record LogMessage(string Message, LogLevel LogLevel)
+{
+    public DateTime Timestamp { get; init; } = DateTime.UtcNow;
+    public string CategoryName { get; init; }
+    public IReadOnlyDictionary<string, object> Scopes { get; init; }
+}

@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json.Nodes;
 
 namespace OpenSmc.Data;
@@ -9,23 +10,49 @@ public abstract record WorkspaceReference<TReference> : WorkspaceReference;
 
 public record EntityStore
 {
+    public EntityStore() { }
+
+    public EntityStore(IReadOnlyDictionary<string, InstanceCollection> collections) =>
+        Collections = collections.ToImmutableDictionary();
+
     public ImmutableDictionary<string, InstanceCollection> Collections { get; init; } =
         ImmutableDictionary<string, InstanceCollection>.Empty;
 
-    public EntityStore Merge(EntityStore s2) =>
+    public EntityStore Merge(EntityStore updated) =>
         this with
         {
             Collections = Collections.SetItems(
                 Collections
                     .Select(kvp => new KeyValuePair<string, InstanceCollection>(
                         kvp.Key,
-                        kvp.Value.Merge(s2.Collections.GetValueOrDefault(kvp.Key))
+                        kvp.Value.Merge(updated.Collections.GetValueOrDefault(kvp.Key))
                     ))
-                    .Concat(s2.Collections.Where(kvp => !Collections.ContainsKey(kvp.Key)))
+                    .Concat(updated.Collections.Where(kvp => !Collections.ContainsKey(kvp.Key)))
                     .Where(x => x.Value.Instances.Count > 0)
                     .ToImmutableDictionary()
             )
         };
+
+    public EntityStore Merge(WorkspaceReference reference, InstanceCollection updated)
+    {
+        //TODO Roland Bürgi 2024-05-12: Generalize this so that it could be used for any reference
+        var reduced = (InstanceCollection)Reduce(reference);
+        var collectionName = reference switch
+        {
+            CollectionReference collectionReference => collectionReference.Collection,
+            _
+                => throw new NotSupportedException(
+                    $"reducer type {reference.GetType().FullName} not supported"
+                )
+        };
+        return this with
+        {
+            Collections = Collections.SetItem(
+                ((CollectionReference)reference).Collection,
+                reduced == null ? updated : reduced.Merge(updated)
+            )
+        };
+    }
 
     public EntityStore Update(
         string collection,
@@ -118,6 +145,11 @@ public record CollectionsReference(IReadOnlyCollection<string> Collections)
     public string Path => $"$[{Collections.Select(c => $"'{c}'").Aggregate((x, y) => $"{x},{y}")}]";
 
     public override string ToString() => Path;
+
+    public virtual bool Equals(CollectionsReference other) =>
+        other != null && Collections.SequenceEqual(other.Collections);
+
+    public override int GetHashCode() => Collections.Aggregate(17, (a, b) => a ^ b.GetHashCode());
 }
 
 public record PartitionedCollectionsReference(

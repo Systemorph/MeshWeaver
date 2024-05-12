@@ -1,3 +1,5 @@
+using OpenSmc.Activities;
+
 namespace OpenSmc.Data.Serialization;
 
 public interface IChangeItem
@@ -18,4 +20,6 @@ public record ChangeItem<TStream>(
 {
     public ChangeItem<TReduced> SetValue<TReduced>(TReduced value) =>
         new(Address, Reference, value, ChangedBy, Version);
+
+    public ActivityLog Log { get; init; }
 }

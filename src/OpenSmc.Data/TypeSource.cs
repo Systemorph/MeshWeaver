@@ -1,7 +1,9 @@
-﻿using System.Collections.Immutable;
+﻿using System.Collections;
+using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
 using System.Reflection;
+using AngleSharp.Common;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Domain;
@@ -107,6 +109,7 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
 {
     protected TypeSource(IMessageHub hub, Type ElementType, object DataSource)
     {
+        this.hub = hub;
         this.ElementType = ElementType;
         this.DataSource = DataSource;
         var typeRegistry = hub
@@ -115,6 +118,7 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
         CollectionName = typeRegistry.TryGetTypeName(ElementType, out var typeName)
             ? typeName
             : ElementType.FullName;
+        Workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
         Key = KeyFunctionBuilder.GetKeyFunction(ElementType);
     }
 
@@ -125,6 +129,7 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
     protected Func<object, object> Key { get; init; }
 
     protected TTypeSource This => (TTypeSource)this;
+    protected IWorkspace Workspace { get; }
 
     public virtual InstanceCollection Update(ChangeItem<WorkspaceState> workspace)
     {
@@ -134,41 +139,57 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
     }
 
     private IDisposable workspaceSubscription;
+    private readonly IMessageHub hub;
 
     protected virtual InstanceCollection UpdateImpl(InstanceCollection myCollection) =>
         myCollection;
 
     ITypeSource ITypeSource.WithInitialData(
-        Func<CancellationToken, Task<IEnumerable<object>>> initialization
+        Func<
+            WorkspaceReference<InstanceCollection>,
+            CancellationToken,
+            Task<IEnumerable<object>>
+        > initialization
     ) => WithInitialData(initialization);
 
     public TTypeSource WithInitialData(
-        Func<CancellationToken, Task<IEnumerable<object>>> initialization
+        Func<
+            WorkspaceReference<InstanceCollection>,
+            CancellationToken,
+            Task<IEnumerable<object>>
+        > initialization
     ) => This with { InitializationFunction = initialization };
 
     protected Func<
+        WorkspaceReference<InstanceCollection>,
         CancellationToken,
         Task<IEnumerable<object>>
-    > InitializationFunction { get; init; } = _ => Task.FromResult(Enumerable.Empty<object>());
+    > InitializationFunction { get; init; } = (_, _) => Task.FromResult(Enumerable.Empty<object>());
 
     public Type ElementType { get; init; }
     public object DataSource { get; init; }
     public string CollectionName { get; init; }
 
-    public virtual async Task<InstanceCollection> InitializeAsync(
+    Task<InstanceCollection> ITypeSource.InitializeAsync(
+        WorkspaceReference<InstanceCollection> reference,
+        CancellationToken cancellationToken
+    ) => InitializeAsync(reference, cancellationToken);
+
+    protected virtual async Task<InstanceCollection> InitializeAsync(
+        WorkspaceReference<InstanceCollection> reference,
         CancellationToken cancellationToken
     )
     {
-        var initialData = await InitializeDataAsync(cancellationToken);
-        return new()
-        {
-            Instances = initialData.ToImmutableDictionary(GetKey, x => x),
-            GetKey = GetKey
-        };
+        return new InstanceCollection(
+            await InitializeDataAsync(reference, cancellationToken),
+            GetKey
+        );
     }
 
-    private Task<IEnumerable<object>> InitializeDataAsync(CancellationToken cancellationToken) =>
-        InitializationFunction(cancellationToken);
+    private Task<IEnumerable<object>> InitializeDataAsync(
+        WorkspaceReference<InstanceCollection> reference,
+        CancellationToken cancellationToken
+    ) => InitializationFunction(reference, cancellationToken);
 
     public void Dispose()
     {

@@ -4,7 +4,7 @@ namespace OpenSmc.Activities;
 
 public interface IActivityService : ILogger
 {
-    string Start();
+    string Start(string category);
     void ChangeStatus(string status);
     bool IsActivityRunning();
     string GetCurrentActivityId();

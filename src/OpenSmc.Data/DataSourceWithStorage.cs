@@ -31,19 +31,6 @@ public abstract record DataSourceWithStorage<TDataSource>(
         return Storage.StartTransactionAsync(cancellationToken);
     }
 
-    public override IEnumerable<ChangeStream<EntityStore>> Initialize()
-    {
-        Workspace.Stream.Subscribe(Update);
-
-        return base.Initialize();
-    }
-
-    private void Update(ChangeItem<WorkspaceState> workspace)
-    {
-        // TODO V10: Should see that there are actual changes ==> no reducer applied here. (25.03.2024, Roland Bürgi)
-        persistenceHub.Schedule(ct => UpdateAsync(workspace, ct));
-    }
-
     protected virtual async Task UpdateAsync(
         ChangeItem<WorkspaceState> workspace,
         CancellationToken cancellationToken

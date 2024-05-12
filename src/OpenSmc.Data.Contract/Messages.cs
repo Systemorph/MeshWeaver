@@ -1,4 +1,5 @@
 ﻿using Json.Patch;
+using OpenSmc.Activities;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
@@ -27,7 +28,7 @@ public record PatchChangeRequest(object Address, object Reference, JsonPatch Cha
     : DataChangeRequest,
         IWorkspaceMessage;
 
-public record DataChangeResponse(long Version, DataChangeStatus Status, string Message = null);
+public record DataChangeResponse(long Version, DataChangeStatus Status, ActivityLog Log);
 
 public enum DataChangeStatus
 {

@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Activities;
 using OpenSmc.Data.Persistence;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
@@ -17,6 +18,7 @@ public static class DataPluginExtensions
     {
         var existingLambdas = config.GetListOfLambdas();
         var ret = config
+            .AddActivities()
             .WithServices(sc => sc.AddScoped<IWorkspace, Workspace>().AddScoped<DataPlugin>())
             .WithSerialization(serialization =>
                 serialization.WithOptions(options =>
@@ -87,9 +89,6 @@ public static class DataPluginExtensions
             id,
             hub => configuration.Invoke(new PartitionedHubDataSource(id, hub))
         );
-
-    public static DataContext FromHub(this DataContext dataSource, object address) =>
-        FromHub(dataSource, address, ds => ds.SynchronizeAll());
 
     public static DataContext FromHub(
         this DataContext dataSource,
