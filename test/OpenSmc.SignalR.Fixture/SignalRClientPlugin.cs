@@ -45,6 +45,8 @@ public class SignalRClientPlugin : MessageHubPlugin
         Register(RouteMessageThroughSignalRAsync);
     }
 
+    public override bool Filter(IMessageDelivery d) => d.State == MessageDeliveryState.NotFound; // HACK V10: this is bad to rely on RoutePlugin with missed routes (2024/05/02, Dmitry Kalabin)
+
     public override async Task StartAsync(CancellationToken cancellationToken)
     {
         logger.LogDebug("Starting SignalR Client plugin at address {address}", Address);
