@@ -29,4 +29,13 @@ public class SignalRClientPlugin : MessageHubPlugin
             )
             .Build();
     }
+
+    public override async Task StartAsync(CancellationToken cancellationToken)
+    {
+        logger.LogDebug("Starting SignalR Client plugin at address {address}", Address);
+
+        await base.StartAsync(cancellationToken);
+
+        logger.LogDebug("SignalR Client plugin at address {address} is ready to process messages.", Address);
+    }
 }
