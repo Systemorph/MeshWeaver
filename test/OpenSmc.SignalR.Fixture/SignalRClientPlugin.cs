@@ -3,12 +3,14 @@ using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Messaging;
+using OpenSmc.Serialization;
 
 namespace OpenSmc.SignalR.Fixture;
 
 public class SignalRClientPlugin : MessageHubPlugin
 {
     private HubConnection Connection { get; set; }
+    private readonly IDisposable onMessageReceivedSubscription;
 
     private static readonly TimeSpan signalRServerDebugTimeout = TimeSpan.FromMinutes(7);
     private readonly ILogger<SignalRClientPlugin> logger;
@@ -33,6 +35,11 @@ public class SignalRClientPlugin : MessageHubPlugin
 
         if (Debugger.IsAttached)
             Connection.ServerTimeout = signalRServerDebugTimeout;
+
+        onMessageReceivedSubscription = Connection.On<MessageDelivery<RawJson>>("HandleEvent", args =>
+        {
+            Hub.DeliverMessage(args);
+        });
     }
 
     public override async Task StartAsync(CancellationToken cancellationToken)
@@ -50,6 +57,7 @@ public class SignalRClientPlugin : MessageHubPlugin
     {
         await base.DisposeAsync();
 
+        onMessageReceivedSubscription?.Dispose();
         try
         {
             await Connection.StopAsync(); // TODO V10: think about timeout for this (2023/09/27, Dmitry Kalabin)
