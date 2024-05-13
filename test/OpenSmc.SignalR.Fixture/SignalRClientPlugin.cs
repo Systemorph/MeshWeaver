@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Messaging;
 using OpenSmc.Serialization;
+using static OpenSmc.SignalR.Fixture.SignalRTestClientConfig;
 
 namespace OpenSmc.SignalR.Fixture;
 
@@ -40,6 +41,8 @@ public class SignalRClientPlugin : MessageHubPlugin
         {
             Hub.DeliverMessage(args);
         });
+
+        Register(RouteMessageThroughSignalRAsync);
     }
 
     public override async Task StartAsync(CancellationToken cancellationToken)
@@ -52,6 +55,9 @@ public class SignalRClientPlugin : MessageHubPlugin
 
         logger.LogDebug("SignalR Client plugin at address {address} is ready to process messages.", Address);
     }
+
+    private Task<IMessageDelivery> RouteMessageThroughSignalRAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
+        => SendThroughSignalR(delivery.Package(Hub.JsonSerializerOptions), Connection, cancellationToken);
 
     public override async Task DisposeAsync()
     {
