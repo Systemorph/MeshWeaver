@@ -1,6 +1,6 @@
-import { MessageHub } from "./MessageHub";
+import { IMessageHub } from "../MessageHub";
 
 export class AddedToContext {
-    constructor(public context: MessageHub) {
+    constructor(public context: IMessageHub) {
     }
 }

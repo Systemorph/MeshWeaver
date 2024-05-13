@@ -12,13 +12,13 @@ import jsonPatch from "fast-json-patch";
 import { JsonPatch } from "./contract/JsonPatch";
 import { PatchChangeRequest } from "./contract/PatchChangeRequest";
 import { Workspace } from "./Workspace";
-import { UiHub } from "@open-smc/app/src/UiHub";
+import { MessageHub } from '@open-smc/messaging/src/MessageHub';
 
 export class RemoteWorkspace<T = unknown> extends Workspace<T> {
     subscription = new Subscription();
 
     constructor(
-        private uiHub: UiHub,
+        private uiHub: MessageHub,
         private reference: WorkspaceReference,
         name?: string
     ) {

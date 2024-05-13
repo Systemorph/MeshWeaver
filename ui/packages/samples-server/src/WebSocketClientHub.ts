@@ -1,6 +1,6 @@
 import { Observable, Subscription } from "rxjs";
 import type { MessageDelivery } from "@open-smc/messaging/src/api/MessageDelivery";
-import type { MessageHub } from "@open-smc/messaging/src/api/MessageHub";
+import type { IMessageHub } from "@open-smc/messaging/src/api/MessageHub";
 import { WebSocketClient, WebSocketCustomListener, WebSocketServer } from "vite";
 import { methodName } from "./contract";
 
@@ -9,7 +9,7 @@ import { methodName } from "./contract";
     return {}
 }
 
-export class WebSocketClientHub extends Observable<MessageDelivery> implements MessageHub {
+export class WebSocketClientHub extends Observable<MessageDelivery> implements IMessageHub {
     constructor(private webSocketClient: WebSocketClient, webSocket: WebSocketServer) {
         super(subscriber => {
             const handler: WebSocketCustomListener<MessageDelivery> =
