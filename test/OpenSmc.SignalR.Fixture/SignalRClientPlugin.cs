@@ -56,7 +56,11 @@ public class SignalRClientPlugin : MessageHubPlugin
         await base.StartAsync(cancellationToken);
 
         logger.LogDebug("SignalR Client plugin at address {address} is ready to process messages.", Address);
+        initializeTaskCompletionSource.SetResult();
     }
+
+    private readonly TaskCompletionSource initializeTaskCompletionSource = new();
+    public override Task Initialized => initializeTaskCompletionSource.Task;
 
     private Task<IMessageDelivery> RouteMessageThroughSignalRAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
         => SendThroughSignalR(delivery.Package(Hub.JsonSerializerOptions), Connection, cancellationToken);
