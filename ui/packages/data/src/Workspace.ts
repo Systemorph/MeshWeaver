@@ -5,7 +5,6 @@ import { WorkspaceAction, workspaceReducer } from "./workspaceReducer";
 export class Workspace<T = unknown> extends Observable<T> implements Observer<WorkspaceAction> {
     protected store: Store<T>;
     protected store$: Observable<T>;
-    lastAction: WorkspaceAction;
 
     constructor(state?: T, public name?: string) {
         super(subscriber => this.store$.subscribe(subscriber));
@@ -28,7 +27,6 @@ export class Workspace<T = unknown> extends Observable<T> implements Observer<Wo
     }
 
     next(value: WorkspaceAction) {
-        this.lastAction = value;
         this.store.dispatch(value);
     }
 

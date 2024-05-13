@@ -3,10 +3,11 @@ import { LayoutAreaReference } from "@open-smc/data/src/contract/LayoutAreaRefer
 import { EntityStore } from "@open-smc/data/src/contract/EntityStore";
 import { RemoteWorkspace } from "@open-smc/data/src/RemoteWorkspace";
 import { EntityStoreRenderer } from "./EntityStoreRenderer";
-import { UiHub } from "../UiHub";
+import { MessageHub } from "@open-smc/messaging/src/MessageHub";
+
 
 export const renderLayoutAreaReference = (
-    uiHub: UiHub,
+    uiHub: MessageHub,
     reference: LayoutAreaReference
 ) => {
     const subscription = new Subscription();

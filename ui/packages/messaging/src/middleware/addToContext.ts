@@ -1,4 +1,4 @@
-import { MessageHub } from "../api/MessageHub";
+import { IMessageHub } from "../MessageHub";
 import { filterByTarget } from "../operators/filterByTarget";
 import { addSender } from "../operators/addSender";
 import { messageOfType } from "../operators/messageOfType";
@@ -7,7 +7,7 @@ import { AddToContextRequest } from "../api/AddToContextRequest";
 import { AddedToContext } from "../api/AddedToContext";
 import { filter } from "rxjs";
 
-export function addToContext(context: MessageHub, hub: MessageHub, address: any) {
+export function addToContext(context: IMessageHub, hub: IMessageHub, address: any) {
     const subscription = context.pipe(filterByTarget(address)).subscribe(hub);
 
     subscription.add(hub.pipe(addSender(address)).subscribe(context));

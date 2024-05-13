@@ -1,19 +1,17 @@
-import { filter, map, Observable, ReplaySubject, Subject, take } from "rxjs";
-import { MessageDelivery } from "@open-smc/messaging/src/api/MessageDelivery";
-import { UiAddress } from "./contract/UiAddress";
+import { filter, map, Observable, Observer, ReplaySubject, Subject, take } from "rxjs";
+import { MessageDelivery } from "./api/MessageDelivery";
 import { v4 } from "uuid";
-import { Request } from "@open-smc/messaging/src/api/Request";
-import { messageOfType } from "@open-smc/messaging/src/operators/messageOfType";
-import { unpack } from "@open-smc/messaging/src/operators/unpack";
-import { MessageHub } from "@open-smc/messaging/src/api/MessageHub";
+import { messageOfType } from "./operators/messageOfType";
+import { unpack } from "./operators/unpack";
+import { Request } from "./api/Request";
 
-export class UiHub extends Observable<MessageDelivery> implements MessageHub {
+export type IMessageHub = Observable<MessageDelivery> & Observer<MessageDelivery>;
+
+export class MessageHub extends Observable<MessageDelivery> implements IMessageHub {
     readonly input = new Subject<MessageDelivery>();
     readonly output = new Subject<MessageDelivery>();
 
-    readonly address = new UiAddress(v4())
-
-    constructor() {
+    constructor(public readonly address?: unknown) {
         super(subscriber => this.output.subscribe(subscriber));
     }
 
@@ -44,12 +42,12 @@ export class UiHub extends Observable<MessageDelivery> implements MessageHub {
 
         this.input
             .pipe(filter(messageOfType(message.responseType)))
-            .pipe(filter(({properties}) => properties?.requestId === id))
+            .pipe(filter(({ properties }) => properties?.requestId === id))
             .pipe(take(1))
             .pipe(map(unpack))
             .subscribe(result);
 
-        this.post(message, {id});
+        this.post(message, { id });
 
         return result.pipe(take(1));
     }

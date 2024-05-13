@@ -10,15 +10,16 @@ import { makeSignalrConnection } from "./signalr/makeSignalrConnection";
 import { renderLayoutAreaReference } from "./store/renderLayoutAreaReference";
 import { LayoutAreaReference } from "@open-smc/data/src/contract/LayoutAreaReference";
 import { connectHubs } from "@open-smc/messaging/src/middleware/connectHubs";
-import { UiHub } from "./UiHub";
 import { SerializationMiddleware } from "@open-smc/middleware/src/SerializationMiddleware";
+import { v4 } from "uuid";
+import { MessageHub } from "@open-smc/messaging/src/MessageHub";
 
 registerControlResolver(applicationControlsResolver);
 
 export function AppPage() {
     const {pathname} = useLocation();
     const [signalrHub] = useState(new SignalrHub(makeSignalrConnection()));
-    const [uiHub] = useState(new UiHub());
+    const [uiHub] = useState(new MessageHub(v4()));
 
     useEffect(() => {
        const subscription = connectHubs(signalrHub, uiHub);

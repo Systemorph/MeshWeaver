@@ -1,11 +1,11 @@
 import { v4 } from "uuid";
 import { filter, from, map, Observable, ReplaySubject, take } from "rxjs";
-import { MessageHub } from "./api/MessageHub";
+import { IMessageHub } from "./MessageHub";
 import { messageOfType } from "./operators/messageOfType";
 import { Request } from "./api/Request";
 import { unpack } from "./operators/unpack";
 
-export const sendRequest = <T>(hub: MessageHub, message: Request<T>): Observable<T> => {
+export const sendRequest = <T>(hub: IMessageHub, message: Request<T>): Observable<T> => {
     const id = v4();
 
     const result = new ReplaySubject<T>();
