@@ -57,6 +57,8 @@ public class SignalRBasicTest : TestBase, IClassFixture<WebApplicationFactory<Pr
 
     public override async Task DisposeAsync()
     {
+        await Client.DisposeAsync();
+
         await base.DisposeAsync();
     }
 }
