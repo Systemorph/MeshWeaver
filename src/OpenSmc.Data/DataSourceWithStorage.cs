@@ -32,7 +32,7 @@ public abstract record DataSourceWithStorage<TDataSource>(
     }
 
     protected virtual async Task UpdateAsync(
-        ChangeItem<WorkspaceState> workspace,
+        ChangeItem<EntityStore> workspace,
         CancellationToken cancellationToken
     )
     {

@@ -74,6 +74,8 @@ public record EntityStore
                 => Update(entityReference.Collection, c => c.Update(entityReference.Id, value)),
             CollectionReference collectionReference
                 => Update(collectionReference.Collection, c => c.Merge((InstanceCollection)value)),
+            WorkspaceReference<EntityStore> collectionsReference => Merge((EntityStore)value),
+
             _
                 => throw new NotSupportedException(
                     $"reducer type {reference.GetType().FullName} not supported"

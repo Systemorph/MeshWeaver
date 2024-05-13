@@ -1,12 +1,7 @@
-﻿using System.Collections.Concurrent;
-using System.Collections.Immutable;
-using System.Net.WebSockets;
+﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reflection;
-using System.Runtime.CompilerServices;
-using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.VisualBasic;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
@@ -86,11 +81,11 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
         var reference = GetReference();
         var stream = Workspace.GetChangeStream(reference);
         Streams = Streams.Add(stream);
-        stream.Synchronization.Subscribe(Synchronize);
+        stream.Skip(1).Subscribe(Synchronize);
         Hub.Schedule(cancellationToken => InitializeAsync(stream, cancellationToken));
     }
 
-    private void Synchronize(ChangeItem<WorkspaceState> item)
+    private void Synchronize(ChangeItem<EntityStore> item)
     {
         if (!Id.Equals(item.ChangedBy))
             foreach (var typeSource in TypeSources.Values)
@@ -98,7 +93,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
     }
 
     private async Task InitializeAsync(
-        IChangeStream<EntityStore, WorkspaceState> stream,
+        IChangeStream<EntityStore> stream,
         CancellationToken cancellationToken
     )
     {

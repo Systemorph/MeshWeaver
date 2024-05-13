@@ -11,6 +11,11 @@ using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Import;
 
+public static class ActivityCategory
+{
+    public const string Import = nameof(Import);
+}
+
 public class ImportPlugin : MessageHubPlugin, IMessageHandlerAsync<ImportRequest>
 {
     private ImportManager importManager;

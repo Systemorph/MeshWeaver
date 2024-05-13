@@ -26,7 +26,11 @@ public record DeleteDataRequest(IReadOnlyCollection<object> Elements)
 
 public record PatchChangeRequest(object Address, object Reference, JsonPatch Change)
     : DataChangeRequest,
-        IWorkspaceMessage;
+        IWorkspaceMessage
+{
+    public PatchChangeRequest(DataChangedEvent dataChanged)
+        : this(dataChanged.Address, dataChanged.Reference, (JsonPatch)dataChanged.Change) { }
+}
 
 public record DataChangeResponse(long Version, DataChangeStatus Status, ActivityLog Log);
 
