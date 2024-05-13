@@ -34,6 +34,8 @@ public class SignalRClientPlugin : MessageHubPlugin
     {
         logger.LogDebug("Starting SignalR Client plugin at address {address}", Address);
 
+        await Connection.StartAsync(cancellationToken);
+
         await base.StartAsync(cancellationToken);
 
         logger.LogDebug("SignalR Client plugin at address {address} is ready to process messages.", Address);
@@ -42,5 +44,14 @@ public class SignalRClientPlugin : MessageHubPlugin
     public override async Task DisposeAsync()
     {
         await base.DisposeAsync();
+
+        try
+        {
+            await Connection.StopAsync(); // TODO V10: think about timeout for this (2023/09/27, Dmitry Kalabin)
+        }
+        finally
+        {
+            await Connection.DisposeAsync();
+        }
     }
 }
