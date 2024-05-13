@@ -1,5 +1,10 @@
-﻿namespace OpenSmc.SignalR.Fixture;
+﻿using OpenSmc.Messaging;
 
-public class SignalRClientPlugin
+namespace OpenSmc.SignalR.Fixture;
+
+public class SignalRClientPlugin : MessageHubPlugin
 {
+    public SignalRClientPlugin(IMessageHub hub) : base(hub)
+    {
+    }
 }
