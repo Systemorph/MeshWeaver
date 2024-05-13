@@ -17,7 +17,7 @@ public interface IWorkspace : IAsyncDisposable
 
     void Rollback();
     WorkspaceState CreateState(EntityStore deserialize);
-    void Initialize();
+    internal void Initialize();
     IChangeStream<TReduced, WorkspaceState> Subscribe<TReduced>(
         object address,
         WorkspaceReference<TReduced> reference
