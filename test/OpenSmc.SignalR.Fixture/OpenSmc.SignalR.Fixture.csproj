@@ -2,4 +2,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OpenSmc.Messaging.Hub\OpenSmc.Messaging.Hub.csproj" />
+  </ItemGroup>
 </Project>
