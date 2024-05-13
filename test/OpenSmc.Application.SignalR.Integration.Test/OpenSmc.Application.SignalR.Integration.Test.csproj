@@ -1,11 +1,11 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
-    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\OpenSmc.Application.Contract\OpenSmc.Application.Contract.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Application.Host\OpenSmc.Application.Host.csproj" />
     <ProjectReference Include="..\OpenSmc.Fixture\OpenSmc.Fixture.csproj" />
+    <ProjectReference Include="..\OpenSmc.SignalR.Fixture\OpenSmc.SignalR.Fixture.csproj" />
   </ItemGroup>
 </Project>
