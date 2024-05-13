@@ -10,5 +10,8 @@ public class SignalRClientPlugin : MessageHubPlugin
     public SignalRClientPlugin(IMessageHub hub, ILogger<SignalRClientPlugin> logger) : base(hub)
     {
         this.logger = logger;
+
+        var configureClient = hub.Configuration.Get<Func<SignalRClientConfiguration, SignalRClientConfiguration>>();
+        var signalRClientConfiguration = configureClient(new());
     }
 }
