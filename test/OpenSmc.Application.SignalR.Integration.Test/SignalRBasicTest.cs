@@ -12,8 +12,8 @@ using OpenSmc.Serialization;
 using OpenSmc.ServiceProvider;
 using Xunit;
 using Xunit.Abstractions;
-using static OpenSmc.Application.SignalR.Integration.Test.TestSetup.SignalRTestClientConfig;
 using static OpenSmc.Application.SignalR.SignalRExtensions;
+using static OpenSmc.SignalR.Fixture.SignalRTestClientConfig;
 
 namespace OpenSmc.Application.SignalR.Integration.Test;
 
