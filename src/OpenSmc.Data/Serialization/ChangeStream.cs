@@ -91,7 +91,7 @@ public record ChangeStream<TStream, TReference>
         this.Reference = reference;
         this.Workspace = workspace;
         if (store != null)
-            Disposables.Add(store.Subscribe(x => Current = x));
+            Disposables.Add(store.Skip(1).Subscribe(x => Current = x));
         this.reduceManager = reduceManager;
     }
 

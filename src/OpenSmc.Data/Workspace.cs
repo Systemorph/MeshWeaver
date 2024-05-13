@@ -106,6 +106,14 @@ public class Workspace : IWorkspace
         where TReference : WorkspaceReference<TReduced>
     {
         var stream = (IChangeStream<TReduced, TReference>)GetChangeStream(reference);
+        if (!Id.Equals(Hub.Address))
+            new ChangeStream<TReduced, TReference>(
+                address,
+                reference,
+                this,
+                ReduceManager.ReduceTo<TReduced>(),
+                stream
+            );
 
         stream.AddDisposable(
             new Disposables.AnonymousDisposable(
