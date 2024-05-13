@@ -38,4 +38,9 @@ public class SignalRClientPlugin : MessageHubPlugin
 
         logger.LogDebug("SignalR Client plugin at address {address} is ready to process messages.", Address);
     }
+
+    public override async Task DisposeAsync()
+    {
+        await base.DisposeAsync();
+    }
 }
