@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.VisualBasic;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
@@ -19,7 +20,7 @@ public interface IDataSource : IAsyncDisposable
     object Id { get; }
     IReadOnlyCollection<DataChangeRequest> Change(DataChangeRequest request);
     void Initialize();
-    Task Initialized { get; }
+    ValueTask<EntityStore> Initialized { get; }
 }
 
 public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDataSource
@@ -29,9 +30,13 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
 
     protected virtual TDataSource This => (TDataSource)this;
 
-    protected ImmutableList<IChangeStream> Streams { get; set; } = [];
+    protected ImmutableList<IChangeStream<EntityStore>> Streams { get; set; } = [];
 
-    public Task Initialized => Task.WhenAll(Streams.Select(ts => ts.Initialized));
+    public ValueTask<EntityStore> Initialized =>
+        Streams
+            .ToAsyncEnumerable()
+            .SelectAwait(async stream => await stream.Initialized)
+            .AggregateAsync(new EntityStore(), (store, el) => store.Merge(el));
 
     IEnumerable<ITypeSource> IDataSource.TypeSources => TypeSources.Values;
 
@@ -111,15 +116,8 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
                 new EntityStore(),
                 (store, selected) => store.Merge(selected.Reference, selected.Initialized)
             );
-        Workspace.Synchronize(
-            new ChangeItem<WorkspaceState>(
-                Id,
-                GetReference(),
-                Workspace.CreateState(initial),
-                Id,
-                Hub.Version
-            )
-        );
+
+        stream.Initialize(initial);
     }
 
     protected virtual WorkspaceReference<EntityStore> GetReference()

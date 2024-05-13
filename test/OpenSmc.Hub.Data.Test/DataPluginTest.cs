@@ -48,6 +48,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task InitializeTest()
     {
         var workspace = GetWorkspace(GetHost());
+        await workspace.Initialized;
         var response = await workspace.GetObservable<MyData>().FirstOrDefaultAsync();
         response.Should().BeEquivalentTo(initialData);
     }

@@ -20,7 +20,11 @@ public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace) : IAsync
             DataSourceBuilders = DataSourceBuilders.Add(id, dataSourceBuilder),
         };
 
-    public Task Initialized => Task.WhenAll(DataSources.Values.Select(ds => ds.Initialized));
+    public ValueTask<EntityStore> Initialized =>
+        DataSources
+            .Values.ToAsyncEnumerable()
+            .SelectAwait(async ds => await ds.Initialized)
+            .AggregateAsync(new EntityStore(), (store, el) => store.Merge(el));
     public ImmutableDictionary<object, DataSourceBuilder> DataSourceBuilders { get; set; } =
         ImmutableDictionary<object, DataSourceBuilder>.Empty;
     internal ReduceManager<WorkspaceState> ReduceManager { get; init; }

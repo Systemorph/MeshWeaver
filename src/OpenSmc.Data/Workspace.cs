@@ -19,7 +19,7 @@ public class Workspace : IWorkspace
     }
 
     public WorkspaceReference Reference { get; } = new WorkspaceStateReference();
-    private WorkspaceState State => myChangeStream.Current;
+    private WorkspaceState State => myChangeStream.Current.Value;
 
     private readonly ConcurrentDictionary<string, ITypeSource> typeSources = new();
 
@@ -112,7 +112,8 @@ public class Workspace : IWorkspace
     public void Delete(IEnumerable<object> instances) =>
         RequestChange(new DeleteDataRequest(instances.ToArray()), Hub.Address, Reference);
 
-    public Task Initialized => DataContext.Initialized;
+    private readonly TaskCompletionSource initialized = new();
+    public Task Initialized => initialized.Task;
 
     public ReduceManager<WorkspaceState> ReduceManager { get; }
 
@@ -190,15 +191,20 @@ public class Workspace : IWorkspace
     {
         DataContext = Hub.GetDataConfiguration(ReduceManager);
 
-        Initialize(DataContext);
-    }
-
-    private void Initialize(DataContext dataContext)
-    {
         logger.LogDebug($"Starting data plugin at address {Id}");
-        dataContext.Initialize();
+        DataContext.Initialize();
 
-        logger.LogDebug("Initialized workspace in address {address}", Id);
+        logger.LogDebug("Started initialization of data context in address {address}", Id);
+
+        DataContext
+            .Initialized.AsTask()
+            .ContinueWith(task =>
+            {
+                logger.LogDebug("Finished initialization of data context in address {address}", Id);
+                myChangeStream.Initialize(CreateState(task.Result));
+
+                initialized.SetResult();
+            });
 
         foreach (var ts in DataContext.DataSources.Values.SelectMany(ds => ds.TypeSources))
             typeSources[ts.CollectionName] = ts;
