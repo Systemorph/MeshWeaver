@@ -42,9 +42,3 @@ public record ActivityLog(string Category)
         };
 }
 
-public static class ActivityCategory
-{
-    public const string DataUpdate = nameof(DataUpdate);
-    public const string Import = nameof(Import);
-    public const string Export = nameof(Export);
-}

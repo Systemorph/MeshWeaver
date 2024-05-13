@@ -28,7 +28,7 @@ public interface ITypeSource : IDisposable
         WorkspaceReference<InstanceCollection> reference,
         CancellationToken cancellationToken
     );
-    InstanceCollection Update(ChangeItem<WorkspaceState> workspace);
+    InstanceCollection Update(ChangeItem<EntityStore> workspace);
 }
 
 public interface IPartitionedTypeSource : ITypeSource

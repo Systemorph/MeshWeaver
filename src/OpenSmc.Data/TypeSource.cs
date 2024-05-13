@@ -131,7 +131,7 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
     protected TTypeSource This => (TTypeSource)this;
     protected IWorkspace Workspace { get; }
 
-    public virtual InstanceCollection Update(ChangeItem<WorkspaceState> workspace)
+    public virtual InstanceCollection Update(ChangeItem<EntityStore> workspace)
     {
         var myCollection = workspace.Value.Reduce(new CollectionReference(CollectionName));
 

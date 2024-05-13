@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
+using System.Reflection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
+using OpenSmc.Reflection;
 
 namespace OpenSmc.Data;
 
@@ -15,7 +17,13 @@ public class Workspace : IWorkspace
         this.activityService = activityService;
         this.logger = logger;
         ReduceManager = CreateReduceManager();
-        myChangeStream = new(Hub.Address, new WorkspaceStateReference(), Hub, ReduceManager, null);
+        myChangeStream = new ChangeStream<WorkspaceState, WorkspaceStateReference>(
+            Hub.Address,
+            new WorkspaceStateReference(),
+            this,
+            ReduceManager,
+            null
+        );
     }
 
     public WorkspaceReference Reference { get; } = new WorkspaceStateReference();
@@ -35,52 +43,69 @@ public class Workspace : IWorkspace
     /// <summary>
     /// Change stream belonging to the workspace.
     /// </summary>
-    private readonly ChangeStream<WorkspaceState, WorkspaceState> myChangeStream;
+    private readonly ChangeStream<WorkspaceState, WorkspaceStateReference> myChangeStream;
     private readonly IActivityService activityService;
 
-    public IChangeStream<TReduced, WorkspaceState> GetExternalChangeStream<TReduced>(
-        object address,
-        WorkspaceReference<TReduced> reference,
-        Func<TReduced, WorkspaceState> backfeed
+    public IChangeStream<TReduced> GetChangeStream<TReduced>(
+        WorkspaceReference<TReduced> reference
     ) =>
-        (IChangeStream<TReduced, WorkspaceState>)
+        (IChangeStream<TReduced>)
+            GetChangeStreamMethod
+                .MakeGenericMethod(typeof(TReduced), reference.GetType())
+                .Invoke(this, [reference]);
+
+    private static readonly MethodInfo GetChangeStreamMethod =
+        ReflectionHelper.GetMethodGeneric<Workspace>(x =>
+            x.GetChangeStream<object, WorkspaceReference<object>>(default)
+        );
+
+    public IChangeStream<TReduced, TReference> GetChangeStream<TReduced, TReference>(
+        TReference reference
+    )
+        where TReference : WorkspaceReference<TReduced>
+    {
+        var stream =
+            (IChangeStream<TReduced, TReference>)
+                streams.GetOrAdd(
+                    reference,
+                    _ => CreateChangeStream<TReduced, TReference>(reference)
+                );
+        return stream;
+    }
+
+    public IChangeStream<TReduced, TReference> GetExternalChangeStream<TReduced, TReference>(
+        object address,
+        TReference reference
+    )
+        where TReference : WorkspaceReference<TReduced> =>
+        (IChangeStream<TReduced, TReference>)
             externalStreams.GetOrAdd(
                 new(address, reference),
-                _ => CreateExternalChangeStream(address, reference, backfeed)
+                _ => CreateExternalChangeStream<TReduced, TReference>(address, reference)
             );
 
-    public IChangeStream<TReduced, WorkspaceState> GetChangeStream<TReduced>(
-        WorkspaceReference<TReduced> reference,
-        Func<TReduced, WorkspaceState> backfeed
-    ) =>
-        (IChangeStream<TReduced, WorkspaceState>)
-            streams.GetOrAdd(reference, _ => CreateChangeStream(reference, backfeed));
-
-    private IChangeStream CreateChangeStream<TReduced>(
-        WorkspaceReference<TReduced> reference,
-        Func<TReduced, WorkspaceState> backfeed
-    )
+    private IChangeStream CreateChangeStream<TReduced, TReference>(TReference reference)
+        where TReference : WorkspaceReference<TReduced>
     {
         var ret = ReduceManager.ReduceStream(myChangeStream, reference);
-        var changeStream = new ChangeStream<TReduced, WorkspaceState>(
+        var changeStream = new ChangeStream<TReduced, TReference>(
             Hub.Address,
             reference,
-            Hub,
+            this,
             ReduceManager.ReduceTo<TReduced>(),
-            backfeed,
             ret
         );
 
         return changeStream;
     }
 
-    private IChangeStream CreateExternalChangeStream<TReduced>(
+    private IChangeStream CreateExternalChangeStream<TReduced, TReference>(
         object address,
-        WorkspaceReference<TReduced> reference,
-        Func<TReduced, WorkspaceState> backfeed
+        TReference reference
     )
+        where TReference : WorkspaceReference<TReduced>
     {
-        var stream = GetChangeStream(reference, backfeed);
+        var stream = (IChangeStream<TReduced, TReference>)GetChangeStream(reference);
 
         stream.AddDisposable(
             new Disposables.AnonymousDisposable(
@@ -89,13 +114,26 @@ public class Workspace : IWorkspace
         );
 
         stream.AddDisposable(
-            stream.Subscribe<PatchChangeRequest>(e => Hub.Post(e, o => o.WithTarget(address)))
+            stream.Id.Equals(Hub.Address)
+                ? stream
+                    .ToDataChanged()
+                    .Subscribe(e =>
+                    {
+                        if (address.Equals(e.ChangedBy))
+                            return;
+                        Hub.Post(e, o => o.WithTarget(address));
+                    })
+                : stream
+                    .ToDataChanged()
+                    .Subscribe(e =>
+                    {
+                        if (address.Equals(e.ChangedBy))
+                            return;
+                        Hub.Post(new PatchChangeRequest(e), o => o.WithTarget(Hub.Address));
+                    })
         );
-        stream.AddDisposable(
-            stream.Subscribe<DataChangedEvent>(e => Hub.Post(e, o => o.WithTarget(address)))
-        );
-
-        stream.AddDisposable(stream.Synchronization.Subscribe(x => RequestChange(x)));
+        // <
+        //         stream.AddDisposable(stream.Synchronization.Subscribe(x => RequestChange(x)));
 
         Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(address));
 
@@ -126,23 +164,28 @@ public class Workspace : IWorkspace
             )
             .AddWorkspaceReference<PartitionedCollectionsReference, EntityStore>(
                 (ws, reference) => ws.ReduceImpl(reference),
-                CreateState
+                (ws, reference, update) =>
+                    update.SetValue(ws with { Store = ws.Store.Update(reference, update.Value) })
             )
             .AddWorkspaceReference<CollectionReference, InstanceCollection>(
                 (ws, reference) => ws.Store.ReduceImpl(reference),
-                null
+                (ws, reference, update) =>
+                    update.SetValue(ws with { Store = ws.Store.Update(reference, update.Value) })
             )
             .AddWorkspaceReference<CollectionsReference, EntityStore>(
                 (ws, reference) => ws.Store.ReduceImpl(reference),
-                CreateState
+                (ws, reference, update) =>
+                    update.SetValue(ws with { Store = ws.Store.Update(reference, update.Value) })
             )
             .AddWorkspaceReference<WorkspaceStoreReference, EntityStore>(
                 (ws, reference) => ws.Store,
-                CreateState
+                (ws, reference, update) =>
+                    update.SetValue(ws with { Store = ws.Store.Update(reference, update.Value) })
             )
             .AddWorkspaceReference<WorkspaceStateReference, WorkspaceState>(
                 (ws, reference) => ws,
-                ws => ws
+                (ws, reference, update) =>
+                    update.SetValue(ws with { Store = ws.Store.Merge(update.Value.Store) })
             )
             .ForReducedStream<EntityStore>(reduced =>
                 reduced
@@ -160,17 +203,17 @@ public class Workspace : IWorkspace
                     )
                     .AddWorkspaceReference<CollectionsReference, EntityStore>(
                         (ws, reference) => ws.ReduceImpl(reference),
-                        x => x
+                        null
                     )
                     .AddWorkspaceReference<WorkspaceStoreReference, EntityStore>(
                         (ws, reference) => ws,
-                        x => x
+                        null
                     )
             )
             .ForReducedStream<InstanceCollection>(reduced =>
                 reduced.AddWorkspaceReference<EntityReference, object>(
                     (ws, reference) => ws.Instances.GetValueOrDefault(reference.Id),
-                    x => new([x], State.GetTypeSource(x.GetType()).GetKey)
+                    null
                 )
             // .AddWorkspaceReference<PartitionedCollectionsReference, EntityStore>(
             //     (ws, reference) => ws.ReduceImpl(reference),
@@ -267,13 +310,27 @@ public class Workspace : IWorkspace
         return response.Ignored();
     }
 
-    public IChangeStream<TReduced, WorkspaceState> Subscribe<TReduced>(
+    public IChangeStream<TReduced> Subscribe<TReduced>(
         object address,
-        WorkspaceReference<TReduced> reference,
-        Func<TReduced, WorkspaceState> backfeed
+        WorkspaceReference<TReduced> reference
+    ) =>
+        (IChangeStream<TReduced>)
+            SubscribeMethod
+                .MakeGenericMethod(typeof(TReduced), reference.GetType())
+                .Invoke(this, [address, reference]);
+
+    private static readonly MethodInfo SubscribeMethod =
+        ReflectionHelper.GetMethodGeneric<Workspace>(x =>
+            x.Subscribe<object, WorkspaceReference<object>>(default, default)
+        );
+
+    public IChangeStream<TReduced, TReference> Subscribe<TReduced, TReference>(
+        object address,
+        TReference reference
     )
+        where TReference : WorkspaceReference<TReduced>
     {
-        var stream = GetExternalChangeStream(address, reference, backfeed);
+        var stream = GetExternalChangeStream<TReduced, TReference>(address, reference);
         externalStreams.TryAdd(new(address, reference), stream);
         return stream;
     }
@@ -297,15 +354,20 @@ public class Workspace : IWorkspace
         return delivery.Ignored();
     }
 
-    public DataChangeResponse RequestChange(ChangeItem<WorkspaceState> changeItem)
+    public DataChangeResponse RequestChange(Func<WorkspaceState, ChangeItem<WorkspaceState>> update)
     {
-        myChangeStream.Synchronize(s => Update(s, changeItem));
-        return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, changeItem.Log);
+        activityService.Start(ActivityCategory.DataUpdate);
+        myChangeStream.Synchronize(update);
+        return new DataChangeResponse(
+            Hub.Version,
+            DataChangeStatus.Committed,
+            activityService.Finish()
+        );
     }
 
-    public void Synchronize(ChangeItem<WorkspaceState> changeItem)
+    public void Synchronize(Func<WorkspaceState, ChangeItem<WorkspaceState>> change)
     {
-        myChangeStream.Synchronize(s => GetUpdatedState(s, changeItem));
+        myChangeStream.Synchronize(s => change(s));
     }
 
     private ChangeItem<WorkspaceState> Update(
@@ -319,7 +381,7 @@ public class Workspace : IWorkspace
             changeItem.ChangedBy
         );
         var newElement = GetUpdatedState(s, changeItem);
-        return newElement with { Log = changeItem.Log.Finish() };
+        return newElement with { Log = activityService.Finish() };
     }
 
     private ChangeItem<WorkspaceState> GetUpdatedState(

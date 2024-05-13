@@ -42,28 +42,22 @@ public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace) : IAsync
             TReference,
             IObservable<ChangeItem<TStream>>
         > referenceDefinition,
-        Func<TStream, WorkspaceState> backTransformation
+        Func<WorkspaceState, TReference, ChangeItem<TStream>, ChangeItem<WorkspaceState>> backFeed
     )
         where TReference : WorkspaceReference<TStream> =>
         this with
         {
-            ReduceManager = ReduceManager.AddWorkspaceReferenceStream(
-                referenceDefinition,
-                backTransformation
-            )
+            ReduceManager = ReduceManager.AddWorkspaceReferenceStream(referenceDefinition, backFeed)
         };
 
     public DataContext AddWorkspaceReference<TReference, TStream>(
         Func<WorkspaceState, TReference, TStream> referenceDefinition,
-        Func<TStream, WorkspaceState> backTransformation
+        Func<WorkspaceState, TReference, ChangeItem<TStream>, ChangeItem<WorkspaceState>> backfeed
     )
         where TReference : WorkspaceReference<TStream> =>
         this with
         {
-            ReduceManager = ReduceManager.AddWorkspaceReference(
-                referenceDefinition,
-                backTransformation
-            )
+            ReduceManager = ReduceManager.AddWorkspaceReference(referenceDefinition, backfeed)
         };
 
     public delegate IDataSource DataSourceBuilder(IMessageHub hub);

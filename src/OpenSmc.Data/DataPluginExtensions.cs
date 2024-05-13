@@ -109,4 +109,12 @@ public static class DataPluginExtensions
             address,
             hub => configuration.Invoke(new GenericDataSource(address, hub))
         );
+
+    public static DataChangedStream<TStream, TReference> ToDataChanged<TStream, TReference>(
+        this IChangeStream<TStream, TReference> stream
+    )
+        where TReference : WorkspaceReference<TStream>
+    {
+        return new DataChangedStream<TStream, TReference>(stream);
+    }
 }

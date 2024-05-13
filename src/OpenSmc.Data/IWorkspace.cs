@@ -1,11 +1,15 @@
-﻿using OpenSmc.Activities;
+﻿using System.Reflection;
+using System.Reflection.Metadata;
+using OpenSmc.Activities;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
+using OpenSmc.Reflection;
 
 namespace OpenSmc.Data;
 
 public interface IWorkspace : IAsyncDisposable
 {
+    IMessageHub Hub { get; }
     WorkspaceState State { get; }
     Task Initialized { get; }
     IReadOnlyCollection<Type> MappedTypes { get; }
@@ -18,20 +22,15 @@ public interface IWorkspace : IAsyncDisposable
     void Rollback();
     WorkspaceState CreateState(EntityStore deserialize);
     internal void Initialize();
-    IChangeStream<TReduced, WorkspaceState> Subscribe<TReduced>(
+    IChangeStream<TReduced> Subscribe<TReduced>(
         object address,
         WorkspaceReference<TReduced> reference
-    ) => Subscribe(address, reference, default(Func<TReduced, WorkspaceState>));
-    IChangeStream<TReduced, WorkspaceState> Subscribe<TReduced>(
-        object address,
-        WorkspaceReference<TReduced> reference,
-        Func<TReduced, WorkspaceState> backfeed
     );
-    IChangeStream<TReduced, WorkspaceState> Subscribe<TReduced>(
+    IChangeStream<TReduced, TReference> Subscribe<TReduced, TReference>(
         object address,
-        WorkspaceReference<TReduced> reference,
-        Func<TReduced, EntityStore> backfeed
-    ) => Subscribe(address, reference, x => CreateState(backfeed(x)));
+        TReference reference
+    )
+        where TReference : WorkspaceReference<TReduced>;
     void Unsubscribe(object address, WorkspaceReference reference);
     IMessageDelivery DeliverMessage(IMessageDelivery<IWorkspaceMessage> delivery);
     DataChangeResponse RequestChange(
@@ -44,18 +43,10 @@ public interface IWorkspace : IAsyncDisposable
     ReduceManager<WorkspaceState> ReduceManager { get; }
     WorkspaceReference Reference { get; }
 
-    IChangeStream<TReduced, WorkspaceState> GetChangeStream<TReduced>(
-        WorkspaceReference<TReduced> reference,
-        Func<TReduced, WorkspaceState> backfeed
-    );
-    IChangeStream<TReduced, WorkspaceState> GetChangeStream<TReduced>(
-        WorkspaceReference<TReduced> reference,
-        Func<TReduced, EntityStore> backfeed
-    ) => GetChangeStream(reference, x => CreateState(backfeed(x)));
-    IChangeStream<TReduced, WorkspaceState> GetChangeStream<TReduced>(
-        WorkspaceReference<TReduced> reference
-    ) => GetChangeStream(reference, default(Func<TReduced, WorkspaceState>));
+    IChangeStream<TReduced> GetChangeStream<TReduced>(WorkspaceReference<TReduced> reference);
+    IChangeStream<TReduced, TReference> GetChangeStream<TReduced, TReference>(TReference reference)
+        where TReference : WorkspaceReference<TReduced>;
 
-    void Synchronize(ChangeItem<WorkspaceState> change);
-    DataChangeResponse RequestChange(ChangeItem<WorkspaceState> change);
+    void Synchronize(Func<WorkspaceState, ChangeItem<WorkspaceState>> change);
+    DataChangeResponse RequestChange(Func<WorkspaceState, ChangeItem<WorkspaceState>> change);
 }

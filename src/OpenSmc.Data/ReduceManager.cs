@@ -11,8 +11,8 @@ public record ReduceManager<TStream>
 {
     internal readonly LinkedList<ReduceDelegate> Reducers = new();
     internal readonly LinkedList<ReduceStream<TStream>> ReduceStreams = new();
-    private ImmutableDictionary<(Type From, Type To), object> BackTransformations { get; init; } =
-        ImmutableDictionary<(Type From, Type To), object>.Empty;
+    private ImmutableDictionary<Type, object> BackTransformations { get; init; } =
+        ImmutableDictionary<Type, object>.Empty;
 
     private ImmutableDictionary<Type, object> ReduceManagers { get; init; } =
         ImmutableDictionary<Type, object>.Empty;
@@ -30,7 +30,12 @@ public record ReduceManager<TStream>
 
     public ReduceManager<TStream> AddWorkspaceReference<TReference, TReduced>(
         Func<TStream, TReference, TReduced> reducer,
-        Func<TReduced, TStream> backTransformation
+        Func<
+            WorkspaceState,
+            TReference,
+            ChangeItem<TReduced>,
+            ChangeItem<WorkspaceState>
+        > backTransformation
     )
         where TReference : WorkspaceReference<TReduced>
     {
@@ -45,10 +50,10 @@ public record ReduceManager<TStream>
 
         return this with
         {
-            BackTransformations = BackTransformations.SetItem(
-                (typeof(TReduced), typeof(TStream)),
-                backTransformation
-            )
+            BackTransformations =
+                backTransformation == null
+                    ? BackTransformations
+                    : BackTransformations.SetItem(typeof(TReference), backTransformation)
         };
     }
 
@@ -63,7 +68,12 @@ public record ReduceManager<TStream>
             TReference,
             IObservable<ChangeItem<TReduced>>
         > reducer,
-        Func<TReduced, TStream> backTransformation
+        Func<
+            WorkspaceState,
+            TReference,
+            ChangeItem<TReduced>,
+            ChangeItem<WorkspaceState>
+        > backTransformation
     )
         where TReference : WorkspaceReference<TReduced>
     {
@@ -77,7 +87,7 @@ public record ReduceManager<TStream>
         return this with
         {
             BackTransformations = BackTransformations.SetItem(
-                (typeof(TReduced), typeof(TStream)),
+                typeof(TReference),
                 backTransformation
             )
         };
@@ -152,13 +162,14 @@ public record ReduceManager<TStream>
                 BackTransformations = BackTransformations
             };
 
-    public Func<TStream, TOriginalStream> GetBackTransformation<TOriginalStream>()
-    {
-        if (typeof(TOriginalStream) == typeof(TStream))
-            return x => (TOriginalStream)(object)x;
-        return (Func<TStream, TOriginalStream>)
-            BackTransformations.GetValueOrDefault((typeof(TStream), typeof(TOriginalStream)));
-    }
+    public Func<
+        WorkspaceState,
+        TReference,
+        ChangeItem<TStream>,
+        ChangeItem<WorkspaceState>
+    > GetBackfeed<TReference>() =>
+        (Func<WorkspaceState, TReference, ChangeItem<TStream>, ChangeItem<WorkspaceState>>)
+            BackTransformations.GetValueOrDefault(typeof(TReference));
 
     internal delegate object ReduceDelegate(
         TStream state,
