@@ -163,7 +163,6 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstAsync(i => i?.Text == TextChange);
         instance.Should().NotBeNull();
 
-        await DisposeAsync();
         storage.Values.Should().Contain(i => (i as MyData).Text == TextChange);
     }
 
