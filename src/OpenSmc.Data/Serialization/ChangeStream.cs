@@ -87,9 +87,9 @@ public record ChangeStream<TStream, TReference>
         IObservable<ChangeItem<TStream>> store
     )
     {
-        this.Id = id;
-        this.Reference = reference;
-        this.Workspace = workspace;
+        Id = id;
+        Reference = reference;
+        Workspace = workspace;
         if (store != null)
             Disposables.Add(store.Skip(1).Subscribe(x => Current = x));
         this.reduceManager = reduceManager;

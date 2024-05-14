@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using System.Reflection;
+using System.Security.Cryptography;
+using AngleSharp.Common;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
 using OpenSmc.Data.Serialization;
@@ -37,8 +39,9 @@ public class Workspace : IWorkspace
 
     private record AddressAndReference(object Address, object Reference);
 
-    private ConcurrentDictionary<WorkspaceReference, IChangeStream> streams = new();
-    private ConcurrentDictionary<AddressAndReference, IChangeStream> externalStreams = new();
+    private ConcurrentDictionary<object, IChangeStream> streams = new();
+    private ConcurrentDictionary<AddressAndReference, IDisposable> subscriptions = new();
+    private ConcurrentDictionary<AddressAndReference, IChangeStream> externalClientStreams = new();
 
     /// <summary>
     /// Change stream belonging to the workspace.
@@ -73,15 +76,15 @@ public class Workspace : IWorkspace
         return stream;
     }
 
-    public IChangeStream<TReduced, TReference> GetExternalChangeStream<TReduced, TReference>(
+    private IChangeStream<TReduced, TReference> GetExternalClientChangeStream<TReduced, TReference>(
         object address,
         TReference reference
     )
         where TReference : WorkspaceReference<TReduced> =>
         (IChangeStream<TReduced, TReference>)
-            externalStreams.GetOrAdd(
+            externalClientStreams.GetOrAdd(
                 new(address, reference),
-                _ => CreateExternalChangeStream<TReduced, TReference>(address, reference)
+                _ => CreateExternalClientChangeStream<TReduced, TReference>(address, reference)
             );
 
     private IChangeStream CreateChangeStream<TReduced, TReference>(TReference reference)
@@ -99,21 +102,19 @@ public class Workspace : IWorkspace
         return changeStream;
     }
 
-    private IChangeStream CreateExternalChangeStream<TReduced, TReference>(
+    private IChangeStream CreateExternalClientChangeStream<TReduced, TReference>(
         object address,
         TReference reference
     )
         where TReference : WorkspaceReference<TReduced>
     {
-        var stream = (IChangeStream<TReduced, TReference>)GetChangeStream(reference);
-        if (!Id.Equals(Hub.Address))
-            new ChangeStream<TReduced, TReference>(
-                address,
-                reference,
-                this,
-                ReduceManager.ReduceTo<TReduced>(),
-                stream
-            );
+        var stream = new ChangeStream<TReduced, TReference>(
+            address,
+            reference,
+            this,
+            ReduceManager.ReduceTo<TReduced>(),
+            GetChangeStream(reference)
+        );
 
         stream.AddDisposable(
             new Disposables.AnonymousDisposable(
@@ -122,26 +123,15 @@ public class Workspace : IWorkspace
         );
 
         stream.AddDisposable(
-            stream.Id.Equals(Hub.Address)
-                ? stream
-                    .ToDataChanged()
-                    .Subscribe(e =>
-                    {
-                        if (address.Equals(e.ChangedBy))
-                            return;
-                        Hub.Post(e, o => o.WithTarget(address));
-                    })
-                : stream
-                    .ToDataChanged()
-                    .Subscribe(e =>
-                    {
-                        if (address.Equals(e.ChangedBy))
-                            return;
-                        Hub.Post(new PatchChangeRequest(e), o => o.WithTarget(Hub.Address));
-                    })
+            stream
+                .ToDataChanged()
+                .Subscribe(e =>
+                {
+                    if (address.Equals(e.ChangedBy))
+                        return;
+                    Hub.Post(new PatchChangeRequest(e), o => o.WithTarget(Hub.Address));
+                })
         );
-        // <
-        //         stream.AddDisposable(stream.Synchronization.Subscribe(x => RequestChange(x)));
 
         Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(address));
 
@@ -299,7 +289,7 @@ public class Workspace : IWorkspace
             return;
         isDisposing = true;
 
-        foreach (var subscription in externalStreams.Values)
+        foreach (var subscription in externalClientStreams.Values.Concat(subscriptions.Values))
             subscription.Dispose();
 
         foreach (var stream in streams.Values)
@@ -318,6 +308,14 @@ public class Workspace : IWorkspace
         return response.Ignored();
     }
 
+    void IWorkspace.SubscribeToHost<TReduced>(
+        object address,
+        WorkspaceReference<TReduced> reference
+    ) =>
+        SubscribToHosteMethod
+            .MakeGenericMethod(typeof(TReduced), reference.GetType())
+            .Invoke(this, [address, reference]);
+
     public IChangeStream<TReduced> Subscribe<TReduced>(
         object address,
         WorkspaceReference<TReduced> reference
@@ -332,29 +330,50 @@ public class Workspace : IWorkspace
             x.Subscribe<object, WorkspaceReference<object>>(default, default)
         );
 
-    public IChangeStream<TReduced, TReference> Subscribe<TReduced, TReference>(
+    private IChangeStream<TReduced, TReference> Subscribe<TReduced, TReference>(
         object address,
         TReference reference
     )
+        where TReference : WorkspaceReference<TReduced> =>
+        GetExternalClientChangeStream<TReduced, TReference>(address, reference);
+
+    private static readonly MethodInfo SubscribToHosteMethod =
+        ReflectionHelper.GetMethodGeneric<Workspace>(x =>
+            x.SubscribeToHost<object, WorkspaceReference<object>>(default, default)
+        );
+
+    private void SubscribeToHost<TReduced, TReference>(object address, TReference reference)
         where TReference : WorkspaceReference<TReduced>
     {
-        var stream = GetExternalChangeStream<TReduced, TReference>(address, reference);
-        externalStreams.TryAdd(new(address, reference), stream);
-        return stream;
+        subscriptions.GetOrAdd(
+            new(address, reference),
+            _ =>
+                ((IChangeStream<TReduced, TReference>)GetChangeStream(reference))
+                    .ToDataChanged()
+                    .Subscribe(e =>
+                    {
+                        if (address.Equals(e.ChangedBy))
+                            return;
+
+                        Hub.Post(e, o => o.WithTarget(address));
+                    })
+        );
     }
 
     public void Unsubscribe(object address, WorkspaceReference reference)
     {
-        if (externalStreams.TryRemove(new(address, reference), out var existing))
+        if (subscriptions.TryRemove(new(address, reference), out var existing))
             existing.Dispose();
     }
 
     public IMessageDelivery DeliverMessage(IMessageDelivery<IWorkspaceMessage> delivery)
     {
         if (
-            externalStreams.TryGetValue(
+            Hub.Address.Equals(delivery.Message.Address)
+                && streams.TryGetValue(delivery.Message.Reference, out var stream)
+            || externalClientStreams.TryGetValue(
                 new(delivery.Sender, delivery.Message.Reference),
-                out var stream
+                out stream
             )
         )
             return stream.DeliverMessage(delivery);

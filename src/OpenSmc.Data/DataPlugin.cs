@@ -62,7 +62,7 @@ public class DataPlugin(IMessageHub hub)
 
     private IMessageDelivery Subscribe(IMessageDelivery<SubscribeRequest> request)
     {
-        Workspace.Subscribe(request.Sender, (dynamic)request.Message.Reference);
+        Workspace.SubscribeToHost(request.Sender, (dynamic)request.Message.Reference);
         return request.Processed();
     }
 

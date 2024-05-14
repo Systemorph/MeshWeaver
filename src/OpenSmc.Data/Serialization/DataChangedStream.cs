@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
 using OpenSmc.Messaging;
 
@@ -37,9 +38,11 @@ public class DataChangedStream<TStream, TReference> : IObservable<DataChangedEve
         });
 
         dataChangedStream = stream
-            .Skip(1)
-            .Select(r => GetDataChanged(r))
-            .Where(x => x?.Change != null);
+            .Take(1)
+            .Select(GetFullDataChange)
+            .Concat(
+                stream.Skip(1).Select(r => GetDataChangePatch(r)).Where(x => x?.Change != null)
+            );
 
         this.stream = stream;
         this.backfeed = stream
@@ -108,10 +111,18 @@ public class DataChangedStream<TStream, TReference> : IObservable<DataChangedEve
 
     private TStream GetFullState(DataChangedEvent request)
     {
-        return request.Change is TStream s
+        var ret = request.Change is TStream s
             ? s
             : (request.Change as JsonNode).Deserialize<TStream>(stream.Hub.JsonSerializerOptions)
                 ?? throw new InvalidOperationException();
+        Current = new ChangeItem<TStream>(
+            stream.Id,
+            stream.Reference,
+            ret,
+            request.ChangedBy,
+            request.Version
+        );
+        return ret;
     }
 
     private void Change(IMessageDelivery<PatchChangeRequest> delivery, TStream state)
@@ -145,11 +156,7 @@ public class DataChangedStream<TStream, TReference> : IObservable<DataChangedEve
 
     public IDisposable Subscribe(IObserver<DataChangedEvent> observer)
     {
-        return stream
-            .Take(1)
-            .Select(GetFullDataChange)
-            .Merge(dataChangedStream.Where(x => x.ChangeType == ChangeType.Patch))
-            .Subscribe(observer);
+        return dataChangedStream.Subscribe(observer);
     }
 
     private JsonPatch GetPatch(TStream fullChange)
@@ -174,18 +181,17 @@ public class DataChangedStream<TStream, TReference> : IObservable<DataChangedEve
         );
     }
 
-    private DataChangedEvent GetDataChanged(ChangeItem<TStream> change)
+    private DataChangedEvent GetDataChangePatch(ChangeItem<TStream> change)
     {
-        var fullChange = change.Value;
-
         var dataChanged = new DataChangedEvent(
             stream.Id,
             stream.Reference,
             change.Version,
-            GetPatch(fullChange),
+            GetPatch(change.Value),
             ChangeType.Patch,
             change.ChangedBy
         );
+        Current = change;
 
         return dataChanged;
     }
