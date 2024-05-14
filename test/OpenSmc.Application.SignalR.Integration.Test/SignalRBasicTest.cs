@@ -20,7 +20,7 @@ namespace OpenSmc.Application.SignalR.Integration.Test;
 public class SignalRBasicTest : TestBase, IClassFixture<WebApplicationFactory<Program>>
 {
     private readonly WebApplicationFactory<Program> webAppFactory;
-    private static readonly UiAddress ClientAddress = new(TestUiIds.HardcodedUiId);
+    private static readonly UiAddress ClientAddress = new(Guid.NewGuid().ToString());
     private static readonly ApplicationAddress ApplicationAddress = new(TestApplication.Name, TestApplication.Environment);
 
     private static readonly TimeSpan signalRServerDebugTimeout = TimeSpan.FromMinutes(7);
