@@ -21,7 +21,7 @@ export function SamplesPage() {
     }, [uiHub, hmrClientHub]);
 
     useEffect(
-        () => renderLayoutAreaReference(uiHub, new LayoutAreaReference("/main")),
+        () => renderLayoutAreaReference(uiHub, new LayoutAreaReference("/")),
         [uiHub, pathname]
     );
 
