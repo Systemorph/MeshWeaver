@@ -3,8 +3,6 @@ import { type } from "@open-smc/serialization/src/type";
 import { ValueOrBinding } from "@open-smc/data/src/contract/Binding";
 
 @type("OpenSmc.Layout.TextBoxControl")
-export class TextBoxControl extends UiControl {
-    constructor(public data: ValueOrBinding<string>) {
-        super();
-    }
+export class TextBoxControl extends UiControl<TextBoxControl> {
+    data: ValueOrBinding<string>;
 }

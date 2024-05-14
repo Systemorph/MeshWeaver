@@ -11,13 +11,13 @@ import { handleRequest } from "@open-smc/messaging/src/handleRequest.ts";
 import { UnsubscribeDataRequest } from "@open-smc/data/src/contract/UnsubscribeDataRequest.ts";
 import { DataChangedEvent } from "@open-smc/data/src/contract/DataChangedEvent.ts";
 import { messageOfType } from "@open-smc/messaging/src/operators/messageOfType.ts";
-import { MessageHubBase } from "@open-smc/messaging/src/MessageHubBase.ts";
-import { Layout } from "./Layout";
+import { SamplesLayout } from "./SamplesLayout";
+import { MessageHub } from "@open-smc/messaging/src/MessageHub";
 
 export class SamplesApp {
     subscription = new Subscription();
 
-    constructor(private serverHub: MessageHubBase) {
+    constructor(private serverHub: MessageHub) {
         this.subscription.add(
             serverHub.input
                 .pipe(handleRequest(SubscribeRequest, this.subscribeRequestHandler()))
@@ -31,7 +31,7 @@ export class SamplesApp {
 
             const subscription = new Subscription();
 
-            const layout = new Layout(this.serverHub, reference as LayoutAreaReference);
+            const layout = new SamplesLayout(this.serverHub, reference as LayoutAreaReference);
 
             subscription.add(
                 layout.subscription
