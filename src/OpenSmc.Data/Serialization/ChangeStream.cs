@@ -42,6 +42,7 @@ public interface IChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<
 public interface IChangeStream<TStream, TReference> : IChangeStream<TStream>
     where TReference : WorkspaceReference<TStream>
 {
+    ChangeItem<TStream> Current { get; }
     new TReference Reference { get; }
 }
 
