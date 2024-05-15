@@ -124,12 +124,12 @@ public class Workspace : IWorkspace
 
         stream.AddDisposable(
             stream
-                .ToDataChanged()
+                .ToChangeStreamClient()
                 .Subscribe(e =>
                 {
                     if (address.Equals(e.ChangedBy))
                         return;
-                    Hub.Post(new PatchChangeRequest(e), o => o.WithTarget(Hub.Address));
+                    Hub.Post(e, o => o.WithTarget(Hub.Address));
                 })
         );
 
@@ -349,7 +349,7 @@ public class Workspace : IWorkspace
             new(address, reference),
             _ =>
                 ((IChangeStream<TReduced, TReference>)GetChangeStream(reference))
-                    .ToDataChanged()
+                    .ToChangeStreamHost()
                     .Subscribe(e =>
                     {
                         if (address.Equals(e.ChangedBy))

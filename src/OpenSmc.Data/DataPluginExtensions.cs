@@ -110,11 +110,13 @@ public static class DataPluginExtensions
             hub => configuration.Invoke(new GenericDataSource(address, hub))
         );
 
-    public static DataChangedStream<TStream, TReference> ToDataChanged<TStream, TReference>(
+    public static ChangeStreamHost<TStream, TReference> ToChangeStreamHost<TStream, TReference>(
         this IChangeStream<TStream, TReference> stream
     )
-        where TReference : WorkspaceReference<TStream>
-    {
-        return new DataChangedStream<TStream, TReference>(stream);
-    }
+        where TReference : WorkspaceReference<TStream> => new(stream);
+
+    public static ChangeStreamClient<TStream, TReference> ToChangeStreamClient<TStream, TReference>(
+        this IChangeStream<TStream, TReference> stream
+    )
+        where TReference : WorkspaceReference<TStream> => new(stream);
 }
