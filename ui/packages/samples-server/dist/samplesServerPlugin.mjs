@@ -852,22 +852,6 @@ var hasMatchFunction = (v) => {
 };
 function createAction(type2, prepareAction) {
   function actionCreator(...args) {
-    if (prepareAction) {
-      let prepared = prepareAction(...args);
-      if (!prepared) {
-        throw new Error(process.env.NODE_ENV === "production" ? formatProdErrorMessage(0) : "prepareAction did not return an object");
-      }
-      return {
-        type: type2,
-        payload: prepared.payload,
-        ..."meta" in prepared && {
-          meta: prepared.meta
-        },
-        ..."error" in prepared && {
-          error: prepared.error
-        }
-      };
-    }
     return {
       type: type2,
       payload: args[0]
@@ -1410,9 +1394,6 @@ function executeReducerBuilderCallback(builderCallback) {
   builderCallback(builder);
   return [actionsMap, actionMatchers, defaultCaseReducer];
 }
-function isStateFunction(x) {
-  return typeof x === "function";
-}
 function createReducer(initialState, mapOrBuilderCallback) {
   if (process.env.NODE_ENV !== "production") {
     if (typeof mapOrBuilderCallback === "object") {
@@ -1421,9 +1402,7 @@ function createReducer(initialState, mapOrBuilderCallback) {
   }
   let [actionsMap, finalActionMatchers, finalDefaultCaseReducer] = executeReducerBuilderCallback(mapOrBuilderCallback);
   let getInitialState;
-  if (isStateFunction(initialState)) {
-    getInitialState = () => freezeDraftable(initialState());
-  } else {
+  {
     const frozenInitialState = freezeDraftable(initialState);
     getInitialState = () => frozenInitialState;
   }
@@ -2400,12 +2379,12 @@ function _toPrimitive(t, r) {
     return t;
   var e = t[Symbol.toPrimitive];
   if (void 0 !== e) {
-    var i = e.call(t, r || "default");
+    var i = e.call(t, r);
     if ("object" != typeof i)
       return i;
     throw new TypeError("@@toPrimitive must return a primitive value.");
   }
-  return ("string" === r ? String : Number)(t);
+  return String(t);
 }
 function _toPropertyKey(t) {
   var i = _toPrimitive(t, "string");
@@ -2437,8 +2416,6 @@ function _defineProperties(target, props) {
 function _createClass(Constructor, protoProps, staticProps) {
   if (protoProps)
     _defineProperties(Constructor.prototype, protoProps);
-  if (staticProps)
-    _defineProperties(Constructor, staticProps);
   Object.defineProperty(Constructor, "prototype", {
     writable: false
   });
@@ -2560,7 +2537,7 @@ function _nonIterableSpread() {
 function _createForOfIteratorHelper(o, allowArrayLike) {
   var it = typeof Symbol !== "undefined" && o[Symbol.iterator] || o["@@iterator"];
   if (!it) {
-    if (Array.isArray(o) || (it = _unsupportedIterableToArray(o)) || allowArrayLike && o && typeof o.length === "number") {
+    if (Array.isArray(o) || (it = _unsupportedIterableToArray(o)) || allowArrayLike) {
       if (it)
         o = it;
       var i = 0;
@@ -4143,15 +4120,15 @@ class SamplesLayout {
         }
         if (action === "addTodo") {
           const { collections } = this.store.getState();
-          const name = collections.addHoc.newTodo;
+          const name = collections.adhoc.newTodo;
           const id2 = v4();
           const newTodo = { id: id2, name, completed: false };
-          const todos = collections.todos;
+          const { todos } = collections;
           this.store.next(
             pathToUpdateAction("/collections/todos")(
               {
                 ...todos,
-                id: newTodo
+                [id2]: newTodo
               }
             )
           );

@@ -10,6 +10,7 @@ export type HtmlElement = {
     minHeight?: string;
     border?: string;
     borderRadius?: string;
+    color?: string;
 }
 
 export type FlexContainer = {

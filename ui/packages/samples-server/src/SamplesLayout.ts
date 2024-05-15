@@ -79,16 +79,16 @@ export class SamplesLayout {
                     }
                     if (action === "addTodo") {
                         const {collections} = this.store.getState();
-                        const name = collections.addHoc.newTodo;
+                        const name = collections.adhoc.newTodo;
                         const id = v4();
                         const newTodo = { id, name, completed: false }
-                        const todos = collections.todos;
+                        const {todos} = collections;
 
                         this.store.next(
                             pathToUpdateAction("/collections/todos")(
                                 {
                                     ...todos,
-                                    id: newTodo
+                                    [id]: newTodo
                                 }
                             )
                         )
