@@ -4,10 +4,10 @@ var __publicField = (obj, key, value) => {
   __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
   return value;
 };
-import { Subscription, Observable, filter, mergeMap, from, map, identity, pairwise, of, take, Subject, ReplaySubject } from "rxjs";
+import { Subscription, Observable, filter, mergeMap, from, map, distinctUntilChanged, pairwise, of, take, Subject, ReplaySubject } from "rxjs";
 import { methodName } from "./contract.mjs";
 import { immerable, isDraftable, produce, isDraft, current, enablePatches, applyPatches } from "immer";
-import { trimStart, set, isEmpty, keyBy, isEqual, omit, cloneDeepWith, assign, mapValues, isFunction } from "lodash-es";
+import { trimStart, set, isEqual, isEmpty, omit, keyBy, keys, cloneDeepWith, assign, mapValues, isFunction } from "lodash-es";
 import { v4 } from "uuid";
 Subscription.prototype.toJSON = (key) => {
   return {};
@@ -1008,18 +1008,18 @@ function createImmutableStateInvariantMiddleware(options = {}) {
     let stringify2 = function(obj, serializer, indent, decycler) {
       return JSON.stringify(obj, getSerialize2(serializer, decycler), indent);
     }, getSerialize2 = function(serializer, decycler) {
-      let stack = [], keys = [];
+      let stack = [], keys2 = [];
       if (!decycler)
         decycler = function(_, value) {
           if (stack[0] === value)
             return "[Circular ~]";
-          return "[Circular ~." + keys.slice(0, stack.indexOf(value)).join(".") + "]";
+          return "[Circular ~." + keys2.slice(0, stack.indexOf(value)).join(".") + "]";
         };
       return function(key, value) {
         if (stack.length > 0) {
           var thisPos = stack.indexOf(this);
           ~thisPos ? stack.splice(thisPos + 1) : stack.push(this);
-          ~thisPos ? keys.splice(thisPos, Infinity, key) : keys.push(key);
+          ~thisPos ? keys2.splice(thisPos, Infinity, key) : keys2.push(key);
           if (~stack.indexOf(value))
             value = decycler.call(this, key, value);
         } else
@@ -1518,75 +1518,6 @@ var removeListener = Object.assign(createAction(`${alm}/remove`), {
 function formatProdErrorMessage(code) {
   return `Minified Redux Toolkit error #${code}; visit https://redux-toolkit.js.org/Errors?code=${code} for the full message or use the non-minified dev environment for full errors. `;
 }
-enablePatches();
-const jsonPatchActionCreator = createAction("patch");
-createAction("patchRequest");
-const jsonPatchReducer = createReducer(
-  void 0,
-  (builder) => {
-    builder.addCase(
-      jsonPatchActionCreator,
-      (state, action) => (
-        // TODO: use fast-json-patch (4/16/2024, akravets)
-        applyPatches(state, action.payload.operations.map(toImmerPatch))
-      )
-    );
-  }
-);
-function toImmerPatch(patch) {
-  const { op, path, value } = patch;
-  return {
-    op,
-    path: path == null ? void 0 : path.split("/").filter(identity),
-    value
-  };
-}
-var __defProp$f = Object.defineProperty;
-var __getOwnPropDesc$f = Object.getOwnPropertyDescriptor;
-var __decorateClass$f = (decorators, target, key, kind) => {
-  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$f(target, key) : target;
-  for (var i = decorators.length - 1, decorator; i >= 0; i--)
-    if (decorator = decorators[i])
-      result = (kind ? decorator(target, key, result) : decorator(result)) || result;
-  if (kind && result)
-    __defProp$f(target, key, result);
-  return result;
-};
-let EntityReference = class extends WorkspaceReference {
-  constructor(collection, id) {
-    super();
-    this.collection = collection;
-    this.id = id;
-  }
-};
-EntityReference = __decorateClass$f([
-  type("OpenSmc.Data.EntityReference")
-], EntityReference);
-var __defProp$e = Object.defineProperty;
-var __getOwnPropDesc$e = Object.getOwnPropertyDescriptor;
-var __decorateClass$e = (decorators, target, key, kind) => {
-  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$e(target, key) : target;
-  for (var i = decorators.length - 1, decorator; i >= 0; i--)
-    if (decorator = decorators[i])
-      result = (kind ? decorator(target, key, result) : decorator(result)) || result;
-  if (kind && result)
-    __defProp$e(target, key, result);
-  return result;
-};
-let EntireWorkspace = class extends WorkspaceReference {
-};
-EntireWorkspace = __decorateClass$e([
-  type("OpenSmc.Data.EntireWorkspace")
-], EntireWorkspace);
-class PathReference extends WorkspaceReference {
-  constructor(path) {
-    super();
-    this.path = path;
-  }
-}
-function isPathReference(reference) {
-  return reference instanceof EntityReference || reference instanceof CollectionReference || reference instanceof EntireWorkspace || reference instanceof PathReference;
-}
 function replace(source, find, repl) {
   let res = "";
   let rem = source;
@@ -1902,20 +1833,20 @@ function descendingVisit(target, visitor, encoder) {
     if (shouldDescend(obj)) {
       distinctObjects.set(obj, new JsonPointer(encodeUriFragmentIdentifier(path)));
       if (!Array.isArray(obj)) {
-        const keys = Object.keys(obj);
-        const len = keys.length;
+        const keys2 = Object.keys(obj);
+        const len = keys2.length;
         let i = -1;
         while (++i < len) {
-          const it = obj[keys[i]];
+          const it = obj[keys2[i]];
           if (isObject(it) && distinctObjects.has(it)) {
             q.push({
               obj: new JsonReference(distinctObjects.get(it)),
-              path: path.concat(keys[i])
+              path: path.concat(keys2[i])
             });
           } else {
             q.push({
               obj: it,
-              path: path.concat(keys[i])
+              path: path.concat(keys2[i])
             });
           }
         }
@@ -2317,6 +2248,75 @@ class JsonReference {
   toString() {
     return this.$ref;
   }
+}
+enablePatches();
+const jsonPatchActionCreator = createAction("patch");
+createAction("patchRequest");
+const jsonPatchReducer = createReducer(
+  void 0,
+  (builder) => {
+    builder.addCase(
+      jsonPatchActionCreator,
+      (state, action) => (
+        // TODO: use fast-json-patch (4/16/2024, akravets)
+        applyPatches(state, action.payload.operations.map(toImmerPatch))
+      )
+    );
+  }
+);
+function toImmerPatch(patch) {
+  const { op, path, value } = patch;
+  return {
+    op,
+    path: JsonPointer.decode(path),
+    value
+  };
+}
+var __defProp$f = Object.defineProperty;
+var __getOwnPropDesc$f = Object.getOwnPropertyDescriptor;
+var __decorateClass$f = (decorators, target, key, kind) => {
+  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$f(target, key) : target;
+  for (var i = decorators.length - 1, decorator; i >= 0; i--)
+    if (decorator = decorators[i])
+      result = (kind ? decorator(target, key, result) : decorator(result)) || result;
+  if (kind && result)
+    __defProp$f(target, key, result);
+  return result;
+};
+let EntityReference = class extends WorkspaceReference {
+  constructor(collection, id) {
+    super();
+    this.collection = collection;
+    this.id = id;
+  }
+};
+EntityReference = __decorateClass$f([
+  type("OpenSmc.Data.EntityReference")
+], EntityReference);
+var __defProp$e = Object.defineProperty;
+var __getOwnPropDesc$e = Object.getOwnPropertyDescriptor;
+var __decorateClass$e = (decorators, target, key, kind) => {
+  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$e(target, key) : target;
+  for (var i = decorators.length - 1, decorator; i >= 0; i--)
+    if (decorator = decorators[i])
+      result = (kind ? decorator(target, key, result) : decorator(result)) || result;
+  if (kind && result)
+    __defProp$e(target, key, result);
+  return result;
+};
+let EntireWorkspace = class extends WorkspaceReference {
+};
+EntireWorkspace = __decorateClass$e([
+  type("OpenSmc.Data.EntireWorkspace")
+], EntireWorkspace);
+class PathReference extends WorkspaceReference {
+  constructor(path) {
+    super();
+    this.path = path;
+  }
+}
+function isPathReference(reference) {
+  return reference instanceof EntityReference || reference instanceof CollectionReference || reference instanceof EntireWorkspace || reference instanceof PathReference;
 }
 function getReferencePath(reference) {
   if (reference instanceof EntityReference) {
@@ -3051,12 +3051,12 @@ var Script = /* @__PURE__ */ function() {
     key: "runInNewContext",
     value: function runInNewContext(context) {
       var expr = this.code;
-      var keys = Object.keys(context);
+      var keys2 = Object.keys(context);
       var funcs = [];
-      moveToAnotherArray(keys, funcs, function(key) {
+      moveToAnotherArray(keys2, funcs, function(key) {
         return typeof context[key] === "function";
       });
-      var values = keys.map(function(vr) {
+      var values = keys2.map(function(vr) {
         return context[vr];
       });
       var funcString = funcs.reduce(function(s, func) {
@@ -3067,13 +3067,13 @@ var Script = /* @__PURE__ */ function() {
         return "var " + func + "=" + fString + ";" + s;
       }, "");
       expr = funcString + expr;
-      if (!/(["'])use strict\1/.test(expr) && !keys.includes("arguments")) {
+      if (!/(["'])use strict\1/.test(expr) && !keys2.includes("arguments")) {
         expr = "var arguments = undefined;" + expr;
       }
       expr = expr.replace(/;[\t-\r \xA0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]*$/, "");
       var lastStatementEnd = expr.lastIndexOf(";");
       var code = lastStatementEnd > -1 ? expr.slice(0, lastStatementEnd + 1) + " return " + expr.slice(lastStatementEnd + 1) : " return " + expr;
-      return _construct(Function, keys.concat([code])).apply(void 0, _toConsumableArray(values));
+      return _construct(Function, keys2.concat([code])).apply(void 0, _toConsumableArray(values));
     }
   }]);
   return Script2;
@@ -3087,6 +3087,16 @@ const toPointer = (jsonPath) => JSONPath.toPointer(
 const pointerToArray = (path) => trimStart(path, "/").split("/");
 const updateByPath = (data, path, value) => set(data, pointerToArray(path), value);
 const updateByReferenceActionCreator = createAction("updateByReference");
+function updateStore(reducer) {
+  return (dispatch, getState) => dispatch(
+    updateByReferenceActionCreator(
+      {
+        reference: new PathReference(""),
+        value: produce(getState(), reducer)
+      }
+    )
+  );
+}
 const workspaceReducer = createReducer(
   void 0,
   (builder) => {
@@ -3128,7 +3138,12 @@ class Workspace extends Observable {
       preloadedState: state,
       reducer: workspaceReducer,
       devTools: name ? { name } : false,
-      middleware: (getDefaultMiddleware) => getDefaultMiddleware({ serializableCheck: false })
+      middleware: (getDefaultMiddleware) => getDefaultMiddleware(
+        {
+          thunk: true,
+          serializableCheck: false
+        }
+      )
     });
     this.store$ = from(this.store);
   }
@@ -3141,6 +3156,9 @@ class Workspace extends Observable {
   }
   getState() {
     return this.store.getState();
+  }
+  update(reducer) {
+    this.store.dispatch(updateStore(reducer));
   }
 }
 var __defProp$c = Object.defineProperty;
@@ -3324,14 +3342,32 @@ let MenuItemControl = class extends ExpandableControl {
 MenuItemControl = __decorateClass$6([
   type("OpenSmc.Layout.Views.MenuItemControl")
 ], MenuItemControl);
+const distinctUntilEqual = () => (source) => source.pipe(distinctUntilChanged(isEqual));
 const uiControlType = UiControl.$type;
-class LayoutViews extends Map {
-  addView(area, control) {
-    this.set(area, control);
+class LayoutViews extends Workspace {
+  constructor() {
+    super({});
+    __publicField(this, "subscription", new Subscription());
+    __publicField(this, "n", 0);
+  }
+  addView(area = this.getAreaName(), control) {
+    this.update((state) => {
+      state[area] = control;
+    });
     return new EntityReference(uiControlType, area);
   }
-  toCollection() {
-    return Object.fromEntries(this);
+  addViewStream(area = this.getAreaName(), control$) {
+    this.subscription.add(
+      control$.pipe(distinctUntilEqual()).pipe(
+        map((value) => updateStore((state) => {
+          state[area] = value;
+        }))
+      ).subscribe(this)
+    );
+    return new EntityReference(uiControlType, area);
+  }
+  getAreaName() {
+    return `area_${this.n++}`;
   }
 }
 var __defProp$5 = Object.defineProperty;
@@ -3425,13 +3461,13 @@ function _objectKeys(obj) {
   if (Object.keys) {
     return Object.keys(obj);
   }
-  var keys = [];
+  var keys2 = [];
   for (var i in obj) {
     if (hasOwnProperty(obj, i)) {
-      keys.push(i);
+      keys2.push(i);
     }
   }
-  return keys;
+  return keys2;
 }
 function _deepClone(obj) {
   switch (typeof obj) {
@@ -3647,10 +3683,10 @@ function applyOperation(document, operation, validateOperation, mutateDocument, 
       document = _deepClone(document);
     }
     var path = operation.path || "";
-    var keys = path.split("/");
+    var keys2 = path.split("/");
     var obj = document;
     var t = 1;
-    var len = keys.length;
+    var len = keys2.length;
     var existingPathFragment = void 0;
     var key = void 0;
     var validateFunction = void 0;
@@ -3660,17 +3696,17 @@ function applyOperation(document, operation, validateOperation, mutateDocument, 
       validateFunction = validator;
     }
     while (true) {
-      key = keys[t];
+      key = keys2[t];
       if (key && key.indexOf("~") != -1) {
         key = unescapePathComponent(key);
       }
-      if (banPrototypeModifications && (key == "__proto__" || key == "prototype" && t > 0 && keys[t - 1] == "constructor")) {
+      if (banPrototypeModifications && (key == "__proto__" || key == "prototype" && t > 0 && keys2[t - 1] == "constructor")) {
         throw new TypeError("JSON-Patch: modifying `__proto__` or `constructor/prototype` prop is banned for security reasons, if this was on purpose, please set `banPrototypeModifications` flag false and pass it to this function. More info in fast-json-patch README");
       }
       if (validateOperation) {
         if (existingPathFragment === void 0) {
           if (obj[key] === void 0) {
-            existingPathFragment = keys.slice(0, t).join("/");
+            existingPathFragment = keys2.slice(0, t).join("/");
           } else if (t == len - 1) {
             existingPathFragment = operation.path;
           }
@@ -3818,15 +3854,15 @@ function _areEquals(a, b) {
     }
     if (arrA != arrB)
       return false;
-    var keys = Object.keys(a);
-    length = keys.length;
+    var keys2 = Object.keys(a);
+    length = keys2.length;
     if (length !== Object.keys(b).length)
       return false;
     for (i = length; i-- !== 0; )
-      if (!b.hasOwnProperty(keys[i]))
+      if (!b.hasOwnProperty(keys2[i]))
         return false;
     for (i = length; i-- !== 0; ) {
-      key = keys[i];
+      key = keys2[i];
       if (!_areEquals(a[key], b[key]))
         return false;
     }
@@ -4082,25 +4118,16 @@ class SamplesLayout {
       this.store.next(jsonPatchActionCreator(message.change));
       return of(new DataChangeResponse("Committed"));
     });
-    const views = this.getLayoutViews();
-    this.store = new Workspace({
-      reference,
-      collections: {
-        [uiControlType]: views.toCollection(),
-        todos: keyBy(
-          [
-            { id: "1", name: "Task 1", completed: true },
-            { id: "2", name: "Task 2", completed: false },
-            { id: "3", name: "Task 3", completed: true },
-            { id: "4", name: "Task 4", completed: true }
-          ],
-          "id"
-        ),
-        adhoc: {
-          newTodo: "New task"
-        }
-      }
-    });
+    this.store = createTodosStore(reference);
+    const views = createLayout(this.store);
+    this.subscription.add(
+      views.subscription
+    );
+    this.subscription.add(
+      views.pipe(
+        map(pathToUpdateAction(`/collections/${uiControlType}`))
+      ).subscribe(this.store)
+    );
     this.subscription.add(
       serverHub.input.pipe(
         filter(messageOfType(PatchChangeRequest)),
@@ -4120,7 +4147,7 @@ class SamplesLayout {
         }
         if (action === "addTodo") {
           const { collections } = this.store.getState();
-          const name = collections.adhoc.newTodo;
+          const name = collections.viewBag.newTodo;
           const id2 = v4();
           const newTodo = { id: id2, name, completed: false };
           const { todos } = collections;
@@ -4148,101 +4175,140 @@ class SamplesLayout {
       ).pipe(map(pack())).subscribe(serverHub.output)
     );
   }
-  getLayoutViews() {
-    const layoutViews = new LayoutViews();
-    const todos = new ItemTemplateControl().with({
-      dataContext: new CollectionReference("todos"),
-      data: new Binding("$"),
-      view: new LayoutStackControl().with({
-        skin: "HorizontalPanel",
-        areas: [
-          layoutViews.addView(
-            "/main/todo/name",
-            new HtmlControl().with({
-              data: new Binding("$.name")
-            })
-          ),
-          layoutViews.addView(
-            "/main/todo/completed",
-            new CheckboxControl().with({
-              data: new Binding("$.completed")
-            })
-          ),
-          layoutViews.addView(
-            "/main/todo/deleteButton",
-            new MenuItemControl().with({
-              icon: "sm sm-close",
-              clickMessage: new ClickedEvent({
-                action: "delete",
-                id: new Binding("$.id")
-              })
-            })
-          )
-        ]
-      })
-    });
-    const addTodo = new LayoutStackControl().with({
+}
+function createTodosStore(reference) {
+  return new Workspace({
+    reference,
+    collections: {
+      todos: keyBy(
+        [
+          { id: "1", name: "Task 1", completed: true },
+          { id: "2", name: "Task 2", completed: false },
+          { id: "3", name: "Task 3", completed: true },
+          { id: "4", name: "Task 4", completed: true }
+        ],
+        "id"
+      ),
+      viewBag: {
+        newTodo: "New task"
+      }
+    }
+  });
+}
+function createLayout(store) {
+  const layoutViews = new LayoutViews();
+  const todos = new ItemTemplateControl().with({
+    dataContext: new CollectionReference("todos"),
+    data: new Binding("$"),
+    view: new LayoutStackControl().with({
       skin: "HorizontalPanel",
       areas: [
         layoutViews.addView(
-          "/addTodo/textbox",
-          new TextBoxControl().with({
-            data: new Binding("$.adhoc.newTodo")
+          "/main/todo/name",
+          new HtmlControl().with({
+            data: new Binding("$.name")
           })
         ),
         layoutViews.addView(
-          "/addTodo/addButton",
+          "/main/todo/completed",
+          new CheckboxControl().with({
+            data: new Binding("$.completed")
+          })
+        ),
+        layoutViews.addView(
+          "/main/todo/deleteButton",
           new MenuItemControl().with({
-            title: "Add todo",
-            color: "#0171ff",
+            icon: "sm sm-close",
             clickMessage: new ClickedEvent({
-              action: "addTodo"
+              action: "delete",
+              id: new Binding("$.id")
             })
           })
         )
       ]
-    });
-    layoutViews.addView(
-      "/",
-      new LayoutStackControl().with({
-        skin: "MainWindow",
-        areas: [
-          layoutViews.addView(
-            "/Main",
-            new LayoutStackControl().with({
-              areas: [
-                layoutViews.addView(
-                  "/main/todos",
-                  todos
-                )
-              ]
-            })
-          ),
-          layoutViews.addView(
-            "/Toolbar",
-            new LayoutStackControl().with({
-              skin: "HorizontalPanel",
-              areas: [
-                layoutViews.addView(
-                  "/toolbar/",
-                  new LayoutStackControl().with({
-                    skin: "HorizontalPanel",
-                    areas: [
-                      layoutViews.addView(
-                        "/toolbar/addTodo",
-                        addTodo
+    })
+  });
+  const addTodo = new LayoutStackControl().with({
+    skin: "HorizontalPanel",
+    areas: [
+      layoutViews.addView(
+        "/addTodo/textbox",
+        new TextBoxControl().with({
+          data: new Binding("$.viewBag.newTodo")
+        })
+      ),
+      layoutViews.addView(
+        "/addTodo/addButton",
+        new MenuItemControl().with({
+          title: "Add todo",
+          color: "#0171ff",
+          clickMessage: new ClickedEvent({
+            action: "addTodo"
+          })
+        })
+      )
+    ]
+  });
+  layoutViews.addView(
+    "/",
+    new LayoutStackControl().with({
+      skin: "MainWindow",
+      areas: [
+        layoutViews.addView(
+          "/Main",
+          new LayoutStackControl().with({
+            areas: [
+              layoutViews.addView(
+                "/main/todos",
+                todos
+              ),
+              layoutViews.addView(
+                "/main/todosCount",
+                new LayoutStackControl().with({
+                  skin: "HorizontalPanel",
+                  areas: [
+                    layoutViews.addView(void 0, new HtmlControl().with({ data: "Total count:" })),
+                    layoutViews.addViewStream(
+                      void 0,
+                      store.pipe(
+                        map(
+                          (state) => {
+                            var _a;
+                            return new HtmlControl().with({ data: (_a = keys(state.collections.todos)) == null ? void 0 : _a.length });
+                          }
+                        )
                       )
-                    ]
-                  })
-                )
-              ]
-            })
-          )
-        ]
-      })
-    );
-    return layoutViews;
-  }
+                    )
+                  ]
+                })
+              )
+            ]
+          })
+        ),
+        layoutViews.addView(
+          "/Toolbar",
+          new LayoutStackControl().with({
+            skin: "HorizontalPanel",
+            areas: [
+              layoutViews.addView(
+                "/toolbar/",
+                new LayoutStackControl().with({
+                  skin: "HorizontalPanel",
+                  areas: [
+                    layoutViews.addView(
+                      "/toolbar/addTodo",
+                      addTodo
+                    )
+                  ]
+                })
+              )
+            ]
+          })
+        )
+      ]
+    })
+  );
+  return layoutViews;
 }
 class SamplesApp {
   constructor(serverHub) {
