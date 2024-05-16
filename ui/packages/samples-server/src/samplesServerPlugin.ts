@@ -1,6 +1,6 @@
 import { PluginOption, ViteDevServer } from "vite";
 import { WebSocketClientHub } from "./WebSocketClientHub";
-import { SamplesApp } from "./SamplesApp";
+import { SamplesServer } from "./SamplesServer";
 import { SerializationMiddleware } from "@open-smc/middleware/src/SerializationMiddleware";
 import "@open-smc/data/src/contract";
 import { connectHubs } from "@open-smc/messaging/src/middleware/connectHubs.ts";
@@ -18,7 +18,7 @@ export function samplesServerPlugin() {
                         const clientHub = new WebSocketClientHub(client, ws);
                         const serverHub = new MessageHub()
                         connectHubs(new SerializationMiddleware(clientHub), serverHub);
-                        const app = new SamplesApp(serverHub);
+                        const server = new SamplesServer(serverHub);
                         // const [uiHub, uiHubProxy] = makeProxy();
                         // connect(clientHub, uiHubProxy);
                         //

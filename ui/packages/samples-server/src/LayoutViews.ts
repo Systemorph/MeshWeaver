@@ -3,7 +3,7 @@ import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
 import { Workspace } from "@open-smc/data/src/Workspace";
 import { distinctUntilEqual } from "@open-smc/data/src/operators/distinctUntilEqual";
 import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl.ts";
-import { map, Observable, Subscription, tap } from "rxjs";
+import { map, Observable, of, Subscription, tap } from "rxjs";
 import { updateStore } from "@open-smc/data/src/workspaceReducer";
 
 export const uiControlType = (UiControl as any).$type;
@@ -15,15 +15,13 @@ export class LayoutViews extends Workspace<Collection<UiControl>> {
         super({});
     }
     
-    addView(area = this.getAreaName(), control: UiControl) {
-        this.update(state => {
-            state[area] = control
-        });
+    addView(area: string, control: UiControl | Observable<UiControl>) {
+        if (!area) {
+            area = this.getAreaName();
+        }
+        
+        const control$ = control instanceof Observable ? control : of(control);
 
-        return new EntityReference(uiControlType, area);
-    }
-
-    addViewStream(area = this.getAreaName(), control$: Observable<UiControl>) {
         this.subscription.add(
             control$
                 .pipe(distinctUntilEqual())
