@@ -1,6 +1,5 @@
 using System.Reactive.Linq;
 using Json.Patch;
-using OpenSmc.Activities;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data.Serialization;
@@ -15,27 +14,34 @@ public class ChangeStreamHost<TStream, TReference>
     {
         stream.RegisterMessageHandler<PatchChangeRequest>(delivery =>
         {
-            Change(delivery, Current.Value);
+            var response = stream.RequestChange(state => Change(delivery, state));
             return delivery.Processed();
         });
     }
 
     public virtual IDisposable Subscribe(IObserver<DataChangedEvent> observer)
     {
-        observer.OnNext(GetFullDataChange(Current));
-        return ChangeStream.Subscribe(observer);
+        TStream current = default;
+        Stream
+            .Take(1)
+            .Select(x =>
+            {
+                current = x.Value;
+                return GetFullDataChange(x);
+            })
+            .Subscribe(observer);
+        return Stream
+            .Skip(1)
+            .Select(r => GetDataChangePatch(ref current, r))
+            .Where(x => x?.Change != null)
+            .Subscribe(observer);
     }
-
-    protected override IObservable<DataChangedEvent> ChangeStream =>
-        InStream.Skip(1).Select(r => GetDataChangePatch(r)).Where(x => x?.Change != null);
 
     private DataChangedEvent GetFullDataChange(ChangeItem<TStream> changeItem)
     {
-        Current = changeItem;
-
         return new DataChangedEvent(
-            InStream.Id,
-            InStream.Reference,
+            Stream.Id,
+            Stream.Reference,
             changeItem.Version,
             changeItem.Value,
             ChangeType.Full,
@@ -43,62 +49,25 @@ public class ChangeStreamHost<TStream, TReference>
         );
     }
 
-    private void Change(IMessageDelivery<PatchChangeRequest> delivery, TStream state)
-    {
-        var patched = delivery.Message.Change.Apply(state, InStream.Hub.JsonSerializerOptions);
-        if (patched == null)
-        {
-            InStream.Hub.Post(
-                new DataChangeResponse(
-                    InStream.Hub.Version,
-                    DataChangeStatus.Failed,
-                    new ActivityLog(ActivityCategory.DataUpdate).Fail("Patch failed")
-                ),
-                o => o.ResponseFor(delivery)
-            );
-            return;
-        }
-
-        var response = RequestChange(
-            new ChangeItem<TStream>(
-                InStream.Id,
-                InStream.Reference,
-                patched,
-                delivery.Sender,
-                InStream.Hub.Version
-            )
+    private ChangeItem<TStream> Change(
+        IMessageDelivery<PatchChangeRequest> delivery,
+        TStream state
+    ) =>
+        new(
+            Stream.Id,
+            Stream.Reference,
+            delivery.Message.Change.Apply(state, Stream.Hub.JsonSerializerOptions),
+            delivery.Sender,
+            Stream.Hub.Version
         );
 
-        InStream.Hub.Post(response, o => o.ResponseFor(delivery));
-    }
-
-    private DataChangeResponse RequestChange(ChangeItem<TStream> changeItem)
-    {
-        if (backfeed == null)
-            return new DataChangeResponse(
-                0,
-                DataChangeStatus.Failed,
-                new ActivityLog(ActivityCategory.DataUpdate).Fail(
-                    $"Was not able to backtransform the change item of type {typeof(TStream).Name}"
-                )
-            );
-        return InStream.Workspace.RequestChange(state =>
-            backfeed(state, InStream.Reference, changeItem)
-        );
-    }
-
-    private DataChangedEvent GetDataChangePatch(ChangeItem<TStream> change)
-    {
-        var dataChanged = new DataChangedEvent(
-            InStream.Id,
-            InStream.Reference,
+    private DataChangedEvent GetDataChangePatch(ref TStream current, ChangeItem<TStream> change) =>
+        new(
+            Stream.Id,
+            Stream.Reference,
             change.Version,
-            GetPatch(change.Value),
+            GetPatch(ref current, change.Value),
             ChangeType.Patch,
             change.ChangedBy
         );
-        Current = change;
-
-        return dataChanged;
-    }
 }

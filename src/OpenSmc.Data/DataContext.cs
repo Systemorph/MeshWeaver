@@ -20,6 +20,11 @@ public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace) : IAsync
             DataSourceBuilders = DataSourceBuilders.Add(id, dataSourceBuilder),
         };
 
+    public ITypeSource GetTypeSource(Type type) =>
+        DataSources
+            .Values.Select(ds => ds.TypeSources.GetValueOrDefault(type))
+            .FirstOrDefault(ts => ts is not null);
+
     public ValueTask<EntityStore> Initialized =>
         DataSources
             .Values.ToAsyncEnumerable()

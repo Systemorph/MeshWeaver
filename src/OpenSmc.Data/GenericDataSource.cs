@@ -10,7 +10,7 @@ namespace OpenSmc.Data;
 
 public interface IDataSource : IAsyncDisposable
 {
-    IEnumerable<ITypeSource> TypeSources { get; }
+    IReadOnlyDictionary<Type, ITypeSource> TypeSources { get; }
     IReadOnlyCollection<Type> MappedTypes { get; }
     object Id { get; }
     IReadOnlyCollection<DataChangeRequest> Change(DataChangeRequest request);
@@ -33,7 +33,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
             .SelectAwait(async stream => await stream.Initialized)
             .AggregateAsync(new EntityStore(), (store, el) => store.Merge(el));
 
-    IEnumerable<ITypeSource> IDataSource.TypeSources => TypeSources.Values;
+    IReadOnlyDictionary<Type, ITypeSource> IDataSource.TypeSources => TypeSources;
 
     protected ImmutableDictionary<Type, ITypeSource> TypeSources { get; init; } =
         ImmutableDictionary<Type, ITypeSource>.Empty;
@@ -87,9 +87,11 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
 
     private void Synchronize(ChangeItem<EntityStore> item)
     {
-        if (!Id.Equals(item.ChangedBy))
-            foreach (var typeSource in TypeSources.Values)
-                typeSource.Update(item);
+        if (item.ChangedBy == null || Id.Equals(item.ChangedBy))
+            return;
+
+        foreach (var typeSource in TypeSources.Values)
+            typeSource.Update(item);
     }
 
     private async Task InitializeAsync(

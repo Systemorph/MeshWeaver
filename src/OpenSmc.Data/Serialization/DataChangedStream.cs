@@ -8,36 +8,27 @@ namespace OpenSmc.Data.Serialization;
 public abstract class DataChangedStreamBase<TStream, TReference, TChange>
     where TReference : WorkspaceReference<TStream>
 {
-    protected ChangeItem<TStream> Current { get; set; }
-    protected abstract IObservable<TChange> ChangeStream { get; }
-    protected readonly IChangeStream<TStream, TReference> InStream;
+    protected readonly IChangeStream<TStream, TReference> Stream;
     protected readonly IActivityService ActivityService;
-    protected readonly Func<
-        WorkspaceState,
-        TReference,
-        ChangeItem<TStream>,
-        ChangeItem<WorkspaceState>
-    > backfeed;
 
     protected DataChangedStreamBase(IChangeStream<TStream, TReference> stream)
     {
         ActivityService = stream.Hub.ServiceProvider.GetRequiredService<IActivityService>();
-        Current = stream.Current;
 
-        InStream = stream;
-        backfeed = stream.Workspace.ReduceManager.ReduceTo<TStream>().GetBackfeed<TReference>();
+        Stream = stream;
     }
 
-    protected TStream ApplyPatch(JsonPatch patch)
+    protected TStream ApplyPatch(TStream current, JsonPatch patch)
     {
-        return patch.Apply(Current.Value, InStream.Hub.JsonSerializerOptions);
+        return patch.Apply(current, Stream.Hub.JsonSerializerOptions);
     }
 
-    protected JsonPatch GetPatch(TStream fullChange)
+    protected JsonPatch GetPatch(ref TStream current, TStream fullChange)
     {
-        var jsonPatch = Current.Value.CreatePatch(fullChange, InStream.Hub.JsonSerializerOptions);
+        var jsonPatch = current.CreatePatch(fullChange, Stream.Hub.JsonSerializerOptions);
         if (!jsonPatch.Operations.Any())
             return null;
+        current = fullChange;
         return jsonPatch;
     }
 }

@@ -178,7 +178,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var toolbarData = (Toolbar)await stream.GetData(toolbarDataReference).FirstAsync();
         toolbarData.Year.Should().Be(2024);
 
-        stream.Synchronize(ci => new Data.Serialization.ChangeItem<EntityStore>(
+        stream.Update(ci => new Data.Serialization.ChangeItem<EntityStore>(
             stream.Id,
             stream.Reference,
             ci.Update(toolbarDataReference, toolbarData with { Year = 2025 }),

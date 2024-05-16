@@ -35,7 +35,7 @@ public class DataPlugin(IMessageHub hub)
 
     private IMessageDelivery RequestChange(IMessageDelivery request, DataChangeRequest change)
     {
-        var response = Workspace.RequestChange(change, request?.Sender ?? Hub.Address, null);
+        var response = Workspace.RequestChange(change, null);
         if (request != null)
         {
             Hub.Post(response, o => o.ResponseFor(request));
