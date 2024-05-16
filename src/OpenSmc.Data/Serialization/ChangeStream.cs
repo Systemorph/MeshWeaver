@@ -2,6 +2,7 @@
 using System.Data;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using OpenSmc.Activities;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data.Serialization;
@@ -30,13 +31,18 @@ public interface IChangeStream : IDisposable
         where TMessage : IWorkspaceMessage;
 }
 
-public interface IChangeStream<TStream> : IChangeStream, IObservable<ChangeItem<TStream>>
+public interface IChangeStream<TStream>
+    : IChangeStream,
+        IObservable<ChangeItem<TStream>>,
+        IObserver<ChangeItem<TStream>>
 {
-    void Synchronize(Func<TStream, ChangeItem<TStream>> update);
+    void Update(Func<TStream, ChangeItem<TStream>> update);
     void Initialize(TStream value);
     IObservable<ChangeItem<TReduced>> Reduce<TReduced>(WorkspaceReference<TReduced> reference);
 
     new Task<TStream> Initialized { get; }
+
+    DataChangeResponse RequestChange(Func<TStream, ChangeItem<TStream>> update);
 }
 
 public interface IChangeStream<TStream, TReference> : IChangeStream<TStream>
@@ -60,6 +66,12 @@ public record ChangeStream<TStream, TReference>
         Func<IMessageDelivery<IWorkspaceMessage>, bool> Applies,
         Func<IMessageDelivery<IWorkspaceMessage>, IMessageDelivery> Process
     )>.Empty;
+    private readonly Func<
+        WorkspaceState,
+        TReference,
+        ChangeItem<TStream>,
+        ChangeItem<WorkspaceState>
+    > backfeed;
 
     public IMessageHub Hub => Workspace.Hub;
     public IWorkspace Workspace { get; }
@@ -84,16 +96,14 @@ public record ChangeStream<TStream, TReference>
         object id,
         TReference reference,
         IWorkspace workspace,
-        ReduceManager<TStream> reduceManager,
-        IObservable<ChangeItem<TStream>> store
+        ReduceManager<TStream> reduceManager
     )
     {
         Id = id;
         Reference = reference;
         Workspace = workspace;
-        if (store != null)
-            Disposables.Add(store.Skip(1).Subscribe(x => Current = x));
         this.reduceManager = reduceManager;
+        backfeed = reduceManager.ReduceTo<TStream>().GetBackfeed<TReference>();
     }
 
     public void RegisterMessageHandler<TMessage>(
@@ -141,7 +151,7 @@ public record ChangeStream<TStream, TReference>
     }
 
     public void Initialize(TStream initial) =>
-        Initialize(new ChangeItem<TStream>(Id, Reference, initial, Id, Hub.Version));
+        Initialize(new ChangeItem<TStream>(Id, Reference, initial, null, Hub.Version));
 
     private void Initialize(ChangeItem<TStream> initial)
     {
@@ -175,7 +185,7 @@ public record ChangeStream<TStream, TReference>
             ?.Invoke(delivery);
     }
 
-    public void Synchronize(Func<TStream, ChangeItem<TStream>> update)
+    public void Update(Func<TStream, ChangeItem<TStream>> update)
     {
         if (Current == null)
             Initialize(update(default));
@@ -186,5 +196,24 @@ public record ChangeStream<TStream, TReference>
     {
         //TODO Roland Bürgi 2024-05-06: Apply some merge logic
         return changeItem;
+    }
+
+    public DataChangeResponse RequestChange(Func<TStream, ChangeItem<TStream>> update)
+    {
+        if (backfeed == null)
+            return new DataChangeResponse(
+                0,
+                DataChangeStatus.Failed,
+                new ActivityLog(ActivityCategory.DataUpdate).Fail(
+                    $"Was not able to backtransform the change item of type {typeof(TStream).Name}"
+                )
+            );
+
+        return Workspace.RequestChange(state => backfeed(state, Reference, update(Current.Value)));
+    }
+
+    public void OnNext(ChangeItem<TStream> value)
+    {
+        Current = value;
     }
 }

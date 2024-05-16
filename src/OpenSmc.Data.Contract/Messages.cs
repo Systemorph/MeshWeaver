@@ -10,7 +10,10 @@ public interface IWorkspaceMessage
     object Reference { get; }
 }
 
-public abstract record DataChangeRequest() : IRequest<DataChangeResponse>;
+public abstract record DataChangeRequest() : IRequest<DataChangeResponse>
+{
+    public object ChangedBy { get; init; }
+}
 
 public abstract record DataChangeRequestWithElements(IReadOnlyCollection<object> Elements)
     : DataChangeRequest;
@@ -24,23 +27,9 @@ public record UpdateDataRequest(IReadOnlyCollection<object> Elements)
 public record DeleteDataRequest(IReadOnlyCollection<object> Elements)
     : DataChangeRequestWithElements(Elements);
 
-public record PatchChangeRequest(
-    object Address,
-    object Reference,
-    JsonPatch Change,
-    long Version,
-    object ChangedBy
-) : DataChangeRequest, IWorkspaceMessage
-{
-    public PatchChangeRequest(DataChangedEvent dataChanged)
-        : this(
-            dataChanged.Address,
-            dataChanged.Reference,
-            (JsonPatch)dataChanged.Change,
-            dataChanged.Version,
-            dataChanged.ChangedBy
-        ) { }
-}
+public record PatchChangeRequest(object Address, object Reference, JsonPatch Change, long Version)
+    : DataChangeRequest,
+        IWorkspaceMessage { }
 
 public record DataChangeResponse(long Version, DataChangeStatus Status, ActivityLog Log);
 

@@ -9,6 +9,7 @@ public interface IWorkspace : IAsyncDisposable
     IMessageHub Hub { get; }
     WorkspaceState State { get; }
     Task Initialized { get; }
+    DataContext DataContext { get; }
     IReadOnlyCollection<Type> MappedTypes { get; }
     void Update(IEnumerable<object> instances) => Update(instances, new());
     void Update(IEnumerable<object> instances, UpdateOptions updateOptions);
@@ -25,11 +26,7 @@ public interface IWorkspace : IAsyncDisposable
     );
     void Unsubscribe(object address, WorkspaceReference reference);
     IMessageDelivery DeliverMessage(IMessageDelivery<IWorkspaceMessage> delivery);
-    DataChangeResponse RequestChange(
-        DataChangeRequest change,
-        object changedBy,
-        WorkspaceReference reference
-    );
+    DataChangeResponse RequestChange(DataChangeRequest change, WorkspaceReference reference);
 
     IObservable<ChangeItem<WorkspaceState>> Stream { get; }
     ReduceManager<WorkspaceState> ReduceManager { get; }
@@ -37,6 +34,12 @@ public interface IWorkspace : IAsyncDisposable
 
     IChangeStream<TReduced> GetChangeStream<TReduced>(WorkspaceReference<TReduced> reference);
     IChangeStream<TReduced, TReference> GetChangeStream<TReduced, TReference>(TReference reference)
+        where TReference : WorkspaceReference<TReduced>;
+
+    IChangeStream<TReduced, TReference> GetRemoteChangeStream<TReduced, TReference>(
+        object address,
+        TReference reference
+    )
         where TReference : WorkspaceReference<TReduced>;
 
     void Synchronize(Func<WorkspaceState, ChangeItem<WorkspaceState>> change);

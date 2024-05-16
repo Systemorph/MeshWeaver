@@ -1,9 +1,11 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Activities;
 using OpenSmc.Data;
+using OpenSmc.Data.Serialization;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using Xunit;
@@ -65,7 +67,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
         TimeSpan timeout = TimeSpan.FromSeconds(9999);
         var clientWorkspace = GetWorkspace(client);
-
+        await clientWorkspace.Initialized;
         var data = (
             await clientWorkspace.GetObservable<MyData>().FirstOrDefaultAsync().Timeout(timeout)
         )

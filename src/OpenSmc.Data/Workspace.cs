@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
+using System.IO.Pipes;
 using System.Reactive.Linq;
 using System.Reflection;
-using System.Security.Cryptography;
 using AngleSharp.Common;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
@@ -23,8 +23,7 @@ public class Workspace : IWorkspace
             Hub.Address,
             new WorkspaceStateReference(),
             this,
-            ReduceManager,
-            null
+            ReduceManager
         );
     }
 
@@ -76,7 +75,7 @@ public class Workspace : IWorkspace
         return stream;
     }
 
-    private IChangeStream<TReduced, TReference> GetExternalClientChangeStream<TReduced, TReference>(
+    public IChangeStream<TReduced, TReference> GetRemoteChangeStream<TReduced, TReference>(
         object address,
         TReference reference
     )
@@ -90,16 +89,18 @@ public class Workspace : IWorkspace
     private IChangeStream CreateChangeStream<TReduced, TReference>(TReference reference)
         where TReference : WorkspaceReference<TReduced>
     {
-        var ret = ReduceManager.ReduceStream(myChangeStream, reference);
-        var changeStream = new ChangeStream<TReduced, TReference>(
+        var ret = new ChangeStream<TReduced, TReference>(
             Hub.Address,
             reference,
             this,
-            ReduceManager.ReduceTo<TReduced>(),
-            ret
+            ReduceManager.ReduceTo<TReduced>()
         );
 
-        return changeStream;
+        ret.AddDisposable(
+            ReduceManager.ReduceStream<TReduced>(myChangeStream, reference).Subscribe(ret)
+        );
+
+        return ret;
     }
 
     private IChangeStream CreateExternalClientChangeStream<TReduced, TReference>(
@@ -112,9 +113,9 @@ public class Workspace : IWorkspace
             address,
             reference,
             this,
-            ReduceManager.ReduceTo<TReduced>(),
-            GetChangeStream(reference)
+            ReduceManager.ReduceTo<TReduced>()
         );
+        stream.AddDisposable(GetChangeStream(reference).Subscribe(stream));
 
         stream.AddDisposable(
             new Disposables.AnonymousDisposable(
@@ -140,13 +141,19 @@ public class Workspace : IWorkspace
 
     public void Update(IEnumerable<object> instances, UpdateOptions updateOptions) =>
         RequestChange(
-            new UpdateDataRequest(instances.ToArray()) { Options = updateOptions },
-            Hub.Address,
+            new UpdateDataRequest(instances.ToArray())
+            {
+                Options = updateOptions,
+                ChangedBy = Hub.Address
+            },
             Reference
         );
 
     public void Delete(IEnumerable<object> instances) =>
-        RequestChange(new DeleteDataRequest(instances.ToArray()), Hub.Address, Reference);
+        RequestChange(
+            new DeleteDataRequest(instances.ToArray()) { ChangedBy = Hub.Address },
+            Reference
+        );
 
     private readonly TaskCompletionSource initialized = new();
     public Task Initialized => initialized.Task;
@@ -247,7 +254,7 @@ public class Workspace : IWorkspace
                 initialized.SetResult();
             });
 
-        foreach (var ts in DataContext.DataSources.Values.SelectMany(ds => ds.TypeSources))
+        foreach (var ts in DataContext.DataSources.Values.SelectMany(ds => ds.TypeSources.Values))
             typeSources[ts.CollectionName] = ts;
     }
 
@@ -261,21 +268,17 @@ public class Workspace : IWorkspace
         //TODO Roland Bürgi 2024-05-06: Not sure yet how to implement
     }
 
-    public DataChangeResponse RequestChange(
-        DataChangeRequest change,
-        object changedBy,
-        WorkspaceReference reference
-    )
+    public DataChangeResponse RequestChange(DataChangeRequest change, WorkspaceReference reference)
     {
         var log = new ActivityLog(ActivityCategory.DataUpdate);
-        myChangeStream.Synchronize(state => new ChangeItem<WorkspaceState>(
+        myChangeStream.Update(state => new ChangeItem<WorkspaceState>(
             Hub.Address,
             reference ?? Reference,
             state.Change(change) with
             {
                 Version = Hub.Version
             },
-            changedBy,
+            change.ChangedBy,
             Hub.Version
         ));
         return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, log.Finish());
@@ -335,7 +338,7 @@ public class Workspace : IWorkspace
         TReference reference
     )
         where TReference : WorkspaceReference<TReduced> =>
-        GetExternalClientChangeStream<TReduced, TReference>(address, reference);
+        GetRemoteChangeStream<TReduced, TReference>(address, reference);
 
     private static readonly MethodInfo SubscribToHosteMethod =
         ReflectionHelper.GetMethodGeneric<Workspace>(x =>
@@ -384,7 +387,7 @@ public class Workspace : IWorkspace
     public DataChangeResponse RequestChange(Func<WorkspaceState, ChangeItem<WorkspaceState>> update)
     {
         activityService.Start(ActivityCategory.DataUpdate);
-        myChangeStream.Synchronize(update);
+        myChangeStream.Update(update);
         return new DataChangeResponse(
             Hub.Version,
             DataChangeStatus.Committed,
@@ -394,7 +397,7 @@ public class Workspace : IWorkspace
 
     public void Synchronize(Func<WorkspaceState, ChangeItem<WorkspaceState>> change)
     {
-        myChangeStream.Synchronize(s => change(s));
+        myChangeStream.Update(s => change(s));
     }
 
     private ChangeItem<WorkspaceState> Update(

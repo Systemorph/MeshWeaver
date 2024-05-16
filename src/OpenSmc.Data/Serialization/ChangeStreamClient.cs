@@ -1,7 +1,9 @@
+using System.Globalization;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
+using Microsoft.VisualBasic;
 
 namespace OpenSmc.Data.Serialization;
 
@@ -13,103 +15,70 @@ public class ChangeStreamClient<TStream, TReference>
     public ChangeStreamClient(IChangeStream<TStream, TReference> stream)
         : base(stream)
     {
+        bool isInitialized = false;
         stream.RegisterMessageHandler<DataChangedEvent>(delivery =>
         {
-            Synchronize(delivery.Message);
+            if (!isInitialized)
+            {
+                isInitialized = true;
+                var newState = GetFullState(delivery.Message);
+                Stream.Initialize(newState);
+            }
+
+            stream.Update(state => Update(state, delivery.Message));
             return delivery.Processed();
         });
     }
 
-    protected override IObservable<PatchChangeRequest> ChangeStream =>
-        InStream.Skip(1).Select(r => GetDataChangePatch(r)).Where(x => x?.Change != null);
-
-    private PatchChangeRequest GetDataChangePatch(ChangeItem<TStream> changeItem)
+    private PatchChangeRequest GetDataChangePatch(
+        ref TStream current,
+        ChangeItem<TStream> changeItem
+    )
     {
-        var patch = GetPatch(changeItem.Value);
+        if (current == null || changeItem.ChangedBy == null)
+        {
+            current = changeItem.Value;
+            return null;
+        }
+        var patch = GetPatch(ref current, changeItem.Value);
         if (patch == null || !patch.Operations.Any())
             return null;
 
-        return new PatchChangeRequest(
-            InStream.Id,
-            InStream.Reference,
-            patch,
-            changeItem.Version,
-            changeItem.ChangedBy
-        );
+        current = changeItem.Value;
+        return new(Stream.Id, Stream.Reference, patch, changeItem.Version);
     }
 
     public IDisposable Subscribe(IObserver<PatchChangeRequest> observer)
     {
-        return ChangeStream.Subscribe(observer);
+        TStream current = default;
+        return Stream
+            .Select(r => GetDataChangePatch(ref current, r))
+            .Where(x => x?.Change != null)
+            .Subscribe(observer);
     }
 
-    private ChangeItem<WorkspaceState> ApplyPatchRequest(
-        WorkspaceState state,
-        PatchChangeRequest request,
-        object changedBy
-    )
-    {
-        var newState = ApplyPatch((JsonPatch)request.Change);
-        return backfeed(
-            state,
-            InStream.Reference,
-            new ChangeItem<TStream>(
-                InStream.Id,
-                InStream.Reference,
-                newState,
-                changedBy,
-                InStream.Hub.Version
-            )
-        );
-    }
-
-    public void Synchronize(DataChangedEvent request)
-    {
-        if (Current == null)
-            InStream.Initialize(GetFullState(request));
-        else
-            InStream.Workspace.Synchronize(state =>
-                ParseDataChangedFromLastSynchronized(state, request)
-            );
-    }
-
-    private ChangeItem<WorkspaceState> ParseDataChangedFromLastSynchronized(
-        WorkspaceState state,
-        DataChangedEvent request
-    )
+    private ChangeItem<TStream> Update(TStream state, DataChangedEvent request)
     {
         var newState = request.ChangeType switch
         {
-            ChangeType.Patch => ApplyPatch((JsonPatch)request.Change),
+            ChangeType.Patch => ApplyPatch(state, (JsonPatch)request.Change),
             ChangeType.Full => GetFullState(request),
             _ => throw new ArgumentOutOfRangeException()
         };
-        return backfeed(
-            state,
-            InStream.Reference,
-            new ChangeItem<TStream>(
-                InStream.Id,
-                InStream.Reference,
-                newState,
-                request.ChangedBy,
-                InStream.Hub.Version
-            )
+        return new ChangeItem<TStream>(
+            Stream.Id,
+            Stream.Reference,
+            newState,
+            request.ChangedBy,
+            Stream.Hub.Version
         );
     }
 
     private TStream GetFullState(DataChangedEvent request)
     {
-        var ret = request.Change is TStream s
+        return request.Change is TStream s
             ? s
-            : (request.Change as JsonNode).Deserialize<TStream>(InStream.Hub.JsonSerializerOptions)
+            : (request.Change as JsonNode).Deserialize<TStream>(Stream.Hub.JsonSerializerOptions)
                 ?? throw new InvalidOperationException();
-        Current = new ChangeItem<TStream>(
-            InStream.Id,
-            InStream.Reference,
-            ret,
-            request.ChangedBy,
-            request.Version
-        );
-        return ret;
     }
 }
