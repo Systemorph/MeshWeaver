@@ -130,7 +130,7 @@ public class Workspace : IWorkspace
                 {
                     if (address.Equals(e.ChangedBy))
                         return;
-                    Hub.Post(e, o => o.WithTarget(Hub.Address));
+                    Hub.Post(e, o => o.WithTarget(address));
                 })
         );
 
