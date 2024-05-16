@@ -27,11 +27,11 @@ public class DataPlugin(IMessageHub hub)
 
     IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(
         IMessageDelivery<UpdateDataRequest> request
-    ) => RequestChange(request, request.Message);
+    ) => RequestChange(request, request.Message with { ChangedBy = request.Sender });
 
     IMessageDelivery IMessageHandler<DeleteDataRequest>.HandleMessage(
         IMessageDelivery<DeleteDataRequest> request
-    ) => RequestChange(request, request.Message);
+    ) => RequestChange(request, request.Message with { ChangedBy = request.Sender });
 
     private IMessageDelivery RequestChange(IMessageDelivery request, DataChangeRequest change)
     {
