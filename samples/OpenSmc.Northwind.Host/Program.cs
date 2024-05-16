@@ -59,6 +59,7 @@ internal static class RouterHubExtensions
                     .RouteAddressToHostedHub<ApplicationAddress>(ConfigureApplication)
                     .RouteAddressToHostedHub<ReferenceDataAddress>(c => c.AddNorthwindReferenceData())
                 )
+                .WithForwardThroughOrleansStream<UiAddress>(ApplicationStreamNamespaces.Ui, a => a.Id)
         );
 
     private static MessageHubConfiguration ConfigureApplication(MessageHubConfiguration configuration)
