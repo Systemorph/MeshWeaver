@@ -1,4 +1,4 @@
-import { Observable, ReplaySubject, Subscription } from "rxjs";
+import { Observable, ReplaySubject, Subject, Subscription } from "rxjs";
 import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
 import { LayoutStackControl } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
 import { LayoutStackRenderer } from "./LayoutStackRenderer";
@@ -37,6 +37,7 @@ export function renderControl(
                 if (value?.constructor !== lastValue?.constructor) {
                     lastValue = value;
                     lastSubscription?.unsubscribe();
+                    lastSubscription = null;
 
                     if (value) {
                         const renderer = getRenderer(value);

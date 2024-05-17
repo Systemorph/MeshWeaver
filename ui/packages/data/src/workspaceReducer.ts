@@ -14,7 +14,7 @@ export type UpdateByReferencePayload<T = unknown> = {
     value: T;
 }
 
-export const updateByReferenceActionCreator = createAction<UpdateByReferencePayload>('updateByReference');
+export const updateByReferenceActionCreator = createAction<UpdateByReferencePayload>('UPDATE_BY_REFERENCE');
 
 export type UpdateByReferenceAction = ReturnType<typeof updateByReferenceActionCreator>;
 

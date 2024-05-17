@@ -1,21 +1,22 @@
 import { filter, map, Subscription } from "rxjs";
 import { WorkspaceReference } from "./contract/WorkspaceReference";
-import { log } from "@open-smc/utils/src/operators/log";
 import { messageOfType } from "@open-smc/messaging/src/operators/messageOfType";
 import { DataChangedEvent } from "./contract/DataChangedEvent";
 import { unpack } from "@open-smc/messaging/src/operators/unpack";
 import { isEqual } from "lodash-es";
-import { jsonPatchActionCreator } from "./jsonPatchReducer";
 import { SubscribeRequest } from "./contract/SubscribeRequest";
 import { WorkspaceAction } from "./workspaceReducer";
-import jsonPatch from "fast-json-patch";
+import FastJsonPatch from "fast-json-patch";
 import { JsonPatch } from "./contract/JsonPatch";
 import { PatchChangeRequest } from "./contract/PatchChangeRequest";
 import { Workspace } from "./Workspace";
 import { MessageHub } from '@open-smc/messaging/src/MessageHub';
+import { deserialize } from "@open-smc/serialization/src/deserialize";
+import { serialize } from "@open-smc/serialization/src/serialize";
 
 export class RemoteWorkspace<T = unknown> extends Workspace<T> {
     subscription = new Subscription();
+    json: unknown;
 
     constructor(
         private uiHub: MessageHub,
@@ -36,9 +37,11 @@ export class RemoteWorkspace<T = unknown> extends Workspace<T> {
                         && !isEqual(message.changedBy, uiHub.address)
                     )
                 )
-                .pipe(map(mapDataChangedEvent))
-                .pipe(map(jsonPatchActionCreator))
-                .subscribe(this.store.dispatch)
+                .pipe(map(dataChangedEventToJsonPatch))
+                .subscribe(patch => {
+                    this.json = FastJsonPatch.applyPatch(this.json, patch.operations, null, false).newDocument;
+                    this.update(() => deserialize(this.json) as T);
+                })
         );
 
         uiHub.sendRequest(new SubscribeRequest(reference))
@@ -51,10 +54,11 @@ export class RemoteWorkspace<T = unknown> extends Workspace<T> {
     }
 
     next(value: WorkspaceAction): void {
-        const oldState = this.getState();
         this.store.dispatch(value);
-        const newState = this.getState();
-        const operations = jsonPatch.compare(oldState, newState);
+        const state = this.getState();
+        const json = serialize(state);
+        const operations = FastJsonPatch.compare(this.json, json);
+        this.json = json;
         if (operations.length) {
             const patch = new JsonPatch(operations);
             this.uiHub.sendRequest(new PatchChangeRequest(null, this.reference, patch))
@@ -71,7 +75,7 @@ export class RemoteWorkspace<T = unknown> extends Workspace<T> {
     }
 }
 
-const mapDataChangedEvent = (event: DataChangedEvent) => {
+const dataChangedEventToJsonPatch = (event: DataChangedEvent) => {
     const {change, changeType} = event;
 
     switch (changeType) {

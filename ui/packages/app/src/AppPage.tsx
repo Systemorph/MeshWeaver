@@ -24,7 +24,7 @@ export function AppPage() {
     useEffect(() => {
        const subscription = connectHubs(signalrHub, uiHub);
        return () => subscription.unsubscribe();
-    }, [new SerializationMiddleware(signalrHub), uiHub]);
+    }, [signalrHub, uiHub]);
 
     useEffect(
         () => renderLayoutAreaReference(uiHub, new LayoutAreaReference(pathname)),

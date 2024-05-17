@@ -5,6 +5,7 @@ import { distinctUntilEqual } from "@open-smc/data/src/operators/distinctUntilEq
 import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl.ts";
 import { map, Observable, of, Subscription, tap } from "rxjs";
 import { updateStore } from "@open-smc/data/src/workspaceReducer";
+import { v4 } from "uuid";
 
 export const uiControlType = (UiControl as any).$type;
 
@@ -36,8 +37,6 @@ export class LayoutViews extends Workspace<Collection<UiControl>> {
     }
 
     private getAreaName() {
-        return `area_${this.n++}`;
+        return `${v4().substring(0, 4)}`;
     }
-
-    private n = 0;
 }

@@ -7,7 +7,7 @@ var __publicField = (obj, key, value) => {
 import { Subscription, Observable, filter, mergeMap, from, map, distinctUntilChanged, of, switchMap, combineLatest, pairwise, take, Subject, ReplaySubject } from "rxjs";
 import { methodName } from "./contract.mjs";
 import { immerable, isDraftable, produce, isDraft, current, enablePatches, applyPatches } from "immer";
-import { trimStart, set, isEqual, keys, keyBy, isEmpty, cloneDeepWith, assign, mapValues, isFunction } from "lodash-es";
+import { cloneDeepWith, assign, mapValues, trimStart, set, isFunction, isEqual, keys, keyBy, isEmpty } from "lodash-es";
 import { v4 } from "uuid";
 Subscription.prototype.toJSON = (key) => {
   return {};
@@ -44,6 +44,26 @@ class Request {
     this.responseType = responseType;
   }
 }
+const isDeserializable = (value) => (value == null ? void 0 : value.$type) !== void 0;
+const deserialize = (value) => {
+  return cloneDeepWith(
+    value,
+    (value2) => {
+      if (isDeserializable(value2)) {
+        const { $type, ...props } = value2;
+        const constructor = getConstructor($type);
+        if (constructor) {
+          if (constructor.deserialize) {
+            return constructor.deserialize(props);
+          }
+          return assign(new constructor(), plainObjectDeserializer(props));
+        }
+        return plainObjectDeserializer(value2);
+      }
+    }
+  );
+};
+const plainObjectDeserializer = (props) => mapValues(props, deserialize);
 var __defProp$k = Object.defineProperty;
 var __getOwnPropDesc$k = Object.getOwnPropertyDescriptor;
 var __decorateClass$k = (decorators, target, key, kind) => {
@@ -62,11 +82,11 @@ let DataChangedEvent = class {
     this.changeType = changeType;
     this.changedBy = changedBy;
   }
-  // // keeping change raw since the patch is meant to be applied to the json store as-is
-  // static deserialize(props: DataChangedEvent) {
-  //     const {reference, change, changeType} = props;
-  //     return new DataChangedEvent(deserialize(reference), change, changeType);
-  // }
+  // keeping change raw since the patch is meant to be applied to the raw json as-is
+  static deserialize(props) {
+    const { reference, change, changeType, changedBy } = props;
+    return new DataChangedEvent(deserialize(reference), change, changeType, changedBy);
+  }
 };
 DataChangedEvent = __decorateClass$k([
   type("OpenSmc.Data.DataChangedEvent")
@@ -3086,7 +3106,7 @@ const toPointer = (jsonPath) => JSONPath.toPointer(
 );
 const pointerToArray = (path) => trimStart(path, "/").split("/");
 const updateByPath = (data, path, value) => set(data, pointerToArray(path), value);
-const updateByReferenceActionCreator = createAction("updateByReference");
+const updateByReferenceActionCreator = createAction("UPDATE_BY_REFERENCE");
 function updateStore(reducer) {
   return (dispatch, getState2) => dispatch(
     updateByReferenceActionCreator(
@@ -3240,6 +3260,24 @@ let ErrorEvent = class {
 ErrorEvent = __decorateClass$c([
   type("OpenSmc.ErrorEvent")
 ], ErrorEvent);
+const isSerializable = (value) => isFunction(value == null ? void 0 : value.constructor) && value.constructor.$type !== void 0;
+const serialize = (value) => {
+  return cloneDeepWith(
+    value,
+    (value2) => {
+      if (isSerializable(value2)) {
+        const { $type } = value2.constructor;
+        if (value2.serialize !== void 0) {
+          return value2.serialize();
+        }
+        return {
+          $type,
+          ...mapValues(value2, serialize)
+        };
+      }
+    }
+  );
+};
 var __defProp$b = Object.defineProperty;
 var __getOwnPropDesc$b = Object.getOwnPropertyDescriptor;
 var __decorateClass$b = (decorators, target, key, kind) => {
@@ -3255,6 +3293,9 @@ let UiControl = class {
   with(config) {
     Object.assign(this, config);
     return this;
+  }
+  toJSON() {
+    return serialize(this);
   }
 };
 UiControl = __decorateClass$b([
@@ -3348,7 +3389,6 @@ class LayoutViews extends Workspace {
   constructor() {
     super({});
     __publicField(this, "subscription", new Subscription());
-    __publicField(this, "n", 0);
   }
   addView(area, control) {
     if (!area) {
@@ -3365,7 +3405,7 @@ class LayoutViews extends Workspace {
     return new EntityReference(uiControlType, area);
   }
   getAreaName() {
-    return `area_${this.n++}`;
+    return `${v4().substring(0, 4)}`;
   }
 }
 const pathToUpdateAction = (path) => (value) => updateByReferenceActionCreator(
@@ -3558,10 +3598,22 @@ class SamplesApp extends Workspace {
         ]
       })
     });
+    layoutViews.addView(
+      "/Main",
+      new LayoutStackControl().with({
+        skin: "VerticalPanel",
+        areas: [
+          layoutViews.addView(
+            "/todos",
+            todos
+          )
+        ]
+      })
+    );
     const todosCount = new LayoutStackControl().with({
       skin: "HorizontalPanel",
       areas: [
-        layoutViews.addView(void 0, new HtmlControl().with({ data: "Total count:" })),
+        layoutViews.addView(void 0, new HtmlControl().with({ data: "Total:" })),
         layoutViews.addView(
           void 0,
           this.pipe(
@@ -3575,7 +3627,7 @@ class SamplesApp extends Workspace {
         )
       ]
     });
-    const addTodo = new LayoutStackControl().with({
+    const toolbar = new LayoutStackControl().with({
       skin: "HorizontalPanel",
       areas: [
         layoutViews.addView(
@@ -3593,28 +3645,16 @@ class SamplesApp extends Workspace {
               action: "addTodo"
             })
           })
+        ),
+        layoutViews.addView(
+          null,
+          todosCount
         )
       ]
     });
     layoutViews.addView(
-      "/Main",
-      new LayoutStackControl().with({
-        skin: "VerticalPanel",
-        areas: [
-          layoutViews.addView(
-            "/addTodo",
-            addTodo
-          ),
-          layoutViews.addView(
-            "/todos",
-            todos
-          ),
-          layoutViews.addView(
-            "/main/todosCount",
-            todosCount
-          )
-        ]
-      })
+      "/Toolbar",
+      toolbar
     );
     return layoutViews;
   }
@@ -3632,8 +3672,15 @@ class SamplesApp extends Workspace {
     const layoutViews = new LayoutViews();
     layoutViews.addView(
       "/Main",
-      new TextBoxControl().with({
-        data: "Multiselect"
+      new LayoutStackControl().with({
+        areas: [
+          layoutViews.addView(
+            null,
+            new TextBoxControl().with({
+              data: "Multiselect"
+            })
+          )
+        ]
       })
     );
     return layoutViews;
@@ -4390,6 +4437,7 @@ class SamplesServer {
       );
       subscription.add(
         samplesApp.pipe(
+          map(serialize),
           toJsonPatch()
         ).pipe(
           map(
@@ -4417,44 +4465,6 @@ class SamplesServer {
     );
   }
 }
-const isDeserializable = (value) => (value == null ? void 0 : value.$type) !== void 0;
-const deserialize = (value) => {
-  return cloneDeepWith(
-    value,
-    (value2) => {
-      if (isDeserializable(value2)) {
-        const { $type, ...props } = value2;
-        const constructor = getConstructor($type);
-        if (constructor) {
-          if (constructor.deserialize) {
-            return constructor.deserialize(props);
-          }
-          return assign(new constructor(), plainObjectDeserializer(props));
-        }
-        return plainObjectDeserializer(value2);
-      }
-    }
-  );
-};
-const plainObjectDeserializer = (props) => mapValues(props, deserialize);
-const isSerializable = (value) => isFunction(value == null ? void 0 : value.constructor) && value.constructor.$type !== void 0;
-const serialize = (value) => {
-  return cloneDeepWith(
-    value,
-    (value2) => {
-      if (isSerializable(value2)) {
-        const { $type } = value2.constructor;
-        if (value2.serialize !== void 0) {
-          return value2.serialize();
-        }
-        return {
-          $type,
-          ...mapValues(value2, serialize)
-        };
-      }
-    }
-  );
-};
 class SerializationMiddleware extends Observable {
   constructor(hub) {
     super(
