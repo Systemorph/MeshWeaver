@@ -5,7 +5,6 @@ import { RemoteWorkspace } from "@open-smc/data/src/RemoteWorkspace";
 import { EntityStoreRenderer } from "./EntityStoreRenderer";
 import { MessageHub } from "@open-smc/messaging/src/MessageHub";
 
-
 export const renderLayoutAreaReference = (
     uiHub: MessageHub,
     reference: LayoutAreaReference

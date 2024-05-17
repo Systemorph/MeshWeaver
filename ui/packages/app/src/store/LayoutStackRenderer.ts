@@ -30,7 +30,7 @@ export class LayoutStackRenderer extends ControlRenderer<LayoutStackControl> {
             controlName,
             props: {
                 areas:
-                    areas.map(reference => qualifyArea(reference.id, this.stackTrace)),
+                    areas?.map(reference => qualifyArea(reference.id, this.stackTrace)),
                 ...bindingsToReferences(props)
             }
         }

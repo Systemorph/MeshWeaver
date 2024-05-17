@@ -12,11 +12,11 @@ export class DataChangedEvent {
     ) {
     }
 
-    // // keeping change raw since the patch is meant to be applied to the json store as-is
-    // static deserialize(props: DataChangedEvent) {
-    //     const {reference, change, changeType} = props;
-    //     return new DataChangedEvent(deserialize(reference), change, changeType);
-    // }
+    // keeping change raw since the patch is meant to be applied to the raw json as-is
+    static deserialize(props: DataChangedEvent) {
+        const {reference, change, changeType, changedBy} = props;
+        return new DataChangedEvent(deserialize(reference), change, changeType, changedBy);
+    }
 }
 
 export type ChangeType = "Full" | "Patch" | "Instance";

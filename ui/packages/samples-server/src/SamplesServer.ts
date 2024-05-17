@@ -40,7 +40,6 @@ export class SamplesServer {
 
             const subscription = new Subscription();
 
-            
             const samplesApp = new SamplesApp(this.serverHub, reference as LayoutAreaReference);
 
             subscription.add(
@@ -82,6 +81,7 @@ export class SamplesServer {
             subscription.add(
                 samplesApp
                     .pipe(
+                        map(serialize),
                         toJsonPatch()
                     )
                     .pipe(

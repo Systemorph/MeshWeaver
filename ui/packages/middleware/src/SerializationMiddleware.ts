@@ -1,6 +1,6 @@
 import { map, Observable, Observer } from "rxjs";
 import { MessageDelivery } from "@open-smc/messaging/src/api/MessageDelivery";
-import { IMessageHub } from "@open-smc/messaging/src/api/MessageHub";
+import { IMessageHub } from "@open-smc/messaging/src/MessageHub";
 import { deserialize } from "@open-smc/serialization/src/deserialize";
 import { serialize } from "@open-smc/serialization/src/serialize";
 

@@ -142,13 +142,13 @@ export class SamplesApp extends Workspace<SamplesStore> {
                                 map(state => state.pages),
                                 distinctUntilChanged(),
                                 map(
-                                    pages => 
+                                    pages =>
                                         new LayoutStackControl().with({
                                             skin: "SideMenu",
                                             areas:
                                                 keys(pages).map(page => {
                                                     const { icon, title } = pages[page];
-            
+
                                                     return layoutViews.addView(
                                                         null,
                                                         new MenuItemControl().with({
@@ -163,7 +163,7 @@ export class SamplesApp extends Workspace<SamplesStore> {
                                                     )
                                                 })
                                         })
-                                    )
+                                )
                             )
                         )
                     ]
@@ -175,7 +175,7 @@ export class SamplesApp extends Workspace<SamplesStore> {
 
     createTodosLayout() {
         const layoutViews = new LayoutViews();
-    
+
         const todos = new ItemTemplateControl()
             .with({
                 dataContext: new CollectionReference("todos"),
@@ -212,12 +212,26 @@ export class SamplesApp extends Workspace<SamplesStore> {
                         ]
                     })
             });
-    
+
+        layoutViews.addView(
+            "/Main",
+            new LayoutStackControl()
+                .with({
+                    skin: "VerticalPanel",
+                    areas: [
+                        layoutViews.addView(
+                            "/todos",
+                            todos
+                        )
+                    ]
+                }),
+        );
+
         const todosCount = new LayoutStackControl()
             .with({
                 skin: "HorizontalPanel",
                 areas: [
-                    layoutViews.addView(undefined, new HtmlControl().with({ data: "Total count:" })),
+                    layoutViews.addView(undefined, new HtmlControl().with({ data: "Total:" })),
                     layoutViews.addView(
                         undefined,
                         this.pipe(
@@ -230,8 +244,8 @@ export class SamplesApp extends Workspace<SamplesStore> {
                     )
                 ]
             });
-    
-        const addTodo = new LayoutStackControl()
+
+        const toolbar = new LayoutStackControl()
             .with({
                 skin: "HorizontalPanel",
                 areas: [
@@ -252,33 +266,19 @@ export class SamplesApp extends Workspace<SamplesStore> {
                                     action: 'addTodo'
                                 }) as any
                             })
+                    ),
+                    layoutViews.addView(
+                        null,
+                        todosCount
                     )
                 ]
             })
-    
+
         layoutViews.addView(
-            "/Main",
-            new LayoutStackControl()
-                .with({
-                    skin: "VerticalPanel",
-                    areas: [
-                        layoutViews.addView(
-                            "/addTodo",
-                            addTodo
-                        ),
-                        layoutViews.addView(
-                            "/todos",
-                            todos
-                        ),
-                        layoutViews.addView(
-                            "/main/todosCount",
-                            todosCount
-                        )
-    
-                    ]
-                })
-        );
-    
+            "/Toolbar",
+            toolbar
+        )
+
         return layoutViews;
     }
 
@@ -295,14 +295,21 @@ export class SamplesApp extends Workspace<SamplesStore> {
 
     createMultiselectLayout() {
         const layoutViews = new LayoutViews();
-    
+
         layoutViews.addView(
             "/Main",
-            new TextBoxControl().with({
-                data: "Multiselect"
+            new LayoutStackControl().with({
+                areas: [
+                    layoutViews.addView(
+                        null,
+                        new TextBoxControl().with({
+                            data: "Multiselect"
+                        })
+                    )
+                ]
             })
         )
-    
+
         return layoutViews;
     }
 }

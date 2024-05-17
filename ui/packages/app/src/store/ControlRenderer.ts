@@ -16,6 +16,7 @@ import { Renderer } from "./Renderer";
 import { RendererStackTrace } from "./RendererStackTrace";
 import { EntityStoreRenderer } from "./EntityStoreRenderer";
 import { serialize } from "@open-smc/serialization/src/serialize";
+import { log } from "@open-smc/utils/src/operators/log";
 
 export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
     readonly subscription = new Subscription();
@@ -31,7 +32,7 @@ export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
         this.subscription.add(
             this.control$
                 .pipe(map(control => control?.dataContext))
-                .pipe(distinctUntilChanged())
+                .pipe(distinctUntilEqual())
                 .pipe(
                     effect(
                         dataContext =>
@@ -59,10 +60,19 @@ export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
                                 const areaModel =
                                     this.getAreaModel(this.area, control);
 
+                                const subscription = new Subscription();
+
                                 const areaModelWorkspace =
                                     sliceByReference(this.dataContext, areaModel);
 
-                                return this.renderControlTo(areaModelWorkspace);
+                                subscription.add(areaModelWorkspace.subscription);
+                                subscription.add(this.renderControlTo(areaModelWorkspace))
+
+                                subscription.add(
+                                    () => console.log('unsub', control)
+                                )
+
+                                return subscription;
                             }
                         }
                     )
@@ -89,7 +99,7 @@ export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
 
         subscription.add(
             areaModelWorkspace
-                .pipe(distinctUntilEqual())
+                .pipe(distinctUntilEqual(), log())
                 // .pipe(map(serialize))
                 .subscribe(layoutAreaModel => {
                     appStore.dispatch(setArea(layoutAreaModel))
