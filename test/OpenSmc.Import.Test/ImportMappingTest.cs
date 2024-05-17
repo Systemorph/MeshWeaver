@@ -76,7 +76,7 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
             .GetWorkspace();
         var ret2 = await workspace.GetObservable<MyRecord2>().FirstAsync();
 
-        ret2.Should().BeNull();
+        ret2.Should().BeEmpty();
 
         var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
@@ -108,7 +108,7 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
             .GetWorkspace();
         var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
-        ret.Should().BeNull();
+        ret.Should().BeEmpty();
     }
 
     const string ThreeTablesContent =
@@ -145,7 +145,7 @@ Record3SystemName,Record3DisplayName";
             .GetWorkspace();
         var ret2 = await workspace.GetObservable<MyRecord2>().FirstAsync();
 
-        ret2.Should().BeNull();
+        ret2.Should().BeEmpty();
 
         var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 

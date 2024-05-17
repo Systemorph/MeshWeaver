@@ -45,15 +45,19 @@ public record WorkspaceState(
             Collections = ((EntityStore)Reduce((dynamic)reference.Collections))
                 .Collections.Select(c => new KeyValuePair<string, InstanceCollection>(
                     c.Key,
-                    GetPartitionedCollection(c.Key, reference.Partition)
+                    GetPartitionedCollection(c.Key, reference.Partition, c.Value)
                 ))
                 .Where(x => x.Value != null)
                 .ToImmutableDictionary()
         };
 
-    private InstanceCollection GetPartitionedCollection(string collection, object partition)
+    private InstanceCollection GetPartitionedCollection(
+        string collection,
+        object partition,
+        InstanceCollection instances
+    )
     {
-        var ret = Store.GetCollection(collection);
+        var ret = instances;
         if (ret == null)
             return null;
         if (

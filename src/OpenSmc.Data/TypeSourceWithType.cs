@@ -9,7 +9,7 @@ public record PartitionedTypeSourceWithType<T>(
     IMessageHub Hub,
     Func<T, object> PartitionFunction,
     object DataSource
-) : TypeSourceWithType<T>(Hub, DataSource)
+) : TypeSourceWithType<T>(Hub, DataSource), IPartitionedTypeSource
 {
     public object GetPartition(object instance) => PartitionFunction.Invoke((T)instance);
 }
