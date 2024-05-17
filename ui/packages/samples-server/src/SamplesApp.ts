@@ -8,129 +8,20 @@ import { HtmlControl } from "@open-smc/layout/src/contract/controls/HtmlControl"
 import { ItemTemplateControl } from "@open-smc/layout/src/contract/controls/ItemTemplateControl";
 import { LayoutStackControl } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
 import { MenuItemControl } from "@open-smc/layout/src/contract/controls/MenuItemControl";
-import { combineLatest, distinctUntilChanged, filter, from, map, of, Subscription, switchMap, tap } from "rxjs";
+import { combineLatest, distinctUntilChanged, filter, map, Subscription, switchMap, tap } from "rxjs";
 import { LayoutViews, uiControlType } from "./LayoutViews";
-import { MessageDelivery } from "@open-smc/messaging/src/api/MessageDelivery";
-import { PatchChangeRequest } from "@open-smc/data/src/contract/PatchChangeRequest";
-import { jsonPatchActionCreator } from "@open-smc/data/src/jsonPatchReducer";
-import { DataChangeResponse } from "@open-smc/data/src/contract/DataChangeResponse";
 import { messageOfType } from "@open-smc/messaging/src/operators/messageOfType";
-import { create, isEqual, keyBy, keys } from "lodash-es";
+import { keyBy, keys } from "lodash-es";
 import { pathToUpdateAction } from "@open-smc/data/src/operators/pathToUpdateAction";
-import { handleRequest } from "@open-smc/messaging/src/handleRequest";
-import { toJsonPatch } from "@open-smc/data/src/operators/toJsonPatch";
-import { DataChangedEvent } from "@open-smc/data/src/contract/DataChangedEvent";
-import { pack } from "@open-smc/messaging/src/operators/pack";
 import { MessageHub } from "@open-smc/messaging/src/MessageHub";
 import { TextBoxControl } from '@open-smc/layout/src/contract/controls/TextBoxControl';
 import { v4 } from "uuid";
+import { log } from "@open-smc/utils/src/operators/log";
 
 const smBlue = "#0171ff";
 
-export class SamplesApp {
-    store: ReturnType<typeof createTodosStore>;
-    subscription = new Subscription();
-    private lastMessage: MessageDelivery;
-
-    constructor(serverHub: MessageHub, reference: LayoutAreaReference) {
-        this.store = createTodosStore(reference);
-
-        const app = new Workspace({
-            page: "home"
-        })
-
-        const pages: Record<string, LayoutViews> = {
-            home: createHomeLayout(),
-            todos: createTodosLayout(this.store),
-        };
-
-        const mainLayout = createLayout();
-
-        this.subscription.add(
-            mainLayout.subscription
-        );
-
-        const pageLayout = app
-            .pipe(
-                switchMap(
-                    state => pages[state.page]
-                )
-            );
-
-        this.subscription.add(
-            combineLatest([mainLayout, pageLayout])
-                .pipe(
-                    map(([main, page]) => ({ ...main, ...page })),
-                    tap(value => console.log(value)),
-                    map(pathToUpdateAction(`/collections/${uiControlType}`))
-                )
-                .subscribe(this.store)
-        );
-
-        this.subscription.add(
-            serverHub
-                .input
-                .pipe(
-                    filter(messageOfType(PatchChangeRequest)),
-                    filter(({ message }) => isEqual(message.reference, reference)),
-                    handleRequest(PatchChangeRequest, this.handlePatchChangeRequest())
-                )
-                .subscribe(serverHub.output)
-        );
-
-        this.subscription.add(
-            serverHub
-                .input
-                .pipe(filter(messageOfType(ClickedEvent)))
-                .subscribe(({ message }) => {
-                    const { action, id } = message.payload as { action: 'delete' | 'addTodo' | "nav", id: string };
-                    if (action === 'delete') {
-                        this.store.update(state => {delete state.collections.todos[id]});
-                    }
-                    if (action === "addTodo") {
-                        const { collections } = this.store.getState();
-                        const name = collections.viewBag.newTodo;
-                        const id = v4();
-                        const newTodo = { id, name, completed: false }
-                        this.store.update(state => {state.collections.todos[id] = newTodo});
-                    }
-                    if (action === "nav") {
-                        app.update(state => {state.page = id});
-                    }
-                })
-        );
-
-        this.subscription.add(
-            this.store
-                .pipe(toJsonPatch())
-                .pipe(
-                    map(
-                        patch =>
-                            new DataChangedEvent(
-                                reference,
-                                patch,
-                                "Patch",
-                                this.lastMessage instanceof PatchChangeRequest ? this.lastMessage.sender : null
-                            )
-                    )
-                )
-                .pipe(map(pack()))
-                .subscribe(serverHub.output)
-        );
-    }
-
-    private handlePatchChangeRequest =
-        () =>
-            (delivery: MessageDelivery<PatchChangeRequest>) => {
-                this.lastMessage = delivery;
-                const { message, sender } = delivery;
-                this.store.next(jsonPatchActionCreator(message.change));
-                return of(new DataChangeResponse("Committed"));
-            }
-}
-
-function createTodosStore(reference: LayoutAreaReference) {
-    return new Workspace({
+function getState(reference: LayoutAreaReference) {
+    return {
         reference,
         collections: {
             todos: keyBy(
@@ -146,185 +37,272 @@ function createTodosStore(reference: LayoutAreaReference) {
                 newTodo: "New task"
             },
         }
-    });
+    }
 }
 
-export type SamplesAppStore = ReturnType<typeof createTodosStore>;
+export type SamplesStore = ReturnType<typeof getState>;
 
-function createLayout() {
-    const layoutViews = new LayoutViews();
+export class SamplesApp extends Workspace<SamplesStore> {
+    subscription = new Subscription();
 
-    layoutViews.addView(
-        "/",
-        new LayoutStackControl()
-            .with({
-                skin: "MainWindow",
-                areas: [
-                    layoutViews.addView(
-                        "/Main",
-                        new HtmlControl()
-                    ),
-                    layoutViews.addView(
-                        "/Toolbar",
-                        new HtmlControl().with({
-                            data: "Toolbar"
-                        })
-                    ),
-                    layoutViews.addView(
-                        "/SideMenu",
-                        new LayoutStackControl().with({
-                            skin: "SideMenu",
-                            areas: [
-                                layoutViews.addView(
-                                    null,
-                                    new MenuItemControl().with({
-                                        title: "Home",
-                                        icon: "sm sm-home",
-                                        skin: "LargeIcon",
-                                        clickMessage: new ClickedEvent({
-                                            action: 'nav',
-                                            id: "home"
-                                        }) as any
-                                    })
-                                ),
-                                layoutViews.addView(
-                                    null,
-                                    new MenuItemControl().with({
-                                        title: "Todos",
-                                        skin: "LargeIcon",
-                                        icon: "sm sm-check",
-                                        clickMessage: new ClickedEvent({
-                                            action: 'nav',
-                                            id: "todos"
-                                        }) as any
-                                    })
-                                ),
-                            ]
-                        })
-                    )
-                ]
-            })
-    );
+    appState = new Workspace({
+        pages: {
+            home: {
+                icon: "sm sm-home",
+                title: "home",
+                layout: this.createHomeLayout(),
+            },
+            todos: {
+                icon: "sm sm-check",
+                title: "Todos",
+                layout: this.createTodosLayout()
+            },
+            multiselect: {
+                icon: "sm sm-slice",
+                title: "Multiselect",
+                layout: this.createMultiselectLayout()
+            },
+        },
+        page: "home"
+    })
 
-    return layoutViews;
-}
+    constructor(serverHub: MessageHub, reference: LayoutAreaReference) {
+        super(null);
 
-function createTodosLayout(store: SamplesAppStore) {
-    const layoutViews = new LayoutViews();
+        this.update(() => getState(reference));
 
-    const todos = new ItemTemplateControl()
-        .with({
-            dataContext: new CollectionReference("todos"),
-            data: new Binding("$"),
-            view: new LayoutStackControl()
+        const mainLayout = this.createLayout();
+
+        this.subscription.add(
+            mainLayout.subscription
+        );
+
+        const pageLayout = this.appState
+            .pipe(
+                switchMap(
+                    state => state.pages[state.page].layout
+                )
+            );
+
+        this.subscription.add(
+            combineLatest([mainLayout, pageLayout])
+                .pipe(
+                    map(([main, page]) => ({ ...main, ...page })),
+                    // tap(value => console.log(value)),
+                    map(pathToUpdateAction(`/collections/${uiControlType}`))
+                )
+                .subscribe(this)
+        );
+
+        this.subscription.add(
+            serverHub
+                .input
+                .pipe(filter(messageOfType(ClickedEvent)))
+                .subscribe(({ message }) => {
+                    const { action, id } = message.payload as { action: 'delete' | 'addTodo' | "nav", id: string };
+                    if (action === 'delete') {
+                        this.update(state => { delete state.collections.todos[id] });
+                    }
+                    if (action === "addTodo") {
+                        const { collections } = this.getState();
+                        const name = collections.viewBag.newTodo;
+                        const id = v4();
+                        const newTodo = { id, name, completed: false }
+                        this.update(state => { state.collections.todos[id] = newTodo });
+                    }
+                    if (action === "nav") {
+                        this.appState.update(state => { state.page = id });
+                    }
+                })
+        );
+    }
+
+    createLayout() {
+        const layoutViews = new LayoutViews();
+
+        layoutViews.addView(
+            "/",
+            new LayoutStackControl()
                 .with({
-                    skin: "HorizontalPanel",
+                    skin: "MainWindow",
                     areas: [
                         layoutViews.addView(
-                            "/todo/name",
+                            "/Main",
                             new HtmlControl()
-                                .with({
-                                    data: new Binding("$.name")
-                                })
                         ),
                         layoutViews.addView(
-                            "/todo/completed",
-                            new CheckboxControl()
-                                .with({
-                                    data: new Binding("$.completed")
-                                })
+                            "/Toolbar",
+                            new HtmlControl().with({
+                                data: "Toolbar"
+                            })
                         ),
                         layoutViews.addView(
-                            "/todo/deleteButton",
-                            new MenuItemControl()
-                                .with({
-                                    icon: "sm sm-close",
-                                    clickMessage: new ClickedEvent({
-                                        action: 'delete',
-                                        id: new Binding("$.id")
-                                    }) as any
-                                })
-                        ),
+                            "/SideMenu",
+                            this.appState.pipe(
+                                map(state => state.pages),
+                                distinctUntilChanged(),
+                                map(
+                                    pages => 
+                                        new LayoutStackControl().with({
+                                            skin: "SideMenu",
+                                            areas:
+                                                keys(pages).map(page => {
+                                                    const { icon, title } = pages[page];
+            
+                                                    return layoutViews.addView(
+                                                        null,
+                                                        new MenuItemControl().with({
+                                                            title,
+                                                            icon,
+                                                            skin: "LargeIcon",
+                                                            clickMessage: new ClickedEvent({
+                                                                action: 'nav',
+                                                                id: page
+                                                            }) as any
+                                                        })
+                                                    )
+                                                })
+                                        })
+                                    )
+                            )
+                        )
                     ]
                 })
-        });
+        );
 
-    const todosCount = new LayoutStackControl()
-        .with({
-            skin: "HorizontalPanel",
-            areas: [
-                layoutViews.addView(undefined, new HtmlControl().with({ data: "Total count:" })),
-                layoutViews.addView(
-                    undefined,
-                    store.pipe(
-                        map(
-                            state =>
+        return layoutViews;
+    }
+
+    createTodosLayout() {
+        const layoutViews = new LayoutViews();
+    
+        const todos = new ItemTemplateControl()
+            .with({
+                dataContext: new CollectionReference("todos"),
+                data: new Binding("$"),
+                view: new LayoutStackControl()
+                    .with({
+                        skin: "HorizontalPanel",
+                        areas: [
+                            layoutViews.addView(
+                                "/todo/name",
                                 new HtmlControl()
-                                    .with({ data: keys(state.collections.todos)?.length })
+                                    .with({
+                                        data: new Binding("$.name")
+                                    })
+                            ),
+                            layoutViews.addView(
+                                "/todo/completed",
+                                new CheckboxControl()
+                                    .with({
+                                        data: new Binding("$.completed")
+                                    })
+                            ),
+                            layoutViews.addView(
+                                "/todo/deleteButton",
+                                new MenuItemControl()
+                                    .with({
+                                        icon: "sm sm-close",
+                                        clickMessage: new ClickedEvent({
+                                            action: 'delete',
+                                            id: new Binding("$.id")
+                                        }) as any
+                                    })
+                            ),
+                        ]
+                    })
+            });
+    
+        const todosCount = new LayoutStackControl()
+            .with({
+                skin: "HorizontalPanel",
+                areas: [
+                    layoutViews.addView(undefined, new HtmlControl().with({ data: "Total count:" })),
+                    layoutViews.addView(
+                        undefined,
+                        this.pipe(
+                            map(
+                                state =>
+                                    new HtmlControl()
+                                        .with({ data: keys(state.collections.todos)?.length })
+                            )
                         )
                     )
-                )
-            ]
-        });
-
-    const addTodo = new LayoutStackControl()
-        .with({
-            skin: "HorizontalPanel",
-            areas: [
-                layoutViews.addView(
-                    null,
-                    new TextBoxControl()
-                        .with({
-                            data: new Binding("$.viewBag.newTodo")
-                        })
-                ),
-                layoutViews.addView(
-                    null,
-                    new MenuItemControl()
-                        .with({
-                            title: "Add todo",
-                            color: smBlue,
-                            clickMessage: new ClickedEvent({
-                                action: 'addTodo'
-                            }) as any
-                        })
-                )
-            ]
-        })
-
-    layoutViews.addView(
-        "/Main",
-        new LayoutStackControl()
+                ]
+            });
+    
+        const addTodo = new LayoutStackControl()
             .with({
-                skin: "VerticalPanel",
+                skin: "HorizontalPanel",
                 areas: [
                     layoutViews.addView(
-                        "/addTodo",
-                        addTodo
+                        null,
+                        new TextBoxControl()
+                            .with({
+                                data: new Binding("$.viewBag.newTodo")
+                            })
                     ),
                     layoutViews.addView(
-                        "/todos",
-                        todos
-                    ),
-                    layoutViews.addView(
-                        "/main/todosCount",
-                        todosCount
+                        null,
+                        new MenuItemControl()
+                            .with({
+                                title: "Add todo",
+                                color: smBlue,
+                                clickMessage: new ClickedEvent({
+                                    action: 'addTodo'
+                                }) as any
+                            })
                     )
-
                 ]
             })
-    );
+    
+        layoutViews.addView(
+            "/Main",
+            new LayoutStackControl()
+                .with({
+                    skin: "VerticalPanel",
+                    areas: [
+                        layoutViews.addView(
+                            "/addTodo",
+                            addTodo
+                        ),
+                        layoutViews.addView(
+                            "/todos",
+                            todos
+                        ),
+                        layoutViews.addView(
+                            "/main/todosCount",
+                            todosCount
+                        )
+    
+                    ]
+                })
+        );
+    
+        return layoutViews;
+    }
 
-    return layoutViews;
-}
+    createHomeLayout() {
+        const layoutViews = new LayoutViews();
+        layoutViews.addView(
+            "/Main",
+            new HtmlControl().with({
+                data: "Overview"
+            })
+        )
+        return layoutViews;
+    }
 
-function createHomeLayout() {
-    const layoutViews = new LayoutViews();
-    layoutViews.addView(
-        "/Main",
-        new HtmlControl().with({
-            data: "Overview"
-        })
-    )
-    return layoutViews;
+    createMultiselectLayout() {
+        const layoutViews = new LayoutViews();
+    
+        layoutViews.addView(
+            "/Main",
+            new TextBoxControl().with({
+                data: "Multiselect"
+            })
+        )
+    
+        return layoutViews;
+    }
 }

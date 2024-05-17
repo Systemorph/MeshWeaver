@@ -26,7 +26,10 @@ export default defineConfig({
                 'fs',
                 'lodash-es',
                 'uuid',
-                "immer"
+                "immer",
+                "json-ptr",
+                "redux",
+                "redux-toolkit"
             ],
         },
     }

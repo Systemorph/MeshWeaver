@@ -26,7 +26,7 @@ export type WorkspaceThunk<State, ReturnType = void> =
         WorkspaceAction
     >
 
-export function updateStore<T>(reducer: (state: T) => void): WorkspaceThunk<T> {
+export function updateStore<T>(reducer: (state: T) => T | void): WorkspaceThunk<T> {
     return (dispatch: ThunkDispatch<T, unknown, WorkspaceAction>, getState: () => T) =>
         dispatch(
             updateByReferenceActionCreator(

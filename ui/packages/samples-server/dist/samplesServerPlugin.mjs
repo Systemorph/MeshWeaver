@@ -4,10 +4,10 @@ var __publicField = (obj, key, value) => {
   __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
   return value;
 };
-import { Subscription, Observable, filter, mergeMap, from, map, distinctUntilChanged, of, pairwise, switchMap, combineLatest, tap, take, Subject, ReplaySubject } from "rxjs";
+import { Subscription, Observable, filter, mergeMap, from, map, distinctUntilChanged, of, switchMap, combineLatest, pairwise, take, Subject, ReplaySubject } from "rxjs";
 import { methodName } from "./contract.mjs";
 import { immerable, isDraftable, produce, isDraft, current, enablePatches, applyPatches } from "immer";
-import { trimStart, set, isEqual, isEmpty, keyBy, keys, cloneDeepWith, assign, mapValues, isFunction } from "lodash-es";
+import { trimStart, set, isEqual, keys, keyBy, isEmpty, cloneDeepWith, assign, mapValues, isFunction } from "lodash-es";
 import { v4 } from "uuid";
 Subscription.prototype.toJSON = (key) => {
   return {};
@@ -272,7 +272,7 @@ function createStore(reducer, preloadedState, enhancer) {
       });
     }
   }
-  function getState() {
+  function getState2() {
     if (isDispatching) {
       throw new Error(process.env.NODE_ENV === "production" ? formatProdErrorMessage$1(3) : "You may not call store.getState() while the reducer is executing. The reducer has already received the state as an argument. Pass it down from the top reducer instead of reading it from the store.");
     }
@@ -354,7 +354,7 @@ function createStore(reducer, preloadedState, enhancer) {
         function observeState() {
           const observerAsObserver = observer;
           if (observerAsObserver.next) {
-            observerAsObserver.next(getState());
+            observerAsObserver.next(getState2());
           }
         }
         observeState();
@@ -374,7 +374,7 @@ function createStore(reducer, preloadedState, enhancer) {
   const store = {
     dispatch,
     subscribe,
-    getState,
+    getState: getState2,
     replaceReducer,
     [symbol_observable_default]: observable
   };
@@ -817,9 +817,9 @@ var createStructuredSelector = Object.assign(
   { withTypes: () => createStructuredSelector }
 );
 function createThunkMiddleware(extraArgument) {
-  const middleware = ({ dispatch, getState }) => (next) => (action) => {
+  const middleware = ({ dispatch, getState: getState2 }) => (next) => (action) => {
     if (typeof action === "function") {
-      return action(dispatch, getState, extraArgument);
+      return action(dispatch, getState2, extraArgument);
     }
     return next(action);
   };
@@ -1034,15 +1034,15 @@ function createImmutableStateInvariantMiddleware(options = {}) {
     } = options;
     const track = trackForMutations.bind(null, isImmutable, ignoredPaths);
     return ({
-      getState
+      getState: getState2
     }) => {
-      let state = getState();
+      let state = getState2();
       let tracker = track(state);
       let result;
       return (next) => (action) => {
         const measureUtils = getTimeMeasureUtils(warnAfter, "ImmutableStateInvariantMiddleware");
         measureUtils.measureTime(() => {
-          state = getState();
+          state = getState2();
           result = tracker.detectMutations();
           tracker = track(state);
           if (result.wasMutated) {
@@ -1051,7 +1051,7 @@ function createImmutableStateInvariantMiddleware(options = {}) {
         });
         const dispatchedAction = next(action);
         measureUtils.measureTime(() => {
-          state = getState();
+          state = getState2();
           result = tracker.detectMutations();
           tracker = track(state);
           if (result.wasMutated) {
@@ -3088,11 +3088,11 @@ const pointerToArray = (path) => trimStart(path, "/").split("/");
 const updateByPath = (data, path, value) => set(data, pointerToArray(path), value);
 const updateByReferenceActionCreator = createAction("updateByReference");
 function updateStore(reducer) {
-  return (dispatch, getState) => dispatch(
+  return (dispatch, getState2) => dispatch(
     updateByReferenceActionCreator(
       {
         reference: new PathReference(""),
-        value: produce(getState(), reducer)
+        value: produce(getState2(), reducer)
       }
     )
   );
@@ -3368,6 +3368,12 @@ class LayoutViews extends Workspace {
     return `area_${this.n++}`;
   }
 }
+const pathToUpdateAction = (path) => (value) => updateByReferenceActionCreator(
+  {
+    reference: new PathReference(path),
+    value
+  }
+);
 var __defProp$5 = Object.defineProperty;
 var __getOwnPropDesc$5 = Object.getOwnPropertyDescriptor;
 var __decorateClass$5 = (decorators, target, key, kind) => {
@@ -3379,47 +3385,260 @@ var __decorateClass$5 = (decorators, target, key, kind) => {
     __defProp$5(target, key, result);
   return result;
 };
-let DataChangeResponse = class {
-  constructor(status) {
-    this.status = status;
-  }
+let TextBoxControl = class extends UiControl {
 };
-DataChangeResponse = __decorateClass$5([
-  type("OpenSmc.Data.DataChangeResponse")
-], DataChangeResponse);
-class DataChangeRequest extends Request {
-  constructor() {
-    super(DataChangeResponse);
+TextBoxControl = __decorateClass$5([
+  type("OpenSmc.Layout.TextBoxControl")
+], TextBoxControl);
+const smBlue = "#0171ff";
+function getState(reference) {
+  return {
+    reference,
+    collections: {
+      todos: keyBy(
+        [
+          { id: "1", name: "Task 1", completed: true },
+          { id: "2", name: "Task 2", completed: false },
+          { id: "3", name: "Task 3", completed: true },
+          { id: "4", name: "Task 4", completed: true }
+        ],
+        "id"
+      ),
+      viewBag: {
+        newTodo: "New task"
+      }
+    }
+  };
+}
+class SamplesApp extends Workspace {
+  constructor(serverHub, reference) {
+    super(null);
+    __publicField(this, "subscription", new Subscription());
+    __publicField(this, "appState", new Workspace({
+      pages: {
+        home: {
+          icon: "sm sm-home",
+          title: "home",
+          layout: this.createHomeLayout()
+        },
+        todos: {
+          icon: "sm sm-check",
+          title: "Todos",
+          layout: this.createTodosLayout()
+        },
+        multiselect: {
+          icon: "sm sm-slice",
+          title: "Multiselect",
+          layout: this.createMultiselectLayout()
+        }
+      },
+      page: "home"
+    }));
+    this.update(() => getState(reference));
+    const mainLayout = this.createLayout();
+    this.subscription.add(
+      mainLayout.subscription
+    );
+    const pageLayout = this.appState.pipe(
+      switchMap(
+        (state) => state.pages[state.page].layout
+      )
+    );
+    this.subscription.add(
+      combineLatest([mainLayout, pageLayout]).pipe(
+        map(([main, page]) => ({ ...main, ...page })),
+        // tap(value => console.log(value)),
+        map(pathToUpdateAction(`/collections/${uiControlType}`))
+      ).subscribe(this)
+    );
+    this.subscription.add(
+      serverHub.input.pipe(filter(messageOfType(ClickedEvent))).subscribe(({ message }) => {
+        const { action, id } = message.payload;
+        if (action === "delete") {
+          this.update((state) => {
+            delete state.collections.todos[id];
+          });
+        }
+        if (action === "addTodo") {
+          const { collections } = this.getState();
+          const name = collections.viewBag.newTodo;
+          const id2 = v4();
+          const newTodo = { id: id2, name, completed: false };
+          this.update((state) => {
+            state.collections.todos[id2] = newTodo;
+          });
+        }
+        if (action === "nav") {
+          this.appState.update((state) => {
+            state.page = id;
+          });
+        }
+      })
+    );
+  }
+  createLayout() {
+    const layoutViews = new LayoutViews();
+    layoutViews.addView(
+      "/",
+      new LayoutStackControl().with({
+        skin: "MainWindow",
+        areas: [
+          layoutViews.addView(
+            "/Main",
+            new HtmlControl()
+          ),
+          layoutViews.addView(
+            "/Toolbar",
+            new HtmlControl().with({
+              data: "Toolbar"
+            })
+          ),
+          layoutViews.addView(
+            "/SideMenu",
+            this.appState.pipe(
+              map((state) => state.pages),
+              distinctUntilChanged(),
+              map(
+                (pages) => new LayoutStackControl().with({
+                  skin: "SideMenu",
+                  areas: keys(pages).map((page) => {
+                    const { icon, title } = pages[page];
+                    return layoutViews.addView(
+                      null,
+                      new MenuItemControl().with({
+                        title,
+                        icon,
+                        skin: "LargeIcon",
+                        clickMessage: new ClickedEvent({
+                          action: "nav",
+                          id: page
+                        })
+                      })
+                    );
+                  })
+                })
+              )
+            )
+          )
+        ]
+      })
+    );
+    return layoutViews;
+  }
+  createTodosLayout() {
+    const layoutViews = new LayoutViews();
+    const todos = new ItemTemplateControl().with({
+      dataContext: new CollectionReference("todos"),
+      data: new Binding("$"),
+      view: new LayoutStackControl().with({
+        skin: "HorizontalPanel",
+        areas: [
+          layoutViews.addView(
+            "/todo/name",
+            new HtmlControl().with({
+              data: new Binding("$.name")
+            })
+          ),
+          layoutViews.addView(
+            "/todo/completed",
+            new CheckboxControl().with({
+              data: new Binding("$.completed")
+            })
+          ),
+          layoutViews.addView(
+            "/todo/deleteButton",
+            new MenuItemControl().with({
+              icon: "sm sm-close",
+              clickMessage: new ClickedEvent({
+                action: "delete",
+                id: new Binding("$.id")
+              })
+            })
+          )
+        ]
+      })
+    });
+    const todosCount = new LayoutStackControl().with({
+      skin: "HorizontalPanel",
+      areas: [
+        layoutViews.addView(void 0, new HtmlControl().with({ data: "Total count:" })),
+        layoutViews.addView(
+          void 0,
+          this.pipe(
+            map(
+              (state) => {
+                var _a;
+                return new HtmlControl().with({ data: (_a = keys(state.collections.todos)) == null ? void 0 : _a.length });
+              }
+            )
+          )
+        )
+      ]
+    });
+    const addTodo = new LayoutStackControl().with({
+      skin: "HorizontalPanel",
+      areas: [
+        layoutViews.addView(
+          null,
+          new TextBoxControl().with({
+            data: new Binding("$.viewBag.newTodo")
+          })
+        ),
+        layoutViews.addView(
+          null,
+          new MenuItemControl().with({
+            title: "Add todo",
+            color: smBlue,
+            clickMessage: new ClickedEvent({
+              action: "addTodo"
+            })
+          })
+        )
+      ]
+    });
+    layoutViews.addView(
+      "/Main",
+      new LayoutStackControl().with({
+        skin: "VerticalPanel",
+        areas: [
+          layoutViews.addView(
+            "/addTodo",
+            addTodo
+          ),
+          layoutViews.addView(
+            "/todos",
+            todos
+          ),
+          layoutViews.addView(
+            "/main/todosCount",
+            todosCount
+          )
+        ]
+      })
+    );
+    return layoutViews;
+  }
+  createHomeLayout() {
+    const layoutViews = new LayoutViews();
+    layoutViews.addView(
+      "/Main",
+      new HtmlControl().with({
+        data: "Overview"
+      })
+    );
+    return layoutViews;
+  }
+  createMultiselectLayout() {
+    const layoutViews = new LayoutViews();
+    layoutViews.addView(
+      "/Main",
+      new TextBoxControl().with({
+        data: "Multiselect"
+      })
+    );
+    return layoutViews;
   }
 }
-var __defProp$4 = Object.defineProperty;
-var __getOwnPropDesc$4 = Object.getOwnPropertyDescriptor;
-var __decorateClass$4 = (decorators, target, key, kind) => {
-  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$4(target, key) : target;
-  for (var i = decorators.length - 1, decorator; i >= 0; i--)
-    if (decorator = decorators[i])
-      result = (kind ? decorator(target, key, result) : decorator(result)) || result;
-  if (kind && result)
-    __defProp$4(target, key, result);
-  return result;
-};
-let PatchChangeRequest = class extends DataChangeRequest {
-  constructor(address, reference, change) {
-    super();
-    this.address = address;
-    this.reference = reference;
-    this.change = change;
-  }
-};
-PatchChangeRequest = __decorateClass$4([
-  type("OpenSmc.Data.PatchChangeRequest")
-], PatchChangeRequest);
-const pathToUpdateAction = (path) => (value) => updateByReferenceActionCreator(
-  {
-    reference: new PathReference(path),
-    value
-  }
-);
 /*!
  * https://github.com/Starcounter-Jack/JSON-Patch
  * (c) 2017-2022 Joachim Wester
@@ -4056,15 +4275,15 @@ Object.assign({}, core, duplex, {
   escapePathComponent,
   unescapePathComponent
 });
-var __defProp$3 = Object.defineProperty;
-var __getOwnPropDesc$3 = Object.getOwnPropertyDescriptor;
-var __decorateClass$3 = (decorators, target, key, kind) => {
-  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$3(target, key) : target;
+var __defProp$4 = Object.defineProperty;
+var __getOwnPropDesc$4 = Object.getOwnPropertyDescriptor;
+var __decorateClass$4 = (decorators, target, key, kind) => {
+  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$4(target, key) : target;
   for (var i = decorators.length - 1, decorator; i >= 0; i--)
     if (decorator = decorators[i])
       result = (kind ? decorator(target, key, result) : decorator(result)) || result;
   if (kind && result)
-    __defProp$3(target, key, result);
+    __defProp$4(target, key, result);
   return result;
 };
 let JsonPatch = class {
@@ -4081,7 +4300,7 @@ let JsonPatch = class {
   //     return new JsonPatch(operations);
   // }
 };
-JsonPatch = __decorateClass$3([
+JsonPatch = __decorateClass$4([
   type("Json.Patch.JsonPatch")
 ], JsonPatch);
 const toJsonPatch = () => (source) => source.pipe(pairwise()).pipe(
@@ -4089,6 +4308,30 @@ const toJsonPatch = () => (source) => source.pipe(pairwise()).pipe(
   filter((operations) => !isEmpty(operations)),
   map((operations) => new JsonPatch(operations))
 );
+var __defProp$3 = Object.defineProperty;
+var __getOwnPropDesc$3 = Object.getOwnPropertyDescriptor;
+var __decorateClass$3 = (decorators, target, key, kind) => {
+  var result = kind > 1 ? void 0 : kind ? __getOwnPropDesc$3(target, key) : target;
+  for (var i = decorators.length - 1, decorator; i >= 0; i--)
+    if (decorator = decorators[i])
+      result = (kind ? decorator(target, key, result) : decorator(result)) || result;
+  if (kind && result)
+    __defProp$3(target, key, result);
+  return result;
+};
+let DataChangeResponse = class {
+  constructor(status) {
+    this.status = status;
+  }
+};
+DataChangeResponse = __decorateClass$3([
+  type("OpenSmc.Data.DataChangeResponse")
+], DataChangeResponse);
+class DataChangeRequest extends Request {
+  constructor() {
+    super(DataChangeResponse);
+  }
+}
 var __defProp$2 = Object.defineProperty;
 var __getOwnPropDesc$2 = Object.getOwnPropertyDescriptor;
 var __decorateClass$2 = (decorators, target, key, kind) => {
@@ -4100,277 +4343,26 @@ var __decorateClass$2 = (decorators, target, key, kind) => {
     __defProp$2(target, key, result);
   return result;
 };
-let TextBoxControl = class extends UiControl {
-};
-TextBoxControl = __decorateClass$2([
-  type("OpenSmc.Layout.TextBoxControl")
-], TextBoxControl);
-const smBlue = "#0171ff";
-class SamplesApp {
-  constructor(serverHub, reference) {
-    __publicField(this, "store");
-    __publicField(this, "subscription", new Subscription());
-    __publicField(this, "lastMessage");
-    __publicField(this, "handlePatchChangeRequest", () => (delivery) => {
-      this.lastMessage = delivery;
-      const { message, sender } = delivery;
-      this.store.next(jsonPatchActionCreator(message.change));
-      return of(new DataChangeResponse("Committed"));
-    });
-    this.store = createTodosStore(reference);
-    const app = new Workspace({
-      page: "home"
-    });
-    const pages = {
-      home: createHomeLayout(),
-      todos: createTodosLayout(this.store)
-    };
-    const mainLayout = createLayout();
-    this.subscription.add(
-      mainLayout.subscription
-    );
-    const pageLayout = app.pipe(
-      switchMap(
-        (state) => pages[state.page]
-      )
-    );
-    this.subscription.add(
-      combineLatest([mainLayout, pageLayout]).pipe(
-        map(([main, page]) => ({ ...main, ...page })),
-        tap((value) => console.log(value)),
-        map(pathToUpdateAction(`/collections/${uiControlType}`))
-      ).subscribe(this.store)
-    );
-    this.subscription.add(
-      serverHub.input.pipe(
-        filter(messageOfType(PatchChangeRequest)),
-        filter(({ message }) => isEqual(message.reference, reference)),
-        handleRequest(PatchChangeRequest, this.handlePatchChangeRequest())
-      ).subscribe(serverHub.output)
-    );
-    this.subscription.add(
-      serverHub.input.pipe(filter(messageOfType(ClickedEvent))).subscribe(({ message }) => {
-        const { action, id } = message.payload;
-        if (action === "delete") {
-          this.store.update((state) => {
-            delete state.collections.todos[id];
-          });
-        }
-        if (action === "addTodo") {
-          const { collections } = this.store.getState();
-          const name = collections.viewBag.newTodo;
-          const id2 = v4();
-          const newTodo = { id: id2, name, completed: false };
-          this.store.update((state) => {
-            state.collections.todos[id2] = newTodo;
-          });
-        }
-        if (action === "nav") {
-          app.update((state) => {
-            state.page = id;
-          });
-        }
-      })
-    );
-    this.subscription.add(
-      this.store.pipe(toJsonPatch()).pipe(
-        map(
-          (patch) => new DataChangedEvent(
-            reference,
-            patch,
-            "Patch",
-            this.lastMessage instanceof PatchChangeRequest ? this.lastMessage.sender : null
-          )
-        )
-      ).pipe(map(pack())).subscribe(serverHub.output)
-    );
+let PatchChangeRequest = class extends DataChangeRequest {
+  constructor(address, reference, change) {
+    super();
+    this.address = address;
+    this.reference = reference;
+    this.change = change;
   }
-}
-function createTodosStore(reference) {
-  return new Workspace({
-    reference,
-    collections: {
-      todos: keyBy(
-        [
-          { id: "1", name: "Task 1", completed: true },
-          { id: "2", name: "Task 2", completed: false },
-          { id: "3", name: "Task 3", completed: true },
-          { id: "4", name: "Task 4", completed: true }
-        ],
-        "id"
-      ),
-      viewBag: {
-        newTodo: "New task"
-      }
-    }
-  });
-}
-function createLayout() {
-  const layoutViews = new LayoutViews();
-  layoutViews.addView(
-    "/",
-    new LayoutStackControl().with({
-      skin: "MainWindow",
-      areas: [
-        layoutViews.addView(
-          "/Main",
-          new HtmlControl()
-        ),
-        layoutViews.addView(
-          "/Toolbar",
-          new HtmlControl().with({
-            data: "Toolbar"
-          })
-        ),
-        layoutViews.addView(
-          "/SideMenu",
-          new LayoutStackControl().with({
-            skin: "SideMenu",
-            areas: [
-              layoutViews.addView(
-                null,
-                new MenuItemControl().with({
-                  title: "Home",
-                  icon: "sm sm-home",
-                  skin: "LargeIcon",
-                  clickMessage: new ClickedEvent({
-                    action: "nav",
-                    id: "home"
-                  })
-                })
-              ),
-              layoutViews.addView(
-                null,
-                new MenuItemControl().with({
-                  title: "Todos",
-                  skin: "LargeIcon",
-                  icon: "sm sm-check",
-                  clickMessage: new ClickedEvent({
-                    action: "nav",
-                    id: "todos"
-                  })
-                })
-              )
-            ]
-          })
-        )
-      ]
-    })
-  );
-  return layoutViews;
-}
-function createTodosLayout(store) {
-  const layoutViews = new LayoutViews();
-  const todos = new ItemTemplateControl().with({
-    dataContext: new CollectionReference("todos"),
-    data: new Binding("$"),
-    view: new LayoutStackControl().with({
-      skin: "HorizontalPanel",
-      areas: [
-        layoutViews.addView(
-          "/todo/name",
-          new HtmlControl().with({
-            data: new Binding("$.name")
-          })
-        ),
-        layoutViews.addView(
-          "/todo/completed",
-          new CheckboxControl().with({
-            data: new Binding("$.completed")
-          })
-        ),
-        layoutViews.addView(
-          "/todo/deleteButton",
-          new MenuItemControl().with({
-            icon: "sm sm-close",
-            clickMessage: new ClickedEvent({
-              action: "delete",
-              id: new Binding("$.id")
-            })
-          })
-        )
-      ]
-    })
-  });
-  const todosCount = new LayoutStackControl().with({
-    skin: "HorizontalPanel",
-    areas: [
-      layoutViews.addView(void 0, new HtmlControl().with({ data: "Total count:" })),
-      layoutViews.addView(
-        void 0,
-        store.pipe(
-          map(
-            (state) => {
-              var _a;
-              return new HtmlControl().with({ data: (_a = keys(state.collections.todos)) == null ? void 0 : _a.length });
-            }
-          )
-        )
-      )
-    ]
-  });
-  const addTodo = new LayoutStackControl().with({
-    skin: "HorizontalPanel",
-    areas: [
-      layoutViews.addView(
-        null,
-        new TextBoxControl().with({
-          data: new Binding("$.viewBag.newTodo")
-        })
-      ),
-      layoutViews.addView(
-        null,
-        new MenuItemControl().with({
-          title: "Add todo",
-          color: smBlue,
-          clickMessage: new ClickedEvent({
-            action: "addTodo"
-          })
-        })
-      )
-    ]
-  });
-  layoutViews.addView(
-    "/Main",
-    new LayoutStackControl().with({
-      skin: "VerticalPanel",
-      areas: [
-        layoutViews.addView(
-          "/addTodo",
-          addTodo
-        ),
-        layoutViews.addView(
-          "/todos",
-          todos
-        ),
-        layoutViews.addView(
-          "/main/todosCount",
-          todosCount
-        )
-      ]
-    })
-  );
-  return layoutViews;
-}
-function createHomeLayout() {
-  const layoutViews = new LayoutViews();
-  layoutViews.addView(
-    "/Main",
-    new HtmlControl().with({
-      data: "Overview"
-    })
-  );
-  return layoutViews;
-}
+};
+PatchChangeRequest = __decorateClass$2([
+  type("OpenSmc.Data.PatchChangeRequest")
+], PatchChangeRequest);
 class SamplesServer {
   constructor(serverHub) {
     __publicField(this, "subscription", new Subscription());
     __publicField(this, "subscribeRequestHandler", () => ({ message, sender }) => {
       const { reference } = message;
       const subscription = new Subscription();
-      const layout = new SamplesApp(this.serverHub, reference);
+      const samplesApp = new SamplesApp(this.serverHub, reference);
       subscription.add(
-        layout.subscription
+        samplesApp.subscription
       );
       subscription.add(
         this.serverHub.input.pipe(
@@ -4380,10 +4372,40 @@ class SamplesServer {
           subscription.unsubscribe();
         })
       );
+      let lastMessage;
+      subscription.add(
+        this.serverHub.input.pipe(
+          filter(messageOfType(PatchChangeRequest)),
+          filter(({ message: message2 }) => isEqual(message2.reference, reference)),
+          handleRequest(
+            PatchChangeRequest,
+            (delivery) => {
+              lastMessage = delivery;
+              const { message: message2, sender: sender2 } = delivery;
+              samplesApp.next(jsonPatchActionCreator(message2.change));
+              return of(new DataChangeResponse("Committed"));
+            }
+          )
+        ).subscribe(this.serverHub.output)
+      );
+      subscription.add(
+        samplesApp.pipe(
+          toJsonPatch()
+        ).pipe(
+          map(
+            (patch) => new DataChangedEvent(
+              reference,
+              patch,
+              "Patch",
+              lastMessage instanceof PatchChangeRequest ? sender : null
+            )
+          )
+        ).pipe(map(pack())).subscribe(this.serverHub.output)
+      );
       this.subscription.add(
         subscription
       );
-      return layout.store.pipe(take(1)).pipe(
+      return samplesApp.pipe(take(1)).pipe(
         map(
           (value) => new DataChangedEvent(reference, value, "Full", null)
         )
