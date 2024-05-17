@@ -109,9 +109,7 @@ public record ReduceManager<TStream>
             ? reducer.Invoke(state, reference)
             : node.Next != null
                 ? node.Next.Value.Invoke(state, @ref, node.Next)
-                : throw new NotSupportedException(
-                    $"Reducer for reference {@ref.GetType().Name} not specified"
-                );
+                : null;
     }
 
     private static object ReduceApplyRules<TReference, TReduced>(
