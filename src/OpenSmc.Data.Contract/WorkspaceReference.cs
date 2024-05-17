@@ -21,16 +21,9 @@ public record EntityStore
     public EntityStore Merge(EntityStore updated) =>
         this with
         {
-            Collections = Collections.SetItems(
-                Collections
-                    .Select(kvp => new KeyValuePair<string, InstanceCollection>(
-                        kvp.Key,
-                        kvp.Value.Merge(updated.Collections.GetValueOrDefault(kvp.Key))
-                    ))
-                    .Concat(updated.Collections.Where(kvp => !Collections.ContainsKey(kvp.Key)))
-                    .Where(x => x.Value.Instances.Count > 0)
-                    .ToImmutableDictionary()
-            )
+            Collections = updated
+                .Collections.Concat(Collections.Where(x => !updated.Collections.ContainsKey(x.Key)))
+                .ToImmutableDictionary()
         };
 
     public EntityStore Merge(WorkspaceReference reference, InstanceCollection updated)
