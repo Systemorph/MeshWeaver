@@ -1,7 +1,6 @@
 import { configureStore } from "@reduxjs/toolkit";
 import { from, Observable, Observer } from "rxjs";
 import { updateStore, WorkspaceAction, workspaceReducer, WorkspaceThunk } from "./workspaceReducer";
-import { produce } from "immer";
 
 export class Workspace<T = unknown> extends Observable<T> implements Observer<WorkspaceAction> {
     protected store: ReturnType<typeof configureStore<T, WorkspaceAction>>;
