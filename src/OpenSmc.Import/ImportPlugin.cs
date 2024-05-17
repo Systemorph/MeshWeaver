@@ -73,15 +73,13 @@ public class ImportPlugin : MessageHubPlugin, IMessageHandlerAsync<ImportRequest
 
             if (!activityService.HasErrors())
             {
-                workspace.Update(
-                    new ChangeItem<EntityStore>(
-                        Hub.Address,
-                        workspace.Reference,
-                        state.Store,
-                        Hub.Address,
-                        Hub.Version
-                    )
-                );
+                workspace.RequestChange(s => new ChangeItem<WorkspaceState>(
+                    Hub.Address,
+                    workspace.Reference,
+                    s.Merge(state),
+                    Hub.Address,
+                    Hub.Version
+                ));
             }
 
             log = activityService.Finish();

@@ -23,6 +23,7 @@ public record EntityStore
         {
             Collections = updated
                 .Collections.Concat(Collections.Where(x => !updated.Collections.ContainsKey(x.Key)))
+                .Where(x => x.Value != null && x.Value.Instances.Count > 0)
                 .ToImmutableDictionary()
         };
 

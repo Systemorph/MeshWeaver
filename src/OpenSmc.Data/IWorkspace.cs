@@ -26,7 +26,10 @@ public interface IWorkspace : IAsyncDisposable
     );
     void Unsubscribe(object address, WorkspaceReference reference);
     IMessageDelivery DeliverMessage(IMessageDelivery<IWorkspaceMessage> delivery);
-    DataChangeResponse RequestChange(DataChangeRequest change, WorkspaceReference reference);
+    internal DataChangeResponse RequestChange(
+        DataChangeRequest change,
+        WorkspaceReference reference
+    );
 
     IObservable<ChangeItem<WorkspaceState>> Stream { get; }
     ReduceManager<WorkspaceState> ReduceManager { get; }
