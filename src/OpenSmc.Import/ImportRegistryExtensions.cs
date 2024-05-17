@@ -94,7 +94,7 @@ public record ImportDataSource(Source Source, IMessageHub Hub)
         );
         config = Configurations.Aggregate(config, (c, f) => f.Invoke(c));
         ImportManager importManager = new(config);
-        var ret = Workspace.Subscribe(Id, GetReference());
+        var ret = Workspace.GetRemoteStream(Id, GetReference());
         Hub.Schedule(async cancellationToken =>
         {
             var (state, hasError) = await importManager.ImportAsync(

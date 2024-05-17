@@ -95,9 +95,9 @@ public class Workspace : IWorkspace
             ReduceManager.ReduceTo<TReduced>()
         );
 
-        ret.AddDisposable(
-            ReduceManager.ReduceStream<TReduced>(myChangeStream, reference).Subscribe(ret)
-        );
+        var reducedStream = ReduceManager.ReduceStream<TReduced>(myChangeStream, reference);
+        if (reducedStream != null)
+            ret.AddDisposable(reducedStream.Subscribe(ret));
 
         return ret;
     }
@@ -310,15 +310,15 @@ public class Workspace : IWorkspace
         return response.Ignored();
     }
 
-    void IWorkspace.SubscribeToHost<TReduced>(
+    void IWorkspace.SubscribeToClient<TReduced>(
         object address,
         WorkspaceReference<TReduced> reference
     ) =>
-        SubscribToHosteMethod
+        SubscribToClientMethod
             .MakeGenericMethod(typeof(TReduced), reference.GetType())
             .Invoke(this, [address, reference]);
 
-    public IChangeStream<TReduced> Subscribe<TReduced>(
+    public IChangeStream<TReduced> GetRemoteStream<TReduced>(
         object address,
         WorkspaceReference<TReduced> reference
     ) =>
@@ -339,12 +339,12 @@ public class Workspace : IWorkspace
         where TReference : WorkspaceReference<TReduced> =>
         GetRemoteChangeStream<TReduced, TReference>(address, reference);
 
-    private static readonly MethodInfo SubscribToHosteMethod =
+    private static readonly MethodInfo SubscribToClientMethod =
         ReflectionHelper.GetMethodGeneric<Workspace>(x =>
-            x.SubscribeToHost<object, WorkspaceReference<object>>(default, default)
+            x.SubscribeToClient<object, WorkspaceReference<object>>(default, default)
         );
 
-    private void SubscribeToHost<TReduced, TReference>(object address, TReference reference)
+    private void SubscribeToClient<TReduced, TReference>(object address, TReference reference)
         where TReference : WorkspaceReference<TReduced>
     {
         subscriptions.GetOrAdd(
