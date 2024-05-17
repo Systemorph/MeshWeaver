@@ -102,6 +102,13 @@ public record WorkspaceState(
         };
     }
 
+    public WorkspaceState Merge(WorkspaceState updated) =>
+        this with
+        {
+            Store = Store.Merge(updated.Store),
+            Version = updated.Version
+        };
+
     private EntityStore Merge(DataChangeRequestWithElements request) =>
         request switch
         {
