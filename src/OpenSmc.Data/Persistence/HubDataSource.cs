@@ -54,7 +54,7 @@ public record PartitionedHubDataSource(object Id, IMessageHub Hub)
         foreach (var partition in InitializePartitions)
         {
             var reference = GetReference(partition);
-            Streams = Streams.Add(Workspace.Subscribe(Id, reference));
+            Streams = Streams.Add(Workspace.Subscribe(partition, reference));
         }
     }
 }

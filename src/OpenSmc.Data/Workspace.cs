@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.IO.Pipes;
 using System.Reactive.Linq;
 using System.Reflection;
 using AngleSharp.Common;
@@ -103,10 +102,10 @@ public class Workspace : IWorkspace
         return ret;
     }
 
-    private IChangeStream CreateExternalClientChangeStream<TReduced, TReference>(
-        object address,
-        TReference reference
-    )
+    private ChangeStream<TReduced, TReference> CreateExternalClientChangeStream<
+        TReduced,
+        TReference
+    >(object address, TReference reference)
         where TReference : WorkspaceReference<TReduced>
     {
         var stream = new ChangeStream<TReduced, TReference>(
