@@ -1,7 +1,0 @@
-Host, Reference => Host, Reference
-                   Changes ==> ChangedBy === client
-Call update
-
-Host, Reference => Host, Reference
-Changes ==> ChangedBy === host
-Call Synchronize
