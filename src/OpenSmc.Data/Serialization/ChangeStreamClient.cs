@@ -30,17 +30,9 @@ public class ChangeStreamClient<TStream, TReference>
         });
     }
 
-    private PatchChangeRequest GetDataChangePatch(
-        ref TStream current,
-        ChangeItem<TStream> changeItem
-    )
+    private PatchChangeRequest GetDataChangePatch(TStream current, ChangeItem<TStream> changeItem)
     {
-        if (current == null || changeItem.ChangedBy == null)
-        {
-            current = changeItem.Value;
-            return null;
-        }
-        var patch = GetPatch(ref current, changeItem.Value);
+        var patch = GetPatch(current, changeItem.Value);
         if (patch == null || !patch.Operations.Any())
             return null;
 
@@ -50,9 +42,9 @@ public class ChangeStreamClient<TStream, TReference>
 
     public IDisposable Subscribe(IObserver<PatchChangeRequest> observer)
     {
-        TStream current = default;
         return Stream
-            .Select(r => GetDataChangePatch(ref current, r))
+            .Skip(1)
+            .Select(r => GetDataChangePatch(Stream.Current.Value, r))
             .Where(x => x?.Change != null)
             .Subscribe(observer);
     }

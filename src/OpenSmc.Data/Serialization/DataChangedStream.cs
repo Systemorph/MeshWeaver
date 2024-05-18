@@ -23,12 +23,11 @@ public abstract class DataChangedStreamBase<TStream, TReference, TChange>
         return patch.Apply(current, Stream.Hub.JsonSerializerOptions);
     }
 
-    protected JsonPatch GetPatch(ref TStream current, TStream fullChange)
+    protected JsonPatch GetPatch(TStream current, TStream fullChange)
     {
         var jsonPatch = current.CreatePatch(fullChange, Stream.Hub.JsonSerializerOptions);
         if (!jsonPatch.Operations.Any())
             return null;
-        current = fullChange;
         return jsonPatch;
     }
 }

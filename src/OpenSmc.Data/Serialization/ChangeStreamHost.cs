@@ -61,13 +61,20 @@ public class ChangeStreamHost<TStream, TReference>
             Stream.Hub.Version
         );
 
-    private DataChangedEvent GetDataChangePatch(ref TStream current, ChangeItem<TStream> change) =>
-        new(
+    private DataChangedEvent GetDataChangePatch(ref TStream current, ChangeItem<TStream> change)
+    {
+        var patch = current.CreatePatch(change.Value, Stream.Hub.JsonSerializerOptions);
+        if (!patch.Operations.Any())
+            return null;
+        current = change.Value;
+
+        return new(
             Stream.Id,
             Stream.Reference,
             change.Version,
-            GetPatch(ref current, change.Value),
+            patch,
             ChangeType.Patch,
             change.ChangedBy
         );
+    }
 }
