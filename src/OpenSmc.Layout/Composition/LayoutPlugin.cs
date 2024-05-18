@@ -82,9 +82,8 @@ public class LayoutManager
     public IObservable<ChangeItem<EntityStore>> Render(LayoutAreaReference reference)
     {
         var viewElement = LayoutDefinition.GetViewElement(reference);
-        var area = new LayoutArea(reference, LayoutDefinition.Hub);
         RenderArea(reference.Area, viewElement);
-        return area.Stream;
+        return layoutArea.Stream;
     }
 }
 
