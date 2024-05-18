@@ -22,7 +22,7 @@ public static class LayoutExtensions
                 data.AddWorkspaceReferenceStream<LayoutAreaReference, EntityStore>(
                     (_, a) => data.Hub.ServiceProvider.GetRequiredService<ILayout>().Render(a),
                     (ws, reference, val) =>
-                        val.SetValue(ws with { Store = ws.Store.Update(reference, val) })
+                        val.SetValue(ws with { Store = ws.Store.Update(reference, val.Value) })
                 )
             )
             .AddLayoutTypes()

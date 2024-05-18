@@ -157,7 +157,7 @@ public class Workspace : IWorkspace
     private readonly TaskCompletionSource initialized = new();
     public Task Initialized => initialized.Task;
 
-    public ReduceManager<WorkspaceState> ReduceManager { get; }
+    public ReduceManager<WorkspaceState> ReduceManager { get; private set; }
 
     private ReduceManager<WorkspaceState> CreateReduceManager()
     {
@@ -240,6 +240,7 @@ public class Workspace : IWorkspace
 
         logger.LogDebug($"Starting data plugin at address {Id}");
         DataContext.Initialize();
+        ReduceManager = DataContext.ReduceManager;
 
         logger.LogDebug("Started initialization of data context in address {address}", Id);
 
