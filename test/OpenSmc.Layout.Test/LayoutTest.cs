@@ -182,7 +182,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             stream.Id,
             stream.Reference,
             ci.Update(toolbarDataReference, toolbarData with { Year = 2025 }),
-            stream.Id,
+            hub.Address,
             hub.Version
         ));
 
