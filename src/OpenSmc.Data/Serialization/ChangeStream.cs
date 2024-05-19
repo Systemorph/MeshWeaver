@@ -44,17 +44,6 @@ public interface IChangeStream<TStream, TReference> : IChangeStream<TStream>
 {
     ChangeItem<TStream> Current { get; }
     new TReference Reference { get; }
-
-    void RegisterMessageHandler<TMessage>(
-        Func<IMessageDelivery<TMessage>, IMessageDelivery> process
-    )
-        where TMessage : WorkspaceMessage => RegisterMessageHandler<TMessage>(process, _ => true);
-
-    void RegisterMessageHandler<TMessage>(
-        Func<IMessageDelivery<TMessage>, IMessageDelivery> process,
-        Func<TMessage, bool> applies
-    )
-        where TMessage : WorkspaceMessage;
 }
 
 public record ChangeStream<TStream, TReference>
@@ -109,21 +98,6 @@ public record ChangeStream<TStream, TReference>
         Workspace = workspace;
         this.reduceManager = reduceManager;
         backfeed = reduceManager.ReduceTo<TStream>().GetBackfeed<TReference>();
-    }
-
-    public void RegisterMessageHandler<TMessage>(
-        Func<IMessageDelivery<TMessage>, IMessageDelivery> process,
-        Func<TMessage, bool> applies
-    )
-        where TMessage : WorkspaceMessage
-    {
-        messageHandlers = messageHandlers.Insert(
-            0,
-            (
-                x => x is IMessageDelivery<TMessage> delivery && applies(delivery.Message),
-                x => process((IMessageDelivery<TMessage>)x)
-            )
-        );
     }
 
     public IObservable<ChangeItem<TReduced>> Reduce<TReduced>(

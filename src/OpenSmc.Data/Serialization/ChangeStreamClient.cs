@@ -16,21 +16,26 @@ public class ChangeStreamClient<TStream, TReference>
         : base(stream)
     {
         bool isInitialized = false;
-        stream.RegisterMessageHandler<DataChangedEvent>(delivery =>
-        {
-            if (!isInitialized)
-            {
-                isInitialized = true;
-                Stream.Initialize(GetFullState(delivery.Message));
-            }
+        stream.AddDisposable(
+            stream.Hub.Register<DataChangedEvent>(
+                delivery =>
+                {
+                    if (!isInitialized)
+                    {
+                        isInitialized = true;
+                        Stream.Initialize(GetFullState(delivery.Message));
+                    }
 
-            stream.Update(state =>
-            {
-                var changeItem = Update(state, delivery.Message);
-                return changeItem;
-            });
-            return delivery.Processed();
-        });
+                    stream.Update(state =>
+                    {
+                        var changeItem = Update(state, delivery.Message);
+                        return changeItem;
+                    });
+                    return delivery.Processed();
+                },
+                d => stream.Id.Equals(d.Message.Id) && stream.Reference.Equals(d.Message.Reference)
+            )
+        );
     }
 
     private PatchChangeRequest GetPatchRequest(TStream current, ChangeItem<TStream> changeItem)
