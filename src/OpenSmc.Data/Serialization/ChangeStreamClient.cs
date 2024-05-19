@@ -21,32 +21,45 @@ public class ChangeStreamClient<TStream, TReference>
             if (!isInitialized)
             {
                 isInitialized = true;
-                var newState = GetFullState(delivery.Message);
-                Stream.Initialize(newState);
+                Stream.Initialize(GetFullState(delivery.Message));
             }
 
-            stream.Update(state => Update(state, delivery.Message));
+            stream.Update(state =>
+            {
+                var changeItem = Update(state, delivery.Message);
+                return changeItem;
+            });
             return delivery.Processed();
         });
     }
 
-    private PatchChangeRequest GetDataChangePatch(TStream current, ChangeItem<TStream> changeItem)
+    private PatchChangeRequest GetPatchRequest(TStream current, ChangeItem<TStream> changeItem)
     {
         var patch = GetPatch(current, changeItem.Value);
         if (patch == null || !patch.Operations.Any())
             return null;
 
-        current = changeItem.Value;
         return new(Stream.Id, Stream.Reference, patch, changeItem.Version);
     }
 
     public IDisposable Subscribe(IObserver<PatchChangeRequest> observer)
     {
         return Stream
-            .Skip(1)
-            .Select(r => GetDataChangePatch(Stream.Current.Value, r))
-            .Where(x => x?.Change != null)
+            .Scan(
+                new { Current = default(TStream), DataChanged = default(PatchChangeRequest) },
+                (state, change) =>
+                    state.Current == null || !Stream.Hub.Address.Equals(change.ChangedBy)
+                        ? new { Current = change.Value, DataChanged = default(PatchChangeRequest) }
+                        : new
+                        {
+                            Current = change.Value,
+                            DataChanged = GetPatchRequest(state.Current, change)
+                        }
+            )
+            .Select(x => x.DataChanged)
+            .Where(x => x != null && x.Change != null)
             .Subscribe(observer);
+        ;
     }
 
     private ChangeItem<TStream> Update(TStream state, DataChangedEvent request)

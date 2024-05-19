@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Json.Patch;
 using OpenSmc.Messaging;
 
@@ -21,20 +22,22 @@ public class ChangeStreamHost<TStream, TReference>
 
     public virtual IDisposable Subscribe(IObserver<DataChangedEvent> observer)
     {
-        TStream current = default;
-        Stream
-            .Take(1)
-            .Select(x =>
-            {
-                current = x.Value;
-                return GetFullDataChange(x);
-            })
-            .Subscribe(observer);
         return Stream
-            .Skip(1)
-            .Select(r => GetDataChangePatch(ref current, r))
-            .Where(x => x?.Change != null)
+            .Scan(
+                new { Current = default(TStream), DataChanged = default(DataChangedEvent) },
+                (state, change) =>
+                    state.Current == null
+                        ? new { Current = change.Value, DataChanged = GetFullDataChange(change) }
+                        : new
+                        {
+                            Current = change.Value,
+                            DataChanged = GetDataChangePatch(state.Current, change)
+                        }
+            )
+            .Select(x => x.DataChanged)
+            .Where(x => x != null && x.Change != null)
             .Subscribe(observer);
+        ;
     }
 
     private DataChangedEvent GetFullDataChange(ChangeItem<TStream> changeItem)
@@ -61,12 +64,11 @@ public class ChangeStreamHost<TStream, TReference>
             Stream.Hub.Version
         );
 
-    private DataChangedEvent GetDataChangePatch(ref TStream current, ChangeItem<TStream> change)
+    private DataChangedEvent GetDataChangePatch(TStream current, ChangeItem<TStream> change)
     {
         var patch = current.CreatePatch(change.Value, Stream.Hub.JsonSerializerOptions);
         if (!patch.Operations.Any())
             return null;
-        current = change.Value;
 
         return new(
             Stream.Id,
