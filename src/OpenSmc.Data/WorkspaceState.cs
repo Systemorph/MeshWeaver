@@ -81,18 +81,7 @@ public record WorkspaceState(
     public WorkspaceState Update(IReadOnlyCollection<object> instances, UpdateOptions options) =>
         Change(new UpdateDataRequest(instances) { Options = options });
 
-    public WorkspaceState Change(DataChangeRequest request) =>
-        request switch
-        {
-            DataChangeRequestWithElements requestWithElements => Change(requestWithElements),
-            PatchChangeRequest patch => Change(patch),
-            _
-                => throw new ArgumentOutOfRangeException(
-                    $"No implementation found for {request.GetType().FullName}"
-                )
-        };
-
-    protected virtual WorkspaceState Change(DataChangeRequestWithElements request)
+    public WorkspaceState Change(DataChangedReqeust request)
     {
         if (request.Elements == null)
             return null;
@@ -113,7 +102,7 @@ public record WorkspaceState(
             Version = updated.Version
         };
 
-    private EntityStore Merge(DataChangeRequestWithElements request) =>
+    private EntityStore Merge(DataChangedReqeust request) =>
         request switch
         {
             UpdateDataRequest update

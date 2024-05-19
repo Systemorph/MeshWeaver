@@ -13,7 +13,7 @@ public interface IDataSource : IAsyncDisposable
     IReadOnlyDictionary<Type, ITypeSource> TypeSources { get; }
     IReadOnlyCollection<Type> MappedTypes { get; }
     object Id { get; }
-    IReadOnlyCollection<DataChangeRequest> Change(DataChangeRequest request);
+    IReadOnlyCollection<DataChangedReqeust> Change(DataChangedReqeust request);
     void Initialize();
     ValueTask<EntityStore> Initialized { get; }
 }
@@ -49,9 +49,9 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
     public ITypeSource GetTypeSource(string collectionName) =>
         TypeSources.Values.FirstOrDefault(x => x.CollectionName == collectionName);
 
-    public virtual IReadOnlyCollection<DataChangeRequest> Change(DataChangeRequest request)
+    public virtual IReadOnlyCollection<DataChangedReqeust> Change(DataChangedReqeust request)
     {
-        if (request is DataChangeRequestWithElements requestWithElements)
+        if (request is DataChangedReqeust requestWithElements)
             return Change(requestWithElements);
 
         throw new ArgumentOutOfRangeException(

@@ -30,7 +30,11 @@ public class DataChangedEventConverter : JsonConverter<DataChangedEvent>
             _ => root.GetProperty("change").Deserialize<object>(options)
         };
 
-        return new DataChangedEvent(address, reference, version, change, changeType, changedBy);
+        return new DataChangedEvent(version, change, changeType, changedBy)
+        {
+            Address = address,
+            Reference = reference
+        };
     }
 
     public override void Write(

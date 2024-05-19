@@ -12,7 +12,7 @@ public interface IChangeStream : IDisposable
     object Id { get; }
     WorkspaceReference Reference { get; }
 
-    IMessageDelivery DeliverMessage(IMessageDelivery<IWorkspaceMessage> delivery);
+    internal IMessageDelivery DeliverMessage(IMessageDelivery<WorkspaceMessage> delivery);
     void AddDisposable(IDisposable disposable);
 
     Task Initialized { get; }
@@ -22,13 +22,16 @@ public interface IChangeStream : IDisposable
     void RegisterMessageHandler<TMessage>(
         Func<IMessageDelivery<TMessage>, IMessageDelivery> process
     )
-        where TMessage : IWorkspaceMessage => RegisterMessageHandler<TMessage>(process, _ => true);
+        where TMessage : WorkspaceMessage => RegisterMessageHandler<TMessage>(process, _ => true);
 
     void RegisterMessageHandler<TMessage>(
         Func<IMessageDelivery<TMessage>, IMessageDelivery> process,
         Func<TMessage, bool> applies
     )
-        where TMessage : IWorkspaceMessage;
+        where TMessage : WorkspaceMessage;
+
+    public void Post(WorkspaceMessage message) =>
+        Hub.Post(message with { Address = Id, Reference = Reference });
 }
 
 public interface IChangeStream<TStream>
@@ -60,11 +63,11 @@ public record ChangeStream<TStream, TReference>
     public TReference Reference { get; init; }
 
     private ImmutableArray<(
-        Func<IMessageDelivery<IWorkspaceMessage>, bool> Applies,
-        Func<IMessageDelivery<IWorkspaceMessage>, IMessageDelivery> Process
+        Func<IMessageDelivery<WorkspaceMessage>, bool> Applies,
+        Func<IMessageDelivery<WorkspaceMessage>, IMessageDelivery> Process
     )> messageHandlers = ImmutableArray<(
-        Func<IMessageDelivery<IWorkspaceMessage>, bool> Applies,
-        Func<IMessageDelivery<IWorkspaceMessage>, IMessageDelivery> Process
+        Func<IMessageDelivery<WorkspaceMessage>, bool> Applies,
+        Func<IMessageDelivery<WorkspaceMessage>, IMessageDelivery> Process
     )>.Empty;
     private readonly Func<
         WorkspaceState,
@@ -110,7 +113,7 @@ public record ChangeStream<TStream, TReference>
         Func<IMessageDelivery<TMessage>, IMessageDelivery> process,
         Func<TMessage, bool> applies
     )
-        where TMessage : IWorkspaceMessage
+        where TMessage : WorkspaceMessage
     {
         messageHandlers = messageHandlers.Insert(
             0,
@@ -176,7 +179,7 @@ public record ChangeStream<TStream, TReference>
 
     public void AddDisposable(IDisposable disposable) => Disposables.Add(disposable);
 
-    IMessageDelivery IChangeStream.DeliverMessage(IMessageDelivery<IWorkspaceMessage> delivery)
+    IMessageDelivery IChangeStream.DeliverMessage(IMessageDelivery<WorkspaceMessage> delivery)
     {
         return messageHandlers
             .Where(x => x.Applies(delivery))

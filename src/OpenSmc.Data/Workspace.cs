@@ -268,7 +268,7 @@ public class Workspace : IWorkspace
         //TODO Roland Bürgi 2024-05-06: Not sure yet how to implement
     }
 
-    public DataChangeResponse RequestChange(DataChangeRequest change, WorkspaceReference reference)
+    public DataChangeResponse RequestChange(DataChangedReqeust change, WorkspaceReference reference)
     {
         var log = new ActivityLog(ActivityCategory.DataUpdate);
         myChangeStream.Update(state => new ChangeItem<WorkspaceState>(
@@ -369,7 +369,7 @@ public class Workspace : IWorkspace
             existing.Dispose();
     }
 
-    public IMessageDelivery DeliverMessage(IMessageDelivery<IWorkspaceMessage> delivery)
+    public IMessageDelivery DeliverMessage(IMessageDelivery<WorkspaceMessage> delivery)
     {
         if (
             Hub.Address.Equals(delivery.Message.Address)

@@ -18,7 +18,7 @@ public record LayoutArea
         new();
     private readonly IWorkspace workspace;
 
-    public void UpdateView(string area, UiControl control)
+    public void Update(string area, UiControl control)
     {
         updateStream.OnNext(ws =>
             ws.SetValue(ws.Value.Update(ControlsCollection, i => i.SetItem(area, control)))
