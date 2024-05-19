@@ -45,7 +45,7 @@ public record ReduceManager<TStream>
             ReduceApplyRules(ws, r, reducer, node);
         Reducers.AddFirst(Lambda);
 
-        AddWorkspaceReferenceStream<TReference, TReduced>(
+        return AddWorkspaceReferenceStream<TReference, TReduced>(
             (changeStream, stream, r) =>
             {
                 changeStream.AddDisposable(
@@ -56,9 +56,7 @@ public record ReduceManager<TStream>
                 return changeStream;
             },
             backTransformation
-        );
-
-        return this with
+        ) with
         {
             BackTransformations =
                 backTransformation == null

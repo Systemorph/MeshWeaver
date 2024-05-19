@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reflection;
-using System.Security.Cryptography;
 using AngleSharp.Common;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
@@ -108,9 +107,7 @@ public class Workspace : IWorkspace
             ReduceManager.ReduceTo<TReduced>()
         );
 
-        ReduceManager.ReduceStream(ret, stream, reference);
-
-        return ret;
+        return ReduceManager.ReduceStream(ret, stream, reference);
     }
 
     private IChangeStream<TReduced, TReference> CreateExternalClientChangeStream<
