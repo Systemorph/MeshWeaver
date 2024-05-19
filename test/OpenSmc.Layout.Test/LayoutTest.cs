@@ -1,6 +1,5 @@
 ﻿using System.Collections;
 using System.ComponentModel.DataAnnotations;
-using System.Data.Common;
 using System.Reactive.Linq;
 using FluentAssertions;
 using OpenSmc.Data;
@@ -255,10 +254,16 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream(new HostAddress(), reference);
-        var reportArea = $"{reference.Area}/Content";
-        var content = await stream.GetControl(reportArea).FirstAsync();
-        content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("Click me");
+        var content = await stream.GetControl(reference.Area).FirstAsync();
+        content
+            .Should()
+            .BeOfType<MenuItemControl>()
+            .Which.Title.ToString()
+            .Should()
+            .Contain("Click me");
         stream.Post(new ClickedEvent(nameof(ViewWithClick)));
+        content = await stream.GetControl(reference.Area).FirstAsync(x => x is HtmlControl);
+        content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("Clicked!");
     }
 }
 

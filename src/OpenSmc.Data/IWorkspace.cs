@@ -36,6 +36,10 @@ public interface IWorkspace : IAsyncDisposable
     WorkspaceReference Reference { get; }
 
     IChangeStream<TReduced> GetChangeStream<TReduced>(WorkspaceReference<TReduced> reference);
+    IChangeStream<TReduced> GetChangeStream<TReduced>(
+        object address,
+        WorkspaceReference<TReduced> reference
+    );
     IChangeStream<TReduced, TReference> GetChangeStream<TReduced, TReference>(TReference reference)
         where TReference : WorkspaceReference<TReduced>;
 

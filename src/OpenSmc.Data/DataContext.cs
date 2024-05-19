@@ -1,11 +1,10 @@
 ﻿using System.Collections.Immutable;
-using System.Security.Cryptography;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
 
-public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace) : IAsyncDisposable
+public sealed record DataContext(IMessageHub Hub) : IAsyncDisposable
 {
     internal ImmutableDictionary<object, IDataSource> DataSources { get; private set; } =
         ImmutableDictionary<object, IDataSource>.Empty;
@@ -32,7 +31,7 @@ public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace) : IAsync
             .AggregateAsync(new EntityStore(), (store, el) => store.Merge(el));
     public ImmutableDictionary<object, DataSourceBuilder> DataSourceBuilders { get; set; } =
         ImmutableDictionary<object, DataSourceBuilder>.Empty;
-    internal ReduceManager<WorkspaceState> ReduceManager { get; init; }
+    internal ReduceManager<WorkspaceState> ReduceManager { get; init; } = CreateReduceManager();
     internal TimeSpan InitializationTimeout { get; set; } = TimeSpan.FromHours(60);
 
     public DataContext WithInitializationTieout(TimeSpan timeout) =>
@@ -42,18 +41,29 @@ public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace) : IAsync
         };
 
     public DataContext AddWorkspaceReferenceStream<TReference, TStream>(
-        Func<
-            IObservable<ChangeItem<WorkspaceState>>,
-            TReference,
-            IObservable<ChangeItem<TStream>>
-        > referenceDefinition,
+        ReducedStreamProjection<WorkspaceState, TReference, TStream> referenceDefinition
+    )
+        where TReference : WorkspaceReference<TStream> =>
+        AddWorkspaceReferenceStream(referenceDefinition, null);
+
+    public DataContext AddWorkspaceReferenceStream<TReference, TStream>(
+        ReducedStreamProjection<WorkspaceState, TReference, TStream> referenceDefinition,
         Func<WorkspaceState, TReference, ChangeItem<TStream>, ChangeItem<WorkspaceState>> backFeed
     )
         where TReference : WorkspaceReference<TStream> =>
         this with
         {
-            ReduceManager = ReduceManager.AddWorkspaceReferenceStream(referenceDefinition, backFeed)
+            ReduceManager = ReduceManager.AddWorkspaceReferenceStream(
+                referenceDefinition,
+                backFeed
+            ),
         };
+
+    private ImmutableDictionary<
+        Type,
+        Func<IChangeStream, IChangeItem>
+    > StreamConfigration { get; init; } =
+        ImmutableDictionary<Type, Func<IChangeStream, IChangeItem>>.Empty;
 
     public DataContext AddWorkspaceReference<TReference, TStream>(
         Func<WorkspaceState, TReference, TStream> referenceDefinition,
@@ -76,6 +86,73 @@ public sealed record DataContext(IMessageHub Hub, IWorkspace Workspace) : IAsync
 
         foreach (var dataSource in DataSources.Values)
             dataSource.Initialize();
+    }
+
+    internal static ReduceManager<WorkspaceState> CreateReduceManager()
+    {
+        return new ReduceManager<WorkspaceState>()
+            .AddWorkspaceReference<EntityReference, object>(
+                (ws, reference) => ws.Store.ReduceImpl(reference),
+                null
+            )
+            .AddWorkspaceReference<PartitionedCollectionsReference, EntityStore>(
+                (ws, reference) => ws.ReduceImpl(reference),
+                (ws, reference, update) =>
+                    update.SetValue(ws with { Store = ws.Store.Update(reference, update.Value) })
+            )
+            .AddWorkspaceReference<CollectionReference, InstanceCollection>(
+                (ws, reference) => ws.Store.ReduceImpl(reference),
+                (ws, reference, update) =>
+                    update.SetValue(ws with { Store = ws.Store.Update(reference, update.Value) })
+            )
+            .AddWorkspaceReference<CollectionsReference, EntityStore>(
+                (ws, reference) => ws.Store.ReduceImpl(reference),
+                (ws, reference, update) =>
+                    update.SetValue(ws with { Store = ws.Store.Update(reference, update.Value) })
+            )
+            .AddWorkspaceReference<WorkspaceStoreReference, EntityStore>(
+                (ws, reference) => ws.Store,
+                (ws, reference, update) =>
+                    update.SetValue(ws with { Store = ws.Store.Update(reference, update.Value) })
+            )
+            .AddWorkspaceReference<WorkspaceStateReference, WorkspaceState>(
+                (ws, reference) => ws,
+                (ws, reference, update) =>
+                    update.SetValue(ws with { Store = ws.Store.Merge(update.Value.Store) })
+            )
+            .ForReducedStream<EntityStore>(reduced =>
+                reduced
+                    .AddWorkspaceReference<EntityReference, object>(
+                        (ws, reference) => ws.ReduceImpl(reference),
+                        null
+                    )
+                    // .AddWorkspaceReference<PartitionedCollectionsReference, EntityStore>(
+                    //     (ws, reference) => ws.ReduceImpl(reference),
+                    //     CreateState
+                    // )
+                    .AddWorkspaceReference<CollectionReference, InstanceCollection>(
+                        (ws, reference) => ws.ReduceImpl(reference),
+                        null
+                    )
+                    .AddWorkspaceReference<CollectionsReference, EntityStore>(
+                        (ws, reference) => ws.ReduceImpl(reference),
+                        null
+                    )
+                    .AddWorkspaceReference<WorkspaceStoreReference, EntityStore>(
+                        (ws, reference) => ws,
+                        null
+                    )
+            )
+            .ForReducedStream<InstanceCollection>(reduced =>
+                reduced.AddWorkspaceReference<EntityReference, object>(
+                    (ws, reference) => ws.Instances.GetValueOrDefault(reference.Id),
+                    null
+                )
+            // .AddWorkspaceReference<PartitionedCollectionsReference, EntityStore>(
+            //     (ws, reference) => ws.ReduceImpl(reference),
+            //     CreateState
+            // )
+            );
     }
 
     public async ValueTask DisposeAsync()

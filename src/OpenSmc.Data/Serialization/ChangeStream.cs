@@ -4,6 +4,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using OpenSmc.Activities;
 using OpenSmc.Messaging;
+using OpenSmc.Serialization;
 
 namespace OpenSmc.Data.Serialization;
 
@@ -19,19 +20,9 @@ public interface IChangeStream : IDisposable
 
     IMessageHub Hub { get; }
     IWorkspace Workspace { get; }
-    void RegisterMessageHandler<TMessage>(
-        Func<IMessageDelivery<TMessage>, IMessageDelivery> process
-    )
-        where TMessage : WorkspaceMessage => RegisterMessageHandler<TMessage>(process, _ => true);
-
-    void RegisterMessageHandler<TMessage>(
-        Func<IMessageDelivery<TMessage>, IMessageDelivery> process,
-        Func<TMessage, bool> applies
-    )
-        where TMessage : WorkspaceMessage;
 
     public void Post(WorkspaceMessage message) =>
-        Hub.Post(message with { Address = Id, Reference = Reference });
+        Hub.Post(message with { Id = Id, Reference = Reference }, o => o.WithTarget(Id));
 }
 
 public interface IChangeStream<TStream>
@@ -53,6 +44,17 @@ public interface IChangeStream<TStream, TReference> : IChangeStream<TStream>
 {
     ChangeItem<TStream> Current { get; }
     new TReference Reference { get; }
+
+    void RegisterMessageHandler<TMessage>(
+        Func<IMessageDelivery<TMessage>, IMessageDelivery> process
+    )
+        where TMessage : WorkspaceMessage => RegisterMessageHandler<TMessage>(process, _ => true);
+
+    void RegisterMessageHandler<TMessage>(
+        Func<IMessageDelivery<TMessage>, IMessageDelivery> process,
+        Func<TMessage, bool> applies
+    )
+        where TMessage : WorkspaceMessage;
 }
 
 public record ChangeStream<TStream, TReference>
@@ -126,7 +128,7 @@ public record ChangeStream<TStream, TReference>
 
     public IObservable<ChangeItem<TReduced>> Reduce<TReduced>(
         WorkspaceReference<TReduced> reference
-    ) => reduceManager.ReduceStream(store, reference);
+    ) => reduceManager.ReduceStream(Workspace.GetChangeStream(reference), store, reference);
 
     public IDisposable Subscribe(IObserver<ChangeItem<TStream>> observer)
     {
@@ -182,10 +184,10 @@ public record ChangeStream<TStream, TReference>
     IMessageDelivery IChangeStream.DeliverMessage(IMessageDelivery<WorkspaceMessage> delivery)
     {
         return messageHandlers
-            .Where(x => x.Applies(delivery))
-            .Select(x => x.Process)
-            .FirstOrDefault()
-            ?.Invoke(delivery);
+                .Where(x => x.Applies(delivery))
+                .Select(x => x.Process)
+                .FirstOrDefault()
+                ?.Invoke(delivery) ?? delivery;
     }
 
     public void Update(Func<TStream, ChangeItem<TStream>> update)

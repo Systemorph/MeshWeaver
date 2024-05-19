@@ -32,7 +32,7 @@ public class DataChangedEventConverter : JsonConverter<DataChangedEvent>
 
         return new DataChangedEvent(version, change, changeType, changedBy)
         {
-            Address = address,
+            Id = address,
             Reference = reference
         };
     }
@@ -45,9 +45,7 @@ public class DataChangedEventConverter : JsonConverter<DataChangedEvent>
     {
         writer.WriteStartObject();
         writer.WritePropertyName("address");
-        JsonSerializer
-            .SerializeToNode(value.Address, value.Address.GetType(), options)!
-            .WriteTo(writer);
+        JsonSerializer.SerializeToNode(value.Id, value.Id.GetType(), options)!.WriteTo(writer);
 
         writer.WritePropertyName("reference");
         JsonSerializer
