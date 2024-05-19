@@ -7,6 +7,7 @@ using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.DataBinding;
+using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
 using Xunit.Abstractions;
 
@@ -41,7 +42,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                         Controls.Stack().WithView("Hello", "Hello").WithView("World", "World")
                     )
                     .WithViewDefinition(nameof(ViewWithProgress), ViewWithProgress)
-                    .WithViewStream(
+                    .WithView(
                         nameof(UpdatingView),
                         _ =>
                             layout
@@ -50,7 +51,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                                 .DistinctUntilChanged()
                                 .Select(UpdatingView)
                     )
-                    .WithViewStream(
+                    .WithView(
                         nameof(ItemTemplate),
                         _ =>
                             layout
@@ -58,6 +59,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                                 .Stream.Select(x => x.Value.GetData<DataRecord>())
                                 .DistinctUntilChanged()
                                 .Select(ItemTemplate)
+                    )
+                    .WithView(
+                        nameof(ViewWithClick),
+                        _ => layout.Hub.GetWorkspace().Stream.Select(x => ViewWithClick())
                     )
             );
     }
@@ -67,6 +72,15 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             data,
             record => Controls.TextBox(record.DisplayName).WithId(record.SystemName)
         );
+
+    private UiControl ViewWithClick()
+    {
+        return Controls
+            .Menu("Click me")
+            .WithClickAction(context =>
+                context.Layout.Update(nameof(ViewWithClick), Controls.HtmlView("Clicked!"))
+            );
+    }
 
     protected override MessageHubConfiguration ConfigureClient(
         MessageHubConfiguration configuration
@@ -100,7 +114,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         for (int i = 0; i < 10; i++)
         {
             await Task.Delay(30);
-            area.UpdateView(
+            area.Update(
                 nameof(ViewWithProgress),
                 progress = progress with { Progress = percentage += 10 }
             );
@@ -231,6 +245,20 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .HaveCount(2)
             .And.Contain(r => r.SystemName == "Hello")
             .And.Contain(r => r.SystemName == "World");
+    }
+
+    [HubFact]
+    public async Task TestClick()
+    {
+        var reference = new LayoutAreaReference(nameof(ViewWithClick));
+
+        var hub = GetClient();
+        var workspace = hub.GetWorkspace();
+        var stream = workspace.GetRemoteStream(new HostAddress(), reference);
+        var reportArea = $"{reference.Area}/Content";
+        var content = await stream.GetControl(reportArea).FirstAsync();
+        content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("Click me");
+        stream.Post(new ClickedEvent(nameof(ViewWithClick)));
     }
 }
 

@@ -39,7 +39,7 @@ public class ChangeStreamClient<TStream, TReference>
         if (patch == null || !patch.Operations.Any())
             return null;
 
-        return new(Stream.Id, Stream.Reference, patch, changeItem.Version);
+        return new(patch, changeItem.Version) { Address = Stream.Id, Reference = Stream.Reference };
     }
 
     public IDisposable Subscribe(IObserver<PatchChangeRequest> observer)

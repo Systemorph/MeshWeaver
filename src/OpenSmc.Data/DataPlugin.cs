@@ -11,7 +11,7 @@ public class DataPlugin(IMessageHub hub)
         IMessageHandler<DeleteDataRequest>,
         IMessageHandler<SubscribeRequest>,
         IMessageHandler<UnsubscribeDataRequest>,
-        IMessageHandler<IWorkspaceMessage>
+        IMessageHandler<WorkspaceMessage>
 {
     private IWorkspace Workspace { get; set; } =
         hub.ServiceProvider.GetRequiredService<IWorkspace>();
@@ -33,7 +33,7 @@ public class DataPlugin(IMessageHub hub)
         IMessageDelivery<DeleteDataRequest> request
     ) => RequestChange(request, request.Message with { ChangedBy = request.Sender });
 
-    private IMessageDelivery RequestChange(IMessageDelivery request, DataChangeRequest change)
+    private IMessageDelivery RequestChange(IMessageDelivery request, DataChangedReqeust change)
     {
         var response = Workspace.RequestChange(change, null);
         if (request != null)
@@ -81,7 +81,7 @@ public class DataPlugin(IMessageHub hub)
         await base.DisposeAsync();
     }
 
-    public IMessageDelivery HandleMessage(IMessageDelivery<IWorkspaceMessage> delivery)
+    public IMessageDelivery HandleMessage(IMessageDelivery<WorkspaceMessage> delivery)
     {
         return Workspace.DeliverMessage(delivery);
     }

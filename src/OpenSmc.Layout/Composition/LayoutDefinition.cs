@@ -25,9 +25,9 @@ public record LayoutDefinition(IMessageHub Hub)
     public LayoutDefinition WithViewStream(
         string area,
         Func<LayoutArea, IObservable<object>> generator
-    ) => WithViewStream(area, a => generator.Invoke(a).Select(o => ControlsManager.Get(o)));
+    ) => WithView(area, a => generator.Invoke(a).Select(o => ControlsManager.Get(o)));
 
-    public LayoutDefinition WithViewStream(
+    public LayoutDefinition WithView(
         string area,
         Func<LayoutArea, IObservable<UiControl>> generator
     ) =>

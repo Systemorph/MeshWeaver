@@ -43,13 +43,15 @@ public class ChangeStreamHost<TStream, TReference>
     private DataChangedEvent GetFullDataChange(ChangeItem<TStream> changeItem)
     {
         return new DataChangedEvent(
-            Stream.Id,
-            Stream.Reference,
             changeItem.Version,
             changeItem.Value,
             ChangeType.Full,
             changeItem.ChangedBy
-        );
+        )
+        {
+            Address = Stream.Id,
+            Reference = Stream.Reference
+        };
     }
 
     private ChangeItem<TStream> Change(
@@ -70,13 +72,10 @@ public class ChangeStreamHost<TStream, TReference>
         if (!patch.Operations.Any())
             return null;
 
-        return new(
-            Stream.Id,
-            Stream.Reference,
-            change.Version,
-            patch,
-            ChangeType.Patch,
-            change.ChangedBy
-        );
+        return new(change.Version, patch, ChangeType.Patch, change.ChangedBy)
+        {
+            Address = Stream.Id,
+            Reference = Stream.Reference
+        };
     }
 }

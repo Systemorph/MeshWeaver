@@ -4,32 +4,30 @@ using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
 
-public interface IWorkspaceMessage
+public record WorkspaceMessage
 {
-    object Address { get; }
-    object Reference { get; }
+    public object Address { get; init; }
+    public object Reference { get; init; }
 }
 
-public abstract record DataChangeRequest() : IRequest<DataChangeResponse>
+public abstract record DataChangedReqeust(IReadOnlyCollection<object> Elements)
+    : IRequest<DataChangeResponse>
 {
     public object ChangedBy { get; init; }
-}
+};
 
-public abstract record DataChangeRequestWithElements(IReadOnlyCollection<object> Elements)
-    : DataChangeRequest;
-
-public record UpdateDataRequest(IReadOnlyCollection<object> Elements)
-    : DataChangeRequestWithElements(Elements)
+public record UpdateDataRequest(IReadOnlyCollection<object> Elements) : DataChangedReqeust(Elements)
 {
     public UpdateOptions Options { get; init; }
 }
 
 public record DeleteDataRequest(IReadOnlyCollection<object> Elements)
-    : DataChangeRequestWithElements(Elements);
+    : DataChangedReqeust(Elements);
 
-public record PatchChangeRequest(object Address, object Reference, JsonPatch Change, long Version)
-    : DataChangeRequest,
-        IWorkspaceMessage { }
+public record PatchChangeRequest(JsonPatch Change, long Version) : WorkspaceMessage
+{
+    public object ChangedBy { get; init; }
+}
 
 public record DataChangeResponse(long Version, DataChangeStatus Status, ActivityLog Log);
 
@@ -46,14 +44,8 @@ public enum ChangeType
     Instance
 }
 
-public record DataChangedEvent(
-    object Address,
-    object Reference,
-    long Version,
-    object Change,
-    ChangeType ChangeType,
-    object ChangedBy
-) : IWorkspaceMessage;
+public record DataChangedEvent(long Version, object Change, ChangeType ChangeType, object ChangedBy)
+    : WorkspaceMessage;
 
 public record SubscribeRequest(WorkspaceReference Reference) : IRequest<DataChangedEvent>;
 

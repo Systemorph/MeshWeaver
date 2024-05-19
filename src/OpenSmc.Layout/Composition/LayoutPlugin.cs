@@ -44,13 +44,13 @@ public class LayoutManager
         if (control.DataContext != null)
             control = control with { DataContext = layoutArea.UpdateData(control.DataContext) };
 
-        layoutArea.UpdateView(area, control);
+        layoutArea.Update(area, control);
     }
 
     private void RenderArea(string area, ViewElementWithViewDefinition viewDefinition)
     {
         var stream = viewDefinition.ViewDefinition;
-        layoutArea.UpdateView(area, new SpinnerControl());
+        layoutArea.Update(area, new SpinnerControl());
         _ = stream.Subscribe(f =>
             layoutHub.Schedule(async ct =>
             {

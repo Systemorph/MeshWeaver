@@ -3,9 +3,7 @@ using OpenSmc.Messaging;
 
 namespace OpenSmc.Layout.Views;
 
-public record ClickedEvent(string Area) : IWorkspaceMessage
+public record ClickedEvent(string Area) : WorkspaceMessage
 {
-    public object Address { get; init; }
-    public object Reference { get; init; }
     public object Payload { get; init; }
 };
