@@ -13,11 +13,16 @@ public class ChangeStreamHost<TStream, TReference>
     public ChangeStreamHost(IChangeStream<TStream, TReference> stream)
         : base(stream)
     {
-        stream.RegisterMessageHandler<PatchChangeRequest>(delivery =>
-        {
-            var response = stream.RequestChange(state => Change(delivery, state));
-            return delivery.Processed();
-        });
+        stream.AddDisposable(
+            stream.Hub.Register<PatchChangeRequest>(
+                delivery =>
+                {
+                    var response = stream.RequestChange(state => Change(delivery, state));
+                    return delivery.Processed();
+                },
+                x => stream.Id.Equals(x.Message.Id) && x.Message.Reference.Equals(stream.Reference)
+            )
+        );
     }
 
     public virtual IDisposable Subscribe(IObserver<DataChangedEvent> observer)

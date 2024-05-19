@@ -1,4 +1,5 @@
-﻿using OpenSmc.Data;
+﻿using System.Data.Common;
+using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
@@ -93,24 +94,29 @@ public class LayoutManager
             return changeStream;
         RenderArea(reference.Area, viewElement);
         changeStream.AddDisposable(layoutArea.Stream.Subscribe(changeStream));
-        changeStream.RegisterMessageHandler<ClickedEvent>(
-            (request) =>
-            {
-                var control = changeStream.Current.Value.GetControl(request.Message.Area);
-                if (control == null)
-                    return request.Ignored();
-                try
+        changeStream.AddDisposable(
+            changeStream.Hub.Register<ClickedEvent>(
+                (request) =>
                 {
-                    control.ClickAction.Invoke(
-                        new(request.Message.Payload, LayoutDefinition.Hub, layoutArea)
-                    );
-                }
-                catch (Exception e)
-                {
-                    request.Failed(e.Message);
-                }
-                return request.Processed();
-            }
+                    var control = changeStream.Current.Value.GetControl(request.Message.Area);
+                    if (control == null)
+                        return request.Ignored();
+                    try
+                    {
+                        control.ClickAction.Invoke(
+                            new(request.Message.Payload, LayoutDefinition.Hub, layoutArea)
+                        );
+                    }
+                    catch (Exception e)
+                    {
+                        request.Failed(e.Message);
+                    }
+                    return request.Processed();
+                },
+                d =>
+                    changeStream.Id.Equals(d.Message.Id)
+                    && changeStream.Reference.Equals(d.Message.Reference)
+            )
         );
 
         return changeStream;

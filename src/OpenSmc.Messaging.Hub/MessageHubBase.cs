@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Linq.Expressions;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Disposables;
 using OpenSmc.Messaging.Serialization;
 using OpenSmc.Reflection;
 using OpenSmc.Serialization;
@@ -186,13 +187,13 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
         return await DeliverMessageAsync(delivery, node.Next, cancellationToken);
     }
 
-    public IMessageHandlerRegistry Register<TMessage>(SyncDelivery<TMessage> action) =>
+    public IDisposable Register<TMessage>(SyncDelivery<TMessage> action) =>
         Register(action, DefaultFilter);
 
-    public IMessageHandlerRegistry Register<TMessage>(AsyncDelivery<TMessage> action) =>
+    public IDisposable Register<TMessage>(AsyncDelivery<TMessage> action) =>
         Register(action, DefaultFilter);
 
-    public IMessageHandlerRegistry Register<TMessage>(
+    public IDisposable Register<TMessage>(
         SyncDelivery<TMessage> action,
         DeliveryFilter<TMessage> filter
     )
@@ -200,37 +201,37 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
         return Register((d, _) => Task.FromResult(action(d)), filter);
     }
 
-    public IMessageHandlerRegistry RegisterInherited<TMessage>(
+    public IDisposable RegisterInherited<TMessage>(
         AsyncDelivery<TMessage> action,
         DeliveryFilter<TMessage> filter = null
     )
     {
-        Rules.AddLast(
-            new LinkedListNode<AsyncDelivery>(
-                (d, c) =>
-                    d is IMessageDelivery<TMessage> md && (filter?.Invoke(md) ?? true)
-                        ? action(md, c)
-                        : Task.FromResult(d)
-            )
+        var node = new LinkedListNode<AsyncDelivery>(
+            (d, c) =>
+                d is IMessageDelivery<TMessage> md && (filter?.Invoke(md) ?? true)
+                    ? action(md, c)
+                    : Task.FromResult(d)
         );
-        return this;
+        Rules.AddLast(node);
+        return new AnonymousDisposable(() => Rules.Remove(node));
     }
 
-    public IMessageHandlerRegistry Register(SyncDelivery delivery) =>
+    public IDisposable Register(SyncDelivery delivery) =>
         Register((d, _) => Task.FromResult(delivery(d)));
 
-    public IMessageHandlerRegistry Register(AsyncDelivery delivery)
+    public IDisposable Register(AsyncDelivery delivery)
     {
-        Rules.AddLast(new LinkedListNode<AsyncDelivery>(delivery));
-        return this;
+        var node = new LinkedListNode<AsyncDelivery>(delivery);
+        Rules.AddLast(node);
+        return new AnonymousDisposable(() => Rules.Remove(node));
     }
 
-    public IMessageHandlerRegistry RegisterInherited<TMessage>(
+    public IDisposable RegisterInherited<TMessage>(
         SyncDelivery<TMessage> action,
         DeliveryFilter<TMessage> filter = null
     ) => RegisterInherited((d, _) => Task.FromResult(action(d)), filter);
 
-    public IMessageHandlerRegistry Register<TMessage>(
+    public IDisposable Register<TMessage>(
         AsyncDelivery<TMessage> action,
         DeliveryFilter<TMessage> filter
     )
@@ -242,18 +243,18 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
         );
     }
 
-    public IMessageHandlerRegistry Register(Type tMessage, AsyncDelivery action)
+    public IDisposable Register(Type tMessage, AsyncDelivery action)
     {
         registeredTypes.Add(tMessage);
         return Register(action, d => d.Message.GetType().IsInstanceOfType(tMessage));
     }
 
-    public IMessageHandlerRegistry Register(AsyncDelivery action, DeliveryFilter filter)
+    public IDisposable Register(AsyncDelivery action, DeliveryFilter filter)
     {
-        Rules.AddFirst(
-            (delivery, cancellationToken) => WrapFilter(delivery, action, filter, cancellationToken)
-        );
-        return this;
+        AsyncDelivery rule = (delivery, cancellationToken) =>
+            WrapFilter(delivery, action, filter, cancellationToken);
+        Rules.AddFirst(rule);
+        return new AnonymousDisposable(() => Rules.Remove(rule));
     }
 
     private Task<IMessageDelivery> WrapFilter(
@@ -268,14 +269,10 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
         return Task.FromResult(delivery);
     }
 
-    public IMessageHandlerRegistry Register(Type tMessage, SyncDelivery action) =>
+    public IDisposable Register(Type tMessage, SyncDelivery action) =>
         Register(tMessage, action, _ => true);
 
-    public IMessageHandlerRegistry Register(
-        Type tMessage,
-        SyncDelivery action,
-        DeliveryFilter filter
-    ) =>
+    public IDisposable Register(Type tMessage, SyncDelivery action, DeliveryFilter filter) =>
         Register(
             tMessage,
             (d, _) =>
@@ -293,11 +290,7 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
         return Task.CompletedTask;
     }
 
-    public IMessageHandlerRegistry Register(
-        Type tMessage,
-        AsyncDelivery action,
-        DeliveryFilter filter
-    )
+    public IDisposable Register(Type tMessage, AsyncDelivery action, DeliveryFilter filter)
     {
         registeredTypes.Add(tMessage);
         TypeRegistry.WithType(tMessage);
