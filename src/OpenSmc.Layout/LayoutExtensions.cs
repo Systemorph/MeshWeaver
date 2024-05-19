@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Layout.Composition;
+using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
 
@@ -20,7 +21,10 @@ public static class LayoutExtensions
             .WithServices(services => services.AddScoped<ILayout, LayoutPlugin>())
             .AddData(data =>
                 data.AddWorkspaceReferenceStream<LayoutAreaReference, EntityStore>(
-                    (_, a) => data.Hub.ServiceProvider.GetRequiredService<ILayout>().Render(a),
+                    (changeStream, _, a) =>
+                        data
+                            .Hub.ServiceProvider.GetRequiredService<ILayout>()
+                            .Render(changeStream, a),
                     (ws, reference, val) =>
                         val.SetValue(ws with { Store = ws.Store.Update(reference, val.Value) })
                 )
@@ -54,6 +58,9 @@ public static class LayoutExtensions
         ((IObservable<ChangeItem<EntityStore>>)changeItems)
             .Select(i => i.Value.Reduce(new EntityReference(typeof(UiControl).FullName, area)))
             .Where(x => x != null);
+
+    public static UiControl GetControl(this EntityStore store, string area) =>
+        (UiControl)store.Reduce(new EntityReference(typeof(UiControl).FullName, area));
 
     public static IObservable<object> GetData(
         this IChangeStream<EntityStore> changeItems,

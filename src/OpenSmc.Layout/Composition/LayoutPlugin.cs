@@ -1,5 +1,6 @@
 ﻿using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
+using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Layout.Composition;
@@ -9,14 +10,20 @@ public record LayoutExecutionAddress(object Host) : IHostedAddress;
 public class LayoutManager
 {
     private readonly LayoutArea layoutArea;
+    private readonly IChangeStream<EntityStore, LayoutAreaReference> changeStream;
     private readonly IMessageHub layoutHub;
 
     public LayoutDefinition LayoutDefinition { get; }
 
-    public LayoutManager(LayoutArea layoutArea, LayoutDefinition layoutDefinition)
+    public LayoutManager(
+        LayoutArea layoutArea,
+        LayoutDefinition layoutDefinition,
+        IChangeStream<EntityStore, LayoutAreaReference> changeStream
+    )
     {
         this.layoutArea = layoutArea;
         LayoutDefinition = layoutDefinition;
+        this.changeStream = changeStream;
         var hub = layoutDefinition.Hub;
         layoutHub = hub.GetHostedHub(new LayoutExecutionAddress(hub.Address));
     }
@@ -79,17 +86,43 @@ public class LayoutManager
         }
     }
 
-    public IObservable<ChangeItem<EntityStore>> Render(LayoutAreaReference reference)
+    public IChangeStream<EntityStore, LayoutAreaReference> Render(LayoutAreaReference reference)
     {
         var viewElement = LayoutDefinition.GetViewElement(reference);
+        if (viewElement == null)
+            return changeStream;
         RenderArea(reference.Area, viewElement);
-        return layoutArea.Stream;
+        changeStream.AddDisposable(layoutArea.Stream.Subscribe(changeStream));
+        changeStream.RegisterMessageHandler<ClickedEvent>(
+            (request) =>
+            {
+                var control = changeStream.Current.Value.GetControl(request.Message.Area);
+                if (control == null)
+                    return request.Ignored();
+                try
+                {
+                    control.ClickAction.Invoke(
+                        new(request.Message.Payload, LayoutDefinition.Hub, layoutArea)
+                    );
+                }
+                catch (Exception e)
+                {
+                    request.Failed(e.Message);
+                }
+                return request.Processed();
+            }
+        );
+
+        return changeStream;
     }
 }
 
 public interface ILayout
 {
-    IObservable<ChangeItem<EntityStore>> Render(LayoutAreaReference reference);
+    IChangeStream<EntityStore, LayoutAreaReference> Render(
+        IChangeStream<EntityStore, LayoutAreaReference> changeStream,
+        LayoutAreaReference reference
+    );
 }
 
 public class LayoutPlugin : MessageHubPlugin, ILayout
@@ -104,8 +137,10 @@ public class LayoutPlugin : MessageHubPlugin, ILayout
             .Aggregate(new LayoutDefinition(Hub), (x, y) => y.Invoke(x));
     }
 
-    public IObservable<ChangeItem<EntityStore>> Render(LayoutAreaReference reference) =>
-        new LayoutManager(new(reference, Hub), layoutDefinition).Render(reference);
+    public IChangeStream<EntityStore, LayoutAreaReference> Render(
+        IChangeStream<EntityStore, LayoutAreaReference> changeStream,
+        LayoutAreaReference reference
+    ) => new LayoutManager(new(reference, Hub), layoutDefinition, changeStream).Render(reference);
 
     public override async Task StartAsync(CancellationToken cancellationToken)
     {

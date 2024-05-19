@@ -49,7 +49,7 @@ public class ChangeStreamHost<TStream, TReference>
             changeItem.ChangedBy
         )
         {
-            Address = Stream.Id,
+            Id = Stream.Id,
             Reference = Stream.Reference
         };
     }
@@ -74,7 +74,7 @@ public class ChangeStreamHost<TStream, TReference>
 
         return new(change.Version, patch, ChangeType.Patch, change.ChangedBy)
         {
-            Address = Stream.Id,
+            Id = Stream.Id,
             Reference = Stream.Reference
         };
     }

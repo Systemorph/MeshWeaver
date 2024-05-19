@@ -65,16 +65,10 @@ public static class DataPluginExtensions
             ?? ImmutableList<Func<DataContext, DataContext>>.Empty;
     }
 
-    internal static DataContext GetDataConfiguration(
-        this IMessageHub hub,
-        ReduceManager<WorkspaceState> reduceManager
-    )
+    internal static DataContext GetDataConfiguration(this IMessageHub hub)
     {
         var dataPluginConfig = hub.Configuration.GetListOfLambdas();
-        var ret = new DataContext(hub, hub.ServiceProvider.GetRequiredService<IWorkspace>())
-        {
-            ReduceManager = reduceManager
-        };
+        var ret = new DataContext(hub);
         foreach (var func in dataPluginConfig)
             ret = func.Invoke(ret);
         return ret;
