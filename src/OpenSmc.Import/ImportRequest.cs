@@ -8,15 +8,35 @@ namespace OpenSmc.Import;
 /// This is a request entity triggering import when executing in a data hub
 /// using the Import Plugin. See also AddImport method.
 /// </summary>
-/// <param name="Content">Content of the source to be imported, e.g. a string (shipping the entire content) or a file name (together with StreamType = File)</param>
-/// <param name="StreamType">Type of the source to be configured in the import plugin, e.g. a file share.</param>
-public record ImportRequest(string Content, string StreamType = nameof(String)) : IRequest<ImportResponse>
+/// <param name="Source">Content of the source to be imported, e.g. a string (shipping the entire content) or a file name (together with StreamType = File)</param>
+public record ImportRequest(Source Source) : IRequest<ImportResponse>
 {
-    public string MimeType { get; init; } = MimeTypes.MapFileExtension(StreamType != nameof(String) ? Content : string.Empty);
+    public ImportRequest(string Contennt)
+        : this(new StringStream(Contennt)) { }
+
+    public string MimeType { get; init; } =
+        MimeTypes.MapFileExtension(
+            Source is StreamSource stream ? Path.GetExtension(stream.Name) : ""
+        );
+
     public string Format { get; init; } = ImportFormat.Default;
     public object TargetDataSource { get; init; }
-    public bool SnapshotMode { get; init; }
+    public bool Snapshot { get; init; }
     public DataSetReaderOptions DataSetReaderOptions { get; init; } = new();
+
+    internal Type EntityType { get; init; }
+
+    public ImportRequest WithEntityType(Type entityType) => this with { EntityType = entityType };
+
+    public bool SaveLog { get; init; }
 }
 
 public record ImportResponse(long Version, ActivityLog Log);
+
+public abstract record Source { }
+
+public record StringStream(string Content) : Source;
+
+public record StreamSource(string Name, Stream Stream) : Source;
+
+//public record FileStream(string FileName) : Source;

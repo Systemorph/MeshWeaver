@@ -3,23 +3,19 @@ using OpenSmc.Pivot.Models.Interfaces;
 
 namespace OpenSmc.Pivot.Models
 {
-    public record Column : IItemWithCoordinates
+    public record Column : ItemWithCoordinates
     {
         public Column()
         {
+            GrouperName = PivotConst.ColumnGrouperName;
         }
 
-        public Column(string systemName, string displayName)
+        public Column(string id, string displayName)
+            : this()
         {
-            SystemName = systemName;
+            SystemName = id;
             DisplayName = displayName;
-            Coordinates = Coordinates.Add(systemName);
+            Coordinates = ImmutableList<object>.Empty.Add(id);
         }
-
-        public IImmutableList<string> Coordinates { get; init; } = ImmutableList<string>.Empty;
-
-        public string SystemName { get; init; }
-        public string DisplayName { get; init; }
-        public string GrouperName { get; init; } = PivotConst.ColumnGrouperName;
     }
 }

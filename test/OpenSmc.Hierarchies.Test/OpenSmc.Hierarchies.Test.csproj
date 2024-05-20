@@ -2,6 +2,7 @@
   <ItemGroup>
     <ProjectReference Include="..\OpenSmc.TestDomain\OpenSmc.TestDomain.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Hierarchies\OpenSmc.Hierarchies.csproj" />
+    <ProjectReference Include="..\OpenSmc.Hub.Fixture\OpenSmc.Hub.Fixture.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Update="**\*.json">

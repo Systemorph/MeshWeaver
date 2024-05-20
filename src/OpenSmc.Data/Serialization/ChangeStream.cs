@@ -1,80 +1,115 @@
-﻿using System.Reactive.Linq;
+﻿using System.Collections.Immutable;
+using System.Data;
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Text.Json;
-using System.Text.Json.Nodes;
-using Json.Patch;
+using OpenSmc.Activities;
 using OpenSmc.Messaging;
+using OpenSmc.Serialization;
 
 namespace OpenSmc.Data.Serialization;
 
-public interface IChangeItem
+public interface IChangeStream : IDisposable
 {
-    object Address { get; }
-    object ChangedBy { get; }
+    object Id { get; }
     WorkspaceReference Reference { get; }
+
+    internal IMessageDelivery DeliverMessage(IMessageDelivery<WorkspaceMessage> delivery);
+    void AddDisposable(IDisposable disposable);
+
+    Task Initialized { get; }
+
+    IMessageHub Hub { get; }
+    IWorkspace Workspace { get; }
+
+    public void Post(WorkspaceMessage message) =>
+        Hub.Post(message with { Id = Id, Reference = Reference }, o => o.WithTarget(Id));
 }
-public record ChangeItem<TStream>(object Address, WorkspaceReference Reference, TStream Value, object ChangedBy) : IChangeItem;
 
-public record ChangeStream<TStream> : IDisposable, 
-    IObserver<DataChangedEvent>, 
-    IObservable<DataChangedEvent>, 
-    IObservable<ChangeItem<TStream>>,
-    IObservable<PatchChangeRequest>
+public interface IChangeStream<TStream>
+    : IChangeStream,
+        IObservable<ChangeItem<TStream>>,
+        IObserver<ChangeItem<TStream>>
 {
-    private readonly Subject<DataChangedEvent> dataChangedStream = new();
-    private readonly Subject<PatchChangeRequest> changes = new();
-    private IDisposable updateSubscription;
+    void Update(Func<TStream, ChangeItem<TStream>> update);
+    void Initialize(TStream value);
+    IObservable<ChangeItem<TReduced>> Reduce<TReduced>(WorkspaceReference<TReduced> reference);
 
-    protected JsonNode LastSynchronized { get; set; }
+    new Task<TStream> Initialized { get; }
 
-    private IMessageHub Hub { get; }
+    DataChangeResponse RequestChange(Func<TStream, ChangeItem<TStream>> update);
+}
+
+public interface IChangeStream<TStream, TReference> : IChangeStream<TStream>
+    where TReference : WorkspaceReference<TStream>
+{
+    ChangeItem<TStream> Current { get; }
+    new TReference Reference { get; }
+}
+
+public record ChangeStream<TStream, TReference>
+    : IChangeStream<TStream, TReference>,
+        IObservable<ChangeItem<TStream>>
+    where TReference : WorkspaceReference<TStream>
+{
+    public TReference Reference { get; init; }
+
+    private ImmutableArray<(
+        Func<IMessageDelivery<WorkspaceMessage>, bool> Applies,
+        Func<IMessageDelivery<WorkspaceMessage>, IMessageDelivery> Process
+    )> messageHandlers = ImmutableArray<(
+        Func<IMessageDelivery<WorkspaceMessage>, bool> Applies,
+        Func<IMessageDelivery<WorkspaceMessage>, IMessageDelivery> Process
+    )>.Empty;
+    private readonly Func<
+        WorkspaceState,
+        TReference,
+        ChangeItem<TStream>,
+        ChangeItem<WorkspaceState>
+    > backfeed;
+
+    public IMessageHub Hub => Workspace.Hub;
+    public IWorkspace Workspace { get; }
+
+    private readonly TaskCompletionSource<TStream> initialized = new();
+    public Task<TStream> Initialized => initialized.Task;
+    Task IChangeStream.Initialized => initialized.Task;
+
+    public object Id { get; init; }
+
+    WorkspaceReference IChangeStream.Reference => Reference;
+
+    private readonly ReduceManager<TStream> reduceManager;
+    private ChangeItem<TStream> current;
+
+    /// <summary>
+    /// My current state
+    /// </summary>
     private readonly ReplaySubject<ChangeItem<TStream>> store = new(1);
-    private readonly Subject<Func<ChangeItem<TStream>, ChangeItem<TStream>>> updates = new();
-    private readonly Subject<ChangeItem<TStream>> updatedInstances = new();
 
-
-    public ChangeStream(IWorkspace Workspace,
-        object Address,
-        WorkspaceReference<TStream> Reference,
-        IMessageHub Hub,
-        Func<long> GetVersion,
-        bool isExternalStream)
+    public ChangeStream(
+        object id,
+        TReference reference,
+        IWorkspace workspace,
+        ReduceManager<TStream> reduceManager
+    )
     {
-        this.Workspace = Workspace;
-        this.Address = Address;
-        this.Reference = Reference;
-        this.Hub = Hub;
-        this.GetVersion = GetVersion;
-
-        this.isExternalStream = isExternalStream;
-
-        updatedInstances.CombineLatest(updates.StartWith(x => x), (value, update) => update(value)).Subscribe(store);
-
-        if (isExternalStream)
-            Disposables.Add(Workspace.ChangeStream.Subscribe(i => Update(i.SetValue(i.Value.Reduce(Reference)))));
-        else
-            Disposables.Add(Workspace.GetStream(Reference).DistinctUntilChanged().Subscribe(Synchronize));
+        Id = id;
+        Reference = reference;
+        Workspace = workspace;
+        this.reduceManager = reduceManager;
+        backfeed = reduceManager.ReduceTo<TStream>().GetBackfeed<TReference>();
     }
 
-
+    public IObservable<ChangeItem<TReduced>> Reduce<TReduced>(
+        WorkspaceReference<TReduced> reference
+    ) => reduceManager.ReduceStream(Workspace.GetChangeStream(reference), store, reference);
 
     public IDisposable Subscribe(IObserver<ChangeItem<TStream>> observer)
     {
         return store.Subscribe(observer);
     }
-    public IDisposable Subscribe(IObserver<DataChangedEvent> observer)
-    {
-        IObservable<DataChangedEvent> stream = dataChangedStream;
-
-        if (LastSynchronized != null)
-            observer.OnNext(new DataChangedEvent(Address, Reference, Hub.Version, LastSynchronized, ChangeType.Full, Address));
-        return stream.Subscribe(observer);
-    }
-
 
     public readonly List<IDisposable> Disposables = new();
-    private readonly bool isExternalStream;
-
 
     public void Dispose()
     {
@@ -82,103 +117,31 @@ public record ChangeStream<TStream> : IDisposable,
             disposeAction.Dispose();
 
         store.Dispose();
-        updateSubscription?.Dispose();
     }
 
-
-    public void Update(Func<TStream, TStream> change)
-        => updates.OnNext(x =>
+    public ChangeItem<TStream> Current
+    {
+        get => current;
+        private set
         {
-            var newValue = change(x.Value);
-            var ret = new ChangeItem<TStream>(Address, Reference, newValue, Hub.Address);
-            if(isExternalStream)
-                Update(ret);
-            else
-                Synchronize(ret);
-            return ret;
-        });
-
-
-    private void Update(ChangeItem<TStream> value)
-    {
-        var dataChanged = GetDataChanged(value);
-        if(dataChanged != null)
-            changes.OnNext(new PatchChangeRequest(Address, Reference, (JsonPatch)dataChanged.Change));
+            current = value;
+            store.OnNext(value);
+        }
     }
 
-    private void Synchronize(ChangeItem<TStream> value)
-    {
-        var dataChanged = GetDataChanged(value);
+    public void Initialize(TStream initial) =>
+        Initialize(new ChangeItem<TStream>(Id, Reference, initial, null, Hub.Version));
 
-        if (dataChanged != null)
-            dataChangedStream.OnNext(dataChanged);
-    }
-
-    private DataChangedEvent GetDataChanged(ChangeItem<TStream> change)
-    {
-        var node = JsonSerializer.SerializeToNode(change.Value, typeof(TStream), Hub.JsonSerializerOptions);
-
-
-        var dataChanged = LastSynchronized == null
-            ? GetFullDataChange(change)
-            : GetPatch(node);
-        LastSynchronized = node;
-        return dataChanged;
-    }
-
-
-    private void Synchronize(DataChangedEvent request)
-    {
-        updatedInstances.OnNext(new ChangeItem<TStream>(request.Address,(WorkspaceReference)request.Reference,ParseDataChanged(request), request.ChangedBy));
-    }
-
-    private TStream ParseDataChanged(DataChangedEvent request)
-    {
-        var newState = request.ChangeType switch
-        {
-            ChangeType.Patch => (LastSynchronized = ((JsonPatch)request.Change).Apply(LastSynchronized).Result).Deserialize<TStream>(Hub.JsonSerializerOptions),
-            ChangeType.Full => GetFullState(request),
-            _ => throw new ArgumentOutOfRangeException()
-        };
-        return newState;
-    }
-
-    private  TStream GetFullState(DataChangedEvent request)
-    {
-        LastSynchronized = JsonSerializer.SerializeToNode(request.Change, request.Change.GetType(), Hub.JsonSerializerOptions);
-        return request.Change is JsonNode node ? node.Deserialize<TStream>(Hub.JsonSerializerOptions) : (TStream)request.Change;
-    }
-
-    public ChangeStream<TStream> Initialize(TStream initial)
+    private void Initialize(ChangeItem<TStream> initial)
     {
         if (initial == null)
             throw new ArgumentNullException(nameof(initial));
-        var start = new ChangeItem<TStream>(Address, Reference, initial, Address);
-        updatedInstances.OnNext(start);
-        LastSynchronized = JsonSerializer.SerializeToNode(initial, Hub.JsonSerializerOptions);
-        dataChangedStream.OnNext(GetFullDataChange(start));
-        return this;
+        if (Current != null)
+            throw new InvalidOperationException("Already initialized");
+
+        Current = initial;
+        initialized.SetResult(initial.Value);
     }
-
-
-    private DataChangedEvent GetPatch(JsonNode node)
-    {
-        var jsonPatch = LastSynchronized.CreatePatch(node);
-        if (!jsonPatch.Operations.Any())
-            return null;
-        return new DataChangedEvent(Address, Reference, GetVersion(), jsonPatch, ChangeType.Patch, Hub.Address);
-    }
-
-    private DataChangedEvent GetFullDataChange(ChangeItem<TStream> value)
-    {
-        return new DataChangedEvent(Address, Reference, GetVersion(), value.Value, ChangeType.Full, value.ChangedBy);
-    }
-
-
-    internal Func<long> GetVersion { get; init; }
-    public IWorkspace Workspace { get; init; }
-    public object Address { get; init; }
-    public WorkspaceReference<TStream> Reference { get; init; }
 
     public void OnCompleted()
     {
@@ -190,15 +153,46 @@ public record ChangeStream<TStream> : IDisposable,
         store.OnError(error);
     }
 
+    public void AddDisposable(IDisposable disposable) => Disposables.Add(disposable);
 
+    IMessageDelivery IChangeStream.DeliverMessage(IMessageDelivery<WorkspaceMessage> delivery)
+    {
+        return messageHandlers
+                .Where(x => x.Applies(delivery))
+                .Select(x => x.Process)
+                .FirstOrDefault()
+                ?.Invoke(delivery) ?? delivery;
+    }
 
-    public void OnNext(DataChangedEvent value)
-        => Synchronize(value);
+    public void Update(Func<TStream, ChangeItem<TStream>> update)
+    {
+        if (Current == null)
+            Initialize(update(default));
+        Current = update(Current.Value);
+    }
 
+    private ChangeItem<TStream> Merge(TStream _, ChangeItem<TStream> changeItem)
+    {
+        //TODO Roland Bürgi 2024-05-06: Apply some merge logic
+        return changeItem;
+    }
 
+    public DataChangeResponse RequestChange(Func<TStream, ChangeItem<TStream>> update)
+    {
+        if (backfeed == null)
+            return new DataChangeResponse(
+                0,
+                DataChangeStatus.Failed,
+                new ActivityLog(ActivityCategory.DataUpdate).Fail(
+                    $"Was not able to backtransform the change item of type {typeof(TStream).Name}"
+                )
+            );
 
+        return Workspace.RequestChange(state => backfeed(state, Reference, update(Current.Value)));
+    }
 
-
-    public IDisposable Subscribe(IObserver<PatchChangeRequest> observer) => changes.Subscribe(observer);
-
+    public void OnNext(ChangeItem<TStream> value)
+    {
+        Current = value;
+    }
 }

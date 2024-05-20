@@ -1,5 +1,5 @@
 ﻿using OpenSmc.DataCubes;
-using OpenSmc.Domain.Abstractions;
+using OpenSmc.Domain;
 
 namespace OpenSmc.TestDomain
 {
@@ -31,10 +31,30 @@ namespace OpenSmc.TestDomain
 
         public static AmountType[] Data =
         {
-            new() { SystemName = "P", DisplayName = "Premium", Order = 20 },
-            new() { SystemName = "E", DisplayName = "Expenses", Order = 10 },
-            new() { SystemName = "C", DisplayName = "Cost", Order = 30 },
-            new() { SystemName = "B", DisplayName = "Benefit", Order = 40 },
+            new()
+            {
+                SystemName = "P",
+                DisplayName = "Premium",
+                Order = 20
+            },
+            new()
+            {
+                SystemName = "E",
+                DisplayName = "Expenses",
+                Order = 10
+            },
+            new()
+            {
+                SystemName = "C",
+                DisplayName = "Cost",
+                Order = 30
+            },
+            new()
+            {
+                SystemName = "B",
+                DisplayName = "Benefit",
+                Order = 40
+            },
         };
     }
 
@@ -44,9 +64,24 @@ namespace OpenSmc.TestDomain
 
         public static Scenario[] Data =
         {
-            new() { SystemName = "B", DisplayName = "Best Estimate", Order = 10 },
-            new() { SystemName = "SL", DisplayName = "Low Stress", Order = 20 },
-            new() { SystemName = "SH", DisplayName = "HighStress", Order = 30 },
+            new()
+            {
+                SystemName = "B",
+                DisplayName = "Best Estimate",
+                Order = 10
+            },
+            new()
+            {
+                SystemName = "SL",
+                DisplayName = "Low Stress",
+                Order = 20
+            },
+            new()
+            {
+                SystemName = "SH",
+                DisplayName = "HighStress",
+                Order = 30
+            },
         };
     }
 

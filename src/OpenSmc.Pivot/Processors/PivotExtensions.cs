@@ -1,6 +1,6 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Reflection;
-using OpenSmc.Domain.Abstractions.Attributes;
+using OpenSmc.Domain;
 using OpenSmc.Reflection;
 using OpenSmc.Utils;
 
@@ -8,16 +8,26 @@ namespace OpenSmc.Pivot.Processors
 {
     public static class PivotExtensions
     {
-        public static IEnumerable<(string SystemName, string DisplayName, PropertyInfo Property)> GetPropertiesForProcessing(this Type tObject, string prefix)
+        public static IEnumerable<(
+            string SystemName,
+            string DisplayName,
+            PropertyInfo Property
+        )> GetPropertiesForProcessing(this Type tObject, string prefix)
         {
             var dot = string.IsNullOrEmpty(prefix) ? string.Empty : ".";
-            var properties = tObject.GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                                    // TODO: This has to be properly linked to access control (2021/05/06, Roland Buergi)
-                                    .Where(x => !x.HasAttribute<NotVisibleAttribute>())
-                                    .OrderBy(x => x.GetCustomAttribute<DisplayAttribute>()?.GetOrder() ?? int.MaxValue)
-                                    .Select(p => (systemName: prefix == null ? p.Name : $"{prefix}{dot}{p.Name}",
-                                                  displayName: p.GetCustomAttribute<DisplayAttribute>()?.Name ?? p.Name.Wordify(),
-                                                  property: p));
+            var properties = tObject
+                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                // TODO: This has to be properly linked to access control (2021/05/06, Roland Buergi)
+                .Where(x => !x.HasAttribute<NotVisibleAttribute>())
+                .OrderBy(x => x.GetCustomAttribute<DisplayAttribute>()?.GetOrder() ?? int.MaxValue)
+                .Select(p =>
+                    (
+                        systemName: prefix == null ? p.Name : $"{prefix}{dot}{p.Name}",
+                        displayName: p.GetCustomAttribute<DisplayAttribute>()?.Name
+                            ?? p.Name.Wordify(),
+                        property: p
+                    )
+                );
             return properties;
         }
 

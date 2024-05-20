@@ -1,4 +1,4 @@
-﻿
+
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.7.34221.43
@@ -48,7 +48,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Arithmetics", "src\
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Arithmetics.Abstractions", "src\OpenSmc.Arithmetics.Abstractions\OpenSmc.Arithmetics.Abstractions.csproj", "{886CD405-9A41-4328-9BD5-BAA08983E53A}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Domain.Abstractions", "src\OpenSmc.Domain.Abstractions\OpenSmc.Domain.Abstractions.csproj", "{D1807EB2-9295-4DF2-A208-835043966AD3}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Domain", "src\OpenSmc.Domain\OpenSmc.Domain.csproj", "{D1807EB2-9295-4DF2-A208-835043966AD3}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DataCubes.Abstractions", "src\OpenSmc.DataCubes.Abstractions\OpenSmc.DataCubes.Abstractions.csproj", "{73452FD0-E16B-49D2-B070-23ECF4930437}"
 EndProject
@@ -96,8 +96,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.DataCubes", "src\Op
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.GridModel", "src\OpenSmc.GridModel\OpenSmc.GridModel.csproj", "{E8C81053-3B97-4862-B7EC-112A0B6CAEDD}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Scopes.DataCubes", "src\OpenSmc.Scopes.DataCubes\OpenSmc.Scopes.DataCubes.csproj", "{127C5840-E91E-4073-A406-F17F99CFC046}"
-EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Project.Contract", "src\OpenSmc.Project.Contract\OpenSmc.Project.Contract.csproj", "{14F37AC8-41AC-4F42-8A64-B673FB48D104}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Activities", "src\OpenSmc.Activities\OpenSmc.Activities.csproj", "{DA956DA1-471F-4B92-A8E0-A10E632A4336}"
@@ -106,7 +104,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Reporting", "src\Op
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Data", "src\OpenSmc.Data\OpenSmc.Data.csproj", "{18C3CDA0-87E5-4E05-91A2-EE95F8B7E7F7}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Hub.Data.Test", "test\OpenSmc.Hub.Data.Test\OpenSmc.Hub.Data.Test.csproj", "{AA71FF58-CF0D-467F-9FDA-2883DD73DA31}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSm.Data.Test", "test\OpenSmc.Data.Test\OpenSmc.Data.Test.csproj", "{AA71FF58-CF0D-467F-9FDA-2883DD73DA31}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Data.Contract", "src\OpenSmc.Data.Contract\OpenSmc.Data.Contract.csproj", "{1EAB617D-513E-4376-A464-530005F27ECC}"
 EndProject
@@ -145,6 +143,12 @@ EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Charting.Test", "test\OpenSmc.Charting.Test\OpenSmc.Charting.Test.csproj", "{DBC408AF-DE28-4B73-AC2E-8E451F2B9EF2}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Charting.Pivot.Test", "test\OpenSmc.Charting.Pivot.Test\OpenSmc.Charting.Pivot.Test.csproj", "{F1320357-8306-4633-A651-D8C190AF1189}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Northwind", "samples\OpenSmc.Northwind\OpenSmc.Northwind.csproj", "{8466850B-5D40-471A-A305-4E89BA721931}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "samples", "samples", "{FD265214-FBC1-4C25-A8F8-0C6827B143C8}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Northwind.Test", "test\OpenSmc.Northwind.Test\OpenSmc.Northwind.Test.csproj", "{9D8115CE-7E37-4E12-8054-EEF4AEF00504}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -312,10 +316,6 @@ Global
 		{E8C81053-3B97-4862-B7EC-112A0B6CAEDD}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{E8C81053-3B97-4862-B7EC-112A0B6CAEDD}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{E8C81053-3B97-4862-B7EC-112A0B6CAEDD}.Release|Any CPU.Build.0 = Release|Any CPU
-		{127C5840-E91E-4073-A406-F17F99CFC046}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{127C5840-E91E-4073-A406-F17F99CFC046}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{127C5840-E91E-4073-A406-F17F99CFC046}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{127C5840-E91E-4073-A406-F17F99CFC046}.Release|Any CPU.Build.0 = Release|Any CPU
 		{14F37AC8-41AC-4F42-8A64-B673FB48D104}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{14F37AC8-41AC-4F42-8A64-B673FB48D104}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{14F37AC8-41AC-4F42-8A64-B673FB48D104}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -412,11 +412,20 @@ Global
 		{F1320357-8306-4633-A651-D8C190AF1189}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F1320357-8306-4633-A651-D8C190AF1189}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F1320357-8306-4633-A651-D8C190AF1189}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8466850B-5D40-471A-A305-4E89BA721931}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8466850B-5D40-471A-A305-4E89BA721931}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8466850B-5D40-471A-A305-4E89BA721931}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8466850B-5D40-471A-A305-4E89BA721931}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9D8115CE-7E37-4E12-8054-EEF4AEF00504}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9D8115CE-7E37-4E12-8054-EEF4AEF00504}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9D8115CE-7E37-4E12-8054-EEF4AEF00504}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9D8115CE-7E37-4E12-8054-EEF4AEF00504}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
+		{8466850B-5D40-471A-A305-4E89BA721931} = {FD265214-FBC1-4C25-A8F8-0C6827B143C8}
 		{A27C8140-8A38-4BAB-AC7D-BA2A987FF39B} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{6AB262EB-D721-46B6-9987-BF93EDA0FA24} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{32572EC3-8AA2-4474-86DC-7B6E2595533F} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
@@ -437,6 +446,7 @@ Global
 		{8B2F6D70-4F8D-41D1-A902-BF1F080CB13B} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{DBC408AF-DE28-4B73-AC2E-8E451F2B9EF2} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{F1320357-8306-4633-A651-D8C190AF1189} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
+		{9D8115CE-7E37-4E12-8054-EEF4AEF00504} = {FD265214-FBC1-4C25-A8F8-0C6827B143C8}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {331ADDC7-02A4-4F0E-8C47-2060003082F2}
