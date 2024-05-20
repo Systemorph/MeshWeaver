@@ -25,7 +25,6 @@ public interface IWorkspace : IAsyncDisposable
         WorkspaceReference<TReduced> reference
     );
     void Unsubscribe(object address, WorkspaceReference reference);
-    IMessageDelivery DeliverMessage(IMessageDelivery<WorkspaceMessage> delivery);
     internal DataChangeResponse RequestChange(
         DataChangedReqeust change,
         WorkspaceReference reference
