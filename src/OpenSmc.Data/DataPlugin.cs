@@ -10,8 +10,7 @@ public class DataPlugin(IMessageHub hub)
         IMessageHandler<UpdateDataRequest>,
         IMessageHandler<DeleteDataRequest>,
         IMessageHandler<SubscribeRequest>,
-        IMessageHandler<UnsubscribeDataRequest>,
-        IMessageHandler<WorkspaceMessage>
+        IMessageHandler<UnsubscribeDataRequest>
 {
     private IWorkspace Workspace { get; set; } =
         hub.ServiceProvider.GetRequiredService<IWorkspace>();
@@ -79,10 +78,5 @@ public class DataPlugin(IMessageHub hub)
     {
         await Workspace.DisposeAsync();
         await base.DisposeAsync();
-    }
-
-    public IMessageDelivery HandleMessage(IMessageDelivery<WorkspaceMessage> delivery)
-    {
-        return Workspace.DeliverMessage(delivery);
     }
 }

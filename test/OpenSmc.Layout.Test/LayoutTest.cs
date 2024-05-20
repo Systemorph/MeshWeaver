@@ -60,8 +60,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                                 .Select(ItemTemplate)
                     )
                     .WithView(
-                        nameof(ViewWithClick),
-                        _ => layout.Hub.GetWorkspace().Stream.Select(x => ViewWithClick())
+                        nameof(Counter),
+                        _ => layout.Hub.GetWorkspace().Stream.Select(x => Counter())
                     )
             );
     }
@@ -72,13 +72,23 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             record => Controls.TextBox(record.DisplayName).WithId(record.SystemName)
         );
 
-    private UiControl ViewWithClick()
+    private UiControl Counter()
     {
+        int counter = 0;
         return Controls
-            .Menu("Click me")
-            .WithClickAction(context =>
-                context.Layout.Update(nameof(ViewWithClick), Controls.HtmlView("Clicked!"))
-            );
+            .Stack()
+            .WithView(
+                "Button",
+                Controls
+                    .Menu("Increase Counter")
+                    .WithClickAction(context =>
+                        context.Layout.Update(
+                            $"{nameof(Counter)}/{nameof(Counter)}",
+                            Controls.HtmlView((++counter))
+                        )
+                    )
+            )
+            .WithView(nameof(Counter), Controls.HtmlView(counter.ToString()));
     }
 
     protected override MessageHubConfiguration ConfigureClient(
@@ -249,21 +259,25 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     [HubFact]
     public async Task TestClick()
     {
-        var reference = new LayoutAreaReference(nameof(ViewWithClick));
+        var reference = new LayoutAreaReference(nameof(Counter));
 
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream(new HostAddress(), reference);
-        var content = await stream.GetControl(reference.Area).FirstAsync();
+        var buttonArea = $"{reference.Area}/Button";
+        var content = await stream.GetControl(buttonArea).FirstAsync();
         content
             .Should()
             .BeOfType<MenuItemControl>()
             .Which.Title.ToString()
             .Should()
-            .Contain("Click me");
-        stream.Post(new ClickedEvent(nameof(ViewWithClick)));
-        content = await stream.GetControl(reference.Area).FirstAsync(x => x is HtmlControl);
-        content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("Clicked!");
+            .Contain("Count");
+        stream.Post(new ClickedEvent(buttonArea));
+        var counterArea = $"{reference.Area}/Counter";
+        content = await stream
+            .GetControl(counterArea)
+            .FirstAsync(x => x is HtmlControl html && html.Data is not "0");
+        content.Should().BeOfType<HtmlControl>().Which.Data.Should().Be("1");
     }
 }
 

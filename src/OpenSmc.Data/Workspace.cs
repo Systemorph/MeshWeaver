@@ -312,14 +312,6 @@ public class Workspace : IWorkspace
             existing.Dispose();
     }
 
-    public IMessageDelivery DeliverMessage(IMessageDelivery<WorkspaceMessage> delivery)
-    {
-        if (streams.TryGetValue((delivery.Message.Id, delivery.Message.Reference), out var stream))
-            return stream.DeliverMessage(delivery);
-
-        return delivery.Ignored();
-    }
-
     public DataChangeResponse RequestChange(Func<WorkspaceState, ChangeItem<WorkspaceState>> update)
     {
         activityService.Start(ActivityCategory.DataUpdate);
