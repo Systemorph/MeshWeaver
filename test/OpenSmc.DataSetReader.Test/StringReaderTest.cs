@@ -11,11 +11,12 @@ namespace OpenSmc.DataSetReader.Test
     public class StringReaderTest : DataSetReaderTestBase
     {
         public StringReaderTest(ITestOutputHelper output)
-            : base(output)
-        {
-        }
-        private Task<(IDataSet DataSet, string Format)> ReadFromStream(Stream stream, DataSetReaderOptions options = null) =>
-            DataSetCsvSerializer.ReadAsync(stream, options ?? new());
+            : base(output) { }
+
+        private Task<(IDataSet DataSet, string Format)> ReadFromStream(
+            Stream stream,
+            DataSetReaderOptions options = null
+        ) => DataSetCsvSerializer.ReadAsync(stream, options ?? new());
 
         [Fact]
         public async Task BasicStringImportTest()
@@ -28,8 +29,12 @@ namespace OpenSmc.DataSetReader.Test
             var content = $"{doubleValue},{decimalValue},{stringValue},{dateValue},{intValue}";
             var stream = GetStreamFromString(content);
 
-            var ret = await ReadFromStream(stream, new DataSetReaderOptions().WithHeaderRow(false)
-                                                 .WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithOrder)));
+            var ret = await ReadFromStream(
+                stream,
+                new DataSetReaderOptions()
+                    .WithHeaderRow(false)
+                    .WithEntityType(typeof(TestImportEntityWithOrder))
+            );
 
             ret.DataSet.Tables.Should().HaveCount(1);
             var table = ret.DataSet.Tables[0];
@@ -39,9 +44,15 @@ namespace OpenSmc.DataSetReader.Test
 
             row[nameof(TestImportEntityWithOrder.StringProperty)].Should().Be(stringValue);
             row[nameof(TestImportEntityWithOrder.DateTimeProperty)].Should().Be(dateValue);
-            row[nameof(TestImportEntityWithOrder.DoubleProperty)].Should().Be(doubleValue.ToString(CultureInfo.InvariantCulture));
-            row[nameof(TestImportEntityWithOrder.DecimalProperty)].Should().Be(decimalValue.ToString(CultureInfo.InvariantCulture));
-            row[nameof(TestImportEntityWithOrder.IntProperty)].Should().Be(intValue.ToString(CultureInfo.InvariantCulture));
+            row[nameof(TestImportEntityWithOrder.DoubleProperty)]
+                .Should()
+                .Be(doubleValue.ToString(CultureInfo.InvariantCulture));
+            row[nameof(TestImportEntityWithOrder.DecimalProperty)]
+                .Should()
+                .Be(decimalValue.ToString(CultureInfo.InvariantCulture));
+            row[nameof(TestImportEntityWithOrder.IntProperty)]
+                .Should()
+                .Be(intValue.ToString(CultureInfo.InvariantCulture));
         }
 
         [Fact]
@@ -53,19 +64,23 @@ namespace OpenSmc.DataSetReader.Test
             var dateValue = new DateTime(2020, 02, 02).ToString("MM/dd/yyyy");
             const string stringValue = "Test";
             var headers = new[]
-                          {
-                              nameof(TestImportEntityWithOrder.DoubleProperty),
-                              nameof(TestImportEntityWithOrder.IntProperty),
-                              nameof(TestImportEntityWithOrder.DecimalProperty),
-                              nameof(TestImportEntityWithOrder.StringProperty),
-                              nameof(TestImportEntityWithOrder.DateTimeProperty),
-                          };
+            {
+                nameof(TestImportEntityWithOrder.DoubleProperty),
+                nameof(TestImportEntityWithOrder.IntProperty),
+                nameof(TestImportEntityWithOrder.DecimalProperty),
+                nameof(TestImportEntityWithOrder.StringProperty),
+                nameof(TestImportEntityWithOrder.DateTimeProperty),
+            };
 
-            var content = @$"{string.Join(',', headers)}
+            var content =
+                @$"{string.Join(',', headers)}
 {doubleValue},{decimalValue},{stringValue},{dateValue},{intValue}";
             var stream = GetStreamFromString(content);
 
-            var ret = await ReadFromStream(stream, new DataSetReaderOptions().WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithOrder)));
+            var ret = await ReadFromStream(
+                stream,
+                new DataSetReaderOptions().WithEntityType(typeof(TestImportEntityWithOrder))
+            );
 
             ret.DataSet.Tables.Should().HaveCount(1);
             var table = ret.DataSet.Tables[0];
@@ -74,10 +89,16 @@ namespace OpenSmc.DataSetReader.Test
             var row = table.Rows[0];
 
             row[nameof(TestImportEntityWithOrder.StringProperty)].Should().Be(dateValue);
-            row[nameof(TestImportEntityWithOrder.DateTimeProperty)].Should().Be(intValue.ToString(CultureInfo.InvariantCulture));
-            row[nameof(TestImportEntityWithOrder.DoubleProperty)].Should().Be(doubleValue.ToString(CultureInfo.InvariantCulture));
+            row[nameof(TestImportEntityWithOrder.DateTimeProperty)]
+                .Should()
+                .Be(intValue.ToString(CultureInfo.InvariantCulture));
+            row[nameof(TestImportEntityWithOrder.DoubleProperty)]
+                .Should()
+                .Be(doubleValue.ToString(CultureInfo.InvariantCulture));
             row[nameof(TestImportEntityWithOrder.DecimalProperty)].Should().Be(stringValue);
-            row[nameof(TestImportEntityWithOrder.IntProperty)].Should().Be(decimalValue.ToString(CultureInfo.InvariantCulture));
+            row[nameof(TestImportEntityWithOrder.IntProperty)]
+                .Should()
+                .Be(decimalValue.ToString(CultureInfo.InvariantCulture));
         }
 
         [Fact]
@@ -86,13 +107,18 @@ namespace OpenSmc.DataSetReader.Test
             const double doubleValue = 1.5;
             const decimal decimalValue = 2.5m;
             const int intValue = 3;
-            var dateValue = new DateTime(2020, 02, 02).ToString("MM/dd/yyyy"); 
+            var dateValue = new DateTime(2020, 02, 02).ToString("MM/dd/yyyy");
             const string stringValue = "Test";
             var content = $"{doubleValue};{decimalValue};{stringValue};{dateValue};{intValue}";
             var stream = GetStreamFromString(content);
 
-            var ret = await ReadFromStream(stream, new DataSetReaderOptions().WithHeaderRow(false)
-                                                 .WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithOrder)).WithDelimiter(';'));
+            var ret = await ReadFromStream(
+                stream,
+                new DataSetReaderOptions()
+                    .WithHeaderRow(false)
+                    .WithEntityType(typeof(TestImportEntityWithOrder))
+                    .WithDelimiter(';')
+            );
 
             ret.DataSet.Tables.Should().HaveCount(1);
             var table = ret.DataSet.Tables[0];
@@ -102,9 +128,15 @@ namespace OpenSmc.DataSetReader.Test
 
             row[nameof(TestImportEntityWithOrder.StringProperty)].Should().Be(stringValue);
             row[nameof(TestImportEntityWithOrder.DateTimeProperty)].Should().Be(dateValue);
-            row[nameof(TestImportEntityWithOrder.DoubleProperty)].Should().Be(doubleValue.ToString(CultureInfo.InvariantCulture));
-            row[nameof(TestImportEntityWithOrder.DecimalProperty)].Should().Be(decimalValue.ToString(CultureInfo.InvariantCulture));
-            row[nameof(TestImportEntityWithOrder.IntProperty)].Should().Be(intValue.ToString(CultureInfo.InvariantCulture));
+            row[nameof(TestImportEntityWithOrder.DoubleProperty)]
+                .Should()
+                .Be(doubleValue.ToString(CultureInfo.InvariantCulture));
+            row[nameof(TestImportEntityWithOrder.DecimalProperty)]
+                .Should()
+                .Be(decimalValue.ToString(CultureInfo.InvariantCulture));
+            row[nameof(TestImportEntityWithOrder.IntProperty)]
+                .Should()
+                .Be(intValue.ToString(CultureInfo.InvariantCulture));
         }
 
         [Fact]
@@ -116,7 +148,12 @@ namespace OpenSmc.DataSetReader.Test
             var content = $"{doubleValue},{decimalValue},{stringValue}";
             var stream = GetStreamFromString(content);
 
-            var ret = await ReadFromStream(stream,new DataSetReaderOptions().WithHeaderRow(false).WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithOrder)));
+            var ret = await ReadFromStream(
+                stream,
+                new DataSetReaderOptions()
+                    .WithHeaderRow(false)
+                    .WithEntityType(typeof(TestImportEntityWithOrder))
+            );
 
             ret.DataSet.Tables.Should().HaveCount(1);
             var table = ret.DataSet.Tables[0];
@@ -126,8 +163,12 @@ namespace OpenSmc.DataSetReader.Test
 
             row[nameof(TestImportEntityWithOrder.StringProperty)].Should().Be(stringValue);
             row[nameof(TestImportEntityWithOrder.DateTimeProperty)].Should().Be(null);
-            row[nameof(TestImportEntityWithOrder.DoubleProperty)].Should().Be(doubleValue.ToString(CultureInfo.InvariantCulture));
-            row[nameof(TestImportEntityWithOrder.DecimalProperty)].Should().Be(decimalValue.ToString(CultureInfo.InvariantCulture));
+            row[nameof(TestImportEntityWithOrder.DoubleProperty)]
+                .Should()
+                .Be(doubleValue.ToString(CultureInfo.InvariantCulture));
+            row[nameof(TestImportEntityWithOrder.DecimalProperty)]
+                .Should()
+                .Be(decimalValue.ToString(CultureInfo.InvariantCulture));
             row[nameof(TestImportEntityWithOrder.IntProperty)].Should().Be(null);
         }
 
@@ -139,11 +180,17 @@ namespace OpenSmc.DataSetReader.Test
             const int intValue = 3;
             var dateValue = new DateTime(2020, 02, 02).ToString("MM/dd/yyyy");
             const string stringValue = "Test";
-            var content = @$"{doubleValue},{decimalValue},{stringValue},{dateValue},{intValue}
+            var content =
+                @$"{doubleValue},{decimalValue},{stringValue},{dateValue},{intValue}
 ,,{stringValue},,";
             var stream = GetStreamFromString(content);
 
-            var ret = await ReadFromStream(stream, new DataSetReaderOptions().WithHeaderRow(false).WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithOrder)));
+            var ret = await ReadFromStream(
+                stream,
+                new DataSetReaderOptions()
+                    .WithHeaderRow(false)
+                    .WithEntityType(typeof(TestImportEntityWithOrder))
+            );
 
             ret.DataSet.Tables.Should().HaveCount(1);
             var table = ret.DataSet.Tables[0];
@@ -153,9 +200,15 @@ namespace OpenSmc.DataSetReader.Test
             var row = table.Rows[0];
             row[nameof(TestImportEntityWithOrder.StringProperty)].Should().Be(stringValue);
             row[nameof(TestImportEntityWithOrder.DateTimeProperty)].Should().Be(dateValue);
-            row[nameof(TestImportEntityWithOrder.DoubleProperty)].Should().Be(doubleValue.ToString(CultureInfo.InvariantCulture));
-            row[nameof(TestImportEntityWithOrder.DecimalProperty)].Should().Be(decimalValue.ToString(CultureInfo.InvariantCulture));
-            row[nameof(TestImportEntityWithOrder.IntProperty)].Should().Be(intValue.ToString(CultureInfo.InvariantCulture));
+            row[nameof(TestImportEntityWithOrder.DoubleProperty)]
+                .Should()
+                .Be(doubleValue.ToString(CultureInfo.InvariantCulture));
+            row[nameof(TestImportEntityWithOrder.DecimalProperty)]
+                .Should()
+                .Be(decimalValue.ToString(CultureInfo.InvariantCulture));
+            row[nameof(TestImportEntityWithOrder.IntProperty)]
+                .Should()
+                .Be(intValue.ToString(CultureInfo.InvariantCulture));
 
             row = table.Rows[1];
             row[nameof(TestImportEntityWithOrder.StringProperty)].Should().Be(stringValue);
@@ -172,7 +225,7 @@ namespace OpenSmc.DataSetReader.Test
             const decimal decimalValue = 2.5m;
             const int intValue = 3;
             var dateValue = new DateTime(2020, 02, 02).ToString("MM/dd/yyyy");
-            const string stringValue1 = 
+            const string stringValue1 =
                 @"some,
 long,
 string1,";
@@ -180,13 +233,19 @@ string1,";
                 @"some,
 long,
 string2,";
-            var content = @$"
+            var content =
+                @$"
 {doubleValue},{decimalValue},""{stringValue1}"",{dateValue},{intValue}
 
 , ,""{stringValue2}"", ,";
             var stream = GetStreamFromString(content);
 
-            var ret = await ReadFromStream(stream, new DataSetReaderOptions().WithHeaderRow(false).WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithOrder)));
+            var ret = await ReadFromStream(
+                stream,
+                new DataSetReaderOptions()
+                    .WithHeaderRow(false)
+                    .WithEntityType(typeof(TestImportEntityWithOrder))
+            );
 
             ret.DataSet.Tables.Should().HaveCount(1);
             var table = ret.DataSet.Tables[0];
@@ -196,9 +255,15 @@ string2,";
             var row = table.Rows[0];
             row[nameof(TestImportEntityWithOrder.StringProperty)].Should().Be(stringValue1);
             row[nameof(TestImportEntityWithOrder.DateTimeProperty)].Should().Be(dateValue);
-            row[nameof(TestImportEntityWithOrder.DoubleProperty)].Should().Be(doubleValue.ToString(CultureInfo.InvariantCulture));
-            row[nameof(TestImportEntityWithOrder.DecimalProperty)].Should().Be(decimalValue.ToString(CultureInfo.InvariantCulture));
-            row[nameof(TestImportEntityWithOrder.IntProperty)].Should().Be(intValue.ToString(CultureInfo.InvariantCulture));
+            row[nameof(TestImportEntityWithOrder.DoubleProperty)]
+                .Should()
+                .Be(doubleValue.ToString(CultureInfo.InvariantCulture));
+            row[nameof(TestImportEntityWithOrder.DecimalProperty)]
+                .Should()
+                .Be(decimalValue.ToString(CultureInfo.InvariantCulture));
+            row[nameof(TestImportEntityWithOrder.IntProperty)]
+                .Should()
+                .Be(intValue.ToString(CultureInfo.InvariantCulture));
 
             row = table.Rows[1];
             row[nameof(TestImportEntityWithOrder.StringProperty)].Should().Be(stringValue2);
@@ -213,12 +278,18 @@ string2,";
         {
             const double doubleValue = 1.5;
             const string stringValue = "Test";
-            var content = @$"{doubleValue},1, 2 ,3,,{stringValue}
+            var content =
+                @$"{doubleValue},1, 2 ,3,,{stringValue}
 {doubleValue},3, 4 ,5 ,6,{stringValue}
 {doubleValue},,,,,{stringValue}";
             var stream = GetStreamFromString(content);
 
-            var ret = await ReadFromStream(stream, new DataSetReaderOptions().WithHeaderRow(false).WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithListsAndOrder)));
+            var ret = await ReadFromStream(
+                stream,
+                new DataSetReaderOptions()
+                    .WithHeaderRow(false)
+                    .WithEntityType(typeof(TestImportEntityWithListsAndOrder))
+            );
 
             ret.DataSet.Tables.Should().HaveCount(1);
             var table = ret.DataSet.Tables[0];
@@ -231,7 +302,9 @@ string2,";
             row[nameof(TestImportEntityWithListsAndOrder.ListOfIntegers) + "1"].Should().Be(" 2 ");
             row[nameof(TestImportEntityWithListsAndOrder.ListOfIntegers) + "2"].Should().Be("3");
             row[nameof(TestImportEntityWithListsAndOrder.ListOfIntegers) + "3"].Should().Be(null);
-            row[nameof(TestImportEntityWithListsAndOrder.DoubleProperty)].Should().Be(doubleValue.ToString(CultureInfo.InvariantCulture));
+            row[nameof(TestImportEntityWithListsAndOrder.DoubleProperty)]
+                .Should()
+                .Be(doubleValue.ToString(CultureInfo.InvariantCulture));
 
             row = table.Rows[1];
             row[nameof(TestImportEntityWithListsAndOrder.StringProperty)].Should().Be(stringValue);
@@ -239,7 +312,9 @@ string2,";
             row[nameof(TestImportEntityWithListsAndOrder.ListOfIntegers) + "1"].Should().Be(" 4 ");
             row[nameof(TestImportEntityWithListsAndOrder.ListOfIntegers) + "2"].Should().Be("5 ");
             row[nameof(TestImportEntityWithListsAndOrder.ListOfIntegers) + "3"].Should().Be("6");
-            row[nameof(TestImportEntityWithListsAndOrder.DoubleProperty)].Should().Be(doubleValue.ToString(CultureInfo.InvariantCulture));
+            row[nameof(TestImportEntityWithListsAndOrder.DoubleProperty)]
+                .Should()
+                .Be(doubleValue.ToString(CultureInfo.InvariantCulture));
 
             row = table.Rows[2];
             row[nameof(TestImportEntityWithListsAndOrder.StringProperty)].Should().Be(stringValue);
@@ -247,7 +322,9 @@ string2,";
             row[nameof(TestImportEntityWithListsAndOrder.ListOfIntegers) + "1"].Should().Be(null);
             row[nameof(TestImportEntityWithListsAndOrder.ListOfIntegers) + "2"].Should().Be(null);
             row[nameof(TestImportEntityWithListsAndOrder.ListOfIntegers) + "3"].Should().Be(null);
-            row[nameof(TestImportEntityWithListsAndOrder.DoubleProperty)].Should().Be(doubleValue.ToString(CultureInfo.InvariantCulture));
+            row[nameof(TestImportEntityWithListsAndOrder.DoubleProperty)]
+                .Should()
+                .Be(doubleValue.ToString(CultureInfo.InvariantCulture));
         }
 
         [Fact]
@@ -258,19 +335,34 @@ string2,";
             var content = @$"{doubleValue},1,2,3,,{stringValue}";
             var stream = GetStreamFromString(content);
 
-            var ret = await ReadFromStream(stream, new DataSetReaderOptions().WithHeaderRow(false).WithTypeToRestoreHeadersFrom(typeof(TestImportEntityWithListWithoutLength)));
+            var ret = await ReadFromStream(
+                stream,
+                new DataSetReaderOptions()
+                    .WithHeaderRow(false)
+                    .WithEntityType(typeof(TestImportEntityWithListWithoutLength))
+            );
 
             ret.DataSet.Tables.Should().HaveCount(1);
             var table = ret.DataSet.Tables[0];
             table.TableName.Should().Be(nameof(TestImportEntityWithListWithoutLength));
             table.Rows.Should().HaveCount(1);
-            table.Columns.Where(c => c.ColumnName.Contains(nameof(TestImportEntityWithListWithoutLength.ListOfIntegers))).Should().BeEmpty();
+            table
+                .Columns.Where(c =>
+                    c.ColumnName.Contains(
+                        nameof(TestImportEntityWithListWithoutLength.ListOfIntegers)
+                    )
+                )
+                .Should()
+                .BeEmpty();
 
             var row = table.Rows[0];
-            row[nameof(TestImportEntityWithListWithoutLength.DoubleProperty)].Should().Be(doubleValue.ToString(CultureInfo.InvariantCulture));
+            row[nameof(TestImportEntityWithListWithoutLength.DoubleProperty)]
+                .Should()
+                .Be(doubleValue.ToString(CultureInfo.InvariantCulture));
             row[nameof(TestImportEntityWithListWithoutLength.StringProperty)].Should().Be("1");
         }
 
-        public Stream GetStreamFromString(string content) => new MemoryStream(Encoding.ASCII.GetBytes(content));
+        public Stream GetStreamFromString(string content) =>
+            new MemoryStream(Encoding.ASCII.GetBytes(content));
     }
 }

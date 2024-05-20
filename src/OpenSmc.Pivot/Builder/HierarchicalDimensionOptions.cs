@@ -1,4 +1,4 @@
-﻿using OpenSmc.Domain.Abstractions;
+﻿using OpenSmc.Domain;
 
 namespace OpenSmc.Pivot.Builder;
 
@@ -6,7 +6,7 @@ public class HierarchicalDimensionOptions : IHierarchicalDimensionOptions
 {
     private readonly Dictionary<Type, int> levelMax = new();
     private readonly Dictionary<Type, int> levelMin = new();
-    private readonly HashSet<Type> flatHierarchies = new(); 
+    private readonly HashSet<Type> flatHierarchies = new();
 
     public IHierarchicalDimensionOptions LevelMax<T>(int level)
         where T : class, IHierarchicalDimension

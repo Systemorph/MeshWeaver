@@ -7,24 +7,22 @@ namespace OpenSmc.Pivot.Models
     {
         public IImmutableList<Column> Children { get; init; } = ImmutableList<Column>.Empty;
 
-        public ColumnGroup()
-        {
-        }
+        public ColumnGroup() { }
 
         public ColumnGroup(IGroup group)
         {
-            SystemName = group.SystemName;
+            SystemName = group.SystemName.ToString();
             DisplayName = group.DisplayName;
             GrouperName = group.GrouperName;
             Coordinates = group.Coordinates;
         }
 
-        public ColumnGroup(string systemName, string displayName, string grouperName)
+        public ColumnGroup(object id, string displayName, object grouperId)
         {
-            SystemName = systemName;
+            SystemName = id;
             DisplayName = displayName;
-            GrouperName = grouperName;
-            Coordinates = Coordinates.Add(systemName);
+            GrouperName = grouperId;
+            Coordinates = Coordinates.Add(id);
         }
 
         public ColumnGroup AddChildren(IEnumerable<Column> children)

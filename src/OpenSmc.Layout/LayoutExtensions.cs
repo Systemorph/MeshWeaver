@@ -4,47 +4,69 @@ using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Layout.Composition;
+using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
 
 namespace OpenSmc.Layout;
 
-
 public static class LayoutExtensions
 {
-
-    public static MessageHubConfiguration AddLayout(this MessageHubConfiguration config,
-        Func<LayoutDefinition, LayoutDefinition> layoutDefinition)
+    public static MessageHubConfiguration AddLayout(
+        this MessageHubConfiguration config,
+        Func<LayoutDefinition, LayoutDefinition> layoutDefinition
+    )
     {
         return config
             .WithServices(services => services.AddScoped<ILayout, LayoutPlugin>())
-            .AddData(data => data
-                .AddWorkspaceReferenceStream<LayoutAreaReference, EntityStore>((_, a) =>
-                    data.Hub.ServiceProvider.GetRequiredService<ILayout>().Render(a))
+            .AddData(data =>
+                data.AddWorkspaceReferenceStream<LayoutAreaReference, EntityStore>(
+                    (changeStream, _, a) =>
+                        data
+                            .Hub.ServiceProvider.GetRequiredService<ILayout>()
+                            .Render(changeStream, a),
+                    (ws, reference, val) =>
+                        val.SetValue(ws with { Store = ws.Store.Update(reference, val.Value) })
+                )
             )
             .AddLayoutTypes()
             .Set(config.GetListOfLambdas().Add(layoutDefinition))
-
-            .AddPlugin<LayoutPlugin>(plugin =>
-                plugin.WithFactory(() => (LayoutPlugin)plugin.Hub.ServiceProvider.GetRequiredService<ILayout>()));
+            .AddPlugin<LayoutPlugin>();
     }
-    internal static ImmutableList<Func<LayoutDefinition, LayoutDefinition>> GetListOfLambdas(this MessageHubConfiguration config) => config.Get<ImmutableList<Func<LayoutDefinition, LayoutDefinition>>>() ?? ImmutableList<Func<LayoutDefinition, LayoutDefinition>>.Empty;
 
+    internal static ImmutableList<Func<LayoutDefinition, LayoutDefinition>> GetListOfLambdas(
+        this MessageHubConfiguration config
+    ) =>
+        config.Get<ImmutableList<Func<LayoutDefinition, LayoutDefinition>>>()
+        ?? ImmutableList<Func<LayoutDefinition, LayoutDefinition>>.Empty;
 
-    public static MessageHubConfiguration AddLayoutTypes(this MessageHubConfiguration configuration)
-        => configuration
-            .WithTypes(typeof(UiControl).Assembly.GetTypes()
-                .Where(t => typeof(IUiControl).IsAssignableFrom(t) && !t.IsAbstract))
-            .WithTypes(typeof(MessageAndAddress), typeof(LayoutAreaReference))
-        ;
+    public static MessageHubConfiguration AddLayoutTypes(
+        this MessageHubConfiguration configuration
+    ) =>
+        configuration
+            .WithTypes(
+                typeof(UiControl)
+                    .Assembly.GetTypes()
+                    .Where(t => typeof(IUiControl).IsAssignableFrom(t) && !t.IsAbstract)
+            )
+            .WithTypes(typeof(MessageAndAddress), typeof(LayoutAreaReference));
 
-
-
-    public static IObservable<object> GetControl(this ChangeStream<EntityStore> changeItems, string area)
-        => ((IObservable<ChangeItem<EntityStore>>)changeItems).Select(i => i.Value.Reduce(new EntityReference(typeof(UiControl).FullName, area)))
+    public static IObservable<object> GetControl(
+        this IChangeStream<EntityStore> changeItems,
+        string area
+    ) =>
+        ((IObservable<ChangeItem<EntityStore>>)changeItems)
+            .Select(i => i.Value.Reduce(new EntityReference(typeof(UiControl).FullName, area)))
             .Where(x => x != null);
-    public static IObservable<object> GetData(this ChangeStream<EntityStore> changeItems, WorkspaceReference reference)
-        => ((IObservable<ChangeItem<EntityStore>>)changeItems).Select(i => i.Value.Reduce(reference))
-            .Where(x => x != null);
 
+    public static UiControl GetControl(this EntityStore store, string area) =>
+        (UiControl)store.Reduce(new EntityReference(typeof(UiControl).FullName, area));
+
+    public static IObservable<object> GetData(
+        this IChangeStream<EntityStore> changeItems,
+        WorkspaceReference reference
+    ) =>
+        ((IObservable<ChangeItem<EntityStore>>)changeItems)
+            .Select(i => i.Value.Reduce(reference))
+            .Where(x => x != null);
 }

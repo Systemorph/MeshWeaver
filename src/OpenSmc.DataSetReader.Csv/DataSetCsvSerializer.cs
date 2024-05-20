@@ -16,14 +16,21 @@ namespace OpenSmc.DataSetReader.Csv
         public const string DataSetNamePrefix = "##";
 
         //Detects odd number of quotes located sequentially
-        private static readonly Regex QuotesRegex = new("(?<!\")\"(\"\")*(?!\")", RegexOptions.Compiled);
+        private static readonly Regex QuotesRegex =
+            new("(?<!\")\"(\"\")*(?!\")", RegexOptions.Compiled);
 
         public static string Serialize(IDataSet dataSet, char delimiter)
         {
             var csvFactory = new Factory();
             var sb = new StringBuilder();
             using TextWriter textWriter = new StringWriter(sb);
-            using var writer = csvFactory.CreateWriter(textWriter, new CsvConfiguration(CultureInfo.InvariantCulture){ Delimiter = delimiter.ToString() });
+            using var writer = csvFactory.CreateWriter(
+                textWriter,
+                new CsvConfiguration(CultureInfo.InvariantCulture)
+                {
+                    Delimiter = delimiter.ToString()
+                }
+            );
             if (!string.IsNullOrEmpty(dataSet.DataSetName))
             {
                 writer.WriteField(dataSet.DataSetName);
@@ -56,7 +63,12 @@ namespace OpenSmc.DataSetReader.Csv
             return sb.ToString();
         }
 
-        public static async Task<(IDataSet DataSet, string Format)> Parse(StreamReader reader, char delimiter, bool withHeaderRow, Type contentType)
+        public static async Task<(IDataSet DataSet, string Format)> Parse(
+            StreamReader reader,
+            char delimiter,
+            bool withHeaderRow,
+            Type contentType
+        )
         {
             var dataSet = new DataSet();
             var content = await reader.ReadLineAsync();
@@ -65,7 +77,7 @@ namespace OpenSmc.DataSetReader.Csv
                 content = await reader.ReadLineAsync();
 
             string format = null;
-            if (content!= null && content.StartsWith(FormatPrefix))
+            if (content != null && content.StartsWith(FormatPrefix))
             {
                 format = content.RemoveRedundantChars(FormatPrefix);
                 content = await reader.ReadLineAsync();
@@ -108,7 +120,9 @@ namespace OpenSmc.DataSetReader.Csv
                     var tableName = content.RemoveRedundantChars(TablePrefix);
                     if (dataSet.Tables.Contains(tableName))
                     {
-                        throw new System.Data.DuplicateNameException($"Table {tableName} was already added in source, duplication is not possible.");
+                        throw new System.Data.DuplicateNameException(
+                            $"Table {tableName} was already added in source, duplication is not possible."
+                        );
                     }
                     dataTable = dataSet.Tables.Add(tableName);
                     content = await reader.ReadLineAsync();
@@ -119,7 +133,15 @@ namespace OpenSmc.DataSetReader.Csv
                 content = await ParseValueInQuotes(reader, content);
 
                 using (var lineReader = new StringReader(content))
-                using (var csvReader = csvFactory.CreateReader(lineReader, new CsvConfiguration(CultureInfo.InvariantCulture) { Delimiter = delimiter.ToString() }))
+                using (
+                    var csvReader = csvFactory.CreateReader(
+                        lineReader,
+                        new CsvConfiguration(CultureInfo.InvariantCulture)
+                        {
+                            Delimiter = delimiter.ToString()
+                        }
+                    )
+                )
                 {
                     try
                     {
@@ -127,13 +149,20 @@ namespace OpenSmc.DataSetReader.Csv
                     }
                     catch (BadDataException e)
                     {
-                        throw new BadDataException(e.ReadingContext, $"Possibly error is in first or last line of this text: {content}");
+                        throw new BadDataException(
+                            e.ReadingContext,
+                            $"Possibly error is in first or last line of this text: {content}"
+                        );
                     }
                     if (isHeaderRow)
                     {
                         csvReader.ReadHeader();
                         var fieldHeaders = csvReader.Context.HeaderRecord;
-                        foreach (var header in fieldHeaders.TakeWhile(header => !string.IsNullOrWhiteSpace(header)))
+                        foreach (
+                            var header in fieldHeaders.TakeWhile(header =>
+                                !string.IsNullOrWhiteSpace(header)
+                            )
+                        )
                         {
                             dataTable?.Columns.Add(header, typeof(string));
                         }
@@ -161,17 +190,28 @@ namespace OpenSmc.DataSetReader.Csv
 
         private static void InitializeDataTableForType(Type type, IDataTable dataTable)
         {
-            var properties = type.GetProperties(BindingFlags.Public | BindingFlags.DeclaredOnly | BindingFlags.Instance)
-                                 .Select(p =>
-                                             (Property: p, MappingOrder: p.GetSingleCustomAttribute<MappingOrderAttribute>()))
-                                 .OrderBy(t => t.MappingOrder?.Order ?? int.MaxValue)
-                                 .Select(t => new { PropertyInfo = t.Property, Length = t.MappingOrder?.Length ?? 0 }).ToArray();
+            var properties = type.GetProperties(
+                    BindingFlags.Public | BindingFlags.DeclaredOnly | BindingFlags.Instance
+                )
+                .Select(p =>
+                    (Property: p, MappingOrder: p.GetSingleCustomAttribute<MappingOrderAttribute>())
+                )
+                .OrderBy(t => t.MappingOrder?.Order ?? int.MaxValue)
+                .Select(t => new
+                {
+                    PropertyInfo = t.Property,
+                    Length = t.MappingOrder?.Length ?? 0
+                })
+                .ToArray();
 
             foreach (var property in properties)
             {
                 var propertyInfo = property.PropertyInfo;
                 var propertyType = property.PropertyInfo.PropertyType;
-                if (propertyType.IsGenericType && propertyType.GetGenericTypeDefinition() == typeof(IList<>))
+                if (
+                    propertyType.IsGenericType
+                    && propertyType.GetGenericTypeDefinition() == typeof(IList<>)
+                )
                 {
                     var genericArguments = propertyType.GetGenericArgumentTypes(typeof(IList<>));
                     var listElementType = genericArguments[0];
@@ -198,7 +238,8 @@ namespace OpenSmc.DataSetReader.Csv
             {
                 sb.AppendLine();
                 sb.Append(newLine);
-                if (QuotesRegex.Matches(newLine).Count % 2 != 0) break;
+                if (QuotesRegex.Matches(newLine).Count % 2 != 0)
+                    break;
             }
 
             return sb.ToString();
@@ -209,10 +250,18 @@ namespace OpenSmc.DataSetReader.Csv
             return Regex.Match(content, $"[^{prefix}]*\\w", RegexOptions.Compiled).Value;
         }
 
-        public static async Task<(IDataSet DataSet, string Format)> ReadAsync(Stream stream, DataSetReaderOptions options)
+        public static async Task<(IDataSet DataSet, string Format)> ReadAsync(
+            Stream stream,
+            DataSetReaderOptions options
+        )
         {
             using var reader = new StreamReader(stream);
-            return await Parse(reader, options.Delimiter, options.IncludeHeaderRow, options.TypeToRestoreHeadersFrom);
+            return await Parse(
+                reader,
+                options.Delimiter,
+                options.IncludeHeaderRow,
+                options.EntityType
+            );
         }
     }
 }

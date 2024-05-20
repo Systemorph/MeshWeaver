@@ -2,16 +2,22 @@
 
 public interface IMessageHandlerRegistry
 {
-    IMessageHandlerRegistry Register<TMessage>(SyncDelivery<TMessage> action);
-    IMessageHandlerRegistry Register<TMessage>(AsyncDelivery<TMessage> action);
-    IMessageHandlerRegistry Register<TMessage>(SyncDelivery<TMessage> action, DeliveryFilter<TMessage> filter);
-    IMessageHandlerRegistry Register<TMessage>(AsyncDelivery<TMessage> action, DeliveryFilter<TMessage> filter);
-    IMessageHandlerRegistry Register(Type tMessage, AsyncDelivery action);
-    IMessageHandlerRegistry Register(Type tMessage, AsyncDelivery action, DeliveryFilter filter);
-    IMessageHandlerRegistry Register(Type tMessage, SyncDelivery action);
-    IMessageHandlerRegistry Register(Type tMessage, SyncDelivery action, DeliveryFilter filter);
-    IMessageHandlerRegistry RegisterInherited<TMessage>(AsyncDelivery<TMessage> action, DeliveryFilter<TMessage> filter = null);
-    IMessageHandlerRegistry RegisterInherited<TMessage>(SyncDelivery<TMessage> action, DeliveryFilter<TMessage> filter = null);
-    IMessageHandlerRegistry Register(SyncDelivery delivery);
-    IMessageHandlerRegistry Register(AsyncDelivery delivery);
+    IDisposable Register<TMessage>(SyncDelivery<TMessage> action);
+    IDisposable Register<TMessage>(AsyncDelivery<TMessage> action);
+    IDisposable Register<TMessage>(SyncDelivery<TMessage> action, DeliveryFilter<TMessage> filter);
+    IDisposable Register<TMessage>(AsyncDelivery<TMessage> action, DeliveryFilter<TMessage> filter);
+    IDisposable Register(Type tMessage, AsyncDelivery action);
+    IDisposable Register(Type tMessage, AsyncDelivery action, DeliveryFilter filter);
+    IDisposable Register(Type tMessage, SyncDelivery action);
+    IDisposable Register(Type tMessage, SyncDelivery action, DeliveryFilter filter);
+    IDisposable RegisterInherited<TMessage>(
+        AsyncDelivery<TMessage> action,
+        DeliveryFilter<TMessage> filter = null
+    );
+    IDisposable RegisterInherited<TMessage>(
+        SyncDelivery<TMessage> action,
+        DeliveryFilter<TMessage> filter = null
+    );
+    IDisposable Register(SyncDelivery delivery);
+    IDisposable Register(AsyncDelivery delivery);
 }

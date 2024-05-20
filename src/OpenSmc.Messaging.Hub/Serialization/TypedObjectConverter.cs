@@ -9,15 +9,17 @@ using OpenSmc.Utils;
 
 namespace OpenSmc.Messaging.Serialization;
 
-public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry)
-    : JsonConverter<object>
+public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry) : JsonConverter<object>
 {
     private const string TypeProperty = "$type";
 
-    public override bool CanConvert(Type typeToConvert)
-        => typeToConvert == typeof(object);
+    public override bool CanConvert(Type typeToConvert) => typeToConvert == typeof(object);
 
-    public override object Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    public override object Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options
+    )
     {
         if (reader.TokenType == JsonTokenType.Number)
             // Convert numeric values to strings
@@ -34,11 +36,8 @@ public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry)
         return Deserialize(node, typeToConvert, options);
     }
 
-
     private object Deserialize(JsonNode node, Type typeToConvert, JsonSerializerOptions options)
     {
-
-
         if (node is JsonObject jObject)
         {
             if (jObject.TryGetPropertyValue(TypeProperty, out var typeName))
@@ -46,17 +45,13 @@ public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry)
                 var type = GetTypeByName(typeName!.ToString());
 
                 if (type == null && !typeRegistry.TryGetType(typeName!.ToString(), out type))
-                    return node;
-
-
+                    return node.DeepClone();
 
                 return node.Deserialize(type, options);
-
-
             }
 
             if (typeToConvert == typeof(object))
-                return node;
+                return node.DeepClone();
 
             return node.Deserialize(typeToConvert, options);
         }
@@ -80,23 +75,27 @@ public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry)
                 //ignore
             }
         }
-
     }
+
     public override void Write(Utf8JsonWriter writer, object value, JsonSerializerOptions options)
     {
         throw new NotImplementedException();
     }
-
-
 }
 
-public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry, Type exclude) : JsonConverter<object>{
+public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry, Type exclude)
+    : JsonConverter<object>
+{
     private const string TypeProperty = "$type";
 
-    public override bool CanConvert(Type typeToConvert)
-        => typeToConvert != exclude && !typeof(JsonNode).IsAssignableFrom(typeToConvert);
+    public override bool CanConvert(Type typeToConvert) =>
+        typeToConvert != exclude && !typeof(JsonNode).IsAssignableFrom(typeToConvert);
 
-    public override object Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    public override object Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options
+    )
     {
         throw new NotImplementedException();
     }
@@ -104,10 +103,13 @@ public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry, Type excl
     public override void Write(Utf8JsonWriter writer, object value, JsonSerializerOptions options)
     {
         var clonedOptions = CloneOptions(options);
-        clonedOptions.Converters.Add(new TypedObjectSerializeConverter(typeRegistry, value.GetType()));
+        clonedOptions.Converters.Add(
+            new TypedObjectSerializeConverter(typeRegistry, value.GetType())
+        );
         var serialized = JsonSerializer.SerializeToNode(value, value.GetType(), clonedOptions);
-        if(serialized is JsonObject obj)
-            obj[TypeProperty] = typeRegistry.GetOrAddTypeName(value.GetType()); ;
+        if (serialized is JsonObject obj)
+            obj[TypeProperty] = typeRegistry.GetOrAddTypeName(value.GetType());
+        ;
 
         serialized!.WriteTo(writer);
     }
@@ -118,7 +120,4 @@ public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry, Type excl
         clonedOptions.Converters.Remove(this);
         return clonedOptions;
     }
-
-
 }
-
