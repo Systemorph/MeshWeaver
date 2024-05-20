@@ -106,7 +106,7 @@ export class SamplesApp extends Workspace<SamplesStore> {
                     if (action === "addTodo") {
                         const { collections } = this.getState();
                         const name = collections.viewBag.newTodo;
-                        const id = v4();
+                        const id = v4().substring(0, 2);
                         const newTodo = { id, name, completed: false }
                         this.update(state => { state.collections.todos[id] = newTodo });
                     }

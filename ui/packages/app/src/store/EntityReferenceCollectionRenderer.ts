@@ -5,13 +5,13 @@ import { removeArea } from "./appReducer";
 import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
 import { selectByReference } from "@open-smc/data/src/operators/selectByReference";
 import { values } from "lodash";
-import { renderControl } from "./renderControl";
+import { renderControl, RenderingResult } from "./renderControl";
 import { Renderer } from "./Renderer";
 import { RendererStackTrace } from "./RendererStackTrace";
 
 export class EntityReferenceCollectionRenderer extends Renderer {
     readonly subscription = new Subscription();
-    private state: Record<string, Subscription> = {};
+    private state: Record<string, RenderingResult> = {};
 
     constructor(
         public readonly areaReferences$: Observable<EntityReference[]>,
@@ -20,9 +20,13 @@ export class EntityReferenceCollectionRenderer extends Renderer {
         super(null, stackTrace);
 
         this.subscription.add(() => {
-            values((this.state))
-                .forEach(subscription => subscription.unsubscribe());
+            values(this.state)
+                .forEach(result => result.subscription.unsubscribe());
         })
+    }
+
+    get areas() {
+        return values(this.state).map(({area}) => area);
     }
 
     renderAddedReferences() {
@@ -49,8 +53,9 @@ export class EntityReferenceCollectionRenderer extends Renderer {
                     references => {
                         keys(this.state).forEach(id => {
                             if (!references?.find(reference => reference.id === id)) {
-                                appStore.dispatch(removeArea(id));
-                                this.state[id].unsubscribe();
+                                const {area, subscription} = this.state[id];
+                                appStore.dispatch(removeArea(area));
+                                subscription.unsubscribe();
                                 delete this.state[id];
                             }
                         })

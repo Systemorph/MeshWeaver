@@ -6,14 +6,14 @@ import { ControlView } from "../ControlDef";
 import { RenderArea } from "../store/RenderArea";
 import { LayoutStackSkin } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
 
-export interface StackView extends ControlView {
-    areas: string[];
+export interface LayoutStackView extends ControlView {
+    areas?: string[];
     skin?: LayoutStackSkin;
     highlightNewAreas?: boolean;
     columnCount?: number;
 }
 
-export default function LayoutStackControl(props: StackView) {
+export default function LayoutStackControl(props: LayoutStackView) {
     const {skin} = props;
 
     if (skin === "MainWindow") {
@@ -31,7 +31,7 @@ export default function LayoutStackControl(props: StackView) {
     return <LayoutStack {...props}/>;
 }
 
-function LayoutStack({id, skin, areas, style, highlightNewAreas, columnCount}: StackView) {
+function LayoutStack({id, skin, areas, style, highlightNewAreas, columnCount}: LayoutStackView) {
     const renderedAreas = areas?.map(id => {
         const className = classNames(
             styles.stackItem, {

@@ -7,7 +7,7 @@ export const effect = <T>(effect: (value: T) => TeardownLogic) =>
             let teardown: TeardownLogic;
             const execTeardown = () => teardown && execFinalizer(teardown);
 
-            source.subscribe({
+            const subscription = source.subscribe({
                 next: value => {
                     execTeardown();
                     teardown = effect(value);
@@ -17,7 +17,10 @@ export const effect = <T>(effect: (value: T) => TeardownLogic) =>
                 complete: () => subscriber.complete()
             });
 
-            return execTeardown;
+            return () => {
+                subscription.unsubscribe();
+                execTeardown();
+            }
         });
 
 // copied from rxjs/src/internal/Subscription.ts
