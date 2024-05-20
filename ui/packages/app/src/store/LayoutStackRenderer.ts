@@ -2,23 +2,24 @@ import { bindingsToReferences, ControlRenderer } from "./ControlRenderer";
 import { map } from "rxjs";
 import { LayoutStackControl } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
 import { EntityReferenceCollectionRenderer } from "./EntityReferenceCollectionRenderer";
-import { qualifyArea } from "./qualifyArea";
 
 export class LayoutStackRenderer extends ControlRenderer<LayoutStackControl> {
+    private collectionRenderer: EntityReferenceCollectionRenderer;
+
     protected render() {
-        const collectionRenderer =
+        this.collectionRenderer =
             new EntityReferenceCollectionRenderer(
                 this.control$.pipe(map(stack => stack?.areas)),
                 this.stackTrace
             );
 
-        this.subscription.add(collectionRenderer.subscription);
+        this.subscription.add(this.collectionRenderer.subscription);
 
-        collectionRenderer.renderAddedReferences();
+        this.collectionRenderer.renderAddedReferences();
 
         super.render();
 
-        collectionRenderer.renderRemovedReferences();
+        this.collectionRenderer.renderRemovedReferences();
     }
 
     protected getAreaModel(area: string, control: LayoutStackControl) {
@@ -29,8 +30,7 @@ export class LayoutStackRenderer extends ControlRenderer<LayoutStackControl> {
             area,
             controlName,
             props: {
-                areas:
-                    areas?.map(reference => qualifyArea(reference.id, this.stackTrace)),
+                areas: this.collectionRenderer.areas,
                 ...bindingsToReferences(props)
             }
         }

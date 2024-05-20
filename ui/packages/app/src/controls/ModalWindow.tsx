@@ -1,5 +1,5 @@
 import styles from "./modalWindow.module.scss";
-import { StackView } from "./LayoutStackControl";
+import { LayoutStackView } from "./LayoutStackControl";
 import { keyBy } from "lodash";
 import classNames from "classnames";
 import { basename } from "path-browserify";
@@ -13,7 +13,7 @@ export const modalWindowAreas = {
 
 export type ModalWindowArea = typeof modalWindowAreas[keyof typeof modalWindowAreas];
 
-export function ModalWindow({areas, style}: StackView) {
+export function ModalWindow({areas, style}: LayoutStackView) {
     const mappedAreas = keyBy(areas, basename);
 
     const mainAreaId = mappedAreas[modalWindowAreas.main];

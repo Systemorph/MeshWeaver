@@ -39,7 +39,7 @@ export class EntityStoreRenderer extends Renderer {
                     map(rootArea =>
                         rootArea ? [new EntityReference(uiControlType, rootArea)] : [])
                 ),
-            this.stackTrace.add(this)
+            this.stackTrace
         );
 
         this.subscription.add(collectionRenderer.subscription);

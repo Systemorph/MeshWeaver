@@ -5,7 +5,7 @@ import { Binding, ValueOrBinding } from "@open-smc/data/src/contract/Binding";
 import { JsonPathReference } from "@open-smc/data/src/contract/JsonPathReference";
 import { Workspace } from "@open-smc/data/src/Workspace";
 import { app$, appMessage$, appStore, LayoutAreaModel } from "./appStore";
-import { distinctUntilChanged, map, Observable, Subscription } from "rxjs";
+import { distinctUntilChanged, map, Observable, pipe, Subscription, take } from "rxjs";
 import { effect } from "@open-smc/utils/src/operators/effect";
 import { syncWorkspaces } from "./syncWorkspaces";
 import { sliceByReference } from "@open-smc/data/src/sliceByReference";
@@ -17,6 +17,7 @@ import { RendererStackTrace } from "./RendererStackTrace";
 import { EntityStoreRenderer } from "./EntityStoreRenderer";
 import { serialize } from "@open-smc/serialization/src/serialize";
 import { log } from "@open-smc/utils/src/operators/log";
+import { withPreviousValue } from "@open-smc/utils/src/operators/withPreviousValue";
 
 export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
     readonly subscription = new Subscription();
@@ -27,7 +28,16 @@ export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
         public readonly control$: Observable<T>,
         stackTrace: RendererStackTrace
     ) {
-        super(new Workspace(null, `${area}/dataContext`), stackTrace);
+        super(new Workspace(null, `[${area}] dataContext`), stackTrace);
+
+        // this.subscription.add(
+        //     control$
+        //         .pipe(withPreviousValue())
+        //         .pipe(log(`sub ${area}`))
+        //         .subscribe()
+        // )
+
+        // this.subscription.add(() => console.log(`unsub "${area}" ${this.constructor.name}`))
 
         this.subscription.add(
             this.control$
@@ -35,12 +45,18 @@ export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
                 .pipe(distinctUntilEqual())
                 .pipe(
                     effect(
-                        dataContext =>
-                            syncWorkspaces(
-                                dataContext ? sliceByReference(this.rootContext, dataContext)
-                                    : this.parentContext,
-                                this.dataContext
-                            )
+                        dataContext => {
+                            if (dataContext) {
+                                const subscription = new Subscription();
+                                const dataContextSlice = sliceByReference(this.rootContext, dataContext);
+                                subscription.add(dataContextSlice.subscription);
+                                subscription.add(syncWorkspaces(dataContextSlice, this.dataContext));
+                                return subscription;
+                            }
+                            else {
+                                return syncWorkspaces(this.parentContext, this.dataContext);
+                            }
+                        }
                     )
                 )
                 .subscribe()
@@ -52,7 +68,9 @@ export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
     protected render() {
         this.subscription.add(
             this.control$
-                .pipe(distinctUntilEqual())
+                // .pipe(withPreviousValue())
+                // .pipe(log(`sub ${this.area}`))
+                // .pipe(map(([previous, current]) => current))
                 .pipe(
                     effect(
                         control => {
@@ -68,9 +86,11 @@ export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
                                 subscription.add(areaModelWorkspace.subscription);
                                 subscription.add(this.renderControlTo(areaModelWorkspace))
 
-                                subscription.add(
-                                    () => console.log('unsub', control)
-                                )
+                                // console.log('sub', areaModel);
+
+                                // subscription.add(
+                                // () => console.log('unsub', areaModel)
+                                // )
 
                                 return subscription;
                             }
@@ -99,7 +119,8 @@ export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
 
         subscription.add(
             areaModelWorkspace
-                .pipe(distinctUntilEqual(), log())
+                // .pipe(log('areaModel'))    
+                .pipe(distinctUntilEqual())
                 // .pipe(map(serialize))
                 .subscribe(layoutAreaModel => {
                     appStore.dispatch(setArea(layoutAreaModel))

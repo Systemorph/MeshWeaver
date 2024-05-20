@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import styles from "./mainWindow.module.scss";
-import { StackView } from "./LayoutStackControl";
+import { LayoutStackView } from "./LayoutStackControl";
 import { keyBy } from "lodash";
 import { CloseModalDialogEvent } from "@open-smc/layout/src/contract/application.contract";
 import Dialog from "rc-dialog";
@@ -17,7 +17,7 @@ export type ModalOptions = {
 
 type ModalSize = "S" | "M" | "L";
 
-export function MainWindow({areas}: StackView) {
+export function MainWindow({areas}: LayoutStackView) {
     const mappedAreas = keyBy(areas, basename);
 
     const mainAreaId = mappedAreas[mainWindowAreas.main];
