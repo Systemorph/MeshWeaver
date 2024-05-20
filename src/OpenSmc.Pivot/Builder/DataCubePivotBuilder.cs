@@ -93,9 +93,9 @@ namespace OpenSmc.Pivot.Builder
             {
                 SliceColumns = new SlicePivotGroupingConfigItem<TElement, ColumnGroup>(
                     SliceColumns
-                        .Dimensions.Select(d => d.Dim)
+                        ?.Dimensions.Select(d => d.Dim)
                         .Union(dimensionDescriptors)
-                        .ToArray(),
+                        .ToArray() ?? dimensionDescriptors,
                     State,
                     HierarchicalDimensionCache,
                     HierarchicalDimensionOptions
