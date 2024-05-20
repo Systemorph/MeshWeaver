@@ -103,7 +103,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Reporting", "src\Op
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Data", "src\OpenSmc.Data\OpenSmc.Data.csproj", "{18C3CDA0-87E5-4E05-91A2-EE95F8B7E7F7}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Hub.Data.Test", "test\OpenSmc.Hub.Data.Test\OpenSmc.Hub.Data.Test.csproj", "{AA71FF58-CF0D-467F-9FDA-2883DD73DA31}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSm.Data.Test", "test\OpenSmc.Data.Test\OpenSmc.Data.Test.csproj", "{AA71FF58-CF0D-467F-9FDA-2883DD73DA31}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Data.Contract", "src\OpenSmc.Data.Contract\OpenSmc.Data.Contract.csproj", "{1EAB617D-513E-4376-A464-530005F27ECC}"
 EndProject
