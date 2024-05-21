@@ -1,6 +1,7 @@
 ﻿using System.Collections;
 using System.Collections.Immutable;
 using System.Linq.Expressions;
+using AngleSharp.Html.Dom.Events;
 using OpenSmc.Collections;
 using OpenSmc.Data;
 using OpenSmc.Domain;
@@ -22,9 +23,12 @@ public abstract record PivotGroupingConfiguration<T, TGroup>
         // TODO V10: this should be a new Column(){ Field = "", HeaderName = "Name", ValueGetter = "node.id"}  (2021/10/05, Ekaterina Mishina)
         if (typeof(INamed).IsAssignableFrom(typeof(T)))
         {
+            //TODO Roland Bürgi 2024-05-21: This should be taken from WorkspaceState and type sources
+            var keyFunction = KeyFunctionBuilder.GetKeyFunction(typeof(T));
             var grouper = Activator.CreateInstance(
                 typeof(NamedPivotGrouper<,>).MakeGenericType(typeof(T), typeof(TGroup)),
-                PivotConst.AutomaticEnumerationPivotGrouperName
+                PivotConst.AutomaticEnumerationPivotGrouperName,
+                keyFunction
             );
             return new((IPivotGrouper<T, TGroup>)grouper);
         }
@@ -119,7 +123,7 @@ public record PivotColumnsGroupingConfiguration<T> : PivotGroupingConfiguration<
                 IPivotGrouper<T, ColumnGroup>.TopGroup.GrouperName
             )
         );
-    private static readonly PivotGroupingConfigItem<T, ColumnGroup> DefaultTransposedGrouping =
+    private PivotGroupingConfigItem<T, ColumnGroup> DefaultTransposedGrouping =>
         CreateDefaultAutomaticNumbering();
 
     public PivotColumnsGroupingConfiguration()

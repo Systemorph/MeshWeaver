@@ -4,6 +4,7 @@ using OpenSmc.DataCubes;
 using OpenSmc.Domain;
 using OpenSmc.Fixture;
 using OpenSmc.Hub.Fixture;
+using OpenSmc.Json.Assertions;
 using OpenSmc.Pivot.Builder;
 using OpenSmc.TestDomain;
 using Xunit;

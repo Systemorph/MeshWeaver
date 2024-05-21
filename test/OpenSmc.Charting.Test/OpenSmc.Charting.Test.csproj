@@ -7,5 +7,6 @@
 
 	<ItemGroup>
 	  <ProjectReference Include="..\..\src\OpenSmc.Charting\OpenSmc.Charting.csproj" />
+	  <ProjectReference Include="..\OpenSmc.Json.Assertions\OpenSmc.Json.Assertions.csproj" />
 	</ItemGroup>
 </Project>

@@ -2,6 +2,7 @@ using OpenSmc.Charting.Builders;
 using OpenSmc.Charting.Builders.DataSetBuilders;
 using OpenSmc.Charting.Enums;
 using OpenSmc.Charting.Models;
+using OpenSmc.Json.Assertions;
 
 namespace OpenSmc.Charting.Test;
 
@@ -27,13 +28,14 @@ public class ChartingSamples
     [Fact]
     public async Task BarChart()
     {
-        var actual = ChartBuilder.Bar()
-                          .WithDataSet(b => b.WithData(data1).WithLabel("First"))
-                          .WithDataSet(b => b.WithData(data2).WithLabel("Second"))
-                          .WithLabels(labels)
-                          .WithLegend()
-                          .WithTitle("Bar Chart")
-                          .ToChart();
+        var actual = ChartBuilder
+            .Bar()
+            .WithDataSet(b => b.WithData(data1).WithLabel("First"))
+            .WithDataSet(b => b.WithData(data2).WithLabel("Second"))
+            .WithLabels(labels)
+            .WithLegend()
+            .WithTitle("Bar Chart")
+            .ToChart();
 
         await actual.JsonShouldMatch("Sample_BarChart.json");
     }
@@ -41,13 +43,14 @@ public class ChartingSamples
     [Fact]
     public async Task LineChart()
     {
-        var actual = ChartBuilder.Line()
-                          .WithDataSet(b => b.WithData(data1).WithLabel("First").Smoothed(0.3))
-                          .WithDataSet(b => b.WithData(data2).WithLabel("Second").Smoothed())
-                          .WithLabels(labels)
-                          .WithLegend()
-                          .WithTitle("Line Chart")
-                          .ToChart();
+        var actual = ChartBuilder
+            .Line()
+            .WithDataSet(b => b.WithData(data1).WithLabel("First").Smoothed(0.3))
+            .WithDataSet(b => b.WithData(data2).WithLabel("Second").Smoothed())
+            .WithLabels(labels)
+            .WithLegend()
+            .WithTitle("Line Chart")
+            .ToChart();
 
         await actual.JsonShouldMatch("Sample_LineChart.json");
     }
@@ -55,13 +58,14 @@ public class ChartingSamples
     [Fact]
     public async Task MixedChart()
     {
-        var actual = ChartBuilder.Bar()
-                          .WithDataSet<LineDataSetBuilder, LineDataSet>(b => b.WithData(data1).WithLabel("First"))
-                          .WithDataSet(b => b.WithData(data2).WithLabel("Second"))
-                          .WithLabels(labels)
-                          .WithLegend()
-                          .WithTitle("Line Chart")
-                          .ToChart();
+        var actual = ChartBuilder
+            .Bar()
+            .WithDataSet<LineDataSetBuilder, LineDataSet>(b => b.WithData(data1).WithLabel("First"))
+            .WithDataSet(b => b.WithData(data2).WithLabel("Second"))
+            .WithLabels(labels)
+            .WithLegend()
+            .WithTitle("Line Chart")
+            .ToChart();
 
         await actual.JsonShouldMatch("Sample_MixedChart.json");
     }
@@ -69,16 +73,20 @@ public class ChartingSamples
     [Fact]
     public async Task TimelineChart()
     {
-        var actual = ChartBuilder.TimeLine()
-                          .WithDataSet(b => b.WithData(dates, data1).WithLabel("First")
-                                             .WithLineWidth(3)
-                                             .WithoutPoint()
-                                             .Smoothed())
-                          .WithOptions(o => o.SetTimeUnit(TimeIntervals.Month)
-                                             .ShortenYAxisNumbers()
-                                             .SetTimeFormat("D MMM YYYY"))
-                          .WithTitle("TimeLine Chart", o => o.WithFontSize(20))
-                          .ToChart();
+        var actual = ChartBuilder
+            .TimeLine()
+            .WithDataSet(b =>
+                b.WithData(dates, data1)
+                    .WithLabel("First")
+                    .WithLineWidth(3)
+                    .WithoutPoint()
+                    .Smoothed()
+            )
+            .WithOptions(o =>
+                o.SetTimeUnit(TimeIntervals.Month).ShortenYAxisNumbers().SetTimeFormat("D MMM YYYY")
+            )
+            .WithTitle("TimeLine Chart", o => o.WithFontSize(20))
+            .ToChart();
 
         await actual.JsonShouldMatch("Sample_TimeLineChart.json");
     }
@@ -86,28 +94,28 @@ public class ChartingSamples
     [Fact]
     public async Task FloatingBarChart()
     {
-        var actual = ChartBuilder.FloatingBar()
-                          .WithDataSet(b => b.WithDataRange(data1, data2)
-                                             .WithLabel("First"))
-                          .WithLabels(labels)
-                          .WithTitle("FloatingBar Chart")
-                          .ToChart();
+        var actual = ChartBuilder
+            .FloatingBar()
+            .WithDataSet(b => b.WithDataRange(data1, data2).WithLabel("First"))
+            .WithLabels(labels)
+            .WithTitle("FloatingBar Chart")
+            .ToChart();
 
         await actual.JsonShouldMatch("Sample_FloatingBarChart.json");
     }
-
 
     [Fact]
     public async Task BubbleChart()
     {
         double[] radius = { 8.0, 11.0, 20.0, 18.0 };
-        var actual = ChartBuilder.Bubble()
-                          .WithDataSet(b => b.WithData(x1, y, radius).WithLabel("First"))
-                          .WithDataSet(b => b.WithData(x2, y, radius).WithLabel("Second"))
-                          .WithLegend()
-                          .WithTitle("Bubble Chart")
-                          .WithColorPalette(Palettes.Brewer.DarkTwo8)
-                          .ToChart();
+        var actual = ChartBuilder
+            .Bubble()
+            .WithDataSet(b => b.WithData(x1, y, radius).WithLabel("First"))
+            .WithDataSet(b => b.WithData(x2, y, radius).WithLabel("Second"))
+            .WithLegend()
+            .WithTitle("Bubble Chart")
+            .WithColorPalette(Palettes.Brewer.DarkTwo8)
+            .ToChart();
 
         await actual.JsonShouldMatch("Sample_BubbleChart.json");
     }
@@ -115,12 +123,13 @@ public class ChartingSamples
     [Fact]
     public async Task PieChart()
     {
-        var actual = ChartBuilder.Pie()
-                          .WithData(data1)
-                          .WithLabels(labels)
-                          .WithLegend()
-                          .WithTitle("Pie Chart")
-                          .ToChart();
+        var actual = ChartBuilder
+            .Pie()
+            .WithData(data1)
+            .WithLabels(labels)
+            .WithLegend()
+            .WithTitle("Pie Chart")
+            .ToChart();
 
         await actual.JsonShouldMatch("Sample_PieChart.json");
     }
@@ -128,12 +137,13 @@ public class ChartingSamples
     [Fact]
     public async Task Doughnut()
     {
-        var actual = ChartBuilder.Doughnut()
-                          .WithData(data1)
-                          .WithLabels(labels)
-                          .WithLegend()
-                          .WithTitle("Doughnut Chart")
-                          .ToChart();
+        var actual = ChartBuilder
+            .Doughnut()
+            .WithData(data1)
+            .WithLabels(labels)
+            .WithLegend()
+            .WithTitle("Doughnut Chart")
+            .ToChart();
 
         await actual.JsonShouldMatch("Sample_Doughnut.json");
     }
@@ -141,12 +151,13 @@ public class ChartingSamples
     [Fact]
     public async Task Polar()
     {
-        var actual = ChartBuilder.PolarArea()
-                          .WithData(data1)
-                          .WithLabels(labels)
-                          .WithLegend()
-                          .WithTitle("Polar Chart")
-                          .ToChart();
+        var actual = ChartBuilder
+            .PolarArea()
+            .WithData(data1)
+            .WithLabels(labels)
+            .WithLegend()
+            .WithTitle("Polar Chart")
+            .ToChart();
 
         await actual.JsonShouldMatch("Sample_Polar.json");
     }
@@ -154,13 +165,14 @@ public class ChartingSamples
     [Fact]
     public async Task Radar()
     {
-        var actual = ChartBuilder.Radar()
-                          .WithDataSet(b => b.WithData(data1).WithLabel("First"))
-                          .WithDataSet(b => b.WithData(data2).WithLabel("Second"))
-                          .WithLabels(labels)
-                          .WithLegend()
-                          .WithTitle("Radar Chart")
-                          .ToChart();
+        var actual = ChartBuilder
+            .Radar()
+            .WithDataSet(b => b.WithData(data1).WithLabel("First"))
+            .WithDataSet(b => b.WithData(data2).WithLabel("Second"))
+            .WithLabels(labels)
+            .WithLegend()
+            .WithTitle("Radar Chart")
+            .ToChart();
 
         await actual.JsonShouldMatch("Sample_Radar.json");
     }
@@ -168,14 +180,14 @@ public class ChartingSamples
     [Fact]
     public async Task Scatter()
     {
-        var actual =
-            ChartBuilder.Scatter()
-                 .WithDataSet(b => b.WithDataPoint(x1, y).WithLabel("First"))
-                 .WithDataSet(b => b.WithDataPoint(x2, y).WithLabel("Second"))
-                 .WithLegend()
-                 .WithTitle("Scatter Chart")
-                 .WithColorPalette(Palettes.Brewer.DarkTwo8)
-                 .ToChart();
+        var actual = ChartBuilder
+            .Scatter()
+            .WithDataSet(b => b.WithDataPoint(x1, y).WithLabel("First"))
+            .WithDataSet(b => b.WithDataPoint(x2, y).WithLabel("Second"))
+            .WithLegend()
+            .WithTitle("Scatter Chart")
+            .WithColorPalette(Palettes.Brewer.DarkTwo8)
+            .ToChart();
 
         await actual.JsonShouldMatch("Sample_Scatter.json");
     }
@@ -183,11 +195,7 @@ public class ChartingSamples
     [Fact]
     public async Task QuickDraw()
     {
-        var actual = ChartBuilder.Bar()
-                          .WithData(data1)
-                          .WithData(data2)
-                          .WithData(x1)
-                          .ToChart();
+        var actual = ChartBuilder.Bar().WithData(data1).WithData(data2).WithData(x1).ToChart();
 
         await actual.JsonShouldMatch("Sample_QuickDraw.json");
     }
@@ -195,10 +203,11 @@ public class ChartingSamples
     [Fact]
     public async Task AreaChart()
     {
-        var actual = ChartBuilder.Line()
-                          .WithDataSet(b => b.WithData(data1).WithArea())
-                          .WithDataSet(b => b.WithData(data2).WithArea())
-                          .ToChart();
+        var actual = ChartBuilder
+            .Line()
+            .WithDataSet(b => b.WithData(data1).WithArea())
+            .WithDataSet(b => b.WithData(data2).WithArea())
+            .ToChart();
 
         await actual.JsonShouldMatch("Sample_AreaChart.json");
     }
