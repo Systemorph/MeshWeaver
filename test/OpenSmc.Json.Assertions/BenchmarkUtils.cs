@@ -14,6 +14,7 @@ public static class BenchmarkUtils
 
     public static async Task JsonShouldMatch(this object model, string fileName)
     {
+        fileName = $"{fileName}.json";
         var modelSerialized = JsonSerializer.Serialize(
             model,
             model.GetType(),
@@ -24,7 +25,11 @@ public static class BenchmarkUtils
         var benchmark = JsonSerializer.Serialize(
             model,
             model.GetType(),
-            new JsonSerializerOptions { WriteIndented = true }
+            new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            }
         );
         await BenchmarkUtils.WriteBenchmarkAsync(filePath, benchmark);
 #else
