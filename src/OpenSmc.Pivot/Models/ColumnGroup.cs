@@ -17,11 +17,11 @@ namespace OpenSmc.Pivot.Models
             Coordinates = group.Coordinates;
         }
 
-        public ColumnGroup(object id, string displayName, object grouperId)
+        public ColumnGroup(object id, string displayName, object grouperName)
         {
             SystemName = id;
             DisplayName = displayName;
-            GrouperName = grouperId;
+            GrouperName = grouperName;
             Coordinates = Coordinates.Add(id);
         }
 

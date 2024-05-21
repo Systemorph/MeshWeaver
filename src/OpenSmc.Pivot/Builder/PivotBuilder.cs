@@ -101,6 +101,7 @@ public record PivotBuilder<T, TIntermediate, TAggregate>
     ) =>
         new(Objects)
         {
+            State = State,
             Aggregations = aggregationsFunc(new Aggregations<T, TIntermediate, TAggregate>()),
         };
 
