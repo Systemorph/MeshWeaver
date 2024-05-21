@@ -1,12 +1,10 @@
-﻿using System.Collections.Concurrent;
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Linq.Expressions;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Disposables;
 using OpenSmc.Messaging.Serialization;
 using OpenSmc.Reflection;
-using OpenSmc.Serialization;
 using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Messaging;
@@ -57,24 +55,29 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
             if (registry.Action != null)
                 Register(registry.Action, d => registry.Type.IsAssignableFrom(d.Message.GetType()));
 
-            TypeRegistry.WithType(registry.Type);
             registeredTypes.Add(registry.Type);
+            WithTypeAndRelatedTypesFor(registry.Type);
+        }
+    }
 
-            var types = registry
-                .Type.GetAllInterfaces()
-                .Where(x => x.IsGenericType && x.GetGenericTypeDefinition() == typeof(IRequest<>))
-                .SelectMany(x => x.GetGenericArguments());
+    private void WithTypeAndRelatedTypesFor(Type typeToRegister)
+    {
+        TypeRegistry.WithType(typeToRegister);
 
-            foreach (var type in types)
-            {
-                TypeRegistry.WithType(type);
-            }
+        var types = typeToRegister
+            .GetAllInterfaces()
+            .Where(x => x.IsGenericType && x.GetGenericTypeDefinition() == typeof(IRequest<>))
+            .SelectMany(x => x.GetGenericArguments());
 
-            if (registry.Type.IsGenericType)
-            {
-                foreach (var genericType in registry.Type.GetGenericArguments())
-                    TypeRegistry.WithType(genericType);
-            }
+        foreach (var type in types)
+        {
+            TypeRegistry.WithType(type);
+        }
+
+        if (typeToRegister.IsGenericType)
+        {
+            foreach (var genericType in typeToRegister.GetGenericArguments())
+                TypeRegistry.WithType(genericType);
         }
     }
 
@@ -236,7 +239,7 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
         DeliveryFilter<TMessage> filter
     )
     {
-        TypeRegistry.WithType(typeof(TMessage));
+        WithTypeAndRelatedTypesFor(typeof(TMessage));
         return Register(
             (d, c) => action((MessageDelivery<TMessage>)d, c),
             d => d is IMessageDelivery<TMessage> md && filter(md)
@@ -246,6 +249,7 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
     public IDisposable Register(Type tMessage, AsyncDelivery action)
     {
         registeredTypes.Add(tMessage);
+        WithTypeAndRelatedTypesFor(tMessage);
         return Register(action, d => tMessage.IsInstanceOfType(d.Message));
     }
 
@@ -293,7 +297,7 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
     public IDisposable Register(Type tMessage, AsyncDelivery action, DeliveryFilter filter)
     {
         registeredTypes.Add(tMessage);
-        TypeRegistry.WithType(tMessage);
+        WithTypeAndRelatedTypesFor(tMessage);
         return Register(
             (d, c) => action(d, c),
             d => tMessage.IsInstanceOfType(d.Message) && filter(d)
