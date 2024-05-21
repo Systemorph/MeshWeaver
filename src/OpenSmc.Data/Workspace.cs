@@ -170,7 +170,7 @@ public class Workspace : IWorkspace
     public object Id => Hub.Address;
     private ILogger logger;
 
-    WorkspaceState IWorkspace.State => Current.Value;
+    WorkspaceState IWorkspace.State => Current?.Value;
 
     public DataContext DataContext { get; private set; }
 
@@ -203,7 +203,7 @@ public class Workspace : IWorkspace
 
     public WorkspaceState CreateState(EntityStore entityStore)
     {
-        return new(Hub, entityStore, typeSources, ReduceManager);
+        return new(Hub, entityStore ?? new(), typeSources, ReduceManager);
     }
 
     public void Rollback()
