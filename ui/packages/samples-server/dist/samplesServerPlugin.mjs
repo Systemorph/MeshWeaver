@@ -2477,7 +2477,7 @@ class SamplesApp extends Workspace {
                   areas: keys(pages).map((page) => {
                     const { icon, title } = pages[page];
                     return layoutViews.addView(
-                      null,
+                      `/SideMenu/${page}`,
                       new MenuItemControl().with({
                         title,
                         icon,
@@ -2546,9 +2546,12 @@ class SamplesApp extends Workspace {
     const todosCount = new LayoutStackControl().with({
       skin: "HorizontalPanel",
       areas: [
-        layoutViews.addView(void 0, new HtmlControl().with({ data: "Total:" })),
         layoutViews.addView(
-          void 0,
+          "/totalLabel",
+          new HtmlControl().with({ data: "Total:" })
+        ),
+        layoutViews.addView(
+          "/totalCount",
           this.pipe(
             map(
               (state) => {
@@ -2564,13 +2567,13 @@ class SamplesApp extends Workspace {
       skin: "HorizontalPanel",
       areas: [
         layoutViews.addView(
-          null,
+          "/newTodoName",
           new TextBoxControl().with({
             data: new Binding("$.viewBag.newTodo")
           })
         ),
         layoutViews.addView(
-          null,
+          "/AddButton",
           new MenuItemControl().with({
             title: "Add todo",
             color: smBlue,
@@ -2580,7 +2583,7 @@ class SamplesApp extends Workspace {
           })
         ),
         layoutViews.addView(
-          null,
+          "/todosCount",
           todosCount
         )
       ]
