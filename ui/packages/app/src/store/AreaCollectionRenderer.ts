@@ -1,7 +1,7 @@
 import { map, Observable, Subscription } from "rxjs";
 import { keys } from "lodash-es";
 import { appStore } from "./appStore";
-import { removeArea } from "./appReducer";
+import { removeAreaActionCreator } from "./appReducer";
 import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
 import { selectByReference } from "@open-smc/data/src/operators/selectByReference";
 import { values } from "lodash";
@@ -24,7 +24,7 @@ export class AreaCollectionRenderer extends Renderer {
             values(this.state)
                 .forEach(result => {
                     result.subscription.unsubscribe();
-                    appStore.dispatch(removeArea(result.area));
+                    appStore.dispatch(removeAreaActionCreator(result.area));
                 });
         })
     }
@@ -56,7 +56,7 @@ export class AreaCollectionRenderer extends Renderer {
                         keys(this.state).forEach(id => {
                             if (!references?.find(reference => reference.id === id)) {
                                 const { area, subscription } = this.state[id];
-                                appStore.dispatch(removeArea(area));
+                                appStore.dispatch(removeAreaActionCreator(area));
                                 subscription.unsubscribe();
                                 delete this.state[id];
                             }
