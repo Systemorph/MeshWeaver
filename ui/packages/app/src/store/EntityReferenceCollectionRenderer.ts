@@ -12,6 +12,7 @@ import { RendererStackTrace } from "./RendererStackTrace";
 export class EntityReferenceCollectionRenderer extends Renderer {
     readonly subscription = new Subscription();
     private state: Record<string, RenderingResult> = {};
+    private areas: string[] = [];
 
     constructor(
         public readonly areaReferences$: Observable<EntityReference[]>,
@@ -25,11 +26,7 @@ export class EntityReferenceCollectionRenderer extends Renderer {
         })
     }
 
-    get areas() {
-        return values(this.state).map(({area}) => area);
-    }
-
-    renderAddedReferences() {
+    renderNewAreas() {
         this.subscription.add(
             this.areaReferences$
                 .subscribe(
@@ -41,12 +38,14 @@ export class EntityReferenceCollectionRenderer extends Renderer {
                                 this.state[reference.id] =
                                     renderControl(reference.id, control$, this.stackTrace);
                             });
+
+                        this.areas = references?.map(reference => this.state[reference.id].area) ?? [];
                     }
                 )
         );
     }
 
-    renderRemovedReferences() {
+    cleanupRemovedAreas() {
         this.subscription.add(
             this.areaReferences$
                 .subscribe(

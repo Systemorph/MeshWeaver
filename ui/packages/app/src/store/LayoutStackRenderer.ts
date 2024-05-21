@@ -15,11 +15,11 @@ export class LayoutStackRenderer extends ControlRenderer<LayoutStackControl> {
 
         this.subscription.add(this.collectionRenderer.subscription);
 
-        this.collectionRenderer.renderAddedReferences();
+        this.collectionRenderer.renderNewAreas();
 
         super.render();
 
-        this.collectionRenderer.renderRemovedReferences();
+        this.collectionRenderer.cleanupRemovedAreas();
     }
 
     protected getAreaModel(area: string, control: LayoutStackControl) {

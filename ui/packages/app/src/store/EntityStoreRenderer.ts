@@ -44,7 +44,7 @@ export class EntityStoreRenderer extends Renderer {
 
         this.subscription.add(collectionRenderer.subscription);
 
-        collectionRenderer.renderAddedReferences();
+        collectionRenderer.renderNewAreas();
 
         this.subscription.add(
             rootArea$
@@ -55,6 +55,6 @@ export class EntityStoreRenderer extends Renderer {
                 })
         );
 
-        collectionRenderer.renderRemovedReferences();
+        collectionRenderer.cleanupRemovedAreas();
     }
 }
