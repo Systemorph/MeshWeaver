@@ -246,7 +246,7 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
     public IDisposable Register(Type tMessage, AsyncDelivery action)
     {
         registeredTypes.Add(tMessage);
-        return Register(action, d => d.Message.GetType().IsInstanceOfType(tMessage));
+        return Register(action, d => tMessage.IsInstanceOfType(d.Message));
     }
 
     public IDisposable Register(AsyncDelivery action, DeliveryFilter filter)
@@ -296,7 +296,7 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
         TypeRegistry.WithType(tMessage);
         return Register(
             (d, c) => action(d, c),
-            d => d.Message.GetType().IsInstanceOfType(tMessage) && filter(d)
+            d => tMessage.IsInstanceOfType(d.Message) && filter(d)
         );
     }
 }
