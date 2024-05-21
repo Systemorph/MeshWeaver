@@ -9,16 +9,16 @@ import { renderControl, RenderingResult } from "./renderControl";
 import { Renderer } from "./Renderer";
 import { RendererStackTrace } from "./RendererStackTrace";
 
-export class EntityReferenceCollectionRenderer extends Renderer {
+export class AreaCollectionRenderer extends Renderer {
     readonly subscription = new Subscription();
     private state: Record<string, RenderingResult> = {};
-    private areas: string[] = [];
+    areas: string[] = [];
 
     constructor(
-        public readonly areaReferences$: Observable<EntityReference[]>,
+        protected readonly areaReferences$: Observable<EntityReference[]>,
         stackTrace: RendererStackTrace
     ) {
-        super(null, stackTrace);
+        super(stackTrace);
 
         this.subscription.add(() => {
             values(this.state)

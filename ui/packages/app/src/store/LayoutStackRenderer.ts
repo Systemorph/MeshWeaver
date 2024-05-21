@@ -1,14 +1,21 @@
 import { bindingsToReferences, ControlRenderer } from "./ControlRenderer";
-import { map } from "rxjs";
+import { map, Observable } from "rxjs";
 import { LayoutStackControl } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
-import { EntityReferenceCollectionRenderer } from "./EntityReferenceCollectionRenderer";
+import { AreaCollectionRenderer } from "./AreaCollectionRenderer";
+import { RendererStackTrace } from "./RendererStackTrace";
 
 export class LayoutStackRenderer extends ControlRenderer<LayoutStackControl> {
-    private collectionRenderer: EntityReferenceCollectionRenderer;
+    private collectionRenderer: AreaCollectionRenderer;
 
-    protected render() {
+    constructor(
+        area: string,
+        control$: Observable<LayoutStackControl>,
+        stackTrace: RendererStackTrace
+    ) {
+        super(area, control$, stackTrace);
+
         this.collectionRenderer =
-            new EntityReferenceCollectionRenderer(
+            new AreaCollectionRenderer(
                 this.control$.pipe(map(stack => stack?.areas)),
                 this.stackTrace
             );
@@ -16,18 +23,19 @@ export class LayoutStackRenderer extends ControlRenderer<LayoutStackControl> {
         this.subscription.add(this.collectionRenderer.subscription);
 
         this.collectionRenderer.renderNewAreas();
-
-        super.render();
-
+        super.renderAreaModel();
         this.collectionRenderer.cleanupRemovedAreas();
     }
 
-    protected getAreaModel(area: string, control: LayoutStackControl) {
+    protected renderAreaModel() {
+    }
+
+    protected getAreaModel(control: LayoutStackControl) {
         const controlName = control.constructor.name;
-        const {areas, dataContext: _, ...props} = control;
+        const { areas, dataContext: _, ...props } = control;
 
         return {
-            area,
+            area: this.expandedArea,
             controlName,
             props: {
                 areas: this.collectionRenderer.areas,

@@ -2,12 +2,12 @@ import { Observable, ReplaySubject, Subject, Subscription } from "rxjs";
 import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
 import { LayoutStackControl } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
 import { LayoutStackRenderer } from "./LayoutStackRenderer";
-import { ItemTemplateRenderer } from "./ItemTemplateRenderer";
+import { ItemTemplateItemRenderer, ItemTemplateRenderer } from "./ItemTemplateRenderer";
 import { ControlRenderer } from "./ControlRenderer";
 import { ItemTemplateControl } from "@open-smc/layout/src/contract/controls/ItemTemplateControl";
 import { RendererStackTrace } from "./RendererStackTrace";
-import { qualifyArea } from "./qualifyArea";
 import { distinctUntilEqual } from "@open-smc/data/src/operators/distinctUntilEqual";
+import { identity } from "lodash-es";
 
 export type RenderingResult = {
     area: string;
@@ -22,8 +22,6 @@ export function renderControl(
     const subject = new ReplaySubject(1);
     let lastValue: UiControl;
     let lastSubscription: Subscription;
-
-    area = qualifyArea(area, stackTrace);
 
     function getRenderer(value: UiControl) {
         if (value instanceof LayoutStackControl) {
@@ -63,7 +61,25 @@ export function renderControl(
     })
 
     return {
-        area, 
+        area: expandArea(area, stackTrace), 
         subscription
     }
+}
+
+export function expandArea(area: string, stackTrace: RendererStackTrace) {
+    const namespace = getNamespace(stackTrace);
+    return namespace ? `{${namespace}}${area}` : area;
+}
+
+function getNamespace(stackTrace: RendererStackTrace) {
+    const namespace =
+        stackTrace
+            .map(renderer => {
+                if (renderer instanceof ItemTemplateItemRenderer) {
+                    return renderer.area;
+                }
+            })
+            .filter(identity);
+
+    return namespace.length ? `${namespace.join(", ")}` : null;
 }

@@ -6,21 +6,29 @@ import { setRoot } from "./appReducer";
 import { appMessage$, appStore } from "./appStore";
 import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
 import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
-import { EntityReferenceCollectionRenderer } from "./EntityReferenceCollectionRenderer";
+import { AreaCollectionRenderer } from "./AreaCollectionRenderer";
 import { RendererStackTrace } from "./RendererStackTrace";
 import { Renderer } from "./Renderer";
-import { WorkspaceSlice } from "@open-smc/data/src/WorkspaceSlice";
 import { RemoteWorkspace } from "@open-smc/data/src/RemoteWorkspace";
+import { syncWorkspaces } from "./syncWorkspaces";
+import { Workspace } from "@open-smc/data/src/Workspace";
 
 export const uiControlType = (UiControl as any).$type;
 
 export class EntityStoreRenderer extends Renderer {
     readonly subscription = new Subscription();
 
-    constructor(public readonly entityStore: RemoteWorkspace<EntityStore>) {
-        super(sliceByPath(entityStore, "/collections"), new RendererStackTrace());
+    constructor(
+        public readonly entityStore: RemoteWorkspace<EntityStore>
+    ) {
+        super(new RendererStackTrace());
 
-        this.subscription.add((this.dataContext as WorkspaceSlice).subscription);
+        this.dataContext = new Workspace(null);
+        
+        const dataContext = sliceByPath(entityStore, "/collections")
+
+        this.subscription.add(dataContext.subscription);
+        this.subscription.add(syncWorkspaces(dataContext, this.dataContext));
 
         this.subscription.add(
             appMessage$
@@ -33,7 +41,7 @@ export class EntityStoreRenderer extends Renderer {
             .pipe(map(selectByPath<string>("/reference/area")))
             .pipe(distinctUntilChanged());
 
-        const collectionRenderer = new EntityReferenceCollectionRenderer(
+        const collectionRenderer = new AreaCollectionRenderer(
             rootArea$
                 .pipe(
                     map(rootArea =>

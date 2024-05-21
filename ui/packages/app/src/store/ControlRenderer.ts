@@ -4,7 +4,7 @@ import { ValueOrReference } from "@open-smc/data/src/contract/ValueOrReference";
 import { Binding, ValueOrBinding } from "@open-smc/data/src/contract/Binding";
 import { JsonPathReference } from "@open-smc/data/src/contract/JsonPathReference";
 import { Workspace } from "@open-smc/data/src/Workspace";
-import { app$, appMessage$, appStore, LayoutAreaModel } from "./appStore";
+import { app$, appStore, LayoutAreaModel } from "./appStore";
 import { distinctUntilChanged, map, Observable, pipe, Subscription, take } from "rxjs";
 import { effect } from "@open-smc/utils/src/operators/effect";
 import { syncWorkspaces } from "./syncWorkspaces";
@@ -14,30 +14,23 @@ import { setArea } from "./appReducer";
 import { pathToUpdateAction } from "@open-smc/data/src/operators/pathToUpdateAction";
 import { Renderer } from "./Renderer";
 import { RendererStackTrace } from "./RendererStackTrace";
-import { EntityStoreRenderer } from "./EntityStoreRenderer";
-import { serialize } from "@open-smc/serialization/src/serialize";
-import { log } from "@open-smc/utils/src/operators/log";
-import { withPreviousValue } from "@open-smc/utils/src/operators/withPreviousValue";
+import { expandArea } from "./renderControl";
 
 export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
     readonly subscription = new Subscription();
     readonly namespace: string;
+    public expandedArea: string;
 
     constructor(
         public readonly area: string,
         public readonly control$: Observable<T>,
         stackTrace: RendererStackTrace
     ) {
-        super(new Workspace(null, `[${area}] dataContext`), stackTrace);
+        super(stackTrace);
 
-        // this.subscription.add(
-        //     control$
-        //         .pipe(withPreviousValue())
-        //         .pipe(log(`sub ${area}`))
-        //         .subscribe()
-        // )
+        this.expandedArea = expandArea(area, this.stackTrace);
 
-        // this.subscription.add(() => console.log(`unsub "${area}" ${this.constructor.name}`))
+        this.dataContext = new Workspace(null);
 
         this.subscription.add(
             this.control$
@@ -62,21 +55,18 @@ export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
                 .subscribe()
         );
 
-        this.render();
+        this.renderAreaModel();
     }
 
-    protected render() {
+    protected renderAreaModel() {
         this.subscription.add(
             this.control$
-                // .pipe(withPreviousValue())
-                // .pipe(log(`sub ${this.area}`))
-                // .pipe(map(([previous, current]) => current))
                 .pipe(
                     effect(
                         control => {
                             if (control) {
                                 const areaModel =
-                                    this.getAreaModel(this.area, control);
+                                    this.getAreaModel(control);
 
                                 const subscription = new Subscription();
 
@@ -85,12 +75,6 @@ export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
 
                                 subscription.add(areaModelWorkspace.subscription);
                                 subscription.add(this.renderControlTo(areaModelWorkspace))
-
-                                // console.log('sub', areaModel);
-
-                                // subscription.add(
-                                // () => console.log('unsub', areaModel)
-                                // )
 
                                 return subscription;
                             }
@@ -101,14 +85,14 @@ export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
         );
     }
 
-    protected getAreaModel(area: string, control: T) {
+    protected getAreaModel(control: T) {
         const controlName = control.constructor.name;
         const props = bindingsToReferences(
             extractProps(control)
         );
 
         return {
-            area,
+            area: this.expandedArea,
             controlName,
             props
         }
@@ -119,9 +103,7 @@ export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
 
         subscription.add(
             areaModelWorkspace
-                // .pipe(log('areaModel'))    
                 .pipe(distinctUntilEqual())
-                // .pipe(map(serialize))
                 .subscribe(layoutAreaModel => {
                     appStore.dispatch(setArea(layoutAreaModel))
                 })
