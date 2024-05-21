@@ -1,21 +1,17 @@
 {
-  "$type": "Systemorph.Pivot.Models.PivotModel, Systemorph.Pivot",
   "columns": [
     {
-      "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+      "systemName": "Value",
+      "displayName": "Value",
       "coordinates": [
         "Value"
       ],
-      "systemName": "Value",
-      "displayName": "Value",
       "grouperName": "ColumnName"
     }
   ],
   "rows": [
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "D1"
         ],
@@ -24,14 +20,11 @@
         "grouperName": "DimD"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 3.0
+        "Value": 3
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "D1",
           "A1"
@@ -41,14 +34,11 @@
         "grouperName": "DimA0"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 3.0
+        "Value": 3
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "D1",
           "A1",
@@ -59,14 +49,11 @@
         "grouperName": "DimA1"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 3.0
+        "Value": 3
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "D1",
           "A1",
@@ -78,14 +65,11 @@
         "grouperName": "DimA2"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 1.0
+        "Value": 1
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "D1",
           "A1",
@@ -97,14 +81,11 @@
         "grouperName": "DimA2"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 2.0
+        "Value": 2
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "D2"
         ],
@@ -113,14 +94,11 @@
         "grouperName": "DimD"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 3.0
+        "Value": 3
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "D2",
           "A1"
@@ -130,14 +108,11 @@
         "grouperName": "DimA0"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 3.0
+        "Value": 3
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "D2",
           "A1",
@@ -148,14 +123,11 @@
         "grouperName": "DimA1"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 3.0
+        "Value": 3
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "D2",
           "A1",
@@ -167,14 +139,11 @@
         "grouperName": "DimA2"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 3.0
+        "Value": 3
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "D3"
         ],
@@ -183,14 +152,11 @@
         "grouperName": "DimD"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 4.0
+        "Value": 4
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "D3",
           "A1"
@@ -200,14 +166,11 @@
         "grouperName": "DimA0"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 4.0
+        "Value": 4
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "D3",
           "A1",
@@ -218,14 +181,11 @@
         "grouperName": "DimA1"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 4.0
+        "Value": 4
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "D3",
           "A1",
@@ -237,8 +197,7 @@
         "grouperName": "DimA2"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 4.0
+        "Value": 4
       }
     }
   ],

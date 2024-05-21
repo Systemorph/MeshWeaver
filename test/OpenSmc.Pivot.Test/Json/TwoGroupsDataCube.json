@@ -1,21 +1,17 @@
 {
-  "$type": "Systemorph.Pivot.Models.PivotModel, Systemorph.Pivot",
   "columns": [
     {
-      "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+      "systemName": "Value",
+      "displayName": "Value",
       "coordinates": [
         "Value"
       ],
-      "systemName": "Value",
-      "displayName": "Value",
       "grouperName": "ColumnName"
     }
   ],
   "rows": [
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "C"
         ],
@@ -24,14 +20,11 @@
         "grouperName": "LineOfBusiness"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": null
+        "Value": null
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "C",
           "B"
@@ -41,14 +34,11 @@
         "grouperName": "AmountType"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": null
+        "Value": null
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "C",
           "C"
@@ -58,14 +48,11 @@
         "grouperName": "AmountType"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": null
+        "Value": null
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "C",
           "E"
@@ -75,14 +62,11 @@
         "grouperName": "AmountType"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": null
+        "Value": null
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "C",
           "P"
@@ -92,14 +76,11 @@
         "grouperName": "AmountType"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": null
+        "Value": null
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "H"
         ],
@@ -108,14 +89,11 @@
         "grouperName": "LineOfBusiness"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": null
+        "Value": null
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "H",
           "B"
@@ -125,14 +103,11 @@
         "grouperName": "AmountType"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": null
+        "Value": null
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "H",
           "C"
@@ -142,14 +117,11 @@
         "grouperName": "AmountType"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": null
+        "Value": null
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "H",
           "E"
@@ -159,14 +131,11 @@
         "grouperName": "AmountType"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": null
+        "Value": null
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "H",
           "P"
@@ -176,14 +145,11 @@
         "grouperName": "AmountType"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": null
+        "Value": null
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "L"
         ],
@@ -192,14 +158,11 @@
         "grouperName": "LineOfBusiness"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": null
+        "Value": null
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "L",
           "B"
@@ -209,14 +172,11 @@
         "grouperName": "AmountType"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": null
+        "Value": null
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "L",
           "C"
@@ -226,14 +186,11 @@
         "grouperName": "AmountType"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": null
+        "Value": null
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "L",
           "E"
@@ -243,14 +200,11 @@
         "grouperName": "AmountType"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": null
+        "Value": null
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "L",
           "P"
@@ -260,14 +214,11 @@
         "grouperName": "AmountType"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": null
+        "Value": null
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "P"
         ],
@@ -276,14 +227,11 @@
         "grouperName": "LineOfBusiness"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": null
+        "Value": null
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "P",
           "B"
@@ -293,14 +241,11 @@
         "grouperName": "AmountType"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": null
+        "Value": null
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "P",
           "C"
@@ -310,14 +255,11 @@
         "grouperName": "AmountType"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": null
+        "Value": null
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "P",
           "E"
@@ -327,14 +269,11 @@
         "grouperName": "AmountType"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": null
+        "Value": null
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "P",
           "P"
@@ -344,8 +283,7 @@
         "grouperName": "AmountType"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": null
+        "Value": null
       }
     }
   ],

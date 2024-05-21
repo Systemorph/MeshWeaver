@@ -1,21 +1,17 @@
 {
-  "$type": "Systemorph.Pivot.Models.PivotModel, Systemorph.Pivot",
   "columns": [
     {
-      "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+      "systemName": "Value",
+      "displayName": "Value",
       "coordinates": [
         "Value"
       ],
-      "systemName": "Value",
-      "displayName": "Value",
       "grouperName": "ColumnName"
     }
   ],
   "rows": [
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "BoP"
         ],
@@ -24,14 +20,11 @@
         "grouperName": "PropertyName"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 0.0
+        "Value": 0
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "Delta"
         ],
@@ -40,14 +33,11 @@
         "grouperName": "PropertyName"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 0.0
+        "Value": 0
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EoP"
         ],
@@ -56,8 +46,7 @@
         "grouperName": "PropertyName"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 0.0
+        "Value": 0
       }
     }
   ],
