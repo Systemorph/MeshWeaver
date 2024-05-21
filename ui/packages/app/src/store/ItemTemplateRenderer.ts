@@ -11,7 +11,6 @@ import { renderControl } from "./renderControl";
 import { appStore, LayoutAreaModel } from "./appStore";
 import { Collection } from "@open-smc/data/src/contract/Collection";
 import { keys } from "lodash-es";
-import { WorkspaceSlice } from "@open-smc/data/src/WorkspaceSlice";
 import { Renderer } from "./Renderer";
 import { RendererStackTrace } from "./RendererStackTrace";
 import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
@@ -24,7 +23,11 @@ export class ItemTemplateRenderer extends ControlRenderer<ItemTemplateControl> {
     readonly view$: Observable<UiControl>;
     private state: Record<string, ItemTemplateItemRenderer> = {};
 
-    constructor(area: string, control$: Observable<ItemTemplateControl>, stackTrace: RendererStackTrace) {
+    constructor(
+        area: string, 
+        control$: Observable<ItemTemplateControl>, 
+        stackTrace: RendererStackTrace
+    ) {
         super(area, control$, stackTrace);
 
         this.subscription.add(
@@ -32,7 +35,7 @@ export class ItemTemplateRenderer extends ControlRenderer<ItemTemplateControl> {
                 .forEach(itemRenderer => itemRenderer.subscription.unsubscribe())
         );
 
-        this.data = new Workspace<Collection>(null, `${this.area}/data`);
+        this.data = new Workspace<Collection>(null);
 
         this.subscription.add(
             this.control$
@@ -62,8 +65,7 @@ export class ItemTemplateRenderer extends ControlRenderer<ItemTemplateControl> {
                     area,
                     controlName: "LayoutStackControl",
                     props: {}
-                },
-                "test"
+                }
             );
 
         this.subscription.add(
@@ -77,7 +79,7 @@ export class ItemTemplateRenderer extends ControlRenderer<ItemTemplateControl> {
                                     this.state[id] = new ItemTemplateItemRenderer(this, id, this.stackTrace);
                                 });
 
-                            const areas = data && keys(data).map(id => this.state[id].renderedArea);
+                            const areas = data && keys(data).map(id => this.state[id].expandedArea);
 
                             areaModelWorkspace.update(state => {
                                 state.props.areas = areas;
@@ -86,7 +88,7 @@ export class ItemTemplateRenderer extends ControlRenderer<ItemTemplateControl> {
                             keys(this.state).forEach(id => {
                                 if (!data?.[id]) {
                                     const itemRenderer = this.state[id];
-                                    appStore.dispatch(removeArea(itemRenderer.area));
+                                    appStore.dispatch(removeArea(itemRenderer.expandedArea));
                                     itemRenderer.subscription.unsubscribe();
                                     delete this.state[id];
                                 }
@@ -102,43 +104,42 @@ export class ItemTemplateRenderer extends ControlRenderer<ItemTemplateControl> {
         );
     }
 
-    protected render() {
+    protected renderAreaModel() {
     }
 }
 
 export class ItemTemplateItemRenderer extends Renderer {
     readonly subscription = new Subscription();
     readonly area: string;
-    readonly renderedArea: string;
+    readonly expandedArea: string;
 
     constructor(
         itemTemplateRenderer: ItemTemplateRenderer,
         itemId: string,
         stackTrace: RendererStackTrace
     ) {
-        super(
-            sliceByReference(
-                itemTemplateRenderer.data,
-                new PathReference(`/${itemId}`),
-                `[${itemTemplateRenderer.area}/${itemId}] dataContex`
-            ),
-            stackTrace
-        );
-
-        this.subscription.add(
-            (this.dataContext as WorkspaceSlice).subscription
-        );
+        super(stackTrace);
 
         this.area = `${itemTemplateRenderer.area}/${itemId}`;
 
+        this.dataContext = new Workspace(null);
+
+        const dataContext = sliceByReference(
+            itemTemplateRenderer.data,
+            new PathReference(`/${itemId}`)
+        );
+        
+        this.subscription.add(dataContext.subscription);
+        this.subscription.add(syncWorkspaces(dataContext, this.dataContext));
+
         const { area, subscription } =
             renderControl(
-                this.area,
+                "",
                 itemTemplateRenderer.view$,
                 this.stackTrace
-            )
+            );
 
-        this.renderedArea = area;
+        this.expandedArea = area;
 
         this.subscription.add(
             subscription

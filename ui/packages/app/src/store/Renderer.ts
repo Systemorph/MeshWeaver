@@ -3,10 +3,10 @@ import { first, identity, last } from "lodash-es";
 import { RendererStackTrace } from "./RendererStackTrace";
 
 export abstract class Renderer {
+    protected dataContext: Workspace;
     public readonly stackTrace: RendererStackTrace;
 
     protected constructor(
-        public readonly dataContext: Workspace,
         stackTrace: RendererStackTrace
     ) {
         this.stackTrace = stackTrace.add(this);
