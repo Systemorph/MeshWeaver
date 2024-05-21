@@ -150,7 +150,7 @@ export class SamplesApp extends Workspace<SamplesStore> {
                                                     const { icon, title } = pages[page];
 
                                                     return layoutViews.addView(
-                                                        null,
+                                                        `/SideMenu/${page}`,
                                                         new MenuItemControl().with({
                                                             title,
                                                             icon,
@@ -231,9 +231,12 @@ export class SamplesApp extends Workspace<SamplesStore> {
             .with({
                 skin: "HorizontalPanel",
                 areas: [
-                    layoutViews.addView(undefined, new HtmlControl().with({ data: "Total:" })),
                     layoutViews.addView(
-                        undefined,
+                        "/totalLabel", 
+                        new HtmlControl().with({ data: "Total:" })
+                    ),
+                    layoutViews.addView(
+                        "/totalCount",
                         this.pipe(
                             map(
                                 state =>
@@ -250,14 +253,14 @@ export class SamplesApp extends Workspace<SamplesStore> {
                 skin: "HorizontalPanel",
                 areas: [
                     layoutViews.addView(
-                        null,
+                        "/newTodoName",
                         new TextBoxControl()
                             .with({
                                 data: new Binding("$.viewBag.newTodo")
                             })
                     ),
                     layoutViews.addView(
-                        null,
+                        "/AddButton",
                         new MenuItemControl()
                             .with({
                                 title: "Add todo",
@@ -268,7 +271,7 @@ export class SamplesApp extends Workspace<SamplesStore> {
                             })
                     ),
                     layoutViews.addView(
-                        null,
+                        "/todosCount",
                         todosCount
                     )
                 ]

@@ -22,7 +22,10 @@ export class AreaCollectionRenderer extends Renderer {
 
         this.subscription.add(() => {
             values(this.state)
-                .forEach(result => result.subscription.unsubscribe());
+                .forEach(result => {
+                    result.subscription.unsubscribe();
+                    appStore.dispatch(removeArea(result.area));
+                });
         })
     }
 
@@ -52,7 +55,7 @@ export class AreaCollectionRenderer extends Renderer {
                     references => {
                         keys(this.state).forEach(id => {
                             if (!references?.find(reference => reference.id === id)) {
-                                const {area, subscription} = this.state[id];
+                                const { area, subscription } = this.state[id];
                                 appStore.dispatch(removeArea(area));
                                 subscription.unsubscribe();
                                 delete this.state[id];

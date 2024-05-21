@@ -24,15 +24,19 @@ export class ItemTemplateRenderer extends ControlRenderer<ItemTemplateControl> {
     private state: Record<string, ItemTemplateItemRenderer> = {};
 
     constructor(
-        area: string, 
-        control$: Observable<ItemTemplateControl>, 
+        area: string,
+        control$: Observable<ItemTemplateControl>,
         stackTrace: RendererStackTrace
     ) {
         super(area, control$, stackTrace);
 
         this.subscription.add(
-            () => values((this.state))
-                .forEach(itemRenderer => itemRenderer.subscription.unsubscribe())
+            () =>
+                values((this.state))
+                    .forEach(itemRenderer => {
+                        itemRenderer.subscription.unsubscribe();
+                        appStore.dispatch(removeArea(itemRenderer.expandedArea));
+                    })
         );
 
         this.data = new Workspace<Collection>(null);
@@ -128,7 +132,7 @@ export class ItemTemplateItemRenderer extends Renderer {
             itemTemplateRenderer.data,
             new PathReference(`/${itemId}`)
         );
-        
+
         this.subscription.add(dataContext.subscription);
         this.subscription.add(syncWorkspaces(dataContext, this.dataContext));
 
