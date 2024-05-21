@@ -14,7 +14,7 @@ import { keys } from "lodash-es";
 import { Renderer } from "./Renderer";
 import { RendererStackTrace } from "./RendererStackTrace";
 import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
-import { removeArea } from "./appReducer";
+import { removeAreaActionCreator } from "./appReducer";
 import { values } from "lodash";
 import { LayoutStackView } from "../controls/LayoutStackControl";
 
@@ -35,7 +35,7 @@ export class ItemTemplateRenderer extends ControlRenderer<ItemTemplateControl> {
                 values((this.state))
                     .forEach(itemRenderer => {
                         itemRenderer.subscription.unsubscribe();
-                        appStore.dispatch(removeArea(itemRenderer.expandedArea));
+                        appStore.dispatch(removeAreaActionCreator(itemRenderer.expandedArea));
                     })
         );
 
@@ -92,7 +92,7 @@ export class ItemTemplateRenderer extends ControlRenderer<ItemTemplateControl> {
                             keys(this.state).forEach(id => {
                                 if (!data?.[id]) {
                                     const itemRenderer = this.state[id];
-                                    appStore.dispatch(removeArea(itemRenderer.expandedArea));
+                                    appStore.dispatch(removeAreaActionCreator(itemRenderer.expandedArea));
                                     itemRenderer.subscription.unsubscribe();
                                     delete this.state[id];
                                 }

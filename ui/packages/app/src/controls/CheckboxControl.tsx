@@ -6,7 +6,7 @@ import classNames from "classnames";
 import { v4 as uuid } from "uuid";
 import { ControlView } from "../ControlDef";
 import { useAppDispatch } from "../store/hooks";
-import { updateAreaActionCreator } from "../store/appReducer";
+import { updateStore } from "@open-smc/data/src/updateStoreReducer";
 
 export interface CheckboxView extends ControlView {
     data?: boolean;
@@ -28,12 +28,13 @@ export default function CheckboxControl({id, data, label, isReadonly}: CheckboxV
                 disabled={isReadonly}
                 checked={data}
                 onChange={(event: any) => {
-                    appDispatch(updateAreaActionCreator({
-                        area,
-                        props: {
-                            data: event.target.checked
-                        }
-                    }))
+                    appDispatch(
+                        updateStore(
+                            state => {
+                                state.areas[area].props.data = event.target.checked
+                            }
+                        )
+                    )
                 }}
             />
             {label && <span>{label}</span>}

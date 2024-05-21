@@ -8,7 +8,7 @@ export type AppState = {
     areas: Record<string, LayoutAreaModel>;
 }
 
-export type LayoutAreaModel<T extends ControlView = unknown> = {
+export type LayoutAreaModel<T extends ControlView = ControlView> = {
     area: string;
     controlName: string;
     props: T

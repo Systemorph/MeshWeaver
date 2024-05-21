@@ -2,7 +2,7 @@ import { distinctUntilChanged, map, Subscription } from "rxjs";
 import { EntityStore } from "@open-smc/data/src/contract/EntityStore";
 import { sliceByPath } from "@open-smc/data/src/sliceByPath";
 import { selectByPath } from "@open-smc/data/src/operators/selectByPath";
-import { setRoot } from "./appReducer";
+import { setRootActionCreator } from "./appReducer";
 import { appMessage$, appStore } from "./appStore";
 import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl";
 import { EntityReference } from "@open-smc/data/src/contract/EntityReference";
@@ -58,7 +58,7 @@ export class EntityStoreRenderer extends Renderer {
             rootArea$
                 .subscribe(rootArea => {
                     if (rootArea) {
-                        appStore.dispatch(setRoot(rootArea));
+                        appStore.dispatch(setRootActionCreator(rootArea));
                     }
                 })
         );

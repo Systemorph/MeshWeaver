@@ -11,7 +11,7 @@ import { MenuItemControl } from "@open-smc/layout/src/contract/controls/MenuItem
 import { combineLatest, distinctUntilChanged, filter, map, Subscription, switchMap, tap } from "rxjs";
 import { LayoutViews, uiControlType } from "./LayoutViews";
 import { messageOfType } from "@open-smc/messaging/src/operators/messageOfType";
-import { keyBy, keys } from "lodash-es";
+import { keyBy, keys, values } from "lodash-es";
 import { pathToUpdateAction } from "@open-smc/data/src/operators/pathToUpdateAction";
 import { MessageHub } from "@open-smc/messaging/src/MessageHub";
 import { TextBoxControl } from '@open-smc/layout/src/contract/controls/TextBoxControl';
@@ -34,7 +34,7 @@ function getState(reference: LayoutAreaReference) {
                 'id'
             ),
             viewBag: {
-                newTodo: "New task"
+                newTodo: ""
             },
         }
     }
@@ -44,23 +44,21 @@ export type SamplesStore = ReturnType<typeof getState>;
 
 export class SamplesApp extends Workspace<SamplesStore> {
     subscription = new Subscription();
+    layouts: Record<string, LayoutViews>;
 
     appState = new Workspace({
         pages: {
             home: {
                 icon: "sm sm-home",
                 title: "home",
-                layout: this.createHomeLayout(),
             },
             todos: {
                 icon: "sm sm-check",
                 title: "Todos",
-                layout: this.createTodosLayout()
             },
             multiselect: {
                 icon: "sm sm-slice",
                 title: "Multiselect",
-                layout: this.createMultiselectLayout()
             },
         },
         page: "home"
@@ -71,6 +69,12 @@ export class SamplesApp extends Workspace<SamplesStore> {
 
         this.update(() => getState(reference));
 
+        this.layouts = {
+            home: this.createHomeLayout(),
+            todos: this.createTodosLayout(),
+            multiselect: this.createMultiselectLayout()
+        }
+
         const mainLayout = this.createLayout();
 
         this.subscription.add(
@@ -80,7 +84,7 @@ export class SamplesApp extends Workspace<SamplesStore> {
         const pageLayout = this.appState
             .pipe(
                 switchMap(
-                    state => state.pages[state.page].layout
+                    state => this.layouts[state.page]
                 )
             );
 
@@ -88,7 +92,6 @@ export class SamplesApp extends Workspace<SamplesStore> {
             combineLatest([mainLayout, pageLayout])
                 .pipe(
                     map(([main, page]) => ({ ...main, ...page })),
-                    // tap(value => console.log(value)),
                     map(pathToUpdateAction(`/collections/${uiControlType}`))
                 )
                 .subscribe(this)
@@ -106,9 +109,15 @@ export class SamplesApp extends Workspace<SamplesStore> {
                     if (action === "addTodo") {
                         const { collections } = this.getState();
                         const name = collections.viewBag.newTodo;
-                        const id = v4().substring(0, 2);
-                        const newTodo = { id, name, completed: false }
-                        this.update(state => { state.collections.todos[id] = newTodo });
+                        if (name) {
+                            const id = v4().substring(0, 2);
+                            const newTodo = { id, name, completed: false }
+                            this.update(state => {
+                                const newTodos = values(state.collections.todos).concat(newTodo);
+                                state.collections.todos = keyBy(newTodos, 'id');
+                                state.collections.viewBag.newTodo = "";
+                            });
+                        }
                     }
                     if (action === "nav") {
                         this.appState.update(state => { state.page = id });
@@ -232,7 +241,7 @@ export class SamplesApp extends Workspace<SamplesStore> {
                 skin: "HorizontalPanel",
                 areas: [
                     layoutViews.addView(
-                        "/totalLabel", 
+                        "/totalLabel",
                         new HtmlControl().with({ data: "Total:" })
                     ),
                     layoutViews.addView(
@@ -241,7 +250,9 @@ export class SamplesApp extends Workspace<SamplesStore> {
                             map(
                                 state =>
                                     new HtmlControl()
-                                        .with({ data: keys(state.collections.todos)?.length })
+                                        .with({ 
+                                            data: keys(state.collections.todos)?.length 
+                                        })
                             )
                         )
                     )
@@ -256,6 +267,7 @@ export class SamplesApp extends Workspace<SamplesStore> {
                         "/newTodoName",
                         new TextBoxControl()
                             .with({
+                                placeholder: "New todo",
                                 data: new Binding("$.viewBag.newTodo")
                             })
                     ),
@@ -271,7 +283,7 @@ export class SamplesApp extends Workspace<SamplesStore> {
                             })
                     ),
                     layoutViews.addView(
-                        "/todosCount",
+                        "/todosTotal",
                         todosCount
                     )
                 ]
