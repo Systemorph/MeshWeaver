@@ -19,7 +19,6 @@ public static class BenchmarkUtils
     )
     {
         options.WriteIndented = true;
-        fileName = $"{fileName}.json";
         var modelSerialized = JsonSerializer.Serialize(model, model.GetType(), options);
         var filePath = Path.Combine(@"..\..\..\Json", fileName);
 #if REGENERATE
