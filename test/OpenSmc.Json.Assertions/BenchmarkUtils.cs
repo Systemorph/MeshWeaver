@@ -12,25 +12,18 @@ public static class BenchmarkUtils
         return File.WriteAllTextAsync(fileName, serialized);
     }
 
-    public static async Task JsonShouldMatch(this object model, string fileName)
+    public static async Task JsonShouldMatch(
+        this object model,
+        JsonSerializerOptions options,
+        string fileName
+    )
     {
+        options.WriteIndented = true;
         fileName = $"{fileName}.json";
-        var modelSerialized = JsonSerializer.Serialize(
-            model,
-            model.GetType(),
-            new JsonSerializerOptions { WriteIndented = true }
-        );
+        var modelSerialized = JsonSerializer.Serialize(model, model.GetType(), options);
         var filePath = Path.Combine(@"..\..\..\Json", fileName);
 #if REGENERATE
-        var benchmark = JsonSerializer.Serialize(
-            model,
-            model.GetType(),
-            new JsonSerializerOptions
-            {
-                WriteIndented = true,
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-            }
-        );
+        var benchmark = JsonSerializer.Serialize(model, model.GetType(), options);
         await BenchmarkUtils.WriteBenchmarkAsync(filePath, benchmark);
 #else
         var benchmark = await File.ReadAllTextAsync(filePath);

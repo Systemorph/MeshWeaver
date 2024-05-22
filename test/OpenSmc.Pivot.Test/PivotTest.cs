@@ -1,4 +1,5 @@
-﻿using FluentAssertions;
+﻿using System.Text.Json;
+using FluentAssertions;
 using OpenSmc.Arithmetics;
 using OpenSmc.Collections;
 using OpenSmc.Data;
@@ -72,6 +73,8 @@ public class PivotTest : HubTestBase
             );
     }
 
+    JsonSerializerOptions Options => GetHost().JsonSerializerOptions;
+
     private async Task<WorkspaceState> GetStateAsync()
     {
         var workspace = GetHost().GetWorkspace();
@@ -92,7 +95,7 @@ public class PivotTest : HubTestBase
         var pivotBuilder = builder(initial);
 
         var model = GetModel(pivotBuilder);
-        await model.JsonShouldMatch(fileName);
+        await model.JsonShouldMatch(Options, fileName);
     }
 
     [Theory]
@@ -109,7 +112,24 @@ public class PivotTest : HubTestBase
         var pivotBuilder = builder(initial);
 
         var model = GetModel(pivotBuilder);
-        await model.JsonShouldMatch(fileName);
+        await model.JsonShouldMatch(Options, fileName);
+    }
+
+    [Fact]
+    public async Task Debug()
+    {
+        var state = await GetStateAsync();
+        var data = CashflowFactory.GenerateEquallyWeightedAllPopulated();
+        var initial = PivotFactory.ForObjects(data).WithState(state);
+
+        var pivotBuilder = initial
+            .WithAggregation(a => a.Count())
+            .GroupColumnsBy(y => y.LineOfBusiness)
+            .GroupRowsBy(y => y.AmountType);
+
+        var model = GetModel(pivotBuilder);
+        var fileName = "GroupedByRowsAndByColumnsCount";
+        await model.JsonShouldMatch(Options, fileName);
     }
 
     [Theory]
@@ -1099,7 +1119,7 @@ public class PivotTest : HubTestBase
         var pivotBuilder = builder(initial);
 
         var model = GetModel(pivotBuilder);
-        await model.JsonShouldMatch(fileName);
+        await model.JsonShouldMatch(Options, fileName);
     }
 
     private async Task ExecuteDataCubeCountTest<TElement>(
@@ -1116,7 +1136,7 @@ public class PivotTest : HubTestBase
         var pivotBuilder = builder(initial);
 
         var model = GetModel(pivotBuilder);
-        await model.JsonShouldMatch(fileName);
+        await model.JsonShouldMatch(Options, fileName);
     }
 
     private async Task ExecuteDataCubeAverageTest<TElement>(
@@ -1133,7 +1153,7 @@ public class PivotTest : HubTestBase
         var pivotBuilder = builder(initial);
 
         var model = GetModel(pivotBuilder);
-        await model.JsonShouldMatch(fileName);
+        await model.JsonShouldMatch(Options, fileName);
     }
 
     protected virtual object GetModel<T, TIntermediate, TAggregate>(
