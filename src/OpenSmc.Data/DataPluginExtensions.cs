@@ -50,7 +50,14 @@ public static class DataPluginExtensions
                 typeof(CollectionsReference),
                 typeof(WorkspaceStoreReference),
                 typeof(JsonPathReference),
-                typeof(JsonPatch)
+                typeof(JsonPatch),
+                typeof(DataChangedEvent),
+                typeof(UpdateDataRequest),
+                typeof(DeleteDataRequest),
+                typeof(PatchChangeRequest),
+                typeof(DataChangeResponse),
+                typeof(SubscribeRequest),
+                typeof(UnsubscribeDataRequest)
             )
             .AddPlugin<DataPlugin>();
 

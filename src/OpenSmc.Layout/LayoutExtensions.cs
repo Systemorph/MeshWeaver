@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Layout.Composition;
+using OpenSmc.Layout.DataBinding;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
@@ -49,7 +50,7 @@ public static class LayoutExtensions
                     .Assembly.GetTypes()
                     .Where(t => typeof(IUiControl).IsAssignableFrom(t) && !t.IsAbstract)
             )
-            .WithTypes(typeof(MessageAndAddress), typeof(LayoutAreaReference));
+            .WithTypes(typeof(MessageAndAddress), typeof(LayoutAreaReference), typeof(Binding));
 
     public static IObservable<object> GetControl(
         this IChangeStream<EntityStore> changeItems,
