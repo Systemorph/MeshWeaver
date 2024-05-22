@@ -6,7 +6,8 @@
       "coordinates": [
         "Value"
       ],
-      "grouperName": "ColumnName"
+      "grouperName": "ColumnName",
+      "$type": "OpenSmc.Pivot.Models.Column"
     }
   ],
   "rows": [
@@ -17,9 +18,10 @@
         ],
         "systemName": "2021",
         "displayName": "2021",
-        "grouperName": "Year"
+        "grouperName": "Year",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
-      "data": null
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -29,11 +31,13 @@
         ],
         "systemName": "2021.BoP",
         "displayName": "Beginning of Period",
-        "grouperName": "PropertyName"
+        "grouperName": "PropertyName",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 4
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -43,11 +47,13 @@
         ],
         "systemName": "2021.Delta",
         "displayName": "Delta",
-        "grouperName": "PropertyName"
+        "grouperName": "PropertyName",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 4
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -57,12 +63,15 @@
         ],
         "systemName": "2021.EoP",
         "displayName": "End of Period",
-        "grouperName": "PropertyName"
+        "grouperName": "PropertyName",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 4
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     }
   ],
-  "hasRowGrouping": true
+  "hasRowGrouping": true,
+  "$type": "OpenSmc.Pivot.Models.PivotModel"
 }

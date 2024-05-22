@@ -10,7 +10,7 @@
             "Value"
           ],
           "grouperName": "ColumnName",
-          "$type": "OpenSmc.Pivot.Models.Column, OpenSmc.Pivot, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+          "$type": "OpenSmc.Pivot.Models.Column"
         }
       ],
       "systemName": "C",
@@ -19,7 +19,7 @@
         "C"
       ],
       "grouperName": "LineOfBusiness",
-      "$type": "OpenSmc.Pivot.Models.ColumnGroup, OpenSmc.Pivot, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+      "$type": "OpenSmc.Pivot.Models.ColumnGroup"
     },
     {
       "children": [
@@ -31,7 +31,7 @@
             "Value"
           ],
           "grouperName": "ColumnName",
-          "$type": "OpenSmc.Pivot.Models.Column, OpenSmc.Pivot, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+          "$type": "OpenSmc.Pivot.Models.Column"
         }
       ],
       "systemName": "H",
@@ -40,7 +40,7 @@
         "H"
       ],
       "grouperName": "LineOfBusiness",
-      "$type": "OpenSmc.Pivot.Models.ColumnGroup, OpenSmc.Pivot, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+      "$type": "OpenSmc.Pivot.Models.ColumnGroup"
     },
     {
       "children": [
@@ -52,7 +52,7 @@
             "Value"
           ],
           "grouperName": "ColumnName",
-          "$type": "OpenSmc.Pivot.Models.Column, OpenSmc.Pivot, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+          "$type": "OpenSmc.Pivot.Models.Column"
         }
       ],
       "systemName": "L",
@@ -61,7 +61,7 @@
         "L"
       ],
       "grouperName": "LineOfBusiness",
-      "$type": "OpenSmc.Pivot.Models.ColumnGroup, OpenSmc.Pivot, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+      "$type": "OpenSmc.Pivot.Models.ColumnGroup"
     },
     {
       "children": [
@@ -73,7 +73,7 @@
             "Value"
           ],
           "grouperName": "ColumnName",
-          "$type": "OpenSmc.Pivot.Models.Column, OpenSmc.Pivot, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+          "$type": "OpenSmc.Pivot.Models.Column"
         }
       ],
       "systemName": "P",
@@ -82,7 +82,7 @@
         "P"
       ],
       "grouperName": "LineOfBusiness",
-      "$type": "OpenSmc.Pivot.Models.ColumnGroup, OpenSmc.Pivot, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+      "$type": "OpenSmc.Pivot.Models.ColumnGroup"
     }
   ],
   "rows": [
@@ -94,28 +94,23 @@
         "systemName": "E",
         "displayName": "Expenses",
         "grouperName": "AmountType",
-        "$type": "OpenSmc.Pivot.Models.RowGroup, OpenSmc.Pivot, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "C": {
-          "Value": 96,
-          "$type": "System.Collections.Generic.Dictionary\u00602[[System.String, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e"
+          "Value": 96
         },
         "H": {
-          "Value": 96,
-          "$type": "System.Collections.Generic.Dictionary\u00602[[System.String, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e"
+          "Value": 96
         },
         "L": {
-          "Value": 96,
-          "$type": "System.Collections.Generic.Dictionary\u00602[[System.String, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e"
+          "Value": 96
         },
         "P": {
-          "Value": 96,
-          "$type": "System.Collections.Generic.Dictionary\u00602[[System.String, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e"
-        },
-        "$type": "System.Collections.Generic.Dictionary\u00602[[System.String, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e"
+          "Value": 96
+        }
       },
-      "$type": "OpenSmc.Pivot.Models.Row, OpenSmc.Pivot, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -125,28 +120,23 @@
         "systemName": "P",
         "displayName": "Premium",
         "grouperName": "AmountType",
-        "$type": "OpenSmc.Pivot.Models.RowGroup, OpenSmc.Pivot, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "C": {
-          "Value": 96,
-          "$type": "System.Collections.Generic.Dictionary\u00602[[System.String, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e"
+          "Value": 96
         },
         "H": {
-          "Value": 96,
-          "$type": "System.Collections.Generic.Dictionary\u00602[[System.String, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e"
+          "Value": 96
         },
         "L": {
-          "Value": 96,
-          "$type": "System.Collections.Generic.Dictionary\u00602[[System.String, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e"
+          "Value": 96
         },
         "P": {
-          "Value": 96,
-          "$type": "System.Collections.Generic.Dictionary\u00602[[System.String, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e"
-        },
-        "$type": "System.Collections.Generic.Dictionary\u00602[[System.String, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e"
+          "Value": 96
+        }
       },
-      "$type": "OpenSmc.Pivot.Models.Row, OpenSmc.Pivot, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -156,28 +146,23 @@
         "systemName": "C",
         "displayName": "Cost",
         "grouperName": "AmountType",
-        "$type": "OpenSmc.Pivot.Models.RowGroup, OpenSmc.Pivot, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "C": {
-          "Value": 96,
-          "$type": "System.Collections.Generic.Dictionary\u00602[[System.String, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e"
+          "Value": 96
         },
         "H": {
-          "Value": 96,
-          "$type": "System.Collections.Generic.Dictionary\u00602[[System.String, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e"
+          "Value": 96
         },
         "L": {
-          "Value": 96,
-          "$type": "System.Collections.Generic.Dictionary\u00602[[System.String, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e"
+          "Value": 96
         },
         "P": {
-          "Value": 96,
-          "$type": "System.Collections.Generic.Dictionary\u00602[[System.String, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e"
-        },
-        "$type": "System.Collections.Generic.Dictionary\u00602[[System.String, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e"
+          "Value": 96
+        }
       },
-      "$type": "OpenSmc.Pivot.Models.Row, OpenSmc.Pivot, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -187,30 +172,25 @@
         "systemName": "B",
         "displayName": "Benefit",
         "grouperName": "AmountType",
-        "$type": "OpenSmc.Pivot.Models.RowGroup, OpenSmc.Pivot, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "C": {
-          "Value": 96,
-          "$type": "System.Collections.Generic.Dictionary\u00602[[System.String, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e"
+          "Value": 96
         },
         "H": {
-          "Value": 96,
-          "$type": "System.Collections.Generic.Dictionary\u00602[[System.String, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e"
+          "Value": 96
         },
         "L": {
-          "Value": 96,
-          "$type": "System.Collections.Generic.Dictionary\u00602[[System.String, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e"
+          "Value": 96
         },
         "P": {
-          "Value": 96,
-          "$type": "System.Collections.Generic.Dictionary\u00602[[System.String, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e"
-        },
-        "$type": "System.Collections.Generic.Dictionary\u00602[[System.String, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e"
+          "Value": 96
+        }
       },
-      "$type": "OpenSmc.Pivot.Models.Row, OpenSmc.Pivot, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+      "$type": "OpenSmc.Pivot.Models.Row"
     }
   ],
   "hasRowGrouping": true,
-  "$type": "OpenSmc.Pivot.Models.PivotModel, OpenSmc.Pivot, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+  "$type": "OpenSmc.Pivot.Models.PivotModel"
 }

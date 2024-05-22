@@ -6,7 +6,8 @@
       "coordinates": [
         "BoP"
       ],
-      "grouperName": "ColumnName"
+      "grouperName": "ColumnName",
+      "$type": "OpenSmc.Pivot.Models.Column"
     },
     {
       "systemName": "Delta",
@@ -14,7 +15,8 @@
       "coordinates": [
         "Delta"
       ],
-      "grouperName": "ColumnName"
+      "grouperName": "ColumnName",
+      "$type": "OpenSmc.Pivot.Models.Column"
     },
     {
       "systemName": "EoP",
@@ -22,7 +24,8 @@
       "coordinates": [
         "EoP"
       ],
-      "grouperName": "ColumnName"
+      "grouperName": "ColumnName",
+      "$type": "OpenSmc.Pivot.Models.Column"
     }
   ],
   "rows": [
@@ -33,14 +36,17 @@
         ],
         "systemName": "TopGroup",
         "displayName": "Total",
-        "grouperName": "Total"
+        "grouperName": "Total",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "BoP": 4,
         "Delta": 4,
         "EoP": 4
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     }
   ],
-  "hasRowGrouping": true
+  "hasRowGrouping": true,
+  "$type": "OpenSmc.Pivot.Models.PivotModel"
 }

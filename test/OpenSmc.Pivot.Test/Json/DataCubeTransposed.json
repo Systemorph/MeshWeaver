@@ -6,7 +6,8 @@
       "coordinates": [
         "Value"
       ],
-      "grouperName": "ColumnName"
+      "grouperName": "ColumnName",
+      "$type": "OpenSmc.Pivot.Models.Column"
     }
   ],
   "rows": [
@@ -17,9 +18,10 @@
         ],
         "systemName": "EUR",
         "displayName": "Euro",
-        "grouperName": "Currency"
+        "grouperName": "Currency",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
-      "data": null
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -29,11 +31,13 @@
         ],
         "systemName": "EUR.Value",
         "displayName": "Value",
-        "grouperName": "PropertyName"
+        "grouperName": "PropertyName",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 384
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -42,9 +46,10 @@
         ],
         "systemName": "RUB",
         "displayName": "Russian rouble",
-        "grouperName": "Currency"
+        "grouperName": "Currency",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
-      "data": null
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -54,11 +59,13 @@
         ],
         "systemName": "RUB.Value",
         "displayName": "Value",
-        "grouperName": "PropertyName"
+        "grouperName": "PropertyName",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 384
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -67,9 +74,10 @@
         ],
         "systemName": "CHF",
         "displayName": "Swiss Franc",
-        "grouperName": "Currency"
+        "grouperName": "Currency",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
-      "data": null
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -79,11 +87,13 @@
         ],
         "systemName": "CHF.Value",
         "displayName": "Value",
-        "grouperName": "PropertyName"
+        "grouperName": "PropertyName",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 384
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -92,9 +102,10 @@
         ],
         "systemName": "USD",
         "displayName": "US Dollar",
-        "grouperName": "Currency"
+        "grouperName": "Currency",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
-      "data": null
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -104,12 +115,15 @@
         ],
         "systemName": "USD.Value",
         "displayName": "Value",
-        "grouperName": "PropertyName"
+        "grouperName": "PropertyName",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 384
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     }
   ],
-  "hasRowGrouping": true
+  "hasRowGrouping": true,
+  "$type": "OpenSmc.Pivot.Models.PivotModel"
 }

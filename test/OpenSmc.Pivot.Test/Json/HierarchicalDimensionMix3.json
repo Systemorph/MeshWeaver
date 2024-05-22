@@ -6,7 +6,8 @@
       "coordinates": [
         "Value"
       ],
-      "grouperName": "ColumnName"
+      "grouperName": "ColumnName",
+      "$type": "OpenSmc.Pivot.Models.Column"
     }
   ],
   "rows": [
@@ -17,11 +18,13 @@
         ],
         "systemName": "D1",
         "displayName": "D1",
-        "grouperName": "DimD"
+        "grouperName": "DimD",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 3
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -31,11 +34,13 @@
         ],
         "systemName": "D1.A1",
         "displayName": "A 1",
-        "grouperName": "DimA0"
+        "grouperName": "DimA0",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 3
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -46,11 +51,13 @@
         ],
         "systemName": "D1.A1.A11",
         "displayName": "A 11",
-        "grouperName": "DimA1"
+        "grouperName": "DimA1",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 3
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -62,11 +69,13 @@
         ],
         "systemName": "D1.A1.A11.A111",
         "displayName": "A 111",
-        "grouperName": "DimA2"
+        "grouperName": "DimA2",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 1
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -78,11 +87,13 @@
         ],
         "systemName": "D1.A1.A11.A112",
         "displayName": "A 112",
-        "grouperName": "DimA2"
+        "grouperName": "DimA2",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 2
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -91,11 +102,13 @@
         ],
         "systemName": "D2",
         "displayName": "D2",
-        "grouperName": "DimD"
+        "grouperName": "DimD",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 3
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -105,11 +118,13 @@
         ],
         "systemName": "D2.A1",
         "displayName": "A 1",
-        "grouperName": "DimA0"
+        "grouperName": "DimA0",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 3
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -120,11 +135,13 @@
         ],
         "systemName": "D2.A1.A11",
         "displayName": "A 11",
-        "grouperName": "DimA1"
+        "grouperName": "DimA1",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 3
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -136,11 +153,13 @@
         ],
         "systemName": "D2.A1.A11.A111",
         "displayName": "A 111",
-        "grouperName": "DimA2"
+        "grouperName": "DimA2",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 3
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -149,11 +168,13 @@
         ],
         "systemName": "D3",
         "displayName": "D3",
-        "grouperName": "DimD"
+        "grouperName": "DimD",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 4
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -163,11 +184,13 @@
         ],
         "systemName": "D3.A1",
         "displayName": "A 1",
-        "grouperName": "DimA0"
+        "grouperName": "DimA0",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 4
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -178,11 +201,13 @@
         ],
         "systemName": "D3.A1.A11",
         "displayName": "A 11",
-        "grouperName": "DimA1"
+        "grouperName": "DimA1",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 4
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -194,12 +219,15 @@
         ],
         "systemName": "D3.A1.A11.A112",
         "displayName": "A 112",
-        "grouperName": "DimA2"
+        "grouperName": "DimA2",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 4
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     }
   ],
-  "hasRowGrouping": true
+  "hasRowGrouping": true,
+  "$type": "OpenSmc.Pivot.Models.PivotModel"
 }

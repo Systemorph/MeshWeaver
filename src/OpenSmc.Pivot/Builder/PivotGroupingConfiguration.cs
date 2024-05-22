@@ -23,8 +23,7 @@ public abstract record PivotGroupingConfiguration<T, TGroup>
         // TODO V10: this should be a new Column(){ Field = "", HeaderName = "Name", ValueGetter = "node.id"}  (2021/10/05, Ekaterina Mishina)
         if (typeof(INamed).IsAssignableFrom(typeof(T)))
         {
-            //TODO Roland Bürgi 2024-05-21: This should be taken from WorkspaceState and type sources
-            var keyFunction = KeyFunctionBuilder.GetKeyFunction(typeof(T));
+            var keyFunction = GetKeySelector();
             var grouper = Activator.CreateInstance(
                 typeof(NamedPivotGrouper<,>).MakeGenericType(typeof(T), typeof(TGroup)),
                 PivotConst.AutomaticEnumerationPivotGrouperName,
@@ -34,6 +33,13 @@ public abstract record PivotGroupingConfiguration<T, TGroup>
         }
 
         return new(new AutomaticEnumerationPivotGrouper<T, TGroup>());
+    }
+
+    private static Func<T, string> GetKeySelector()
+    {
+        //TODO Roland Bürgi 2024-05-21: This should be taken from WorkspaceState and type sources
+        var objSelector = KeyFunctionBuilder.GetKeyFunction(typeof(T));
+        return x => objSelector(x).ToString();
     }
 
     public PivotGroupingConfiguration<T, TGroup> GroupBy<TSelected>(

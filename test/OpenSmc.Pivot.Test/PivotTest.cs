@@ -115,23 +115,6 @@ public class PivotTest : HubTestBase
         await model.JsonShouldMatch(Options, fileName);
     }
 
-    [Fact]
-    public async Task Debug()
-    {
-        var state = await GetStateAsync();
-        var data = CashflowFactory.GenerateEquallyWeightedAllPopulated();
-        var initial = PivotFactory.ForObjects(data).WithState(state);
-
-        var pivotBuilder = initial
-            .WithAggregation(a => a.Count())
-            .GroupColumnsBy(y => y.LineOfBusiness)
-            .GroupRowsBy(y => y.AmountType);
-
-        var model = GetModel(pivotBuilder);
-        var fileName = "GroupedByRowsAndByColumnsCount";
-        await model.JsonShouldMatch(Options, fileName);
-    }
-
     [Theory]
     [MemberData(nameof(DataCubeScopeWithDimensionTestCases))]
     public async Task DataCubeScopeWithDimensionReports<TElement>(
