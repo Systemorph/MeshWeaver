@@ -7,11 +7,11 @@ namespace OpenSmc.Pivot.Grouping
     {
         private readonly Func<IEnumerable<T>, IEnumerable<IGrouping<TGroup, T>>> grouping;
 
-        protected readonly object Name;
+        protected readonly string Name;
 
         public DirectPivotGrouper(
             Func<IEnumerable<T>, IEnumerable<IGrouping<TGroup, T>>> grouping,
-            object name
+            string name
         )
         {
             this.grouping = grouping;

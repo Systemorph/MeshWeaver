@@ -1,6 +1,5 @@
 ﻿using System.Collections.Immutable;
 using System.Data;
-using OpenSmc.Collections;
 using OpenSmc.Data;
 using OpenSmc.DataCubes;
 using OpenSmc.Domain;
@@ -33,7 +32,6 @@ namespace OpenSmc.Pivot.Grouping
             IEnumerable<IGrouping<object, T>> groups
         )
         {
-            base.Order(groups);
             if (typeof(IOrdered).IsAssignableFrom(typeof(TDimension)))
                 return groups.OrderBy(g => g.Key == null).ThenBy(g => GetOrder(g.Key));
             return groups.OrderBy(g => g.Key == null).ThenBy(g => GetDisplayName(g.Key));
@@ -60,10 +58,10 @@ namespace OpenSmc.Pivot.Grouping
             var displayName = GetDisplayName(value);
             return new TGroup
             {
-                SystemName = value,
+                SystemName = value.ToString(),
                 DisplayName = displayName?.ToString(),
                 GrouperName = Id,
-                Coordinates = ImmutableList<object>.Empty.Add(value)
+                Coordinates = ImmutableList<string>.Empty.Add(value.ToString())
             };
         }
 

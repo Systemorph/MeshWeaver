@@ -1,19 +1,18 @@
 ﻿using System.Collections.Immutable;
-using OpenSmc.Data;
 using OpenSmc.Pivot.Models.Interfaces;
 
 namespace OpenSmc.Pivot.Grouping
 {
     public class SelectorPivotGrouper<T, TSelected, TGroup>(
         Func<T, int, TSelected> selector,
-        object id
+        string id
     ) : IPivotGrouper<T, TGroup>
         where TGroup : class, IGroup, new()
     {
         protected Func<T, int, TSelected> Selector { get; } = selector;
-        public object Id { get; } = id;
+        public string Id { get; } = id;
 
-        public SelectorPivotGrouper(Func<T, TSelected> selector, object id)
+        public SelectorPivotGrouper(Func<T, TSelected> selector, string id)
             : this((x, _) => selector.Invoke(x), id) { }
 
         public virtual IReadOnlyCollection<
@@ -68,7 +67,7 @@ namespace OpenSmc.Pivot.Grouping
                 DisplayName = systemName,
                 SystemName = systemName,
                 GrouperName = Id,
-                Coordinates = ImmutableList<object>.Empty.Add(systemName)
+                Coordinates = ImmutableList<string>.Empty.Add(systemName)
             };
         }
     }

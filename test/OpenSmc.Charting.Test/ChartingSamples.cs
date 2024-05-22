@@ -1,3 +1,4 @@
+﻿using System.Text.Json;
 using OpenSmc.Charting.Builders;
 using OpenSmc.Charting.Builders.DataSetBuilders;
 using OpenSmc.Charting.Enums;
@@ -10,6 +11,8 @@ public class ChartingSamples
 {
     private readonly double[] data1 = { -1.0, 4.0, 3.0, 2.0 };
     private readonly double[] data2 = { 4.0, 5.0, 6.0, 3.0 };
+
+    private JsonSerializerOptions Options => new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase};
 
     private readonly DateTime[] dates =
     {
@@ -37,7 +40,7 @@ public class ChartingSamples
             .WithTitle("Bar Chart")
             .ToChart();
 
-        await actual.JsonShouldMatch("Sample_BarChart.json");
+        await actual.JsonShouldMatch(Options,"Sample_BarChart.json");
     }
 
     [Fact]
@@ -52,7 +55,7 @@ public class ChartingSamples
             .WithTitle("Line Chart")
             .ToChart();
 
-        await actual.JsonShouldMatch("Sample_LineChart.json");
+        await actual.JsonShouldMatch(Options,"Sample_LineChart.json");
     }
 
     [Fact]
@@ -67,7 +70,7 @@ public class ChartingSamples
             .WithTitle("Line Chart")
             .ToChart();
 
-        await actual.JsonShouldMatch("Sample_MixedChart.json");
+        await actual.JsonShouldMatch(Options,"Sample_MixedChart.json");
     }
 
     [Fact]
@@ -88,7 +91,7 @@ public class ChartingSamples
             .WithTitle("TimeLine Chart", o => o.WithFontSize(20))
             .ToChart();
 
-        await actual.JsonShouldMatch("Sample_TimeLineChart.json");
+        await actual.JsonShouldMatch(Options,"Sample_TimeLineChart.json");
     }
 
     [Fact]
@@ -101,7 +104,7 @@ public class ChartingSamples
             .WithTitle("FloatingBar Chart")
             .ToChart();
 
-        await actual.JsonShouldMatch("Sample_FloatingBarChart.json");
+        await actual.JsonShouldMatch(Options,"Sample_FloatingBarChart.json");
     }
 
     [Fact]
@@ -117,7 +120,7 @@ public class ChartingSamples
             .WithColorPalette(Palettes.Brewer.DarkTwo8)
             .ToChart();
 
-        await actual.JsonShouldMatch("Sample_BubbleChart.json");
+        await actual.JsonShouldMatch(Options,"Sample_BubbleChart.json");
     }
 
     [Fact]
@@ -131,7 +134,7 @@ public class ChartingSamples
             .WithTitle("Pie Chart")
             .ToChart();
 
-        await actual.JsonShouldMatch("Sample_PieChart.json");
+        await actual.JsonShouldMatch(Options,"Sample_PieChart.json");
     }
 
     [Fact]
@@ -145,7 +148,7 @@ public class ChartingSamples
             .WithTitle("Doughnut Chart")
             .ToChart();
 
-        await actual.JsonShouldMatch("Sample_Doughnut.json");
+        await actual.JsonShouldMatch(Options,"Sample_Doughnut.json");
     }
 
     [Fact]
@@ -159,7 +162,7 @@ public class ChartingSamples
             .WithTitle("Polar Chart")
             .ToChart();
 
-        await actual.JsonShouldMatch("Sample_Polar.json");
+        await actual.JsonShouldMatch(Options,"Sample_Polar.json");
     }
 
     [Fact]
@@ -174,7 +177,7 @@ public class ChartingSamples
             .WithTitle("Radar Chart")
             .ToChart();
 
-        await actual.JsonShouldMatch("Sample_Radar.json");
+        await actual.JsonShouldMatch(Options,"Sample_Radar.json");
     }
 
     [Fact]
@@ -189,7 +192,7 @@ public class ChartingSamples
             .WithColorPalette(Palettes.Brewer.DarkTwo8)
             .ToChart();
 
-        await actual.JsonShouldMatch("Sample_Scatter.json");
+        await actual.JsonShouldMatch(Options,"Sample_Scatter.json");
     }
 
     [Fact]
@@ -197,7 +200,7 @@ public class ChartingSamples
     {
         var actual = ChartBuilder.Bar().WithData(data1).WithData(data2).WithData(x1).ToChart();
 
-        await actual.JsonShouldMatch("Sample_QuickDraw.json");
+        await actual.JsonShouldMatch(Options,"Sample_QuickDraw.json");
     }
 
     [Fact]
@@ -209,6 +212,6 @@ public class ChartingSamples
             .WithDataSet(b => b.WithData(data2).WithArea())
             .ToChart();
 
-        await actual.JsonShouldMatch("Sample_AreaChart.json");
+        await actual.JsonShouldMatch(Options,"Sample_AreaChart.json");
     }
 }

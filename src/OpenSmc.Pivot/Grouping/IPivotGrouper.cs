@@ -17,7 +17,7 @@ namespace OpenSmc.Pivot.Grouping
                 SystemName = "NullGroup",
                 DisplayName = " ",
                 GrouperName = "Null",
-                Coordinates = ImmutableList<object>.Empty.Add("NullGroup")
+                Coordinates = ImmutableList<string>.Empty.Add("NullGroup")
             };
         static readonly TGroup TopGroup =
             new()
@@ -25,7 +25,7 @@ namespace OpenSmc.Pivot.Grouping
                 SystemName = "TopGroup",
                 DisplayName = "Total",
                 GrouperName = "Total",
-                Coordinates = ImmutableList<object>.Empty.Add("TopGroup")
+                Coordinates = ImmutableList<string>.Empty.Add("TopGroup")
             };
         static readonly TGroup TotalGroup =
             new()
@@ -33,7 +33,7 @@ namespace OpenSmc.Pivot.Grouping
                 SystemName = "TotalGroup",
                 DisplayName = " ",
                 GrouperName = "Aggregate",
-                Coordinates = ImmutableList<object>.Empty.Add("TotalGroup")
+                Coordinates = ImmutableList<string>.Empty.Add("TotalGroup")
             };
     }
 }
