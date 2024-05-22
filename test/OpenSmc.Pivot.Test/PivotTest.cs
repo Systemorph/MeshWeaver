@@ -95,7 +95,7 @@ public class PivotTest : HubTestBase
         var pivotBuilder = builder(initial);
 
         var model = GetModel(pivotBuilder);
-        await model.JsonShouldMatch(Options, fileName);
+        await model.JsonShouldMatch(Options, $"{fileName}.json");
     }
 
     [Theory]
@@ -112,7 +112,7 @@ public class PivotTest : HubTestBase
         var pivotBuilder = builder(initial);
 
         var model = GetModel(pivotBuilder);
-        await model.JsonShouldMatch(Options, fileName);
+        await model.JsonShouldMatch(Options, $"{fileName}.json");
     }
 
     [Theory]
@@ -1102,7 +1102,7 @@ public class PivotTest : HubTestBase
         var pivotBuilder = builder(initial);
 
         var model = GetModel(pivotBuilder);
-        await model.JsonShouldMatch(Options, fileName);
+        await model.JsonShouldMatch(Options, $"{fileName}.json");
     }
 
     private async Task ExecuteDataCubeCountTest<TElement>(
@@ -1119,7 +1119,7 @@ public class PivotTest : HubTestBase
         var pivotBuilder = builder(initial);
 
         var model = GetModel(pivotBuilder);
-        await model.JsonShouldMatch(Options, fileName);
+        await model.JsonShouldMatch(Options, $"{fileName}.json");
     }
 
     private async Task ExecuteDataCubeAverageTest<TElement>(
@@ -1136,7 +1136,7 @@ public class PivotTest : HubTestBase
         var pivotBuilder = builder(initial);
 
         var model = GetModel(pivotBuilder);
-        await model.JsonShouldMatch(Options, fileName);
+        await model.JsonShouldMatch(Options, $"{fileName}.json");
     }
 
     protected virtual object GetModel<T, TIntermediate, TAggregate>(
