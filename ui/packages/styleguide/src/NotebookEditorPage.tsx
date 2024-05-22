@@ -6,7 +6,7 @@ import { last } from "lodash";
 import { PropsWithChildren, useMemo, useState } from "react";
 import { getOrAdd } from "@open-smc/utils/src/getOrAdd";
 import { ViewModelHub } from "@open-smc/sandbox/src/ViewModelHub";
-import { SetAreaRequest } from "@open-smc/application/src/application.contract";
+import { SetAreaRequest } from "@open-smc/application/src/contract/application.contract";
 
 import myNotebook1 from "./notebooks/myNotebook1.json";
 import { ProjectContextProvider } from "@open-smc/portal/src/features/project/projectStore/projectStore";

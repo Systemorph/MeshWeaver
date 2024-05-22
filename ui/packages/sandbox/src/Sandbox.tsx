@@ -3,7 +3,7 @@ import { MessageHubBase } from "@open-smc/application/src/messageHub/MessageHubB
 import { AddHub } from "@open-smc/application/src/messageHub/AddHub";
 import { ControlStarter } from "@open-smc/application/src/ControlStarter";
 import { ViewModelHub } from "./ViewModelHub";
-import { SetAreaRequest } from "@open-smc/application/src/application.contract";
+import { SetAreaRequest } from "@open-smc/application/src/contract/application.contract";
 import { ControlDef } from "@open-smc/application/src/ControlDef";
 import { layoutHubId } from "@open-smc/application/src/LayoutHub";
 import { NotificationProvider } from "@open-smc/application/src/notifications/NotificationProvider";

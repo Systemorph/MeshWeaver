@@ -9,7 +9,7 @@ import styles from "../features/notebook/element.module.scss";
 import { isElementInViewport } from "../shared/utils/helpers";
 import { formatNumber } from "@open-smc/utils/src/numbers";
 import { useSubscribeToElementStatusChanged } from "../features/notebook/documentStore/hooks/useSubscribeToElementStatusChanged";
-import { AreaChangedEvent } from "@open-smc/application/src/application.contract";
+import { AreaChangedEvent } from "@open-smc/application/src/contract/application.contract";
 import { ElementKind, EvaluationStatus } from "../app/notebookFormat";
 import {
     useElementsStore,

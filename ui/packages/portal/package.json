@@ -1,6 +1,6 @@
 {
   "name": "@open-smc/portal",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "devDependencies": {
     "@types/event-emitter": "^0.3.3",
     "@types/github-slugger": "^1.3.0",
@@ -14,15 +14,13 @@
     "@types/uuid": "^8.3.4",
     "@types/webpack-env": "^1.18.4",
     "monaco-editor-webpack-plugin": "^7.0.1",
-    "raw-loader": "^4.0.2",
-    "rimraf": "^3.0.2",
-    "typescript": "^4.8.4"
+    "raw-loader": "^4.0.2"
   },
   "dependencies": {
-    "@open-smc/application": "0.1.0",
-    "@open-smc/ui-kit": "0.1.0",
-    "@open-smc/store": "0.1.0",
-    "@open-smc/utils": "0.1.0",
+    "@open-smc/application": "0.0.0",
+    "@open-smc/ui-kit": "0.0.0",
+    "@open-smc/store": "0.0.0",
+    "@open-smc/utils": "0.0.0",
     "ag-grid-community": "^30.2.1",
     "ag-grid-enterprise": "^30.2.1",
     "ag-grid-react": "^30.2.1",
