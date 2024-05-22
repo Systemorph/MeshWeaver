@@ -1,0 +1,27 @@
+{
+  "data": {
+    "dataSets": [],
+    "labels": [
+      "1"
+    ]
+  },
+  "options": {
+    "plugins": {
+      "title": {
+        "display": true,
+        "font": {
+          "family": "Ov\u0435rpass",
+          "size": 22,
+          "weight": "600",
+          "lineHeight": "24px"
+        },
+        "text": "Empty Chart"
+      },
+      "colorSchemes": {
+        "scheme": {
+          "palette": "brewer.PastelOne9"
+        }
+      }
+    }
+  }
+}

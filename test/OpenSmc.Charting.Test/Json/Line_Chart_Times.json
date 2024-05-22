@@ -1,0 +1,52 @@
+{
+  "type": 5,
+  "data": {
+    "dataSets": [
+      {
+        "data": [
+          {
+            "x": "2019-09-18T00:00:00.0000000",
+            "y": 1
+          },
+          {
+            "x": "2019-10-09T00:00:00.0000000",
+            "y": 2
+          },
+          {
+            "x": "2019-09-23T00:00:00.0000000",
+            "y": 3
+          },
+          {
+            "x": "2019-11-10T00:00:00.0000000",
+            "y": 4
+          }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "scales": {
+      "x": {
+        "type": "time"
+      }
+    },
+    "plugins": {
+      "title": {
+        "display": true,
+        "position": 1,
+        "font": {
+          "family": "Ov\u0435rpass",
+          "size": 20,
+          "weight": "600",
+          "lineHeight": "24px"
+        },
+        "text": "Timed Chart"
+      },
+      "colorSchemes": {
+        "scheme": {
+          "palette": "brewer.PastelOne9"
+        }
+      }
+    }
+  }
+}

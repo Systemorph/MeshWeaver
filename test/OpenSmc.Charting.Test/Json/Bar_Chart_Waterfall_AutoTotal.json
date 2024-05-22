@@ -1,0 +1,334 @@
+{
+  "data": {
+    "dataSets": [
+      {
+        "backgroundColor": {
+          "red": 102,
+          "green": 183,
+          "blue": 255,
+          "alpha": 1
+        },
+        "data": [
+          {
+            "range": [
+              0,
+              1
+            ],
+            "label": "Jan",
+            "dataLabel": "1",
+            "dataLabelColor": "#66B7FF",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "range": [
+              1,
+              5
+            ],
+            "label": "Feb",
+            "dataLabel": "4",
+            "dataLabelColor": "#66B7FF",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Mar",
+            "dataLabel": "",
+            "dataLabelColor": "#66B7FF",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Apr",
+            "dataLabel": "",
+            "dataLabelColor": "#66B7FF",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "range": [
+              0,
+              8
+            ],
+            "label": "May",
+            "dataLabel": "8",
+            "dataLabelColor": "#66B7FF",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "range": [
+              8,
+              19
+            ],
+            "label": "June",
+            "dataLabel": "11",
+            "dataLabelColor": "#66B7FF",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Total",
+            "dataLabel": "",
+            "dataLabelColor": "#66B7FF",
+            "dataLabelAlignment": "end"
+          }
+        ],
+        "hoverBackgroundColor": {
+          "red": 102,
+          "green": 183,
+          "blue": 255,
+          "alpha": 1
+        },
+        "label": "Increments",
+        "parsing": {
+          "xAxisKey": "label",
+          "yAxisKey": "range"
+        }
+      },
+      {
+        "backgroundColor": {
+          "red": 245,
+          "green": 98,
+          "blue": 149,
+          "alpha": 1
+        },
+        "data": [
+          {
+            "label": "Jan",
+            "dataLabel": "",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Feb",
+            "dataLabel": "",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "range": [
+              2,
+              5
+            ],
+            "label": "Mar",
+            "dataLabel": "-3",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "range": [
+              0,
+              2
+            ],
+            "label": "Apr",
+            "dataLabel": "-2",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "May",
+            "dataLabel": "",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "June",
+            "dataLabel": "",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Total",
+            "dataLabel": "",
+            "dataLabelColor": "#F56295",
+            "dataLabelAlignment": "end"
+          }
+        ],
+        "hoverBackgroundColor": {
+          "red": 245,
+          "green": 98,
+          "blue": 149,
+          "alpha": 1
+        },
+        "label": "Decrements",
+        "parsing": {
+          "xAxisKey": "label",
+          "yAxisKey": "range"
+        }
+      },
+      {
+        "backgroundColor": {
+          "red": 166,
+          "green": 171,
+          "blue": 194,
+          "alpha": 1
+        },
+        "data": [
+          {
+            "label": "Jan",
+            "dataLabel": "",
+            "dataLabelColor": "#A6ABC2",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Feb",
+            "dataLabel": "",
+            "dataLabelColor": "#A6ABC2",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Mar",
+            "dataLabel": "",
+            "dataLabelColor": "#A6ABC2",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "Apr",
+            "dataLabel": "",
+            "dataLabelColor": "#A6ABC2",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "May",
+            "dataLabel": "",
+            "dataLabelColor": "#A6ABC2",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "label": "June",
+            "dataLabel": "",
+            "dataLabelColor": "#A6ABC2",
+            "dataLabelAlignment": "end"
+          },
+          {
+            "range": [
+              0,
+              19
+            ],
+            "label": "Total",
+            "dataLabel": "19",
+            "dataLabelColor": "#A6ABC2",
+            "dataLabelAlignment": "end"
+          }
+        ],
+        "hoverBackgroundColor": {
+          "red": 166,
+          "green": 171,
+          "blue": 194,
+          "alpha": 1
+        },
+        "label": "Total",
+        "parsing": {
+          "xAxisKey": "label",
+          "yAxisKey": "range"
+        }
+      },
+      {
+        "borderWidth": 1,
+        "data": [
+          1,
+          1,
+          null,
+          0,
+          0,
+          null,
+          null
+        ],
+        "label": "hidden",
+        "dataLabels": {
+          "display": false
+        },
+        "type": 5
+      },
+      {
+        "borderWidth": 1,
+        "data": [
+          null,
+          5,
+          5,
+          null,
+          8,
+          8,
+          null
+        ],
+        "label": "hidden",
+        "dataLabels": {
+          "display": false
+        },
+        "type": 5
+      },
+      {
+        "borderWidth": 1,
+        "data": [
+          null,
+          null,
+          2,
+          2,
+          null,
+          19,
+          19
+        ],
+        "label": "hidden",
+        "dataLabels": {
+          "display": false
+        },
+        "type": 5
+      }
+    ],
+    "labels": [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "June",
+      "Total"
+    ]
+  },
+  "options": {
+    "scales": {
+      "x": {
+        "grid": {
+          "display": false
+        },
+        "stacked": true
+      },
+      "y": {
+        "display": false
+      }
+    },
+    "plugins": {
+      "legend": {
+        "display": true,
+        "labels": {
+          "filter": "item =\u003E item.text !== \u0027hidden\u0027"
+        }
+      },
+      "title": {
+        "display": true,
+        "font": {
+          "family": "Ov\u0435rpass",
+          "size": 22,
+          "weight": "600",
+          "lineHeight": "24px"
+        },
+        "text": "Waterfall"
+      },
+      "tooltip": {
+        "enabled": false
+      },
+      "colorSchemes": {
+        "scheme": [
+          "#66B7FF",
+          "#F56295",
+          "#A6ABC2",
+          "#A6ABC2",
+          "#A6ABC2",
+          "#A6ABC2"
+        ]
+      },
+      "dataLabels": {
+        "align": "context =\u003E context.dataset.data[context.dataIndex].dataLabelAlignment",
+        "anchor": "context =\u003E context.dataset.data[context.dataIndex].dataLabelAlignment",
+        "color": "context =\u003E context.dataset.data[context.dataIndex].dataLabelColor",
+        "display": true,
+        "formatter": "(value, context) =\u003E context.dataset.data[context.dataIndex]?.dataLabel"
+      }
+    }
+  }
+}

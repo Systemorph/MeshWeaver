@@ -1,0 +1,79 @@
+{
+  "type": 1,
+  "data": {
+    "dataSets": [
+      {
+        "data": [
+          {
+            "x": 1,
+            "y": 4,
+            "r": 8
+          },
+          {
+            "x": 4,
+            "y": 1,
+            "r": 11
+          },
+          {
+            "x": 3,
+            "y": 2,
+            "r": 20
+          },
+          {
+            "x": 2,
+            "y": 3,
+            "r": 18
+          }
+        ],
+        "label": "First"
+      },
+      {
+        "data": [
+          {
+            "x": 10,
+            "y": 4,
+            "r": 8
+          },
+          {
+            "x": 2,
+            "y": 1,
+            "r": 11
+          },
+          {
+            "x": 7,
+            "y": 2,
+            "r": 20
+          },
+          {
+            "x": 1,
+            "y": 3,
+            "r": 18
+          }
+        ],
+        "label": "Second"
+      }
+    ]
+  },
+  "options": {
+    "plugins": {
+      "legend": {
+        "display": true
+      },
+      "title": {
+        "display": true,
+        "font": {
+          "family": "Ov\u0435rpass",
+          "size": 22,
+          "weight": "600",
+          "lineHeight": "24px"
+        },
+        "text": "Bubble Chart"
+      },
+      "colorSchemes": {
+        "scheme": {
+          "palette": "brewer.DarkTwo8"
+        }
+      }
+    }
+  }
+}

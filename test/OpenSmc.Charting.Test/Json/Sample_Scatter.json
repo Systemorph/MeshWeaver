@@ -1,0 +1,71 @@
+{
+  "type": 8,
+  "data": {
+    "dataSets": [
+      {
+        "data": [
+          {
+            "x": 1,
+            "y": 4
+          },
+          {
+            "x": 4,
+            "y": 1
+          },
+          {
+            "x": 3,
+            "y": 2
+          },
+          {
+            "x": 2,
+            "y": 3
+          }
+        ],
+        "label": "First"
+      },
+      {
+        "data": [
+          {
+            "x": 10,
+            "y": 4
+          },
+          {
+            "x": 2,
+            "y": 1
+          },
+          {
+            "x": 7,
+            "y": 2
+          },
+          {
+            "x": 1,
+            "y": 3
+          }
+        ],
+        "label": "Second"
+      }
+    ]
+  },
+  "options": {
+    "plugins": {
+      "legend": {
+        "display": true
+      },
+      "title": {
+        "display": true,
+        "font": {
+          "family": "Ov\u0435rpass",
+          "size": 22,
+          "weight": "600",
+          "lineHeight": "24px"
+        },
+        "text": "Scatter Chart"
+      },
+      "colorSchemes": {
+        "scheme": {
+          "palette": "brewer.DarkTwo8"
+        }
+      }
+    }
+  }
+}
