@@ -4,8 +4,8 @@ import { Workspace } from "@open-smc/data/src/Workspace";
 import { distinctUntilEqual } from "@open-smc/data/src/operators/distinctUntilEqual";
 import { UiControl } from "@open-smc/layout/src/contract/controls/UiControl.ts";
 import { from, map, Observable, of, Subscription, tap } from "rxjs";
-import { updateStore } from "@open-smc/data/src/workspaceReducer";
 import { v4 } from "uuid";
+import { updateStore } from "@open-smc/data/src/updateStoreReducer";
 
 export const uiControlType = (UiControl as any).$type;
 

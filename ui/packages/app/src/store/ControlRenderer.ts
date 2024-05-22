@@ -16,6 +16,7 @@ import { Renderer } from "./Renderer";
 import { RendererStackTrace } from "./RendererStackTrace";
 import { expandArea } from "./renderControl";
 import { log } from "@open-smc/utils/src/operators/log";
+import { ControlView } from "../ControlDef";
 
 export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
     readonly subscription = new Subscription();
@@ -96,10 +97,10 @@ export class ControlRenderer<T extends UiControl = UiControl> extends Renderer {
             area: this.expandedArea,
             controlName,
             props
-        }
+        } as LayoutAreaModel
     }
 
-    protected renderControlTo(areaModelWorkspace: Workspace<LayoutAreaModel>) {
+    protected renderControlTo<TView extends ControlView = ControlView>(areaModelWorkspace: Workspace<LayoutAreaModel<TView>>) {
         const subscription = new Subscription();
 
         subscription.add(
