@@ -1,7 +1,7 @@
 import { configureStore } from "@reduxjs/toolkit";
 import { from, Observable, Observer } from "rxjs";
 import { WorkspaceAction, workspaceReducer, WorkspaceThunk } from "./workspaceReducer";
-import { updateStore } from "./updateStoreReducer";
+import { updateStore, UpdateStoreRecipe } from "./updateStoreReducer";
 
 export class Workspace<T = unknown> extends Observable<T> implements Observer<WorkspaceAction> {
     protected store: ReturnType<typeof configureStore<T, WorkspaceAction>>;
@@ -40,7 +40,7 @@ export class Workspace<T = unknown> extends Observable<T> implements Observer<Wo
         return this.store.getState();
     }
 
-    update(reducer: (state: T) => T | void) {
+    update(reducer: UpdateStoreRecipe<T>) {
         this.store.dispatch(updateStore<T>(reducer));
     }
 }

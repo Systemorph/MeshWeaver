@@ -3,6 +3,7 @@ import { map, Observable } from "rxjs";
 import { LayoutStackControl } from "@open-smc/layout/src/contract/controls/LayoutStackControl";
 import { AreaCollectionRenderer } from "./AreaCollectionRenderer";
 import { RendererStackTrace } from "./RendererStackTrace";
+import { LayoutAreaModel } from "./appStore";
 
 export class LayoutStackRenderer extends ControlRenderer<LayoutStackControl> {
     private collectionRenderer: AreaCollectionRenderer;
@@ -41,6 +42,6 @@ export class LayoutStackRenderer extends ControlRenderer<LayoutStackControl> {
                 areas: this.collectionRenderer.areas,
                 ...bindingsToReferences(props)
             }
-        }
+        } as LayoutAreaModel
     }
 }
