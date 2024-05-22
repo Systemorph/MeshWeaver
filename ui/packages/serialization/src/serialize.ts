@@ -12,7 +12,7 @@ export const isSerializable = (value: any): value is Serializable =>
     isFunction(value?.constructor) && value.constructor.$type !== undefined;
 
 export const serialize =
-    <T>(value: T): T | Deserializable<T> => {
+    <T>(value: T): Deserializable<T> => {
         return cloneDeepWith(
             value,
             value => {

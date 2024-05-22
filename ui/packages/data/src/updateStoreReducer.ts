@@ -18,11 +18,16 @@ export const updateStoreReducer = createReducer(
     }
 );
 
-export function updateStore<T>(reducer: (state: Draft<T>) => Draft<T> | void) {
+export type UpdateStoreReducer<T, D = Draft<T>> = (draft: D) => D | void | undefined;
+export type UpdateStoreRecipe<T> = T | UpdateStoreReducer<T>;
+
+export function updateStore<T>(recipe: UpdateStoreRecipe<T>) {
     return (dispatch: ThunkDispatch<T, unknown, UpdateStoreAction>, getState: () => T) =>
         dispatch(
-            updateStoreActionCreator(
-                produce(getState(), reducer)
-            )
+            recipe instanceof Function ?
+                updateStoreActionCreator(
+                    produce(getState(), recipe)
+                )
+                : updateStoreActionCreator(recipe)
         )
 }

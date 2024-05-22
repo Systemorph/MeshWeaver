@@ -11,12 +11,12 @@ import { JsonPatch } from "./contract/JsonPatch";
 import { PatchChangeRequest } from "./contract/PatchChangeRequest";
 import { Workspace } from "./Workspace";
 import { MessageHub } from '@open-smc/messaging/src/MessageHub';
-import { deserialize } from "@open-smc/serialization/src/deserialize";
+import { Deserializable, deserialize } from "@open-smc/serialization/src/deserialize";
 import { serialize } from "@open-smc/serialization/src/serialize";
 
 export class RemoteWorkspace<T = unknown> extends Workspace<T> {
     subscription = new Subscription();
-    json: unknown;
+    json: Deserializable<T>;
 
     constructor(
         private uiHub: MessageHub,
@@ -40,7 +40,7 @@ export class RemoteWorkspace<T = unknown> extends Workspace<T> {
                 .pipe(map(dataChangedEventToJsonPatch))
                 .subscribe(patch => {
                     this.json = FastJsonPatch.applyPatch(this.json, patch.operations, null, false).newDocument;
-                    this.update(() => deserialize(this.json) as T);
+                    this.update(deserialize(this.json));
                 })
         );
 
