@@ -1,0 +1,46 @@
+{
+  "type": 1,
+  "data": {
+    "dataSets": [
+      {
+        "backgroundColor": {
+          "red": 255,
+          "green": 99,
+          "blue": 132,
+          "alpha": 1
+        },
+        "data": [
+          {
+            "x": 20,
+            "y": 30,
+            "r": 15
+          },
+          {
+            "x": 40,
+            "y": 10,
+            "r": 10
+          }
+        ],
+        "hoverBackgroundColor": {
+          "red": 255,
+          "green": 99,
+          "blue": 132,
+          "alpha": 1
+        },
+        "label": "Bubble Dataset"
+      }
+    ]
+  },
+  "options": {
+    "plugins": {
+      "legend": {
+        "display": true
+      },
+      "colorSchemes": {
+        "scheme": {
+          "palette": "brewer.PastelOne9"
+        }
+      }
+    }
+  }
+}
