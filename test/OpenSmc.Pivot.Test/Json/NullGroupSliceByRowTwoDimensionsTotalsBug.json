@@ -6,7 +6,8 @@
       "coordinates": [
         "Value"
       ],
-      "grouperName": "ColumnName"
+      "grouperName": "ColumnName",
+      "$type": "OpenSmc.Pivot.Models.Column"
     }
   ],
   "rows": [
@@ -17,11 +18,13 @@
         ],
         "systemName": "A",
         "displayName": "A",
-        "grouperName": "Dim2"
+        "grouperName": "Dim2",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 4
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -31,11 +34,13 @@
         ],
         "systemName": "A.a",
         "displayName": "a",
-        "grouperName": "Dim1"
+        "grouperName": "Dim1",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 3
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -45,11 +50,13 @@
         ],
         "systemName": "A.NullGroup",
         "displayName": " ",
-        "grouperName": "Dim1"
+        "grouperName": "Dim1",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 1
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -58,11 +65,13 @@
         ],
         "systemName": "B",
         "displayName": "B",
-        "grouperName": "Dim2"
+        "grouperName": "Dim2",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 2
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -72,12 +81,15 @@
         ],
         "systemName": "B.NullGroup",
         "displayName": " ",
-        "grouperName": "Dim1"
+        "grouperName": "Dim1",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 2
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     }
   ],
-  "hasRowGrouping": true
+  "hasRowGrouping": true,
+  "$type": "OpenSmc.Pivot.Models.PivotModel"
 }

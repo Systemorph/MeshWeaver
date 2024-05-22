@@ -6,7 +6,8 @@
       "coordinates": [
         "Value"
       ],
-      "grouperName": "ColumnName"
+      "grouperName": "ColumnName",
+      "$type": "OpenSmc.Pivot.Models.Column"
     }
   ],
   "rows": [
@@ -17,11 +18,13 @@
         ],
         "systemName": "E",
         "displayName": "Expenses",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -30,11 +33,13 @@
         ],
         "systemName": "P",
         "displayName": "Premium",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -43,11 +48,13 @@
         ],
         "systemName": "C",
         "displayName": "Cost",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -56,12 +63,15 @@
         ],
         "systemName": "B",
         "displayName": "Benefit",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     }
   ],
-  "hasRowGrouping": true
+  "hasRowGrouping": true,
+  "$type": "OpenSmc.Pivot.Models.PivotModel"
 }

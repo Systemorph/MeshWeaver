@@ -6,7 +6,8 @@
       "coordinates": [
         "Value"
       ],
-      "grouperName": "ColumnName"
+      "grouperName": "ColumnName",
+      "$type": "OpenSmc.Pivot.Models.Column"
     }
   ],
   "rows": [
@@ -17,11 +18,13 @@
         ],
         "systemName": "1",
         "displayName": "1",
-        "grouperName": "AutomaticNumber"
+        "grouperName": "AutomaticNumber",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 1
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -30,11 +33,13 @@
         ],
         "systemName": "2",
         "displayName": "2",
-        "grouperName": "AutomaticNumber"
+        "grouperName": "AutomaticNumber",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 1
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -43,12 +48,15 @@
         ],
         "systemName": "3",
         "displayName": "3",
-        "grouperName": "AutomaticNumber"
+        "grouperName": "AutomaticNumber",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 1
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     }
   ],
-  "hasRowGrouping": true
+  "hasRowGrouping": true,
+  "$type": "OpenSmc.Pivot.Models.PivotModel"
 }

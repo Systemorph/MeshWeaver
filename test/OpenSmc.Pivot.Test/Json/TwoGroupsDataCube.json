@@ -6,7 +6,8 @@
       "coordinates": [
         "Value"
       ],
-      "grouperName": "ColumnName"
+      "grouperName": "ColumnName",
+      "$type": "OpenSmc.Pivot.Models.Column"
     }
   ],
   "rows": [
@@ -17,11 +18,13 @@
         ],
         "systemName": "C",
         "displayName": "C",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -31,11 +34,13 @@
         ],
         "systemName": "C.B",
         "displayName": "B",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -45,11 +50,13 @@
         ],
         "systemName": "C.C",
         "displayName": "C",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -59,11 +66,13 @@
         ],
         "systemName": "C.E",
         "displayName": "E",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -73,11 +82,13 @@
         ],
         "systemName": "C.P",
         "displayName": "P",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -86,11 +97,13 @@
         ],
         "systemName": "H",
         "displayName": "H",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -100,11 +113,13 @@
         ],
         "systemName": "H.B",
         "displayName": "B",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -114,11 +129,13 @@
         ],
         "systemName": "H.C",
         "displayName": "C",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -128,11 +145,13 @@
         ],
         "systemName": "H.E",
         "displayName": "E",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -142,11 +161,13 @@
         ],
         "systemName": "H.P",
         "displayName": "P",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -155,11 +176,13 @@
         ],
         "systemName": "L",
         "displayName": "L",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -169,11 +192,13 @@
         ],
         "systemName": "L.B",
         "displayName": "B",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -183,11 +208,13 @@
         ],
         "systemName": "L.C",
         "displayName": "C",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -197,11 +224,13 @@
         ],
         "systemName": "L.E",
         "displayName": "E",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -211,11 +240,13 @@
         ],
         "systemName": "L.P",
         "displayName": "P",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -224,11 +255,13 @@
         ],
         "systemName": "P",
         "displayName": "P",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -238,11 +271,13 @@
         ],
         "systemName": "P.B",
         "displayName": "B",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -252,11 +287,13 @@
         ],
         "systemName": "P.C",
         "displayName": "C",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -266,11 +303,13 @@
         ],
         "systemName": "P.E",
         "displayName": "E",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -280,12 +319,15 @@
         ],
         "systemName": "P.P",
         "displayName": "P",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": null
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     }
   ],
-  "hasRowGrouping": true
+  "hasRowGrouping": true,
+  "$type": "OpenSmc.Pivot.Models.PivotModel"
 }

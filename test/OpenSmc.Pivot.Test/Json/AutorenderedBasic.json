@@ -6,7 +6,8 @@
       "coordinates": [
         "BoP"
       ],
-      "grouperName": "ColumnName"
+      "grouperName": "ColumnName",
+      "$type": "OpenSmc.Pivot.Models.Column"
     },
     {
       "systemName": "Delta",
@@ -14,7 +15,8 @@
       "coordinates": [
         "Delta"
       ],
-      "grouperName": "ColumnName"
+      "grouperName": "ColumnName",
+      "$type": "OpenSmc.Pivot.Models.Column"
     },
     {
       "systemName": "EoP",
@@ -22,7 +24,8 @@
       "coordinates": [
         "EoP"
       ],
-      "grouperName": "ColumnName"
+      "grouperName": "ColumnName",
+      "$type": "OpenSmc.Pivot.Models.Column"
     }
   ],
   "rows": [
@@ -33,13 +36,15 @@
         ],
         "systemName": "1",
         "displayName": "1",
-        "grouperName": "AutomaticNumber"
+        "grouperName": "AutomaticNumber",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "BoP": 0,
         "Delta": 0,
         "EoP": 0
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -48,13 +53,15 @@
         ],
         "systemName": "2",
         "displayName": "2",
-        "grouperName": "AutomaticNumber"
+        "grouperName": "AutomaticNumber",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "BoP": 0,
         "Delta": 1,
         "EoP": 1
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -63,14 +70,17 @@
         ],
         "systemName": "3",
         "displayName": "3",
-        "grouperName": "AutomaticNumber"
+        "grouperName": "AutomaticNumber",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "BoP": 0,
         "Delta": 2,
         "EoP": 2
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     }
   ],
-  "hasRowGrouping": true
+  "hasRowGrouping": true,
+  "$type": "OpenSmc.Pivot.Models.PivotModel"
 }

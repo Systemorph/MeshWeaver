@@ -6,7 +6,8 @@
       "coordinates": [
         "Value"
       ],
-      "grouperName": "ColumnName"
+      "grouperName": "ColumnName",
+      "$type": "OpenSmc.Pivot.Models.Column"
     }
   ],
   "rows": [
@@ -17,11 +18,13 @@
         ],
         "systemName": "BoP",
         "displayName": "Beginning of Period",
-        "grouperName": "PropertyName"
+        "grouperName": "PropertyName",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 4
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -30,11 +33,13 @@
         ],
         "systemName": "Delta",
         "displayName": "Delta",
-        "grouperName": "PropertyName"
+        "grouperName": "PropertyName",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 4
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
       "rowGroup": {
@@ -43,12 +48,15 @@
         ],
         "systemName": "EoP",
         "displayName": "End of Period",
-        "grouperName": "PropertyName"
+        "grouperName": "PropertyName",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
         "Value": 4
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     }
   ],
-  "hasRowGrouping": true
+  "hasRowGrouping": true,
+  "$type": "OpenSmc.Pivot.Models.PivotModel"
 }
