@@ -1,0 +1,85 @@
+{
+  "data": {
+    "dataSets": [
+      {
+        "xAxisID": "x1",
+        "data": [
+          0.19999999999999973,
+          7.4,
+          1,
+          6.7,
+          3,
+          4,
+          4
+        ],
+        "label": "Alessandro",
+        "type": 0,
+        "$type": "OpenSmc.Charting.Models.BarDataSet"
+      },
+      {
+        "xAxisID": "x1",
+        "data": [
+          1.1,
+          2.2,
+          3.3,
+          4.4,
+          null,
+          null,
+          null
+        ],
+        "label": "Paolo",
+        "type": 5,
+        "$type": "OpenSmc.Charting.Models.BarDataSet"
+      }
+    ],
+    "labels": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7"
+    ],
+    "$type": "OpenSmc.Charting.Models.Data"
+  },
+  "options": {
+    "responsive": true,
+    "scales": {
+      "x1": {
+        "labels": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7"
+        ],
+        "display": true,
+        "stacked": false,
+        "$type": "OpenSmc.Charting.Models.Options.Scales.CartesianCategoryScale"
+      },
+      "y": {
+        "stacked": false,
+        "$type": "OpenSmc.Charting.Models.Options.Scales.Scale"
+      }
+    },
+    "plugins": {
+      "legend": {
+        "display": true,
+        "$type": "OpenSmc.Charting.Models.Options.Legend"
+      },
+      "colorSchemes": {
+        "scheme": {
+          "palette": "brewer.PastelOne9",
+          "$type": "OpenSmc.Charting.Enums.Palettes"
+        },
+        "$type": "OpenSmc.Charting.Models.Options.ColorSchemes"
+      },
+      "$type": "OpenSmc.Charting.Models.Options.Plugins"
+    },
+    "$type": "OpenSmc.Charting.Models.Options.Options"
+  },
+  "$type": "OpenSmc.Charting.Models.Chart"
+}

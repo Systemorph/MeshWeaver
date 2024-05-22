@@ -6,6 +6,7 @@ using OpenSmc.Domain;
 using OpenSmc.Fixture;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Json.Assertions;
+using OpenSmc.Messaging;
 using OpenSmc.Pivot.Builder;
 using Xunit.Abstractions;
 
@@ -59,6 +60,21 @@ public record RecordWithValues
 
 public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
 {
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureHost(configuration)
+            .AddData(data =>
+                data.FromConfigurableDataSource(
+                    "Records",
+                    dataSource =>
+                        dataSource
+                            .WithType<RecordWithValues>()
+                            .WithType<Country>(type => type.WithInitialData(Country.Data))
+                            .WithType<Name>(type => type.WithInitialData(Name.Data))
+                )
+            );
+    }
+
     private static readonly RecordWithValues[] RecordsWithValues =
     {
         new("P", "IT", 1, 1.1),
@@ -89,6 +105,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     }
 
     private JsonSerializerOptions Options => GetHost().JsonSerializerOptions;
+
     [Fact]
     public async Task BarChartAggregatedByCountry()
     {
@@ -100,7 +117,10 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             .ToBarChart()
             .WithTitle("AggregateByCountry")
             .Execute();
-        await charSlicedByName.JsonShouldMatch(Options,$"{nameof(BarChartAggregatedByCountry)}.json");
+        await charSlicedByName.JsonShouldMatch(
+            Options,
+            $"{nameof(BarChartAggregatedByCountry)}.json"
+        );
     }
 
     [Fact]
@@ -113,7 +133,10 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             .SliceRowsBy(nameof(Country))
             .ToBarChart()
             .Execute();
-        await charSliceByCountry.JsonShouldMatch(Options,$"{nameof(BarChartAggregatedByName)}.json");
+        await charSliceByCountry.JsonShouldMatch(
+            Options,
+            $"{nameof(BarChartAggregatedByName)}.json"
+        );
     }
 
     [Fact]
@@ -128,7 +151,10 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             .AsStackedWithScatterTotals()
             .WithOptions(m => m.WithLabelsFromLevels(0, 1))
             .Execute();
-        await charStacked.JsonShouldMatch(Options,$"{nameof(StackedBarChartTestLabelSetting)}.json");
+        await charStacked.JsonShouldMatch(
+            Options,
+            $"{nameof(StackedBarChartTestLabelSetting)}.json"
+        );
     }
 
     [Fact]
@@ -141,7 +167,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             .ToBarChart()
             .WithOptions(m => m)
             .Execute();
-        await doubleColumnSlice.JsonShouldMatch(Options,$"{nameof(BarChartTestWithOption)}.json");
+        await doubleColumnSlice.JsonShouldMatch(Options, $"{nameof(BarChartTestWithOption)}.json");
     }
 
     [Fact]
@@ -154,7 +180,8 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             .SliceRowsBy(nameof(Name))
             .ToBarChart()
             .Execute();
-        await doubleColumnSliceTwoRows.JsonShouldMatch(Options,
+        await doubleColumnSliceTwoRows.JsonShouldMatch(
+            Options,
             $"{nameof(BarChartWithHierarchicalColumns)}.json"
         );
     }
@@ -168,7 +195,10 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             .SliceRowsBy(nameof(RecordWithValues.ValueIndex))
             .ToBarChart()
             .Execute();
-        await noColumnSlice.JsonShouldMatch(Options,$"{nameof(BarChartWithOneDefaultColumnReport)}.json");
+        await noColumnSlice.JsonShouldMatch(
+            Options,
+            $"{nameof(BarChartWithOneDefaultColumnReport)}.json"
+        );
     }
 
     [Fact]
@@ -182,7 +212,10 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             .ToBarChart()
             .AsStackedWithScatterTotals()
             .Execute();
-        await stackOneOne.JsonShouldMatch(Options,$"{nameof(StackedBarChartWithManyColumns)}.json");
+        await stackOneOne.JsonShouldMatch(
+            Options,
+            $"{nameof(StackedBarChartWithManyColumns)}.json"
+        );
     }
 
     [Fact]
@@ -196,7 +229,10 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             .ToBarChart()
             .AsStackedWithScatterTotals()
             .Execute();
-        await stackTwoTwo.JsonShouldMatch(Options,$"{nameof(StackedBarPlotsWithRestrictedColumns)}.json");
+        await stackTwoTwo.JsonShouldMatch(
+            Options,
+            $"{nameof(StackedBarPlotsWithRestrictedColumns)}.json"
+        );
     }
 
     [Fact]
@@ -215,7 +251,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             )
             .WithColorScheme(Palettes.Brewer.Blues3)
             .Execute();
-        await charSlicedByName.JsonShouldMatch(Options,$"{nameof(BarChartWithRenaming)}.json");
+        await charSlicedByName.JsonShouldMatch(Options, $"{nameof(BarChartWithRenaming)}.json");
     }
 
     [Fact]
@@ -238,7 +274,10 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
                 ).WithLegendItemsFromLevels(".", 1, 0)
             )
             .Execute();
-        await charSliceByName.JsonShouldMatch(Options,$"{nameof(BarChartWithOptionsAndRenaming)}.json");
+        await charSliceByName.JsonShouldMatch(
+            Options,
+            $"{nameof(BarChartWithOptionsAndRenaming)}.json"
+        );
     }
 
     [Fact]
@@ -252,7 +291,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             .ToBarChart()
             .WithRowsAsLine("Paolo")
             .Execute();
-        await mixedPlot1.JsonShouldMatch(Options,$"{nameof(MixedChart)}.json");
+        await mixedPlot1.JsonShouldMatch(Options, $"{nameof(MixedChart)}.json");
     }
 
     [Fact]
@@ -269,7 +308,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             .WithRows("Alessandro.Italy", "Paolo.Italy")
             .WithOptions(model => model.WithLabels("8", "9", "10", "11", "12", "13", "14"))
             .Execute();
-        await linePlot1.JsonShouldMatch(Options,$"{nameof(LineChart)}.json");
+        await linePlot1.JsonShouldMatch(Options, $"{nameof(LineChart)}.json");
     }
 
     [Fact]
@@ -282,7 +321,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .ToRadarChart()
             .Execute();
-        await radarChart.JsonShouldMatch(Options,$"{nameof(SimpleRadarChart)}.json");
+        await radarChart.JsonShouldMatch(Options, $"{nameof(SimpleRadarChart)}.json");
     }
 
     [Fact]
@@ -300,7 +339,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             .WithColorScheme(new string[] { "#1ECBE1", "#E1341E" })
             .WithTitle("Two lines radar plot", t => t.WithFontSize(15).AlignAtStart())
             .Execute();
-        await radarChart.JsonShouldMatch(Options,$"{nameof(RadarChartWithExtraOptions)}.json");
+        await radarChart.JsonShouldMatch(Options, $"{nameof(RadarChartWithExtraOptions)}.json");
     }
 
     [FactWithWorkItem("26433")]
@@ -323,6 +362,6 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             .WithTotals(col => col.IsTotalForSlice(nameof(Country)))
             //.WithLegendItems("Increments", "Decrements", "Total")
             .Execute();
-        await waterfall.JsonShouldMatch(Options,$"{nameof(SimpleWaterfallChart)}.json");
+        await waterfall.JsonShouldMatch(Options, $"{nameof(SimpleWaterfallChart)}.json");
     }
 }
