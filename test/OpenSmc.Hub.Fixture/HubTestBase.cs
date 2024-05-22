@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Fixture;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 using OpenSmc.ServiceProvider;
 using Xunit.Abstractions;
 
@@ -38,11 +39,11 @@ public class HubTestBase : TestBase
 
     protected virtual MessageHubConfiguration ConfigureHost(
         MessageHubConfiguration configuration
-    ) => configuration;
+    ) => configuration.WithTypes(typeof(HostAddress), typeof(ClientAddress));
 
     protected virtual MessageHubConfiguration ConfigureClient(
         MessageHubConfiguration configuration
-    ) => configuration;
+    ) => configuration.WithTypes(typeof(HostAddress), typeof(ClientAddress));
 
     protected virtual IMessageHub GetHost()
     {
