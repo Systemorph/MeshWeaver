@@ -190,11 +190,11 @@ namespace OpenSmc.Charting.Pivot
                     }
                 };
                 PivotChartModel.Rows.Add(row);
-                AddDataToRow((IReadOnlyDictionary<object, object>)pivotRow.Data, row);
+                AddDataToRow((IReadOnlyDictionary<string, object>)pivotRow.Data, row);
             }
         }
 
-        private void AddDataToRow(IReadOnlyDictionary<object, object> data, PivotChartRow chartRow)
+        private void AddDataToRow(IReadOnlyDictionary<string, object> data, PivotChartRow chartRow)
         {
             foreach (var columnDescriptor in PivotChartModel.ColumnDescriptors)
             {
@@ -205,16 +205,16 @@ namespace OpenSmc.Charting.Pivot
         }
 
         private double? GetValue(
-            IReadOnlyDictionary<object, object> data,
+            IReadOnlyDictionary<string, object> data,
             IReadOnlyCollection<(object Id, string DisplayName, object GrouperName)> coordinates
         )
         {
             if (!coordinates.Any() || data is null)
                 return null;
 
-            if (data.TryGetValue(coordinates.First().Id, out var subData))
+            if (data.TryGetValue(coordinates.First().Id.ToString(), out var subData))
             {
-                if (subData is IReadOnlyDictionary<object, object> subDataDict)
+                if (subData is IReadOnlyDictionary<string, object> subDataDict)
                     return GetValue(subDataDict, coordinates.Skip(1).ToList());
                 if (subData is int intSubData)
                     return (double?)intSubData;
