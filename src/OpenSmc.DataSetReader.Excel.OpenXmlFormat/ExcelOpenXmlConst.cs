@@ -2,9 +2,10 @@
 
 namespace OpenSmc.DataSetReader.Excel.OpenXmlFormat
 {
-    public class ExcelOpenXmlConst
+    public static class ExcelOpenXmlConst
     {
-        public static readonly XNamespace SpreadSheetNamespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        public static readonly XNamespace SpreadSheetNamespace =
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 
         public const string WorksheetTag = "worksheet";
         public const string DimensionTag = "dimension";

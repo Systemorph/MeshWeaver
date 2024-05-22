@@ -5,12 +5,12 @@ namespace OpenSmc.Pivot.Models
 {
     public record RowGroup : IGroup
     {
-        public IImmutableList<string> Coordinates { get; init; } = ImmutableList<string>.Empty;
-        public string SystemName { get; init; }
+        public ImmutableList<object> Coordinates { get; init; } = ImmutableList<object>.Empty;
+        public object SystemName { get; init; }
         public string DisplayName { get; init; }
-        public string GrouperName { get; init; }
+        public object GrouperName { get; init; }
 
-        public RowGroup(string systemName, string displayName, string grouperName)
+        public RowGroup(object systemName, string displayName, object grouperName)
         {
             SystemName = systemName;
             DisplayName = displayName;
@@ -18,9 +18,7 @@ namespace OpenSmc.Pivot.Models
             Coordinates = Coordinates.Add(systemName);
         }
 
-        public RowGroup()
-        {
-        }
+        public RowGroup() { }
 
         public virtual bool Equals(RowGroup other)
         {

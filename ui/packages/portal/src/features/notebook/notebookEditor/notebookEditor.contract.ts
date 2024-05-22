@@ -1,4 +1,4 @@
-import { BaseEvent, EventStatus } from "@open-smc/application/src/application.contract";
+import { BaseEvent, EventStatus } from "@open-smc/application/src/contract/application.contract";
 import {
     ElementKind,
     EvaluationStatus, SessionDescriptor,

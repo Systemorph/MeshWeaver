@@ -1,6 +1,6 @@
 ﻿using System.Reflection;
 using AspectCore.Extensions.Reflection;
-using OpenSmc.Domain.Abstractions.Attributes;
+using OpenSmc.Domain;
 using CustomAttributeExtensions = System.Reflection.CustomAttributeExtensions;
 
 namespace OpenSmc.DataCubes
@@ -9,7 +9,11 @@ namespace OpenSmc.DataCubes
     {
         private class PropertyToDimensionDescriptor
         {
-            public PropertyToDimensionDescriptor(PropertyInfo property, PropertyReflector reflector, DimensionDescriptor descriptor)
+            public PropertyToDimensionDescriptor(
+                PropertyInfo property,
+                PropertyReflector reflector,
+                DimensionDescriptor descriptor
+            )
             {
                 Property = property;
                 Reflector = reflector;
@@ -21,16 +25,25 @@ namespace OpenSmc.DataCubes
             public DimensionDescriptor Descriptor { get; }
         }
 
-        private static readonly Dictionary<string, PropertyToDimensionDescriptor> PropertiesByDimension = typeof(T).GetProperties()
-                                                                                                                   .Select(p => new
-                                                                                                                                {
-                                                                                                                                    Property = p,
-                                                                                                                                    DimensionAttribute = CustomAttributeExtensions.GetCustomAttribute<DimensionAttribute>((MemberInfo)p)
-                                                                                                                                })
-                                                                                                                   .Where(p => p.DimensionAttribute != null)
-                                                                                                                   .Select(p => new PropertyToDimensionDescriptor(p.Property, p.Property.GetReflector(), new DimensionDescriptor(p.DimensionAttribute.Name, p.DimensionAttribute.Type)))
-                                                                                                                   .ToDictionaryValidated(x => x.Descriptor.SystemName);
-
+        private static readonly Dictionary<
+            string,
+            PropertyToDimensionDescriptor
+        > PropertiesByDimension = typeof(T)
+            .GetProperties()
+            .Select(p => new
+            {
+                Property = p,
+                DimensionAttribute = CustomAttributeExtensions.GetCustomAttribute<DimensionAttribute>(
+                    (MemberInfo)p
+                )
+            })
+            .Where(p => p.DimensionAttribute != null)
+            .Select(p => new PropertyToDimensionDescriptor(
+                p.Property,
+                p.Property.GetReflector(),
+                new DimensionDescriptor(p.DimensionAttribute.Name, p.DimensionAttribute.Type)
+            ))
+            .ToDictionaryValidated(x => x.Descriptor.SystemName);
 
         public static PropertyReflector GetReflector(string dimension)
         {
@@ -38,26 +51,34 @@ namespace OpenSmc.DataCubes
             return ret?.Reflector;
         }
 
-        public static IEnumerable<DataSlice<T>> GetDimensionTuples(string[] dimensions, IEnumerable<T> data)
+        public static IEnumerable<DataSlice<T>> GetDimensionTuples(
+            string[] dimensions,
+            IEnumerable<T> data
+        )
         {
-            var properties = dimensions
-                .Select(d => new { Dimension = d, Property = PropertiesByDimension.TryGetValue(d, out var p) ? p : null });
+            var properties = dimensions.Select(d => new
+            {
+                Dimension = d,
+                Property = PropertiesByDimension.TryGetValue(d, out var p) ? p : null
+            });
 
-
-            var slices = data.Select(d =>
-                                         new DataSlice<T>(d, new DimensionTuple(properties.Select(p =>
-                                                                                                      (dimension: p.Dimension, value: p.Property?.Reflector.GetValue(d))))));
+            var slices = data.Select(d => new DataSlice<T>(
+                d,
+                new DimensionTuple(
+                    properties.Select(p =>
+                        (dimension: p.Dimension, value: p.Property?.Reflector.GetValue(d))
+                    )
+                )
+            ));
 
             return slices;
         }
 
-
-        public static Func<T, bool> GetFilter(IEnumerable<(string dimension, object value)> tupleFilter)
+        public static Func<T, bool> GetFilter(
+            IEnumerable<(string dimension, object value)> tupleFilter
+        )
         {
-            var filters = tupleFilter
-                          .Select(CreateComparer)
-                          .Where(x => x != default)
-                          .ToArray();
+            var filters = tupleFilter.Select(CreateComparer).Where(x => x != default).ToArray();
             if (filters.Length == 0)
                 return null;
             return CombineFilters(filters);
@@ -80,12 +101,17 @@ namespace OpenSmc.DataCubes
 
             if (valueTuple.value is int number)
                 return t => (int)dimensionReflector.GetValue(t) == number;
-            
+
             if (valueTuple.value is string pattern)
                 return t => MatchesStringPattern((string)dimensionReflector.GetValue(t), pattern);
 
             if (valueTuple.value is IEnumerable<string> patterns)
-                return t => patterns.Aggregate(false, (agg, p) => agg || MatchesStringPattern((string)dimensionReflector.GetValue(t), p));
+                return t =>
+                    patterns.Aggregate(
+                        false,
+                        (agg, p) =>
+                            agg || MatchesStringPattern((string)dimensionReflector.GetValue(t), p)
+                    );
 
             return t => dimensionReflector.GetValue(t) == valueTuple.value;
         }
@@ -102,7 +128,9 @@ namespace OpenSmc.DataCubes
             return value == pattern;
         }
 
-        public static IEnumerable<DimensionDescriptor> GetDimensionDescriptors(IEnumerable<string> dimensions)
+        public static IEnumerable<DimensionDescriptor> GetDimensionDescriptors(
+            IEnumerable<string> dimensions
+        )
         {
             foreach (var dimension in dimensions)
             {

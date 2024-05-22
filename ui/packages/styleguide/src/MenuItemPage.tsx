@@ -1,7 +1,7 @@
 import { makeMenuItem } from "@open-smc/sandbox/src/MenuItem";
 import { Sandbox } from "@open-smc/sandbox/src/Sandbox";
 import styles from "./menuItemPage.module.scss";
-import { AreaChangedEvent } from "@open-smc/application/src/application.contract";
+import { AreaChangedEvent } from "@open-smc/application/src/contract/application.contract";
 import { makeStack } from "@open-smc/sandbox/src/LayoutStack";
 import { ExpandAction } from "@open-smc/sandbox/src/ExpandableControl";
 import { makeItemTemplate } from "@open-smc/sandbox/src/ItemTemplate";

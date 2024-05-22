@@ -12,8 +12,10 @@ namespace OpenSmc.Scopes.Proxy
 
     public class ApplicabilityInterceptorFactory : IScopeInterceptorFactory
     {
-        private readonly CreatableObjectStore<Type, IScopeWithApplicabilityInterceptor> applicabilityInterceptors = new(CreateApplicabilityInterceptor);
-
+        private readonly CreatableObjectStore<
+            Type,
+            IScopeWithApplicabilityInterceptor
+        > applicabilityInterceptors = new(CreateApplicabilityInterceptor);
 
         private static IScopeWithApplicabilityInterceptor CreateApplicabilityInterceptor(Type type)
         {
@@ -28,18 +30,23 @@ namespace OpenSmc.Scopes.Proxy
             return ApplicabilityBuilder.GetApplicabilityBuilder(tScope)?.Build();
         }
 
-
-        public IEnumerable<IScopeInterceptor> GetInterceptors(Type tScope, IInternalScopeFactory factory)
+        public IEnumerable<IScopeInterceptor> GetInterceptors(
+            Type tScope,
+            IInternalScopeFactory factory
+        )
         {
-            return applicabilityInterceptors.GetInstance(tScope)?.RepeatOnce() ?? Enumerable.Empty<IScopeInterceptor>();
+            return applicabilityInterceptors.GetInstance(tScope)?.RepeatOnce()
+                ?? Enumerable.Empty<IScopeInterceptor>();
         }
     }
 
-    public interface IScopeWithApplicabilityInterceptor : IScopeInterceptor, IHasAdditionalInterfaces
-    {
-    }
+    public interface IScopeWithApplicabilityInterceptor
+        : IScopeInterceptor,
+            IHasAdditionalInterfaces { }
 
-    internal class ScopeWithApplicabilityInterceptor : ScopeInterceptorBase, IScopeWithApplicabilityInterceptor
+    internal class ScopeWithApplicabilityInterceptor
+        : ScopeInterceptorBase,
+            IScopeWithApplicabilityInterceptor
     {
         private readonly ApplicabilityMap applicabilityMap;
 
@@ -50,14 +57,22 @@ namespace OpenSmc.Scopes.Proxy
 
         public override void Intercept(IInvocation invocation)
         {
-            invocation.ReturnValue =
-                applicabilityMap.GetMember(invocation.Proxy, (MethodInfo)invocation.Arguments.First());
+            invocation.ReturnValue = applicabilityMap.GetMember(
+                invocation.Proxy,
+                (MethodInfo)invocation.Arguments.First()
+            );
         }
 
         private static readonly AspectPredicate[] SAspectPredicates =
-            { x => x.DeclaringType == typeof(IScopeWithApplicability) };
+        {
+            x => x.DeclaringType == typeof(IScopeWithApplicability)
+        };
 
-        IEnumerable<Type> IHasAdditionalInterfaces.GetAdditionalInterfaces(Type scopeType) => typeof(IScopeWithApplicability).RepeatOnce().Concat(applicabilityMap.AdditionalInterfaces);
+        IEnumerable<Type> IHasAdditionalInterfaces.GetAdditionalInterfaces(Type scopeType) =>
+            typeof(IScopeWithApplicability)
+                .RepeatOnce()
+                .Concat(applicabilityMap.AdditionalInterfaces);
+
         public override IEnumerable<AspectPredicate> Predicates => SAspectPredicates;
     }
 
@@ -87,38 +102,44 @@ namespace OpenSmc.Scopes.Proxy
 
             if (currentlyEvaluating.Contains(method))
                 throw new CyclicApplicabilityResultionException(
-                                                                $"Method {method.Name} has a self-reference due to the applicability constraints.", method);
+                    $"Method {method.Name} has a self-reference due to the applicability constraints.",
+                    method
+                );
             var applicability = applicabilityParts.FirstOrDefault(p =>
-                                                                  {
-                                                                      try
-                                                                      {
-                                                                          currentlyEvaluating.Add(method);
-                                                                          return p.MemberSelector(method) && p.ScopeSelector(scope);
-                                                                      }
-                                                                      catch (CyclicApplicabilityResultionException)
-                                                                      {
-                                                                          return false;
-                                                                      }
-                                                                      finally
-                                                                      {
-                                                                          currentlyEvaluating.Remove(method);
-                                                                      }
-                                                                  });
+            {
+                try
+                {
+                    currentlyEvaluating.Add(method);
+                    return p.MemberSelector(method) && p.ScopeSelector(scope);
+                }
+                catch (CyclicApplicabilityResultionException)
+                {
+                    return false;
+                }
+                finally
+                {
+                    currentlyEvaluating.Remove(method);
+                }
+            });
             if (applicability == null)
                 return method;
 
-            return GetApplicabilitySpecificMethod(method, applicability) ??
-                   DefaultImplementationOfInterfacesExtensions.FindMostSpecificOverride(method,
-                                                                                        applicability.InterfaceType);
+            return GetApplicabilitySpecificMethod(method, applicability)
+                ?? DefaultImplementationOfInterfacesExtensions.FindMostSpecificOverride(
+                    method,
+                    applicability.InterfaceType
+                );
         }
 
-        private static MethodInfo GetApplicabilitySpecificMethod(MethodInfo method, ApplicabilityPart applicability)
+        private static MethodInfo GetApplicabilitySpecificMethod(
+            MethodInfo method,
+            ApplicabilityPart applicability
+        )
         {
             // ReSharper disable once PossibleNullReferenceException
             var fullName = FullName(method);
             var typeInfo = applicability.InterfaceType.GetTypeInfo();
-            var ret = typeInfo.DeclaredMethods
-                              .FirstOrDefault(m => ImplementingName(m) == fullName);
+            var ret = typeInfo.DeclaredMethods.FirstOrDefault(m => ImplementingName(m) == fullName);
             return ret;
         }
 
@@ -129,7 +150,6 @@ namespace OpenSmc.Scopes.Proxy
                 return split.First() + split.Last();
             return methodInfo.Name;
         }
-
 
         private static string FullName(MethodInfo method)
         {
@@ -160,8 +180,16 @@ namespace OpenSmc.Scopes.Proxy
         {
             Method = method;
         }
-    }
 
+        public CyclicApplicabilityResultionException()
+            : base() { }
+
+        public CyclicApplicabilityResultionException(string message)
+            : base(message) { }
+
+        public CyclicApplicabilityResultionException(string message, Exception innerException)
+            : base(message, innerException) { }
+    }
 
     internal record ApplicabilityPart
     {
@@ -174,7 +202,8 @@ namespace OpenSmc.Scopes.Proxy
     {
         private readonly Type interfaceType;
         private readonly Func<object, bool> scopeSelector;
-        internal IReadOnlyCollection<Func<MethodInfo, bool>> MemberSelectors { get; init; } = Array.Empty<Func<MethodInfo, bool>>();
+        internal IReadOnlyCollection<Func<MethodInfo, bool>> MemberSelectors { get; init; } =
+            Array.Empty<Func<MethodInfo, bool>>();
 
         public ApplicabilityPartBuilder(Type interfaceType, Func<object, bool> scopeSelector)
         {
@@ -182,23 +211,36 @@ namespace OpenSmc.Scopes.Proxy
             this.scopeSelector = scopeSelector;
         }
 
-        public ApplicabilityPartBuilder<TScope> ForMember<TReturn>(Expression<Func<TScope, TReturn>> memberExpression)
+        public ApplicabilityPartBuilder<TScope> ForMember<TReturn>(
+            Expression<Func<TScope, TReturn>> memberExpression
+        )
         {
             MethodInfo method = memberExpression.GetMethod();
             if (method == null)
-                throw new ArgumentException("Expression supplied must be ¨Property or Method selection", nameof(memberExpression));
+                throw new ArgumentException(
+                    "Expression supplied must be ¨Property or Method selection",
+                    nameof(memberExpression)
+                );
 
-            return this with { MemberSelectors = MemberSelectors.Concat(((Func<MemberInfo, bool>)(x => x == method)).RepeatOnce()).ToArray() };
+            return this with
+            {
+                MemberSelectors = MemberSelectors
+                    .Concat(((Func<MemberInfo, bool>)(x => x == method)).RepeatOnce())
+                    .ToArray()
+            };
         }
 
         internal ApplicabilityPart Build()
         {
             return new ApplicabilityPart
-                   {
-                       ScopeSelector = scopeSelector,
-                       MemberSelector = MemberSelectors.Count > 0 ? MemberSelectors.Aggregate((x, y) => m => x(m) || y(m)) : _ => true,
-                       InterfaceType = interfaceType
-                   };
+            {
+                ScopeSelector = scopeSelector,
+                MemberSelector =
+                    MemberSelectors.Count > 0
+                        ? MemberSelectors.Aggregate((x, y) => m => x(m) || y(m))
+                        : _ => true,
+                InterfaceType = interfaceType
+            };
         }
     }
 }

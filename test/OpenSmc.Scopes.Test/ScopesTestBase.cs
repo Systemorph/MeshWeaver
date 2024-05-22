@@ -7,12 +7,12 @@ namespace OpenSmc.Scopes.Test;
 
 public class ScopesTestBase : HubTestBase
 {
-
     protected IScopeFactory ScopeFactory;
 
     protected ScopesTestBase(ITestOutputHelper output)
         : base(output)
     {
+        Services.AddScopes();
     }
 
     protected override void Initialize()
@@ -28,12 +28,13 @@ public class ScopesTestBase : HubTestBase
         return (scopes.First(), storage);
     }
 
-    protected virtual (ICollection<TScope> scopes, IdentitiesStorage storage) GetTestScopes<TScope>(int nScopes = 1)
+    protected virtual (ICollection<TScope> scopes, IdentitiesStorage storage) GetTestScopes<TScope>(
+        int nScopes = 1
+    )
         where TScope : class, IScope
     {
         var storage = new IdentitiesStorage(nScopes);
-        var scopes = ScopeFactory.ForIdentities(storage.Identities, storage)
-            .ToScopes<TScope>();
+        var scopes = ScopeFactory.ForIdentities(storage.Identities, storage).ToScopes<TScope>();
         return (scopes, storage);
     }
 }

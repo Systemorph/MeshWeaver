@@ -1,39 +1,33 @@
 {
-  "$type": "Systemorph.Pivot.Models.PivotModel, Systemorph.Pivot",
   "columns": [
     {
-      "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+      "systemName": "BoP",
+      "displayName": "Beginning of Period",
       "coordinates": [
         "BoP"
       ],
-      "systemName": "BoP",
-      "displayName": "Beginning of Period",
       "grouperName": "ColumnName"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+      "systemName": "Delta",
+      "displayName": "Delta",
       "coordinates": [
         "Delta"
       ],
-      "systemName": "Delta",
-      "displayName": "Delta",
       "grouperName": "ColumnName"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+      "systemName": "EoP",
+      "displayName": "End of Period",
       "coordinates": [
         "EoP"
       ],
-      "systemName": "EoP",
-      "displayName": "End of Period",
       "grouperName": "ColumnName"
     }
   ],
   "rows": [
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "TopGroup"
         ],
@@ -42,10 +36,9 @@
         "grouperName": "Total"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "boP": 4.0,
-        "delta": 4.0,
-        "eoP": 4.0
+        "BoP": 4,
+        "Delta": 4,
+        "EoP": 4
       }
     }
   ],

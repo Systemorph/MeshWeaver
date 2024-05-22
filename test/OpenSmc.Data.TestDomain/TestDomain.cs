@@ -1,7 +1,6 @@
 ﻿using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
-using OpenSmc.Domain.Abstractions;
-using OpenSmc.Domain.Abstractions.Attributes;
+using OpenSmc.Domain;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data.TestDomain;
@@ -10,30 +9,24 @@ public static class TestDomain
 {
     public record ImportAddress(object Host) : IHostedAddress;
 
-    public static readonly Dictionary<Type, IEnumerable<object>> TestRecordsDomain
-        =
+    public static readonly Dictionary<Type, IEnumerable<object>> TestRecordsDomain =
         new()
         {
-            {
-                typeof(MyRecord), new MyRecord[]
-                {
-                }
-            },
-            {
-                typeof(MyRecord2), new MyRecord2[]
-                {
-                }
-            }
+            { typeof(MyRecord), new MyRecord[] { } },
+            { typeof(MyRecord2), new MyRecord2[] { } }
         };
 
-    public static TDataSource ConfigureCategory<TDataSource>(this TDataSource dataSource, IDictionary<Type, IEnumerable<object>> typeAndInstance)
-        where TDataSource : DataSource<TDataSource>
-        => typeAndInstance.Aggregate(dataSource,
-            (ds, kvp) =>
-                ds.WithType(kvp.Key, t => t.WithInitialData(kvp.Value)));
+    public static TDataSource ConfigureCategory<TDataSource>(
+        this TDataSource dataSource,
+        IDictionary<Type, IEnumerable<object>> typeAndInstance
+    )
+        where TDataSource : DataSource<TDataSource> =>
+        typeAndInstance.Aggregate(
+            dataSource,
+            (ds, kvp) => ds.WithType(kvp.Key, t => t.WithInitialData(kvp.Value))
+        );
 
-    public static readonly Dictionary<Type, IEnumerable<object>> ContractDomain
-        =
+    public static readonly Dictionary<Type, IEnumerable<object>> ContractDomain =
         new()
         {
             { typeof(Contract), new Contract[] { } },
@@ -46,6 +39,7 @@ public static class TestDomain
     {
         [Required]
         public string Street { get; set; }
+
         [Category<Country>]
         public string Country { get; set; }
     }
@@ -54,8 +48,10 @@ public static class TestDomain
     {
         [Key]
         public string SystemName { get; init; }
+
         [Range(1999, 2023)]
         public int FoundationYear { get; set; }
+
         [Category("ContractType")]
         public string ContractType { get; set; }
     }
@@ -69,6 +65,8 @@ public static class TestDomain
 
     public record Discount
     {
+        public Guid Id { get; init; } = Guid.NewGuid();
+
         [Percentage]
         public double DoubleValue { get; init; }
 
@@ -81,5 +79,4 @@ public static class TestDomain
         [Percentage]
         public int IntValue { get; init; }
     }
-
 }

@@ -3,103 +3,29 @@ import type {
     StackSkin,
     StackView
 } from "@open-smc/application/src/controls/LayoutStackControl";
-import { AreaChangedEvent } from "@open-smc/application/src/application.contract";
+import { AreaChangedEvent } from "@open-smc/application/src/contract/application.contract";
 import { v4 } from "uuid";
-import { mainWindowAreas } from "@open-smc/application/src/controls/MainWindow";
 import { modalWindowAreas } from "@open-smc/application/src/controls/ModalWindow";
 import {Builder} from "@open-smc/utils/src/Builder";
-import {StyleBuilder} from "./StyleBuilder";
+// import {StyleBuilder} from "./StyleBuilder";
 import { insertAfter } from "@open-smc/utils/src/insertAfter";
-import { ControlBase, ControlBuilderBase } from "./ControlBase";
+import { ControlBase } from "./ControlBase";
+import { mainWindowAreas } from "@open-smc/application/src/controls/mainWindowApi";
+import { Style } from "packages/application/src/contract/controls/Style";
 
 export class LayoutStack extends ControlBase implements StackView {
     skin: StackSkin;
-    areas: AreaChangedEvent[];
+    readonly areas: AreaChangedEvent[] = [];
     highlightNewAreas: boolean;
     columnCount: number;
 
-    constructor() {
-        super("LayoutStackControl");
+    constructor(id?: string) {
+        super("LayoutStackControl", id);
     }
 
-    addView(viewBuilder: ControlBuilderBase, buildFunc?: (builder: AreaChangedEventBuilder) => void) {
-        const builder = new AreaChangedEventBuilder<StackOptions>().withView(viewBuilder);
-        buildFunc?.(builder);
-
-        if (!this.areas) {
-            this.areas = [];
-        }
-
-        const event = builder.build()
-        const {view, area, options} = event;
-
-        const insertAfterArea = options?.insertAfter;
-
-        const insertAfterEvent =
-            insertAfterArea ? this.areas.find(a => a.area === insertAfterArea) : null;
-
-        this.areas = insertAfter(this.areas, event, insertAfterEvent);
-
-        this.setArea(area, view, options);
-    }
-
-    removeView(area: string) {
-        const index = this.areas?.findIndex(a => a.area === area);
-
-        if (index !== -1) {
-            this.areas.splice(index, 1);
-            this.setArea(area, null);
-        }
-    }
-}
-
-export class AreaChangedEventBuilder<TOptions = unknown> extends Builder<AreaChangedEvent<TOptions>> {
-    constructor() {
-        super();
-        this.withArea(v4());
-    }
-
-    withArea(value: string) {
-        this.data.area = value;
-        return this;
-    }
-
-    withView(value: ControlBuilderBase) {
-        this.data.view = value.build();
-        return this;
-    }
-
-    withOptions(value: TOptions) {
-        this.data.options = value;
-        return this;
-    }
-
-    withStyle(buildFunc: (builder: StyleBuilder) => void) {
-        const builder = new StyleBuilder();
-        buildFunc(builder);
-        this.data.style = builder.build();
-        return this;
-    }
-}
-
-export class LayoutStackBuilder extends ControlBuilderBase<LayoutStack> {
-    constructor(areas?: AreaChangedEvent[]) {
-        super(LayoutStack);
-        this.data.areas = areas;
-    }
-
-    withView(view: ControlBuilderBase, buildFunc?: (builder: AreaChangedEventBuilder) => void) {
-        const builder = new AreaChangedEventBuilder().withView(view);
-        buildFunc?.(builder);
-
-        if (!this.data.areas) {
-            this.data.areas = [];
-        }
-
-        const builtArea = builder.build()
-
-        this.data.areas.push(builtArea);
-
+    withView(control: ControlBase, area = v4(), options?: any, style?: Style) {
+        this.addChildHub(control, control.address);
+        this.areas.push(new AreaChangedEvent(area, control, options, style));
         return this;
     }
 
@@ -108,85 +34,135 @@ export class LayoutStackBuilder extends ControlBuilderBase<LayoutStack> {
     }
 
     withHighlightNewAreas(value: boolean) {
-        this.data.highlightNewAreas = value;
+        this.highlightNewAreas = value;
         return this;
     }
 
     withColumnCount(value: number) {
-        this.data.columnCount = value;
+        this.columnCount = value;
         return this;
     }
+
+    // addView(view: ControlBase, buildFunc?: (builder: AreaChangedEventBuilder) => void) {
+    //     const are
+    //     const builder = new AreaChangedEventBuilder<StackOptions>().withView(viewBuilder);
+    //     buildFunc?.(builder);
+    //
+    //     if (!this.areas) {
+    //         this.areas = [];
+    //     }
+    //
+    //     const event = builder.build()
+    //     const {view, area, options} = event;
+    //
+    //     const insertAfterArea = options?.insertAfter;
+    //
+    //     const insertAfterEvent =
+    //         insertAfterArea ? this.areas.find(a => a.area === insertAfterArea) : null;
+    //
+    //     this.areas = insertAfter(this.areas, event, insertAfterEvent);
+    //
+    //     this.sendMessage(new AreaChangedEvent(area, view, options));
+    // }
+    //
+    // removeView(area: string) {
+    //     const index = this.areas?.findIndex(a => a.area === area);
+    //
+    //     if (index !== -1) {
+    //         this.areas.splice(index, 1);
+    //         this.setArea(area, null);
+    //     }
+    // }
 }
 
-export class SmappWindowBuilder extends LayoutStackBuilder {
-    constructor() {
-        super();
+// export class AreaChangedEventBuilder<TOptions = unknown> extends Builder<AreaChangedEvent<TOptions>> {
+//     constructor() {
+//         super();
+//         this.withArea(v4());
+//     }
+//
+//     withArea(value: string) {
+//         this.data.area = value;
+//         return this;
+//     }
+//
+//     withView(value: ControlBuilderBase) {
+//         this.data.view = value.build();
+//         return this;
+//     }
+//
+//     withOptions(value: TOptions) {
+//         this.data.options = value;
+//         return this;
+//     }
+//
+//     withStyle(buildFunc: (builder: StyleBuilder) => void) {
+//         const builder = new StyleBuilder();
+//         buildFunc(builder);
+//         this.data.style = builder.build();
+//         return this;
+//     }
+// }
+
+export class MainWindowStack extends LayoutStack {
+    constructor(id?: string) {
+        super(id);
         this.withSkin("MainWindow");
     }
 
-    withSideMenu(view: ControlBuilderBase) {
-        return this.withView(view, (builder) => builder
-            .withArea(mainWindowAreas.sideMenu)
-        );
+    withSideMenu(control: ControlBase) {
+        return this.withView(control, mainWindowAreas.sideMenu);
     }
 
-    withToolbar(view: ControlBuilderBase) {
-        return this.withView(view, (builder) => builder
-            .withArea(mainWindowAreas.toolbar)
-        );
+    withToolbar(control: ControlBase) {
+        return this.withView(control, mainWindowAreas.toolbar);
     }
 
-    withContextMenu(view: ControlBuilderBase) {
-        return this.withView(view, (builder) => builder
-            .withArea(mainWindowAreas.contextMenu));
+    withContextMenu(control: ControlBase) {
+        return this.withView(control , mainWindowAreas.contextMenu);
     }
 
-    withMain(view: ControlBuilderBase) {
-        return this.withView(view, (builder) => builder
-            .withArea(mainWindowAreas.main)
-        );
+    withMain(control: ControlBase) {
+        return this.withView(control, mainWindowAreas.main);
     }
 
-    withStatusBar(view: ControlBuilderBase) {
-        return this.withView(view, (builder) => builder
-            .withArea(mainWindowAreas.statusBar)
-        );
+    withStatusBar(control: ControlBase) {
+        return this.withView(control, mainWindowAreas.statusBar);
     }
 
-    withModal(view: ControlBuilderBase) {
-        return this.withView(view, (builder) => builder
-            .withArea(mainWindowAreas.modal)
-        );
+    withModal(control: ControlBase) {
+        return this.withView(control, mainWindowAreas.modal);
     }
 }
 
-export class ModalWindowBuilder extends LayoutStackBuilder {
-    constructor() {
-        super();
-        this.withSkin("Modal");
-    }
+//
+// export class ModalWindowBuilder extends LayoutStackBuilder {
+//     constructor() {
+//         super();
+//         this.withSkin("Modal");
+//     }
+//
+//     withHeader(view: ControlBuilderBase) {
+//         return this.withView(view, (builder) => builder
+//             .withArea(modalWindowAreas.header)
+//         )
+//     }
+//
+//     withMain(view: ControlBuilderBase) {
+//         return this.withView(view, (builder) => builder
+//             .withArea(modalWindowAreas.main)
+//         )
+//     }
+//
+//     withFooter(view: ControlBuilderBase) {
+//         return this.withView(view, (builder) => builder
+//             .withArea(modalWindowAreas.footer)
+//         )
+//     }
+// }
 
-    withHeader(view: ControlBuilderBase) {
-        return this.withView(view, (builder) => builder
-            .withArea(modalWindowAreas.header)
-        )
-    }
-
-    withMain(view: ControlBuilderBase) {
-        return this.withView(view, (builder) => builder
-            .withArea(modalWindowAreas.main)
-        )
-    }
-
-    withFooter(view: ControlBuilderBase) {
-        return this.withView(view, (builder) => builder
-            .withArea(modalWindowAreas.footer)
-        )
-    }
-}
-
-export const makeStack = (areas?: AreaChangedEvent[]) => new LayoutStackBuilder(areas);
-
-export const makeSmappWindow = () => new SmappWindowBuilder();
-
-export const makeModalWindow = () => new ModalWindowBuilder();
+export const makeStack = (id?: string) => new LayoutStack(id);
+//
+// export const makeSmappWindow = () => new SmappWindowBuilder();
+//
+// export const makeModalWindow = () => new ModalWindowBuilder();

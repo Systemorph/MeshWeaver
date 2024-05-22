@@ -1,11 +1,14 @@
 using OpenSmc.Charting.Enums;
+using OpenSmc.Data;
 using OpenSmc.DataCubes;
-using OpenSmc.Domain.Abstractions;
-using OpenSmc.Domain.Abstractions.Attributes;
+using OpenSmc.Domain;
 using OpenSmc.Fixture;
+using OpenSmc.Hub.Fixture;
+using OpenSmc.Json.Assertions;
 using OpenSmc.Pivot.Builder;
 using OpenSmc.TestDomain;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace OpenSmc.Charting.Pivot.Test;
 
@@ -13,8 +16,8 @@ public record Name : Dimension
 {
     public static Name[] Data =
     {
-        new() {SystemName = "P", DisplayName = "Paolo"},
-        new() {SystemName = "A", DisplayName = "Alessandro"}
+        new() { SystemName = "P", DisplayName = "Paolo" },
+        new() { SystemName = "A", DisplayName = "Alessandro" }
     };
 }
 
@@ -53,10 +56,9 @@ public record RecordWithValues
         Value = value;
         ValueIndex = valueIndex;
     }
-
 }
 
-public class SimplePivotChartTest
+public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
 {
     private static readonly RecordWithValues[] RecordsWithValues =
     {
@@ -77,196 +79,227 @@ public class SimplePivotChartTest
         new("A", "RU", 7, 4)
     };
 
-    private static readonly IDataCube<RecordWithValues> CubeWithValues  = RecordsWithValues.ToDataCube();
+    private static readonly IDataCube<RecordWithValues> CubeWithValues =
+        RecordsWithValues.ToDataCube();
+
+    private async Task<WorkspaceState> GetWorkspaceState()
+    {
+        var workspace = GetHost().GetWorkspace();
+        await workspace.Initialized;
+        return workspace.State;
+    }
 
     [Fact]
     public async Task BarChartAggregatedByCountry()
     {
-        var charSlicedByName =  PivotFactory.ForDataCube(CubeWithValues)
-                                           .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
-                                           .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
-                                           .SliceRowsBy(nameof(Name))
-                                           .ToBarChart()
-                                           .WithTitle("AggregateByCountry")
-                                           .Execute();
+        var charSlicedByName = PivotFactory
+            .ForDataCube(CubeWithValues)
+            .WithState(await GetWorkspaceState())
+            .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
+            .SliceRowsBy(nameof(Name))
+            .ToBarChart()
+            .WithTitle("AggregateByCountry")
+            .Execute();
         await charSlicedByName.JsonShouldMatch($"{nameof(BarChartAggregatedByCountry)}.json");
     }
 
     [Fact]
     public async Task BarChartAggregatedByName()
     {
-        var charSliceByCountry =  PivotFactory.ForDataCube(CubeWithValues)
-                                                  .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
-                                                  .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
-                                                  .SliceRowsBy(nameof(Country))
-                                                  .ToBarChart()
-                                                  .Execute();
+        var charSliceByCountry = PivotFactory
+            .ForDataCube(CubeWithValues)
+            .WithState(await GetWorkspaceState())
+            .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
+            .SliceRowsBy(nameof(Country))
+            .ToBarChart()
+            .Execute();
         await charSliceByCountry.JsonShouldMatch($"{nameof(BarChartAggregatedByName)}.json");
     }
 
     [Fact]
     public async Task StackedBarChartTestLabelSetting()
     {
-        var charStacked =  PivotFactory.ForDataCube(CubeWithValues)
-                                           .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
-                                           .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
-                                           .SliceRowsBy(nameof(Name), nameof(Country))
-                                           .ToBarChart()
-                                           .AsStackedWithScatterTotals()
-                                           .WithOptions(m => m.WithLabelsFromLevels(0,1))
-                                           .Execute();
+        var charStacked = PivotFactory
+            .ForDataCube(CubeWithValues)
+            .WithState(await GetWorkspaceState())
+            .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
+            .SliceRowsBy(nameof(Name), nameof(Country))
+            .ToBarChart()
+            .AsStackedWithScatterTotals()
+            .WithOptions(m => m.WithLabelsFromLevels(0, 1))
+            .Execute();
         await charStacked.JsonShouldMatch($"{nameof(StackedBarChartTestLabelSetting)}.json");
     }
 
     [Fact]
     public async Task BarChartTestWithOption()
     {
-        var doubleColumnSlice =  PivotFactory.ForDataCube(CubeWithValues)
-                                                 .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
-                                                 .SliceColumnsBy(nameof(RecordWithValues.ValueIndex), nameof(Country))
-                                                 .ToBarChart()
-                                                 .WithOptions(m => m)
-                                                 .Execute();
+        var doubleColumnSlice = PivotFactory
+            .ForDataCube(CubeWithValues)
+            .WithState(await GetWorkspaceState())
+            .SliceColumnsBy(nameof(RecordWithValues.ValueIndex), nameof(Country))
+            .ToBarChart()
+            .WithOptions(m => m)
+            .Execute();
         await doubleColumnSlice.JsonShouldMatch($"{nameof(BarChartTestWithOption)}.json");
     }
 
     [Fact]
     public async Task BarChartWithHierarchicalColumns()
     {
-        var doubleColumnSliceTwoRows =  PivotFactory.ForDataCube(CubeWithValues)
-                                                        .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
-                                                        .SliceColumnsBy(nameof(Country), nameof(RecordWithValues.ValueIndex))
-                                                        .SliceRowsBy(nameof(Name))
-                                                        .ToBarChart()
-                                                        .Execute();
-        await doubleColumnSliceTwoRows.JsonShouldMatch($"{nameof(BarChartWithHierarchicalColumns)}.json");
+        var doubleColumnSliceTwoRows = PivotFactory
+            .ForDataCube(CubeWithValues)
+            .WithState(await GetWorkspaceState())
+            .SliceColumnsBy(nameof(Country), nameof(RecordWithValues.ValueIndex))
+            .SliceRowsBy(nameof(Name))
+            .ToBarChart()
+            .Execute();
+        await doubleColumnSliceTwoRows.JsonShouldMatch(
+            $"{nameof(BarChartWithHierarchicalColumns)}.json"
+        );
     }
 
     [Fact]
     public async Task BarChartWithOneDefaultColumnReport()
     {
-        var noColumnSlice =  PivotFactory.ForDataCube(CubeWithValues)
-                                             .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
-                                             .SliceRowsBy(nameof(RecordWithValues.ValueIndex))
-                                             .ToBarChart()
-                                             .Execute();
+        var noColumnSlice = PivotFactory
+            .ForDataCube(CubeWithValues)
+            .WithState(await GetWorkspaceState())
+            .SliceRowsBy(nameof(RecordWithValues.ValueIndex))
+            .ToBarChart()
+            .Execute();
         await noColumnSlice.JsonShouldMatch($"{nameof(BarChartWithOneDefaultColumnReport)}.json");
     }
 
     [Fact]
     public async Task StackedBarChartWithManyColumns()
     {
-        var stackOneOne =  PivotFactory.ForDataCube(CubeWithValues)
-                                           .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
-                                           .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
-                                           .SliceRowsBy(nameof(Country))
-                                           .ToBarChart()
-                                           .AsStackedWithScatterTotals()
-                                           .Execute();
+        var stackOneOne = PivotFactory
+            .ForDataCube(CubeWithValues)
+            .WithState(await GetWorkspaceState())
+            .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
+            .SliceRowsBy(nameof(Country))
+            .ToBarChart()
+            .AsStackedWithScatterTotals()
+            .Execute();
         await stackOneOne.JsonShouldMatch($"{nameof(StackedBarChartWithManyColumns)}.json");
     }
 
     [Fact]
     public async Task StackedBarPlotsWithRestrictedColumns()
     {
-        var stackTwoTwo =  PivotFactory.ForDataCube(CubeWithValues)
-                                           .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
-                                           .SliceColumnsBy(nameof(Name))
-                                           .SliceRowsBy(nameof(Country))
-                                           .ToBarChart()
-                                           .AsStackedWithScatterTotals()
-                                           .Execute();
+        var stackTwoTwo = PivotFactory
+            .ForDataCube(CubeWithValues)
+            .WithState(await GetWorkspaceState())
+            .SliceColumnsBy(nameof(Name))
+            .SliceRowsBy(nameof(Country))
+            .ToBarChart()
+            .AsStackedWithScatterTotals()
+            .Execute();
         await stackTwoTwo.JsonShouldMatch($"{nameof(StackedBarPlotsWithRestrictedColumns)}.json");
     }
 
     [Fact]
     public async Task BarChartWithRenaming()
     {
-        var charSlicedByName =  PivotFactory.ForDataCube(CubeWithValues)
-                                                .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
-                                                .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
-                                                .SliceRowsBy(nameof(Country))
-                                                .ToBarChart()
-                                                .WithOptions(model => model.WithLabels("A", "B", "C", "D", "E", "F", "G", "H")
-                                                                           .WithLegendItems("Country1", "Country2", "Country3"))
-                                                .WithColorScheme(Palettes.Brewer.Blues3)
-                                                .Execute();
+        var charSlicedByName = PivotFactory
+            .ForDataCube(CubeWithValues)
+            .WithState(await GetWorkspaceState())
+            .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
+            .SliceRowsBy(nameof(Country))
+            .ToBarChart()
+            .WithOptions(model =>
+                model
+                    .WithLabels("A", "B", "C", "D", "E", "F", "G", "H")
+                    .WithLegendItems("Country1", "Country2", "Country3")
+            )
+            .WithColorScheme(Palettes.Brewer.Blues3)
+            .Execute();
         await charSlicedByName.JsonShouldMatch($"{nameof(BarChartWithRenaming)}.json");
     }
 
     [Fact]
     public async Task BarChartWithOptionsAndRenaming()
     {
-        var charSliceByName =  PivotFactory.ForDataCube(CubeWithValues)
-                                               .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
-                                               .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
-                                               .SliceRowsBy(nameof(Name), nameof(Country))
-                                               .ToBarChart()
-                                               .WithOptions(model => (model with
-                                                                      {
-                                                                          Rows = model.Rows
-                                                                                      .Where(row => row.Descriptor.Coordinates.Count == 2)
-                                                                                      .ToList()
-                                                                      }).WithLegendItemsFromLevels(".", 1, 0))
-                                               .Execute();
+        var charSliceByName = PivotFactory
+            .ForDataCube(CubeWithValues)
+            .WithState(await GetWorkspaceState())
+            .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
+            .SliceRowsBy(nameof(Name), nameof(Country))
+            .ToBarChart()
+            .WithOptions(model =>
+                (
+                    model with
+                    {
+                        Rows = model
+                            .Rows.Where(row => row.Descriptor.Coordinates.Count == 2)
+                            .ToList()
+                    }
+                ).WithLegendItemsFromLevels(".", 1, 0)
+            )
+            .Execute();
         await charSliceByName.JsonShouldMatch($"{nameof(BarChartWithOptionsAndRenaming)}.json");
     }
 
     [Fact]
     public async Task MixedChart()
     {
-        var mixedPlot1 =  PivotFactory.ForDataCube(CubeWithValues)
-                                          .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
-                                          .SliceRowsBy(nameof(Name))
-                                          .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
-                                          .ToBarChart()
-                                          .WithRowsAsLine("Paolo")
-                                          .Execute();
+        var mixedPlot1 = PivotFactory
+            .ForDataCube(CubeWithValues)
+            .WithState(await GetWorkspaceState())
+            .SliceRowsBy(nameof(Name))
+            .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
+            .ToBarChart()
+            .WithRowsAsLine("Paolo")
+            .Execute();
         await mixedPlot1.JsonShouldMatch($"{nameof(MixedChart)}.json");
     }
 
     [Fact]
     public async Task LineChart()
     {
-        var linePlot1 =  PivotFactory.ForDataCube(CubeWithValues)
-                                         .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
-                                         .SliceRowsBy(nameof(Name), nameof(Country))
-                                         .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
-                                         .ToLineChart()
-                                         .WithSmoothedLines("Paolo.Italy")
-                                         .WithSmoothedLines(new Dictionary<string, double>(){{"Alessandro.Italy", 0.5}})
-                                         .WithRows("Alessandro.Italy", "Paolo.Italy")
-                                         .WithOptions(model => model.WithLabels("8", "9", "10", "11", "12", "13", "14"))
-                                         .Execute();
+        var linePlot1 = PivotFactory
+            .ForDataCube(CubeWithValues)
+            .WithState(await GetWorkspaceState())
+            .SliceRowsBy(nameof(Name), nameof(Country))
+            .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
+            .ToLineChart()
+            .WithSmoothedLines("Paolo.Italy")
+            .WithSmoothedLines(new Dictionary<string, double>() { { "Alessandro.Italy", 0.5 } })
+            .WithRows("Alessandro.Italy", "Paolo.Italy")
+            .WithOptions(model => model.WithLabels("8", "9", "10", "11", "12", "13", "14"))
+            .Execute();
         await linePlot1.JsonShouldMatch($"{nameof(LineChart)}.json");
     }
 
     [Fact]
     public async Task SimpleRadarChart()
     {
-        var radarChart =  PivotFactory.ForDataCube(CubeWithValues)
-                                     .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
-                                     .SliceRowsBy((nameof(Name)))
-                                     .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
-                                     .ToRadarChart()
-                                     .Execute();
+        var radarChart = PivotFactory
+            .ForDataCube(CubeWithValues)
+            .WithState(await GetWorkspaceState())
+            .SliceRowsBy((nameof(Name)))
+            .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
+            .ToRadarChart()
+            .Execute();
         await radarChart.JsonShouldMatch($"{nameof(SimpleRadarChart)}.json");
     }
 
     [Fact]
     public async Task RadarChartWithExtraOptions()
     {
-        var radarChart =  PivotFactory.ForDataCube(CubeWithValues)
-                                     .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
-                                     .SliceRowsBy(nameof(Name), nameof(Country))
-                                     .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
-                                     .ToRadarChart()
-                                     .WithSmoothedLines(new Dictionary<string, double>() { { "Alessandro.Italy", 0.2 } })
-                                     .WithFilledArea()
-                                     .WithRows("Alessandro.Italy", "Paolo.Italy")
-                                     .WithColorScheme(new string[] { "#1ECBE1", "#E1341E" })
-                                     .WithTitle("Two lines radar plot", t => t.WithFontSize(15).AlignAtStart())
-                                     .Execute();
+        var radarChart = PivotFactory
+            .ForDataCube(CubeWithValues)
+            .WithState(await GetWorkspaceState())
+            .SliceRowsBy(nameof(Name), nameof(Country))
+            .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
+            .ToRadarChart()
+            .WithSmoothedLines(new Dictionary<string, double>() { { "Alessandro.Italy", 0.2 } })
+            .WithFilledArea()
+            .WithRows("Alessandro.Italy", "Paolo.Italy")
+            .WithColorScheme(new string[] { "#1ECBE1", "#E1341E" })
+            .WithTitle("Two lines radar plot", t => t.WithFontSize(15).AlignAtStart())
+            .Execute();
         await radarChart.JsonShouldMatch($"{nameof(RadarChartWithExtraOptions)}.json");
     }
 
@@ -274,19 +307,22 @@ public class SimplePivotChartTest
     public async Task SimpleWaterfallChart()
     {
         var filteredCube = CubeWithValues;
-            //.Filter(x => x.Country == "RU" && x.Name == "A");
-        var waterfall =  PivotFactory.ForDataCube(filteredCube)
-                                          .WithQuerySource(new StaticDataFieldReadOnlyWorkspace())
-                                          .SliceColumnsBy(nameof(Country), nameof(Name))
-                                          .ToWaterfallChart()
-                                          .WithStylingOptions(b => b.IncrementColor("#08BFD1")
-                                                                    .DecrementColor("#01AB6C")
-                                                                    .TotalColor("#A7E1ED")
-                                                                    .LabelsFontColor("white")
-                                                                    .LabelsFontSize(14))
-                                          .WithTotals(col =>  col.IsTotalForSlice(nameof(Country)))
-                                          //.WithLegendItems("Increments", "Decrements", "Total")
-                                          .Execute();
+        //.Filter(x => x.Country == "RU" && x.Name == "A");
+        var waterfall = PivotFactory
+            .ForDataCube(filteredCube)
+            .WithState(await GetWorkspaceState())
+            .SliceColumnsBy(nameof(Country), nameof(Name))
+            .ToWaterfallChart()
+            .WithStylingOptions(b =>
+                b.IncrementColor("#08BFD1")
+                    .DecrementColor("#01AB6C")
+                    .TotalColor("#A7E1ED")
+                    .LabelsFontColor("white")
+                    .LabelsFontSize(14)
+            )
+            .WithTotals(col => col.IsTotalForSlice(nameof(Country)))
+            //.WithLegendItems("Increments", "Decrements", "Total")
+            .Execute();
         await waterfall.JsonShouldMatch($"{nameof(SimpleWaterfallChart)}.json");
     }
 }

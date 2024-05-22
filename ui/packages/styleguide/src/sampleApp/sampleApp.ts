@@ -1,7 +1,6 @@
 import { makeSmappWindow, makeStack } from "@open-smc/sandbox/src/LayoutStack";
 import { sideMenu } from "./sideMenu";
 import { makeMenuItem } from "@open-smc/sandbox/src/MenuItem";
-import { mainWindowAreas } from "@open-smc/application/src/controls/MainWindow";
 import {toolbar} from "./toolbar";
 import {ModalOptions} from '@open-smc/application/src/controls/MainWindow';
 import { ControlBuilderBase } from "@open-smc/sandbox/src/ControlBase";

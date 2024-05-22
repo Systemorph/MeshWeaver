@@ -1,9 +1,9 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Xunit.Abstractions;
 
 namespace OpenSmc.Fixture;
@@ -15,9 +15,14 @@ public static class LoggingBuilderExtensions
     /// </summary>
     /// <param name="builder">The <see cref="ILoggingBuilder"/> to use.</param>
     /// <param name="outputHelperAccessor">outputHelperAccessor to register. If not specified, a type singleton is registered</param>
-    public static ILoggingBuilder AddXUnitLogger(this ILoggingBuilder builder, TestOutputHelperAccessor outputHelperAccessor = null)
+    public static ILoggingBuilder AddXUnitLogger(
+        this ILoggingBuilder builder,
+        TestOutputHelperAccessor outputHelperAccessor = null
+    )
     {
-        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ILoggerProvider, XUnitLoggerProvider>());
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ILoggerProvider, XUnitLoggerProvider>()
+        );
         builder.SetMinimumLevel(LogLevel.Debug);
         if (outputHelperAccessor == null)
             builder.Services.AddSingleton<TestOutputHelperAccessor>();
@@ -26,6 +31,7 @@ public static class LoggingBuilderExtensions
         return builder;
     }
 }
+
 public class TestOutputHelperAccessor
 {
     public ITestOutputHelper OutputHelper { get; set; }
@@ -49,13 +55,14 @@ public class XUnitLoggerProvider : ILoggerProvider, ISupportExternalScope
         this.scopeProvider = scopeProvider;
     }
 
-    void IDisposable.Dispose()
-    {
-    }
+    void IDisposable.Dispose() { }
 
     public ILogger CreateLogger(string categoryName)
     {
-        return loggers.GetOrAdd(categoryName, _ => new(categoryName, testOutputHelperAccessor, scopeProvider));
+        return loggers.GetOrAdd(
+            categoryName,
+            _ => new(categoryName, testOutputHelperAccessor, scopeProvider)
+        );
     }
 }
 
@@ -65,7 +72,11 @@ public class XUnitLogger : ILogger
     private readonly string categoryName;
     private readonly IExternalScopeProvider scopeProvider;
 
-    public XUnitLogger(string categoryName, TestOutputHelperAccessor testOutputHelperAccessor, IExternalScopeProvider scopeProvider)
+    public XUnitLogger(
+        string categoryName,
+        TestOutputHelperAccessor testOutputHelperAccessor,
+        IExternalScopeProvider scopeProvider
+    )
     {
         this.testOutputHelperAccessor = testOutputHelperAccessor;
         this.categoryName = categoryName;
@@ -76,7 +87,13 @@ public class XUnitLogger : ILogger
 
     public IDisposable BeginScope<TState>(TState state) => scopeProvider.Push(state);
 
-    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
+    public void Log<TState>(
+        LogLevel logLevel,
+        EventId eventId,
+        TState state,
+        Exception exception,
+        Func<TState, Exception, string> formatter
+    )
     {
         if (testOutputHelperAccessor.OutputHelper == null)
             return;
@@ -87,9 +104,11 @@ public class XUnitLogger : ILogger
 
         var sb = new StringBuilder();
         sb.Append(GetLogLevelString(logLevel))
-          .Append($" {DateTime.UtcNow:hh:mm:ss.fff tt}")
-          .Append(" [").Append(categoryName).AppendLine("] ")
-          .Append(formatter(state, exception));
+            .Append($" {DateTime.UtcNow:hh:mm:ss.fff tt}")
+            .Append(" [")
+            .Append(categoryName)
+            .AppendLine("] ")
+            .Append(formatter(state, exception));
 
         if (exception != null)
         {
@@ -97,17 +116,22 @@ public class XUnitLogger : ILogger
         }
 
         // Append scopes
-        scopeProvider.ForEachScope((scope, s) =>
-        {
-            s.Append("\n => ");
-            s.Append(scope);
-        }, sb);
+        scopeProvider.ForEachScope(
+            (scope, s) =>
+            {
+                s.Append("\n => ");
+                s.Append(scope);
+            },
+            sb
+        );
 
+#pragma warning disable RCS1075 // Avoid empty catch clause that catches System.Exception
         try
         {
             testOutputHelperAccessor.OutputHelper.WriteLine(sb.ToString());
         }
         catch (Exception) { }
+#pragma warning restore RCS1075 // Avoid empty catch clause that catches System.Exception
     }
 
     [SuppressMessage("ReSharper", "StringLiteralTypo")]
