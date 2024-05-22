@@ -1,24 +1,25 @@
-﻿{
-  Type: radar,
-  Data: {
-    DataSets: [
+{
+  "type": 2,
+  "data": {
+    "dataSets": [
       {
-        Fill: true,
-        Tension: 0.2,
-        Data: [
+        "fill": true,
+        "tension": 0.2,
+        "data": [
           -3.9,
           3.4,
-          3.0,
+          3,
           2.7,
           null,
           null,
           null
         ],
-        Label: Alessandro.Italy
+        "label": "Alessandro.Italy",
+        "$type": "OpenSmc.Charting.Models.RadarDataSet"
       },
       {
-        Fill: true,
-        Data: [
+        "fill": true,
+        "data": [
           1.1,
           2.2,
           3.3,
@@ -27,41 +28,50 @@
           null,
           null
         ],
-        Label: Paolo.Italy
+        "label": "Paolo.Italy",
+        "$type": "OpenSmc.Charting.Models.RadarDataSet"
       }
     ],
-    Labels: [
-      1,
-      2,
-      3,
-      4,
-      5,
-      6,
-      7
-    ]
+    "labels": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7"
+    ],
+    "$type": "OpenSmc.Charting.Models.Data"
   },
-  Options: {
-    Plugins: {
-      Legend: {
-        Display: true
+  "options": {
+    "plugins": {
+      "legend": {
+        "display": true,
+        "$type": "OpenSmc.Charting.Models.Options.Legend"
       },
-      Title: {
-        Align: start,
-        Display: true,
-        Font: {
-          Family: Ovеrpass,
-          Size: 15,
-          Weight: 600,
-          LineHeight: 24px
+      "title": {
+        "align": "start",
+        "display": true,
+        "font": {
+          "family": "Ov\u0435rpass",
+          "size": 15,
+          "weight": "600",
+          "lineHeight": "24px",
+          "$type": "OpenSmc.Charting.Models.Options.Font"
         },
-        Text: Two lines radar plot
+        "text": "Two lines radar plot",
+        "$type": "OpenSmc.Charting.Models.Options.Title"
       },
-      ColorSchemes: {
-        Scheme: [
-          #1ECBE1,
-          #E1341E
-        ]
-      }
-    }
-  }
+      "colorSchemes": {
+        "scheme": [
+          "#1ECBE1",
+          "#E1341E"
+        ],
+        "$type": "OpenSmc.Charting.Models.Options.ColorSchemes"
+      },
+      "$type": "OpenSmc.Charting.Models.Options.Plugins"
+    },
+    "$type": "OpenSmc.Charting.Models.Options.Options"
+  },
+  "$type": "OpenSmc.Charting.Models.Chart"
 }

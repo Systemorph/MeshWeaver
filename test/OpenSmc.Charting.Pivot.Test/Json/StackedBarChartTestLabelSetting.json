@@ -47,7 +47,7 @@
         "$type": "OpenSmc.Charting.Models.LineScatterDataSet"
       },
       {
-        "stack": "A.IT",
+        "stack": "A",
         "xAxisID": "x1",
         "data": [
           -3.9,
@@ -58,12 +58,12 @@
           null,
           null
         ],
-        "label": "Italy.Italy",
+        "label": "Alessandro.Italy",
         "type": 0,
         "$type": "OpenSmc.Charting.Models.BarDataSet"
       },
       {
-        "stack": "A.RU",
+        "stack": "A",
         "xAxisID": "x1",
         "data": [
           4.1,
@@ -74,7 +74,7 @@
           4,
           4
         ],
-        "label": "Russia.Russia",
+        "label": "Alessandro.Russia",
         "type": 0,
         "$type": "OpenSmc.Charting.Models.BarDataSet"
       },
@@ -124,7 +124,7 @@
         "$type": "OpenSmc.Charting.Models.LineScatterDataSet"
       },
       {
-        "stack": "P.IT",
+        "stack": "P",
         "xAxisID": "x1",
         "data": [
           1.1,
@@ -135,7 +135,7 @@
           null,
           null
         ],
-        "label": "Italy.Italy",
+        "label": "Paolo.Italy",
         "type": 0,
         "$type": "OpenSmc.Charting.Models.BarDataSet"
       }

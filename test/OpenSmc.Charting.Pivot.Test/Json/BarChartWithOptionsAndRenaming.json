@@ -1,37 +1,39 @@
-﻿{
-  Data: {
-    DataSets: [
+{
+  "data": {
+    "dataSets": [
       {
-        XAxisID: x1,
-        Data: [
+        "xAxisID": "x1",
+        "data": [
           -3.9,
           3.4,
-          3.0,
+          3,
           2.7,
           null,
           null,
           null
         ],
-        Label: Italy.Alessandro,
-        Type: bar
+        "label": "Italy.Alessandro",
+        "type": 0,
+        "$type": "OpenSmc.Charting.Models.BarDataSet"
       },
       {
-        XAxisID: x1,
-        Data: [
+        "xAxisID": "x1",
+        "data": [
           4.1,
-          4.0,
-          -2.0,
-          4.0,
-          3.0,
-          4.0,
-          4.0
+          4,
+          -2,
+          4,
+          3,
+          4,
+          4
         ],
-        Label: Russia.Alessandro,
-        Type: bar
+        "label": "Russia.Alessandro",
+        "type": 0,
+        "$type": "OpenSmc.Charting.Models.BarDataSet"
       },
       {
-        XAxisID: x1,
-        Data: [
+        "xAxisID": "x1",
+        "data": [
           1.1,
           2.2,
           3.3,
@@ -40,49 +42,59 @@
           null,
           null
         ],
-        Label: Italy.Paolo,
-        Type: bar
+        "label": "Italy.Paolo",
+        "type": 0,
+        "$type": "OpenSmc.Charting.Models.BarDataSet"
       }
     ],
-    Labels: [
-      1,
-      2,
-      3,
-      4,
-      5,
-      6,
-      7
-    ]
+    "labels": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7"
+    ],
+    "$type": "OpenSmc.Charting.Models.Data"
   },
-  Options: {
-    Responsive: true,
-    Scales: {
-      x1: {
-        Labels: [
-          1,
-          2,
-          3,
-          4,
-          5,
-          6,
-          7
+  "options": {
+    "responsive": true,
+    "scales": {
+      "x1": {
+        "labels": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7"
         ],
-        Display: true,
-        Stacked: false
+        "display": true,
+        "stacked": false,
+        "$type": "OpenSmc.Charting.Models.Options.Scales.CartesianCategoryScale"
       },
-      y: {
-        Stacked: false
+      "y": {
+        "stacked": false,
+        "$type": "OpenSmc.Charting.Models.Options.Scales.Scale"
       }
     },
-    Plugins: {
-      Legend: {
-        Display: true
+    "plugins": {
+      "legend": {
+        "display": true,
+        "$type": "OpenSmc.Charting.Models.Options.Legend"
       },
-      ColorSchemes: {
-        Scheme: {
-          Palette: brewer.PastelOne9
-        }
-      }
-    }
-  }
+      "colorSchemes": {
+        "scheme": {
+          "palette": "brewer.PastelOne9",
+          "$type": "OpenSmc.Charting.Enums.Palettes"
+        },
+        "$type": "OpenSmc.Charting.Models.Options.ColorSchemes"
+      },
+      "$type": "OpenSmc.Charting.Models.Options.Plugins"
+    },
+    "$type": "OpenSmc.Charting.Models.Options.Options"
+  },
+  "$type": "OpenSmc.Charting.Models.Chart"
 }

@@ -1,25 +1,26 @@
-﻿{
-  Type: line,
-  Data: {
-    DataSets: [
+{
+  "type": 5,
+  "data": {
+    "dataSets": [
       {
-        Fill: false,
-        Tension: 0.5,
-        Data: [
+        "fill": false,
+        "tension": 0.5,
+        "data": [
           -3.9,
           3.4,
-          3.0,
+          3,
           2.7,
           null,
           null,
           null
         ],
-        Label: Alessandro.Italy
+        "label": "Alessandro.Italy",
+        "$type": "OpenSmc.Charting.Models.LineDataSet"
       },
       {
-        Fill: false,
-        Tension: 0.4,
-        Data: [
+        "fill": false,
+        "tension": 0.4,
+        "data": [
           1.1,
           2.2,
           3.3,
@@ -28,29 +29,37 @@
           null,
           null
         ],
-        Label: Paolo.Italy
+        "label": "Paolo.Italy",
+        "$type": "OpenSmc.Charting.Models.LineDataSet"
       }
     ],
-    Labels: [
-      8,
-      9,
-      10,
-      11,
-      12,
-      13,
-      14
-    ]
+    "labels": [
+      "8",
+      "9",
+      "10",
+      "11",
+      "12",
+      "13",
+      "14"
+    ],
+    "$type": "OpenSmc.Charting.Models.Data"
   },
-  Options: {
-    Plugins: {
-      Legend: {
-        Display: true
+  "options": {
+    "plugins": {
+      "legend": {
+        "display": true,
+        "$type": "OpenSmc.Charting.Models.Options.Legend"
       },
-      ColorSchemes: {
-        Scheme: {
-          Palette: brewer.PastelOne9
-        }
-      }
-    }
-  }
+      "colorSchemes": {
+        "scheme": {
+          "palette": "brewer.PastelOne9",
+          "$type": "OpenSmc.Charting.Enums.Palettes"
+        },
+        "$type": "OpenSmc.Charting.Models.Options.ColorSchemes"
+      },
+      "$type": "OpenSmc.Charting.Models.Options.Plugins"
+    },
+    "$type": "OpenSmc.Charting.Models.Options.Options"
+  },
+  "$type": "OpenSmc.Charting.Models.Chart"
 }
