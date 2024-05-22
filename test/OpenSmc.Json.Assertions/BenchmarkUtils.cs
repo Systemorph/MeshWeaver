@@ -20,7 +20,7 @@ public static class BenchmarkUtils
     {
         options.WriteIndented = true;
         var modelSerialized = JsonSerializer.Serialize(model, model.GetType(), options);
-        var filePath = Path.Combine(@"..\..\..\Json", fileName);
+        var filePath = Path.Combine(@"../../../Json", fileName);
 #if REGENERATE
         var benchmark = JsonSerializer.Serialize(model, model.GetType(), options);
         await BenchmarkUtils.WriteBenchmarkAsync(filePath, benchmark);
