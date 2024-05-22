@@ -3,14 +3,12 @@
     public record ColDef
     {
         // ReSharper disable once EmptyConstructor
-        public ColDef()
-        {
-        }
+        public ColDef() { }
 
         // The field of the row to get the cells data from
         public string Field { get; init; }
 
-        public string ColId { get; init; }
+        public object ColId { get; init; }
 
         // The name to render in the column header. If not specified and field is specified, the field name will be used as the header name.
         public string HeaderName { get; init; }
@@ -97,7 +95,7 @@
     // params for the agGroupCellRenderer CellRenderer
     public record CellRendererParams
     {
-        // The value getter for the footer text. 
+        // The value getter for the footer text.
         public string FooterValueGetter { get; init; }
 
         // The renderer to use for inside the cell

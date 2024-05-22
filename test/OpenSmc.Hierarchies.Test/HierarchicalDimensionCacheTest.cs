@@ -1,24 +1,40 @@
 ﻿using FluentAssertions;
 using FluentAssertions.Execution;
+using OpenSmc.Data;
+using OpenSmc.Hub.Fixture;
+using OpenSmc.Messaging;
 using OpenSmc.TestDomain;
 using OpenSmc.TestDomain.SimpleData;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace OpenSmc.Hierarchies.Test;
 
-public class HierarchicalDimensionCacheTest
+public class HierarchicalDimensionCacheTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    [Fact]
-    public void InitializationTest()
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
-        var querySource = new StaticDataFieldReadOnlyWorkspace();
-        var hierarchies = querySource.ToHierarchicalDimensionCache();
-        using (new AssertionScope())
-        {
-            hierarchies.Get<TestHierarchicalDimensionA>().Should().BeNull();
-            hierarchies.Get<TestHierarchicalDimensionA>("A111").Should().BeNull();
-        }
-        hierarchies.Initialize<TestHierarchicalDimensionA>();
+        return base.ConfigureHost(configuration)
+            .AddData(data =>
+                data.FromConfigurableDataSource(
+                    "Test Data",
+                    dataSource =>
+                        dataSource
+                            .WithType<TestHierarchicalDimensionA>(type =>
+                                type.WithInitialData(TestHierarchicalDimensionA.Data)
+                            )
+                            .WithType<TestHierarchicalDimensionB>(type =>
+                                type.WithInitialData(TestHierarchicalDimensionB.Data)
+                            )
+                )
+            );
+    }
+
+    [Fact]
+    public async Task InitializationTest()
+    {
+        var workspace = await GetWorkspace();
+        var hierarchies = workspace.State.ToHierarchicalDimensionCache();
         using (new AssertionScope())
         {
             hierarchies.Get<TestHierarchicalDimensionA>().Should().NotBeNull();
@@ -28,166 +44,113 @@ public class HierarchicalDimensionCacheTest
         }
     }
 
-    [Fact]
-    public void LeafLevelTest()
+    private async Task<IWorkspace> GetWorkspace()
     {
-        var querySource = new StaticDataFieldReadOnlyWorkspace();
-        var hierarchies = querySource.ToHierarchicalDimensionCache();
-        hierarchies.Initialize<TestHierarchicalDimensionA>();
-        hierarchies.Initialize<TestHierarchicalDimensionB>();
+        var workspace = GetHost().GetWorkspace();
+        await workspace.Initialized;
+        return workspace;
+    }
+
+    [Fact]
+    public async Task LeafLevelTest()
+    {
+        var workspace = await GetWorkspace();
+        var hierarchies = workspace.State.ToHierarchicalDimensionCache();
         using (new AssertionScope())
         {
-            hierarchies.Get<TestHierarchicalDimensionA>("A111").Parent().SystemName.Should().Be("A11");
-            hierarchies.Get<TestHierarchicalDimensionA>("A111").AncestorAtLevel(0).SystemName.Should().Be("A1");
-            hierarchies.Get<TestHierarchicalDimensionA>("A111").AncestorAtLevel(1).SystemName.Should().Be("A11");
-            hierarchies.Get<TestHierarchicalDimensionA>("A112").AncestorAtLevel(1).SystemName.Should().Be("A11");
-            hierarchies.Get<TestHierarchicalDimensionA>("A111").AncestorAtLevel(2).SystemName.Should().Be("A111");
-            hierarchies.Get<TestHierarchicalDimensionA>("A111").AncestorAtLevel(3).Should().BeNull();
-            hierarchies.Get<TestHierarchicalDimensionA>("A111").Children().Should().BeEmpty();
+            hierarchies.Parent<TestHierarchicalDimensionA>("A111").SystemName.Should().Be("A11");
+            hierarchies
+                .AncestorAtLevel<TestHierarchicalDimensionA>("A111", 0)
+                .SystemName.Should()
+                .Be("A1");
+            hierarchies
+                .AncestorAtLevel<TestHierarchicalDimensionA>("A111", 1)
+                .SystemName.Should()
+                .Be("A11");
+            hierarchies
+                .AncestorAtLevel<TestHierarchicalDimensionA>("A112", 1)
+                .SystemName.Should()
+                .Be("A11");
+            hierarchies
+                .AncestorAtLevel<TestHierarchicalDimensionA>("A111", 2)
+                .SystemName.Should()
+                .Be("A111");
+            hierarchies.AncestorAtLevel<TestHierarchicalDimensionA>("A111", 3).Should().BeNull();
         }
     }
 
     [Fact]
-    public void IntermediateLevelTest()
+    public async Task IntermediateLevelTest()
     {
-        var querySource = new StaticDataFieldReadOnlyWorkspace();
-        var hierarchies = querySource.ToHierarchicalDimensionCache();
-        hierarchies.Initialize<TestHierarchicalDimensionA>();
+        var workspace = await GetWorkspace();
+        var hierarchies = workspace.State.ToHierarchicalDimensionCache();
         using (new AssertionScope())
         {
-            hierarchies.Get<TestHierarchicalDimensionA>("A11").Parent().SystemName.Should().Be("A1");
-            hierarchies.Get<TestHierarchicalDimensionA>("A11").AncestorAtLevel(0).SystemName.Should().Be("A1");
-            hierarchies.Get<TestHierarchicalDimensionA>("A11").AncestorAtLevel(1).SystemName.Should().Be("A11");
-            hierarchies.Get<TestHierarchicalDimensionA>("A11").AncestorAtLevel(2).Should().BeNull();
-            hierarchies.Get<TestHierarchicalDimensionA>("A11").Children().Select(x => x.SystemName).Should()
-                       .BeEquivalentTo(new List<string> { "A111", "A112" });
+            hierarchies.Parent<TestHierarchicalDimensionA>("A11").SystemName.Should().Be("A1");
+            hierarchies
+                .AncestorAtLevel<TestHierarchicalDimensionA>("A11", 0)
+                .SystemName.Should()
+                .Be("A1");
+            hierarchies
+                .AncestorAtLevel<TestHierarchicalDimensionA>("A11", 1)
+                .SystemName.Should()
+                .Be("A11");
+            hierarchies.AncestorAtLevel<TestHierarchicalDimensionA>("A11", 2).Should().BeNull();
         }
     }
 
     [Fact]
-    public void RootLevelTest()
+    public async Task RootLevelTest()
     {
-        var querySource = new StaticDataFieldReadOnlyWorkspace();
-        var hierarchies = querySource.ToHierarchicalDimensionCache();
-        hierarchies.Initialize<TestHierarchicalDimensionA>();
+        var workspace = await GetWorkspace();
+        var hierarchies = workspace.State.ToHierarchicalDimensionCache();
         using (new AssertionScope())
         {
-            hierarchies.Get<TestHierarchicalDimensionA>("A1").Parent().Should().BeNull();
-            hierarchies.Get<TestHierarchicalDimensionA>("A1").Ancestors().Should().BeEmpty();
-            hierarchies.Get<TestHierarchicalDimensionA>("A1").AncestorAtLevel(0).SystemName.Should().Be("A1");
-            hierarchies.Get<TestHierarchicalDimensionA>("A1").AncestorAtLevel(2).Should().BeNull();
-            hierarchies.Get<TestHierarchicalDimensionA>("A1").Children().Select(x => x.SystemName).Should()
-                       .BeEquivalentTo(new List<string> { "A11", "A12" });
-            hierarchies.Get<TestHierarchicalDimensionA>().Children(null).Select(x => x.SystemName).Should()
-                       .BeEquivalentTo(new List<string> { "A1", "A2" });
+            hierarchies.Parent<TestHierarchicalDimensionA>("A1").Should().BeNull();
+            hierarchies
+                .AncestorAtLevel<TestHierarchicalDimensionA>("A1", 0)
+                .SystemName.Should()
+                .Be("A1");
+            hierarchies.AncestorAtLevel<TestHierarchicalDimensionA>("A1", 2).Should().BeNull();
         }
     }
 
     [Fact]
-    public void LevelTest()
+    public async Task LevelTest()
     {
-        var querySource = new StaticDataFieldReadOnlyWorkspace();
-        var hierarchies = querySource.ToHierarchicalDimensionCache();
-        hierarchies.Initialize<TestHierarchicalDimensionA>();
+        var workspace = await GetWorkspace();
+        var hierarchies = workspace.State.ToHierarchicalDimensionCache();
         using (new AssertionScope())
         {
-            hierarchies.Get<TestHierarchicalDimensionA>("A1").Level().Should().Be(0);
-            hierarchies.Get<TestHierarchicalDimensionA>("A11").Level().Should().Be(1);
-            hierarchies.Get<TestHierarchicalDimensionA>("A11").Level().Should().Be(1);
-            hierarchies.Get<TestHierarchicalDimensionA>("A111").Level().Should().Be(2);
-            hierarchies.Get<TestHierarchicalDimensionA>("A112").Level().Should().Be(2);
+            hierarchies.Get<TestHierarchicalDimensionA>("A1").Level.Should().Be(0);
+            hierarchies.Get<TestHierarchicalDimensionA>("A11").Level.Should().Be(1);
+            hierarchies.Get<TestHierarchicalDimensionA>("A11").Level.Should().Be(1);
+            hierarchies.Get<TestHierarchicalDimensionA>("A111").Level.Should().Be(2);
+            hierarchies.Get<TestHierarchicalDimensionA>("A112").Level.Should().Be(2);
         }
     }
 
     [Fact]
-    public void SeveralDimensionsLevelTest()
+    public async Task SeveralDimensionsLevelTest()
     {
-        var querySource = new StaticDataFieldReadOnlyWorkspace();
-        var hierarchies = querySource.ToHierarchicalDimensionCache();
-        hierarchies.Initialize<TestHierarchicalDimensionA>();
-        hierarchies.Initialize<TestHierarchicalDimensionB>();
+        var workspace = await GetWorkspace();
+        var hierarchies = workspace.State.ToHierarchicalDimensionCache();
         using (new AssertionScope())
         {
-            hierarchies.Get<TestHierarchicalDimensionA>("A1").Level().Should().Be(0);
-            hierarchies.Get<TestHierarchicalDimensionA>("A11").Level().Should().Be(1);
-            hierarchies.Get<TestHierarchicalDimensionA>("A111").Level().Should().Be(2);
-            hierarchies.Get<TestHierarchicalDimensionB>("B1").Level().Should().Be(0);
-            hierarchies.Get<TestHierarchicalDimensionB>("B11").Level().Should().Be(1);
-            hierarchies.Get<TestHierarchicalDimensionB>("B111").Level().Should().Be(2);
+            hierarchies.Get<TestHierarchicalDimensionA>("A1").Level.Should().Be(0);
+            hierarchies.Get<TestHierarchicalDimensionA>("A11").Level.Should().Be(1);
+            hierarchies.Get<TestHierarchicalDimensionA>("A111").Level.Should().Be(2);
+            hierarchies.Get<TestHierarchicalDimensionB>("B1").Level.Should().Be(0);
+            hierarchies.Get<TestHierarchicalDimensionB>("B11").Level.Should().Be(1);
+            hierarchies.Get<TestHierarchicalDimensionB>("B111").Level.Should().Be(2);
         }
     }
 
     [Fact]
-    public void AncestorsTest()
+    public async Task HierarchyApiTest()
     {
-        var querySource = new StaticDataFieldReadOnlyWorkspace();
-        var hierarchies = querySource.ToHierarchicalDimensionCache();
-        hierarchies.Initialize<TestHierarchicalDimensionA>();
-        using (new AssertionScope())
-        {
-            hierarchies.Get<TestHierarchicalDimensionA>("A112").Ancestors().Select(x => x.SystemName).Should()
-                       .BeEquivalentTo(hierarchies.Get<TestHierarchicalDimensionA>("A111").Ancestors().Select(x => x.SystemName))
-                       .And
-                       .BeEquivalentTo(new List<string> { "A1", "A11" });
-            hierarchies.Get<TestHierarchicalDimensionA>("A111").Ancestors(includeSelf: true).Select(x => x.SystemName).Should()
-                       .BeEquivalentTo(new List<string> { "A1", "A11", "A111" });
-        }
-    }
-
-    [Fact]
-    public void DescendantsTest()
-    {
-        var querySource = new StaticDataFieldReadOnlyWorkspace();
-        var hierarchies = querySource.ToHierarchicalDimensionCache();
-        hierarchies.Initialize<TestHierarchicalDimensionA>();
-        using (new AssertionScope())
-        {
-            hierarchies.Get<TestHierarchicalDimensionA>("A112").Descendants().Select(x => x.SystemName).Should()
-                       .BeEquivalentTo(hierarchies.Get<TestHierarchicalDimensionA>("A111").Descendants().Select(x => x.SystemName))
-                       .And
-                       .BeEmpty();
-            hierarchies.Get<TestHierarchicalDimensionA>("A1").Descendants(includeSelf: true).Select(x => x.SystemName).Should()
-                       .BeEquivalentTo(new List<string> { "A1", "A11", "A12", "A111", "A112" });
-        }
-    }
-
-    [Fact]
-    public void DescendantsAtLevelTest()
-    {
-        var querySource = new StaticDataFieldReadOnlyWorkspace();
-        var hierarchies = querySource.ToHierarchicalDimensionCache();
-        hierarchies.Initialize<TestHierarchicalDimensionA>();
-        using (new AssertionScope())
-        {
-            hierarchies.Get<TestHierarchicalDimensionA>("A1").DescendantsAtLevel(2).Select(x => x.SystemName).Should()
-                       .BeEquivalentTo(new List<string> { "A111", "A112" });
-            hierarchies.Get<TestHierarchicalDimensionA>("A1").DescendantsAtLevel(0).Select(x => x.SystemName).Should()
-                       .BeEquivalentTo(new List<string> { "A1" });
-            hierarchies.Get<TestHierarchicalDimensionA>("A11").DescendantsAtLevel(0).Should().BeEmpty();
-        }
-    }
-    
-    [Fact]
-    public void SiblingsTest()
-    {
-        var querySource = new StaticDataFieldReadOnlyWorkspace();
-        var hierarchies = querySource.ToHierarchicalDimensionCache();
-        hierarchies.Initialize<TestHierarchicalDimensionA>();
-        using (new AssertionScope())
-        {
-            hierarchies.Get<TestHierarchicalDimensionA>("A112").Siblings().Select(x => x.SystemName).Should()
-                       .BeEquivalentTo(new List<string> { "A111" });
-            hierarchies.Get<TestHierarchicalDimensionA>("A112").Siblings(includeSelf: true).Select(x => x.SystemName).Should()
-                       .BeEquivalentTo(new List<string> { "A111", "A112" });
-        }
-    }
-
-    [Fact]
-    public void HierarchyApiTest()
-    {
-        var querySource = new StaticDataFieldReadOnlyWorkspace();
-        var hierarchies = querySource.ToHierarchicalDimensionCache();
-        hierarchies.Initialize<TestHierarchicalDimensionA>();
+        var workspace = await GetWorkspace();
+        var hierarchies = workspace.State.ToHierarchicalDimensionCache();
         var hierarchyA = hierarchies.Get<TestHierarchicalDimensionA>();
         hierarchyA.Get("A11").Parent.Should().Be(hierarchyA.Get("A12").Parent);
     }

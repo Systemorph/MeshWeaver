@@ -7,11 +7,22 @@ using OpenSmc.Pivot.Processors;
 
 namespace OpenSmc.Pivot.Builder
 {
-    public abstract record PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> : IPivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-        where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
+    public abstract record PivotBuilderBase<
+        T,
+        TTransformed,
+        TIntermediate,
+        TAggregate,
+        TPivotBuilder
+    > : IPivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
+        where TPivotBuilder : PivotBuilderBase<
+                T,
+                TTransformed,
+                TIntermediate,
+                TAggregate,
+                TPivotBuilder
+            >
     {
-        private readonly IWorkspace fReadOnlyWorkspace;
-        public IDimensionCache DimensionsCache { get; private init; }
+        public WorkspaceState State { get; init; }
         public IHierarchicalDimensionCache HierarchicalDimensionCache { get; private init; }
         public IHierarchicalDimensionOptions HierarchicalDimensionOptions { get; private init; }
         public IList<T> Objects { get; }
@@ -27,32 +38,29 @@ namespace OpenSmc.Pivot.Builder
             HierarchicalDimensionOptions = new HierarchicalDimensionOptions();
         }
 
-        internal IWorkspace ReadOnlyWorkspace
+        public TPivotBuilder WithHierarchicalDimensionOptions(
+            Func<IHierarchicalDimensionOptions, IHierarchicalDimensionOptions> optionsFunc
+        )
         {
-            get => fReadOnlyWorkspace;
-            init
+            return (TPivotBuilder)this with
             {
-                fReadOnlyWorkspace = value;
-                DimensionsCache = new DimensionCache(value);
-                HierarchicalDimensionCache = new HierarchicalDimensionCache(value);
-            }
+                HierarchicalDimensionOptions = optionsFunc(HierarchicalDimensionOptions)
+            };
         }
 
-        public TPivotBuilder WithHierarchicalDimensionOptions(Func<IHierarchicalDimensionOptions,IHierarchicalDimensionOptions> optionsFunc)
+        public TPivotBuilder WithState(WorkspaceState state)
         {
-            return (TPivotBuilder)this with { HierarchicalDimensionOptions = optionsFunc(HierarchicalDimensionOptions) };
-        }
-
-        public TPivotBuilder WithQuerySource(IWorkspace readOnlyWorkspace)
-        {
-            return (TPivotBuilder)this with { ReadOnlyWorkspace = readOnlyWorkspace };
+            return (TPivotBuilder)this with
+            {
+                State = state,
+                HierarchicalDimensionCache = new HierarchicalDimensionCache(state)
+            };
         }
 
         public virtual TPivotBuilder Transpose<TValue>()
         {
-            return (TPivotBuilder) this with { TransposedValue = typeof(TValue) };
+            return (TPivotBuilder)this with { TransposedValue = typeof(TValue) };
         }
-
 
         public virtual PivotModel Execute()
         {
@@ -61,6 +69,12 @@ namespace OpenSmc.Pivot.Builder
             return ret;
         }
 
-        protected abstract PivotProcessorBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> GetReportProcessor();
+        protected abstract PivotProcessorBase<
+            T,
+            TTransformed,
+            TIntermediate,
+            TAggregate,
+            TPivotBuilder
+        > GetReportProcessor();
     }
 }

@@ -1,16 +1,15 @@
-﻿using OpenSmc.Domain.Abstractions.Attributes;
+﻿using OpenSmc.Domain;
 
-namespace OpenSmc.TestDomain.Scopes
+namespace OpenSmc.TestDomain.Scopes;
+
+public record YearQuarterAndCompany
 {
-    public record YearQuarterAndCompany
-    {
-        [Dimension(typeof(int), nameof(Year))]
-        public int Year { get; init; }
+    [Dimension(typeof(int), nameof(Year))]
+    public int Year { get; init; }
 
-        [Dimension(typeof(int), nameof(Quarter))]
-        public int Quarter { get; init; }
+    [Dimension(typeof(int), nameof(Quarter))]
+    public int Quarter { get; init; }
 
-        [Dimension(typeof(Company))]
-        public string Company { get; init; }
-    }
+    [Dimension(typeof(Company))]
+    public string Company { get; init; }
 }

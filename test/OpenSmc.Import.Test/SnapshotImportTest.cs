@@ -12,31 +12,34 @@ namespace OpenSmc.Import.Test;
 
 public class SnapshotImportTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration) 
-        => base.ConfigureHost(configuration)
-            .AddData(
-                data => data.FromConfigurableDataSource
-                (
+    protected override MessageHubConfiguration ConfigureHost(
+        MessageHubConfiguration configuration
+    ) =>
+        base.ConfigureHost(configuration)
+            .AddData(data =>
+                data.FromConfigurableDataSource(
                     nameof(GenericDataSource),
-                    source => source
-                        .ConfigureCategory(TestDomain.TestRecordsDomain)
+                    source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
                 )
             )
-            .WithHostedHub(new TestDomain.ImportAddress(configuration.Address),
-                config => config
-                    .AddImport(
-                        data => data.FromHub(configuration.Address,
-                            source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
-                        ),
-                        import => import
-                    )
-            )
-        ;
+            .WithHostedHub(
+                new TestDomain.ImportAddress(configuration.Address),
+                config =>
+                    config
+                        .AddData(data =>
+                            data.FromHub(
+                                configuration.Address,
+                                source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
+                            )
+                        )
+                        .AddImport()
+            );
 
     [Fact]
     public async Task SnapshotImport_SimpleTest()
     {
-        const string content = @"@@MyRecord
+        const string content =
+            @"@@MyRecord
 SystemName,DisplayName,Number
 A1,A,1
 A2,A,2
@@ -46,24 +49,32 @@ B4,B,4
 
         var client = GetClient();
         var importRequest = new ImportRequest(content);
-        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
+        var importResponse = await client.AwaitResponse(
+            importRequest,
+            o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
+        );
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
         var host = GetHost();
-        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress())).GetWorkspace();
+        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress()))
+            .GetWorkspace();
         var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
         ret.Should().HaveCount(4);
 
-        const string content2 = @"@@MyRecord
+        const string content2 =
+            @"@@MyRecord
 SystemName,DisplayName,Number
 A5,A,5
 @@MyRecord2
 SystemName,DisplayName
 ";
 
-        importRequest = new ImportRequest(content2) {SnapshotMode = true};
-        importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
+        importRequest = new ImportRequest(content2) { Snapshot = true };
+        importResponse = await client.AwaitResponse(
+            importRequest,
+            o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
+        );
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
         await Task.Delay(100);
@@ -77,7 +88,8 @@ SystemName,DisplayName
     [Fact]
     public async Task SnapshotImport_AndThenRegularImportTest()
     {
-        const string content1 = @"@@MyRecord
+        const string content1 =
+            @"@@MyRecord
 SystemName,DisplayName,Number
 A1,A,1
 A2,A,2
@@ -87,15 +99,20 @@ B4,B,4
 
         var client = GetClient();
         var importRequest = new ImportRequest(content1);
-        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
+        var importResponse = await client.AwaitResponse(
+            importRequest,
+            o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
+        );
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
         var host = GetHost();
-        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress())).GetWorkspace();
+        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress()))
+            .GetWorkspace();
         var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
         ret.Should().HaveCount(4);
 
-        const string content2 = @"@@MyRecord
+        const string content2 =
+            @"@@MyRecord
 SystemName,DisplayName,Number
 A5,A,5
 @@MyRecord2
@@ -103,8 +120,11 @@ SystemName,DisplayName
 ";
 
         //snapshot
-        importRequest = new ImportRequest(content2) { SnapshotMode = true };
-        importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
+        importRequest = new ImportRequest(content2) { Snapshot = true };
+        importResponse = await client.AwaitResponse(
+            importRequest,
+            o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
+        );
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
         await Task.Delay(100);
@@ -114,7 +134,8 @@ SystemName,DisplayName
         ret.Should().HaveCount(1);
         ret.Should().ContainSingle().Which.Number.Equals(5);
 
-        const string content3 = @"@@MyRecord
+        const string content3 =
+            @"@@MyRecord
 SystemName,DisplayName,Number
 A6,A,6
 @@MyRecord2
@@ -123,19 +144,22 @@ SystemName2,DisplayName2
 
         //not snapshot
         importRequest = new ImportRequest(content3);
-        importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
+        importResponse = await client.AwaitResponse(
+            importRequest,
+            o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
+        );
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
         ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
         ret.Should().HaveCount(2);
-
     }
-    
+
     [Fact(Skip = "Illegal case in current implementation")]
     public async Task SnapshotImport_ZeroInstancesTest()
     {
-        const string content = @"@@MyRecord
+        const string content =
+            @"@@MyRecord
 SystemName,DisplayName,Number
 A1,A,1
 A2,A,2
@@ -145,23 +169,31 @@ B4,B,4
 
         var client = GetClient();
         var importRequest = new ImportRequest(content);
-        var importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
+        var importResponse = await client.AwaitResponse(
+            importRequest,
+            o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
+        );
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
 
         var host = GetHost();
-        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress())).GetWorkspace();
+        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress()))
+            .GetWorkspace();
         var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
         ret.Should().HaveCount(4);
 
-        const string content2 = @"@@MyRecord
+        const string content2 =
+            @"@@MyRecord
 SystemName,DisplayName,Number
 ";
 
-        importRequest = new ImportRequest(content2) { SnapshotMode = true };
-        importResponse = await client.AwaitResponse(importRequest, o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress())));
+        importRequest = new ImportRequest(content2) { Snapshot = true };
+        importResponse = await client.AwaitResponse(
+            importRequest,
+            o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
+        );
         importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
-        
+
         await Task.Delay(100);
 
         ret = await workspace.GetObservable<MyRecord>().FirstAsync();

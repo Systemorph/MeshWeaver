@@ -10,75 +10,128 @@ using OpenSmc.Data;
 using OpenSmc.DataSetReader;
 using OpenSmc.DataSetReader.Csv;
 using OpenSmc.DataSetReader.Excel;
-using OpenSmc.Domain.Abstractions;
-using OpenSmc.Domain.Abstractions.Attributes;
+using OpenSmc.Domain;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 
 namespace OpenSmc.Import;
 
-public record ImportConfiguration(IMessageHub Hub, IWorkspace Workspace)
+public record ImportConfiguration
 {
-    public IActivityService ActivityService { get; } = Hub.ServiceProvider.GetRequiredService<IActivityService>();
+    public IMessageHub Hub { get; }
+    public WorkspaceState State { get; }
+    public IReadOnlyCollection<Type> MappedTypes { get; init; }
 
-    internal ImmutableDictionary<string, ImportFormat> ImportFormats { get; init; } 
+    public ImportConfiguration(
+        IMessageHub hub,
+        IReadOnlyCollection<Type> mappedTypes,
+        ILogger logger
+    )
+    {
+        this.Hub = hub;
+        this.State = State;
+        MappedTypes = mappedTypes;
+        Validations = ImmutableList<ValidationFunction>
+            .Empty.Add(StandardValidations)
+            .Add(CategoriesValidation);
+        if (mappedTypes.Any())
+            ImportFormatBuilders = ImportFormatBuilders.Add(
+                ImportFormat.Default,
+                f => f.WithAutoMappingsForTypes(mappedTypes)
+            );
+        Logger = logger;
+    }
 
-    public ImportConfiguration WithFormat(string format, Func<ImportFormat, ImportFormat> configuration)
-        => this with
-        {
-            ImportFormatBuilders = ImportFormatBuilders.SetItem(format, configuration)
-        };
+    public ImportConfiguration(IMessageHub Hub, ILogger logger)
+        : this(Hub, Array.Empty<Type>(), logger) { }
 
-    private ImmutableDictionary<string,Func<ImportFormat, ImportFormat>> ImportFormatBuilders { get; init; }
-    = ImmutableDictionary<string, Func<ImportFormat, ImportFormat>>.Empty.Add(ImportFormat.Default, f => f.WithAutoMappings(domain => domain));
+    private readonly ConcurrentDictionary<string, ImportFormat> ImportFormats = new();
 
-    public ImportConfiguration Build() =>
-        this with
-        {
-            ImportFormats = ImportFormatBuilders
-                .ToImmutableDictionary(
-                    x => x.Key,
-                x => x.Value.Invoke
-                    (
-                        new ImportFormat(x.Key, Hub, Workspace, Validations)
-                            .WithValidation(StandardValidations)
-                            .WithValidation(CategoriesValidation)))
-        };
+    public ImportConfiguration WithFormat(
+        string format,
+        Func<ImportFormat, ImportFormat> configuration
+    ) => this with { ImportFormatBuilders = ImportFormatBuilders.SetItem(format, configuration) };
+
+    private ImmutableDictionary<
+        string,
+        Func<ImportFormat, ImportFormat>
+    > ImportFormatBuilders { get; init; } =
+        ImmutableDictionary<string, Func<ImportFormat, ImportFormat>>.Empty;
+
+    public ImportFormat GetFormat(string format)
+    {
+        if (ImportFormats.TryGetValue(format, out var ret))
+            return ret;
+
+        var builder = ImportFormatBuilders.GetValueOrDefault(format);
+        if (builder == null)
+            return null;
+
+        return ImportFormats.GetOrAdd(
+            format,
+            builder.Invoke(new ImportFormat(format, Hub, MappedTypes, Validations))
+        );
+    }
 
     internal ImmutableDictionary<string, ReadDataSet> DataSetReaders { get; init; } =
-        ImmutableDictionary<string, ReadDataSet>.Empty.Add(MimeTypes.Csv, (stream, options, _) => DataSetCsvSerializer.ReadAsync(stream, options))
-            .Add(MimeTypes.Xlsx, (stream,_,_) => Task.FromResult(new ExcelDataSetReader().Read(stream)))
-            .Add(MimeTypes.Xls, new ExcelDataSetReaderOld().ReadAsync);
+        ImmutableDictionary<string, ReadDataSet>
+            .Empty.Add(
+                MimeTypes.csv,
+                (stream, options, _) => DataSetCsvSerializer.ReadAsync(stream, options)
+            )
+            .Add(
+                MimeTypes.xlsx,
+                (stream, _, _) => Task.FromResult(new ExcelDataSetReader().Read(stream))
+            )
+            .Add(MimeTypes.xls, new ExcelDataSetReaderOld().ReadAsync);
 
-    public ImportConfiguration WithDataSetReader(string fileType, ReadDataSet dataSetReader)
-        => this with { DataSetReaders = DataSetReaders.SetItem(fileType, dataSetReader) };
+    public ImportConfiguration WithDataSetReader(string fileType, ReadDataSet dataSetReader) =>
+        this with
+        {
+            DataSetReaders = DataSetReaders.SetItem(fileType, dataSetReader)
+        };
 
-    public ImportFormat GetFormat(string importRequestFormat)
-        => ImportFormats.GetValueOrDefault(importRequestFormat);
+    internal ImmutableDictionary<Type, Func<ImportRequest, Stream>> StreamProviders { get; init; } =
+        ImmutableDictionary<Type, Func<ImportRequest, Stream>>
+            .Empty.Add(typeof(StringStream), CreateMemoryStream)
+            .Add(typeof(EmbeddedResource), CreateEmbeddedResourceStream);
 
-
-    internal ImmutableDictionary<string, Func<ImportRequest, Stream>> StreamProviders { get; init; } 
-        = ImmutableDictionary<string, Func<ImportRequest, Stream>>.Empty
-            .Add(nameof(String), CreateMemoryStream);
+    private static Stream CreateEmbeddedResourceStream(ImportRequest request)
+    {
+        var embeddedResource = (EmbeddedResource)request.Source;
+        var assembly = embeddedResource.Assembly;
+        var resourceName = $"{assembly.GetName().Name}.{embeddedResource.Resource}";
+        var stream = assembly.GetManifestResourceStream(resourceName);
+        if (stream == null)
+        {
+            throw new ArgumentException($"Resource '{resourceName}' not found.");
+        }
+        return stream;
+    }
 
     private static Stream CreateMemoryStream(ImportRequest request)
     {
         var stream = new MemoryStream();
         var writer = new StreamWriter(stream);
-        writer.Write(request.Content);
+        writer.Write(((StringStream)request.Source).Content);
         writer.Flush();
         stream.Position = 0;
         return stream;
     }
 
+    public ImportConfiguration WithStreamReader(
+        Type sourceType,
+        Func<ImportRequest, Stream> reader
+    ) => this with { StreamProviders = StreamProviders.SetItem(sourceType, reader) };
 
-    public ImportConfiguration WithStreamReader(string sourceId, Func<ImportRequest, Stream> reader)
-        => this with { StreamProviders = StreamProviders.SetItem(sourceId, reader) };
-
-    internal ImmutableList<ValidationFunction> Validations { get; init; } = ImmutableList<ValidationFunction>.Empty;
+    internal ImmutableList<ValidationFunction> Validations { get; init; }
+    public ILogger Logger { get; }
 
     public ImportConfiguration WithValidation(ValidationFunction validation) =>
-        this with { Validations = Validations.Add(validation) };
+        this with
+        {
+            Validations = Validations.Add(validation)
+        };
 
     private bool StandardValidations(object instance, ValidationContext validationContext)
     {
@@ -88,47 +141,73 @@ public record ImportConfiguration(IMessageHub Hub, IWorkspace Workspace)
 
         foreach (var validation in validationResults)
         {
-            ActivityService.LogError(validation.ToString());
+            Logger.LogError(validation.ToString());
             ret = false;
         }
         return ret;
     }
 
-    public static string UnknownValueErrorMessage = "Property {0} of type {1} has unknown value {2}.";
+    public static string UnknownValueErrorMessage =
+        "Property {0} of type {1} has unknown value {2}.";
     public static string MissingCategoryErrorMessage = "Category with name {0} was not found.";
 
-    private static readonly ConcurrentDictionary<Type, (Type, string, Func<object, string>)[]> TypesWithCategoryAttributes = new();
-    public bool CategoriesValidation(object instance, ValidationContext validationContext)
-    {
+    private static readonly ConcurrentDictionary<
+        Type,
+        (Type, string, Func<object, string>)[]
+    > TypesWithCategoryAttributes = new();
 
+    private bool CategoriesValidation(object instance, ValidationContext validationContext)
+    {
         var type = instance.GetType();
-        var dimensions = TypesWithCategoryAttributes.GetOrAdd(type, key => key.GetProperties()
-            .Where(x => x.PropertyType == typeof(string))
-            .Select(x => new { Attr = x.GetCustomAttribute(typeof(CategoryAttribute<>)), x.Name })
-            .Where(x => x.Attr != null)
-            .Select(x => (x.Attr.GetType().GetGenericArguments().First(), x.Name, CreateGetter(type, x.Name)))
-            .ToArray());
+        var dimensions = TypesWithCategoryAttributes.GetOrAdd(
+            type,
+            key =>
+                key.GetProperties()
+                    .Where(x => x.PropertyType == typeof(string))
+                    .Select(x => new
+                    {
+                        Attr = x.GetCustomAttribute(typeof(CategoryAttribute<>)),
+                        x.Name
+                    })
+                    .Where(x => x.Attr != null)
+                    .Select(x =>
+                        (
+                            x.Attr.GetType().GetGenericArguments().First(),
+                            x.Name,
+                            CreateGetter(type, x.Name)
+                        )
+                    )
+                    .ToArray()
+        );
 
         var ret = true;
         foreach (var (categoryType, propertyName, propGetter) in dimensions)
         {
-
-            if (!Workspace.MappedTypes.Contains(categoryType))
+            if (!State.MappedTypes.Contains(categoryType))
             {
-                ActivityService.LogError(string.Format(MissingCategoryErrorMessage, categoryType));
+                Logger.LogError(string.Format(MissingCategoryErrorMessage, categoryType));
                 ret = false;
                 continue;
             }
             var value = propGetter(instance);
             // TODO V10: Use category cache (22.03.2024, Yury Pekishev)
-            if (!string.IsNullOrEmpty(value) && !(bool)IsElementExistsMethod.MakeGenericMethod(categoryType).InvokeAsFunction(this, Workspace, value))
+            if (
+                !string.IsNullOrEmpty(value)
+                && !(bool)
+                    ExistsElementMethod
+                        .MakeGenericMethod(categoryType)
+                        .InvokeAsFunction(this, State, value)
+            )
             {
-                ActivityService.LogError(string.Format(UnknownValueErrorMessage, propertyName, type.FullName, value));
+                Logger.LogError(
+                    string.Format(UnknownValueErrorMessage, propertyName, type.FullName, value)
+                );
                 ret = false;
             }
         }
         return ret;
     }
+
     private static Func<object, string> CreateGetter(Type type, string property)
     {
         var prm = Expression.Parameter(typeof(object));
@@ -137,12 +216,14 @@ public record ImportConfiguration(IMessageHub Hub, IWorkspace Workspace)
         return Expression.Lambda<Func<object, string>>(propertyExpression, prm).Compile();
     }
 
-    private readonly MethodInfo IsElementExistsMethod = ReflectionHelper.GetMethodGeneric<ImportConfiguration>(x => x.IsElementExists<object>(null, null));
+    private readonly MethodInfo ExistsElementMethod =
+        ReflectionHelper.GetMethodGeneric<ImportConfiguration>(x =>
+            x.ExistsElement<object>(null, null)
+        );
 
-    private bool IsElementExists<T>(IWorkspace workspace, string value) where T : class
+    private bool ExistsElement<T>(WorkspaceState state, string value)
+        where T : class
     {
-        var data = workspace.GetData<T>();
-        return data.OfType<INamed>().Select(x => x.SystemName).Contains(value);
+        return state.GetDataById<T>().ContainsKey(value);
     }
-
 }

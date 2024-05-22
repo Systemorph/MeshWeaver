@@ -1,21 +1,17 @@
 {
-  "$type": "OpenSmc.Pivot.Models.PivotModel, OpenSmc.Pivot",
   "columns": [
     {
-      "$type": "OpenSmc.Pivot.Models.Column, OpenSmc.Pivot",
+      "systemName": "Value",
+      "displayName": "Value",
       "coordinates": [
         "Value"
       ],
-      "systemName": "Value",
-      "displayName": "Value",
       "grouperName": "ColumnName"
     }
   ],
   "rows": [
     {
-      "$type": "OpenSmc.Pivot.Models.Row, OpenSmc.Pivot",
       "rowGroup": {
-        "$type": "OpenSmc.Pivot.Models.RowGroup, OpenSmc.Pivot",
         "coordinates": [
           "1"
         ],
@@ -24,14 +20,11 @@
         "grouperName": "AutomaticNumber"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 1
+        "Value": 1
       }
     },
     {
-      "$type": "OpenSmc.Pivot.Models.Row, OpenSmc.Pivot",
       "rowGroup": {
-        "$type": "OpenSmc.Pivot.Models.RowGroup, OpenSmc.Pivot",
         "coordinates": [
           "2"
         ],
@@ -40,14 +33,11 @@
         "grouperName": "AutomaticNumber"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 1
+        "Value": 1
       }
     },
     {
-      "$type": "OpenSmc.Pivot.Models.Row, OpenSmc.Pivot",
       "rowGroup": {
-        "$type": "OpenSmc.Pivot.Models.RowGroup, OpenSmc.Pivot",
         "coordinates": [
           "3"
         ],
@@ -56,8 +46,7 @@
         "grouperName": "AutomaticNumber"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 1
+        "Value": 1
       }
     }
   ],

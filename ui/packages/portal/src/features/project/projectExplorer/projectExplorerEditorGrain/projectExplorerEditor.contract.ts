@@ -1,5 +1,5 @@
 import { contractMessage } from "@open-smc/application/src/contractMessage";
-import { BaseEvent, EventStatus } from "@open-smc/application/src/application.contract";
+import { BaseEvent, EventStatus } from "@open-smc/application/src/contract/application.contract";
 
 @contractMessage("OpenSmc.Notebook.OpenProjectExplorerEvent")
 export class OpenProjectExplorerEvent extends BaseEvent {

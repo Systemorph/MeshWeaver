@@ -1,29 +1,40 @@
-﻿////#define REGENERATE
+﻿//#define REGENERATE
 
-//using FluentAssertions;
-//using OpenSmc.Serialization;
-//using Newtonsoft.Json.Linq;
-//using OpenSmc.Messaging.Serialization;
+using System.Text.Json;
+using FluentAssertions;
 
-//namespace OpenSmc.Json.Assertions;
+namespace OpenSmc.Json.Assertions;
 
-//public static class BenchmarkUtils
-//{
-//    public static void WriteBenchmark(string fileName, string serialized)
-//    {
-//        File.WriteAllText(fileName, serialized);
-//    }
+public static class BenchmarkUtils
+{
+    public static Task WriteBenchmarkAsync(string fileName, string serialized)
+    {
+        return File.WriteAllTextAsync(fileName, serialized);
+    }
 
-//    public static void JsonShouldMatch(this object model, ISerializationService serializationService, string fileName)
-//    {
-//        var modelSerialized = JObject.FromObject(model, ((SerializationService)serializationService).Serializer).ToString();
-//        var filePath = Path.Combine(@"..\..\..\Json", fileName);
-//#if REGENERATE
-//            var benchmark = JObject.FromObject(model, ((SerializationService)serializationService).Serializer).ToString();
-//            BenchmarkUtils.WriteBenchmark(filePath, benchmark);
-//#else
-//        var benchmark = File.ReadAllText(filePath);
-//#endif
-//        modelSerialized.Should().Be(benchmark);
-//    }
-//}
+    public static async Task JsonShouldMatch(this object model, string fileName)
+    {
+        fileName = $"{fileName}.json";
+        var modelSerialized = JsonSerializer.Serialize(
+            model,
+            model.GetType(),
+            new JsonSerializerOptions { WriteIndented = true }
+        );
+        var filePath = Path.Combine(@"..\..\..\Json", fileName);
+#if REGENERATE
+        var benchmark = JsonSerializer.Serialize(
+            model,
+            model.GetType(),
+            new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            }
+        );
+        await BenchmarkUtils.WriteBenchmarkAsync(filePath, benchmark);
+#else
+        var benchmark = await File.ReadAllTextAsync(filePath);
+#endif
+        modelSerialized.Should().Be(benchmark);
+    }
+}

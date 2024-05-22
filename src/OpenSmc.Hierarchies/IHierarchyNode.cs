@@ -1,16 +1,10 @@
-﻿using OpenSmc.Domain.Abstractions;
+﻿using OpenSmc.Domain;
 
 namespace OpenSmc.Hierarchies;
 
-public interface IHierarchyNode<T>
+public record HierarchyNode<T>(object Id, T Element, object ParentId, T Parent)
     where T : class, IHierarchicalDimension
 {
-    T Parent();
-    T AncestorAtLevel(int level);
-    IList<T> Children();
-    IList<T> Descendants(bool includeSelf = false);
-    IList<T> DescendantsAtLevel(int level);
-    IList<T> Ancestors(bool includeSelf = false);
-    IList<T> Siblings(bool includeSelf = false);
-    int Level();
+    public int Level { get; init; }
+    public string SystemName { get; internal set; }
 }

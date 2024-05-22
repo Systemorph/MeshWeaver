@@ -8,11 +8,10 @@ namespace OpenSmc.Activities
         private readonly ConcurrentDictionary<string, ActivityLog> parents = new();
         private ActivityLog currentActivity;
 
-        public string Start()
+        public string Start(string category)
         {
-
             //need to know id before, to start scope with known id
-            var newActivity = new ActivityLog(DateTime.UtcNow, null);
+            var newActivity = new ActivityLog(category);
             if (currentActivity != null)
             {
                 parents[newActivity.Id] = currentActivity;
@@ -70,7 +69,6 @@ namespace OpenSmc.Activities
             if (currentActivity == null)
                 return null;
 
-
             if (HasErrors())
                 ChangeStatus(ActivityLogStatus.Failed);
             else
@@ -91,15 +89,24 @@ namespace OpenSmc.Activities
             return currentActivity;
         }
 
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception exception,
+            Func<TState, Exception, string> formatter
+        )
         {
             logger.Log(logLevel, eventId, state, exception, formatter);
-            
+
             if (currentActivity == null)
                 return;
-            var item = new LogMessage(state.ToString(), logLevel, DateTime.Now, null, null);
+            var item = new LogMessage(state.ToString(), logLevel);
 
-            currentActivity = currentActivity with { Messages = currentActivity.Messages.Add(item) };
+            currentActivity = currentActivity with
+            {
+                Messages = currentActivity.Messages.Add(item)
+            };
         }
 
         public bool IsEnabled(LogLevel logLevel)

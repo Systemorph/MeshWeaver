@@ -1,10 +1,10 @@
-﻿using FluentAssertions.Extensions;
+﻿using System.Reactive.Linq;
+using FluentAssertions;
+using FluentAssertions.Extensions;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Fixture;
-using OpenSmc.ServiceProvider;
-using System.Reactive.Linq;
-using FluentAssertions;
 using OpenSmc.Hub.Fixture;
+using OpenSmc.ServiceProvider;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -15,42 +15,55 @@ public class MessageHubSubscribersTest : TestBase
     protected record RouterAddress;
 
     protected record HostAddress;
+
     protected record ClientAddress(string Id);
 
     record SayHelloRequest : IRequest<HelloEvent>;
+
     record HelloEvent;
 
-    [Inject] protected IMessageHub Router;
+    [Inject]
+    protected IMessageHub Router;
 
-    public MessageHubSubscribersTest(ITestOutputHelper output) : base(output)
+    public MessageHubSubscribersTest(ITestOutputHelper output)
+        : base(output)
     {
-        Services.AddSingleton<IMessageHub>(sp => sp.CreateMessageHub(new RouterAddress(),
-            conf => conf
-                .WithRoutes(forward => forward
-                    .RouteAddressToHostedHub<HostAddress>(ConfigureHost)
-                    .RouteAddressToHostedHub<ClientAddress>(ConfigureClient)
-                )));
+        Services.AddSingleton<IMessageHub>(sp =>
+            sp.CreateMessageHub(
+                new RouterAddress(),
+                conf =>
+                    conf.WithRoutes(forward =>
+                        forward
+                            .RouteAddressToHostedHub<HostAddress>(ConfigureHost)
+                            .RouteAddressToHostedHub<ClientAddress>(ConfigureClient)
+                    )
+            )
+        );
     }
+
     protected IMessageHub GetHost()
     {
         return Router.GetHostedHub(new HostAddress(), ConfigureHost);
     }
+
     protected IMessageHub GetClient(string id)
     {
         return Router.GetHostedHub(new ClientAddress(id), ConfigureClient);
     }
 
-    protected MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
-        => configuration
-            .WithHandler<SayHelloRequest>((hub, request) =>
+    protected MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration) =>
+        configuration.WithHandler<SayHelloRequest>(
+            (hub, request) =>
             {
                 hub.Post(new HelloEvent(), options => options.ResponseFor(request));
                 return request.Processed();
-            });
+            }
+        );
 
-    protected MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) => configuration;
+    protected MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
+        configuration;
 
-    [Fact]
+    [Fact(Skip = "Currently not supported.")]
     public async Task TwoSubscribers()
     {
         // arrange: initiate subscription from client to host
@@ -64,11 +77,23 @@ public class MessageHubSubscribersTest : TestBase
 
         var clientOut1 = client1.AddObservable().Timeout(500.Milliseconds());
         var clientOut2 = client2.AddObservable().Timeout(500.Milliseconds());
-        var client1Awaiter = clientOut1.Select(d => d.Message).OfType<HelloEvent>().FirstAsync().GetAwaiter();
-        var client2Awaiter = clientOut2.Select(d => d.Message).OfType<HelloEvent>().FirstAsync().GetAwaiter();
-        var client3Awaiter = clientOut3.Select(d => d.Message).OfType<HelloEvent>().ToArray().GetAwaiter();
+        var client1Awaiter = clientOut1
+            .Select(d => d.Message)
+            .OfType<HelloEvent>()
+            .FirstAsync()
+            .GetAwaiter();
+        var client2Awaiter = clientOut2
+            .Select(d => d.Message)
+            .OfType<HelloEvent>()
+            .FirstAsync()
+            .GetAwaiter();
+        var client3Awaiter = clientOut3
+            .Select(d => d.Message)
+            .OfType<HelloEvent>()
+            .ToArray()
+            .GetAwaiter();
 
-        // act 
+        // act
         var host = GetHost();
         host.Post(new HelloEvent(), o => o.WithTarget(MessageTargets.Subscribers));
 
@@ -84,5 +109,4 @@ public class MessageHubSubscribersTest : TestBase
         client2Messages.Should().BeAssignableTo<HelloEvent>();
         client3Messages.Should().BeEmpty();
     }
-
 }

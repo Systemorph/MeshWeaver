@@ -1,33 +1,28 @@
 {
-  "$type": "Systemorph.Pivot.Models.PivotModel, Systemorph.Pivot",
   "columns": [
     {
-      "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+      "systemName": "Value",
+      "displayName": "Value",
       "coordinates": [
         "Value"
       ],
-      "systemName": "Value",
-      "displayName": "Value",
       "grouperName": "ColumnName"
     }
   ],
   "rows": [
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "2021"
         ],
         "systemName": "2021",
         "displayName": "2021",
         "grouperName": "Year"
-      }
+      },
+      "data": null
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "2021",
           "BoP"
@@ -37,14 +32,11 @@
         "grouperName": "PropertyName"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 4.0
+        "Value": 4
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "2021",
           "Delta"
@@ -54,14 +46,11 @@
         "grouperName": "PropertyName"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 4.0
+        "Value": 4
       }
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "2021",
           "EoP"
@@ -71,8 +60,7 @@
         "grouperName": "PropertyName"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 4.0
+        "Value": 4
       }
     }
   ],

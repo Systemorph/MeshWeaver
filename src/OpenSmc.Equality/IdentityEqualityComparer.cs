@@ -2,7 +2,7 @@
 using System.Linq.Expressions;
 using System.Reflection;
 using OpenSmc.Collections;
-using OpenSmc.Domain.Abstractions.Attributes;
+using OpenSmc.Domain;
 using OpenSmc.Reflection;
 
 namespace OpenSmc.Equality
@@ -19,24 +19,34 @@ namespace OpenSmc.Equality
 
         private IdentityEqualityComparer()
         {
-            subtypeEquality = new CreatableObjectStore<(Type, Type), Func<T, T, bool>>(CreateSubtypeAction);
+            subtypeEquality = new CreatableObjectStore<(Type, Type), Func<T, T, bool>>(
+                CreateSubtypeAction
+            );
             subtypeHashCode = new CreatableObjectStore<Type, Func<T, int>>(CreateHashCode);
-            comparisonFunctionsLazy = new Lazy<(Func<T, T, bool> equalityFunc, Func<T, int> hashCodeFunc)>(CreateComparisonFunctions);
+            comparisonFunctionsLazy = new Lazy<(
+                Func<T, T, bool> equalityFunc,
+                Func<T, int> hashCodeFunc
+            )>(CreateComparisonFunctions);
         }
 
-        private static (Func<T, T, bool> equalityFunc, Func<T, int> hashCodeFunc) CreateComparisonFunctions()
+        private static (
+            Func<T, T, bool> equalityFunc,
+            Func<T, int> hashCodeFunc
+        ) CreateComparisonFunctions()
         {
             var identityProps = typeof(TTarget).GetIdentityOrSimilarProperties();
             if (typeof(T) != typeof(TTarget))
             {
                 identityProps = identityProps
-                                .Join(typeof(T).GetProperties(BindingFlags.Instance | BindingFlags.Public),
-                                      s => s.Name,
-                                      t => t.Name,
-                                      (_, t) => t)
-                                .ToArray();
+                    .Join(
+                        typeof(T).GetProperties(BindingFlags.Instance | BindingFlags.Public),
+                        s => s.Name,
+                        t => t.Name,
+                        (_, t) => t
+                    )
+                    .ToArray();
             }
-            
+
             return IdentityEqualityComparerHelper.GetHashAndEqualityForType<T>(identityProps);
         }
 
@@ -45,15 +55,36 @@ namespace OpenSmc.Equality
             if (type == typeof(T))
                 return comparisonFunctionsLazy.Value.hashCodeFunc;
 
-            var equalityComparerType = typeof(IdentityEqualityComparer<,>).MakeGenericType(type, GetTargetTypeOfPocoType(type));
+            var equalityComparerType = typeof(IdentityEqualityComparer<,>).MakeGenericType(
+                type,
+                GetTargetTypeOfPocoType(type)
+            );
 
-            var method = equalityComparerType.GetMethod(nameof(GetHashCodeImpl), BindingFlags.NonPublic | BindingFlags.Instance, null, new[] { type }, null);
+            var method = equalityComparerType.GetMethod(
+                nameof(GetHashCodeImpl),
+                BindingFlags.NonPublic | BindingFlags.Instance,
+                null,
+                new[] { type },
+                null
+            );
             var instance = equalityComparerType.GetField(nameof(Instance))?.GetValue(null);
             var prm1 = Expression.Parameter(typeof(T));
-            return Expression.Lambda<Func<T, int>>(Expression.Call(Expression.Constant(instance), method!, Expression.Convert(prm1, type)), prm1).Compile();
+            return Expression
+                .Lambda<Func<T, int>>(
+                    Expression.Call(
+                        Expression.Constant(instance),
+                        method!,
+                        Expression.Convert(prm1, type)
+                    ),
+                    prm1
+                )
+                .Compile();
         }
 
-        private readonly Lazy<(Func<T, T, bool> equalityFunc, Func<T, int> hashCodeFunc)> comparisonFunctionsLazy;
+        private readonly Lazy<(
+            Func<T, T, bool> equalityFunc,
+            Func<T, int> hashCodeFunc
+        )> comparisonFunctionsLazy;
 
         private readonly CreatableObjectStore<(Type, Type), Func<T, T, bool>> subtypeEquality;
         private readonly CreatableObjectStore<Type, Func<T, int>> subtypeHashCode;
@@ -72,12 +103,32 @@ namespace OpenSmc.Equality
             var mainType = types.t1;
             if (mainType == typeof(T))
                 return comparisonFunctionsLazy.Value.equalityFunc;
-            var equalityComparerType = typeof(IdentityEqualityComparer<,>).MakeGenericType(mainType, GetTargetTypeOfPocoType(mainType));
-            var method = equalityComparerType.GetMethod(nameof(EqualsImpl), BindingFlags.NonPublic | BindingFlags.Instance, null, new[] { mainType, mainType }, null);
+            var equalityComparerType = typeof(IdentityEqualityComparer<,>).MakeGenericType(
+                mainType,
+                GetTargetTypeOfPocoType(mainType)
+            );
+            var method = equalityComparerType.GetMethod(
+                nameof(EqualsImpl),
+                BindingFlags.NonPublic | BindingFlags.Instance,
+                null,
+                new[] { mainType, mainType },
+                null
+            );
             var instance = equalityComparerType.GetField(nameof(Instance))!.GetValue(null);
             var prm1 = Expression.Parameter(typeof(T));
             var prm2 = Expression.Parameter(typeof(T));
-            return Expression.Lambda<Func<T, T, bool>>(Expression.Call(Expression.Constant(instance), method!, Expression.Convert(prm1, mainType), Expression.Convert(prm2, mainType)), prm1, prm2).Compile();
+            return Expression
+                .Lambda<Func<T, T, bool>>(
+                    Expression.Call(
+                        Expression.Constant(instance),
+                        method!,
+                        Expression.Convert(prm1, mainType),
+                        Expression.Convert(prm2, mainType)
+                    ),
+                    prm1,
+                    prm2
+                )
+                .Compile();
         }
 
         public static Type GetTargetTypeOfPocoType(Type type)
@@ -86,7 +137,6 @@ namespace OpenSmc.Equality
 
             return attribute?.Type ?? type;
         }
-
 
         public bool Equals(T x, T y)
         {
@@ -102,14 +152,6 @@ namespace OpenSmc.Equality
         {
             var type1 = x.GetType();
             var type2 = y.GetType();
-
-            if (typeof(T).IsInterface || typeof(T).GetTypeInterface() != null)
-            {
-                var interface1 = type1.GetTypeInterface();
-                var interface2 = type2.GetTypeInterface();
-                if (interface1 != null && interface2 != null)
-                    return subtypeEquality.GetInstance((interface1, interface2))(x, y);
-            }
 
             return subtypeEquality.GetInstance((type1, type2))(x, y);
         }
@@ -131,7 +173,9 @@ namespace OpenSmc.Equality
 
     public static class IdentityEqualityComparerHelper
     {
-        public static (Func<T, T, bool>, Func<T, int>) GetHashAndEqualityForType<T>(PropertyInfo[] identityProps)
+        public static (Func<T, T, bool>, Func<T, int>) GetHashAndEqualityForType<T>(
+            PropertyInfo[] identityProps
+        )
         {
             Func<T, T, bool> equalityFunc;
             Func<T, int> hashCodeFunc;
@@ -144,7 +188,9 @@ namespace OpenSmc.Equality
 
             var prm1 = Expression.Parameter(typeof(T));
             var prm2 = Expression.Parameter(typeof(T));
-            var expr = identityProps.Select(p => GetPropertyEqualityAndHash(p, prm1, prm2)).ToArray();
+            var expr = identityProps
+                .Select(p => GetPropertyEqualityAndHash(p, prm1, prm2))
+                .ToArray();
             var equalityExpr = expr.Select(x => x.equality).Aggregate(Expression.AndAlso);
             equalityFunc = Expression.Lambda<Func<T, T, bool>>(equalityExpr, prm1, prm2).Compile();
 
@@ -157,23 +203,48 @@ namespace OpenSmc.Equality
                 typeExpression = Expression.Call(callGetType, nameof(GetHashCode), Type.EmptyTypes);
             }
 
-            var hashCodeExpr = Expression.ExclusiveOr(expr.Select(x => x.hash).Aggregate(Expression.ExclusiveOr), typeExpression);
+            var hashCodeExpr = Expression.ExclusiveOr(
+                expr.Select(x => x.hash).Aggregate(Expression.ExclusiveOr),
+                typeExpression
+            );
             hashCodeFunc = Expression.Lambda<Func<T, int>>(hashCodeExpr, prm1).Compile();
 
             return (equalityFunc, hashCodeFunc);
         }
 
-        private static (Expression equality, Expression hash) GetPropertyEqualityAndHash(PropertyInfo propertyInfo, ParameterExpression prm1, ParameterExpression prm2)
+        private static (Expression equality, Expression hash) GetPropertyEqualityAndHash(
+            PropertyInfo propertyInfo,
+            ParameterExpression prm1,
+            ParameterExpression prm2
+        )
         {
-            var eq = Expression.Equal(Expression.Property(prm1, propertyInfo), Expression.Property(prm2, propertyInfo));
-            var hash = propertyInfo.PropertyType.IsNullableGeneric() || !propertyInfo.PropertyType.IsValueType
-                           ? (Expression)Expression.Condition(Expression.Equal(Expression.Property(prm1, propertyInfo), Expression.Constant(null, propertyInfo.PropertyType)), Expression.Constant(17), Expression.Call(Expression.Property(prm1, propertyInfo), GetHashCodeMethod))
-                           : Expression.Call(Expression.Property(prm1, propertyInfo), GetHashCodeMethod);
+            var eq = Expression.Equal(
+                Expression.Property(prm1, propertyInfo),
+                Expression.Property(prm2, propertyInfo)
+            );
+            var hash =
+                propertyInfo.PropertyType.IsNullableGeneric()
+                || !propertyInfo.PropertyType.IsValueType
+                    ? (Expression)
+                        Expression.Condition(
+                            Expression.Equal(
+                                Expression.Property(prm1, propertyInfo),
+                                Expression.Constant(null, propertyInfo.PropertyType)
+                            ),
+                            Expression.Constant(17),
+                            Expression.Call(
+                                Expression.Property(prm1, propertyInfo),
+                                GetHashCodeMethod
+                            )
+                        )
+                    : Expression.Call(Expression.Property(prm1, propertyInfo), GetHashCodeMethod);
 
             return (eq, hash);
         }
 
-        [SuppressMessage("ReSharper", "ReturnValueOfPureMethodIsNotUsed")] 
-        public static readonly MethodInfo GetHashCodeMethod = ReflectionHelper.GetMethod<object>(x => x.GetHashCode());
+        [SuppressMessage("ReSharper", "ReturnValueOfPureMethodIsNotUsed")]
+        public static readonly MethodInfo GetHashCodeMethod = ReflectionHelper.GetMethod<object>(
+            x => x.GetHashCode()
+        );
     }
 }

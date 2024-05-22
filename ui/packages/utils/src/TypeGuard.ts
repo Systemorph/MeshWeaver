@@ -1,0 +1,1 @@
+export type TypeGuard<TValue, T extends TValue> = (value: TValue) => value is T;

@@ -1,8 +1,7 @@
 {
   "name": "@open-smc/styleguide",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "scripts": {
-    "clean-node-modules": "rimraf node_modules",
     "start": "react-app-rewired start",
     "build": "react-app-rewired build",
     "test": "react-app-rewired test"
@@ -21,10 +20,10 @@
     "json-loader": "^0.5.7"
   },
   "dependencies": {
-    "@open-smc/application": "0.1.0",
-    "@open-smc/sandbox": "0.1.0",
-    "@open-smc/portal": "0.1.0",
-    "@open-smc/ui-kit": "0.1.0",
+    "@open-smc/application": "0.0.0",
+    "@open-smc/sandbox": "0.0.0",
+    "@open-smc/portal": "0.0.0",
+    "@open-smc/ui-kit": "0.0.0",
     "chance": "^1.1.11",
     "lodash": "^4.17.21",
     "react": "^18.2.0",

@@ -1,27 +1,44 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
+using Microsoft.Extensions.Logging;
 using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Activities;
 
-public record ActivityLog(
-    //string DisplayName, TODO add this later
-    //string Category, TODO add this later or think about how to find activity by its process created
-    DateTime Start,
-    UserInfo User)
+public record ActivityLog(string Category)
 {
+    public DateTime Start { get; init; } = DateTime.UtcNow;
 
-    [property: Key] public string Id { get; init; } = Guid.NewGuid().AsString();
+    [property: Key]
+    public string Id { get; init; } = Guid.NewGuid().AsString();
     public ImmutableList<LogMessage> Messages { get; init; } = ImmutableList<LogMessage>.Empty;
     public string Status { get; init; } = ActivityLogStatus.Started;
     public DateTime? End { get; init; }
-    public string Category { get; init; }
+    public UserInfo User { get; init; }
+    public ImmutableList<ActivityLog> SubActivities { get; init; } =
+        ImmutableList<ActivityLog>.Empty;
 
-    public ImmutableList<ActivityLog> SubActivities { get; init; } = ImmutableList<ActivityLog>.Empty;
+    public ActivityLog Fail(string error) =>
+        this with
+        {
+            Messages = Messages.Add(new LogMessage(error, LogLevel.Error)),
+            Status = ActivityLogStatus.Failed,
+            End = DateTime.UtcNow,
+        };
 
-    public ActivityLog WithSubLog(ActivityLog subLog) => this with
-    {
-        SubActivities = SubActivities.Add(subLog),
-    };
+    public ActivityLog Finish() =>
+        this with
+        {
+            Status = Messages.Any(x => x.LogLevel == LogLevel.Error)
+                ? ActivityLogStatus.Failed
+                : ActivityLogStatus.Succeeded,
+            End = DateTime.UtcNow,
+        };
 
+    public ActivityLog WithSubLog(ActivityLog subLog) =>
+        this with
+        {
+            SubActivities = SubActivities.Add(subLog),
+        };
 }
+

@@ -1,60 +1,95 @@
-﻿using System.Text;
+﻿using System.Diagnostics;
+using System.Text;
+using AngleSharp;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
 using OpenSmc.Data;
-using OpenSmc.DataStructures;
+using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Import;
 
-public class ImportPlugin : MessageHubPlugin<ImportState>,
-    IMessageHandlerAsync<ImportRequest>
+public static class ActivityCategory
 {
-    [Inject] private IActivityService activityService;
-    private readonly IWorkspace workspace;
+    public const string Import = nameof(Import);
+}
 
-    public ImportConfiguration Configuration;
-    public ImportPlugin(IMessageHub hub, Func<ImportConfiguration, ImportConfiguration> importConfiguration) : base(hub)
+public class ImportPlugin : MessageHubPlugin, IMessageHandlerAsync<ImportRequest>
+{
+    private ImportManager importManager;
+    private readonly IWorkspace workspace;
+    private readonly IActivityService activityService;
+    private readonly Func<ImportConfiguration, ImportConfiguration> importConfiguration;
+
+    public ImportPlugin(
+        IMessageHub hub,
+        Func<ImportConfiguration, ImportConfiguration> importConfiguration
+    )
+        : base(hub)
     {
         workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
-        Configuration = importConfiguration.Invoke(new(hub, workspace)).Build();
+        activityService = hub.ServiceProvider.GetRequiredService<IActivityService>();
+        this.importConfiguration = importConfiguration;
     }
 
     public override async Task StartAsync(CancellationToken cancellationToken)
     {
         await base.StartAsync(cancellationToken);
-        InitializeState(new ImportState());
+        initializeTask = InitializeAsync();
     }
 
-    public override Task Initialized => workspace.Initialized;
+    private Task initializeTask;
+    public override Task Initialized => initializeTask;
 
-
-    public async Task<IMessageDelivery> HandleMessageAsync(IMessageDelivery<ImportRequest> request, CancellationToken cancellationToken)
+    private async Task InitializeAsync()
     {
-        activityService.Start(); 
+        await workspace.Initialized;
+        importManager = new ImportManager(
+            importConfiguration.Invoke(new(Hub, workspace.MappedTypes, activityService))
+        );
+    }
+
+    public async Task<IMessageDelivery> HandleMessageAsync(
+        IMessageDelivery<ImportRequest> request,
+        CancellationToken cancellationToken
+    )
+    {
+        activityService.Start(ActivityCategory.Import);
+        ActivityLog log;
 
         try
         {
-            var importRequest = request.Message;
-            var (dataSet, format) = await ReadDataSetAsync(importRequest, cancellationToken);
-
-            var hasError = format.Import(importRequest, dataSet);
+            var (state, hasError) = await importManager.ImportAsync(
+                request.Message,
+                workspace.State,
+                activityService,
+                cancellationToken
+            );
 
             if (hasError)
-                activityService.LogError(ValidationStageFailed);
+                activityService.LogError(ImportManager.ImportFailed);
 
             if (!activityService.HasErrors())
-                workspace.Commit();
-            else
-                workspace.Rollback();
+            {
+                workspace.RequestChange(s => new ChangeItem<WorkspaceState>(
+                    Hub.Address,
+                    workspace.Reference,
+                    s.Merge(state),
+                    Hub.Address,
+                    Hub.Version
+                ));
+            }
 
-            if (format.SaveLog)
-                workspace.Update(activityService.GetCurrentActivityLog());
+            log = activityService.Finish();
+
+            if (request.Message.SaveLog)
+            {
+                workspace.Update(log);
+            }
 
             //activityService.Finish();
-
         }
         catch (Exception e)
         {
@@ -66,47 +101,10 @@ public class ImportPlugin : MessageHubPlugin<ImportState>,
             }
 
             activityService.LogError(message.ToString());
-        }
-        finally
-        {
-            activityService.LogInformation($"Import finished.");
-            Hub.Post(new ImportResponse(Hub.Version, activityService.Finish()), o => o.ResponseFor(request));
+            log = activityService.Finish();
         }
 
+        Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
         return request.Processed();
     }
-
-
-    public async Task<(IDataSet dataSet, ImportFormat format)> ReadDataSetAsync(ImportRequest importRequest,
-        CancellationToken cancellationToken)
-    {
-        if (!Configuration.StreamProviders.TryGetValue(importRequest.StreamType, out var streamProvider))
-            throw new ImportException($"Unknown stream type: {importRequest.StreamType}");
-
-
-
-
-        var stream = streamProvider.Invoke(importRequest);
-        if (stream == null)
-            throw new ImportException($"Could not open stream: {importRequest.StreamType}, {importRequest.Content}");
-
-
-
-        if (!Configuration.DataSetReaders.TryGetValue(importRequest.MimeType, out var reader))
-            throw new ImportException($"Cannot read mime type {importRequest.MimeType}");
-
-        var (dataSet, format) = await reader.Invoke(stream, importRequest.DataSetReaderOptions, cancellationToken);
-
-        format ??= importRequest.Format;
-        if (format == null)
-            throw new ImportException("Format not specified.");
-
-        var importFormat = Configuration.GetFormat(format);
-        if (importFormat == null)
-            throw new ImportException($"Unknown format: {format}");
-
-        return (dataSet, importFormat);
-    }
-
-    public static string ValidationStageFailed = "Validation stage has failed.";
 }
