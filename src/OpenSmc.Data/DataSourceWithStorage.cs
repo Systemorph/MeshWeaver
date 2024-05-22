@@ -31,6 +31,11 @@ public abstract record DataSourceWithStorage<TDataSource>(
         return Storage.StartTransactionAsync(cancellationToken);
     }
 
+    protected override void Synchronize(ChangeItem<EntityStore> item)
+    {
+        persistenceHub.Schedule(ct => UpdateAsync(item, ct));
+    }
+
     protected virtual async Task UpdateAsync(
         ChangeItem<EntityStore> workspace,
         CancellationToken cancellationToken
