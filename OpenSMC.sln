@@ -166,6 +166,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenSmc.Northwind.Applicati
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Northwind.Host", "samples\OpenSmc.Northwind.Host\OpenSmc.Northwind.Host.csproj", "{96DE7D50-70A6-4F28-B53F-DB5D76DEA61E}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{26552B8B-B431-4CA9-8192-F11043394798}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenSmc.Blazor", "src\OpenSmc.Blazor\OpenSmc.Blazor.csproj", "{3AC5191B-50A6-464D-B03E-AF2366E9FD00}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -468,6 +472,10 @@ Global
 		{96DE7D50-70A6-4F28-B53F-DB5D76DEA61E}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{96DE7D50-70A6-4F28-B53F-DB5D76DEA61E}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{96DE7D50-70A6-4F28-B53F-DB5D76DEA61E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3AC5191B-50A6-464D-B03E-AF2366E9FD00}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3AC5191B-50A6-464D-B03E-AF2366E9FD00}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3AC5191B-50A6-464D-B03E-AF2366E9FD00}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3AC5191B-50A6-464D-B03E-AF2366E9FD00}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -498,6 +506,7 @@ Global
 		{9D8115CE-7E37-4E12-8054-EEF4AEF00504} = {FD265214-FBC1-4C25-A8F8-0C6827B143C8}
 		{8022161B-DFD3-4208-B631-A01EDC063392} = {FD265214-FBC1-4C25-A8F8-0C6827B143C8}
 		{96DE7D50-70A6-4F28-B53F-DB5D76DEA61E} = {FD265214-FBC1-4C25-A8F8-0C6827B143C8}
+		{3AC5191B-50A6-464D-B03E-AF2366E9FD00} = {26552B8B-B431-4CA9-8192-F11043394798}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {331ADDC7-02A4-4F0E-8C47-2060003082F2}
