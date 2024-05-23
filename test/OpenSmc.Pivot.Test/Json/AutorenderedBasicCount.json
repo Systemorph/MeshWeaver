@@ -1,65 +1,62 @@
 {
-  "$type": "OpenSmc.Pivot.Models.PivotModel, OpenSmc.Pivot",
   "columns": [
     {
-      "$type": "OpenSmc.Pivot.Models.Column, OpenSmc.Pivot",
+      "systemName": "Value",
+      "displayName": "Value",
       "coordinates": [
         "Value"
       ],
-      "systemName": "Value",
-      "displayName": "Value",
-      "grouperName": "ColumnName"
+      "grouperName": "ColumnName",
+      "$type": "OpenSmc.Pivot.Models.Column"
     }
   ],
   "rows": [
     {
-      "$type": "OpenSmc.Pivot.Models.Row, OpenSmc.Pivot",
       "rowGroup": {
-        "$type": "OpenSmc.Pivot.Models.RowGroup, OpenSmc.Pivot",
         "coordinates": [
           "1"
         ],
         "systemName": "1",
         "displayName": "1",
-        "grouperName": "AutomaticNumber"
+        "grouperName": "AutomaticNumber",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 1
-      }
+        "Value": 1
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "OpenSmc.Pivot.Models.Row, OpenSmc.Pivot",
       "rowGroup": {
-        "$type": "OpenSmc.Pivot.Models.RowGroup, OpenSmc.Pivot",
         "coordinates": [
           "2"
         ],
         "systemName": "2",
         "displayName": "2",
-        "grouperName": "AutomaticNumber"
+        "grouperName": "AutomaticNumber",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 1
-      }
+        "Value": 1
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "OpenSmc.Pivot.Models.Row, OpenSmc.Pivot",
       "rowGroup": {
-        "$type": "OpenSmc.Pivot.Models.RowGroup, OpenSmc.Pivot",
         "coordinates": [
           "3"
         ],
         "systemName": "3",
         "displayName": "3",
-        "grouperName": "AutomaticNumber"
+        "grouperName": "AutomaticNumber",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "value": 1
-      }
+        "Value": 1
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     }
   ],
-  "hasRowGrouping": true
+  "hasRowGrouping": true,
+  "$type": "OpenSmc.Pivot.Models.PivotModel"
 }

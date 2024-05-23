@@ -4,6 +4,9 @@ export type PropertyPath = (string | number)[];
 
 type QueueItem = [any, PropertyPath];
 
+/**
+ @deprecated use walkjs instead (4/1/2024, akravets)
+ */
 export function visit<T extends object>(root: T, iteratee: (node: unknown, path: PropertyPath) => void) {
     const visited: any[] = [];
 

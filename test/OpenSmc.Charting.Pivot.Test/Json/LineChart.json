@@ -1,0 +1,65 @@
+{
+  "type": 5,
+  "data": {
+    "dataSets": [
+      {
+        "fill": false,
+        "tension": 0.5,
+        "data": [
+          -3.9,
+          3.4,
+          3,
+          2.7,
+          null,
+          null,
+          null
+        ],
+        "label": "Alessandro.Italy",
+        "$type": "OpenSmc.Charting.Models.LineDataSet"
+      },
+      {
+        "fill": false,
+        "tension": 0.4,
+        "data": [
+          1.1,
+          2.2,
+          3.3,
+          4.4,
+          null,
+          null,
+          null
+        ],
+        "label": "Paolo.Italy",
+        "$type": "OpenSmc.Charting.Models.LineDataSet"
+      }
+    ],
+    "labels": [
+      "8",
+      "9",
+      "10",
+      "11",
+      "12",
+      "13",
+      "14"
+    ],
+    "$type": "OpenSmc.Charting.Models.Data"
+  },
+  "options": {
+    "plugins": {
+      "legend": {
+        "display": true,
+        "$type": "OpenSmc.Charting.Models.Options.Legend"
+      },
+      "colorSchemes": {
+        "scheme": {
+          "palette": "brewer.PastelOne9",
+          "$type": "OpenSmc.Charting.Enums.Palettes"
+        },
+        "$type": "OpenSmc.Charting.Models.Options.ColorSchemes"
+      },
+      "$type": "OpenSmc.Charting.Models.Options.Plugins"
+    },
+    "$type": "OpenSmc.Charting.Models.Options.Options"
+  },
+  "$type": "OpenSmc.Charting.Models.Chart"
+}

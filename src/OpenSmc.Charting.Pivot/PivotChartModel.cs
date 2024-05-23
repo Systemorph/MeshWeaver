@@ -24,8 +24,8 @@ public record PivotChartRow
 
 public record PivotElementDescriptor
 {
-    public object Id { get; init; }
+    public string Id { get; init; }
     public string DisplayName { get; init; }
-    public List<(object Id, string DisplayName, object GrouperName)> Coordinates { get; set; } =
+    public List<(string Id, string DisplayName, string GrouperName)> Coordinates { get; set; } =
         new();
 }

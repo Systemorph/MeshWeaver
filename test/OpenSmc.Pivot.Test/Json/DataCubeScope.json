@@ -1,53 +1,52 @@
 {
-  "$type": "Systemorph.Pivot.Models.PivotModel, Systemorph.Pivot",
   "columns": [
     {
-      "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+      "systemName": "BoP",
+      "displayName": "Beginning of Period",
       "coordinates": [
         "BoP"
       ],
-      "systemName": "BoP",
-      "displayName": "Beginning of Period",
-      "grouperName": "ColumnName"
+      "grouperName": "ColumnName",
+      "$type": "OpenSmc.Pivot.Models.Column"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+      "systemName": "Delta",
+      "displayName": "Delta",
       "coordinates": [
         "Delta"
       ],
-      "systemName": "Delta",
-      "displayName": "Delta",
-      "grouperName": "ColumnName"
+      "grouperName": "ColumnName",
+      "$type": "OpenSmc.Pivot.Models.Column"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+      "systemName": "EoP",
+      "displayName": "End of Period",
       "coordinates": [
         "EoP"
       ],
-      "systemName": "EoP",
-      "displayName": "End of Period",
-      "grouperName": "ColumnName"
+      "grouperName": "ColumnName",
+      "$type": "OpenSmc.Pivot.Models.Column"
     }
   ],
   "rows": [
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "TopGroup"
         ],
         "systemName": "TopGroup",
         "displayName": "Total",
-        "grouperName": "Total"
+        "grouperName": "Total",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "boP": 4.0,
-        "delta": 4.0,
-        "eoP": 4.0
-      }
+        "BoP": 4,
+        "Delta": 4,
+        "EoP": 4
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     }
   ],
-  "hasRowGrouping": true
+  "hasRowGrouping": true,
+  "$type": "OpenSmc.Pivot.Models.PivotModel"
 }

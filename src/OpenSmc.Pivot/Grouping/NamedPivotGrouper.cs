@@ -8,7 +8,7 @@ namespace OpenSmc.Pivot.Grouping
         where TGroup : class, IGroup, new()
         where T : INamed
     {
-        public NamedPivotGrouper(string name, Func<T, object> keySelector)
+        public NamedPivotGrouper(string name, Func<T, string> keySelector)
             : base(
                 x =>
                     x.GroupBy(o =>

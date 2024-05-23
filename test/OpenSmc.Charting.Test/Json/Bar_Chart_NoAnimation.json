@@ -1,0 +1,55 @@
+{
+  "data": {
+    "dataSets": [
+      {
+        "data": [
+          2,
+          2,
+          3,
+          3
+        ],
+        "label": "One"
+      },
+      {
+        "data": [
+          1,
+          4,
+          1,
+          2
+        ],
+        "label": "Two"
+      }
+    ],
+    "labels": [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr"
+    ]
+  },
+  "options": {
+    "animation": {
+      "duration": 0
+    },
+    "plugins": {
+      "legend": {
+        "display": true
+      },
+      "title": {
+        "display": true,
+        "font": {
+          "family": "Ov\u0435rpass",
+          "size": 22,
+          "weight": "600",
+          "lineHeight": "24px"
+        },
+        "text": "No animation"
+      },
+      "colorSchemes": {
+        "scheme": {
+          "palette": "brewer.PastelOne9"
+        }
+      }
+    }
+  }
+}

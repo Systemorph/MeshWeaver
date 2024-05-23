@@ -64,7 +64,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
             )
             .GetObservable<TransactionalData>()
             .Timeout(timeout)
-            .FirstAsync();
+            .FirstAsync(x => x.Count > 1);
 
         var computedItems1 = await GetWorkspace(
                 host.GetHostedHub(new ComputedDataAddress(2024, "1", new HostAddress()))

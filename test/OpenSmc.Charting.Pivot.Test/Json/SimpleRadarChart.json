@@ -1,0 +1,63 @@
+{
+  "type": 2,
+  "data": {
+    "dataSets": [
+      {
+        "fill": false,
+        "data": [
+          0.19999999999999973,
+          7.4,
+          1,
+          6.7,
+          3,
+          4,
+          4
+        ],
+        "label": "Alessandro",
+        "$type": "OpenSmc.Charting.Models.RadarDataSet"
+      },
+      {
+        "fill": false,
+        "data": [
+          1.1,
+          2.2,
+          3.3,
+          4.4,
+          null,
+          null,
+          null
+        ],
+        "label": "Paolo",
+        "$type": "OpenSmc.Charting.Models.RadarDataSet"
+      }
+    ],
+    "labels": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7"
+    ],
+    "$type": "OpenSmc.Charting.Models.Data"
+  },
+  "options": {
+    "plugins": {
+      "legend": {
+        "display": true,
+        "$type": "OpenSmc.Charting.Models.Options.Legend"
+      },
+      "colorSchemes": {
+        "scheme": {
+          "palette": "brewer.PastelOne9",
+          "$type": "OpenSmc.Charting.Enums.Palettes"
+        },
+        "$type": "OpenSmc.Charting.Models.Options.ColorSchemes"
+      },
+      "$type": "OpenSmc.Charting.Models.Options.Plugins"
+    },
+    "$type": "OpenSmc.Charting.Models.Options.Options"
+  },
+  "$type": "OpenSmc.Charting.Models.Chart"
+}

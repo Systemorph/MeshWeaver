@@ -56,10 +56,10 @@ namespace OpenSmc.Charting.Pivot
 
         private void BuildColumnCoordinateMapInner()
         {
-            var headerDimensions = new Dictionary<string, IList<Tuple<object, string, object>>>();
+            var headerDimensions = new Dictionary<string, IList<Tuple<string, string, string>>>();
             var valueDimensions = new Dictionary<string, string>();
 
-            var displayNameToDimensions = new List<Tuple<object, string, object>>();
+            var displayNameToDimensions = new List<Tuple<string, string, string>>();
 
             BuildColumnCoordinateMap(
                 PivotModel.Columns,
@@ -81,11 +81,11 @@ namespace OpenSmc.Charting.Pivot
             PivotChartModel.ColumnDescriptors = descriptors.ToList();
         }
 
-        private IList<Tuple<object, string, object>> BuildColumnCoordinateMap(
+        private IList<Tuple<string, string, string>> BuildColumnCoordinateMap(
             IReadOnlyCollection<Column> pivotColumns,
-            IDictionary<string, IList<Tuple<object, string, object>>> headerDimensions,
+            IDictionary<string, IList<Tuple<string, string, string>>> headerDimensions,
             IDictionary<string, string> valueDimensions,
-            IList<Tuple<object, string, object>> displayNameToDimensions
+            IList<Tuple<string, string, string>> displayNameToDimensions
         )
         {
             for (var i = 0; i < pivotColumns.Count; i++)
@@ -103,7 +103,7 @@ namespace OpenSmc.Charting.Pivot
                             == IPivotGrouper<object, ColumnGroup>.TotalGroup.SystemName
                     )
                         continue; // we do not want to export aggregated values
-                    var item = new Tuple<object, string, object>(
+                    var item = new Tuple<string, string, string>(
                         colGroup.Coordinates.Last(),
                         colGroup.DisplayName,
                         colGroup.GrouperName
@@ -130,7 +130,7 @@ namespace OpenSmc.Charting.Pivot
                         coordinate.Append($".{currentElement.Coordinates[j + 1]}");
 
                     var valueDisplayName = pivotColumns.ElementAt(i).DisplayName;
-                    var item = new Tuple<object, string, object>(
+                    var item = new Tuple<string, string, string>(
                         pivotColumns.ElementAt(i).Coordinates.Last(),
                         pivotColumns.ElementAt(i).DisplayName,
                         PivotChartConst.Column
@@ -165,7 +165,9 @@ namespace OpenSmc.Charting.Pivot
                                 (_, j) =>
                                 {
                                     var cRow = PivotChartModel.Rows.FirstOrDefault(r =>
-                                        r.Descriptor.Id.Equals(rowGroup.Coordinates.Take(j + 1))
+                                        r.Descriptor.Id.Equals(
+                                            String.Join(".", rowGroup.Coordinates.Take(j + 1))
+                                        )
                                     );
                                     return cRow != null
                                         ? cRow.Descriptor.Coordinates.Last()
@@ -190,11 +192,11 @@ namespace OpenSmc.Charting.Pivot
                     }
                 };
                 PivotChartModel.Rows.Add(row);
-                AddDataToRow((IReadOnlyDictionary<object, object>)pivotRow.Data, row);
+                AddDataToRow((IReadOnlyDictionary<string, object>)pivotRow.Data, row);
             }
         }
 
-        private void AddDataToRow(IReadOnlyDictionary<object, object> data, PivotChartRow chartRow)
+        private void AddDataToRow(IReadOnlyDictionary<string, object> data, PivotChartRow chartRow)
         {
             foreach (var columnDescriptor in PivotChartModel.ColumnDescriptors)
             {
@@ -205,16 +207,16 @@ namespace OpenSmc.Charting.Pivot
         }
 
         private double? GetValue(
-            IReadOnlyDictionary<object, object> data,
-            IReadOnlyCollection<(object Id, string DisplayName, object GrouperName)> coordinates
+            IReadOnlyDictionary<string, object> data,
+            IReadOnlyCollection<(string Id, string DisplayName, string GrouperName)> coordinates
         )
         {
             if (!coordinates.Any() || data is null)
                 return null;
 
-            if (data.TryGetValue(coordinates.First().Id, out var subData))
+            if (data.TryGetValue(coordinates.First().Id.ToString(), out var subData))
             {
-                if (subData is IReadOnlyDictionary<object, object> subDataDict)
+                if (subData is IReadOnlyDictionary<string, object> subDataDict)
                     return GetValue(subDataDict, coordinates.Skip(1).ToList());
                 if (subData is int intSubData)
                     return (double?)intSubData;

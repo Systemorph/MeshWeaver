@@ -1,0 +1,15 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Orleans.Serialization.SystemTextJson" />
+    <PackageReference Include="Microsoft.Orleans.Server" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OpenSmc.Application.Orleans\OpenSmc.Application.Orleans.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.Application.SignalR\OpenSmc.Application.SignalR.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.Hosting\OpenSmc.Hosting.csproj" />
+    <ProjectReference Include="..\OpenSmc.Northwind\OpenSmc.Northwind.csproj" />
+  </ItemGroup>
+</Project>

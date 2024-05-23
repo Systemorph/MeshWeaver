@@ -3,7 +3,7 @@ import type {
     NotebookElementDto
 } from "@open-smc/portal/src/controls/ElementEditorControl";
 import { ControlDef } from "@open-smc/application/src/ControlDef";
-import { AreaChangedEvent } from "@open-smc/application/src/application.contract";
+import { AreaChangedEvent } from "@open-smc/application/src/contract/application.contract";
 import { NotebookEditor } from "./NotebookEditor";
 import {NotebookElementContentChangedEvent} from "@open-smc/portal/src/features/notebook/notebookElement.contract";
 import {debounce} from "lodash";

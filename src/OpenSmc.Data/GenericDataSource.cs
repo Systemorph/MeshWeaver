@@ -85,7 +85,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
         Hub.Schedule(cancellationToken => InitializeAsync(stream, cancellationToken));
     }
 
-    private void Synchronize(ChangeItem<EntityStore> item)
+    protected virtual void Synchronize(ChangeItem<EntityStore> item)
     {
         if (item.ChangedBy == null || Id.Equals(item.ChangedBy))
             return;

@@ -1,263 +1,237 @@
 {
-  "$type": "Systemorph.Pivot.Models.PivotModel, Systemorph.Pivot",
   "columns": [
     {
-      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
       "children": [
         {
-          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
           "children": [
             {
-              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "systemName": "D.D.Value",
+              "displayName": "Value",
               "coordinates": [
                 "D",
                 "D",
                 "Value"
               ],
-              "systemName": "D.D.Value",
-              "displayName": "Value",
-              "grouperName": "ColumnName"
+              "grouperName": "ColumnName",
+              "$type": "OpenSmc.Pivot.Models.Column"
             }
           ],
+          "systemName": "D.D",
+          "displayName": "Velaro Germany",
           "coordinates": [
             "D",
             "D"
           ],
-          "systemName": "D.D",
-          "displayName": "Velaro Germany",
-          "grouperName": "Company"
+          "grouperName": "Company",
+          "$type": "OpenSmc.Pivot.Models.ColumnGroup"
         }
-      ],
-      "coordinates": [
-        "D"
       ],
       "systemName": "D",
       "displayName": "Germany",
-      "grouperName": "ScopeCountry"
+      "coordinates": [
+        "D"
+      ],
+      "grouperName": "ScopeCountry",
+      "$type": "OpenSmc.Pivot.Models.ColumnGroup"
     },
     {
-      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
       "children": [
         {
-          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
           "children": [
             {
-              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "systemName": "PT.PT.Value",
+              "displayName": "Value",
               "coordinates": [
                 "PT",
                 "PT",
                 "Value"
               ],
-              "systemName": "PT.PT.Value",
-              "displayName": "Value",
-              "grouperName": "ColumnName"
+              "grouperName": "ColumnName",
+              "$type": "OpenSmc.Pivot.Models.Column"
             }
           ],
+          "systemName": "PT.PT",
+          "displayName": "Velaro Portugal",
           "coordinates": [
             "PT",
             "PT"
           ],
-          "systemName": "PT.PT",
-          "displayName": "Velaro Portugal",
-          "grouperName": "Company"
+          "grouperName": "Company",
+          "$type": "OpenSmc.Pivot.Models.ColumnGroup"
         }
-      ],
-      "coordinates": [
-        "PT"
       ],
       "systemName": "PT",
       "displayName": "Portugal",
-      "grouperName": "ScopeCountry"
+      "coordinates": [
+        "PT"
+      ],
+      "grouperName": "ScopeCountry",
+      "$type": "OpenSmc.Pivot.Models.ColumnGroup"
     },
     {
-      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
       "children": [
         {
-          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
           "children": [
             {
-              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "systemName": "RU.RU.Value",
+              "displayName": "Value",
               "coordinates": [
                 "RU",
                 "RU",
                 "Value"
               ],
-              "systemName": "RU.RU.Value",
-              "displayName": "Value",
-              "grouperName": "ColumnName"
+              "grouperName": "ColumnName",
+              "$type": "OpenSmc.Pivot.Models.Column"
             }
           ],
+          "systemName": "RU.RU",
+          "displayName": "Velaro Russia",
           "coordinates": [
             "RU",
             "RU"
           ],
-          "systemName": "RU.RU",
-          "displayName": "Velaro Russia",
-          "grouperName": "Company"
+          "grouperName": "Company",
+          "$type": "OpenSmc.Pivot.Models.ColumnGroup"
         }
-      ],
-      "coordinates": [
-        "RU"
       ],
       "systemName": "RU",
       "displayName": "Russia",
-      "grouperName": "ScopeCountry"
+      "coordinates": [
+        "RU"
+      ],
+      "grouperName": "ScopeCountry",
+      "$type": "OpenSmc.Pivot.Models.ColumnGroup"
     },
     {
-      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
       "children": [
         {
-          "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
           "children": [
             {
-              "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+              "systemName": "CH.CH.Value",
+              "displayName": "Value",
               "coordinates": [
                 "CH",
                 "CH",
                 "Value"
               ],
-              "systemName": "CH.CH.Value",
-              "displayName": "Value",
-              "grouperName": "ColumnName"
+              "grouperName": "ColumnName",
+              "$type": "OpenSmc.Pivot.Models.Column"
             }
           ],
+          "systemName": "CH.CH",
+          "displayName": "Velaro Switzerland",
           "coordinates": [
             "CH",
             "CH"
           ],
-          "systemName": "CH.CH",
-          "displayName": "Velaro Switzerland",
-          "grouperName": "Company"
+          "grouperName": "Company",
+          "$type": "OpenSmc.Pivot.Models.ColumnGroup"
         }
-      ],
-      "coordinates": [
-        "CH"
       ],
       "systemName": "CH",
       "displayName": "Switzerland",
-      "grouperName": "ScopeCountry"
+      "coordinates": [
+        "CH"
+      ],
+      "grouperName": "ScopeCountry",
+      "$type": "OpenSmc.Pivot.Models.ColumnGroup"
     }
   ],
   "rows": [
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "ElementProperty"
         ],
         "systemName": "ElementProperty",
         "displayName": "Element Property",
-        "grouperName": "PropertyName"
+        "grouperName": "PropertyName",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "d": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "d": {
-            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-            "value": 2.0
+        "D": {
+          "D": {
+            "Value": 2
           },
-          "totalGroup": {
-            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-            "value": 2.0
+          "TotalGroup": {
+            "Value": 2
           }
         },
-        "pt": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "pt": {
-            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-            "value": 2.0
+        "PT": {
+          "PT": {
+            "Value": 2
           },
-          "totalGroup": {
-            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-            "value": 2.0
+          "TotalGroup": {
+            "Value": 2
           }
         },
-        "ru": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "ru": {
-            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-            "value": 2.0
+        "RU": {
+          "RU": {
+            "Value": 2
           },
-          "totalGroup": {
-            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-            "value": 2.0
+          "TotalGroup": {
+            "Value": 2
           }
         },
-        "ch": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "ch": {
-            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-            "value": 2.0
+        "CH": {
+          "CH": {
+            "Value": 2
           },
-          "totalGroup": {
-            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-            "value": 2.0
+          "TotalGroup": {
+            "Value": 2
           }
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "ElementProperty",
           "CHF"
         ],
         "systemName": "ElementProperty.CHF",
         "displayName": "Swiss Franc",
-        "grouperName": "Currency"
+        "grouperName": "Currency",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "d": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "d": {
-            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-            "value": 2.0
+        "D": {
+          "D": {
+            "Value": 2
           },
-          "totalGroup": {
-            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-            "value": 2.0
+          "TotalGroup": {
+            "Value": 2
           }
         },
-        "pt": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "pt": {
-            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-            "value": 2.0
+        "PT": {
+          "PT": {
+            "Value": 2
           },
-          "totalGroup": {
-            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-            "value": 2.0
+          "TotalGroup": {
+            "Value": 2
           }
         },
-        "ru": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "ru": {
-            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-            "value": 2.0
+        "RU": {
+          "RU": {
+            "Value": 2
           },
-          "totalGroup": {
-            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-            "value": 2.0
+          "TotalGroup": {
+            "Value": 2
           }
         },
-        "ch": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "ch": {
-            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-            "value": 2.0
+        "CH": {
+          "CH": {
+            "Value": 2
           },
-          "totalGroup": {
-            "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-            "value": 2.0
+          "TotalGroup": {
+            "Value": 2
           }
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     }
   ],
-  "hasRowGrouping": true
+  "hasRowGrouping": true,
+  "$type": "OpenSmc.Pivot.Models.PivotModel"
 }

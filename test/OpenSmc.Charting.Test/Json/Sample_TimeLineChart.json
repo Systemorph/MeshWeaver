@@ -1,0 +1,59 @@
+{
+  "type": 5,
+  "data": {
+    "dataSets": [
+      {
+        "borderWidth": 3,
+        "data": [
+          {
+            "x": "2020-01-01T09:00:00.0000000",
+            "y": -1
+          },
+          {
+            "x": "2020-02-01T09:00:00.0000000",
+            "y": 4
+          },
+          {
+            "x": "2020-03-01T09:00:00.0000000",
+            "y": 3
+          },
+          {
+            "x": "2020-04-01T09:00:00.0000000",
+            "y": 2
+          }
+        ],
+        "label": "First"
+      }
+    ]
+  },
+  "options": {
+    "scales": {
+      "x": {
+        "type": "time"
+      },
+      "y": {
+        "ticks": {}
+      }
+    },
+    "plugins": {
+      "legend": {
+        "display": true
+      },
+      "title": {
+        "display": true,
+        "font": {
+          "family": "Ov\u0435rpass",
+          "size": 20,
+          "weight": "600",
+          "lineHeight": "24px"
+        },
+        "text": "TimeLine Chart"
+      },
+      "colorSchemes": {
+        "scheme": {
+          "palette": "brewer.PastelOne9"
+        }
+      }
+    }
+  }
+}

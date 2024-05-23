@@ -233,6 +233,7 @@ namespace OpenSmc.Pivot.Builder
             {
                 SliceColumns = SliceColumns,
                 SliceRows = SliceRows,
+                State = State,
                 PropertiesToHide = PropertiesToHide,
                 Aggregations = new Aggregations<
                     DataSlice<TElement>,
@@ -269,6 +270,7 @@ namespace OpenSmc.Pivot.Builder
                 SliceColumns = SliceColumns,
                 SliceRows = SliceRows,
                 PropertiesToHide = PropertiesToHide,
+                State = State,
                 Aggregations = new Aggregations<DataSlice<TElement>, TNewAggregate, TNewAggregate>
                 {
                     Aggregation = slices => aggregations.Aggregation(slices.Select(s => s.Data)),

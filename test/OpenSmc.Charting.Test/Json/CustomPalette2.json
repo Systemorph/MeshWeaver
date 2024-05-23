@@ -1,0 +1,33 @@
+{
+  "type": 4,
+  "data": {
+    "dataSets": [
+      {
+        "data": [
+          1,
+          2,
+          3,
+          4
+        ]
+      }
+    ],
+    "labels": [
+      "One",
+      "Two",
+      "Three",
+      "Four"
+    ]
+  },
+  "options": {
+    "plugins": {
+      "legend": {
+        "display": true
+      },
+      "colorSchemes": {
+        "scheme": {
+          "palette": "brewer.YlGn8"
+        }
+      }
+    }
+  }
+}
