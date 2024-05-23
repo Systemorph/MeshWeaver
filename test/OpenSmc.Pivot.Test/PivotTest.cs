@@ -196,7 +196,6 @@ public class PivotTest : HubTestBase
             () =>
                 qs = PivotFactory
                     .ForDataCube(ValueWithHierarchicalDimension.Data.ToDataCube())
-                    .WithState(state)
                     .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
                     .Execute()
         );
@@ -205,7 +204,6 @@ public class PivotTest : HubTestBase
 
         var flattened = PivotFactory
             .ForDataCube(ValueWithHierarchicalDimension.Data.ToDataCube())
-            .WithState(state)
             .WithHierarchicalDimensionOptions(o => o.Flatten<TestHierarchicalDimensionA>())
             .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
             .Execute();

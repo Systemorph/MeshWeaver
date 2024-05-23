@@ -79,7 +79,7 @@ namespace OpenSmc.Pivot.Grouping
         {
             if (id == null)
                 return IPivotGrouper<T, TGroup>.NullGroup.DisplayName;
-            return State.GetData<TDimension>(id)?.DisplayName ?? id;
+            return State?.GetData<TDimension>(id)?.DisplayName ?? id;
         }
     }
 }
