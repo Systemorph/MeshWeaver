@@ -22,7 +22,7 @@ namespace OpenSmc.Pivot.Builder
                 TPivotBuilder
             >
     {
-        public WorkspaceState State { get; private init; }
+        public WorkspaceState State { get; init; }
         public IHierarchicalDimensionCache HierarchicalDimensionCache { get; private init; }
         public IHierarchicalDimensionOptions HierarchicalDimensionOptions { get; private init; }
         public IList<T> Objects { get; }

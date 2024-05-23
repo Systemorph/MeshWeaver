@@ -1,17 +1,14 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Activities;
-using OpenSmc.Data;
-using OpenSmc.Data.Serialization;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using Xunit;
 using Xunit.Abstractions;
 
-namespace OpenSmc.Hub.Data.Test;
+namespace OpenSmc.Data.Test;
 
 public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 {

@@ -1,72 +1,65 @@
 {
-  "$type": "Systemorph.Pivot.Models.PivotModel, Systemorph.Pivot",
   "columns": [
     {
-      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
       "children": [
         {
-          "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+          "systemName": "CHF.Value",
+          "displayName": "Value",
           "coordinates": [
             "CHF",
             "Value"
           ],
-          "systemName": "CHF.Value",
-          "displayName": "Value",
-          "grouperName": "ColumnName"
+          "grouperName": "ColumnName",
+          "$type": "OpenSmc.Pivot.Models.Column"
         }
-      ],
-      "coordinates": [
-        "CHF"
       ],
       "systemName": "CHF",
       "displayName": "Swiss Franc",
-      "grouperName": "Currency"
+      "coordinates": [
+        "CHF"
+      ],
+      "grouperName": "Currency",
+      "$type": "OpenSmc.Pivot.Models.ColumnGroup"
     }
   ],
   "rows": [
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "BoP"
         ],
         "systemName": "BoP",
         "displayName": "Beginning of Period",
-        "grouperName": "PropertyName"
+        "grouperName": "PropertyName",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "chf": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 0.0
+        "CHF": {
+          "Value": 0
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "BoP",
           "P"
         ],
         "systemName": "BoP.P",
         "displayName": "Premium",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "chf": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 0.0
+        "CHF": {
+          "Value": 0
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "BoP",
           "P",
@@ -74,59 +67,53 @@
         ],
         "systemName": "BoP.P.2021",
         "displayName": "2021",
-        "grouperName": "Year"
+        "grouperName": "Year",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "chf": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 0.0
+        "CHF": {
+          "Value": 0
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "Delta"
         ],
         "systemName": "Delta",
         "displayName": "Delta",
-        "grouperName": "PropertyName"
+        "grouperName": "PropertyName",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "chf": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 4.0
+        "CHF": {
+          "Value": 4
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "Delta",
           "P"
         ],
         "systemName": "Delta.P",
         "displayName": "Premium",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "chf": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 4.0
+        "CHF": {
+          "Value": 4
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "Delta",
           "P",
@@ -134,59 +121,53 @@
         ],
         "systemName": "Delta.P.2021",
         "displayName": "2021",
-        "grouperName": "Year"
+        "grouperName": "Year",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "chf": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 4.0
+        "CHF": {
+          "Value": 4
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EoP"
         ],
         "systemName": "EoP",
         "displayName": "End of Period",
-        "grouperName": "PropertyName"
+        "grouperName": "PropertyName",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "chf": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 4.0
+        "CHF": {
+          "Value": 4
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EoP",
           "P"
         ],
         "systemName": "EoP.P",
         "displayName": "Premium",
-        "grouperName": "AmountType"
+        "grouperName": "AmountType",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "chf": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 4.0
+        "CHF": {
+          "Value": 4
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EoP",
           "P",
@@ -194,16 +175,17 @@
         ],
         "systemName": "EoP.P.2021",
         "displayName": "2021",
-        "grouperName": "Year"
+        "grouperName": "Year",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "chf": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 4.0
+        "CHF": {
+          "Value": 4
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     }
   ],
-  "hasRowGrouping": true
+  "hasRowGrouping": true,
+  "$type": "OpenSmc.Pivot.Models.PivotModel"
 }

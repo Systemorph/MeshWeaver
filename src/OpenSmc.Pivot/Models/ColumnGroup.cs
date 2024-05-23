@@ -5,23 +5,23 @@ namespace OpenSmc.Pivot.Models
 {
     public record ColumnGroup : Column, IGroup
     {
-        public IImmutableList<Column> Children { get; init; } = ImmutableList<Column>.Empty;
+        public ImmutableList<Column> Children { get; init; } = ImmutableList<Column>.Empty;
 
         public ColumnGroup() { }
 
         public ColumnGroup(IGroup group)
         {
-            SystemName = group.SystemName.ToString();
+            SystemName = group.SystemName;
             DisplayName = group.DisplayName;
             GrouperName = group.GrouperName;
             Coordinates = group.Coordinates;
         }
 
-        public ColumnGroup(object id, string displayName, object grouperId)
+        public ColumnGroup(string id, string displayName, string grouperName)
         {
             SystemName = id;
             DisplayName = displayName;
-            GrouperName = grouperId;
+            GrouperName = grouperName;
             Coordinates = Coordinates.Add(id);
         }
 

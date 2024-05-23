@@ -7,7 +7,7 @@ namespace OpenSmc.Pivot.Processors
         where TGroup : IGroup, new()
     {
         private readonly IDictionary<
-            object,
+            string,
             HierarchicalRowGroupAggregator<TIntermediate, TAggregate, TGroup>
         > subAggregates;
         public ICollection<PivotGrouping<TGroup, TIntermediate>> AggregatedGroupings { get; }

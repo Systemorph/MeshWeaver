@@ -1,0 +1,43 @@
+{
+  "type": 6,
+  "data": {
+    "dataSets": [
+      {
+        "data": [
+          -1,
+          4,
+          3,
+          2
+        ]
+      }
+    ],
+    "labels": [
+      "One",
+      "two",
+      "three",
+      "four"
+    ]
+  },
+  "options": {
+    "plugins": {
+      "legend": {
+        "display": true
+      },
+      "title": {
+        "display": true,
+        "font": {
+          "family": "Ov\u0435rpass",
+          "size": 22,
+          "weight": "600",
+          "lineHeight": "24px"
+        },
+        "text": "Doughnut Chart"
+      },
+      "colorSchemes": {
+        "scheme": {
+          "palette": "brewer.PastelOne9"
+        }
+      }
+    }
+  }
+}

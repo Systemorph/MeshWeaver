@@ -5,7 +5,7 @@ using FluentAssertions;
 using Json.Patch;
 using Xunit;
 
-namespace OpenSmc.Hub.Data.Test;
+namespace OpenSmc.Data.Test;
 
 public class Playground
 {
@@ -15,7 +15,7 @@ public class Playground
         ReplaySubject<int> initialDataChanged = new(1);
         Subject<int> outgoingChanges = new();
 
-        int lastValue = 0;
+        var lastValue = 0;
 
         var sub = initialDataChanged.Take(1).Merge(outgoingChanges).Subscribe(x => lastValue = x);
 
@@ -42,7 +42,7 @@ public class Playground
         var values = new Subject<int>();
         var changes = new Subject<Func<int, int>>();
         var output = values.CombineLatest(changes.StartWith(x => x), (i, c) => c.Invoke(i));
-        int lastValue = 0;
+        var lastValue = 0;
         var sub = output.Subscribe(x => lastValue = x);
 
         values.OnNext(2);

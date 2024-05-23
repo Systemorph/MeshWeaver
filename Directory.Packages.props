@@ -14,6 +14,7 @@
     <PackageVersion Include="CSharpVitamins.ShortGuid" Version="2.0.0" />
     <PackageVersion Include="CsvHelper" Version="15.0.5" />
     <PackageVersion Include="DocumentFormat.OpenXml" Version="2.11.2" />
+    <PackageVersion Include="JetBrains.Annotations" Version="2023.3.0" />
     <PackageVersion Include="JsonPatch.Net" Version="3.0.0" />
     <PackageVersion Include="JsonPath.Net" Version="0.8.1" />
     <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="3.3.4" />
@@ -28,10 +29,15 @@
     <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="$(MicrosoftExtensionsVersion)" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Orleans.Core" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Orleans.Sdk" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Orleans.Serialization.SystemTextJson" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Orleans.Server" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="8.0.0" />
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageVersion Include="System.Interactive" Version="6.0.1" />
     <PackageVersion Include="System.Reactive" Version="6.0.0" />

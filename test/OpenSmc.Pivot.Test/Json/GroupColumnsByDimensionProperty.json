@@ -1,111 +1,110 @@
 {
-  "$type": "Systemorph.Pivot.Models.PivotModel, Systemorph.Pivot",
   "columns": [
     {
-      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
       "children": [
         {
-          "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+          "systemName": "E.Value",
+          "displayName": "Value",
           "coordinates": [
             "E",
             "Value"
           ],
-          "systemName": "E.Value",
-          "displayName": "Value",
-          "grouperName": "ColumnName"
+          "grouperName": "ColumnName",
+          "$type": "OpenSmc.Pivot.Models.Column"
         }
-      ],
-      "coordinates": [
-        "E"
       ],
       "systemName": "E",
       "displayName": "Expenses",
-      "grouperName": "AmountType"
+      "coordinates": [
+        "E"
+      ],
+      "grouperName": "AmountType",
+      "$type": "OpenSmc.Pivot.Models.ColumnGroup"
     },
     {
-      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
       "children": [
         {
-          "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+          "systemName": "P.Value",
+          "displayName": "Value",
           "coordinates": [
             "P",
             "Value"
           ],
-          "systemName": "P.Value",
-          "displayName": "Value",
-          "grouperName": "ColumnName"
+          "grouperName": "ColumnName",
+          "$type": "OpenSmc.Pivot.Models.Column"
         }
-      ],
-      "coordinates": [
-        "P"
       ],
       "systemName": "P",
       "displayName": "Premium",
-      "grouperName": "AmountType"
+      "coordinates": [
+        "P"
+      ],
+      "grouperName": "AmountType",
+      "$type": "OpenSmc.Pivot.Models.ColumnGroup"
     },
     {
-      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
       "children": [
         {
-          "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+          "systemName": "C.Value",
+          "displayName": "Value",
           "coordinates": [
             "C",
             "Value"
           ],
-          "systemName": "C.Value",
-          "displayName": "Value",
-          "grouperName": "ColumnName"
+          "grouperName": "ColumnName",
+          "$type": "OpenSmc.Pivot.Models.Column"
         }
-      ],
-      "coordinates": [
-        "C"
       ],
       "systemName": "C",
       "displayName": "Cost",
-      "grouperName": "AmountType"
+      "coordinates": [
+        "C"
+      ],
+      "grouperName": "AmountType",
+      "$type": "OpenSmc.Pivot.Models.ColumnGroup"
     },
     {
-      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
       "children": [
         {
-          "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+          "systemName": "B.Value",
+          "displayName": "Value",
           "coordinates": [
             "B",
             "Value"
           ],
-          "systemName": "B.Value",
-          "displayName": "Value",
-          "grouperName": "ColumnName"
+          "grouperName": "ColumnName",
+          "$type": "OpenSmc.Pivot.Models.Column"
         }
-      ],
-      "coordinates": [
-        "B"
       ],
       "systemName": "B",
       "displayName": "Benefit",
-      "grouperName": "AmountType"
+      "coordinates": [
+        "B"
+      ],
+      "grouperName": "AmountType",
+      "$type": "OpenSmc.Pivot.Models.ColumnGroup"
     }
   ],
   "rows": [
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "Value"
         ],
         "systemName": "Value",
         "displayName": "Value",
-        "grouperName": "PropertyName"
+        "grouperName": "PropertyName",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": null,
-        "p": null,
-        "c": null,
-        "b": null
-      }
+        "E": null,
+        "P": null,
+        "C": null,
+        "B": null
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     }
   ],
-  "hasRowGrouping": true
+  "hasRowGrouping": true,
+  "$type": "OpenSmc.Pivot.Models.PivotModel"
 }

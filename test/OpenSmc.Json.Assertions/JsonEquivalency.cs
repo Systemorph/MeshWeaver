@@ -1,5 +1,5 @@
-﻿using FluentAssertions.Json;
-using FluentAssertions.Equivalency;
+﻿using FluentAssertions.Equivalency;
+using FluentAssertions.Json;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
 using Newtonsoft.Json.Linq;
@@ -17,7 +17,11 @@ public class JsonEquivalency : IEquivalencyStep
         this.options = options;
     }
 
-    public EquivalencyResult Handle(Comparands comparands, IEquivalencyValidationContext context, IEquivalencyValidator nestedValidator)
+    public EquivalencyResult Handle(
+        Comparands comparands,
+        IEquivalencyValidationContext context,
+        IEquivalencyValidator nestedValidator
+    )
     {
         if (!TryGetJToken(comparands.Subject, out var actual))
             return EquivalencyResult.ContinueWithNext;
@@ -28,7 +32,13 @@ public class JsonEquivalency : IEquivalencyStep
         {
             RemoveRedundantProperties(expected);
 
-            actual.Should().BeEquivalentTo(expected, context.Reason.FormattedMessage, context.Reason.Arguments);
+            actual
+                .Should()
+                .BeEquivalentTo(
+                    expected,
+                    context.Reason.FormattedMessage,
+                    context.Reason.Arguments
+                );
             return EquivalencyResult.AssertionCompleted;
         }
 
@@ -43,7 +53,13 @@ public class JsonEquivalency : IEquivalencyStep
 
         RemoveRedundantProperties(expectedJObject);
 
-        actual.Should().BeEquivalentTo(expectedJObject, context.Reason.FormattedMessage, context.Reason.Arguments);
+        actual
+            .Should()
+            .BeEquivalentTo(
+                expectedJObject,
+                context.Reason.FormattedMessage,
+                context.Reason.Arguments
+            );
         return EquivalencyResult.AssertionCompleted;
     }
 
@@ -137,7 +153,7 @@ public class JsonEquivalency : IEquivalencyStep
             {
                 new StringEnumConverter(),
                 // TODO V10: Understand the idea of this and replace by something else. (08.04.2024, Roland Bürgi)
-                //new RawJsonNewtonsoftConverter(), 
+                //new RawJsonNewtonsoftConverter(),
                 //new JsonNodeNewtonsoftConverter()
             },
             SerializationBinder = new BenchmarkSerializationBinder()
@@ -146,7 +162,11 @@ public class JsonEquivalency : IEquivalencyStep
 
     public class BenchmarkSerializationBinder : DefaultSerializationBinder
     {
-        public override void BindToName(Type serializedType, out string assemblyName, out string typeName)
+        public override void BindToName(
+            Type serializedType,
+            out string assemblyName,
+            out string typeName
+        )
         {
             typeName = serializedType.FullName ?? serializedType.Name;
             assemblyName = null;

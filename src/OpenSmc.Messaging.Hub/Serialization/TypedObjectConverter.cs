@@ -1,11 +1,9 @@
-﻿using System;
-using System.Collections;
+﻿using System.Collections;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Json.More;
-using OpenSmc.Utils;
 
 namespace OpenSmc.Messaging.Serialization;
 
@@ -89,7 +87,9 @@ public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry, Type excl
     private const string TypeProperty = "$type";
 
     public override bool CanConvert(Type typeToConvert) =>
-        typeToConvert != exclude && !typeof(JsonNode).IsAssignableFrom(typeToConvert);
+        typeToConvert != exclude
+        && !typeof(IEnumerable).IsAssignableFrom(typeToConvert)
+        && !typeof(JsonNode).IsAssignableFrom(typeToConvert);
 
     public override object Read(
         ref Utf8JsonReader reader,
@@ -107,7 +107,7 @@ public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry, Type excl
             new TypedObjectSerializeConverter(typeRegistry, value.GetType())
         );
         var serialized = JsonSerializer.SerializeToNode(value, value.GetType(), clonedOptions);
-        if (serialized is JsonObject obj)
+        if (serialized is JsonObject obj && value is not IDictionary)
             obj[TypeProperty] = typeRegistry.GetOrAddTypeName(value.GetType());
         ;
 

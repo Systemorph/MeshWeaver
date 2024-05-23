@@ -111,7 +111,7 @@ namespace OpenSmc.Pivot.Grouping
 
         public IEnumerable<PivotGrouping<TGroup, IReadOnlyCollection<T>>> CreateRowGroupings(
             IReadOnlyCollection<T> objects,
-            IReadOnlyCollection<object> parentCoordinates
+            IReadOnlyCollection<string> parentCoordinates
         )
         {
             if (objects.Count == 0)
@@ -132,7 +132,7 @@ namespace OpenSmc.Pivot.Grouping
         /// <returns></returns>
         protected virtual TGroup GetModifiedGroup(
             TGroup original,
-            IDictionary<object, object[]> fullCoordinatesBySystemName
+            IDictionary<string, string[]> fullCoordinatesBySystemName
         )
         {
             if (original.SystemName == IPivotGrouper<T, TGroup>.TopGroup.SystemName)
@@ -167,7 +167,7 @@ namespace OpenSmc.Pivot.Grouping
             PivotGrouping<TGroup, IReadOnlyCollection<T>>
         > MixRowGroupsWithSubGroups(
             IReadOnlyCollection<PivotGrouping<TGroup, IReadOnlyCollection<T>>> groupings,
-            IReadOnlyCollection<object> parentCoordinates
+            IReadOnlyCollection<string> parentCoordinates
         )
         {
             Dictionary<
@@ -205,10 +205,10 @@ namespace OpenSmc.Pivot.Grouping
             PivotGrouping<TGroup, IReadOnlyCollection<T>>
         > GetFinalizedReportGroupings(
             IReadOnlyCollection<PivotGrouping<TGroup, IReadOnlyCollection<T>>> groupings,
-            IReadOnlyCollection<object> parentCoordinates
+            IReadOnlyCollection<string> parentCoordinates
         )
         {
-            IDictionary<object, object[]> fullCoordinatesBySystemName = GetFullGroupingsCoordinates(
+            IDictionary<string, string[]> fullCoordinatesBySystemName = GetFullGroupingsCoordinates(
                 groupings,
                 parentCoordinates
             );
@@ -237,9 +237,9 @@ namespace OpenSmc.Pivot.Grouping
             return ret;
         }
 
-        private IDictionary<object, object[]> GetFullGroupingsCoordinates(
+        private IDictionary<string, string[]> GetFullGroupingsCoordinates(
             IReadOnlyCollection<PivotGrouping<TGroup, IReadOnlyCollection<T>>> groupings,
-            IReadOnlyCollection<object> parentCoordinates
+            IReadOnlyCollection<string> parentCoordinates
         )
         {
             if (parentCoordinates == null)
@@ -270,7 +270,7 @@ namespace OpenSmc.Pivot.Grouping
 
         public HierarchicalRowGroupAggregator<TIntermediate, TAggregate, TGroup> GetAggregates(
             IReadOnlyCollection<T> objects,
-            IReadOnlyCollection<object> parentCoordinates
+            IReadOnlyCollection<string> parentCoordinates
         )
         {
             // if lowest level, get aggregates from object

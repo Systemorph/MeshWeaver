@@ -1,0 +1,77 @@
+{
+  "type": 2,
+  "data": {
+    "dataSets": [
+      {
+        "fill": true,
+        "tension": 0.2,
+        "data": [
+          -3.9,
+          3.4,
+          3,
+          2.7,
+          null,
+          null,
+          null
+        ],
+        "label": "Alessandro.Italy",
+        "$type": "OpenSmc.Charting.Models.RadarDataSet"
+      },
+      {
+        "fill": true,
+        "data": [
+          1.1,
+          2.2,
+          3.3,
+          4.4,
+          null,
+          null,
+          null
+        ],
+        "label": "Paolo.Italy",
+        "$type": "OpenSmc.Charting.Models.RadarDataSet"
+      }
+    ],
+    "labels": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7"
+    ],
+    "$type": "OpenSmc.Charting.Models.Data"
+  },
+  "options": {
+    "plugins": {
+      "legend": {
+        "display": true,
+        "$type": "OpenSmc.Charting.Models.Options.Legend"
+      },
+      "title": {
+        "align": "start",
+        "display": true,
+        "font": {
+          "family": "Ov\u0435rpass",
+          "size": 15,
+          "weight": "600",
+          "lineHeight": "24px",
+          "$type": "OpenSmc.Charting.Models.Options.Font"
+        },
+        "text": "Two lines radar plot",
+        "$type": "OpenSmc.Charting.Models.Options.Title"
+      },
+      "colorSchemes": {
+        "scheme": [
+          "#1ECBE1",
+          "#E1341E"
+        ],
+        "$type": "OpenSmc.Charting.Models.Options.ColorSchemes"
+      },
+      "$type": "OpenSmc.Charting.Models.Options.Plugins"
+    },
+    "$type": "OpenSmc.Charting.Models.Options.Options"
+  },
+  "$type": "OpenSmc.Charting.Models.Chart"
+}

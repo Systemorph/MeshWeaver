@@ -13,7 +13,7 @@ import {
     StartSessionEvent,
     StopSessionEvent
 } from "./notebookEditor.contract";
-import { EventStatus } from "@open-smc/application/src/application.contract";
+import { EventStatus } from "@open-smc/application/src/contract/application.contract";
 import { ElementKind, SessionSpecification } from "../../../app/notebookFormat";
 // import { MessageHubInstance } from "@open-smc/application/src/messageHub/createMessageHub";
 

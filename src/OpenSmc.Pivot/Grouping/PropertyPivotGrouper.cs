@@ -41,7 +41,7 @@ namespace OpenSmc.Pivot.Grouping
                 SystemName = systemName,
                 DisplayName = displayName,
                 GrouperName = Id,
-                Coordinates = ImmutableList<object>.Empty.Add(systemName)
+                Coordinates = ImmutableList<string>.Empty.Add(systemName)
             };
         }
     }

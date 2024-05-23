@@ -1,9 +1,11 @@
-﻿using FluentAssertions;
+﻿using System.Text.Json;
+using FluentAssertions;
 using OpenSmc.Arithmetics;
 using OpenSmc.Collections;
 using OpenSmc.Data;
 using OpenSmc.DataCubes;
 using OpenSmc.Hub.Fixture;
+using OpenSmc.Json.Assertions;
 using OpenSmc.Messaging;
 using OpenSmc.Pivot.Aggregations;
 using OpenSmc.Pivot.Builder;
@@ -15,19 +17,9 @@ using OpenSmc.TestDomain;
 using OpenSmc.TestDomain.Cubes;
 using OpenSmc.TestDomain.Scopes;
 using OpenSmc.TestDomain.SimpleData;
-using VerifyXunit;
-using Xunit;
 using Xunit.Abstractions;
 
 namespace OpenSmc.Pivot.Test;
-
-public static class VerifyExtension
-{
-    public static async Task Verify(this object model, string fileName)
-    {
-        await Verifier.Verify(model).UseFileName(fileName).UseDirectory("Json");
-    }
-}
 
 public class PivotTest : HubTestBase
 {
@@ -66,9 +58,22 @@ public class PivotTest : HubTestBase
                             .WithType<ValueWithTwoHierarchicalDimensions>(type =>
                                 type.WithInitialData(ValueWithTwoHierarchicalDimensions.Data)
                             )
+                            .WithType<Currency>(type => type.WithInitialData(Currency.Data))
+                            .WithType<AmountType>(type => type.WithInitialData(AmountType.Data))
+                            .WithType<Country>(type => type.WithInitialData(Country.Data))
+                            .WithType<LineOfBusiness>(type =>
+                                type.WithInitialData(LineOfBusiness.Data)
+                            )
+                            .WithType<Scenario>(type => type.WithInitialData(Scenario.Data))
+                            .WithType<Company>(type => type.WithInitialData(Company.Data))
+                            .WithType<Dim1>(type => type)
+                            .WithType<Dim2>(type => type)
+                            .WithType<Split>(type => type.WithInitialData(Split.Data))
                 )
             );
     }
+
+    JsonSerializerOptions Options => GetHost().JsonSerializerOptions;
 
     private async Task<WorkspaceState> GetStateAsync()
     {
@@ -90,7 +95,7 @@ public class PivotTest : HubTestBase
         var pivotBuilder = builder(initial);
 
         var model = GetModel(pivotBuilder);
-        await model.Verify(fileName);
+        await model.JsonShouldMatch(Options, $"{fileName}.json");
     }
 
     [Theory]
@@ -101,12 +106,13 @@ public class PivotTest : HubTestBase
         Func<PivotBuilder<T, T, T>, PivotBuilder<T, int, int>> builder
     )
     {
-        var initial = PivotFactory.ForObjects(data).WithState(await GetStateAsync());
+        var state = await GetStateAsync();
+        var initial = PivotFactory.ForObjects(data).WithState(state);
 
         var pivotBuilder = builder(initial);
 
         var model = GetModel(pivotBuilder);
-        await model.Verify(fileName);
+        await model.JsonShouldMatch(Options, $"{fileName}.json");
     }
 
     [Theory]
@@ -182,9 +188,10 @@ public class PivotTest : HubTestBase
     }
 
     [Fact]
-    public void NullQuerySourceShouldFlatten()
+    public async Task NullQuerySourceShouldFlatten()
     {
         PivotModel qs = null;
+        var state = await GetStateAsync();
         var exception = Record.Exception(
             () =>
                 qs = PivotFactory
@@ -1093,7 +1100,7 @@ public class PivotTest : HubTestBase
         var pivotBuilder = builder(initial);
 
         var model = GetModel(pivotBuilder);
-        await model.Verify(fileName);
+        await model.JsonShouldMatch(Options, $"{fileName}.json");
     }
 
     private async Task ExecuteDataCubeCountTest<TElement>(
@@ -1110,7 +1117,7 @@ public class PivotTest : HubTestBase
         var pivotBuilder = builder(initial);
 
         var model = GetModel(pivotBuilder);
-        await model.Verify(fileName);
+        await model.JsonShouldMatch(Options, $"{fileName}.json");
     }
 
     private async Task ExecuteDataCubeAverageTest<TElement>(
@@ -1127,7 +1134,7 @@ public class PivotTest : HubTestBase
         var pivotBuilder = builder(initial);
 
         var model = GetModel(pivotBuilder);
-        await model.Verify(fileName);
+        await model.JsonShouldMatch(Options, $"{fileName}.json");
     }
 
     protected virtual object GetModel<T, TIntermediate, TAggregate>(

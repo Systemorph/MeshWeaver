@@ -1,159 +1,146 @@
 {
-  "$type": "Systemorph.Pivot.Models.PivotModel, Systemorph.Pivot",
   "columns": [
     {
-      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
       "children": [
         {
-          "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+          "systemName": "E.Value",
+          "displayName": "Value",
           "coordinates": [
             "E",
             "Value"
           ],
-          "systemName": "E.Value",
-          "displayName": "Value",
-          "grouperName": "ColumnName"
+          "grouperName": "ColumnName",
+          "$type": "OpenSmc.Pivot.Models.Column"
         }
-      ],
-      "coordinates": [
-        "E"
       ],
       "systemName": "E",
       "displayName": "Expenses",
-      "grouperName": "AmountType"
+      "coordinates": [
+        "E"
+      ],
+      "grouperName": "AmountType",
+      "$type": "OpenSmc.Pivot.Models.ColumnGroup"
     },
     {
-      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
       "children": [
         {
-          "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+          "systemName": "P.Value",
+          "displayName": "Value",
           "coordinates": [
             "P",
             "Value"
           ],
-          "systemName": "P.Value",
-          "displayName": "Value",
-          "grouperName": "ColumnName"
+          "grouperName": "ColumnName",
+          "$type": "OpenSmc.Pivot.Models.Column"
         }
-      ],
-      "coordinates": [
-        "P"
       ],
       "systemName": "P",
       "displayName": "Premium",
-      "grouperName": "AmountType"
+      "coordinates": [
+        "P"
+      ],
+      "grouperName": "AmountType",
+      "$type": "OpenSmc.Pivot.Models.ColumnGroup"
     },
     {
-      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
       "children": [
         {
-          "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+          "systemName": "C.Value",
+          "displayName": "Value",
           "coordinates": [
             "C",
             "Value"
           ],
-          "systemName": "C.Value",
-          "displayName": "Value",
-          "grouperName": "ColumnName"
+          "grouperName": "ColumnName",
+          "$type": "OpenSmc.Pivot.Models.Column"
         }
-      ],
-      "coordinates": [
-        "C"
       ],
       "systemName": "C",
       "displayName": "Cost",
-      "grouperName": "AmountType"
+      "coordinates": [
+        "C"
+      ],
+      "grouperName": "AmountType",
+      "$type": "OpenSmc.Pivot.Models.ColumnGroup"
     },
     {
-      "$type": "Systemorph.Pivot.Models.ColumnGroup, Systemorph.Pivot",
       "children": [
         {
-          "$type": "Systemorph.Pivot.Models.Column, Systemorph.Pivot",
+          "systemName": "B.Value",
+          "displayName": "Value",
           "coordinates": [
             "B",
             "Value"
           ],
-          "systemName": "B.Value",
-          "displayName": "Value",
-          "grouperName": "ColumnName"
+          "grouperName": "ColumnName",
+          "$type": "OpenSmc.Pivot.Models.Column"
         }
-      ],
-      "coordinates": [
-        "B"
       ],
       "systemName": "B",
       "displayName": "Benefit",
-      "grouperName": "AmountType"
+      "coordinates": [
+        "B"
+      ],
+      "grouperName": "AmountType",
+      "$type": "OpenSmc.Pivot.Models.ColumnGroup"
     }
   ],
   "rows": [
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EUR"
         ],
         "systemName": "EUR",
         "displayName": "Euro",
-        "grouperName": "Currency"
+        "grouperName": "Currency",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 96.0
+        "E": {
+          "Value": 96
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 96.0
+        "P": {
+          "Value": 96
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 96.0
+        "C": {
+          "Value": 96
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 96.0
+        "B": {
+          "Value": 96
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EUR",
           "D"
         ],
         "systemName": "EUR.D",
         "displayName": "Germany",
-        "grouperName": "Country"
+        "grouperName": "Country",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "E": {
+          "Value": 24
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "P": {
+          "Value": 24
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "C": {
+          "Value": 24
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "B": {
+          "Value": 24
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EUR",
           "D",
@@ -161,32 +148,27 @@
         ],
         "systemName": "EUR.D.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EUR",
           "D",
@@ -194,32 +176,27 @@
         ],
         "systemName": "EUR.D.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EUR",
           "D",
@@ -227,32 +204,27 @@
         ],
         "systemName": "EUR.D.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EUR",
           "D",
@@ -260,64 +232,54 @@
         ],
         "systemName": "EUR.D.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EUR",
           "PT"
         ],
         "systemName": "EUR.PT",
         "displayName": "Portugal",
-        "grouperName": "Country"
+        "grouperName": "Country",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "E": {
+          "Value": 24
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "P": {
+          "Value": 24
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "C": {
+          "Value": 24
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "B": {
+          "Value": 24
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EUR",
           "PT",
@@ -325,32 +287,27 @@
         ],
         "systemName": "EUR.PT.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EUR",
           "PT",
@@ -358,32 +315,27 @@
         ],
         "systemName": "EUR.PT.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EUR",
           "PT",
@@ -391,32 +343,27 @@
         ],
         "systemName": "EUR.PT.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EUR",
           "PT",
@@ -424,64 +371,54 @@
         ],
         "systemName": "EUR.PT.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EUR",
           "RU"
         ],
         "systemName": "EUR.RU",
         "displayName": "Russia",
-        "grouperName": "Country"
+        "grouperName": "Country",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "E": {
+          "Value": 24
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "P": {
+          "Value": 24
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "C": {
+          "Value": 24
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "B": {
+          "Value": 24
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EUR",
           "RU",
@@ -489,32 +426,27 @@
         ],
         "systemName": "EUR.RU.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EUR",
           "RU",
@@ -522,32 +454,27 @@
         ],
         "systemName": "EUR.RU.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EUR",
           "RU",
@@ -555,32 +482,27 @@
         ],
         "systemName": "EUR.RU.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EUR",
           "RU",
@@ -588,64 +510,54 @@
         ],
         "systemName": "EUR.RU.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EUR",
           "CH"
         ],
         "systemName": "EUR.CH",
         "displayName": "Switzerland",
-        "grouperName": "Country"
+        "grouperName": "Country",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "E": {
+          "Value": 24
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "P": {
+          "Value": 24
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "C": {
+          "Value": 24
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "B": {
+          "Value": 24
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EUR",
           "CH",
@@ -653,32 +565,27 @@
         ],
         "systemName": "EUR.CH.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EUR",
           "CH",
@@ -686,32 +593,27 @@
         ],
         "systemName": "EUR.CH.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EUR",
           "CH",
@@ -719,32 +621,27 @@
         ],
         "systemName": "EUR.CH.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "EUR",
           "CH",
@@ -752,95 +649,80 @@
         ],
         "systemName": "EUR.CH.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "RUB"
         ],
         "systemName": "RUB",
         "displayName": "Russian rouble",
-        "grouperName": "Currency"
+        "grouperName": "Currency",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 96.0
+        "E": {
+          "Value": 96
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 96.0
+        "P": {
+          "Value": 96
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 96.0
+        "C": {
+          "Value": 96
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 96.0
+        "B": {
+          "Value": 96
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "RUB",
           "D"
         ],
         "systemName": "RUB.D",
         "displayName": "Germany",
-        "grouperName": "Country"
+        "grouperName": "Country",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "E": {
+          "Value": 24
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "P": {
+          "Value": 24
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "C": {
+          "Value": 24
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "B": {
+          "Value": 24
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "RUB",
           "D",
@@ -848,32 +730,27 @@
         ],
         "systemName": "RUB.D.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "RUB",
           "D",
@@ -881,32 +758,27 @@
         ],
         "systemName": "RUB.D.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "RUB",
           "D",
@@ -914,32 +786,27 @@
         ],
         "systemName": "RUB.D.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "RUB",
           "D",
@@ -947,64 +814,54 @@
         ],
         "systemName": "RUB.D.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "RUB",
           "PT"
         ],
         "systemName": "RUB.PT",
         "displayName": "Portugal",
-        "grouperName": "Country"
+        "grouperName": "Country",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "E": {
+          "Value": 24
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "P": {
+          "Value": 24
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "C": {
+          "Value": 24
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "B": {
+          "Value": 24
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "RUB",
           "PT",
@@ -1012,32 +869,27 @@
         ],
         "systemName": "RUB.PT.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "RUB",
           "PT",
@@ -1045,32 +897,27 @@
         ],
         "systemName": "RUB.PT.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "RUB",
           "PT",
@@ -1078,32 +925,27 @@
         ],
         "systemName": "RUB.PT.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "RUB",
           "PT",
@@ -1111,64 +953,54 @@
         ],
         "systemName": "RUB.PT.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "RUB",
           "RU"
         ],
         "systemName": "RUB.RU",
         "displayName": "Russia",
-        "grouperName": "Country"
+        "grouperName": "Country",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "E": {
+          "Value": 24
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "P": {
+          "Value": 24
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "C": {
+          "Value": 24
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "B": {
+          "Value": 24
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "RUB",
           "RU",
@@ -1176,32 +1008,27 @@
         ],
         "systemName": "RUB.RU.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "RUB",
           "RU",
@@ -1209,32 +1036,27 @@
         ],
         "systemName": "RUB.RU.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "RUB",
           "RU",
@@ -1242,32 +1064,27 @@
         ],
         "systemName": "RUB.RU.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "RUB",
           "RU",
@@ -1275,64 +1092,54 @@
         ],
         "systemName": "RUB.RU.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "RUB",
           "CH"
         ],
         "systemName": "RUB.CH",
         "displayName": "Switzerland",
-        "grouperName": "Country"
+        "grouperName": "Country",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "E": {
+          "Value": 24
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "P": {
+          "Value": 24
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "C": {
+          "Value": 24
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "B": {
+          "Value": 24
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "RUB",
           "CH",
@@ -1340,32 +1147,27 @@
         ],
         "systemName": "RUB.CH.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "RUB",
           "CH",
@@ -1373,32 +1175,27 @@
         ],
         "systemName": "RUB.CH.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "RUB",
           "CH",
@@ -1406,32 +1203,27 @@
         ],
         "systemName": "RUB.CH.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "RUB",
           "CH",
@@ -1439,95 +1231,80 @@
         ],
         "systemName": "RUB.CH.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "CHF"
         ],
         "systemName": "CHF",
         "displayName": "Swiss Franc",
-        "grouperName": "Currency"
+        "grouperName": "Currency",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 96.0
+        "E": {
+          "Value": 96
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 96.0
+        "P": {
+          "Value": 96
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 96.0
+        "C": {
+          "Value": 96
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 96.0
+        "B": {
+          "Value": 96
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "CHF",
           "D"
         ],
         "systemName": "CHF.D",
         "displayName": "Germany",
-        "grouperName": "Country"
+        "grouperName": "Country",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "E": {
+          "Value": 24
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "P": {
+          "Value": 24
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "C": {
+          "Value": 24
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "B": {
+          "Value": 24
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "CHF",
           "D",
@@ -1535,32 +1312,27 @@
         ],
         "systemName": "CHF.D.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "CHF",
           "D",
@@ -1568,32 +1340,27 @@
         ],
         "systemName": "CHF.D.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "CHF",
           "D",
@@ -1601,32 +1368,27 @@
         ],
         "systemName": "CHF.D.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "CHF",
           "D",
@@ -1634,64 +1396,54 @@
         ],
         "systemName": "CHF.D.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "CHF",
           "PT"
         ],
         "systemName": "CHF.PT",
         "displayName": "Portugal",
-        "grouperName": "Country"
+        "grouperName": "Country",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "E": {
+          "Value": 24
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "P": {
+          "Value": 24
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "C": {
+          "Value": 24
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "B": {
+          "Value": 24
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "CHF",
           "PT",
@@ -1699,32 +1451,27 @@
         ],
         "systemName": "CHF.PT.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "CHF",
           "PT",
@@ -1732,32 +1479,27 @@
         ],
         "systemName": "CHF.PT.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "CHF",
           "PT",
@@ -1765,32 +1507,27 @@
         ],
         "systemName": "CHF.PT.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "CHF",
           "PT",
@@ -1798,64 +1535,54 @@
         ],
         "systemName": "CHF.PT.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "CHF",
           "RU"
         ],
         "systemName": "CHF.RU",
         "displayName": "Russia",
-        "grouperName": "Country"
+        "grouperName": "Country",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "E": {
+          "Value": 24
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "P": {
+          "Value": 24
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "C": {
+          "Value": 24
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "B": {
+          "Value": 24
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "CHF",
           "RU",
@@ -1863,32 +1590,27 @@
         ],
         "systemName": "CHF.RU.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "CHF",
           "RU",
@@ -1896,32 +1618,27 @@
         ],
         "systemName": "CHF.RU.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "CHF",
           "RU",
@@ -1929,32 +1646,27 @@
         ],
         "systemName": "CHF.RU.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "CHF",
           "RU",
@@ -1962,64 +1674,54 @@
         ],
         "systemName": "CHF.RU.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "CHF",
           "CH"
         ],
         "systemName": "CHF.CH",
         "displayName": "Switzerland",
-        "grouperName": "Country"
+        "grouperName": "Country",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "E": {
+          "Value": 24
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "P": {
+          "Value": 24
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "C": {
+          "Value": 24
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "B": {
+          "Value": 24
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "CHF",
           "CH",
@@ -2027,32 +1729,27 @@
         ],
         "systemName": "CHF.CH.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "CHF",
           "CH",
@@ -2060,32 +1757,27 @@
         ],
         "systemName": "CHF.CH.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "CHF",
           "CH",
@@ -2093,32 +1785,27 @@
         ],
         "systemName": "CHF.CH.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "CHF",
           "CH",
@@ -2126,95 +1813,80 @@
         ],
         "systemName": "CHF.CH.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "USD"
         ],
         "systemName": "USD",
         "displayName": "US Dollar",
-        "grouperName": "Currency"
+        "grouperName": "Currency",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 96.0
+        "E": {
+          "Value": 96
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 96.0
+        "P": {
+          "Value": 96
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 96.0
+        "C": {
+          "Value": 96
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 96.0
+        "B": {
+          "Value": 96
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "USD",
           "D"
         ],
         "systemName": "USD.D",
         "displayName": "Germany",
-        "grouperName": "Country"
+        "grouperName": "Country",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "E": {
+          "Value": 24
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "P": {
+          "Value": 24
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "C": {
+          "Value": 24
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "B": {
+          "Value": 24
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "USD",
           "D",
@@ -2222,32 +1894,27 @@
         ],
         "systemName": "USD.D.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "USD",
           "D",
@@ -2255,32 +1922,27 @@
         ],
         "systemName": "USD.D.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "USD",
           "D",
@@ -2288,32 +1950,27 @@
         ],
         "systemName": "USD.D.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "USD",
           "D",
@@ -2321,64 +1978,54 @@
         ],
         "systemName": "USD.D.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "USD",
           "PT"
         ],
         "systemName": "USD.PT",
         "displayName": "Portugal",
-        "grouperName": "Country"
+        "grouperName": "Country",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "E": {
+          "Value": 24
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "P": {
+          "Value": 24
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "C": {
+          "Value": 24
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "B": {
+          "Value": 24
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "USD",
           "PT",
@@ -2386,32 +2033,27 @@
         ],
         "systemName": "USD.PT.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "USD",
           "PT",
@@ -2419,32 +2061,27 @@
         ],
         "systemName": "USD.PT.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "USD",
           "PT",
@@ -2452,32 +2089,27 @@
         ],
         "systemName": "USD.PT.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "USD",
           "PT",
@@ -2485,64 +2117,54 @@
         ],
         "systemName": "USD.PT.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "USD",
           "RU"
         ],
         "systemName": "USD.RU",
         "displayName": "Russia",
-        "grouperName": "Country"
+        "grouperName": "Country",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "E": {
+          "Value": 24
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "P": {
+          "Value": 24
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "C": {
+          "Value": 24
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "B": {
+          "Value": 24
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "USD",
           "RU",
@@ -2550,32 +2172,27 @@
         ],
         "systemName": "USD.RU.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "USD",
           "RU",
@@ -2583,32 +2200,27 @@
         ],
         "systemName": "USD.RU.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "USD",
           "RU",
@@ -2616,32 +2228,27 @@
         ],
         "systemName": "USD.RU.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "USD",
           "RU",
@@ -2649,64 +2256,54 @@
         ],
         "systemName": "USD.RU.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "USD",
           "CH"
         ],
         "systemName": "USD.CH",
         "displayName": "Switzerland",
-        "grouperName": "Country"
+        "grouperName": "Country",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "E": {
+          "Value": 24
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "P": {
+          "Value": 24
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "C": {
+          "Value": 24
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 24.0
+        "B": {
+          "Value": 24
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "USD",
           "CH",
@@ -2714,32 +2311,27 @@
         ],
         "systemName": "USD.CH.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "USD",
           "CH",
@@ -2747,32 +2339,27 @@
         ],
         "systemName": "USD.CH.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "USD",
           "CH",
@@ -2780,32 +2367,27 @@
         ],
         "systemName": "USD.CH.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     },
     {
-      "$type": "Systemorph.Pivot.Models.Row, Systemorph.Pivot",
       "rowGroup": {
-        "$type": "Systemorph.Pivot.Models.RowGroup, Systemorph.Pivot",
         "coordinates": [
           "USD",
           "CH",
@@ -2813,28 +2395,26 @@
         ],
         "systemName": "USD.CH.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness"
+        "grouperName": "LineOfBusiness",
+        "$type": "OpenSmc.Pivot.Models.RowGroup"
       },
       "data": {
-        "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-        "e": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "E": {
+          "Value": 6
         },
-        "p": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "P": {
+          "Value": 6
         },
-        "c": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "C": {
+          "Value": 6
         },
-        "b": {
-          "$type": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib",
-          "value": 6.0
+        "B": {
+          "Value": 6
         }
-      }
+      },
+      "$type": "OpenSmc.Pivot.Models.Row"
     }
   ],
-  "hasRowGrouping": true
+  "hasRowGrouping": true,
+  "$type": "OpenSmc.Pivot.Models.PivotModel"
 }

@@ -2,10 +2,10 @@ import type {
     MenuItemSkin,
     MenuItemView
 } from "@open-smc/application/src/controls/MenuItemControl";
-import { ExpandableControl, ExpandableControlBuilder } from "./ExpandableControl";
+import { ExpandableControl } from "./ExpandableControl";
 import { IconDef } from "@open-smc/ui-kit/src/components/renderIcon";
 
-export class MenuItem extends ExpandableControl implements MenuItemView {
+class MenuItem extends ExpandableControl implements MenuItemView {
     title: string;
     icon: IconDef;
     skin: MenuItemSkin;
@@ -14,25 +14,19 @@ export class MenuItem extends ExpandableControl implements MenuItemView {
     constructor() {
         super("MenuItemControl");
     }
-}
-
-export class MenuItemBuilder extends ExpandableControlBuilder<MenuItem> {
-    constructor() {
-        super(MenuItem);
-    }
 
     withTitle(title: string) {
-        this.data.title = title;
+        this.title = title;
         return this;
     }
 
     withIcon(icon: IconDef) {
-        this.data.icon = icon;
+        this.icon = icon;
         return this;
     }
 
     withColor(color: string) {
-        this.data.color = color;
+        this.color = color;
         return this;
     }
 
@@ -41,4 +35,4 @@ export class MenuItemBuilder extends ExpandableControlBuilder<MenuItem> {
     }
 }
 
-export const makeMenuItem = () => new MenuItemBuilder();
+export const makeMenuItem = () => new MenuItem();

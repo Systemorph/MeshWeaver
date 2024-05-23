@@ -1,13 +1,12 @@
 ﻿using System.Reactive.Linq;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
-using OpenSmc.Data;
 using OpenSmc.Data.TestDomain;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using Xunit.Abstractions;
 
-namespace OpenSmc.Hub.Data.Test;
+namespace OpenSmc.Data.Test;
 
 public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(output)
 {
