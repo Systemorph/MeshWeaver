@@ -1,0 +1,16 @@
+<div>
+    @foreach(var area in Control.Areas){
+        <GenericView Control="GetArea(area)", Store="@Store"/>
+    }
+</div>
+
+
+@code{
+
+    [Parameter]
+    public LayoutStackControl Control { get; set; }
+    [Parameter]
+    public EntityStore Store { get; set; }
+
+    UiControl GetArea(object control) => (UiControl) control;
+}
