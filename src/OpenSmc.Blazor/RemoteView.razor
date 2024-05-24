@@ -1,0 +1,20 @@
+<div>
+    <GenericView Control="@RootControl", Store="@Store"/>
+ </div>
+@code{
+    [Parameter]
+    public RemoteViewControl Control { get; set; }
+
+    [Parameter]
+    public EntityStore Store { get; set; }
+
+    [Parameter]
+    public object Address { get; set; }
+
+    [Parameter]
+    public LayoutAreaReference Reference { get; set; }
+
+    [Parameter]
+    public UiControl RootControl { get; set; }
+
+}

@@ -1,0 +1,23 @@
+@switch(Control){
+    case MenuItemControl menuItem:
+        <MenuItem Control="@menuItem" />
+        break;
+
+    case RemoteViewControl remoteView:
+        <RemoteView Control="@remoteView" Store="@Store" />
+        break;
+
+
+    default:
+        <p>Unknown control: @Control.GetType().FullName. Please specify a view.</p>
+        break;
+}
+
+
+@code{
+
+    [Parameter]
+    public UiControl Control { get; set; }
+    [Parameter]
+    public EntityStore Store { get; set; }
+}

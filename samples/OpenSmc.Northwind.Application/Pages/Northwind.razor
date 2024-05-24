@@ -1,0 +1,13 @@
+@page "/northwind"
+@using OpenSmc.Application;
+@using OpenSmc.Layout;
+
+<PageTitle>Northwind</PageTitle>
+
+<h1>Northwind</h1>
+<RemoteView Address="@Address", Reference="@Reference"/>
+
+@code{
+    public object Address => new ApplicationAddress("Northwind", "dev");
+    public LayoutAreaReference Reference => new(""); 
+}

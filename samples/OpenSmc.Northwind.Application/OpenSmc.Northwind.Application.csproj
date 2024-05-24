@@ -1,3 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
-
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OpenSmc.Layout\OpenSmc.Layout.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.Application.Contract\OpenSmc.Application.Contract.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.Blazor\OpenSmc.Blazor.csproj" />
+  </ItemGroup>
 </Project>
