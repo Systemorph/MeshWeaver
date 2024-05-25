@@ -10,14 +10,14 @@ internal class MessageHubServiceProviderFactory : IServiceProviderFactory<IServi
 
     public IServiceProvider CreateServiceProvider(IServiceCollection services)
     {
-        var serviceProvider = services.SetupModules();
+        var serviceProvider = services.UseOpenSmc();
         return serviceProvider;
     }
 }
 
 public static class HostBuilderExtensions
 {
-    public static IHostBuilder ConfigureServiceProvider(this IHostBuilder hostBuilder)
+    public static IHostBuilder UseOpenSmc(this IHostBuilder hostBuilder)
     {
         return hostBuilder.UseServiceProviderFactory(new MessageHubServiceProviderFactory());
     }

@@ -16,7 +16,7 @@ public class Program
         builder.Services.ConfigureApplicationSignalR();
 
         builder
-            .Host.ConfigureServiceProvider()
+            .Host.UseOpenSmc()
             .UseOrleans(static siloBuilder =>
             {
                 siloBuilder.UseLocalhostClustering();

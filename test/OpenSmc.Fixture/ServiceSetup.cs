@@ -24,12 +24,11 @@ public class ServiceSetup
 
     protected virtual void BuildServiceProvider()
     {
-        ServiceProvider = Services.SetupModules();
+        ServiceProvider = Services.UseOpenSmc();
 
         foreach (var initialize in Initializations)
             initialize(ServiceProvider);
     }
-
 
     internal void SetOutputHelper(ITestOutputHelper output)
     {
@@ -42,5 +41,4 @@ public class ServiceSetup
         Initialize();
         SetOutputHelper(output);
     }
-
 }
