@@ -3,5 +3,11 @@
     <ProjectReference Include="..\..\src\OpenSmc.Layout\OpenSmc.Layout.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Application.Contract\OpenSmc.Application.Contract.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Blazor\OpenSmc.Blazor.csproj" />
+    <ProjectReference Include="..\OpenSmc.Northwind\OpenSmc.Northwind.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.ServiceProvider\OpenSmc.ServiceProvider.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.Hosting\OpenSmc.Hosting.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging" />
   </ItemGroup>
 </Project>
