@@ -15,7 +15,6 @@ public partial class LayoutAreaView : IDisposable
 
     private readonly List<IDisposable> disposables = new();
 
-    public EntityStore LayoutAreaStore { get; private set; }
 
     [Parameter(CaptureUnmatchedValues = true)]
     public Dictionary<string, object> AdditionalParameters { get; set; }
@@ -44,8 +43,9 @@ public partial class LayoutAreaView : IDisposable
 
     private void Render(ChangeItem<EntityStore> item)
     {
-        LayoutAreaStore = item.Value;
-        RootControl = LayoutAreaStore.GetControl(Reference.Area);
+        Store = item.Value;
+        RootControl = Store.GetControl(Reference.Area);
+        InvokeAsync(StateHasChanged);
     }
 
     public void Dispose()

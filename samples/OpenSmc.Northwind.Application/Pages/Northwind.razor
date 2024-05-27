@@ -5,9 +5,9 @@
 <PageTitle>Northwind</PageTitle>
 
 <h1>Northwind</h1>
-<LayoutAreaView Address="@Address" Reference="@Reference"/>
+<LayoutAreaView Address="@address" Reference="@reference"/>
 
 @code{
-    private object Address = new ApplicationAddress("Northwind", "dev");
-    private LayoutAreaReference Reference = new(""); 
+    private readonly object address = new ApplicationAddress("Northwind", "dev");
+    private readonly LayoutAreaReference reference = new(nameof(NorthwindViews.Dashboard)); 
 }
