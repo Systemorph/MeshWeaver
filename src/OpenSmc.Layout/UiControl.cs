@@ -126,7 +126,9 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion,
         };
 
     [JsonIgnore]
-    public ImmutableList<Func<TControl, IServiceProvider, TControl>> BuildFunctions { get; init; } =
+    internal ImmutableList<
+        Func<TControl, IServiceProvider, TControl>
+    > BuildFunctions { get; init; } =
         ImmutableList<Func<TControl, IServiceProvider, TControl>>.Empty;
 
     protected override IUiControl WithBuild(
