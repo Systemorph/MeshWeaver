@@ -1,7 +1,6 @@
 ﻿using System.Reactive.Linq;
 using FluentAssertions;
 using OpenSmc.Data;
-using OpenSmc.Data.Persistence;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using Xunit;

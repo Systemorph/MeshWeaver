@@ -44,12 +44,8 @@ public partial class LayoutAreaView : IDisposable
 
     private void Render(ChangeItem<EntityStore> item)
     {
-        if (Hub.Address.Equals(item.Address))
-            return;
         LayoutAreaStore = item.Value;
-        var rootItem = LayoutAreaStore.GetControl(Reference.Area);
-        if (rootItem == null)
-            return; //TODO Roland Bürgi 2024-05-24: Need to find out what should happen in this case ==> view should be disposed.
+        RootControl = LayoutAreaStore.GetControl(Reference.Area);
     }
 
     public void Dispose()
