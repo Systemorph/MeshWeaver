@@ -6,8 +6,12 @@
         <MenuItem Control="@menuItem" />
         break;
 
-    case RemoteViewControl remoteView:
+    case LayoutAreaControl remoteView:
         <LayoutAreaView Control="@remoteView" Store="@Store" />
+        break;
+
+        case LayoutStackControl stack:
+        <LayoutStack Control="@stack" Store="@Store" />
         break;
 
 
