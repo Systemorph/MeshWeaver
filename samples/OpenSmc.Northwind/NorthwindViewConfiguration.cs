@@ -1,4 +1,4 @@
-using OpenSmc.Layout;
+﻿using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
 using static OpenSmc.Layout.Controls;
@@ -11,7 +11,7 @@ public static class NorthwindViewConfiguration
         this MessageHubConfiguration configuration
     )
     {
-        return configuration.AddLayout(layout => layout.WithInitialState(Main()));
+        return configuration.AddLayout(layout => layout.WithView(string.Empty, Main()));
     }
 
     private static LayoutStackControl Main() =>

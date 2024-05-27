@@ -1,11 +1,10 @@
-using System.Collections.Concurrent;
-using System.Reactive.Linq;
+﻿using System.Collections.Concurrent;
 using System.Reactive.Subjects;
 using System.Reflection;
-using AngleSharp.Common;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
 using OpenSmc.Data.Serialization;
+using OpenSmc.Disposables;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 
@@ -44,7 +43,7 @@ public class Workspace : IWorkspace
 
     private record AddressAndReference(object Address, object Reference);
 
-    private ConcurrentDictionary<(object Id, object WorkspaceReference), IChangeStream> streams =
+    private readonly ConcurrentDictionary<(object Id, object WorkspaceReference), IChangeStream> streams =
         new();
     private ConcurrentDictionary<AddressAndReference, IDisposable> subscriptions = new();
     private ConcurrentDictionary<AddressAndReference, IChangeStream> externalClientStreams = new();
@@ -106,7 +105,7 @@ public class Workspace : IWorkspace
             this,
             ReduceManager.ReduceTo<TReduced>()
         );
-
+        ret.Disposables.Add(new AnonymousDisposable(() => streams.Remove((id,reference), out _)));
         return ReduceManager.ReduceStream(ret, stream, reference);
     }
 
@@ -116,17 +115,17 @@ public class Workspace : IWorkspace
     >(object address, TReference reference)
         where TReference : WorkspaceReference<TReduced>
     {
-        var stream = GetChangeStream<TReduced, TReference>(address, reference);
-        stream.AddDisposable(GetChangeStream(reference).Subscribe(stream));
+        var ret = GetChangeStream<TReduced, TReference>(address, reference);
+        ret.AddDisposable(GetChangeStream(reference).Subscribe(ret));
 
-        stream.AddDisposable(
+        ret.AddDisposable(
             new Disposables.AnonymousDisposable(
                 () => Hub.Post(new UnsubscribeDataRequest(reference), o => o.WithTarget(address))
             )
         );
 
-        stream.AddDisposable(
-            stream
+        ret.AddDisposable(
+            ret
                 .ToChangeStreamClient()
                 .Subscribe(e =>
                 {
@@ -138,7 +137,7 @@ public class Workspace : IWorkspace
 
         Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(address));
 
-        return stream;
+        return ret;
     }
 
     public void Update(IEnumerable<object> instances, UpdateOptions updateOptions) =>
@@ -238,8 +237,8 @@ public class Workspace : IWorkspace
         foreach (var subscription in externalClientStreams.Values.Concat(subscriptions.Values))
             subscription.Dispose();
 
-        foreach (var stream in streams.Values)
-            stream.Dispose();
+        foreach (var s in streams.Values)
+            s.Dispose();
 
         stream.Dispose();
 

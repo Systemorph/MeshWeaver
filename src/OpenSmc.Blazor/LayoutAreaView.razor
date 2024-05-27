@@ -1,9 +1,9 @@
 <div>
-    <GenericView Control="@RootControl", Store="@Store"/>
+    <GenericView Control="@RootControl" Store="@Store"/>
  </div>
 @code{
     [Parameter]
-    public RemoteViewControl Control { get; set; }
+    public RemoteViewControl Control { get; set; } = null;
 
     [Parameter]
     public EntityStore Store { get; set; }
@@ -14,7 +14,7 @@
     [Parameter]
     public LayoutAreaReference Reference { get; set; }
 
-    [Parameter]
+//    [Parameter]
     public UiControl RootControl { get; set; }
 
 }

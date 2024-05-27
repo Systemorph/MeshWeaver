@@ -1,10 +1,7 @@
 ﻿using System.Collections.Immutable;
-using System.Data;
-using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using OpenSmc.Activities;
 using OpenSmc.Messaging;
-using OpenSmc.Serialization;
 
 namespace OpenSmc.Data.Serialization;
 
@@ -39,7 +36,7 @@ public interface IChangeStream<TStream>
     DataChangeResponse RequestChange(Func<TStream, ChangeItem<TStream>> update);
 }
 
-public interface IChangeStream<TStream, TReference> : IChangeStream<TStream>
+public interface IChangeStream<TStream, out TReference> : IChangeStream<TStream>
     where TReference : WorkspaceReference<TStream>
 {
     ChangeItem<TStream> Current { get; }
@@ -47,13 +44,12 @@ public interface IChangeStream<TStream, TReference> : IChangeStream<TStream>
 }
 
 public record ChangeStream<TStream, TReference>
-    : IChangeStream<TStream, TReference>,
-        IObservable<ChangeItem<TStream>>
+    : IChangeStream<TStream, TReference>
     where TReference : WorkspaceReference<TStream>
 {
     public TReference Reference { get; init; }
 
-    private ImmutableArray<(
+    private readonly ImmutableArray<(
         Func<IMessageDelivery<WorkspaceMessage>, bool> Applies,
         Func<IMessageDelivery<WorkspaceMessage>, IMessageDelivery> Process
     )> messageHandlers = ImmutableArray<(
@@ -168,14 +164,10 @@ public record ChangeStream<TStream, TReference>
     {
         if (Current == null)
             Initialize(update(default));
-        Current = update(Current.Value);
+        else
+            Current = update(Current.Value);
     }
 
-    private ChangeItem<TStream> Merge(TStream _, ChangeItem<TStream> changeItem)
-    {
-        //TODO Roland Bürgi 2024-05-06: Apply some merge logic
-        return changeItem;
-    }
 
     public DataChangeResponse RequestChange(Func<TStream, ChangeItem<TStream>> update)
     {
@@ -184,7 +176,7 @@ public record ChangeStream<TStream, TReference>
                 0,
                 DataChangeStatus.Failed,
                 new ActivityLog(ActivityCategory.DataUpdate).Fail(
-                    $"Was not able to backtransform the change item of type {typeof(TStream).Name}"
+                    $"Was not able to back transform the change item of type {typeof(TStream).Name}"
                 )
             );
 
