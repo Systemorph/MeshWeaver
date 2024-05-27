@@ -122,6 +122,8 @@ public record ChangeStream<TStream, TReference>
         {
             current = value;
             store.OnNext(value);
+            if(!initialized.Task.IsCompleted)
+                initialized.SetResult(value.Value);
         }
     }
 
@@ -136,7 +138,6 @@ public record ChangeStream<TStream, TReference>
             throw new InvalidOperationException("Already initialized");
 
         Current = initial;
-        initialized.SetResult(initial.Value);
     }
 
     public void OnCompleted()
