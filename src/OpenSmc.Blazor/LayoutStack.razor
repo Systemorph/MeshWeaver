@@ -1,5 +1,6 @@
 <div id ="@Control.Id">
     @foreach(var area in Control.Areas){
+        <p>Rendering area @area</p>
         <GenericView Control="GetArea(area)" Store="@Store"/>
     }
 </div>
