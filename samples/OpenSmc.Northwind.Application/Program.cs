@@ -1,4 +1,3 @@
-using Autofac;
 using OpenSmc.Application;
 using OpenSmc.Hosting;
 using OpenSmc.Northwind.Application;
@@ -8,18 +7,30 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 builder.Services.AddRazorPages();
-builder.Services.AddServerSideBlazor();
+builder.Services.AddServerSideBlazor()
+// .AddHubOptions(o =>
+// {
+//     o.MaximumReceiveMessageSize = 10 * 1024 * 1024;
+// })
+// .AddJsonProtocol(options =>
+// {
+//     options.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
+//     options.PayloadSerializerOptions.WriteIndented = true;
+// })
+;
 builder.Services.AddSingleton<WeatherForecastService>();
-builder.Services.AddScoped(sp => sp.CreateNorthwindHub(new ApplicationAddress("Northwind", "dev")));
 builder.Services.AddLogging(config => config.AddConsole().AddDebug());
-builder.Host.UseOpenSmc();
+builder.Host.UseOpenSmc(
+    new ApplicationAddress("Northwind", "dev"),
+    config => config.ConfigureNorthwindHubs()
+);
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error");
-    // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
+    // The default HSTS value is 30 days. Yoseru may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
     app.UseHsts();
 }
 

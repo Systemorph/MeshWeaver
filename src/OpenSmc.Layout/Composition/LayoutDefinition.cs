@@ -11,11 +11,6 @@ public record LayoutDefinition(IMessageHub Hub)
     internal ImmutableList<ViewGenerator> ViewGenerators { get; init; } =
         ImmutableList<ViewGenerator>.Empty;
 
-    public LayoutDefinition WithInitialState(UiControl initialState) =>
-        this with
-        {
-            InitialState = initialState
-        };
 
     public LayoutDefinition WithViewGenerator(
         Func<LayoutAreaReference, bool> filter,

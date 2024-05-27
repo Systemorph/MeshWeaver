@@ -16,7 +16,7 @@ public class Program
         builder.Services.ConfigureApplicationSignalR();
 
         builder
-            .Host.UseOpenSmc()
+            .Host.UseOpenSmc(new RouterAddress(), conf => conf.ConfigureRouter())
             .UseOrleans(static siloBuilder =>
             {
                 siloBuilder.UseLocalhostClustering();
@@ -35,7 +35,6 @@ public class Program
                     .AddMemoryStreams(ApplicationStreamProviders.AppStreamProvider)
                     .AddMemoryGrainStorage("PubSubStore");
 
-                siloBuilder.Services.AddRouterHub();
             });
 
         using var app = builder.Build();
@@ -48,37 +47,21 @@ public class Program
 
 public static class OrleansMessageHubExtensions
 {
-    public static IServiceCollection AddRouterHub(this IServiceCollection services)
-    {
-        services.AddSingleton(sp => sp.GetRouterHub());
-        return services;
-    }
-
-    public static IMessageHub GetRouterHub(this IServiceProvider serviceProvider) =>
-        serviceProvider.CreateMessageHub(
-            new RouterAddress(),
-            conf =>
-                conf.WithTypes(typeof(UiAddress), typeof(ApplicationAddress))
-                    .WithHostedHub(
-                        new ApplicationAddress(TestApplication.Name, TestApplication.Environment),
-                        config =>
-                            // HACK V10: this is just for testing and should not be a part of Prod setup (2024/04/17, Dmitry Kalabin)
-                            config.WithHandler<TestRequest>(
-                                (hub, request) =>
-                                {
-                                    hub.Post(
-                                        new TestResponse(),
-                                        options => options.ResponseFor(request)
-                                    );
-                                    return request.Processed();
-                                }
-                            )
+    public static MessageHubConfiguration ConfigureRouter(this MessageHubConfiguration conf) =>
+        conf.WithTypes(typeof(UiAddress), typeof(ApplicationAddress))
+            .WithHostedHub(
+                new ApplicationAddress(TestApplication.Name, TestApplication.Environment),
+                config =>
+                    // HACK V10: this is just for testing and should not be a part of Prod setup (2024/04/17, Dmitry Kalabin)
+                    config.WithHandler<TestRequest>(
+                        (hub, request) =>
+                        {
+                            hub.Post(new TestResponse(), options => options.ResponseFor(request));
+                            return request.Processed();
+                        }
                     )
-                    .WithForwardThroughOrleansStream<UiAddress>(
-                        ApplicationStreamNamespaces.Ui,
-                        a => a.Id
-                    )
-        );
+            )
+            .WithForwardThroughOrleansStream<UiAddress>(ApplicationStreamNamespaces.Ui, a => a.Id);
 }
 
 record RouterAddress;

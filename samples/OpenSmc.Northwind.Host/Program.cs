@@ -18,7 +18,7 @@ public static class Program
         builder.Services.ConfigureApplicationSignalR();
 
         builder
-            .Host.UseOpenSmc()
+            .Host.UseOpenSmc(new RouterAddress(), conf => conf.ConfigureRouter())
             .UseOrleans(static siloBuilder =>
             {
                 siloBuilder.UseLocalhostClustering();
@@ -36,8 +36,6 @@ public static class Program
                 siloBuilder
                     .AddMemoryStreams(ApplicationStreamProviders.AppStreamProvider)
                     .AddMemoryGrainStorage("PubSubStore");
-
-                siloBuilder.Services.AddRouterHub();
             });
 
         await using var app = builder.Build();
@@ -50,29 +48,16 @@ public static class Program
 
 internal static class RouterHubExtensions
 {
-    internal static IServiceCollection AddRouterHub(this IServiceCollection services)
-    {
-        services.AddSingleton(sp => sp.GetRouterHub());
-        return services;
-    }
-
-    private static IMessageHub GetRouterHub(this IServiceProvider serviceProvider) =>
-        serviceProvider.CreateMessageHub(
-            new RouterAddress(),
-            conf =>
-                conf.WithTypes(typeof(UiAddress), typeof(ApplicationAddress))
-                    .WithRoutes(forward =>
-                        forward
-                            .RouteAddressToHostedHub<ApplicationAddress>(ConfigureApplication)
-                            .RouteAddressToHostedHub<ReferenceDataAddress>(c =>
-                                c.AddNorthwindReferenceData()
-                            )
+    public static MessageHubConfiguration ConfigureRouter(this MessageHubConfiguration conf) =>
+        conf.WithTypes(typeof(UiAddress), typeof(ApplicationAddress))
+            .WithRoutes(forward =>
+                forward
+                    .RouteAddressToHostedHub<ApplicationAddress>(ConfigureApplication)
+                    .RouteAddressToHostedHub<ReferenceDataAddress>(c =>
+                        c.AddNorthwindReferenceData()
                     )
-                    .WithForwardThroughOrleansStream<UiAddress>(
-                        ApplicationStreamNamespaces.Ui,
-                        a => a.Id
-                    )
-        );
+            )
+            .WithForwardThroughOrleansStream<UiAddress>(ApplicationStreamNamespaces.Ui, a => a.Id);
 
     private static MessageHubConfiguration ConfigureApplication(
         MessageHubConfiguration configuration

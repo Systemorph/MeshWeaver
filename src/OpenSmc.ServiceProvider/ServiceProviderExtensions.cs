@@ -7,7 +7,7 @@ namespace OpenSmc.ServiceProvider;
 
 public static class ServiceProviderExtensions
 {
-    public static IServiceProvider UseOpenSmc(this IServiceCollection services) =>
+    public static IServiceProvider CreateOpenSmcServiceProvider(this IServiceCollection services) =>
         SetupModules(services, null);
 
     public static IServiceProvider SetupModules(
@@ -47,7 +47,6 @@ public static class ServiceProviderExtensions
 
             ret = new AutofacServiceProvider(containerBuilder.Build());
         }
-
         return ret;
     }
 

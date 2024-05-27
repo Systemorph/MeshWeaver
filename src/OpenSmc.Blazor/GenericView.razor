@@ -1,10 +1,13 @@
 @switch(Control){
+    case null:
+        //TODO Roland Bürgi 2024-05-27: Show spinner here? Encapsulate in task?
+        break;
     case MenuItemControl menuItem:
         <MenuItem Control="@menuItem" />
         break;
 
     case RemoteViewControl remoteView:
-        <RemoteView Control="@remoteView" Store="@Store" />
+        <LayoutAreaView Control="@remoteView" Store="@Store" />
         break;
 
 

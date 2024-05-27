@@ -24,7 +24,7 @@ public class ServiceSetup
 
     protected virtual void BuildServiceProvider()
     {
-        ServiceProvider = Services.UseOpenSmc();
+        ServiceProvider = Services.CreateOpenSmcServiceProvider();
 
         foreach (var initialize in Initializations)
             initialize(ServiceProvider);

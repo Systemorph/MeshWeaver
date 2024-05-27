@@ -1,5 +1,4 @@
-﻿using System.Data.Common;
-using OpenSmc.Data;
+﻿using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
@@ -131,7 +130,7 @@ public interface ILayout
     );
 }
 
-public class LayoutPlugin : MessageHubPlugin, ILayout
+public sealed class LayoutPlugin : MessageHubPlugin, ILayout
 {
     private readonly LayoutDefinition layoutDefinition;
 
