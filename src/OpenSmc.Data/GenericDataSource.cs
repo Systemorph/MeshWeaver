@@ -79,7 +79,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
     public virtual void Initialize()
     {
         var reference = GetReference();
-        var stream = Workspace.GetChangeStream(reference);
+        var stream = Workspace.GetStream(reference);
         Streams = Streams.Add(stream);
         stream.Skip(1).Subscribe(Synchronize);
         Hub.Schedule(cancellationToken => InitializeAsync(stream, cancellationToken));

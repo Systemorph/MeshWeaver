@@ -43,8 +43,7 @@ public interface IChangeStream<TStream, out TReference> : IChangeStream<TStream>
     new TReference Reference { get; }
 }
 
-public record ChangeStream<TStream, TReference>
-    : IChangeStream<TStream, TReference>
+public record ChangeStream<TStream, TReference> : IChangeStream<TStream, TReference>
     where TReference : WorkspaceReference<TStream>
 {
     public TReference Reference { get; init; }
@@ -98,7 +97,7 @@ public record ChangeStream<TStream, TReference>
 
     public IObservable<ChangeItem<TReduced>> Reduce<TReduced>(
         WorkspaceReference<TReduced> reference
-    ) => reduceManager.ReduceStream(Workspace.GetChangeStream(reference), store, reference);
+    ) => reduceManager.ReduceStream(Workspace.GetStream(reference), store, reference);
 
     public IDisposable Subscribe(IObserver<ChangeItem<TStream>> observer)
     {
@@ -122,7 +121,7 @@ public record ChangeStream<TStream, TReference>
         {
             current = value;
             store.OnNext(value);
-            if(!initialized.Task.IsCompleted)
+            if (!initialized.Task.IsCompleted)
                 initialized.SetResult(value.Value);
         }
     }
@@ -168,7 +167,6 @@ public record ChangeStream<TStream, TReference>
         else
             Current = update(Current.Value);
     }
-
 
     public DataChangeResponse RequestChange(Func<TStream, ChangeItem<TStream>> update)
     {

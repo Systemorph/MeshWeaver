@@ -34,15 +34,15 @@ public interface IWorkspace : IAsyncDisposable
     ReduceManager<WorkspaceState> ReduceManager { get; }
     WorkspaceReference Reference { get; }
 
-    IChangeStream<TReduced> GetChangeStream<TReduced>(WorkspaceReference<TReduced> reference);
-    IChangeStream<TReduced> GetChangeStream<TReduced>(
+    IChangeStream<TReduced> GetStream<TReduced>(WorkspaceReference<TReduced> reference);
+    IChangeStream<TReduced> GetStream<TReduced>(
         object address,
         WorkspaceReference<TReduced> reference
     );
-    IChangeStream<TReduced, TReference> GetChangeStream<TReduced, TReference>(TReference reference)
+    IChangeStream<TReduced, TReference> GetStream<TReduced, TReference>(TReference reference)
         where TReference : WorkspaceReference<TReduced>;
 
-    IChangeStream<TReduced, TReference> GetRemoteChangeStream<TReduced, TReference>(
+    IChangeStream<TReduced, TReference> GetStream<TReduced, TReference>(
         object address,
         TReference reference
     )

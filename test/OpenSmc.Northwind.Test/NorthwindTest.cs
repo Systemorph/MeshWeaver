@@ -2,6 +2,7 @@
 using FluentAssertions;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
+using OpenSmc.Layout;
 using OpenSmc.Messaging;
 using Xunit;
 using Xunit.Abstractions;
@@ -31,6 +32,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
+            .AddNorthwindViews()
             .AddData(data =>
                 data.FromHub(
                         new ReferenceDataAddress(),
@@ -101,5 +103,18 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             .Timeout(Timeout)
             .FirstAsync();
         customers.Should().HaveCountGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task DashboardView()
+    {
+        var workspace = GetClient().GetWorkspace();
+        await workspace.Initialized;
+
+        var viewName = nameof(NorthwindViews.Dashboard);
+        var stream = workspace.GetStream(new HostAddress(), new LayoutAreaReference(viewName));
+        var dashboard = await stream.GetControl(viewName).FirstAsync();
+
+        dashboard.Should().BeOfType<LayoutStackControl>();
     }
 }

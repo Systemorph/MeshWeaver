@@ -1,9 +1,5 @@
-using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Runtime.CompilerServices;
-using System.Security.Cryptography.X509Certificates;
-using AngleSharp.Common;
 using OpenSmc.Data.Serialization;
 
 namespace OpenSmc.Data;
@@ -112,9 +108,7 @@ public record ReduceManager<TStream>
             ? reducer.Invoke(state, reference)
             : node.Next != null
                 ? node.Next.Value.Invoke(state, @ref, node.Next)
-                : throw new NotSupportedException(
-                    $"Reducer for reference {@ref.GetType().Name} not specified"
-                );
+                : null;
     }
 
     public object Reduce(TStream workspaceState, WorkspaceReference reference)
@@ -127,13 +121,14 @@ public record ReduceManager<TStream>
         return first.Value(workspaceState, reference, first);
     }
 
-    public IChangeStream<TReduced> ReduceStream<TReduced>(
+    public IChangeStream<TReduced, TReference> ReduceStream<TReduced, TReference>(
         IChangeStream<TReduced> reducedStream,
         IObservable<ChangeItem<TStream>> stream,
-        WorkspaceReference<TReduced> reference
+        TReference reference
     )
+        where TReference : WorkspaceReference<TReduced>
     {
-        return (IChangeStream<TReduced>)
+        return (IChangeStream<TReduced, TReference>)
             ReduceStreams
                 .Select(reduceStream => reduceStream.Invoke(reducedStream, stream, reference))
                 .FirstOrDefault(x => x != null);
