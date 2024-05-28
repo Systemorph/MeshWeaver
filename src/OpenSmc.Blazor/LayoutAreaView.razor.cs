@@ -15,7 +15,6 @@ public partial class LayoutAreaView : IDisposable
 
     private readonly List<IDisposable> disposables = new();
 
-
     [Parameter(CaptureUnmatchedValues = true)]
     public Dictionary<string, object> AdditionalParameters { get; set; }
 
@@ -34,8 +33,8 @@ public partial class LayoutAreaView : IDisposable
             throw new ArgumentNullException(nameof(Reference), "Reference cannot be null.");
 
         var changeStream = Address.Equals(Hub.Address)
-            ? Workspace.GetChangeStream<EntityStore, LayoutAreaReference>(Reference)
-            : Workspace.GetRemoteChangeStream<EntityStore, LayoutAreaReference>(Address, Reference);
+            ? Workspace.GetStream<EntityStore, LayoutAreaReference>(Reference)
+            : Workspace.GetStream<EntityStore, LayoutAreaReference>(Address, Reference);
         disposables.Add(changeStream);
         changeStream.Subscribe(Render);
         await changeStream.Initialized;

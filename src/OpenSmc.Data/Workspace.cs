@@ -43,18 +43,19 @@ public class Workspace : IWorkspace
 
     private record AddressAndReference(object Address, object Reference);
 
-    private readonly ConcurrentDictionary<(object Id, object WorkspaceReference), IChangeStream> streams =
-        new();
+    private readonly ConcurrentDictionary<
+        (object Id, object WorkspaceReference),
+        IChangeStream
+    > streams = new();
     private ConcurrentDictionary<AddressAndReference, IDisposable> subscriptions = new();
     private ConcurrentDictionary<AddressAndReference, IChangeStream> externalClientStreams = new();
 
     private readonly IActivityService activityService;
 
-    public IChangeStream<TReduced> GetChangeStream<TReduced>(
-        WorkspaceReference<TReduced> reference
-    ) => GetChangeStream(Hub.Address, reference);
+    public IChangeStream<TReduced> GetStream<TReduced>(WorkspaceReference<TReduced> reference) =>
+        GetStream(Hub.Address, reference);
 
-    public IChangeStream<TReduced> GetChangeStream<TReduced>(
+    public IChangeStream<TReduced> GetStream<TReduced>(
         object id,
         WorkspaceReference<TReduced> reference
     ) =>
@@ -65,27 +66,14 @@ public class Workspace : IWorkspace
 
     private static readonly MethodInfo GetChangeStreamMethod =
         ReflectionHelper.GetMethodGeneric<Workspace>(x =>
-            x.GetChangeStream<object, WorkspaceReference<object>>(default, default)
+            x.GetStream<object, WorkspaceReference<object>>(default, default)
         );
 
-    public IChangeStream<TReduced, TReference> GetChangeStream<TReduced, TReference>(
-        TReference reference
-    )
+    public IChangeStream<TReduced, TReference> GetStream<TReduced, TReference>(TReference reference)
         where TReference : WorkspaceReference<TReduced> =>
-        GetChangeStream<TReduced, TReference>(Hub.Address, reference);
+        GetStream<TReduced, TReference>(Hub.Address, reference);
 
-    public IChangeStream<TReduced, TReference> GetChangeStream<TReduced, TReference>(
-        object id,
-        TReference reference
-    )
-        where TReference : WorkspaceReference<TReduced> =>
-        (IChangeStream<TReduced, TReference>)
-            streams.GetOrAdd(
-                (id, reference),
-                _ => CreateChangeStream<TReduced, TReference>(id, reference)
-            );
-
-    public IChangeStream<TReduced, TReference> GetRemoteChangeStream<TReduced, TReference>(
+    public IChangeStream<TReduced, TReference> GetStream<TReduced, TReference>(
         object address,
         TReference reference
     )
@@ -93,20 +81,36 @@ public class Workspace : IWorkspace
         (IChangeStream<TReduced, TReference>)
             externalClientStreams.GetOrAdd(
                 new(address, reference),
-                _ => CreateExternalClientChangeStream<TReduced, TReference>(address, reference)
+                _ =>
+                    Hub.Address.Equals(address)
+                        ? CreateInternalChangeStream<TReduced, TReference>(reference)
+                        : CreateExternalClientChangeStream<TReduced, TReference>(address, reference)
             );
 
-    private IChangeStream CreateChangeStream<TReduced, TReference>(object id, TReference reference)
+    private IChangeStream<TReduced, TReference> CreateChangeStream<TReduced, TReference>(
+        object id,
+        TReference reference
+    )
         where TReference : WorkspaceReference<TReduced>
     {
-        var ret = new ChangeStream<TReduced, TReference>(
+        IChangeStream<TReduced, TReference> ret = new ChangeStream<TReduced, TReference>(
             id,
             reference,
             this,
             ReduceManager.ReduceTo<TReduced>()
         );
-        ret.Disposables.Add(new AnonymousDisposable(() => streams.Remove((id,reference), out _)));
-        return ReduceManager.ReduceStream(ret, stream, reference);
+        ret.AddDisposable(new AnonymousDisposable(() => streams.Remove((id, reference), out _)));
+        return ret;
+    }
+
+    private IChangeStream<TReduced, TReference> CreateInternalChangeStream<TReduced, TReference>(
+        TReference reference
+    )
+        where TReference : WorkspaceReference<TReduced>
+    {
+        var ret = CreateChangeStream<TReduced, TReference>(Hub.Address, reference);
+        ret = ReduceManager.ReduceStream(ret, stream, reference);
+        return ret;
     }
 
     private IChangeStream<TReduced, TReference> CreateExternalClientChangeStream<
@@ -115,8 +119,11 @@ public class Workspace : IWorkspace
     >(object address, TReference reference)
         where TReference : WorkspaceReference<TReduced>
     {
-        var ret = GetChangeStream<TReduced, TReference>(address, reference);
-        ret.AddDisposable(GetChangeStream(reference).Subscribe(ret));
+        var ret = CreateChangeStream<TReduced, TReference>(address, reference);
+        var myStream = GetStream(reference);
+
+        if (myStream != null)
+            ret.AddDisposable(myStream.Subscribe(ret));
 
         ret.AddDisposable(
             new Disposables.AnonymousDisposable(
@@ -125,8 +132,7 @@ public class Workspace : IWorkspace
         );
 
         ret.AddDisposable(
-            ret
-                .ToChangeStreamClient()
+            ret.ToChangeStreamClient()
                 .Subscribe(e =>
                 {
                     if (address.Equals(e.ChangedBy))
@@ -280,7 +286,7 @@ public class Workspace : IWorkspace
         TReference reference
     )
         where TReference : WorkspaceReference<TReduced> =>
-        GetRemoteChangeStream<TReduced, TReference>(address, reference);
+        GetStream<TReduced, TReference>(address, reference);
 
     private static readonly MethodInfo SubscribToClientMethod =
         ReflectionHelper.GetMethodGeneric<Workspace>(x =>
@@ -293,7 +299,7 @@ public class Workspace : IWorkspace
         subscriptions.GetOrAdd(
             new(address, reference),
             _ =>
-                ((IChangeStream<TReduced, TReference>)GetChangeStream(reference))
+                ((IChangeStream<TReduced, TReference>)GetStream(reference))
                     .ToChangeStreamHost()
                     .Subscribe(e =>
                     {
