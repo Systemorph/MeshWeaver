@@ -12,7 +12,7 @@ public record LayoutStackControl()
     internal ImmutableList<ViewElement> ViewElements { get; init; } =
         ImmutableList<ViewElement>.Empty;
 
-    public IReadOnlyCollection<object> Areas { get; init; }
+    public IReadOnlyCollection<string> Areas { get; init; }
 
     public LayoutStackControl WithView(object value) => WithView(GetAutoName(), value);
 

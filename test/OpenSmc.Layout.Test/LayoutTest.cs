@@ -154,14 +154,13 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .BeOfType<LayoutStackControl>()
             .Which.Areas.Should()
             .HaveCount(2)
-            .And.Subject.Should()
-            .AllBeOfType<EntityReference>()
-            .And.Subject.Cast<EntityReference>()
-            .ToArray();
+            .And.Subject;
 
         var areaControls = await areas
             .ToAsyncEnumerable()
-            .SelectAwait(async a => await stream.GetData(a).FirstAsync())
+            .SelectAwait(async a =>
+                await stream.Select(s => s.Value.GetControl(a)).FirstAsync(x => x != null)
+            )
             .ToArrayAsync();
 
         areaControls.Should().HaveCount(2).And.AllBeOfType<HtmlControl>();
