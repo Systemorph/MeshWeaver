@@ -39,12 +39,7 @@ public class LayoutManager
                 RenderArea($"{area}/{ve.Area}", ve);
             control = stack with
             {
-                Areas = stack
-                    .ViewElements.Select(ve => new EntityReference(
-                        LayoutArea.ControlsCollection,
-                        $"{area}/{ve.Area}"
-                    ))
-                    .ToArray()
+                Areas = stack.ViewElements.Select(ve => $"{area}/{ve.Area}").ToArray()
             };
         }
 
