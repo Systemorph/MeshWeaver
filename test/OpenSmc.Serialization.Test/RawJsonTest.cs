@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data;
 using OpenSmc.Fixture;
@@ -45,6 +46,8 @@ public class RawJsonTest : TestBase
         var delivery = new MessageDelivery<SubscribeRequest>(subscribeRequest, postOptions);
 
         var serialized = JsonSerializer.Serialize(delivery, Client.JsonSerializerOptions);
+
+        serialized.Should().NotBeNull();
 
         // act
 
