@@ -2,6 +2,7 @@
 using OpenSmc.Data;
 using OpenSmc.Fixture;
 using OpenSmc.Messaging;
+using OpenSmc.ServiceProvider;
 using Xunit.Abstractions;
 
 namespace OpenSmc.Serialization.Test;
@@ -13,6 +14,9 @@ public class RawJsonTest : TestBase
     record HostAddress;
 
     record ClientAddress;
+
+    [Inject]
+    private IMessageHub<ClientAddress> Client { get; set; }
 
     public RawJsonTest(ITestOutputHelper output) : base(output)
     {
