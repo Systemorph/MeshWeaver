@@ -4,6 +4,12 @@ namespace OpenSmc.Serialization.Test;
 
 public class RawJsonTest
 {
+    record RouterAddress;
+
+    record HostAddress;
+
+    record ClientAddress;
+
     [Fact]
     public void DeserializeToRawJson()
     {
