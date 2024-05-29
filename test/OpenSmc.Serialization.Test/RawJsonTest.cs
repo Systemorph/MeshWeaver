@@ -20,6 +20,9 @@ public class RawJsonTest : TestBase
     [Inject]
     private IMessageHub<ClientAddress> Client { get; set; }
 
+    [Inject]
+    private IMessageHub Router { get; set; }
+
     public RawJsonTest(ITestOutputHelper output) : base(output)
     {
         Services.AddSingleton(sp => sp.CreateMessageHub(new ClientAddress(), ConfigureClient));
