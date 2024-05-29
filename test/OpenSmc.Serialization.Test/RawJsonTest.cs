@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data;
 using OpenSmc.Fixture;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 using OpenSmc.ServiceProvider;
 using Xunit.Abstractions;
 
@@ -30,6 +31,7 @@ public class RawJsonTest : TestBase
             new RouterAddress(),
             hubConf =>
                 hubConf
+                    .WithTypes(typeof(ClientAddress), typeof(HostAddress))
         );
     }
 
