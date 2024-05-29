@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data;
 using OpenSmc.Fixture;
 using OpenSmc.Messaging;
@@ -42,6 +43,8 @@ public class RawJsonTest : TestBase
             );
         var subscribeRequest = new SubscribeRequest(new CollectionReference("TestCollection"));
         var delivery = new MessageDelivery<SubscribeRequest>(subscribeRequest, postOptions);
+
+        var serialized = JsonSerializer.Serialize(delivery, Client.JsonSerializerOptions);
 
         // act
 
