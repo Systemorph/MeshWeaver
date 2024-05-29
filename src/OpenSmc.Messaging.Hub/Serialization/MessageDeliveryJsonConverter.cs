@@ -17,15 +17,22 @@ public class MessageDeliveryRawJsonConverter : JsonConverter<MessageDelivery<Raw
         var target = node["target"].Deserialize<object>(options);
         var properties = node["properties"]?.Deserialize<Dictionary<string, object>>(options) ?? [];
         var state = node["state"].GetValue<string>();
+        var id = node["id"]?.GetValue<string>();
 
         var postOptions =
             new PostOptions(sender, null)
                 .WithTarget(target)
                 .WithProperties(properties);
-        return new MessageDelivery<RawJson>(rawJson, postOptions)
-            {
-                State = state,
-            };
+        return string.IsNullOrWhiteSpace(id)
+            ? new MessageDelivery<RawJson>(rawJson, postOptions)
+                {
+                    State = state,
+                }
+            : new MessageDelivery<RawJson>(rawJson, postOptions)
+                {
+                    State = state,
+                    Id = id,
+                };
     }
 
     public override void Write(Utf8JsonWriter writer, MessageDelivery<RawJson> value, JsonSerializerOptions options)
