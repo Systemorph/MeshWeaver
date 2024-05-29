@@ -60,6 +60,7 @@ public class RawJsonTest : TestBase
         serialized.Should().NotBeNull();
 
         // act
+        var deserialized = JsonSerializer.Deserialize<MessageDelivery<RawJson>>(serialized, Router.JsonSerializerOptions);
 
         // assert
     }
