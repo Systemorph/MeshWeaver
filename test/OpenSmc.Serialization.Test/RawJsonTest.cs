@@ -1,4 +1,6 @@
-﻿namespace OpenSmc.Serialization.Test;
+﻿using OpenSmc.Data;
+
+namespace OpenSmc.Serialization.Test;
 
 public class RawJsonTest
 {
@@ -6,6 +8,7 @@ public class RawJsonTest
     public void DeserializeToRawJson()
     {
         // arrange
+        var subscribeRequest = new SubscribeRequest(new CollectionReference("TestCollection"));
 
         // act
 
