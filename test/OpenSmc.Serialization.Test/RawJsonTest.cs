@@ -41,6 +41,7 @@ public class RawJsonTest : TestBase
                 }
             );
         var subscribeRequest = new SubscribeRequest(new CollectionReference("TestCollection"));
+        var delivery = new MessageDelivery<SubscribeRequest>(subscribeRequest, postOptions);
 
         // act
 
