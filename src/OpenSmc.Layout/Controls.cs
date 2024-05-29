@@ -32,10 +32,10 @@ public static class Controls
 
     public static CodeSampleControl CodeSample(object data) => new(data);
 
-    public static HtmlControl HtmlView(object data) => new(data);
+    public static HtmlControl Html(object data) => new(data);
 
     public static HtmlControl Title(object text, int headerSize) =>
-        HtmlView($"<h{headerSize}>{text}</h{headerSize}>");
+        Html($"<h{headerSize}>{text}</h{headerSize}>");
 
     public static BadgeControl Badge(object title, object subTitle = null, object color = null) =>
         new(title, subTitle, color);

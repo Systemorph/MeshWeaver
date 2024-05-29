@@ -13,8 +13,6 @@
     [Parameter]
     public EntityStore Store { get; set; }
 
-    UiControl GetArea(object reference) => Store?.GetControl(GetAreaId(reference));
+    UiControl GetArea(string area) => Store?.GetControl(area);
 
-    // TODO V10: This is clumsy. ==> Convert Areas to IReadonlyCollection<string>? (27.05.2024, Roland Bürgi)
-    private static string GetAreaId(object reference) => (string)((EntityReference)reference).Id;
 }

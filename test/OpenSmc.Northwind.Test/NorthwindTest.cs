@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using DocumentFormat.OpenXml.Drawing.Diagrams;
 using FluentAssertions;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
@@ -113,8 +114,16 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
 
         var viewName = nameof(NorthwindViews.Dashboard);
         var stream = workspace.GetStream(new HostAddress(), new LayoutAreaReference(viewName));
-        var dashboard = await stream.GetControl(viewName).FirstAsync();
+        var dashboard = (await stream.GetControl(viewName)).Should().BeOfType<LayoutStackControl>().Subject;
+        var areas = dashboard.Areas;
+        var controls = new List<KeyValuePair<string, UiControl>>();
 
-        dashboard.Should().BeOfType<LayoutStackControl>();
+        while (areas.Count > 0)
+        {
+            var children = await areas.ToAsyncEnumerable().SelectAwait(async s => new KeyValuePair<string,UiControl>(s, await stream.GetControl(s))).ToArrayAsync();
+            controls.AddRange(children);
+            areas = children.SelectMany(c => (c.Value as LayoutStackControl)?.Areas ?? Enumerable.Empty<string>()).ToArray();
+        }
+
     }
 }

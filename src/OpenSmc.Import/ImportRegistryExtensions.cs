@@ -1,14 +1,10 @@
 ﻿using System.Collections.Immutable;
 using System.Data;
 using System.Reflection;
-using System.Security.Cryptography.X509Certificates;
-using AngleSharp.Io;
-using DocumentFormat.OpenXml.Bibliography;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
 using OpenSmc.Data;
-using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Import;
@@ -94,7 +90,7 @@ public record ImportDataSource(Source Source, IMessageHub Hub)
         );
         config = Configurations.Aggregate(config, (c, f) => f.Invoke(c));
         ImportManager importManager = new(config);
-        var ret = Workspace.GetRemoteStream(Id, GetReference());
+        var ret = Workspace.GetStream(Id, GetReference());
         Hub.Schedule(async cancellationToken =>
         {
             var (state, hasError) = await importManager.ImportAsync(

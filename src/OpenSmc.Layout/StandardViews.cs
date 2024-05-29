@@ -52,14 +52,14 @@ public static class StandardViews
                             .WithView(
                                 Stack()
                                     .WithSkin(Skin.HorizontalPanel)
-                                    .WithView(HtmlView("<em>by</em>"))
-                                    .WithView(HtmlView($"<strong>{log.User?.DisplayName}</strong>"))
+                                    .WithView(Html("<em>by</em>"))
+                                    .WithView(Html($"<strong>{log.User?.DisplayName}</strong>"))
                             )
                             .WithView(
                                 Stack()
                                     .WithSkin(Skin.HorizontalPanel)
-                                    .WithView(HtmlView("<em>at</em>"))
-                                    .WithView(HtmlView($"<strong>{shortDateString}</strong>"))
+                                    .WithView(Html("<em>at</em>"))
+                                    .WithView(Html($"<strong>{shortDateString}</strong>"))
                             )
                     )
             );
@@ -69,7 +69,7 @@ public static class StandardViews
             var errorsStack = log.Errors()
                 .Aggregate(
                     Stack().WithSkin(Skin.VerticalPanel).WithView(Title("Errors", 3)),
-                    (seed, message) => seed.WithView(HtmlView($"<p>{message.Message}</p>"))
+                    (seed, message) => seed.WithView(Html($"<p>{message.Message}</p>"))
                 );
             stack = stack.WithView(
                 DialogBodyStack()
@@ -82,7 +82,7 @@ public static class StandardViews
             var warningsStack = log.Warnings()
                 .Aggregate(
                     Stack().WithSkin(Skin.VerticalPanel).WithView(Title("Warnings", 3)),
-                    (seed, message) => seed.WithView(HtmlView($"<p>{message.Message}</p>"))
+                    (seed, message) => seed.WithView(Html($"<p>{message.Message}</p>"))
                 );
             stack = stack.WithView(
                 DialogBodyStack()
@@ -95,7 +95,7 @@ public static class StandardViews
             var warningsStack = log.Infos()
                 .Aggregate(
                     Stack().WithSkin(Skin.VerticalPanel).WithView(Title("Infos", 3)),
-                    (seed, message) => seed.WithView(HtmlView($"<p>{message.Message}</p>"))
+                    (seed, message) => seed.WithView(Html($"<p>{message.Message}</p>"))
                 );
             stack = stack.WithView(
                 DialogBodyStack()
@@ -118,7 +118,7 @@ public static class StandardViews
         return Stack()
             .WithStyle(x => x.WithMinWidth(120))
             .WithView(Icon(Icons.OpenSmc.UploadCloud, Colors.Button))
-            .WithView(HtmlView($"<strong>{title}</strong> <em>{description}</em>"))
+            .WithView(Html($"<strong>{title}</strong> <em>{description}</em>"))
             .WithView(
                 Menu("Import")
                     .WithId(buttonId)

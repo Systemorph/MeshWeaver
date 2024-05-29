@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using OpenSmc.Data;
 using OpenSmc.Layout.Conventions;
 using OpenSmc.Messaging;
 
@@ -11,7 +12,7 @@ public record LayoutDefinition(IMessageHub Hub)
     internal ImmutableList<ViewGenerator> ViewGenerators { get; init; } =
         ImmutableList<ViewGenerator>.Empty;
 
-
+    public IWorkspace Workspace => Hub.GetWorkspace();
     public LayoutDefinition WithViewGenerator(
         Func<LayoutAreaReference, bool> filter,
         ViewElement viewElement

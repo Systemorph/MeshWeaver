@@ -17,7 +17,7 @@ public record UiControlsManager
         RegisterFallback(o =>
         {
             var mimeType = Formatter.GetPreferredMimeTypesFor(o?.GetType()).FirstOrDefault();
-            return Controls.HtmlView(o.ToDisplayString(mimeType));
+            return Controls.Html(o.ToDisplayString(mimeType));
         });
 
         Register(typeof(Exception), o => Controls.Exception((Exception)o));

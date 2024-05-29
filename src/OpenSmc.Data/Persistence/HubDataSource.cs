@@ -1,12 +1,7 @@
-﻿using System.Reactive.Linq;
-using System.Runtime.CompilerServices;
-using System.Text.Json;
-using System.Text.Json.Nodes;
+﻿using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
-using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
-using OpenSmc.Serialization;
 
 namespace OpenSmc.Data.Persistence;
 
@@ -54,7 +49,7 @@ public record PartitionedHubDataSource(object Id, IMessageHub Hub)
         foreach (var partition in InitializePartitions)
         {
             var reference = GetReference(partition);
-            Streams = Streams.Add(Workspace.GetRemoteStream(partition, reference));
+            Streams = Streams.Add(Workspace.GetStream(partition, reference));
         }
     }
 }
@@ -89,6 +84,6 @@ public record HubDataSource : HubDataSourceBase<HubDataSource>
         var reference = new CollectionsReference(
             TypeSources.Values.Select(ts => ts.CollectionName).ToArray()
         );
-        Streams = Streams.Add(Workspace.GetRemoteStream(Id, reference));
+        Streams = Streams.Add(Workspace.GetStream(Id, reference));
     }
 }

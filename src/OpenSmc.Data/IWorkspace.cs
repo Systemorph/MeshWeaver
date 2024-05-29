@@ -20,10 +20,6 @@ public interface IWorkspace : IAsyncDisposable
     void Rollback();
     WorkspaceState CreateState(EntityStore deserialize);
     internal void Initialize();
-    IChangeStream<TReduced> GetRemoteStream<TReduced>(
-        object address,
-        WorkspaceReference<TReduced> reference
-    );
     void Unsubscribe(object address, WorkspaceReference reference);
     internal DataChangeResponse RequestChange(
         DataChangedReqeust change,
