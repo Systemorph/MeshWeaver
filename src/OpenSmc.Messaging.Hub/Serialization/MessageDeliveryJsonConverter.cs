@@ -15,10 +15,12 @@ public class MessageDeliveryRawJsonConverter : JsonConverter<MessageDelivery<Raw
         var rawJson = new RawJson(content);
         var sender = node["sender"].Deserialize<object>(options);
         var target = node["target"].Deserialize<object>(options);
+        var properties = node["properties"]?.Deserialize<Dictionary<string, object>>(options) ?? [];
 
         var postOptions =
             new PostOptions(sender, null)
-                .WithTarget(target);
+                .WithTarget(target)
+                .WithProperties(properties);
         return new MessageDelivery<RawJson>(rawJson, postOptions);
     }
 
