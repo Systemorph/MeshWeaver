@@ -30,6 +30,16 @@ public class RawJsonTest : TestBase
     public void DeserializeToRawJson()
     {
         // arrange
+        var postOptions = new PostOptions(Client.Address, Client)
+            .WithTarget(new HostAddress())
+            .WithProperties(
+                new Dictionary<string, object>
+                {
+                    { "MyId", "394" },
+                    { "MyAddress", new ClientAddress() },
+                    { "MyId2", "22394" },
+                }
+            );
         var subscribeRequest = new SubscribeRequest(new CollectionReference("TestCollection"));
 
         // act
