@@ -1,5 +1,7 @@
-﻿using OpenSmc.Data;
+﻿using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Data;
 using OpenSmc.Fixture;
+using OpenSmc.Messaging;
 using Xunit.Abstractions;
 
 namespace OpenSmc.Serialization.Test;
@@ -14,7 +16,11 @@ public class RawJsonTest : TestBase
 
     public RawJsonTest(ITestOutputHelper output) : base(output)
     {
+        Services.AddSingleton(sp => sp.CreateMessageHub(new ClientAddress(), ConfigureClient));
     }
+
+    private static MessageHubConfiguration ConfigureClient(MessageHubConfiguration c)
+        => c;
 
     [Fact]
     public void DeserializeToRawJson()
