@@ -5,7 +5,6 @@ using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.DataBinding;
-using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
 
@@ -52,22 +51,33 @@ public static class LayoutExtensions
             )
             .WithTypes(typeof(MessageAndAddress), typeof(LayoutAreaReference), typeof(Binding));
 
-    public static IObservable<object> GetControl(
+    private static readonly string UiControlCollection = typeof(UiControl).FullName;
+
+    public static IObservable<UiControl> GetControlStream(
         this IChangeStream<EntityStore> changeItems,
         string area
     ) =>
-        ((IObservable<ChangeItem<EntityStore>>)changeItems)
-            .Select(i => i.Value.Reduce(new EntityReference(typeof(UiControl).FullName, area)))
-            .Where(x => x != null);
+        changeItems
+            .Select(i =>
+                i.Value.Collections.GetValueOrDefault(UiControlCollection)
+                    ?.Instances.GetValueOrDefault(area) as UiControl
+            );
+
+
+    public static async Task<UiControl> GetControl(this IChangeStream<EntityStore> changeItems,
+        string area) => await changeItems.GetControlStream(area).FirstAsync(x => x != null);
 
     public static UiControl GetControl(this EntityStore store, string area) =>
-        (UiControl)store.Reduce(new EntityReference(typeof(UiControl).FullName, area));
+        (UiControl)
+            store
+                .Collections.GetValueOrDefault(UiControlCollection)
+                ?.Instances.GetValueOrDefault(area);
 
-    public static IObservable<object> GetData(
+    public static IObservable<object> GetDataStream(
         this IChangeStream<EntityStore> changeItems,
         WorkspaceReference reference
     ) =>
-        ((IObservable<ChangeItem<EntityStore>>)changeItems)
+        changeItems
             .Select(i => i.Value.Reduce(reference))
             .Where(x => x != null);
 }

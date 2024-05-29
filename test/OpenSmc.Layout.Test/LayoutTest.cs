@@ -22,7 +22,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return base.ConfigureHost(configuration)
             .WithRoutes(r =>
-                r.RouteAddress<ClientAddress>((a, d) => d.Package(r.Hub.JsonSerializerOptions))
+                r.RouteAddress<ClientAddress>((_, d) => d.Package(r.Hub.JsonSerializerOptions))
             )
             .AddData(data =>
                 data.FromConfigurableDataSource(
@@ -61,7 +61,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     )
                     .WithView(
                         nameof(Counter),
-                        _ => layout.Hub.GetWorkspace().Stream.Select(x => Counter())
+                        _ => layout.Hub.GetWorkspace().Stream.Select(_ => Counter())
                     )
             );
     }
@@ -84,11 +84,11 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     .WithClickAction(context =>
                         context.Layout.Update(
                             $"{nameof(Counter)}/{nameof(Counter)}",
-                            Controls.HtmlView((++counter))
+                            Controls.Html((++counter))
                         )
                     )
             )
-            .WithView(nameof(Counter), Controls.HtmlView(counter.ToString()));
+            .WithView(nameof(Counter), Controls.Html(counter.ToString()));
     }
 
     protected override MessageHubConfiguration ConfigureClient(
@@ -129,7 +129,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             );
         }
 
-        return Controls.HtmlView("Report");
+        return Controls.Html("Report");
     }
 
     private static UiControl UpdatingView(Toolbar toolbar)
@@ -137,7 +137,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         return Controls
             .Stack()
             .WithView("Toolbar", Controls.Bind(toolbar, tb => Controls.TextBox(tb.Year)))
-            .WithView("Content", Controls.HtmlView($"Report for year {toolbar.Year}"));
+            .WithView("Content", Controls.Html($"Report for year {toolbar.Year}"));
     }
 
     [HubFact]
@@ -146,9 +146,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var reference = new LayoutAreaReference(StaticView);
 
         var workspace = GetClient().GetWorkspace();
-        var stream = workspace.GetRemoteStream(new HostAddress(), reference);
+        var stream = workspace.GetStream(new HostAddress(), reference);
 
-        var control = await stream.GetControl(reference.Area).FirstAsync();
+        var control = await stream.GetControl(reference.Area);
         var areas = control
             .Should()
             .BeOfType<LayoutStackControl>()
@@ -172,9 +172,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var reference = new LayoutAreaReference(nameof(ViewWithProgress));
 
         var workspace = GetClient().GetWorkspace();
-        var stream = workspace.GetRemoteStream(new HostAddress(), reference);
+        var stream = workspace.GetStream(new HostAddress(), reference);
         var controls = await stream
-            .GetControl(reference.Area)
+            .GetControlStream(reference.Area)
             .TakeUntil(o => o is HtmlControl)
             .ToArray();
         controls.Should().HaveCountGreaterThan(1).And.HaveCountLessThan(12);
@@ -187,17 +187,17 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetRemoteStream(new HostAddress(), reference);
+        var stream = workspace.GetStream(new HostAddress(), reference);
         var reportArea = $"{reference.Area}/Content";
-        var content = await stream.GetControl(reportArea).FirstAsync();
+        var content = await stream.GetControlStream(reportArea).FirstAsync();
         content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
 
         // Get toolbar and change value.
         var toolbarArea = $"{reference.Area}/Toolbar";
-        var toolbar = (TextBoxControl)await stream.GetControl(toolbarArea).FirstAsync();
+        var toolbar = (TextBoxControl)await stream.GetControlStream(toolbarArea).FirstAsync();
         toolbar.Data.Should().BeOfType<Binding>().Which.Path.Should().Be("$.year");
         var toolbarDataReference = toolbar.DataContext.Should().BeOfType<EntityReference>().Which;
-        var toolbarData = (Toolbar)await stream.GetData(toolbarDataReference).FirstAsync();
+        var toolbarData = (Toolbar)await stream.GetDataStream(toolbarDataReference).FirstAsync();
         toolbarData.Year.Should().Be(2024);
 
         stream.Update(ci => new Data.Serialization.ChangeItem<EntityStore>(
@@ -209,7 +209,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         ));
 
         var updatedControls = await stream
-            .GetControl(reportArea)
+            .GetControlStream(reportArea)
             .TakeUntil(o => o is HtmlControl html && !html.Data.ToString()!.Contains("2024"))
             .ToArray();
         updatedControls
@@ -228,16 +228,16 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetRemoteStream(new HostAddress(), reference);
+        var stream = workspace.GetStream(new HostAddress(), reference);
         var controlArea = $"{reference.Area}";
-        var content = await stream.GetControl(controlArea).FirstAsync();
+        var content = await stream.GetControlStream(controlArea).FirstAsync();
         var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
         var workspaceReferences = await itemTemplate
             .DataContext.Should()
             .BeAssignableTo<IEnumerable>()
             .Which.OfType<EntityReference>()
             .ToAsyncEnumerable()
-            .SelectAwait(async r => (DataRecord)await stream.GetData(r).FirstAsync())
+            .SelectAwait(async r => (DataRecord)await stream.GetDataStream(r).FirstAsync())
             .ToArrayAsync();
 
         itemTemplate.Data.Should().BeOfType<Binding>().Which.Path.Should().Be("$");
@@ -262,9 +262,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetRemoteStream(new HostAddress(), reference);
+        var stream = workspace.GetStream(new HostAddress(), reference);
         var buttonArea = $"{reference.Area}/Button";
-        var content = await stream.GetControl(buttonArea).FirstAsync();
+        var content = await stream.GetControlStream(buttonArea).FirstAsync();
         content
             .Should()
             .BeOfType<MenuItemControl>()
@@ -274,7 +274,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         stream.Post(new ClickedEvent(buttonArea));
         var counterArea = $"{reference.Area}/Counter";
         content = await stream
-            .GetControl(counterArea)
+            .GetControlStream(counterArea)
             .FirstAsync(x => x is HtmlControl html && html.Data is not "0");
         content.Should().BeOfType<HtmlControl>().Which.Data.Should().Be("1");
     }

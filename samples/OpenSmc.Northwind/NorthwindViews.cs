@@ -1,4 +1,6 @@
-﻿using OpenSmc.Layout;
+﻿using System.Reactive.Linq;
+using OpenSmc.Data;
+using OpenSmc.Layout;
 using OpenSmc.Messaging;
 using static OpenSmc.Layout.Controls;
 
@@ -10,23 +12,9 @@ public static class NorthwindViews
         this MessageHubConfiguration configuration
     )
     {
-        return configuration.AddLayout(layout => layout.WithView(nameof(Dashboard), Main()));
+        return configuration.AddLayout(layout => layout.WithView(nameof(Dashboard), Dashboard()));
     }
 
-    private static LayoutStackControl Main() =>
-        Stack().WithSkin(Skin.MainWindow).WithView(SideMenu());
-
-    private static LayoutStackControl SideMenu() =>
-        Stack()
-            .WithSkin(Skin.SideMenu)
-            .WithView(
-                Stack()
-                    .WithSkin(Skin.VerticalPanel)
-                    .WithView(
-                        Menu("Dashboard")
-                    // .WithClickAction(c => c.Layout.Render(MainContent, Dashboard())                            )
-                    )
-            );
 
     public static UiControl Dashboard()
     {
@@ -41,14 +29,13 @@ public static class NorthwindViews
                             .WithView(
                                 Stack()
                                     .WithSkin(Skin.HorizontalPanel)
-                                    .WithView(HtmlView("Total Orders"))
-                                    .WithView(HtmlView("100"))
-                            )
+                                    .WithView(Html("<h1>Total Orders</h1>")))
+                                    .OrdersDashboardTable()
                             .WithView(
                                 Stack()
                                     .WithSkin(Skin.HorizontalPanel)
-                                    .WithView(HtmlView("Total Customers"))
-                                    .WithView(HtmlView("100"))
+                                    .WithView(Html("Total Customers"))
+                                    .WithView(Html("100"))
                             )
                     )
                     .WithView(
@@ -57,17 +44,22 @@ public static class NorthwindViews
                             .WithView(
                                 Stack()
                                     .WithSkin(Skin.HorizontalPanel)
-                                    .WithView(HtmlView("Total Products"))
-                                    .WithView(HtmlView("100"))
+                                    .WithView(Html("Total Products"))
+                                    .WithView(Html("100"))
                             )
                             .WithView(
                                 Stack()
                                     .WithSkin(Skin.HorizontalPanel)
-                                    .WithView(HtmlView("Total Employees"))
-                                    .WithView(HtmlView("100"))
+                                    .WithView(Html("Total Employees"))
+                                    .WithView(Html("100"))
                             )
-                    )
-            );
+                        )
+                    );
+    }
+
+    private static LayoutStackControl OrdersDashboardTable(this LayoutStackControl stack)
+    {
+        return stack.WithView(area => area.Workspace.GetObservable<Order>().Select(x => x.OrderByDescending(y => y.OrderDate).Take(5)).DistinctUntilChanged());
     }
 
 

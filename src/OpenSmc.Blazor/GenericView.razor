@@ -11,12 +11,13 @@
     case LayoutAreaControl remoteView:
         <LayoutAreaView Control="@remoteView" Store="@Store" />
         break;
-
-        case LayoutStackControl stack:
+    
+    case LayoutStackControl stack:
         <LayoutStack Control="@stack" Store="@Store" />
         break;
+    
     case HtmlControl html:
-        <div>@((MarkupString)html.Data)</div>
+        <div>@((MarkupString)html.Data.ToString())</div>
         break;
 
     default:
