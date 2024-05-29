@@ -13,9 +13,10 @@ public class MessageDeliveryRawJsonConverter : JsonConverter<MessageDelivery<Raw
 
         var content = node["message"].ToJsonString();
         var rawJson = new RawJson(content);
+        var sender = node["sender"].Deserialize<object>(options);
 
         var postOptions =
-            new PostOptions(null, null);
+            new PostOptions(sender, null);
         return new MessageDelivery<RawJson>(rawJson, postOptions);
     }
 
