@@ -40,8 +40,9 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
         if (nameByType.TryGetValue(type, out var typeName))
             return typeName;
 
-        typeByName[type.FullName!] = type;
-        return nameByType[type] = type.FullName;
+        typeName = FormatType(type);
+        typeByName[typeName] = type;
+        return nameByType[type] = typeName;
     }
 
     public ITypeRegistry WithTypesFromAssembly(Type type, Func<Type, bool> filter) =>
