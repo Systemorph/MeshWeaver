@@ -23,6 +23,11 @@ public class RawJsonTest : TestBase
     public RawJsonTest(ITestOutputHelper output) : base(output)
     {
         Services.AddSingleton(sp => sp.CreateMessageHub(new ClientAddress(), ConfigureClient));
+        Services.AddMessageHubs(
+            new RouterAddress(),
+            hubConf =>
+                hubConf
+        );
     }
 
     private static MessageHubConfiguration ConfigureClient(MessageHubConfiguration c)
