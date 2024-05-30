@@ -26,25 +26,25 @@ public class LayoutManager
         layoutHub = hub.GetHostedHub(new LayoutExecutionAddress(hub.Address));
     }
 
-    private void RenderArea(string area, UiControl control)
+    private void RenderArea(string area, object viewModel)
     {
-        if (control == null)
+        if (viewModel == null)
             return;
 
-        if (control is LayoutStackControl stack)
+        if (viewModel is LayoutStackControl stack)
         {
             foreach (var ve in stack.ViewElements)
                 RenderArea($"{area}/{ve.Area}", ve);
-            control = stack with
+            viewModel = stack with
             {
                 Areas = stack.ViewElements.Select(ve => $"{area}/{ve.Area}").ToArray()
             };
         }
 
-        if (control.DataContext != null)
-            control = control with { DataContext = layoutArea.UpdateData(control.DataContext) };
+        if (viewModel is UiControl { DataContext: not null } control)
+            viewModel = control with { DataContext = layoutArea.UpdateData(control.DataContext) };
 
-        layoutArea.Update(area, control);
+        layoutArea.Update(area, viewModel);
     }
 
     private void RenderArea(string area, ViewElementWithViewDefinition viewDefinition)

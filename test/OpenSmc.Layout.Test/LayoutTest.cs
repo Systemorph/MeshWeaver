@@ -40,7 +40,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                         StaticView,
                         Controls.Stack().WithView("Hello", "Hello").WithView("World", "World")
                     )
-                    .WithViewDefinition(nameof(ViewWithProgress), ViewWithProgress)
+                    .WithView(nameof(ViewWithProgress), ViewWithProgress)
                     .WithView(
                         nameof(UpdatingView),
                         _ =>
