@@ -11,6 +11,7 @@ public static class SignalRExtensions
 
     public static IServiceCollection ConfigureApplicationSignalR(this IServiceCollection services)
     {
+        services.AddSingleton(sp => sp.CreateMessageHub(new SignalRAddress(), ConfigureSignalRHub));
         services.AddSignalR(o =>
             {
                 o.EnableDetailedErrors = true; // TODO: False for Prod environment (2021/05/14, Alexander Yolokhov)
