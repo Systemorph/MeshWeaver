@@ -56,13 +56,16 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
     }
 
     public static string FormatType(Type mainType)
+        => FormatType(mainType, t => t.GetGenericArguments().Select(FormatType));
+
+    public static string FormatType(Type mainOpenType, Func<Type, IEnumerable<string>> genericArgumentsGetter)
     {
-        var mainTypeName = (mainType.FullName ?? mainType.Name).Replace('\u002B', '.');
-        if (!mainType.IsGenericType)
+        var mainTypeName = (mainOpenType.FullName ?? mainOpenType.Name).Replace('\u002B', '.');
+        if (!mainOpenType.IsGenericType)
             return mainTypeName;
 
         var text =
-            $"{mainTypeName[..mainTypeName.IndexOf('`')]}[{string.Join(',', mainType.GetGenericArguments().Select(FormatType))}]";
+            $"{mainTypeName[..mainTypeName.IndexOf('`')]}[{string.Join(',', genericArgumentsGetter(mainOpenType))}]";
         return text;
     }
 }
