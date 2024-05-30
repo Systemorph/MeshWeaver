@@ -18,7 +18,7 @@ public static class SignalRExtensions
                 o.EnableDetailedErrors = true; // TODO: False for Prod environment (2021/05/14, Alexander Yolokhov)
                 o.MaximumReceiveMessageSize = 400000; // TODO: see what's recommended size (2021/12/07, Alexander Kravets)
             })
-            .AddJsonProtocolFromHub((o, hub) =>
+            .AddJsonProtocolFrom((JsonHubProtocolOptions o, IMessageHub<SignalRAddress> hub) =>
             {
                 o.PayloadSerializerOptions = hub.JsonSerializerOptions;
             });
