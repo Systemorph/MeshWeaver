@@ -37,7 +37,7 @@ public class SignalRClientPlugin : MessageHubPlugin
         if (Debugger.IsAttached)
             Connection.ServerTimeout = signalRServerDebugTimeout;
 
-        onMessageReceivedSubscription = Connection.On<MessageDelivery<RawJson>>("HandleEvent", args =>
+        onMessageReceivedSubscription = Connection.On<IMessageDelivery>("HandleEvent", args =>
         {
             Hub.DeliverMessage(args);
         });
