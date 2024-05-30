@@ -16,7 +16,7 @@ public class MessageDeliveryRawJsonConverter : JsonConverter<MessageDelivery<Raw
         var sender = node["sender"].Deserialize<object>(options);
         var target = node["target"].Deserialize<object>(options);
         var properties = node["properties"]?.Deserialize<Dictionary<string, object>>(options) ?? [];
-        var state = node["state"].GetValue<string>();
+        var state = node["state"]?.GetValue<string>();
         var id = node["id"]?.GetValue<string>();
 
         var postOptions =
@@ -24,15 +24,22 @@ public class MessageDeliveryRawJsonConverter : JsonConverter<MessageDelivery<Raw
                 .WithTarget(target)
                 .WithProperties(properties);
         return string.IsNullOrWhiteSpace(id)
-            ? new MessageDelivery<RawJson>(rawJson, postOptions)
-                {
-                    State = state,
-                }
-            : new MessageDelivery<RawJson>(rawJson, postOptions)
-                {
-                    State = state,
-                    Id = id,
-                };
+            ? string.IsNullOrWhiteSpace(state)
+                ? new MessageDelivery<RawJson>(rawJson, postOptions)
+                : new MessageDelivery<RawJson>(rawJson, postOptions)
+                    {
+                        State = state,
+                    }
+            : string.IsNullOrWhiteSpace(state)
+                ? new MessageDelivery<RawJson>(rawJson, postOptions)
+                    {
+                        Id = id,
+                    }
+                : new MessageDelivery<RawJson>(rawJson, postOptions)
+                    {
+                        State = state,
+                        Id = id,
+                    };
     }
 
     public override void Write(Utf8JsonWriter writer, MessageDelivery<RawJson> value, JsonSerializerOptions options)
