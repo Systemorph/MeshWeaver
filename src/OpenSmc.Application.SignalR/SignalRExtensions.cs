@@ -48,3 +48,5 @@ public static class SignalRExtensions
         return app;
     }
 }
+
+public record SignalRAddress;
