@@ -43,5 +43,25 @@ public class MessageDeliveryRawJsonConverter : JsonConverter<MessageDelivery<Raw
     }
 
     public override void Write(Utf8JsonWriter writer, MessageDelivery<RawJson> value, JsonSerializerOptions options)
-        => throw new NotImplementedException();
+    {
+        writer.WriteStartObject();
+        writer.WritePropertyName("message");
+        if (string.IsNullOrWhiteSpace(value.Message?.Content))
+            writer.WriteNullValue();
+        else
+            writer.WriteRawValue(value.Message.Content);
+
+        writer.WritePropertyName("sender");
+        JsonSerializer.SerializeToNode(value.Sender, value.Sender.GetType(), options)!.WriteTo(writer);
+        writer.WritePropertyName("target");
+        JsonSerializer.SerializeToNode(value.Target, value.Target.GetType(), options)!.WriteTo(writer);
+        writer.WritePropertyName("properties");
+        JsonSerializer.SerializeToNode(value.Properties, value.Properties.GetType(), options)!.WriteTo(writer);
+        writer.WritePropertyName("state");
+        writer.WriteStringValue(value.State);
+        writer.WritePropertyName("id");
+        writer.WriteStringValue(value.Id);
+
+        writer.WriteEndObject();
+    }
 }
