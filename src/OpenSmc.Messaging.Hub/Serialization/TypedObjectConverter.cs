@@ -107,7 +107,7 @@ public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry, Type excl
             new TypedObjectSerializeConverter(typeRegistry, value.GetType())
         );
         var serialized = JsonSerializer.SerializeToNode(value, value.GetType(), clonedOptions);
-        if (serialized is JsonObject obj && value is not IDictionary)
+        if (serialized is JsonObject obj && value is not IDictionary && !obj.ContainsKey(TypeProperty))
             obj[TypeProperty] = typeRegistry.GetOrAddTypeName(value.GetType());
         ;
 
