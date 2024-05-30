@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 
 namespace OpenSmc.Application.SignalR;
 
@@ -50,7 +51,8 @@ public static class SignalRExtensions
     }
 
     private static MessageHubConfiguration ConfigureSignalRHub(MessageHubConfiguration conf)
-        => conf;
+        => conf
+            .WithTypes(typeof(UiAddress), typeof(ApplicationAddress));
 }
 
 public record SignalRAddress;
