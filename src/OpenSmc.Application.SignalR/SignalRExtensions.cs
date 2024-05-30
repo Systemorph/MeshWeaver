@@ -47,6 +47,9 @@ public static class SignalRExtensions
 
         return app;
     }
+
+    private static MessageHubConfiguration ConfigureSignalRHub(MessageHubConfiguration conf)
+        => conf;
 }
 
 public record SignalRAddress;
