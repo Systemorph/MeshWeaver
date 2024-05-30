@@ -1,8 +1,8 @@
 ﻿namespace OpenSmc.Layout.Composition;
 
-public delegate Task<UiControl> ViewDefinition(LayoutArea area);
+public delegate Task<object> ViewDefinition(LayoutArea area);
 
-public delegate IObservable<UiControl> ViewStream(LayoutArea area);
+public delegate IObservable<object> ViewStream(LayoutArea area);
 
 public abstract record ViewElement(string Area);
 

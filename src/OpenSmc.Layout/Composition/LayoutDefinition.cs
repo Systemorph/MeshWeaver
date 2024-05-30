@@ -25,15 +25,12 @@ public record LayoutDefinition(IMessageHub Hub)
 
     public LayoutDefinition WithView(
         string area,
-        Func<LayoutArea, IObservable<UiControl>> generator
+        Func<LayoutArea, IObservable<object>> generator
     ) =>
         WithViewGenerator(
             r => r.Area == area,
             new ViewElementWithViewStream(area, a => generator(a))
         );
-
-    public LayoutDefinition WithViewDefinition(string area, Func<LayoutArea, object> generator) =>
-        WithViewDefinition(area, Observable.Return(generator));
 
     public LayoutDefinition WithViewDefinition(
         string area,
@@ -59,32 +56,16 @@ public record LayoutDefinition(IMessageHub Hub)
             r => r.Area == area,
             new ViewElementWithViewDefinition(
                 area,
-                generator.Select(x => (ViewDefinition)(async a => ControlsManager.Get(await x(a))))
+                generator.Cast<ViewDefinition>()
             )
         );
 
-    public LayoutDefinition WithViewDefinition(
-        string area,
-        Func<LayoutArea, UiControl> generator
-    ) =>
-        WithViewDefinition(
-            area,
-            (Func<LayoutArea, Task<UiControl>>)(a => Task.FromResult(generator.Invoke(a)))
-        );
 
     public LayoutDefinition WithViewDefinition(
         string area,
         Func<LayoutArea, Task<UiControl>> generator
     ) => WithViewDefinition(area, Observable.Return(generator));
 
-    public LayoutDefinition WithViewDefinition(
-        string area,
-        IObservable<Func<LayoutArea, Task<UiControl>>> generator
-    ) =>
-        WithViewGenerator(
-            r => r.Area == area,
-            new ViewElementWithViewDefinition(area, generator.Select(x => (ViewDefinition)x.Invoke))
-        );
 
     public LayoutDefinition WithViewDefinition(string area, ViewDefinition generator) =>
         WithViewDefinition(area, Observable.Return(generator));
@@ -96,6 +77,12 @@ public record LayoutDefinition(IMessageHub Hub)
 
     public LayoutDefinition WithView(string area, object view) =>
         WithViewGenerator(r => r.Area == area, new ViewElementWithView(area, view));
+    public LayoutDefinition WithView(string area, Func<LayoutArea, Task<object>> view)
+    {
+        return WithViewGenerator(r => r.Area == area,
+            new ViewElementWithViewDefinition(area, Observable.Return<ViewDefinition>(view.Invoke)));
+    }
+
 
     internal ImmutableList<Func<CancellationToken, Task>> Initializations { get; init; } =
         ImmutableList<Func<CancellationToken, Task>>.Empty;

@@ -20,12 +20,12 @@ public record LayoutArea
         new();
     public readonly IWorkspace Workspace;
 
-    public void Update(string area, UiControl control)
+    public void Update(string area, object control)
     {
         updateStream.OnNext(ws => UpdateImpl(area, control, ws));
     }
 
-    private ChangeItem<EntityStore> UpdateImpl(string area, UiControl control, ChangeItem<EntityStore> ws)
+    private ChangeItem<EntityStore> UpdateImpl(string area, object control, ChangeItem<EntityStore> ws)
     {
         return ws.SetValue(ws.Value.Update(ControlsCollection, i => i.SetItem(area, control)));
     }
