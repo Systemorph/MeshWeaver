@@ -2,8 +2,11 @@
 @typeparam TViewModel
 
 @code {
-    [Parameter] public TViewModel ViewModel { get; set; }
-
-    [Parameter] public IChangeStream<EntityStore, LayoutAreaReference> Stream { get; set; }
+    [Parameter] 
+    public TViewModel ViewModel { get; set; }
+    [Parameter] 
+    public IChangeStream<EntityStore, LayoutAreaReference> Stream { get; set; }
+    [Parameter] 
+    public string Area { get; set; }
 
 }

@@ -10,7 +10,7 @@ public partial class DispatchView
     public override async Task SetParametersAsync(ParameterView parameters)
     {
         await base.SetParametersAsync(parameters);
-        var client = Hub.ServiceProvider.GetRequiredService<IBlazorClient>();
-        ViewDescriptor = client.GetViewDescriptor(ViewModel, Stream);
+        var client = Hub.ServiceProvider.GetRequiredService<IBlazorServer>();
+        ViewDescriptor = client.GetViewDescriptor(ViewModel, Stream, Area);
     }
 }

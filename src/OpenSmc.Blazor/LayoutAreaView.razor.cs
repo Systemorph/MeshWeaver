@@ -7,7 +7,7 @@ using OpenSmc.Messaging;
 
 namespace OpenSmc.Blazor;
 
-public partial class LayoutAreaView : IDisposable
+public partial class LayoutAreaView
 {
     [Inject]
     private IMessageHub Hub { get; set; }
@@ -15,8 +15,6 @@ public partial class LayoutAreaView : IDisposable
     private ILogger<LayoutAreaView> Logger { get; set; }
 
     private IWorkspace Workspace => Hub.GetWorkspace();
-
-    private readonly List<IDisposable> disposables = new();
 
     [Parameter(CaptureUnmatchedValues = true)]
     public Dictionary<string, object> AdditionalParameters { get; set; }
@@ -63,15 +61,7 @@ public partial class LayoutAreaView : IDisposable
         Stream = Address.Equals(Hub.Address)
             ? Workspace.GetStream<EntityStore, LayoutAreaReference>(Reference)
             : Workspace.GetStream<EntityStore, LayoutAreaReference>(Address, Reference);
-        disposables.Add(Stream);
+        Disposables.Add(Stream);
         Stream.Subscribe(item => InvokeAsync(() => Render(item)));
-    }
-
-
-    public void Dispose()
-    {
-        foreach (var disposable in disposables)
-            disposable.Dispose();
-        disposables.Clear();
     }
 }
