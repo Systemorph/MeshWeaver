@@ -69,7 +69,7 @@ public static class LayoutExtensions
 
     public static object GetControl(this EntityStore store, string area) =>
             store
-                .Collections.GetValueOrDefault(UiControlCollection)
+                .Collections.GetValueOrDefault(LayoutAreaReference.CollectionName)
                 ?.Instances.GetValueOrDefault(area);
 
     public static IObservable<object> GetDataStream(

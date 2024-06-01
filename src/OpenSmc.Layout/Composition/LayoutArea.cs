@@ -10,7 +10,6 @@ namespace OpenSmc.Layout.Composition;
 
 public record LayoutArea
 {
-    public static readonly string ControlsCollection = typeof(UiControl).FullName;
 
     public ReplaySubject<ChangeItem<EntityStore>> Stream { get; } = new(1);
     public LayoutAreaReference Reference { get; init; }
@@ -26,7 +25,7 @@ public record LayoutArea
 
     private ChangeItem<EntityStore> UpdateImpl(string area, object control, ChangeItem<EntityStore> ws)
     {
-        return ws.SetValue(ws.Value.Update(ControlsCollection, i => i.SetItem(area, control)));
+        return ws.SetValue(ws.Value.Update(LayoutAreaReference.CollectionName, i => i.SetItem(area, control)));
     }
 
     public LayoutArea(LayoutAreaReference Reference, IMessageHub hub)

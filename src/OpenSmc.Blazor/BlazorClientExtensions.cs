@@ -10,14 +10,14 @@ public static class BlazorClientExtensions
         config.AddBlazorClient(x => x);
 
     public static MessageHubConfiguration AddBlazorClient(this MessageHubConfiguration config,
-        Func<BlazorClientConfiguration, BlazorClientConfiguration> configuration)
+        Func<BlazorConfiguration, BlazorConfiguration> configuration)
     {
         return config
-            .WithServices(services => services.AddScoped<IBlazorClient, BlazorClient>())
+            .WithServices(services => services.AddScoped<IBlazorServer, BlazorServer>())
             .Set(config.GetConfigurationFunctions().Add(configuration));
     }
 
-    internal static ImmutableList<Func<BlazorClientConfiguration, BlazorClientConfiguration>> GetConfigurationFunctions(this MessageHubConfiguration config)
-        => config.Get<ImmutableList<Func<BlazorClientConfiguration, BlazorClientConfiguration>>>() 
-           ?? ImmutableList<Func<BlazorClientConfiguration, BlazorClientConfiguration>>.Empty;
+    internal static ImmutableList<Func<BlazorConfiguration, BlazorConfiguration>> GetConfigurationFunctions(this MessageHubConfiguration config)
+        => config.Get<ImmutableList<Func<BlazorConfiguration, BlazorConfiguration>>>() 
+           ?? ImmutableList<Func<BlazorConfiguration, BlazorConfiguration>>.Empty;
 }
