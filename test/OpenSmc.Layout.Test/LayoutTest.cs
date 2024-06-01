@@ -63,16 +63,17 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                         nameof(Counter),
                         _ => layout.Hub.GetWorkspace().Stream.Select(_ => Counter())
                     )
+                    .WithView("int", 3)
             );
     }
 
-    private UiControl ItemTemplate(IReadOnlyCollection<DataRecord> data) =>
+    private object ItemTemplate(IReadOnlyCollection<DataRecord> data) =>
         Controls.Bind(
             data,
             record => Controls.TextBox(record.DisplayName).WithId(record.SystemName)
         );
 
-    private UiControl Counter()
+    private object Counter()
     {
         int counter = 0;
         return Controls
@@ -277,6 +278,19 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .GetControlStream(counterArea)
             .FirstAsync(x => x is HtmlControl html && html.Data is not "0");
         content.Should().BeOfType<HtmlControl>().Which.Data.Should().Be("1");
+    }
+
+    [HubFact]
+    public async Task IntView()
+    {
+        var reference = new LayoutAreaReference("int");
+
+        var hub = GetClient();
+        var workspace = hub.GetWorkspace();
+        var stream = workspace.GetStream(new HostAddress(), reference);
+        var controlArea = $"{reference.Area}";
+        var content = await stream.GetControlStream(controlArea).FirstAsync();
+        content.Should().Be(3);
     }
 }
 

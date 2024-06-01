@@ -64,11 +64,10 @@ public static class LayoutExtensions
             );
 
 
-    public static async Task<UiControl> GetControl(this IChangeStream<EntityStore> changeItems,
+    public static async Task<object> GetControl(this IChangeStream<EntityStore> changeItems,
         string area) => await changeItems.GetControlStream(area).FirstAsync(x => x != null);
 
-    public static UiControl GetControl(this EntityStore store, string area) =>
-        (UiControl)
+    public static object GetControl(this EntityStore store, string area) =>
             store
                 .Collections.GetValueOrDefault(UiControlCollection)
                 ?.Instances.GetValueOrDefault(area);

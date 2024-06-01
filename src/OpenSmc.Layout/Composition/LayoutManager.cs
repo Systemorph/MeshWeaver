@@ -67,7 +67,7 @@ public class LayoutManager
         switch (viewElement)
         {
             case ViewElementWithView view:
-                RenderArea(area, LayoutDefinition.ControlsManager.Get(view.View));
+                RenderArea(area, view.View);
                 break;
             case ViewElementWithViewDefinition viewDefinition:
                 RenderArea(area, viewDefinition);
@@ -91,14 +91,15 @@ public class LayoutManager
             changeStream.Hub.Register<ClickedEvent>(
                 (request) =>
                 {
-                    var control = changeStream.Current.Value.GetControl(request.Message.Area);
-                    if (control == null)
+                    var view = changeStream.Current.Value.GetControl(request.Message.Area);
+                    if (view == null)
                         return request.Ignored();
                     try
                     {
-                        control.ClickAction.Invoke(
-                            new(request.Message.Payload, LayoutDefinition.Hub, layoutArea)
-                        );
+                        if (view is UiControl control)
+                            control.ClickAction.Invoke(
+                                new(request.Message.Payload, LayoutDefinition.Hub, layoutArea)
+                            );
                     }
                     catch (Exception e)
                     {

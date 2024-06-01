@@ -1,14 +1,12 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using OpenSmc.Data;
-using OpenSmc.Layout.Conventions;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Layout.Composition;
 
 public record LayoutDefinition(IMessageHub Hub)
 {
-    internal UiControl InitialState { get; init; }
     internal ImmutableList<ViewGenerator> ViewGenerators { get; init; } =
         ImmutableList<ViewGenerator>.Empty;
 
@@ -17,11 +15,6 @@ public record LayoutDefinition(IMessageHub Hub)
         Func<LayoutAreaReference, bool> filter,
         ViewElement viewElement
     ) => this with { ViewGenerators = ViewGenerators.Add(new(filter, viewElement)) };
-
-    public LayoutDefinition WithViewStream(
-        string area,
-        Func<LayoutArea, IObservable<object>> generator
-    ) => WithView(area, a => generator.Invoke(a).Select(o => ControlsManager.Get(o)));
 
     public LayoutDefinition WithView(
         string area,
@@ -93,13 +86,6 @@ public record LayoutDefinition(IMessageHub Hub)
             Initializations = Initializations.Add(func)
         };
 
-    internal UiControlsManager ControlsManager { get; } = new();
-
-    public LayoutDefinition WithUiControls(Action<UiControlsManager> configuration)
-    {
-        configuration.Invoke(ControlsManager);
-        return this;
-    }
 
     internal ViewElement GetViewElement(LayoutAreaReference reference)
     {

@@ -1,19 +1,21 @@
-<div>
-    @if(RootControl == null)
-    {
-        <p>Loading data from @Address for Area @Reference.Area</p>
-    }
-    else
-    {
-        <GenericView Control="@RootControl" Store="@Store"/>
-    }
-</div>
-@code{
-    [Parameter]
-    public LayoutAreaControl Control { get; set; } = null;
+@using OpenSmc.Data.Serialization
+@inherits BlazorView<LayoutAreaControl>
 
-    [Parameter]
-    public EntityStore Store { get; set; }
+
+@if (RootControl == null)
+{
+    <div style="width: 600px; display: grid; grid-gap: 3px; grid-auto-flow: row;">
+        <div>Connecting to <b> @Address </b></div>
+        <div>Fetching <b>@Reference.Area</b></div>
+        <FluentProgress></FluentProgress>
+    </div>
+}
+else
+{
+    <DispatchView ViewModel="@RootControl" Stream="@Stream"/>
+}
+
+@code{
 
     [Parameter]
     public object Address { get; set; }
@@ -21,7 +23,6 @@
     [Parameter]
     public LayoutAreaReference Reference { get; set; }
 
-//    [Parameter]
-    public UiControl RootControl { get; set; }
+    private object RootControl { get; set; } = null;
 
 }

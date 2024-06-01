@@ -32,8 +32,4 @@ public static class HostBuilderExtensions
             new MessageHubServiceProviderFactory(address, configuration)
         );
     }
-    // public static IHostBuilder UseOpenSmc(this IHostBuilder hostBuilder)
-    // {
-    //     return hostBuilder.UseServiceProviderFactory(new MessageHubServiceProviderFactory());
-    // }
 }
