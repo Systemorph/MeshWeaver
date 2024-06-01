@@ -1,7 +1,2 @@
-﻿<button onclick="HandleClick">@Control.Title</button>
-
-@code{
-    [Parameter]
-    public MenuItemControl Control { get; set; }
-
-}
+﻿<button>@ViewModel.Title</button>
+@inherits BlazorView<MenuItemControl>

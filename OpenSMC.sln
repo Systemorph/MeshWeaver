@@ -168,7 +168,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Northwind.Host", "s
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Blazor", "src\OpenSmc.Blazor\OpenSmc.Blazor.csproj", "{3AC5191B-50A6-464D-B03E-AF2366E9FD00}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenSmc.Northwind.Views", "samples\OpenSmc.Northwind.Views\OpenSmc.Northwind.Views.csproj", "{F8B58D07-FBAA-4F9C-8B9B-9AD437A51128}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Northwind.Views", "samples\OpenSmc.Northwind.Views\OpenSmc.Northwind.Views.csproj", "{F8B58D07-FBAA-4F9C-8B9B-9AD437A51128}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

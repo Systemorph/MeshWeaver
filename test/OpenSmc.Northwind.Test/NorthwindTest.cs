@@ -116,11 +116,11 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var stream = workspace.GetStream(new HostAddress(), new LayoutAreaReference(viewName));
         var dashboard = (await stream.GetControl(viewName)).Should().BeOfType<LayoutStackControl>().Subject;
         var areas = dashboard.Areas;
-        var controls = new List<KeyValuePair<string, UiControl>>();
+        var controls = new List<KeyValuePair<string, object>>();
 
         while (areas.Count > 0)
         {
-            var children = await areas.ToAsyncEnumerable().SelectAwait(async s => new KeyValuePair<string,UiControl>(s, await stream.GetControl(s))).ToArrayAsync();
+            var children = await areas.ToAsyncEnumerable().SelectAwait(async s => new KeyValuePair<string,object>(s, await stream.GetControl(s))).ToArrayAsync();
             controls.AddRange(children);
             areas = children.SelectMany(c => (c.Value as LayoutStackControl)?.Areas ?? Enumerable.Empty<string>()).ToArray();
         }

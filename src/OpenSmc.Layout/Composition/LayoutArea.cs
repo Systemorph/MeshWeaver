@@ -10,7 +10,6 @@ namespace OpenSmc.Layout.Composition;
 
 public record LayoutArea
 {
-    private readonly LayoutDefinition definition;
     public static readonly string ControlsCollection = typeof(UiControl).FullName;
 
     public ReplaySubject<ChangeItem<EntityStore>> Stream { get; } = new(1);
@@ -30,9 +29,8 @@ public record LayoutArea
         return ws.SetValue(ws.Value.Update(ControlsCollection, i => i.SetItem(area, control)));
     }
 
-    public LayoutArea(LayoutAreaReference Reference, IMessageHub hub, LayoutDefinition definition)
+    public LayoutArea(LayoutAreaReference Reference, IMessageHub hub)
     {
-        this.definition = definition;
         this.Reference = Reference;
         Workspace = hub.GetWorkspace();
         updateStream
@@ -67,10 +65,6 @@ public record LayoutArea
         return new EntityReference(typeSource.CollectionName, id);
     }
 
-    public UiControl GetControl(object instance)
-    {
-        return definition.ControlsManager.Get(instance);
-    }
 
     private readonly ConcurrentDictionary<string, List<IDisposable>> disposablesByArea = new();
     public void AddDisposable(string area, IDisposable disposable)

@@ -1,0 +1,23 @@
+@using OpenSmc.Data.Serialization
+@inherits BlazorView<object>
+
+<p>Rendering @ViewModel</p>
+
+
+@* @((RenderFragment) (builder =>
+{
+    builder.OpenComponent(0, ViewDescriptor.Type);
+    var index = 0;
+    foreach (var parameter in ViewDescriptor.Parameters)
+    {
+        builder.AddAttribute(++index, parameter.Key, parameter.Value);
+    }
+    builder.CloseComponent();
+}))
+ *@
+@code
+{
+    private ViewDescriptor ViewDescriptor { get; set; }
+}
+
+

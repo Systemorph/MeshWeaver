@@ -1,5 +1,4 @@
-﻿// ReSharper disable once CheckNamespace
-namespace OpenSmc.TypeRelevance;
+﻿namespace OpenSmc.Layout;
 
 public class SortByTypeRelevanceRegistry<T>
 {

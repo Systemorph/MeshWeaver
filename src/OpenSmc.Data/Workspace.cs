@@ -43,12 +43,9 @@ public class Workspace : IWorkspace
 
     private record AddressAndReference(object Address, object Reference);
 
-    private readonly ConcurrentDictionary<
-        (object Id, object WorkspaceReference),
-        IChangeStream
-    > streams = new();
-    private ConcurrentDictionary<AddressAndReference, IDisposable> subscriptions = new();
-    private ConcurrentDictionary<AddressAndReference, IChangeStream> externalClientStreams = new();
+    private readonly ConcurrentDictionary<WorkspaceReference, IChangeStream> streams = new();
+    private readonly ConcurrentDictionary<AddressAndReference, IDisposable> subscriptions = new();
+    private readonly ConcurrentDictionary<AddressAndReference, IChangeStream> externalClientStreams = new();
 
     private readonly IActivityService activityService;
 
@@ -78,14 +75,9 @@ public class Workspace : IWorkspace
         TReference reference
     )
         where TReference : WorkspaceReference<TReduced> =>
-        (IChangeStream<TReduced, TReference>)
-            externalClientStreams.GetOrAdd(
-                new(address, reference),
-                _ =>
-                    Hub.Address.Equals(address)
-                        ? CreateInternalChangeStream<TReduced, TReference>(reference)
-                        : CreateExternalClientChangeStream<TReduced, TReference>(address, reference)
-            );
+        Hub.Address.Equals(address)
+            ? GetInternalChangeStream<TReduced, TReference>(reference)
+            : GetExternalClientChangeStream<TReduced, TReference>(address, reference);
 
     private IChangeStream<TReduced, TReference> CreateChangeStream<TReduced, TReference>(
         object id,
@@ -99,27 +91,29 @@ public class Workspace : IWorkspace
             this,
             ReduceManager.ReduceTo<TReduced>()
         );
-        ret.AddDisposable(new AnonymousDisposable(() => streams.Remove((id, reference), out _)));
         return ret;
     }
 
-    private IChangeStream<TReduced, TReference> CreateInternalChangeStream<TReduced, TReference>(
+    private IChangeStream<TReduced, TReference> GetInternalChangeStream<TReduced, TReference>(
         TReference reference
     )
         where TReference : WorkspaceReference<TReduced>
     {
-        var ret = CreateChangeStream<TReduced, TReference>(Hub.Address, reference);
+        var ret = (IChangeStream<TReduced, TReference>)streams.GetOrAdd(reference, _ => CreateChangeStream<TReduced, TReference>(Hub.Address, reference));
+        ret.AddDisposable(new AnonymousDisposable(() => streams.Remove(reference, out _)));
         ret = ReduceManager.ReduceStream(ret, stream, reference);
         return ret;
     }
 
-    private IChangeStream<TReduced, TReference> CreateExternalClientChangeStream<
+    private IChangeStream<TReduced, TReference> GetExternalClientChangeStream<
         TReduced,
         TReference
     >(object address, TReference reference)
         where TReference : WorkspaceReference<TReduced>
     {
-        var ret = CreateChangeStream<TReduced, TReference>(address, reference);
+        var key = new AddressAndReference(address, reference);
+        var ret = (IChangeStream<TReduced, TReference>)externalClientStreams.GetOrAdd(key, _ => CreateChangeStream<TReduced, TReference>(address, reference));
+        ret.AddDisposable(new AnonymousDisposable(() => externalClientStreams.Remove(key, out _)));
         var myStream = GetStream(reference);
 
         if (myStream != null)
@@ -263,7 +257,7 @@ public class Workspace : IWorkspace
         object address,
         WorkspaceReference<TReduced> reference
     ) =>
-        SubscribToClientMethod
+        SubscribeToClientMethod
             .MakeGenericMethod(typeof(TReduced), reference.GetType())
             .Invoke(this, [address, reference]);
 
@@ -288,7 +282,7 @@ public class Workspace : IWorkspace
         where TReference : WorkspaceReference<TReduced> =>
         GetStream<TReduced, TReference>(address, reference);
 
-    private static readonly MethodInfo SubscribToClientMethod =
+    private static readonly MethodInfo SubscribeToClientMethod =
         ReflectionHelper.GetMethodGeneric<Workspace>(x =>
             x.SubscribeToClient<object, WorkspaceReference<object>>(default, default)
         );
@@ -333,35 +327,5 @@ public class Workspace : IWorkspace
         Current = change(Current.Value);
     }
 
-    private ChangeItem<WorkspaceState> Update(
-        WorkspaceState s,
-        ChangeItem<WorkspaceState> changeItem
-    )
-    {
-        activityService.Start(ActivityCategory.DataUpdate);
-        activityService.LogInformation(
-            "Updating workspace state from resource {changedBy}",
-            changeItem.ChangedBy
-        );
-        var newElement = GetUpdatedState(s, changeItem);
-        return newElement with { Log = activityService.Finish() };
-    }
 
-    private ChangeItem<WorkspaceState> GetUpdatedState(
-        WorkspaceState existing,
-        ChangeItem<WorkspaceState> changeItem
-    )
-    {
-        return changeItem with
-        {
-            Value = changeItem.Value with
-            {
-                Store =
-                    existing == null
-                        ? changeItem.Value.Store
-                        : existing.Store.Merge(changeItem.Value.Store),
-                Version = Hub.Version
-            }
-        };
-    }
 }

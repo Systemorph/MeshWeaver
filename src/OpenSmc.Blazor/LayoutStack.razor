@@ -1,18 +1,15 @@
-<div id ="@Control.Id">
-    @foreach(var area in Control.Areas){
+@using OpenSmc.Data.Serialization
+@inherits BlazorView<LayoutStackControl>
+<div id ="@ViewModel.Id">
+    @foreach(var area in ViewModel.Areas){
         <p>Rendering area @area</p>
-        <GenericView Control="GetArea(area)" Store="@Store"/>
+        <DispatchView ViewModel="GetArea(area)" Stream="@Stream"/>
     }
 </div>
 
 
 @code{
 
-    [Parameter]
-    public LayoutStackControl Control { get; set; }
-    [Parameter]
-    public EntityStore Store { get; set; }
-
-    UiControl GetArea(string area) => Store?.GetControl(area);
+    object GetArea(string area) => Stream?.GetControl(area);
 
 }

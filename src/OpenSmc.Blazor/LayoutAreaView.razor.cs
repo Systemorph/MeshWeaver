@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.Logging;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Layout;
@@ -9,7 +10,9 @@ namespace OpenSmc.Blazor;
 public partial class LayoutAreaView : IDisposable
 {
     [Inject]
-    IMessageHub Hub { get; set; }
+    private IMessageHub Hub { get; set; }
+    [Inject] 
+    private ILogger<LayoutAreaView> Logger { get; set; }
 
     private IWorkspace Workspace => Hub.GetWorkspace();
 
@@ -21,10 +24,10 @@ public partial class LayoutAreaView : IDisposable
     public override async Task SetParametersAsync(ParameterView parameters)
     {
         await base.SetParametersAsync(parameters);
-        if (Control != null)
+        if (ViewModel != null)
         {
-            Address ??= Control.Address;
-            Reference ??= Control.Reference;
+            Address ??= ViewModel.Address;
+            Reference ??= ViewModel.Reference;
         }
 
         if (Address == null)
@@ -32,20 +35,38 @@ public partial class LayoutAreaView : IDisposable
         if (Reference == null)
             throw new ArgumentNullException(nameof(Reference), "Reference cannot be null.");
 
-        var changeStream = Address.Equals(Hub.Address)
-            ? Workspace.GetStream<EntityStore, LayoutAreaReference>(Reference)
-            : Workspace.GetStream<EntityStore, LayoutAreaReference>(Address, Reference);
-        disposables.Add(changeStream);
-        changeStream.Subscribe(Render);
-        await changeStream.Initialized;
     }
 
     private void Render(ChangeItem<EntityStore> item)
     {
-        Store = item.Value;
-        RootControl = Store.GetControl(Reference.Area);
-        InvokeAsync(StateHasChanged);
+        var newControl = item.Value.GetControl(Reference.Area);
+        if(newControl==null)
+            if(RootControl == null)
+                return;
+            else
+            {
+                RootControl = null;
+                StateHasChanged();
+                return;
+            }
+
+        if(newControl.Equals(RootControl))
+            return;
+        Logger.LogDebug("Changing area {Reference} of {Address} to {Instance}", Reference, Address, newControl);
+        RootControl = newControl;
+        StateHasChanged();
     }
+
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        Stream = Address.Equals(Hub.Address)
+            ? Workspace.GetStream<EntityStore, LayoutAreaReference>(Reference)
+            : Workspace.GetStream<EntityStore, LayoutAreaReference>(Address, Reference);
+        disposables.Add(Stream);
+        Stream.Subscribe(item => InvokeAsync(() => Render(item)));
+    }
+
 
     public void Dispose()
     {

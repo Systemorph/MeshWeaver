@@ -30,7 +30,7 @@ public sealed class LayoutPlugin : MessageHubPlugin, ILayout
     public IChangeStream<EntityStore, LayoutAreaReference> Render(
         IChangeStream<EntityStore, LayoutAreaReference> changeStream,
         LayoutAreaReference reference
-    ) => new LayoutManager(new(reference, Hub, layoutDefinition), layoutDefinition, changeStream).Render(reference);
+    ) => new LayoutManager(new(reference, Hub), layoutDefinition, changeStream).Render(reference);
 
     public override async Task StartAsync(CancellationToken cancellationToken)
     {

@@ -1,3 +1,4 @@
+﻿using OpenSmc.Blazor;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Northwind.Application;
@@ -9,6 +10,7 @@ public static class HubConfiguration
     )
     {
         return configuration
+            .AddBlazorClient(x => x)
             .AddNorthwindViews()
             .AddNorthwindEmployees()
             .AddNorthwindOrders()

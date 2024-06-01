@@ -41,7 +41,7 @@ public record LayoutStackControl()
     public LayoutStackControl WithView(Func<LayoutArea, IObservable<object>> viewDefinition)
         => WithView(GetAutoName(), viewDefinition);
     public LayoutStackControl WithView(string area, Func<LayoutArea,IObservable<object>> viewDefinition)
-        => this with {ViewElements = ViewElements.Add(new ViewElementWithViewStream(area, a => viewDefinition.Invoke(a).Select(a.GetControl)))};
+        => this with {ViewElements = ViewElements.Add(new ViewElementWithViewStream(area, viewDefinition.Invoke))};
 
     public bool HighlightNewAreas { get; init; }
 
