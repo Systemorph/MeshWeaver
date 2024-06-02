@@ -41,8 +41,8 @@ public class LayoutManager
             };
         }
 
-        if (viewModel is UiControl { DataContext: not null } control)
-            viewModel = control with { DataContext = layoutArea.UpdateData(control.DataContext) };
+        //if (viewModel is UiControl { DataContext: not null } control)
+        //    viewModel = control with { DataContext = layoutArea.UpdateData(control.DataContext) };
 
         layoutArea.Update(area, viewModel);
     }
