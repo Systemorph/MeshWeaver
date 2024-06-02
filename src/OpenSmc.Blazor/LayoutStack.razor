@@ -1,14 +1,46 @@
-@using OpenSmc.Data.Serialization
+@using HorizontalAlignment = OpenSmc.Layout.HorizontalAlignment
 @inherits BlazorView<LayoutStackControl>
-<div id ="@ViewModel.Id">
+<FluentStack Orientation="@Orientation"
+             HorizontalAlignment="@Horizontal"
+             VerticalAlignment="@Vertical"
+             VerticalGap="ViewModel.VerticalGap"
+             HorizontalGap="ViewModel.HorizontalGap"
+             Style="height: 200px; border: 1px dotted var(--accent-fill-rest)" id="@ViewModel.Id">
     @foreach(var (area,viewModel) in Areas){
-        <p>Rendering area @area</p>
+        <p>Area @area</p>
         <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area"/>
     }
-</div>
+</FluentStack>
 
 
 @code{
 
+    private Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment Vertical => ViewModel.VerticalAlignment 
+        switch
+    {
+        Layout.VerticalAlignment.Center => Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment.Center,
+        Layout.VerticalAlignment.Top => Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment.Top,
+        Layout.VerticalAlignment.Bottom => Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment.Bottom,
+        _ => Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment.Top
+    };
+
+
+    private Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment Horizontal => ViewModel.HorizontalAlignment
+        switch
+        {
+            HorizontalAlignment.Center => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Center,
+            HorizontalAlignment.Left => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Left,
+            HorizontalAlignment.Right => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Right,
+            HorizontalAlignment.Start => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Start,
+            HorizontalAlignment.End => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.End,
+            _ => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Left
+        };
+    private Microsoft.FluentUI.AspNetCore.Components.Orientation Orientation => ViewModel.Orientation
+        switch
+        {
+            OpenSmc.Layout.Orientation.Horizontal => Microsoft.FluentUI.AspNetCore.Components.Orientation.Horizontal,
+            OpenSmc.Layout.Orientation.Vertical => Microsoft.FluentUI.AspNetCore.Components.Orientation.Vertical,
+            _ => Microsoft.FluentUI.AspNetCore.Components.Orientation.Vertical
+        };
 
 }
