@@ -41,23 +41,23 @@ public static class StandardViews
         var shortDateString = log.Start.ToString("HH:MM MMM dd, yyyy");
         var stack = Stack()
             .WithStyle(style => style.WithRowGap("24px"))
-            .WithSkin(Skin.VerticalPanel)
+            .WithOrientation(Orientation.Vertical)
             .WithId(ActivityLogViewId)
             .WithView(
                 DialogBodyStack()
                     .WithView(icon)
                     .WithView(
                         Stack()
-                            .WithSkin(Skin.VerticalPanel)
+                            .WithOrientation(Orientation.Vertical)
                             .WithView(
                                 Stack()
-                                    .WithSkin(Skin.HorizontalPanel)
+                                    .WithOrientation(Orientation.Horizontal)
                                     .WithView(Html("<em>by</em>"))
                                     .WithView(Html($"<strong>{log.User?.DisplayName}</strong>"))
                             )
                             .WithView(
                                 Stack()
-                                    .WithSkin(Skin.HorizontalPanel)
+                                    .WithOrientation(Orientation.Horizontal)
                                     .WithView(Html("<em>at</em>"))
                                     .WithView(Html($"<strong>{shortDateString}</strong>"))
                             )
@@ -68,7 +68,7 @@ public static class StandardViews
         {
             var errorsStack = log.Errors()
                 .Aggregate(
-                    Stack().WithSkin(Skin.VerticalPanel).WithView(Title("Errors", 3)),
+                    Stack().WithOrientation(Orientation.Vertical).WithView(Title("Errors", 3)),
                     (seed, message) => seed.WithView(Html($"<p>{message.Message}</p>"))
                 );
             stack = stack.WithView(
@@ -81,7 +81,7 @@ public static class StandardViews
         {
             var warningsStack = log.Warnings()
                 .Aggregate(
-                    Stack().WithSkin(Skin.VerticalPanel).WithView(Title("Warnings", 3)),
+                    Stack().WithOrientation(Orientation.Vertical).WithView(Title("Warnings", 3)),
                     (seed, message) => seed.WithView(Html($"<p>{message.Message}</p>"))
                 );
             stack = stack.WithView(
@@ -94,7 +94,7 @@ public static class StandardViews
         {
             var warningsStack = log.Infos()
                 .Aggregate(
-                    Stack().WithSkin(Skin.VerticalPanel).WithView(Title("Infos", 3)),
+                    Stack().WithOrientation(Orientation.Vertical).WithView(Title("Infos", 3)),
                     (seed, message) => seed.WithView(Html($"<p>{message.Message}</p>"))
                 );
             stack = stack.WithView(
@@ -124,8 +124,7 @@ public static class StandardViews
                     .WithId(buttonId)
                     .WithColor(Colors.Button)
                     .WithClickMessage(new ClickedEvent(buttonArea), address)
-            )
-            .WithSkin(Skin.Action);
+            );
     }
 
     public static ActivityControl RenderHistoryLog(
@@ -164,12 +163,12 @@ public static class StandardViews
     public static LayoutStackControl VerticalStackWithGap(
         this LayoutStackControl control,
         string gap = "16px"
-    ) => control.WithSkin(Skin.VerticalPanel).WithStyle(style => style.WithGap(gap));
+    ) => control.WithOrientation(Orientation.Vertical).WithStyle(style => style.WithGap(gap));
 
     public static LayoutStackControl DialogBodyStack() => Stack().WithDialogBodyStyle();
 
     public static LayoutStackControl WithDialogBodyStyle(this LayoutStackControl stack) =>
         stack
-            .WithSkin("HorizontalPanel")
+            .WithOrientation(Orientation.Horizontal)
             .WithStyle(style => style.WithGap("24px").WithAlignItems("flex-start"));
 }

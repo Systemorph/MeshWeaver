@@ -43,10 +43,27 @@ public record LayoutStackControl()
     public LayoutStackControl WithView(string area, Func<LayoutArea,IObservable<object>> viewDefinition)
         => this with {ViewElements = ViewElements.Add(new ViewElementWithViewStream(area, viewDefinition.Invoke))};
 
-    public bool HighlightNewAreas { get; init; }
 
-    public LayoutStackControl WithHighlightNewAreas()
-    {
-        return this with { HighlightNewAreas = true };
-    }
+    public HorizontalAlignment HorizontalAlignment { get; init; }
+
+    public VerticalAlignment VerticalAlignment { get; init; }
+    public int? HorizontalGap { get; init; }
+    public int? VerticalGap { get; init; }
+    public Orientation Orientation { get; init; }
+    public bool Wrap { get; init; }
+    public string Width { get; init; }
+    public LayoutStackControl WithHorizontalAlignment(HorizontalAlignment horizontalAlignment)
+        => this with { HorizontalAlignment = horizontalAlignment };
+    public LayoutStackControl WithVerticalAlignment(VerticalAlignment verticalAlignment)
+    => this with { VerticalAlignment = verticalAlignment };
+    public LayoutStackControl WithHorizontalGap(int? horizontalGap)
+        => this with { HorizontalGap = horizontalGap };
+    public LayoutStackControl WithVerticalGap(int? verticalGap)
+        => this with { VerticalGap = verticalGap };
+    public LayoutStackControl WithOrientation(Orientation orientation)
+    => this with { Orientation = orientation };
+    public LayoutStackControl WithWrap(bool wrap)
+        => this with { Wrap = wrap };
+    public LayoutStackControl WithWidth(string width)
+    => this with { Width = width };
 }

@@ -19,42 +19,55 @@ public static class NorthwindViews
     public static UiControl Dashboard()
     {
         return Stack()
-            .WithSkin(Skin.VerticalPanel)
-            .WithView(
-                Stack()
-                    .WithSkin(Skin.HorizontalPanel)
-                    .WithView(
-                        Stack()
-                            .WithSkin(Skin.VerticalPanel)
-                            .WithView(
-                                Stack()
-                                    .WithSkin(Skin.HorizontalPanel)
-                                    .WithView(Html("<h1>Total Orders</h1>")))
-                                    .OrdersDashboardTable()
-                            .WithView(
-                                Stack()
-                                    .WithSkin(Skin.HorizontalPanel)
-                                    .WithView(Html("Total Customers"))
-                                    .WithView(Html("100"))
-                            )
-                    )
-                    .WithView(
-                        Stack()
-                            .WithSkin(Skin.VerticalPanel)
-                            .WithView(
-                                Stack()
-                                    .WithSkin(Skin.HorizontalPanel)
-                                    .WithView(Html("Total Products"))
-                                    .WithView(Html("100"))
-                            )
-                            .WithView(
-                                Stack()
-                                    .WithSkin(Skin.HorizontalPanel)
-                                    .WithView(Html("Total Employees"))
-                                    .WithView(Html("100"))
-                            )
-                        )
-                    );
+            .WithOrientation(Orientation.Vertical)
+            .WithView(Html("<h1>Dashboard</h1>"))
+            .WithView(Stack().WithOrientation(Orientation.Horizontal)
+                .WithView(Html("<h2>Order Summary</h2>"))
+                .WithView(Html("<h2>Product Summary</h2>"))
+            )
+            .WithView(Stack().WithOrientation(Orientation.Horizontal)
+                .WithView(Html("<h2>Customer Summary</h2>"))
+                .WithView(Html("<h2>Supplier Summary</h2>"))
+            )
+            ;
+
+            //.WithOrientation(Orientation.Vertical)
+            //.WithView(
+            //    Stack()
+            //        .WithOrientation(Orientation.Horizontal)
+            //        .WithView(
+            //            Stack()
+            //                .WithOrientation(Orientation.Vertical)
+            //                .WithView(
+            //                    Stack()
+            //                        .WithOrientation(Orientation.Vertical)
+            //                        .WithView(Html("<h1>Total Orders</h1>")))
+            //                        .OrdersDashboardTable()
+            //                .WithView(
+            //                    Stack()
+            //                        .WithOrientation(Orientation.Vertical)
+            //                        .WithView(Html("Total Customers"))
+            //                        .WithView(Html("100"))
+            //                )
+            //        )
+            //        .WithView(
+            //            Stack()
+            //                .WithOrientation(Orientation.Vertical)
+            //                .WithOrientation(Orientation.Vertical)
+            //                .WithView(
+            //                    Stack()
+            //                        .WithOrientation(Orientation.Vertical)
+            //                        .WithView(Html("Total Products"))
+            //                        .WithView(Html("100"))
+            //                )
+            //                .WithView(
+            //                    Stack()
+            //                        .WithOrientation(Orientation.Horizontal)
+            //                        .WithView(Html("Total Employees"))
+            //                        .WithView(Html("100"))
+            //                )
+            //            )
+            //        );
     }
 
     private static LayoutStackControl OrdersDashboardTable(this LayoutStackControl stack)

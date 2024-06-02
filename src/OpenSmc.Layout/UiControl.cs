@@ -39,7 +39,6 @@ public abstract record UiControl(object Data) : IUiControl
     protected abstract void Dispose();
 
     public object Style { get; init; } //depends on control, we need to give proper style here!
-    public object Skin { get; init; }
 
     public string Tooltip { get; init; }
     public bool IsReadonly { get; init; } //TODO add concept of registering conventions for properties to distinguish if it is editable!!! have some defaults, no setter=> iseditable to false, or some attribute to mark as not editable, or checking if it has setter, so on... or BProcess open
@@ -84,7 +83,6 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion,
             Style = styleBuilder(new StyleBuilder()).Build()
         };
 
-    public TControl WithSkin(string skin) => This with { Skin = skin };
 
     public TControl WithClickAction(Func<UiActionContext, Task> onClick)
     {
