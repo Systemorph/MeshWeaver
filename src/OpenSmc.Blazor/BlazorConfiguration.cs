@@ -26,8 +26,11 @@ public record BlazorConfiguration
         ViewMaps.Select(m => m.Invoke(instance, stream, area)).FirstOrDefault(d => d is not null);
 
     private static ViewDescriptor StandardView<TViewModel, TView>(TViewModel instance,
-        IChangeStream<EntityStore, LayoutAreaReference> stream, string area) where TView:BlazorView<TViewModel> =>
-        new(typeof(TView), new Dictionary<string, object> { { ViewModel, instance }, { nameof(Stream), stream },{nameof(Area), area} });
+        IChangeStream<EntityStore, LayoutAreaReference> stream, string area) where TView : BlazorView<TViewModel> =>
+        new(typeof(TView), new Dictionary<string, object> { { ViewModel, instance }, { nameof(Stream), stream }, { nameof(Area), area } });
+    private static ViewDescriptor StandardView(Type tView, object instance,
+        IChangeStream<EntityStore, LayoutAreaReference> stream, string area) =>
+        new(tView, new Dictionary<string, object> { { ViewModel, instance }, { nameof(Stream), stream }, { nameof(Area), area } });
 
     public const string ViewModel = nameof(ViewModel);
 
@@ -42,12 +45,24 @@ public record BlazorConfiguration
                 StandardView<LayoutStackControl, LayoutStack>(stack, stream, area),
             MenuItemControl menu => StandardView<MenuItemControl, MenuItem>(menu, stream, area),
             LayoutAreaControl layoutArea => StandardView<LayoutAreaControl, LayoutAreaView>(layoutArea, stream, area),
-
+            IGenericType gc => GenericView(gc, stream, area),
             _ => DelegateToDotnetInteractive(instance, stream, area)
 
 
         };
     }
+
+    private static ViewDescriptor GenericView(IGenericType gc, IChangeStream<EntityStore, LayoutAreaReference> stream, string area)
+    {
+        var viewType = GenericTypeMaps.GetValueOrDefault(gc.BaseType)?.Invoke(gc);
+        return StandardView(viewType, gc, stream, area);
+    }
+
+    private static readonly Dictionary<Type, Func<IGenericType, Type>> GenericTypeMaps = new()
+    {
+        { typeof(DataGridControl<>), t => typeof(DataGrid<>).MakeGenericType(t.TypeArguments) }
+    };
+
 
     private static ViewDescriptor DelegateToDotnetInteractive(object instance,
         IChangeStream<EntityStore, LayoutAreaReference> stream, string area)

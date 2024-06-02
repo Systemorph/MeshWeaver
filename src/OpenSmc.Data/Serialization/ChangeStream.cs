@@ -29,6 +29,9 @@ public interface IChangeStream<TStream>
 {
     void Update(Func<TStream, ChangeItem<TStream>> update);
     void Initialize(TStream value);
+    IObservable<IChangeItem> Reduce(WorkspaceReference reference)
+        => Reduce((dynamic)reference);
+
     IObservable<ChangeItem<TReduced>> Reduce<TReduced>(WorkspaceReference<TReduced> reference);
 
     new Task<TStream> Initialized { get; }
