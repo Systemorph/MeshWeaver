@@ -1,4 +1,3 @@
-@using HorizontalAlignment = OpenSmc.Layout.HorizontalAlignment
 @inherits BlazorView<LayoutStackControl>
 <FluentStack Orientation="@Orientation"
              HorizontalAlignment="@Horizontal"
@@ -7,7 +6,6 @@
              HorizontalGap="ViewModel.HorizontalGap"
              Style="height: 200px; border: 1px dotted var(--accent-fill-rest)" id="@ViewModel.Id">
     @foreach(var (area,viewModel) in Areas){
-        <p>Area @area</p>
         <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area"/>
     }
 </FluentStack>
@@ -28,11 +26,11 @@
     private Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment Horizontal => ViewModel.HorizontalAlignment
         switch
         {
-            HorizontalAlignment.Center => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Center,
-            HorizontalAlignment.Left => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Left,
-            HorizontalAlignment.Right => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Right,
-            HorizontalAlignment.Start => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Start,
-            HorizontalAlignment.End => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.End,
+        Layout.HorizontalAlignment.Center => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Center,
+        Layout.HorizontalAlignment.Left => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Left,
+        Layout.HorizontalAlignment.Right => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Right,
+        Layout.HorizontalAlignment.Start => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Start,
+        Layout.HorizontalAlignment.End => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.End,
             _ => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Left
         };
     private Microsoft.FluentUI.AspNetCore.Components.Orientation Orientation => ViewModel.Orientation
