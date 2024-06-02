@@ -1,3 +1,4 @@
+﻿using Microsoft.FluentUI.AspNetCore.Components;
 using OpenSmc.Application;
 using OpenSmc.Hosting;
 using OpenSmc.Northwind.Application;
@@ -20,6 +21,7 @@ builder.Services.AddServerSideBlazor()
 ;
 builder.Services.AddSingleton<WeatherForecastService>();
 builder.Services.AddLogging(config => config.AddConsole().AddDebug());
+builder.Services.AddFluentUIComponents(); 
 builder.Host.UseOpenSmc(
     new ApplicationAddress("Northwind", "dev"),
     config => config.ConfigureNorthwindHubs()

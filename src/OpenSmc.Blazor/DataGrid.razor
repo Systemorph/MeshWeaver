@@ -1,8 +1,8 @@
 @inherits BlazorView<DataGridControl<TGridElement>>
 @using OpenSmc.Messaging
 @typeparam TGridElement
-<div> data grid for @typeof(TGridElement).FullName: @ViewModel</div>
-@* <FluentDataGrid Items="@QueryableData">
+
+<FluentDataGrid Items="@QueryableData">
     @foreach (var column in MappedColumns())
     {
         @((RenderFragment) (builder =>
@@ -21,8 +21,6 @@
 
 @code{
 
-    [Inject] private IMessageHub Hub { get; set;}
-
     private IEnumerable<ViewDescriptor> MappedColumns()
     {
         foreach (var column in ViewModel.Columns)
@@ -40,4 +38,4 @@
 
 
     private IQueryable<TGridElement> QueryableData => ((System.Collections.IEnumerable)DataContext)?.Cast<TGridElement>()?.AsQueryable();
-} *@
+}
