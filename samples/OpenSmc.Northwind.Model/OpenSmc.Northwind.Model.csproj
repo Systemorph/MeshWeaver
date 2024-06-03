@@ -1,4 +1,5 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+
   <ItemGroup>
     <None Remove="Files\categories.csv" />
     <None Remove="Files\customers.csv" />
@@ -12,6 +13,7 @@
     <None Remove="Files\suppliers.csv" />
     <None Remove="Files\territories.csv" />
   </ItemGroup>
+
   <ItemGroup>
     <EmbeddedResource Include="Files\categories.csv" />
     <EmbeddedResource Include="Files\customers.csv" />
@@ -25,10 +27,11 @@
     <EmbeddedResource Include="Files\suppliers.csv" />
     <EmbeddedResource Include="Files\territories.csv" />
   </ItemGroup>
+
   <ItemGroup>
-    <ProjectReference Include="..\..\src\OpenSmc.Messaging.Hub\OpenSmc.Messaging.Hub.csproj" />
-    <ProjectReference Include="..\..\src\OpenSmc.Data\OpenSmc.Data.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Import\OpenSmc.Import.csproj" />
-    <ProjectReference Include="..\..\src\OpenSmc.Layout\OpenSmc.Layout.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.Messaging.Hub\OpenSmc.Messaging.Hub.csproj" />
+    <ProjectReference Include="..\OpenSmc.Northwind.Domain\OpenSmc.Northwind.Domain.csproj" />
   </ItemGroup>
+
 </Project>

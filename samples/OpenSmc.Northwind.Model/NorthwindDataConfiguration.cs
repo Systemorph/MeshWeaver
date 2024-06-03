@@ -1,16 +1,12 @@
-﻿using System.Reflection;
-using OpenSmc.Data;
+﻿using OpenSmc.Data;
+using OpenSmc.Import;
 using OpenSmc.Messaging;
-using static OpenSmc.Data.DataPluginExtensions;
-using static OpenSmc.Import.ImportExtensions;
+using OpenSmc.Northwind.Domain;
 
-namespace OpenSmc.Northwind;
+namespace OpenSmc.Northwind.Model;
 
 public static class NorthwindDataConfiguration
 {
-    private static readonly Assembly NorthwindAssembly =
-        typeof(NorthwindDataConfiguration).Assembly;
-
     public static MessageHubConfiguration AddNorthwindReferenceData(
         this MessageHubConfiguration configuration
     )

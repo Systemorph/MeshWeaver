@@ -1,4 +1,4 @@
-namespace OpenSmc.Northwind;
+﻿namespace OpenSmc.Northwind.Model;
 
 public class ReferenceDataAddress;
 

@@ -1,6 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <ProjectReference Include="..\..\samples\OpenSmc.Northwind.Model\OpenSmc.Northwind.Model.csproj" />
+    <ProjectReference Include="..\..\samples\OpenSmc.Northwind.ViewModel\OpenSmc.Northwind.ViewModel.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.Layout\OpenSmc.Layout.csproj" />
+    <ProjectReference Include="..\OpenSmc.Data.TestDomain\OpenSmc.Data.TestDomain.csproj" />
     <ProjectReference Include="..\OpenSmc.Hub.Fixture\OpenSmc.Hub.Fixture.csproj" />
-    <ProjectReference Include="..\..\samples\OpenSmc.Northwind\OpenSmc.Northwind.csproj" />
   </ItemGroup>
 </Project>

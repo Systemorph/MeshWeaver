@@ -3,9 +3,10 @@ using OpenSmc.Data;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
+using OpenSmc.Northwind.Domain;
 using static OpenSmc.Layout.Controls;
 
-namespace OpenSmc.Northwind;
+namespace OpenSmc.Northwind.ViewModel;
 
 public static class NorthwindViews
 {
@@ -20,7 +21,13 @@ public static class NorthwindViews
                 .WithView(nameof(ProductSummary), _ => ProductSummary())
             .WithView(nameof(CustomerSummary), _ => CustomerSummary())
             .WithView(nameof(SupplierSummary), _ => SupplierSummary())
+                .WithView(nameof(NavigationMenu), _ => NavigationMenu())
         );
+    }
+
+    private static object NavigationMenu()
+    {
+        return null; // TODO V10: Create a structure which allows me to return a container with NavLinks (03.06.2024, Roland Bürgi)
     }
 
 
@@ -39,43 +46,6 @@ public static class NorthwindViews
             )
             ;
 
-            //.WithOrientation(Orientation.Vertical)
-            //.WithView(
-            //    Stack()
-            //        .WithOrientation(Orientation.Horizontal)
-            //        .WithView(
-            //            Stack()
-            //                .WithOrientation(Orientation.Vertical)
-            //                .WithView(
-            //                    Stack()
-            //                        .WithOrientation(Orientation.Vertical)
-            //                        .WithView(Html("<h1>Total Orders</h1>")))
-            //                        .OrdersDashboardTable()
-            //                .WithView(
-            //                    Stack()
-            //                        .WithOrientation(Orientation.Vertical)
-            //                        .WithView(Html("Total Customers"))
-            //                        .WithView(Html("100"))
-            //                )
-            //        )
-            //        .WithView(
-            //            Stack()
-            //                .WithOrientation(Orientation.Vertical)
-            //                .WithOrientation(Orientation.Vertical)
-            //                .WithView(
-            //                    Stack()
-            //                        .WithOrientation(Orientation.Vertical)
-            //                        .WithView(Html("Total Products"))
-            //                        .WithView(Html("100"))
-            //                )
-            //                .WithView(
-            //                    Stack()
-            //                        .WithOrientation(Orientation.Horizontal)
-            //                        .WithView(Html("Total Employees"))
-            //                        .WithView(Html("100"))
-            //                )
-            //            )
-            //        );
     }
 
     private static LayoutStackControl SupplierSummary() =>
@@ -96,7 +66,7 @@ public static class NorthwindViews
             .WithView(la => la.Workspace.GetObservable<Order>()
                 .Select(x =>
                 x
-                    .OrderByDescending(x => x.OrderDate)
+                    .OrderByDescending(y => y.OrderDate)
                     .Take(5)
                     .ToArray()
                     .ToDataGrid(conf => 
@@ -104,10 +74,6 @@ public static class NorthwindViews
                     .WithColumn(o => o.OrderDate)
                     .WithColumn(o => o.CustomerId))));
 
-    private static LayoutStackControl OrdersDashboardTable(this LayoutStackControl stack)
-    {
-        return stack.WithView(area => area.Workspace.GetObservable<Order>().Select(x => x.OrderByDescending(y => y.OrderDate).Take(5)).DistinctUntilChanged());
-    }
 
 
 }
