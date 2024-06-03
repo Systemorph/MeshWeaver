@@ -13,7 +13,7 @@ public static class HubConfiguration
     {
         return configuration
             .AddBlazorClient(x => x)
-            .AddNorthwindViews()
+            .AddNorthwindViewModels()
             .AddNorthwindEmployees()
             .AddNorthwindOrders()
             .AddNorthwindSuppliers()

@@ -43,6 +43,7 @@ public static class NorthwindDataConfiguration
                     new EmbeddedResource(MyAssembly, "Files.orders.csv"),
                     config => config.WithType<Order>()
                 )
+                .FromEmbeddedResource<OrderDetails>(new EmbeddedResource(MyAssembly,"Files.orders_details.csv"), conf => conf.WithType<OrderDetails>())
             );
     }
 
@@ -103,22 +104,15 @@ public static class NorthwindDataConfiguration
     }
 
     public static TDataSource AddNorthwindDomain<TDataSource>(this TDataSource dataSource)
-        where TDataSource : DataSource<TDataSource>
-    {
-        return dataSource
-            .AddNorthwindReferenceData()
-            .WithType<Order>()
-            .WithType<Supplier>()
-            .WithType<Employee>()
-            .WithType<Product>()
-            .WithType<Customer>();
-    }
+        where TDataSource : DataSource<TDataSource> =>
+        NorthwindDomain.ReferenceDataTypes.Concat(NorthwindDomain.OperationalTypes).Aggregate(dataSource, (ds, t) => ds.WithType(t, x => x));
 
     public static TDataSource AddNorthwindReferenceData<TDataSource>(this TDataSource dataSource)
         where TDataSource : DataSource<TDataSource>
     {
         return dataSource.WithType<Category>().WithType<Region>().WithType<Territory>();
     }
+
 
     public static IMessageHub GetCustomerHub(this IServiceProvider serviceProvider, object address)
     {
