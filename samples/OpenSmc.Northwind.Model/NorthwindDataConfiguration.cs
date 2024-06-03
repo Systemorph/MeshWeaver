@@ -1,4 +1,5 @@
-﻿using OpenSmc.Data;
+﻿using System.Reflection;
+using OpenSmc.Data;
 using OpenSmc.Import;
 using OpenSmc.Messaging;
 using OpenSmc.Northwind.Domain;
@@ -7,6 +8,8 @@ namespace OpenSmc.Northwind.Model;
 
 public static class NorthwindDataConfiguration
 {
+    public static readonly Assembly MyAssembly = typeof(NorthwindDataConfiguration).Assembly;
+
     public static MessageHubConfiguration AddNorthwindReferenceData(
         this MessageHubConfiguration configuration
     )
@@ -15,15 +18,15 @@ public static class NorthwindDataConfiguration
             .AddImport()
             .AddData(data =>
                 data.FromEmbeddedResource<Category>(
-                        "Files.categories.csv",
+                        new EmbeddedResource(MyAssembly,"Files.categories.csv"),
                         config => config.WithType<Category>()
                     )
                     .FromEmbeddedResource<Region>(
-                        "Files.regions.csv",
+                        new EmbeddedResource(MyAssembly,"Files.regions.csv"),
                         config => config.WithType<Region>()
                     )
                     .FromEmbeddedResource<Territory>(
-                        "Files.territories.csv",
+                        new EmbeddedResource(MyAssembly, "Files.territories.csv"),
                         config => config.WithType<Territory>()
                     )
             );
@@ -37,7 +40,7 @@ public static class NorthwindDataConfiguration
             .AddImport()
             .AddData(data =>
                 data.FromEmbeddedResource<Order>(
-                    "Files.orders.csv",
+                    new EmbeddedResource(MyAssembly, "Files.orders.csv"),
                     config => config.WithType<Order>()
                 )
             );
@@ -51,7 +54,7 @@ public static class NorthwindDataConfiguration
             .AddImport()
             .AddData(data =>
                 data.FromEmbeddedResource<Supplier>(
-                    "Files.suppliers.csv",
+                    new EmbeddedResource(MyAssembly, "Files.suppliers.csv"),
                     config => config.WithType<Supplier>()
                 )
             );
@@ -65,7 +68,7 @@ public static class NorthwindDataConfiguration
             .AddImport()
             .AddData(data =>
                 data.FromEmbeddedResource<Employee>(
-                    "Files.employees.csv",
+                    new EmbeddedResource(MyAssembly, "Files.employees.csv"),
                     config => config.WithType<Employee>()
                 )
             );
@@ -79,7 +82,7 @@ public static class NorthwindDataConfiguration
             .AddImport()
             .AddData(data =>
                 data.FromEmbeddedResource<Product>(
-                    "Files.products.csv",
+                    new EmbeddedResource(MyAssembly, "Files.products.csv"),
                     config => config.WithType<Product>()
                 )
             );
@@ -93,7 +96,7 @@ public static class NorthwindDataConfiguration
             .AddImport()
             .AddData(data =>
                 data.FromEmbeddedResource<Customer>(
-                    "Files.customers.csv",
+                    new EmbeddedResource(MyAssembly, "Files.customers.csv"),
                     config => config.WithType<Customer>()
                 )
             );

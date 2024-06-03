@@ -42,11 +42,22 @@ public static class ImportExtensions
         var source = new EmbeddedResource(typeof(T).Assembly, resource);
         return dataContext.WithDataSourceBuilder(
             source,
-            hub => ConfigureDatgaSource(configuration, hub, source)
+            hub => ConfigureDataSource(configuration, hub, source)
+        );
+    }
+    public static DataContext FromEmbeddedResource<T>(
+        this DataContext dataContext,
+        EmbeddedResource resource,
+        Func<ImportDataSource, ImportDataSource> configuration
+    )
+    {
+        return dataContext.WithDataSourceBuilder(
+            resource,
+            hub => ConfigureDataSource(configuration, hub, resource)
         );
     }
 
-    private static ImportDataSource ConfigureDatgaSource(
+    private static ImportDataSource ConfigureDataSource(
         Func<ImportDataSource, ImportDataSource> configuration,
         IMessageHub hub,
         EmbeddedResource source
