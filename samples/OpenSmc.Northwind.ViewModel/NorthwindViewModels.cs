@@ -3,14 +3,15 @@ using OpenSmc.Data;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 using OpenSmc.Northwind.Domain;
 using static OpenSmc.Layout.Controls;
 
 namespace OpenSmc.Northwind.ViewModel;
 
-public static class NorthwindViews
+public static class NorthwindViewModels
 {
-    public static MessageHubConfiguration AddNorthwindViews(
+    public static MessageHubConfiguration AddNorthwindViewModels(
         this MessageHubConfiguration configuration
     )
     {
@@ -63,16 +64,19 @@ public static class NorthwindViews
     private static LayoutStackControl OrderSummary() =>
         Stack().WithOrientation(Orientation.Vertical)
             .WithView(Html("<h2>Order Summary</h2>"))
-            .WithView(la => la.Workspace.GetObservable<Order>()
+            .WithView(area => area.Workspace.GetObservable<Order>()
                 .Select(x =>
                 x
                     .OrderByDescending(y => y.OrderDate)
                     .Take(5)
+                    .Select(order => new OrderSummaryItem(area.Workspace.GetData<Customer>(order.CustomerId)?.ContactName, area.Workspace.GetData<OrderDetails>().Count(d => d.OrderId == order.OrderId), order.OrderDate))
                     .ToArray()
                     .ToDataGrid(conf => 
                     conf
-                    .WithColumn(o => o.OrderDate)
-                    .WithColumn(o => o.CustomerId))));
+                    .WithColumn(o => o.Customer)
+                    .WithColumn(o => o.Products)
+                    .WithColumn(o => o.Purchased)
+                    )));
 
 
 

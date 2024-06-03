@@ -36,7 +36,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
-            .AddNorthwindViews()
+            .AddNorthwindViewModels()
             .AddData(data =>
                 data.FromHub(
                         new ReferenceDataAddress(),
@@ -107,6 +107,12 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             .Timeout(Timeout)
             .FirstAsync();
         customers.Should().HaveCountGreaterThan(0);
+        var orderDetails = await client
+            .GetWorkspace()
+            .GetObservable<OrderDetails>()
+            .Timeout(Timeout)
+            .FirstAsync();
+        orderDetails.Should().HaveCountGreaterThan(0);
     }
 
     [Fact]
@@ -115,7 +121,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = GetClient().GetWorkspace();
         await workspace.Initialized;
 
-        var viewName = nameof(NorthwindViews.Dashboard);
+        var viewName = nameof(NorthwindViewModels.Dashboard);
         var stream = workspace.GetStream(new HostAddress(), new LayoutAreaReference(viewName));
         var dashboard = (await stream.GetControl(viewName)).Should().BeOfType<LayoutStackControl>().Subject;
         var areas = dashboard.Areas;
