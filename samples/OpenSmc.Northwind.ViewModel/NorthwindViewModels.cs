@@ -75,7 +75,7 @@ public static class NorthwindViewModels
                     conf
                     .WithColumn(o => o.Customer)
                     .WithColumn(o => o.Products)
-                    .WithColumn(o => o.Purchased)
+                    .WithColumn(o => o.Purchased, column => column.WithFormat("yyyy-MM-dd"))
                     )));
 
 
