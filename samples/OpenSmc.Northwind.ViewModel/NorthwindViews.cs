@@ -27,7 +27,12 @@ public static class NorthwindViews
 
     private static object NavigationMenu()
     {
-        return null; // TODO V10: Create a structure which allows me to return a container with NavLinks (03.06.2024, Roland Bürgi)
+        return NavMenu()
+            .WithNavLink("Dashboard", "dashboard")
+            .WithNavLink("Orders", "orders")
+            .WithNavLink("Products", "products")
+            .WithNavLink("Customers", "customers")
+            .WithNavLink("Suppliers", "suppliers");
     }
 
 
