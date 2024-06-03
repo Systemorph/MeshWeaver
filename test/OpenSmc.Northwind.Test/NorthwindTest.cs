@@ -1,12 +1,15 @@
 ﻿using System.Reactive.Linq;
-using DocumentFormat.OpenXml.Drawing.Diagrams;
 using FluentAssertions;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout;
 using OpenSmc.Messaging;
+using OpenSmc.Northwind.Domain;
+using OpenSmc.Northwind.Model;
+using OpenSmc.Northwind.ViewModel;
 using Xunit;
 using Xunit.Abstractions;
+using Category = DocumentFormat.OpenXml.Drawing.Diagrams.Category;
 
 namespace OpenSmc.Northwind.Test;
 

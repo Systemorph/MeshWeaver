@@ -1,5 +1,7 @@
 ﻿using OpenSmc.Blazor;
 using OpenSmc.Messaging;
+using OpenSmc.Northwind.Model;
+using OpenSmc.Northwind.ViewModel;
 
 namespace OpenSmc.Northwind.Application;
 

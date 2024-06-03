@@ -3,6 +3,7 @@ using OpenSmc.Application.Orleans;
 using OpenSmc.Data;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
+using OpenSmc.Northwind.Model;
 using Orleans.Serialization;
 using static OpenSmc.Application.SignalR.SignalRExtensions;
 using static OpenSmc.Hosting.HostBuilderExtensions;

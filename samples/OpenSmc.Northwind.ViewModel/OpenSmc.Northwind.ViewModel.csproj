@@ -1,0 +1,9 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OpenSmc.Messaging.Hub\OpenSmc.Messaging.Hub.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.Data\OpenSmc.Data.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.Import\OpenSmc.Import.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.Layout\OpenSmc.Layout.csproj" />
+    <ProjectReference Include="..\OpenSmc.Northwind.Domain\OpenSmc.Northwind.Domain.csproj" />
+  </ItemGroup>
+</Project>
