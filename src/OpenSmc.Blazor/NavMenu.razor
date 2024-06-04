@@ -1,0 +1,15 @@
+@inherits BlazorView<NavMenuControl>
+
+<FluentNavMenu>
+    @foreach (var item in ViewModel.Items)
+    {
+        @if (item is NavLink navLink)
+        {
+            <NavLinkView ViewModel="@navLink"/>
+        }
+        else if (item is NavGroup navGroup)
+        {
+            <NavGroupView ViewModel="@navGroup"/>
+        }
+    }
+</FluentNavMenu>
