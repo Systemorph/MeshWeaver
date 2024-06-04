@@ -1,36 +1,62 @@
 ﻿using System.Collections.Immutable;
 using OpenSmc.Application.Styles;
-using static OpenSmc.Layout.Controls;
 
 namespace OpenSmc.Layout.Views;
 
 public record NavMenuControl()
     : UiControl<NavMenuControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
 {
-    internal ImmutableList<IUiControl> Items { get; init; } =
-        ImmutableList<IUiControl>.Empty;
+    public ImmutableList<INavItem> Items { get; init; } =
+        ImmutableList<INavItem>.Empty;
 
-    public NavMenuControl WithGroup(NavGroupControl navGroup) =>
+    public NavMenuControl WithGroup(NavGroup navGroup) =>
         this with
         {
             Items = Items.Add(navGroup)
         };
 
-    public NavMenuControl WithNavLink(NavLinkControl navLink) => 
+    public NavMenuControl WithNavLink(NavLink navLink) => 
         this with
     {
         Items = Items.Add(navLink)
     };
 
     public NavMenuControl WithGroup(string title, string href) =>
-        WithGroup(NavGroup.WithTitle(title).WithHref(href));
+        WithGroup(Controls.NavGroup.WithTitle(title).WithHref(href));
 
     public NavMenuControl WithGroup(string title, string href, Icon icon) =>
-        WithGroup(NavGroup.WithTitle(title).WithHref(href).WithIcon(icon));
+        WithGroup(Controls.NavGroup.WithTitle(title).WithHref(href).WithIcon(icon));
 
     public NavMenuControl WithNavLink(string title, string href) =>
-        WithNavLink(NavLink.WithTitle(title).WithHref(href));
+        WithNavLink(Controls.NavLink.WithTitle(title).WithHref(href));
 
     public NavMenuControl WithNavLink(string title, string href, Icon icon) =>
-        WithNavLink(NavLink.WithTitle(title).WithHref(href).WithIcon(icon));
+        WithNavLink(Controls.NavLink.WithTitle(title).WithHref(href).WithIcon(icon));
 }
+
+public interface INavItem
+{
+    string Title { get; init; }
+    string Href { get; init; }
+    Icon Icon { get; init; }
+}
+
+public abstract record NavItem<TItem> : INavItem where TItem : NavItem<TItem>
+{
+    public string Title { get; init; }
+
+    public string Href { get; init; }
+
+    public Icon Icon { get; init; }
+
+    public TItem WithTitle(string title) => (TItem)(this with { Title = title });
+
+    public TItem WithHref(string href) => (TItem)(this with { Href = href });
+
+    public TItem WithIcon(Icon icon) => (TItem)(this with { Icon = icon });
+}
+
+
+public record NavLink : NavItem<NavLink>;
+
+public record NavGroup : NavItem<NavGroup>;

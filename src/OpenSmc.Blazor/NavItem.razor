@@ -1,0 +1,8 @@
+@typeparam TViewModel
+
+@code {
+    [Parameter]
+    public TViewModel ViewModel { get; set; }
+
+    protected Icon Icon => new Icons.Regular.Size20.Home();
+}

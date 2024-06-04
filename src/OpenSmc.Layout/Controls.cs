@@ -9,9 +9,9 @@ public static class Controls
 {
     public static NavMenuControl NavMenu() => new();
 
-    public static NavGroupControl NavGroup = new();
+    public static NavGroup NavGroup = new();
 
-    public static NavLinkControl NavLink = new();
+    public static NavLink NavLink = new();
 
     public static LayoutStackControl Stack() => new();
 
