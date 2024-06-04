@@ -1,4 +1,5 @@
 ﻿using FluentAssertions;
+using OpenSmc.Messaging;
 using OpenSmc.Serialization;
 using Xunit;
 

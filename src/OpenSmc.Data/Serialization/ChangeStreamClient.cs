@@ -1,9 +1,6 @@
-using System.Globalization;
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Json.Patch;
-using Microsoft.VisualBasic;
 
 namespace OpenSmc.Data.Serialization;
 
@@ -62,16 +59,15 @@ public class ChangeStreamClient<TStream, TReference>
                         }
             )
             .Select(x => x.DataChanged)
-            .Where(x => x != null && x.Change != null)
+            .Where(x => x is { Change: not null })
             .Subscribe(observer);
-        ;
     }
 
     private ChangeItem<TStream> Update(TStream state, DataChangedEvent request)
     {
         var newState = request.ChangeType switch
         {
-            ChangeType.Patch => ApplyPatch(state, (JsonPatch)request.Change),
+            ChangeType.Patch => ApplyPatch(state, JsonSerializer.Deserialize<JsonPatch>(request.Change.Content)),
             ChangeType.Full => GetFullState(request),
             _ => throw new ArgumentOutOfRangeException()
         };
@@ -86,9 +82,6 @@ public class ChangeStreamClient<TStream, TReference>
 
     private TStream GetFullState(DataChangedEvent request)
     {
-        return request.Change is TStream s
-            ? s
-            : (request.Change as JsonNode).Deserialize<TStream>(Stream.Hub.JsonSerializerOptions)
-                ?? throw new InvalidOperationException();
+        return JsonSerializer.Deserialize<TStream>(request.Change.Content, Stream.Hub.JsonSerializerOptions);
     }
 }

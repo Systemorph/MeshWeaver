@@ -190,7 +190,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetStream(new HostAddress(), reference);
         var reportArea = $"{reference.Area}/Content";
-        var content = await stream.GetControlStream(reportArea).FirstAsync();
+        var content = await stream.GetControlStream(reportArea).FirstAsync(x => x != null);
         content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
 
         // Get toolbar and change value.

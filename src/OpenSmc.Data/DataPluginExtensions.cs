@@ -37,8 +37,6 @@ public static class DataPluginExtensions
                         );
                     if (!options.Converters.Any(c => c is InstancesInCollectionConverter))
                         options.Converters.Insert(0, new InstancesInCollectionConverter());
-                    if (!options.Converters.Any(c => c is DataChangedEventConverter))
-                        options.Converters.Insert(0, new DataChangedEventConverter());
                 })
             )
             .Set(existingLambdas.Add(dataPluginConfiguration))

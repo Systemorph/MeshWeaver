@@ -1,5 +1,5 @@
-using System.Reactive.Linq;
-using System.Reactive.Subjects;
+﻿using System.Reactive.Linq;
+using System.Text.Json;
 using Json.Patch;
 using OpenSmc.Messaging;
 
@@ -49,7 +49,7 @@ public class ChangeStreamHost<TStream, TReference>
     {
         return new DataChangedEvent(
             changeItem.Version,
-            changeItem.Value,
+            new(JsonSerializer.Serialize(changeItem.Value, Stream.Hub.JsonSerializerOptions)),
             ChangeType.Full,
             changeItem.ChangedBy
         )
@@ -77,7 +77,7 @@ public class ChangeStreamHost<TStream, TReference>
         if (!patch.Operations.Any())
             return null;
 
-        return new(change.Version, patch, ChangeType.Patch, change.ChangedBy)
+        return new(change.Version, new(JsonSerializer.Serialize(patch, Stream.Hub.JsonSerializerOptions)), ChangeType.Patch, change.ChangedBy)
         {
             Id = Stream.Id,
             Reference = Stream.Reference

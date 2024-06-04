@@ -1,5 +1,6 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Reflection;
 using System.Text.Json;
 using FluentAssertions;
 using Json.Patch;
@@ -50,4 +51,11 @@ public class Playground
         changes.OnNext(x => x + 1);
         lastValue.Should().Be(3);
     }
+
+    [Fact]
+    public void JsonPath()
+    {
+        var methods = typeof(MyData).GetMethods(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+    }
+
 }
