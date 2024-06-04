@@ -7,13 +7,13 @@ public interface IChangeItem
     object Address { get; }
     object ChangedBy { get; }
     object Value { get; }
-    WorkspaceReference Reference { get; }
+    object Reference { get; }
     ChangeItem<TReduced> SetValue<TReduced>(TReduced value);
 }
 
 public record ChangeItem<TStream>(
     object Address,
-    WorkspaceReference Reference,
+    object Reference,
     TStream Value,
     object ChangedBy,
     long Version

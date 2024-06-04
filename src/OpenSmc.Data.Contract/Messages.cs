@@ -44,7 +44,7 @@ public enum ChangeType
     Instance
 }
 
-public record DataChangedEvent(long Version, object Change, ChangeType ChangeType, object ChangedBy)
+public record DataChangedEvent(long Version, RawJson Change, ChangeType ChangeType, object ChangedBy)
     : WorkspaceMessage;
 
 public record SubscribeRequest(WorkspaceReference Reference) : IRequest<DataChangedEvent>;

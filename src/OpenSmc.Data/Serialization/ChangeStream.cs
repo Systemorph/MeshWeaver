@@ -8,7 +8,7 @@ namespace OpenSmc.Data.Serialization;
 public interface IChangeStream : IDisposable
 {
     object Id { get; }
-    WorkspaceReference Reference { get; }
+    object Reference { get; }
 
     internal IMessageDelivery DeliverMessage(IMessageDelivery<WorkspaceMessage> delivery);
     void AddDisposable(IDisposable disposable);
@@ -40,14 +40,13 @@ public interface IChangeStream<TStream>
 }
 
 public interface IChangeStream<TStream, out TReference> : IChangeStream<TStream>
-    where TReference : WorkspaceReference<TStream>
 {
     ChangeItem<TStream> Current { get; }
     new TReference Reference { get; }
 }
 
+
 public record ChangeStream<TStream, TReference> : IChangeStream<TStream, TReference>
-    where TReference : WorkspaceReference<TStream>
 {
     public TReference Reference { get; init; }
 
@@ -74,7 +73,7 @@ public record ChangeStream<TStream, TReference> : IChangeStream<TStream, TRefere
 
     public object Id { get; init; }
 
-    WorkspaceReference IChangeStream.Reference => Reference;
+    object IChangeStream.Reference => Reference;
 
     private readonly ReduceManager<TStream> reduceManager;
     private ChangeItem<TStream> current;
