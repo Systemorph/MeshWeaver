@@ -12,7 +12,7 @@ public static class SignalRExtensions
 
     public static IServiceCollection ConfigureApplicationSignalR(this IServiceCollection services, Func<MessageHubConfiguration, MessageHubConfiguration> configuration = null)
     {
-        configuration ??= ConfigureSignalRHub;
+        configuration ??= ApplyDefaultSignalRConfiguration;
         services.AddSingleton(sp => sp.CreateMessageHub(new SignalRAddress(), configuration));
         services.AddSignalR(o =>
             {
@@ -51,7 +51,7 @@ public static class SignalRExtensions
         return app;
     }
 
-    private static MessageHubConfiguration ConfigureSignalRHub(MessageHubConfiguration conf)
+    private static MessageHubConfiguration ApplyDefaultSignalRConfiguration(MessageHubConfiguration conf)
         => conf
             .WithTypes(typeof(UiAddress), typeof(ApplicationAddress))
             .WithSerialization(serialization =>
