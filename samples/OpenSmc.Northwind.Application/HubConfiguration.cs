@@ -11,6 +11,7 @@ public static class HubConfiguration
         this MessageHubConfiguration configuration
     )
     {
+        // TODO V10: add pre-compiled statement to remove all northwind related config (05.06.2024, Alexander Kravets)
         return configuration
             .AddBlazorClient(x => x)
             .AddNorthwindViews()

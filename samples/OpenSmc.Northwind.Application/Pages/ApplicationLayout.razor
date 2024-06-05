@@ -1,0 +1,34 @@
+@page "/app/{Application}/{Environment}/{Area}"
+@inject NavigationManager navigationManager
+@using OpenSmc.Application;
+@using OpenSmc.Layout;
+@using Microsoft.AspNetCore.WebUtilities
+@using Microsoft.Extensions.Primitives
+
+<PageTitle>@Application</PageTitle>
+
+<LayoutAreaView Address="@Address" Reference="@Reference"/>
+
+@code{
+    [Parameter]
+    public string Application { get; set; }
+    [Parameter]
+    public string Environment { get; set; }
+    [Parameter]
+    public string Area { get; set; }
+
+    public Dictionary<string, StringValues> Options { get; set; }
+
+    private object Address => new ApplicationAddress(Application, Environment);
+
+    private LayoutAreaReference Reference => new(Area)
+    {
+        Options = Options
+    }; 
+
+    protected override void OnInitialized()
+    {
+        var uri = navigationManager.ToAbsoluteUri(navigationManager.Uri);
+        Options = QueryHelpers.ParseQuery(uri.Query);
+    }
+}

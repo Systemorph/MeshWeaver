@@ -1,3 +1,5 @@
+<!-- todo rename to "Demo.Shell" -->
+<!-- leave hardcoded references to northwind only if local dev using precompiled vars -->
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <ItemGroup>
     <ProjectReference Include="..\..\src\OpenSmc.Layout\OpenSmc.Layout.csproj" />
