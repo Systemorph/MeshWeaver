@@ -10,9 +10,10 @@ public static class SignalRExtensions
 {
     public const string DefaultSignalREndpoint = "/signalR/application";
 
-    public static IServiceCollection ConfigureApplicationSignalR(this IServiceCollection services)
+    public static IServiceCollection ConfigureApplicationSignalR(this IServiceCollection services, Func<MessageHubConfiguration, MessageHubConfiguration> configuration = null)
     {
-        services.AddSingleton(sp => sp.CreateMessageHub(new SignalRAddress(), ConfigureSignalRHub));
+        configuration ??= ConfigureSignalRHub;
+        services.AddSingleton(sp => sp.CreateMessageHub(new SignalRAddress(), configuration));
         services.AddSignalR(o =>
             {
                 o.EnableDetailedErrors = true; // TODO: False for Prod environment (2021/05/14, Alexander Yolokhov)
