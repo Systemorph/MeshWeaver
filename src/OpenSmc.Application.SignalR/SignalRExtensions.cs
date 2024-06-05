@@ -12,8 +12,8 @@ public static class SignalRExtensions
 
     public static IServiceCollection ConfigureApplicationSignalR(this IServiceCollection services, Func<MessageHubConfiguration, MessageHubConfiguration> configuration = null)
     {
-        configuration ??= ApplyDefaultSignalRConfiguration;
-        services.AddSingleton(sp => sp.CreateMessageHub(new SignalRAddress(), configuration));
+        Func<MessageHubConfiguration, MessageHubConfiguration> combinedconfiguration = configuration == null ? ApplyDefaultSignalRConfiguration : (c => configuration(ApplyDefaultSignalRConfiguration(c)));
+        services.AddSingleton(sp => sp.CreateMessageHub(new SignalRAddress(), combinedconfiguration));
         services.AddSignalR(o =>
             {
                 o.EnableDetailedErrors = true; // TODO: False for Prod environment (2021/05/14, Alexander Yolokhov)
