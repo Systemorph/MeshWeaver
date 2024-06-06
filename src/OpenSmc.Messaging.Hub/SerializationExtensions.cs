@@ -39,4 +39,6 @@ public record SerializationConfiguration(IMessageHub Hub)
         typeRegistry.WithType<T>();
         return this;
     }
+
+    public bool StrictTypeResolution { get; init; }
 };

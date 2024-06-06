@@ -1,7 +1,10 @@
 ﻿using System.Collections;
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
+using System.Text.Json;
 using FluentAssertions;
+using Json.Patch;
+using Json.Pointer;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout.Composition;
@@ -31,7 +34,6 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                         ds.WithType<DataRecord>(t =>
                                 t.WithInitialData([new("Hello", "Hello"), new("World", "World")])
                             )
-                            .WithType<Toolbar>(t => t.WithInitialData([new(2024)]))
                 )
             )
             .AddLayout(layout =>
@@ -97,31 +99,21 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     )
     {
         return base.ConfigureClient(configuration)
-            .AddLayout(d => d)
-            .AddData(data =>
-                data.FromHub(
-                    new HostAddress(),
-                    source => source.WithType<Toolbar>().WithType<DataRecord>()
-                )
-            );
+            .AddLayoutClient(d => d)
+            ;
     }
 
-    private record Toolbar(int Year)
-    {
-        [Key]
-        public string Id { get; } = nameof(Toolbar);
-    }
+    private record Toolbar(int Year);
 
     private Toolbar GetToolbar(WorkspaceState ws)
     {
         return ws.GetData<Toolbar>().Single();
     }
-
     private static async Task<object> ViewWithProgress(LayoutArea area)
     {
         var percentage = 0;
         var progress = Controls.Progress("Processing", percentage);
-        for (int i = 0; i < 10; i++)
+        for (var i = 0; i < 10; i++)
         {
             await Task.Delay(30);
             area.Update(
@@ -160,7 +152,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var areaControls = await areas
             .ToAsyncEnumerable()
             .SelectAwait(async a =>
-                await stream.Select(s => s.Value.GetControl(a)).FirstAsync(x => x != null)
+                await stream.GetControl(a)
             )
             .ToArrayAsync();
 
@@ -196,15 +188,16 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         // Get toolbar and change value.
         var toolbarArea = $"{reference.Area}/Toolbar";
         var toolbar = (TextBoxControl)await stream.GetControlStream(toolbarArea).FirstAsync();
-        toolbar.Data.Should().BeOfType<Binding>().Which.Path.Should().Be("$.year");
-        var toolbarDataReference = toolbar.DataContext.Should().BeOfType<EntityReference>().Which;
-        var toolbarData = (Toolbar)await stream.GetDataStream(toolbarDataReference).FirstAsync();
-        toolbarData.Year.Should().Be(2024);
+        var jsonPath = toolbar.Data.Should().BeOfType<JsonPointerReference>().Which;
+        jsonPath.Pointer.Should().Be($"/{LayoutAreaReference.Data}/{reference.Area}~1Toolbar");
+        var year = await stream.Reduce(jsonPath).FirstAsync();
+        year.Value.Should().Be(2024);
 
-        stream.Update(ci => new Data.Serialization.ChangeItem<EntityStore>(
+
+        stream.Update(ci => new Data.Serialization.ChangeItem<JsonElement>(
             stream.Id,
             stream.Reference,
-            ci.Update(toolbarDataReference, toolbarData with { Year = 2025 }),
+            new JsonPatch(PatchOperation.Replace(JsonPointer.Parse(jsonPath.Pointer), 2025)).Apply(ci),
             hub.Address,
             hub.Version
         ));
@@ -236,7 +229,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var workspaceReferences = await itemTemplate
             .DataContext.Should()
             .BeAssignableTo<IEnumerable>()
-            .Which.OfType<EntityReference>()
+            .Which.OfType<JsonPointerReference>()
             .ToAsyncEnumerable()
             .SelectAwait(async r => (DataRecord)await stream.GetDataStream(r).FirstAsync())
             .ToArrayAsync();

@@ -48,14 +48,15 @@ public class ChangeStreamClient<TStream, TReference>
     {
         return Stream
             .Scan(
-                new { Current = default(TStream), DataChanged = default(PatchChangeRequest) },
+                new { Current = default(TStream), DataChanged = default(PatchChangeRequest), IsInitialized = false },
                 (state, change) =>
-                    state.Current == null || !Stream.Hub.Address.Equals(change.ChangedBy)
-                        ? new { Current = change.Value, DataChanged = default(PatchChangeRequest) }
+                    !state.IsInitialized || !Stream.Hub.Address.Equals(change.ChangedBy)
+                        ? new { Current = change.Value, DataChanged = default(PatchChangeRequest), IsInitialized = true }
                         : new
                         {
                             Current = change.Value,
-                            DataChanged = GetPatchRequest(state.Current, change)
+                            DataChanged = GetPatchRequest(state.Current, change),
+                            IsInitialized = true
                         }
             )
             .Select(x => x.DataChanged)

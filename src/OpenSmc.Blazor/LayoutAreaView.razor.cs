@@ -1,4 +1,6 @@
-﻿using Microsoft.AspNetCore.Components;
+﻿using System.Text.Json;
+using System.Text.Json.Nodes;
+using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
@@ -35,9 +37,9 @@ public partial class LayoutAreaView
 
     }
 
-    private void Render(ChangeItem<EntityStore> item)
+    private void Render(ChangeItem<JsonElement> item)
     {
-        var newControl = item.Value.GetControl(Reference.Area);
+        var newControl = GetControl(item, Reference.Area);
         if(newControl==null)
             if(RootControl == null)
                 return;
@@ -55,12 +57,13 @@ public partial class LayoutAreaView
         StateHasChanged();
     }
 
+
     protected override void OnInitialized()
     {
         base.OnInitialized();
         Stream = Address.Equals(Hub.Address)
-            ? Workspace.GetStream<EntityStore, LayoutAreaReference>(Reference)
-            : Workspace.GetStream<EntityStore, LayoutAreaReference>(Address, Reference);
+            ? Workspace.GetStream<JsonElement, LayoutAreaReference>(Reference)
+            : Workspace.GetStream<JsonElement, LayoutAreaReference>(Address, Reference);
         Disposables.Add(Stream);
         Stream.Subscribe(item => InvokeAsync(() => Render(item)));
     }

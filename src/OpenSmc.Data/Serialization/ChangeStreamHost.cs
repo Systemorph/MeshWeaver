@@ -18,6 +18,7 @@ public class ChangeStreamHost<TStream, TReference>
                 delivery =>
                 {
                     var response = stream.RequestChange(state => Change(delivery, state));
+                    stream.Hub.Post(response, o => o.ResponseFor(delivery));
                     return delivery.Processed();
                 },
                 x => stream.Id.Equals(x.Message.Id) && x.Message.Reference.Equals(stream.Reference)
@@ -29,20 +30,20 @@ public class ChangeStreamHost<TStream, TReference>
     {
         return Stream
             .Scan(
-                new { Current = default(TStream), DataChanged = default(DataChangedEvent) },
+                new { Current = default(TStream), DataChanged = default(DataChangedEvent), IsInitialized = false },
                 (state, change) =>
-                    state.Current == null
-                        ? new { Current = change.Value, DataChanged = GetFullDataChange(change) }
+                    !state.IsInitialized
+                        ? new { Current = change.Value, DataChanged = GetFullDataChange(change), IsInitialized = true }
                         : new
                         {
                             Current = change.Value,
-                            DataChanged = GetDataChangePatch(state.Current, change)
+                            DataChanged = GetDataChangePatch(state.Current, change),
+                            IsInitialized = true
                         }
             )
             .Select(x => x.DataChanged)
-            .Where(x => x != null && x.Change != null)
+            .Where(x => x is { Change: not null })
             .Subscribe(observer);
-        ;
     }
 
     private DataChangedEvent GetFullDataChange(ChangeItem<TStream> changeItem)

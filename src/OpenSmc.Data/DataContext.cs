@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 
@@ -58,6 +59,11 @@ public sealed record DataContext(IMessageHub Hub) : IAsyncDisposable
                 backFeed
             ),
         };
+
+
+    public DataContext ForReducedStream<TReducedStream>(
+        Func<ReduceManager<TReducedStream>, ReduceManager<TReducedStream>> configuration
+    ) => this with { ReduceManager = ReduceManager.ForReducedStream<TReducedStream>(configuration) };
 
     private ImmutableDictionary<
         Type,

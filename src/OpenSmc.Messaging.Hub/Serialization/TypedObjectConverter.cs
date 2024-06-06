@@ -7,11 +7,11 @@ using Json.More;
 
 namespace OpenSmc.Messaging.Serialization;
 
-public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry) : JsonConverter<object>
+public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry, SerializationConfiguration configuration) : JsonConverter<object>
 {
     private const string TypeProperty = "$type";
 
-    public override bool CanConvert(Type typeToConvert) => typeToConvert == typeof(object);
+    public override bool CanConvert(Type typeToConvert) => typeToConvert == typeof(object);// || typeToConvert.IsAbstract;
 
     public override object Read(
         ref Utf8JsonReader reader,
@@ -38,11 +38,13 @@ public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry) : JsonC
     {
         if (node is JsonObject jObject)
         {
-            if (jObject.TryGetPropertyValue(TypeProperty, out var typeName))
+            if (jObject.TryGetPropertyValue(TypeProperty, out var tn))
             {
-                var type = GetTypeByName(typeName!.ToString());
+                var typeName = tn!.ToString();
+                if (!typeRegistry.TryGetType(typeName, out var type) && !configuration.StrictTypeResolution)
+                    type = GetTypeByName(typeName);
 
-                if (type == null && !typeRegistry.TryGetType(typeName!.ToString(), out type))
+                if (type == null)
                     return node.DeepClone();
 
                 return node.Deserialize(type, options);
@@ -74,6 +76,7 @@ public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry) : JsonC
             }
         }
     }
+
 
     public override void Write(Utf8JsonWriter writer, object value, JsonSerializerOptions options)
     {

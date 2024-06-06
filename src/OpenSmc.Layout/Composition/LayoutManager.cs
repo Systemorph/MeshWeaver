@@ -1,4 +1,6 @@
-﻿using OpenSmc.Data;
+﻿using System.Collections.Concurrent;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
@@ -8,7 +10,7 @@ namespace OpenSmc.Layout.Composition;
 public class LayoutManager
 {
     private readonly LayoutArea layoutArea;
-    private readonly IChangeStream<EntityStore, LayoutAreaReference> changeStream;
+    private readonly IChangeStream<JsonElement, LayoutAreaReference> changeStream;
     private readonly IMessageHub layoutHub;
 
     public LayoutDefinition LayoutDefinition { get; }
@@ -16,7 +18,7 @@ public class LayoutManager
     public LayoutManager(
         LayoutArea layoutArea,
         LayoutDefinition layoutDefinition,
-        IChangeStream<EntityStore, LayoutAreaReference> changeStream
+        IChangeStream<JsonElement, LayoutAreaReference> changeStream
     )
     {
         this.layoutArea = layoutArea;
@@ -80,7 +82,8 @@ public class LayoutManager
         }
     }
 
-    public IChangeStream<EntityStore, LayoutAreaReference> Render(LayoutAreaReference reference)
+    private readonly ConcurrentDictionary<string, Func<UiActionContext, Task>> clickActions = new();
+    public IChangeStream<JsonElement, LayoutAreaReference> Render(LayoutAreaReference reference)
     {
         var viewElement = LayoutDefinition.GetViewElement(reference);
         if (viewElement == null)
@@ -91,15 +94,11 @@ public class LayoutManager
             changeStream.Hub.Register<ClickedEvent>(
                 (request) =>
                 {
-                    var view = changeStream.Current.Value.GetControl(request.Message.Area);
-                    if (view == null)
+                    if(!clickActions.TryGetValue(request.Message.Area, out var action))
                         return request.Ignored();
                     try
                     {
-                        if (view is UiControl control)
-                            control.ClickAction.Invoke(
-                                new(request.Message.Payload, LayoutDefinition.Hub, layoutArea)
-                            );
+                        action.Invoke(new(request.Message.Payload, LayoutDefinition.Hub, layoutArea));
                     }
                     catch (Exception e)
                     {

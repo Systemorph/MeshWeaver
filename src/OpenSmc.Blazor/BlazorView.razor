@@ -1,12 +1,20 @@
 @using OpenSmc.Data.Serialization
+@using System.Text.Json
 @typeparam TViewModel
 
 @code {
     [Parameter] 
     public TViewModel ViewModel { get; set; }
     [Parameter] 
-    public IChangeStream<EntityStore, LayoutAreaReference> Stream { get; set; }
+    public IChangeStream<JsonElement, LayoutAreaReference> Stream { get; set; }
     [Parameter] 
     public string Area { get; set; }
+    protected UiControl GetControl(ChangeItem<JsonElement> item, string area)
+    {
+        return item.Value.TryGetProperty(LayoutAreaReference.Areas, out var controls) && 
+            controls.TryGetProperty(area, out var node) 
+            ? node.Deserialize<UiControl>(Stream.Hub.JsonSerializerOptions) 
+            : null;
+    }
 
 }
