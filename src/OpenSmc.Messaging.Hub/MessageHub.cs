@@ -63,16 +63,16 @@ public sealed class MessageHub<TAddress>
                 ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>
             >()
             ?? ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>.Empty;
-        var serializationOptions = configurations
-            .Aggregate(CreateSerializationConfiguration(), (c, f) => f.Invoke(c))
-            .Options;
+        var serializationConfig = configurations
+            .Aggregate(CreateSerializationConfiguration(), (c, f) => f.Invoke(c));
+        var serializationOptions = serializationConfig.Options;
         var typeRegistry = serviceProvider.GetRequiredService<ITypeRegistry>();
         var deserializationOptions = new JsonSerializerOptions(serializationOptions);
         serializationOptions.Converters.Add(new JsonNodeConverter());
         serializationOptions.Converters.Add(new ImmutableDictionaryOfStringObjectConverter());
         serializationOptions.Converters.Add(new TypedObjectSerializeConverter(typeRegistry, null));
         deserializationOptions.Converters.Add(new ImmutableDictionaryOfStringObjectConverter());
-        deserializationOptions.Converters.Add(new TypedObjectDeserializeConverter(typeRegistry));
+        deserializationOptions.Converters.Add(new TypedObjectDeserializeConverter(typeRegistry, serializationConfig));
 
         JsonSerializerOptions = new JsonSerializerOptions();
         JsonSerializerOptions.Converters.Add(

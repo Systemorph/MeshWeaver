@@ -1,8 +1,15 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Json.Patch;
+using Json.Path;
+using Json.Pointer;
 using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Blazor;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
+using OpenSmc.Layout.Client;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.DataBinding;
 using OpenSmc.Messaging;
@@ -20,7 +27,7 @@ public static class LayoutExtensions
         return config
             .WithServices(services => services.AddScoped<ILayout, LayoutPlugin>())
             .AddData(data =>
-                data.AddWorkspaceReferenceStream<LayoutAreaReference, EntityStore>(
+                data.AddWorkspaceReferenceStream<LayoutAreaReference, JsonElement>(
                     (changeStream, _, a) =>
                         data
                             .Hub.ServiceProvider.GetRequiredService<ILayout>()
@@ -28,10 +35,19 @@ public static class LayoutExtensions
                     (ws, reference, val) =>
                         val.SetValue(ws with { Store = ws.Store.Update(reference, val.Value) })
                 )
+                .ForReducedStream<JsonElement>(conf => conf.AddWorkspaceReference<JsonPointerReference, JsonElement?>(ReduceJsonPointer, null))
             )
             .AddLayoutTypes()
             .Set(config.GetListOfLambdas().Add(layoutDefinition))
             .AddPlugin<LayoutPlugin>();
+    }
+
+
+    private static JsonElement? ReduceJsonPointer(JsonElement obj, JsonPointerReference pointer)
+    {
+        var parsed = JsonPointer.Parse(pointer.Pointer);
+        var result = parsed.Evaluate(obj);
+        return result;
     }
 
     internal static ImmutableList<Func<LayoutDefinition, LayoutDefinition>> GetListOfLambdas(
@@ -51,32 +67,54 @@ public static class LayoutExtensions
             )
             .WithTypes(typeof(MessageAndAddress), typeof(LayoutAreaReference), typeof(Binding));
 
-    private static readonly string UiControlCollection = typeof(UiControl).FullName;
 
-    public static IObservable<UiControl> GetControlStream(
-        this IChangeStream<EntityStore> changeItems,
+    public static IObservable<object> GetControlStream(
+        this IChangeStream<JsonElement> changeItems,
         string area
     ) =>
         changeItems
             .Select(i =>
-                i.Value.Collections.GetValueOrDefault(UiControlCollection)
-                    ?.Instances.GetValueOrDefault(area) as UiControl
+                JsonPointer.Parse($"/{LayoutAreaReference.Areas}/{area.Replace("/", "~1")}").Evaluate(i.Value)
+                    ?.Deserialize<object>(changeItems.Hub.JsonSerializerOptions)
             );
 
 
-    public static async Task<object> GetControl(this IChangeStream<EntityStore> changeItems,
+    public static async Task<object> GetControl(this IChangeStream<JsonElement> changeItems,
         string area) => await changeItems.GetControlStream(area).FirstAsync(x => x != null);
 
-    public static object GetControl(this EntityStore store, string area) =>
-            store
-                .Collections.GetValueOrDefault(LayoutAreaReference.CollectionName)
-                ?.Instances.GetValueOrDefault(area);
 
     public static IObservable<object> GetDataStream(
-        this IChangeStream<EntityStore> changeItems,
+        this IChangeStream<JsonElement> stream,
         WorkspaceReference reference
-    ) =>
-        changeItems
-            .Select(i => i.Value.Reduce(reference))
-            .Where(x => x != null);
+    ) => stream.Reduce(reference);
+
+
+
+    public static MessageHubConfiguration AddLayoutClient(this MessageHubConfiguration config,
+        Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration)
+    {
+        return config
+            .AddData()
+            .AddLayoutTypes()
+            .WithServices(services => services.AddScoped<ILayoutClient, LayoutClient>())
+            .Set(config.GetConfigurationFunctions().Add(configuration))
+            .WithSerialization(serialization => serialization);
+    }
+    internal static ImmutableList<Func<LayoutClientConfiguration, LayoutClientConfiguration>> GetConfigurationFunctions(this MessageHubConfiguration config)
+        => config.Get<ImmutableList<Func<LayoutClientConfiguration, LayoutClientConfiguration>>>()
+           ?? ImmutableList<Func<LayoutClientConfiguration, LayoutClientConfiguration>>.Empty;
+
+
+    public static JsonObject SetPath(this JsonObject obj, string path, JsonNode value)
+    {
+        var jsonPath = JsonPath.Parse(path);
+        var existingValue = jsonPath.Evaluate(obj);
+        var op = existingValue.Matches?.Any() ?? false
+            ? PatchOperation.Replace(JsonPointer.Parse(path), value)
+            : PatchOperation.Add(JsonPointer.Parse(path), value);
+
+
+        var patchDocument = new JsonPatch(op);
+        return (JsonObject)patchDocument.Apply(obj).Result;
+    }
 }

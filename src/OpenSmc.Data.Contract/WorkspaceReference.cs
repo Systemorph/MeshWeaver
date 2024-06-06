@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace OpenSmc.Data;
@@ -107,9 +108,9 @@ public record EntityStore
         Collections.GetValueOrDefault(collection);
 }
 
-public record JsonPathReference(string Path) : WorkspaceReference<JsonNode>
+public record JsonPointerReference(string Pointer) : WorkspaceReference<JsonElement?>
 {
-    public override string ToString() => $"{Path}";
+    public override string ToString() => Pointer;
 }
 
 public record InstanceReference(object Id) : WorkspaceReference<object>

@@ -71,6 +71,7 @@ public record ChangeStream<TStream, TReference> : IChangeStream<TStream, TRefere
     public Task<TStream> Initialized => initialized.Task;
     Task IChangeStream.Initialized => initialized.Task;
 
+
     public object Id { get; init; }
 
     object IChangeStream.Reference => Reference;
@@ -164,7 +165,7 @@ public record ChangeStream<TStream, TReference> : IChangeStream<TStream, TRefere
 
     public void Update(Func<TStream, ChangeItem<TStream>> update)
     {
-        if (Current == null)
+        if (!initialized.Task.IsCompleted)
             Initialize(update(default));
         else
             Current = update(Current.Value);

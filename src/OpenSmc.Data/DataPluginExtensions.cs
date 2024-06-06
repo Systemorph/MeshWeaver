@@ -12,6 +12,11 @@ namespace OpenSmc.Data;
 public static class DataPluginExtensions
 {
     public static MessageHubConfiguration AddData(
+        this MessageHubConfiguration config
+    )
+        => config.AddData(x => x);
+
+    public static MessageHubConfiguration AddData(
         this MessageHubConfiguration config,
         Func<DataContext, DataContext> dataPluginConfiguration
     )
@@ -47,7 +52,7 @@ public static class DataPluginExtensions
                 typeof(CollectionReference),
                 typeof(CollectionsReference),
                 typeof(WorkspaceStoreReference),
-                typeof(JsonPathReference),
+                typeof(JsonPointerReference),
                 typeof(JsonPatch),
                 typeof(DataChangedEvent),
                 typeof(UpdateDataRequest),

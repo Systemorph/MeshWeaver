@@ -24,7 +24,7 @@ public record UpdateDataRequest(IReadOnlyCollection<object> Elements) : DataChan
 public record DeleteDataRequest(IReadOnlyCollection<object> Elements)
     : DataChangedReqeust(Elements);
 
-public record PatchChangeRequest(JsonPatch Change, long Version) : WorkspaceMessage
+public record PatchChangeRequest(JsonPatch Change, long Version) : WorkspaceMessage, IRequest<DataChangeResponse>
 {
     public object ChangedBy { get; init; }
 }
