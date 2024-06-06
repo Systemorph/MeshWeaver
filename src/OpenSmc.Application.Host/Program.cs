@@ -13,7 +13,12 @@ public class Program
     {
         var builder = WebApplication.CreateBuilder(args);
 
-        builder.Services.ConfigureApplicationSignalR();
+        builder.Services.ConfigureApplicationSignalR(c =>
+            c.WithForwardToOrleansGrain<ApplicationAddress, IApplicationGrain>(
+                a => a.ToString(), // TODO V10: need to make this deterministic (2024/04/22, Dmitry Kalabin)
+                (g, d) => g.DeliverMessage(d)
+            )
+        );
 
         builder
             .Host.UseOpenSmc(new RouterAddress(), conf => conf.ConfigureRouter())
