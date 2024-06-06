@@ -7,7 +7,7 @@
 
 <PageTitle>@Application</PageTitle>
 
-<LayoutAreaView Address="@Address" Reference="@Reference"/>
+<LayoutAreaView Address="@Address" Reference="@Reference" />
 
 @code{
     [Parameter]
@@ -24,7 +24,7 @@
     private LayoutAreaReference Reference => new(Area)
     {
         Options = Options
-    }; 
+    };
 
     protected override void OnInitialized()
     {
