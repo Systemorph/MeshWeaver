@@ -7,7 +7,11 @@
 
 <PageTitle>@Application</PageTitle>
 
-<LayoutAreaView Address="@Address" Reference="@Reference" />
+<CascadingValue Value="@BaseUrl" Name="BaseAppUrl">
+    <h1>@Area</h1>
+    <LayoutAreaView Address="@Address" Reference="@NavMenuReference"/>
+    <LayoutAreaView Address="@Address" Reference="@Reference" />
+</CascadingValue>
 
 @code{
     [Parameter]
@@ -17,7 +21,8 @@
     [Parameter]
     public string Area { get; set; }
 
-    public Dictionary<string, StringValues> Options { get; set; }
+    public Dictionary<string, StringValues> Options => 
+        QueryHelpers.ParseQuery(navigationManager.ToAbsoluteUri(navigationManager.Uri).Query);
 
     private object Address => new ApplicationAddress(Application, Environment);
 
@@ -26,9 +31,16 @@
         Options = Options
     };
 
-    protected override void OnInitialized()
+    private LayoutAreaReference NavMenuReference => new("NavigationMenu")
     {
-        var uri = navigationManager.ToAbsoluteUri(navigationManager.Uri);
-        Options = QueryHelpers.ParseQuery(uri.Query);
+        Options = Options
+    };
+
+    public string BaseUrl {
+        get
+        {
+            var uri = navigationManager.ToAbsoluteUri(navigationManager.Uri);
+            return new Uri(uri, ".").AbsolutePath;
+        }
     }
 }

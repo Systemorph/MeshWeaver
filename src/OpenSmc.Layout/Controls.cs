@@ -11,7 +11,7 @@ public static class Controls
 
     public static NavGroup NavGroup = new();
 
-    public static NavLink NavLink = new();
+    public static NavLink NavLink(string area) => new(area);
 
     public static LayoutStackControl Stack() => new();
 

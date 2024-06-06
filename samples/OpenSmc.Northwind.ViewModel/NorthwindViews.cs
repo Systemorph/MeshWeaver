@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using OpenSmc.Application.Styles;
 using OpenSmc.Data;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
@@ -19,8 +20,8 @@ public static class NorthwindViews
                 .WithView(nameof(Dashboard), Dashboard)
                 .WithView(nameof(OrderSummary), _ => OrderSummary())
                 .WithView(nameof(ProductSummary), _ => ProductSummary())
-            .WithView(nameof(CustomerSummary), _ => CustomerSummary())
-            .WithView(nameof(SupplierSummary), _ => SupplierSummary())
+                .WithView(nameof(CustomerSummary), _ => CustomerSummary())
+                .WithView(nameof(SupplierSummary), _ => SupplierSummary())
                 .WithView(nameof(NavigationMenu), _ => NavigationMenu())
         );
     }
@@ -28,11 +29,11 @@ public static class NorthwindViews
     private static object NavigationMenu()
     {
         return NavMenu()
-            .WithNavLink("Dashboard", "dashboard")
-            .WithNavLink("Orders", "orders")
-            .WithNavLink("Products", "products")
-            .WithNavLink("Customers", "customers")
-            .WithNavLink("Suppliers", "suppliers");
+            .WithNavLink(nameof(Dashboard), FluentUiIcons.Grid)
+            .WithNavLink(nameof(OrderSummary), FluentUiIcons.Box)
+            .WithNavLink(nameof(ProductSummary), FluentUiIcons.Box)
+            .WithNavLink(nameof(CustomerSummary), FluentUiIcons.Person)
+            .WithNavLink(nameof(SupplierSummary), FluentUiIcons.Person);
     }
 
 

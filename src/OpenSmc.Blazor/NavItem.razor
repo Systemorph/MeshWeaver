@@ -1,8 +1,25 @@
-@typeparam TViewModel
+@using OpenSmc.Utils
+@using OpenSmc.Application.Styles
+@using Icon = Microsoft.FluentUI.AspNetCore.Components.Icon
+@using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons
+@typeparam TViewModel where TViewModel : INavItem
 
 @code {
     [Parameter]
     public TViewModel ViewModel { get; set; }
 
-    protected Icon Icon => new Icons.Regular.Size20.Home();
+    [CascadingParameter(Name = "BaseAppUrl")]
+    private string BaseAppUrl { get; set; }
+
+    protected string Href => $"{BaseAppUrl}{ViewModel.Area}";
+    protected string Title => ViewModel.Title ?? ViewModel.Area.Wordify();
+
+    protected Icon Icon =>
+        ViewModel.Icon.Provider switch
+        {
+            FluentUiIcons.Provider => 
+                Icons.GetInstance(new IconInfo {Name = ViewModel.Icon.Id, Size = IconSize.Size24}),
+            _ => null
+            };
+
 }
