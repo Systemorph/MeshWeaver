@@ -45,6 +45,7 @@ public record BlazorConfiguration
                 StandardView<LayoutStackControl, LayoutStack>(stack, stream, area),
             MenuItemControl menu => StandardView<MenuItemControl, MenuItem>(menu, stream, area),
             LayoutAreaControl layoutArea => StandardView<LayoutAreaControl, LayoutAreaView>(layoutArea, stream, area),
+            NavMenuControl navMenu => StandardView<NavMenuControl, NavMenuView>(navMenu, stream, area),
             IGenericType gc => GenericView(gc, stream, area),
             _ => DelegateToDotnetInteractive(instance, stream, area)
 
