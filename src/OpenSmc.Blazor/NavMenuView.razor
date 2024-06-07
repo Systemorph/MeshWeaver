@@ -1,26 +1,19 @@
 @inherits BlazorView<NavMenuControl>
 
-<div class="navmenu">
-    <input type="checkbox" title="Menu expand/collapse toggle" id="navmenu-toggle" class="navmenu-icon" />
-    <label for="navmenu-toggle" class="navmenu-icon">
-        <FluentIcon Value="@(new Icons.Regular.Size20.Navigation())" Color="Color.Fill"/>
-    </label>
-    <nav class="sitenav" aria-labelledby="main-menu" onclick="document.getElementById('navmenu-toggle').click();">
-        <FluentNavMenu>
-            @foreach (var item in ViewModel.Items)
-            {
-                @if (item is NavLink navLink)
-                {
-                    <NavLinkView ViewModel="@navLink"/>
-                }
-                else if (item is NavGroup navGroup)
-                {
-                    <NavGroupView ViewModel="@navGroup"/>
-                }
-            }
-        </FluentNavMenu>
-    </nav>
-</div>
+@* todo: un-hardcode Id *@
+<FluentNavMenu Id="main-menu" Collapsible="@ViewModel.Collapsible" Width="@ViewModel.Width" @bind-Expanded="@expanded">
+    @foreach (var item in ViewModel.Items)
+    {
+        @if (item is NavLink navLink)
+        {
+            <NavLinkView ViewModel="@navLink"/>
+        }
+        else if (item is NavGroup navGroup)
+        {
+            <NavGroupView ViewModel="@navGroup"/>
+        }
+    }
+</FluentNavMenu>
 
 @code {
     private bool expanded = true;
