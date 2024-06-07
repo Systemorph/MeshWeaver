@@ -15,6 +15,8 @@ public static class Controls
 
     public static LayoutStackControl Stack() => new();
 
+    public static ToolbarControl Toolbar() => new();
+
     public static SpinnerControl Spinner() => new();
 
     public static TextBoxControl TextBox(object data) => new(data);
