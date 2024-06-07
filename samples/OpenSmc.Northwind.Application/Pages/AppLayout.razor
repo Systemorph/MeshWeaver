@@ -7,11 +7,7 @@
 
 <PageTitle>@Application</PageTitle>
 
-<CascadingValue Value="@BaseUrl" Name="BaseAppUrl">
-    <h1>@Area</h1>
-    <LayoutAreaView Address="@Address" Reference="@NavMenuReference"/>
-    <LayoutAreaView Address="@Address" Reference="@Reference" />
-</CascadingValue>
+<LayoutAreaView Address="@Address" Reference="@Reference" />
 
 @code{
     [Parameter]
@@ -30,17 +26,4 @@
     {
         Options = Options
     };
-
-    private LayoutAreaReference NavMenuReference => new("NavigationMenu")
-    {
-        Options = Options
-    };
-
-    public string BaseUrl {
-        get
-        {
-            var uri = navigationManager.ToAbsoluteUri(navigationManager.Uri);
-            return new Uri(uri, ".").AbsolutePath;
-        }
-    }
 }
