@@ -1,6 +1,6 @@
 ﻿namespace OpenSmc.Application.Styles;
 
-public static class FluentUiIcons
+public static class FluentIcons
 {
     public const string Provider = "fluent-ui";
 

@@ -9,6 +9,10 @@ public record NavMenuControl()
     public ImmutableList<INavItem> Items { get; init; } =
         ImmutableList<INavItem>.Empty;
 
+    public bool Collapsible { get; init; }
+
+    public int? Width { get; init; }
+
     public NavMenuControl WithGroup(NavGroup navGroup) =>
         this with
         {
@@ -35,13 +39,18 @@ public record NavMenuControl()
 
     public NavMenuControl WithNavLink(string area, string title, Icon icon) =>
         WithNavLink(Controls.NavLink(area).WithTitle(title).WithIcon(icon));
+
+    public NavMenuControl WithCollapsible(bool collapsible) => this with { Collapsible = collapsible };
+
+    public NavMenuControl WithWidth(int width) => this with { Width = width };
 }
 
 public interface INavItem
 {
-    string Title { get; init; }
-    string Area { get; init; }
-    Icon Icon { get; init; }
+    string Title { get; }
+    string Area { get; }
+    Icon Icon { get; }
+    string Href { get; }
 }
 
 public abstract record NavItem<TItem> : INavItem where TItem : NavItem<TItem>
@@ -51,6 +60,9 @@ public abstract record NavItem<TItem> : INavItem where TItem : NavItem<TItem>
     public string Title { get; init; }
 
     public Icon Icon { get; init; }
+
+    // TODO V10: un-hardcode app name and environment (07.06.2024, Alexander Kravets)
+    public string Href => $"/app/Northwind/dev/{Area}";
 
     public TItem WithTitle(string title) => (TItem)(this with { Title = title });
 

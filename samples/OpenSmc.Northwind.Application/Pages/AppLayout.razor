@@ -4,8 +4,9 @@
 @using OpenSmc.Layout;
 @using Microsoft.AspNetCore.WebUtilities
 @using Microsoft.Extensions.Primitives
+@using OpenSmc.Utils
 
-<PageTitle>@Application</PageTitle>
+<PageTitle>@PageTitle</PageTitle>
 
 <LayoutAreaView Address="@Address" Reference="@Reference" />
 
@@ -16,6 +17,8 @@
     public string Environment { get; set; }
     [Parameter]
     public string Area { get; set; }
+
+    private string PageTitle => $"{Area.Wordify()} - {Application}";
 
     public Dictionary<string, StringValues> Options => 
         QueryHelpers.ParseQuery(navigationManager.ToAbsoluteUri(navigationManager.Uri).Query);

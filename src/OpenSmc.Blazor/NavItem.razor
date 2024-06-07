@@ -8,13 +8,12 @@
     [Parameter]
     public TViewModel ViewModel { get; set; }
 
-    protected string Href => $"{ViewModel.Area}";
     protected string Title => ViewModel.Title ?? ViewModel.Area.Wordify();
 
     protected Icon Icon =>
         ViewModel.Icon.Provider switch
         {
-            FluentUiIcons.Provider => 
+            FluentIcons.Provider => 
                 Icons.GetInstance(new IconInfo {Name = ViewModel.Icon.Id, Size = IconSize.Size24}),
             _ => null
             };
