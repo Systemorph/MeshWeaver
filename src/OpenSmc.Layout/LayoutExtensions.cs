@@ -31,11 +31,8 @@ public static class LayoutExtensions
                     (changeStream, _, a) =>
                         data
                             .Hub.ServiceProvider.GetRequiredService<ILayout>()
-                            .Render(changeStream, a),
-                    (ws, reference, val) =>
-                        val.SetValue(ws with { Store = ws.Store.Update(reference, val.Value) })
+                            .Render(changeStream, a)
                 )
-                .ForReducedStream<JsonElement>(conf => conf.AddWorkspaceReference<JsonPointerReference, JsonElement?>(ReduceJsonPointer, null))
             )
             .AddLayoutTypes()
             .Set(config.GetListOfLambdas().Add(layoutDefinition))
@@ -43,12 +40,6 @@ public static class LayoutExtensions
     }
 
 
-    private static JsonElement? ReduceJsonPointer(JsonElement obj, JsonPointerReference pointer)
-    {
-        var parsed = JsonPointer.Parse(pointer.Pointer);
-        var result = parsed.Evaluate(obj);
-        return result;
-    }
 
     internal static ImmutableList<Func<LayoutDefinition, LayoutDefinition>> GetListOfLambdas(
         this MessageHubConfiguration config
@@ -65,7 +56,7 @@ public static class LayoutExtensions
                     .Assembly.GetTypes()
                     .Where(t => typeof(IUiControl).IsAssignableFrom(t) && !t.IsAbstract)
             )
-            .WithTypes(typeof(MessageAndAddress), typeof(LayoutAreaReference), typeof(Binding));
+            .WithTypes(typeof(MessageAndAddress), typeof(LayoutAreaReference));
 
 
     public static IObservable<object> GetControlStream(

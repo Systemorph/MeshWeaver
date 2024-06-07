@@ -1,5 +1,6 @@
 ﻿using System.Linq.Expressions;
 using System.Reflection;
+using OpenSmc.Data;
 using OpenSmc.Reflection;
 using OpenSmc.Utils;
 
@@ -32,7 +33,7 @@ public static class TemplateBuilder
         }
 
 
-        private static readonly ConstructorInfo BindingConstructor = typeof(Binding).GetConstructor(BindingFlags.Public | BindingFlags.Instance, new[] { typeof(string) });
+        private static readonly ConstructorInfo BindingConstructor = typeof(JsonPointerReference).GetConstructor(BindingFlags.Public | BindingFlags.Instance, new[] { typeof(string) });
         internal readonly List<Type> DataBoundTypes = new();
         private Expression GetBinding(string path, Type type)
         {
@@ -69,12 +70,12 @@ public static class TemplateBuilder
         private static readonly Dictionary<MethodInfo, MethodInfo> ReplacementMethods = new()
                                                                         {
                                                                             {
-                                                                                ReflectionHelper.GetStaticMethodGeneric(() => Controls.Bind<object, UiControl>((object)null, default)),
-                                                                                ReflectionHelper.GetStaticMethodGeneric(() => Controls.BindObject<object, UiControl>(default, default))
+                                                                                ReflectionHelper.GetStaticMethodGeneric(() => Controls.Bind<object, UiControl>(null, (object)null, null,default)),
+                                                                                ReflectionHelper.GetStaticMethodGeneric(() => Controls.BindObject<object, UiControl>(null, default, null,default))
                                                                             },
                                                                             {
-                                                                                ReflectionHelper.GetStaticMethodGeneric(() => Controls.Bind<object, UiControl>(null, default)),
-                                                                                ReflectionHelper.GetStaticMethodGeneric(() => Controls.BindEnumerable<object, UiControl>(default, default))
+                                                                                ReflectionHelper.GetStaticMethodGeneric(() => Controls.Bind<object, UiControl>(null, null, null,default)),
+                                                                                ReflectionHelper.GetStaticMethodGeneric(() => Controls.BindEnumerable<object, UiControl>(null, default, null,default))
                                                                             },
 
                                                                         };
@@ -84,7 +85,7 @@ public static class TemplateBuilder
             var obj = Visit(node.Object);
             var args = node.Arguments.Select(Visit).ToArray();
             if (node.Method.Name == "get_Item" && obj != null && bindings.TryGetValue(obj, out var path))
-                return GetBinding($"{path}[{args.First()}]", node.Method.ReturnType);
+                return GetBinding($"{path}/{args.First()}", node.Method.ReturnType);
 
             var method = node.Method.IsGenericMethod && ReplacementMethods.TryGetValue(node.Method.GetGenericMethodDefinition(), out var repl) ? repl.MakeGenericMethod(node.Method.GetGenericArguments()) : node.Method;
             if (args.Zip(method.GetParameters(), (a, p) => p.ParameterType.IsAssignableFrom(a.Type)).Any(x => !x))
@@ -128,7 +129,7 @@ public static class TemplateBuilder
 
             if (expr != null && bindings.TryGetValue(expr, out var parentPath))
             {
-                var separator = string.IsNullOrEmpty(parentPath) ? string.Empty : ".";
+                var separator = string.IsNullOrEmpty(parentPath) ? string.Empty : "/";
 
                 string path = $"{parentPath}{separator}{node.Member.Name.ToCamelCase()}";
                 var ret = GetBinding(path, node.Type);

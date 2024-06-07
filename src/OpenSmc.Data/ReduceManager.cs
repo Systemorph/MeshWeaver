@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using OpenSmc.Data.Serialization;
 
@@ -131,7 +131,9 @@ public record ReduceManager<TStream>
         return (IChangeStream<TReduced, TReference>)
             ReduceStreams
                 .Select(reduceStream => reduceStream.Invoke(reducedStream, stream, reference))
-                .FirstOrDefault(x => x != null);
+                .FirstOrDefault(x => x != null)
+            ;
+            //?? throw new ArgumentException($"No reducer defined for stream type {typeof(TStream).Name} and reference type {reference.GetType().Name}");
     }
 
     public ReduceManager<TReduced> ReduceTo<TReduced>() =>

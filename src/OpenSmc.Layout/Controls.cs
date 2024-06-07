@@ -1,5 +1,7 @@
 ﻿using System.Linq.Expressions;
 using OpenSmc.Application.Styles;
+using OpenSmc.Data;
+using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.DataBinding;
 using OpenSmc.Layout.Views;
 
@@ -71,43 +73,58 @@ public static class Controls
     /// <summary>
     /// Takes expression tree of data template and replaces all property getters by binding instances and sets data context property
     /// </summary>
-    public static UiControl Bind<T, TView>(T data, Expression<Func<T, TView>> dataTemplate)
-        where TView : UiControl => BindObject(data, dataTemplate);
+    public static UiControl Bind<T, TView>(this LayoutArea area, T data, string id, Expression<Func<T, TView>> dataTemplate)
+        where TView : UiControl => BindObject(area, data, id, dataTemplate);
 
     internal static UiControl BindObject<T, TView>(
+        this LayoutArea area,
         object data,
+        string id,
         Expression<Func<T, TView>> dataTemplate
     )
         where TView : UiControl
     {
-        var view = dataTemplate.Build("$", out var types);
+        var topLevel = UpdateData(area, data, id);
+        var view = dataTemplate.Build(topLevel, out var _);
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
         view = view with { DataContext = data };
         return view;
     }
 
+    private static string UpdateData(LayoutArea area, object data, string id)
+    {
+        if (data is JsonPointerReference reference)
+            return reference.Pointer;
+
+        var topLevel = LayoutAreaReference.GetDataPointer(id);
+        area.UpdateData(topLevel, data);
+        return topLevel;
+    }
+
     public static ItemTemplateControl Bind<T, TView>(
+        this LayoutArea area,
         IEnumerable<T> data,
+        string id,
         Expression<Func<T, TView>> dataTemplate
     )
-        where TView : UiControl => BindEnumerable(data, dataTemplate);
+        where TView : UiControl => BindEnumerable(area, data, id, dataTemplate);
 
     internal static ItemTemplateControl BindEnumerable<T, TView>(
+        this LayoutArea area,
         object data,
+        string id,
         Expression<Func<T, TView>> dataTemplate
     )
         where TView : UiControl
     {
-        var view = dataTemplate.Build("$", out var types);
+        var topLevel = UpdateData(area, data, id);
+
+        var view = dataTemplate.Build(topLevel, out var _);
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
-        var ret =
-            data is Binding
-                ? new ItemTemplateControl(view, data)
-                : new ItemTemplateControl(view, new Binding("$")) { DataContext = data };
 
-        return ret;
+        return new ItemTemplateControl(view, new JsonPointerReference(topLevel));
     }
 
     #endregion

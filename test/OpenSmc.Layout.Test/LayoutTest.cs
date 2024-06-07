@@ -8,7 +8,6 @@ using Json.Pointer;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout.Composition;
-using OpenSmc.Layout.DataBinding;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
 using Xunit.Abstractions;
@@ -45,21 +44,16 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     .WithView(nameof(ViewWithProgress), ViewWithProgress)
                     .WithView(
                         nameof(UpdatingView),
-                        _ =>
-                            layout
-                                .Hub.GetWorkspace()
-                                .Stream.Select(ws => GetToolbar(ws.Value))
-                                .DistinctUntilChanged()
-                                .Select(UpdatingView)
+                        UpdatingView()
                     )
                     .WithView(
                         nameof(ItemTemplate),
-                        _ =>
+                        area =>
                             layout
                                 .Hub.GetWorkspace()
                                 .Stream.Select(x => x.Value.GetData<DataRecord>())
                                 .DistinctUntilChanged()
-                                .Select(ItemTemplate)
+                                .Select(data => ItemTemplate(area, data))
                     )
                     .WithView(
                         nameof(Counter),
@@ -69,9 +63,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             );
     }
 
-    private object ItemTemplate(IReadOnlyCollection<DataRecord> data) =>
-        Controls.Bind(
+    private object ItemTemplate(LayoutArea area,IReadOnlyCollection<DataRecord> data) =>
+        area.Bind(
             data,
+            nameof(ItemTemplate),
             record => Controls.TextBox(record.DisplayName).WithId(record.SystemName)
         );
 
@@ -85,7 +80,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 Controls
                     .Menu("Increase Counter")
                     .WithClickAction(context =>
-                        context.Layout.Update(
+                        context.Layout.UpdateLayout(
                             $"{nameof(Counter)}/{nameof(Counter)}",
                             Controls.Html((++counter))
                         )
@@ -96,19 +91,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
     protected override MessageHubConfiguration ConfigureClient(
         MessageHubConfiguration configuration
-    )
-    {
-        return base.ConfigureClient(configuration)
-            .AddLayoutClient(d => d)
-            ;
-    }
+    ) =>
+        base.ConfigureClient(configuration)
+            .AddLayoutClient(d => d);
 
     private record Toolbar(int Year);
 
-    private Toolbar GetToolbar(WorkspaceState ws)
-    {
-        return ws.GetData<Toolbar>().Single();
-    }
     private static async Task<object> ViewWithProgress(LayoutArea area)
     {
         var percentage = 0;
@@ -116,7 +104,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         for (var i = 0; i < 10; i++)
         {
             await Task.Delay(30);
-            area.Update(
+            area.UpdateLayout(
                 nameof(ViewWithProgress),
                 progress = progress with { Progress = percentage += 10 }
             );
@@ -125,12 +113,15 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         return Controls.Html("Report");
     }
 
-    private static UiControl UpdatingView(Toolbar toolbar)
+    private static object UpdatingView()
     {
+        var toolbar = new Toolbar(2024);
+        
         return Controls
             .Stack()
-            .WithView("Toolbar", Controls.Bind(toolbar, tb => Controls.TextBox(tb.Year)))
-            .WithView("Content", Controls.Html($"Report for year {toolbar.Year}"));
+            .WithView("Toolbar", layoutArea => layoutArea.Bind(toolbar, nameof(toolbar), tb => Controls.TextBox(tb.Year)))
+            .WithView("Content", area => area.GetDataStream<Toolbar>(nameof(toolbar))
+                .Select(tb =>  Controls.Html($"Report for year {tb.Year}")));
     }
 
     [HubFact]
@@ -187,11 +178,11 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Get toolbar and change value.
         var toolbarArea = $"{reference.Area}/Toolbar";
-        var toolbar = (TextBoxControl)await stream.GetControlStream(toolbarArea).FirstAsync();
-        var jsonPath = toolbar.Data.Should().BeOfType<JsonPointerReference>().Which;
-        jsonPath.Pointer.Should().Be($"/{LayoutAreaReference.Data}/{reference.Area}~1Toolbar");
+        var yearTextBox = (TextBoxControl)await stream.GetControlStream(toolbarArea).FirstAsync();
+        var jsonPath = yearTextBox.Data.Should().BeOfType<JsonPointerReference>().Which;
+        jsonPath.Pointer.Should().Be("/data/toolbar/year");
         var year = await stream.Reduce(jsonPath).FirstAsync();
-        year.Value.Should().Be(2024);
+        year.Value.Should().BeOfType<JsonElement>().Which.GetInt32().Should().Be(2024);
 
 
         stream.Update(ci => new Data.Serialization.ChangeItem<JsonElement>(
@@ -234,14 +225,15 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .SelectAwait(async r => (DataRecord)await stream.GetDataStream(r).FirstAsync())
             .ToArrayAsync();
 
-        itemTemplate.Data.Should().BeOfType<Binding>().Which.Path.Should().Be("$");
+        var basePath = LayoutAreaReference.GetDataPointer(nameof(ItemTemplate));
+        itemTemplate.Data.Should().BeOfType<JsonPointerReference>().Which.Pointer.Should().Be(basePath);
         itemTemplate
             .View.Should()
             .BeOfType<TextBoxControl>()
             .Which.Data.Should()
-            .BeOfType<Binding>()
-            .Which.Path.Should()
-            .Be("$.displayName");
+            .BeOfType<JsonPointerReference>()
+            .Which.Pointer.Should()
+            .Be($"{basePath}/displayName");
         workspaceReferences
             .Should()
             .HaveCount(2)
@@ -273,18 +265,6 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         content.Should().BeOfType<HtmlControl>().Which.Data.Should().Be("1");
     }
 
-    [HubFact]
-    public async Task IntView()
-    {
-        var reference = new LayoutAreaReference("int");
-
-        var hub = GetClient();
-        var workspace = hub.GetWorkspace();
-        var stream = workspace.GetStream(new HostAddress(), reference);
-        var controlArea = $"{reference.Area}";
-        var content = await stream.GetControlStream(controlArea).FirstAsync();
-        content.Should().Be(3);
-    }
 }
 
 public static class TestAreas

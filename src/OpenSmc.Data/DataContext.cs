@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
-using System.Runtime.CompilerServices;
+using System.Text.Json;
+using Json.Pointer;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 
@@ -61,25 +62,7 @@ public sealed record DataContext(IMessageHub Hub) : IAsyncDisposable
         };
 
 
-    public DataContext ForReducedStream<TReducedStream>(
-        Func<ReduceManager<TReducedStream>, ReduceManager<TReducedStream>> configuration
-    ) => this with { ReduceManager = ReduceManager.ForReducedStream<TReducedStream>(configuration) };
 
-    private ImmutableDictionary<
-        Type,
-        Func<IChangeStream, IChangeItem>
-    > StreamConfigration { get; init; } =
-        ImmutableDictionary<Type, Func<IChangeStream, IChangeItem>>.Empty;
-
-    public DataContext AddWorkspaceReference<TReference, TStream>(
-        Func<WorkspaceState, TReference, TStream> referenceDefinition,
-        Func<WorkspaceState, TReference, ChangeItem<TStream>, ChangeItem<WorkspaceState>> backfeed
-    )
-        where TReference : WorkspaceReference<TStream> =>
-        this with
-        {
-            ReduceManager = ReduceManager.AddWorkspaceReference(referenceDefinition, backfeed)
-        };
 
     public delegate IDataSource DataSourceBuilder(IMessageHub hub);
 
@@ -117,13 +100,13 @@ public sealed record DataContext(IMessageHub Hub) : IAsyncDisposable
                     update.SetValue(ws with { Store = ws.Store.Update(reference, update.Value) })
             )
             .AddWorkspaceReference<WorkspaceStoreReference, EntityStore>(
-                (ws, reference) => ws.Store,
+                (ws, _) => ws.Store,
                 (ws, reference, update) =>
                     update.SetValue(ws with { Store = ws.Store.Update(reference, update.Value) })
             )
             .AddWorkspaceReference<WorkspaceStateReference, WorkspaceState>(
-                (ws, reference) => ws,
-                (ws, reference, update) =>
+                (ws, _) => ws,
+                (ws, _, update) =>
                     update.SetValue(ws with { Store = ws.Store.Merge(update.Value.Store) })
             )
             .ForReducedStream<EntityStore>(reduced =>
@@ -145,7 +128,7 @@ public sealed record DataContext(IMessageHub Hub) : IAsyncDisposable
                         null
                     )
                     .AddWorkspaceReference<WorkspaceStoreReference, EntityStore>(
-                        (ws, reference) => ws,
+                        (ws, _) => ws,
                         null
                     )
             )
@@ -154,11 +137,16 @@ public sealed record DataContext(IMessageHub Hub) : IAsyncDisposable
                     (ws, reference) => ws.Instances.GetValueOrDefault(reference.Id),
                     null
                 )
-            // .AddWorkspaceReference<PartitionedCollectionsReference, EntityStore>(
-            //     (ws, reference) => ws.ReduceImpl(reference),
-            //     CreateState
-            // )
-            );
+
+            )
+            .ForReducedStream<JsonElement>(conf => conf.AddWorkspaceReference<JsonPointerReference, JsonElement?>(ReduceJsonPointer, null))
+            ;
+    }
+    private static JsonElement? ReduceJsonPointer(JsonElement obj, JsonPointerReference pointer)
+    {
+        var parsed = JsonPointer.Parse(pointer.Pointer);
+        var result = parsed.Evaluate(obj);
+        return result;
     }
 
     public async ValueTask DisposeAsync()
