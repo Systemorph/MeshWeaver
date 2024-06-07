@@ -15,15 +15,15 @@ namespace OpenSmc.Layout.Composition;
 public record LayoutArea
 {
     private readonly IMessageHub hub;
+    public IChangeStream<JsonElement, LayoutAreaReference> Stream { get; }
 
-    public ReplaySubject<ChangeItem<JsonElement>> Stream { get; } = new(1);
     public LayoutAreaReference Reference { get; init; }
 
     private readonly Subject<Func<ChangeItem<JsonElement>, ChangeItem<JsonElement>>> updateStream =
         new();
     public readonly IWorkspace Workspace;
 
-    public void Update(string area, object control)
+    public void UpdateLayout(string area, object control)
     {
         updateStream.OnNext(ws => UpdateImpl(area, control, ws));
     }
@@ -41,9 +41,10 @@ public record LayoutArea
         return ws.SetValue(UpdateJsonElement(ws.Value, path, ConvertToControl(control)));
     }
 
-    public LayoutArea(LayoutAreaReference Reference, IMessageHub hub)
+    public LayoutArea(LayoutAreaReference Reference, IMessageHub hub, IChangeStream<JsonElement, LayoutAreaReference> stream)
     {
         this.hub = hub;
+        Stream = stream;
         this.Reference = Reference;
         Workspace = hub.GetWorkspace();
         updateStream
@@ -61,11 +62,10 @@ public record LayoutArea
             .Subscribe(Stream);
     }
 
-    public object UpdateData(string pointer, object data)
+    public void UpdateData(string pointer, object data)
     {
         updateStream.OnNext(ws =>
             ws.SetValue(UpdateJsonElement(ws.Value, pointer, data)));
-        return new JsonPointerReference(pointer);
     }
 
     private JsonElement UpdateJsonElement(JsonElement existing, string pointer, object data) => 
@@ -93,5 +93,14 @@ public record LayoutArea
     public void AddDisposable(string area, IDisposable disposable)
     {
         disposablesByArea.GetOrAdd(area, _ => new()).Add(disposable);
+    }
+
+    public IObservable<T> GetDataStream<T>(string id)
+        where T:class
+    {
+        var reference = JsonPointer.Parse(LayoutAreaReference.GetDataPointer(id));
+        return Stream.Select(ci => reference.Evaluate(ci.Value)?.Deserialize<T>(hub.JsonSerializerOptions))
+            .Where(x => x != null)
+            .DistinctUntilChanged();
     }
 }

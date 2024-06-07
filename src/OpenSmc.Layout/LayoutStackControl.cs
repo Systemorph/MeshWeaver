@@ -40,8 +40,10 @@ public record LayoutStackControl()
         => WithView(GetAutoName(), viewDefinition);
     public LayoutStackControl WithView(Func<LayoutArea, IObservable<object>> viewDefinition)
         => WithView(GetAutoName(), viewDefinition);
-    public LayoutStackControl WithView(string area, Func<LayoutArea,IObservable<object>> viewDefinition)
-        => this with {ViewElements = ViewElements.Add(new ViewElementWithViewStream(area, viewDefinition.Invoke))};
+    public LayoutStackControl WithView(string area, Func<LayoutArea, IObservable<object>> viewDefinition)
+        => this with { ViewElements = ViewElements.Add(new ViewElementWithViewStream(area, viewDefinition.Invoke)) };
+    public LayoutStackControl WithView(string area, Func<LayoutArea, object> viewDefinition)
+        => WithView(area, la => Observable.Return(viewDefinition.Invoke(la)));
 
 
     public HorizontalAlignment HorizontalAlignment { get; init; }

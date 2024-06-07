@@ -476,7 +476,7 @@ public sealed class MessageHub<TAddress>
             JsonSerializerOptions options
         )
         {
-            using JsonDocument doc = JsonDocument.ParseValue(ref reader);
+            using var doc = JsonDocument.ParseValue(ref reader);
             var node = doc.RootElement.AsNode();
             return node.Deserialize(typeToConvert, deserializationOptions);
         }
@@ -488,7 +488,7 @@ public sealed class MessageHub<TAddress>
         )
         {
             var node = JsonSerializer.SerializeToNode(value, serializationOptions);
-            node.WriteTo(writer);
+            node?.WriteTo(writer);
         }
     }
 

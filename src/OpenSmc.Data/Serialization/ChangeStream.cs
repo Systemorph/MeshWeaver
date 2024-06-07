@@ -1,7 +1,8 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Subjects;
-using OpenSmc.Activities;
+using System.Reflection;
 using OpenSmc.Messaging;
+using OpenSmc.Reflection;
 
 namespace OpenSmc.Data.Serialization;
 
@@ -32,7 +33,7 @@ public interface IChangeStream<TStream>
     IObservable<IChangeItem> Reduce(WorkspaceReference reference)
         => Reduce((dynamic)reference);
 
-    IObservable<ChangeItem<TReduced>> Reduce<TReduced>(WorkspaceReference<TReduced> reference);
+    IChangeStream<TReduced> Reduce<TReduced>(WorkspaceReference<TReduced> reference);
 
     new Task<TStream> Initialized { get; }
 
@@ -98,10 +99,17 @@ public record ChangeStream<TStream, TReference> : IChangeStream<TStream, TRefere
         backfeed = reduceManager.ReduceTo<TStream>().GetBackfeed<TReference>();
     }
 
-    public IObservable<ChangeItem<TReduced>> Reduce<TReduced>(
+    public IChangeStream<TReduced> Reduce<TReduced>(
         WorkspaceReference<TReduced> reference
-    ) => reduceManager.ReduceStream(Workspace.GetStream(reference), store, reference);
+    ) => (IChangeStream<TReduced>)ReduceMethod.MakeGenericMethod(typeof(TReduced), reference.GetType()).Invoke(this, [reference]);
 
+    private static readonly MethodInfo ReduceMethod = ReflectionHelper.GetMethodGeneric<ChangeStream<TStream,TReference>>(x => x.Reduce<object, WorkspaceReference<object>>(null));
+    private IChangeStream<TReduced> Reduce<TReduced, TReference2>(
+        TReference2 reference
+    )
+        where TReference2 : WorkspaceReference<TReduced>
+        => 
+            reduceManager.ReduceStream(new ChangeStream<TReduced, TReference2>(Id, reference, Workspace, reduceManager.ReduceTo<TReduced>()), store, reference);
     public IDisposable Subscribe(IObserver<ChangeItem<TStream>> observer)
     {
         return store.Subscribe(observer);
@@ -173,16 +181,10 @@ public record ChangeStream<TStream, TReference> : IChangeStream<TStream, TRefere
 
     public DataChangeResponse RequestChange(Func<TStream, ChangeItem<TStream>> update)
     {
-        if (backfeed == null)
-            return new DataChangeResponse(
-                0,
-                DataChangeStatus.Failed,
-                new ActivityLog(ActivityCategory.DataUpdate).Fail(
-                    $"Was not able to back transform the change item of type {typeof(TStream).Name}"
-                )
-            );
-
-        return Workspace.RequestChange(state => backfeed(state, Reference, update(Current.Value)));
+        if (backfeed != null)
+            return Workspace.RequestChange(state => backfeed(state, Reference, update(Current.Value)));
+        Current = update(Current.Value);
+        return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, null);
     }
 
     public void OnNext(ChangeItem<TStream> value)

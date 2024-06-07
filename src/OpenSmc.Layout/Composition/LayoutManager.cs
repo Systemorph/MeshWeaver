@@ -1,6 +1,5 @@
 ﻿using System.Collections.Concurrent;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
@@ -10,20 +9,17 @@ namespace OpenSmc.Layout.Composition;
 public class LayoutManager
 {
     private readonly LayoutArea layoutArea;
-    private readonly IChangeStream<JsonElement, LayoutAreaReference> changeStream;
     private readonly IMessageHub layoutHub;
 
     public LayoutDefinition LayoutDefinition { get; }
 
     public LayoutManager(
         LayoutArea layoutArea,
-        LayoutDefinition layoutDefinition,
-        IChangeStream<JsonElement, LayoutAreaReference> changeStream
+        LayoutDefinition layoutDefinition
     )
     {
         this.layoutArea = layoutArea;
         LayoutDefinition = layoutDefinition;
-        this.changeStream = changeStream;
         var hub = layoutDefinition.Hub;
         layoutHub = hub.GetHostedHub(new LayoutExecutionAddress(hub.Address));
     }
@@ -46,13 +42,13 @@ public class LayoutManager
         //if (viewModel is UiControl { DataContext: not null } control)
         //    viewModel = control with { DataContext = layoutArea.UpdateData(control.DataContext) };
 
-        layoutArea.Update(area, viewModel);
+        layoutArea.UpdateLayout(area, viewModel);
     }
 
     private void RenderArea(string area, ViewElementWithViewDefinition viewDefinition)
     {
         var stream = viewDefinition.ViewDefinition;
-        layoutArea.Update(area, new SpinnerControl());
+        layoutArea.UpdateLayout(area, new SpinnerControl());
         
         layoutArea.AddDisposable(area, stream.Subscribe(f =>
             layoutHub.Schedule(async ct =>
@@ -87,9 +83,10 @@ public class LayoutManager
     {
         var viewElement = LayoutDefinition.GetViewElement(reference);
         if (viewElement == null)
-            return changeStream;
+            return layoutArea.Stream;
+
+        var changeStream = layoutArea.Stream;
         RenderArea(reference.Area, viewElement);
-        changeStream.AddDisposable(layoutArea.Stream.Subscribe(changeStream));
         changeStream.AddDisposable(
             changeStream.Hub.Register<ClickedEvent>(
                 (request) =>
