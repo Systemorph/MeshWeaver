@@ -8,10 +8,7 @@
     [Parameter]
     public TViewModel ViewModel { get; set; }
 
-    [CascadingParameter(Name = "BaseAppUrl")]
-    private string BaseAppUrl { get; set; }
-
-    protected string Href => $"{BaseAppUrl}{ViewModel.Area}";
+    protected string Href => $"{ViewModel.Area}";
     protected string Title => ViewModel.Title ?? ViewModel.Area.Wordify();
 
     protected Icon Icon =>

@@ -55,9 +55,13 @@ public partial class LayoutAreaView
         StateHasChanged();
     }
 
-    protected override void OnInitialized()
+    protected override void OnParametersSet()
     {
-        base.OnInitialized();
+        base.OnParametersSet();
+
+        RootControl = null;
+        Stream?.Dispose();
+
         Stream = Address.Equals(Hub.Address)
             ? Workspace.GetStream<EntityStore, LayoutAreaReference>(Reference)
             : Workspace.GetStream<EntityStore, LayoutAreaReference>(Address, Reference);

@@ -29,11 +29,11 @@ public static class NorthwindViews
     private static object NavigationMenu()
     {
         return NavMenu()
-            .WithNavLink(nameof(Dashboard), FluentUiIcons.Grid)
-            .WithNavLink(nameof(OrderSummary), FluentUiIcons.Box)
-            .WithNavLink(nameof(ProductSummary), FluentUiIcons.Box)
-            .WithNavLink(nameof(CustomerSummary), FluentUiIcons.Person)
-            .WithNavLink(nameof(SupplierSummary), FluentUiIcons.Person);
+            .WithNavLink("app/Northwind/dev/Dashboard", FluentUiIcons.Grid)
+            .WithNavLink("app/Northwind/dev/OrderSummary", FluentUiIcons.Box)
+            .WithNavLink("app/Northwind/dev/ProductSummary", FluentUiIcons.Box)
+            .WithNavLink("app/Northwind/dev/CustomerSummary", FluentUiIcons.Person)
+            .WithNavLink("app/Northwind/dev/SupplierSummary", FluentUiIcons.Person);
     }
 
 
