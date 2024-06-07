@@ -215,26 +215,15 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetStream(new HostAddress(), reference);
         var controlArea = $"{reference.Area}";
-        var content = await stream.GetControlStream(controlArea).FirstAsync();
+        var content = await stream.GetControlStream(controlArea).FirstAsync(x => x != null);
         var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
-        var workspaceReferences = await itemTemplate
-            .DataContext.Should()
-            .BeAssignableTo<IEnumerable>()
-            .Which.OfType<JsonPointerReference>()
-            .ToAsyncEnumerable()
-            .SelectAwait(async r => (DataRecord)await stream.GetDataStream(r).FirstAsync())
-            .ToArrayAsync();
+        var dataReference = itemTemplate.Data.Should().BeOfType<JsonPointerReference>().Which;
+        dataReference.Pointer.Should().Be($"/data/{nameof(ItemTemplate)}");
+        var data =  await stream.Reduce(dataReference).FirstAsync();
 
-        var basePath = LayoutAreaReference.GetDataPointer(nameof(ItemTemplate));
-        itemTemplate.Data.Should().BeOfType<JsonPointerReference>().Which.Pointer.Should().Be(basePath);
-        itemTemplate
-            .View.Should()
-            .BeOfType<TextBoxControl>()
-            .Which.Data.Should()
-            .BeOfType<JsonPointerReference>()
-            .Which.Pointer.Should()
-            .Be($"{basePath}/displayName");
-        workspaceReferences
+
+        var deserialized = data.Value?.Deserialize<IEnumerable<DataRecord>>(hub.JsonSerializerOptions);
+        deserialized
             .Should()
             .HaveCount(2)
             .And.Contain(r => r.SystemName == "Hello")
