@@ -9,7 +9,15 @@ namespace OpenSmc.Layout;
 
 public static class Controls
 {
+    public static NavMenuControl NavMenu() => new();
+
+    public static NavGroup NavGroup = new();
+
+    public static NavLink NavLink(string area) => new(area);
+
     public static LayoutStackControl Stack() => new();
+
+    public static ToolbarControl Toolbar() => new();
 
     public static SpinnerControl Spinner() => new();
 
