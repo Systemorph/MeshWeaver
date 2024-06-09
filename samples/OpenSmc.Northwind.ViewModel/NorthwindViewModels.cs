@@ -3,7 +3,6 @@ using OpenSmc.Data;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
-using OpenSmc.Messaging.Serialization;
 using OpenSmc.Northwind.Domain;
 using static OpenSmc.Layout.Controls;
 
