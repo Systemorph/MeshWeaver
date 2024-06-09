@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using OpenSmc.Application.Styles;
 using OpenSmc.Data;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
@@ -19,15 +20,22 @@ public static class NorthwindViewModels
                 .WithView(nameof(Dashboard), Dashboard)
                 .WithView(nameof(OrderSummary), _ => OrderSummary())
                 .WithView(nameof(ProductSummary), _ => ProductSummary())
-            .WithView(nameof(CustomerSummary), _ => CustomerSummary())
-            .WithView(nameof(SupplierSummary), _ => SupplierSummary())
+                .WithView(nameof(CustomerSummary), _ => CustomerSummary())
+                .WithView(nameof(SupplierSummary), _ => SupplierSummary())
                 .WithView(nameof(NavigationMenu), _ => NavigationMenu())
         );
     }
 
     private static object NavigationMenu()
     {
-        return null; // TODO V10: Create a structure which allows me to return a container with NavLinks (03.06.2024, Roland Bürgi)
+        return NavMenu()
+            .WithCollapsible(true)
+            .WithWidth(250)
+            .WithNavLink(nameof(Dashboard), FluentIcons.Grid)
+            .WithNavLink(nameof(OrderSummary), FluentIcons.Box)
+            .WithNavLink(nameof(ProductSummary), FluentIcons.Box)
+            .WithNavLink(nameof(CustomerSummary), FluentIcons.Person)
+            .WithNavLink(nameof(SupplierSummary), FluentIcons.Person);
     }
 
 

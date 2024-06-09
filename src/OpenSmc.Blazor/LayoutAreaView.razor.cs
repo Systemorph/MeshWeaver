@@ -58,9 +58,13 @@ public partial class LayoutAreaView
     }
 
 
-    protected override void OnInitialized()
+    protected override void OnParametersSet()
     {
-        base.OnInitialized();
+        base.OnParametersSet();
+
+        RootControl = null;
+        Stream?.Dispose();
+
         Stream = Address.Equals(Hub.Address)
             ? Workspace.GetStream<JsonElement, LayoutAreaReference>(Reference)
             : Workspace.GetStream<JsonElement, LayoutAreaReference>(Address, Reference);

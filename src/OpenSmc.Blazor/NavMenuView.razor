@@ -1,0 +1,20 @@
+@inherits BlazorView<NavMenuControl>
+
+@* todo: un-hardcode Id *@
+<FluentNavMenu Id="main-menu" Collapsible="@ViewModel.Collapsible" Width="@ViewModel.Width" @bind-Expanded="@expanded">
+    @foreach (var item in ViewModel.Items)
+    {
+        @if (item is NavLink navLink)
+        {
+            <NavLinkView ViewModel="@navLink"/>
+        }
+        else if (item is NavGroup navGroup)
+        {
+            <NavGroupView ViewModel="@navGroup"/>
+        }
+    }
+</FluentNavMenu>
+
+@code {
+    private bool expanded = true;
+}
