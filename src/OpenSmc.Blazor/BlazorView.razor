@@ -9,11 +9,11 @@
     public IChangeStream<JsonElement, LayoutAreaReference> Stream { get; set; }
     [Parameter] 
     public string Area { get; set; }
-    protected UiControl GetControl(ChangeItem<JsonElement> item, string area)
+    protected object GetControl(ChangeItem<JsonElement> item, string area)
     {
         return item.Value.TryGetProperty(LayoutAreaReference.Areas, out var controls) && 
             controls.TryGetProperty(area, out var node) 
-            ? node.Deserialize<UiControl>(Stream.Hub.JsonSerializerOptions) 
+            ? node.Deserialize<object>(Stream.Hub.JsonSerializerOptions) 
             : null;
     }
 

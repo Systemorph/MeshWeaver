@@ -1,41 +1,17 @@
-@inherits BlazorView<DataGridControl<TGridElement>>
-@using OpenSmc.Messaging
-@typeparam TGridElement
+@inherits BlazorView<DataGridControl>
+@using System.Text.Json.Nodes
 
 <FluentDataGrid Items="@QueryableData">
-    @foreach (var column in MappedColumns())
+    @foreach (var column in ViewModel.Columns)
     {
-        @((RenderFragment) (builder =>
-        {
-            builder.OpenComponent(0, column.Type);
-            var index = 0;
-            foreach (var parameter in column.Parameters)
-            {
-                builder.AddAttribute(++index, parameter.Key, parameter.Value);
-            }
-            builder.CloseComponent();
-        }))
+        <PropertyColumn Property="@(x => GetValue(x, column.Property))" Sortable="@column.Sortable" Format="@column.Format"></PropertyColumn>
 
     }
 </FluentDataGrid>
 
 @code{
+    private object GetValue(JsonObject obj, string propertyName)
+        => obj.TryGetPropertyValue(propertyName, out var x) ? x : null;
 
-    private IEnumerable<ViewDescriptor> MappedColumns()
-    {
-        foreach (var column in ViewModel.Columns)
-        {
-            yield return new ViewDescriptor(
-                typeof(Microsoft.FluentUI.AspNetCore.Components.PropertyColumn<,>).MakeGenericType(column.GetType().GetGenericArguments()),
-                new Dictionary<string, object>
-                {
-                    { nameof(DataGridColumn<TGridElement>.Property), column.ColumnExpression },
-                    { nameof(DataGridColumn<TGridElement>.Sortable), column.Sortable },
-                    { nameof(DataGridColumn<TGridElement>.Format), column.Format }
-                });
-        }
-    }
-
-
-    private IQueryable<TGridElement> QueryableData => ((System.Collections.IEnumerable)DataContext)?.Cast<TGridElement>()?.AsQueryable();
+    private IQueryable<JsonObject> QueryableData => ((System.Collections.IEnumerable)DataContext)?.Cast<JsonObject>()?.AsQueryable();
 }

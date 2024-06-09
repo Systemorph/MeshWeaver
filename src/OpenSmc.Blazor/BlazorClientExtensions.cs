@@ -46,23 +46,14 @@ public static class BlazorClientExtensions
                 StandardView<LayoutStackControl, LayoutStack>(stack, stream, area),
             MenuItemControl menu => StandardView<MenuItemControl, MenuItem>(menu, stream, area),
             LayoutAreaControl layoutArea => StandardView<LayoutAreaControl, LayoutAreaView>(layoutArea, stream, area),
-            IGenericType gc => GenericView(gc, stream, area),
+            DataGridControl gc => StandardView<DataGridControl, DataGrid>(gc, stream, area),
             _ => DelegateToDotnetInteractive(instance, stream, area)
 
 
         };
     }
 
-    private static ViewDescriptor GenericView(IGenericType gc, IChangeStream<JsonElement, LayoutAreaReference> stream, string area)
-    {
-        var viewType = GenericTypeMaps.GetValueOrDefault(gc.BaseType)?.Invoke(gc);
-        return StandardView(viewType, gc, stream, area);
-    }
 
-    private static readonly Dictionary<Type, Func<IGenericType, Type>> GenericTypeMaps = new()
-    {
-        { typeof(DataGridControl<>), t => typeof(DataGrid<>).MakeGenericType(t.TypeArguments) }
-    };
 
 
     private static ViewDescriptor DelegateToDotnetInteractive(object instance,
