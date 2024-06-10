@@ -5,6 +5,7 @@
     <ProjectReference Include="..\..\src\OpenSmc.Layout\OpenSmc.Layout.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Application.Contract\OpenSmc.Application.Contract.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Blazor\OpenSmc.Blazor.csproj" />
+    <ProjectReference Include="..\OpenSmc.Northwind.ServiceDefaults\OpenSmc.Northwind.ServiceDefaults.csproj" />
     <ProjectReference Include="..\OpenSmc.Northwind.Model\OpenSmc.Northwind.Model.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.ServiceProvider\OpenSmc.ServiceProvider.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Hosting\OpenSmc.Hosting.csproj" />
