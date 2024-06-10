@@ -3,11 +3,12 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using OpenSmc.Utils;
 
 namespace OpenSmc.Layout;
 
-public record DataGridControl()
-    : UiControl<DataGridControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
+public record DataGridControl(object Data)
+    : UiControl<DataGridControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data)
 {
     public ImmutableList<object> Columns { get; init; } = ImmutableList<object>.Empty;
 }
@@ -17,6 +18,7 @@ public abstract record DataGridColumn
     public string Property { get; init; }
     public bool Sortable { get; init; } = true;
     public string Format { get; init; }
+    public string Title { get; init; }
 
     public abstract Type GetPropertyType();
 }
@@ -47,6 +49,11 @@ public record PropertyColumnBuilder<TGridItem, TProperty>
         {
             Column = Column with { Format = format }
         };
+    public PropertyColumnBuilder<TGridItem, TProperty> WithTitle(string title) =>
+        this with
+        {
+            Column = Column with { Title = title }
+        };
 }
 
 public static class DataGridControlBuilder
@@ -57,12 +64,11 @@ public static class DataGridControlBuilder
     public static DataGridControl ToDataGrid<T>(
         this IReadOnlyCollection<T> elements,
         Func<DataGridControlBuilder<T>, DataGridControlBuilder<T>> configuration
-    ) => configuration.Invoke(new() { DataContext = elements }).Build();
+    ) => configuration.Invoke(new(elements) ).Build();
 }
 
-public record DataGridControlBuilder<T>
+public record DataGridControlBuilder<T>(IReadOnlyCollection<T> elements)
 {
-    public IReadOnlyCollection<T> DataContext { get; init; }
     public ImmutableList<object> Columns { get; init; } = ImmutableList<object>.Empty;
 
     public DataGridControlBuilder<T> WithColumn<TProp>(Expression<Func<T, TProp>> expression) =>
@@ -71,19 +77,21 @@ public record DataGridControlBuilder<T>
     public DataGridControlBuilder<T> WithColumn<TProp>(
         Expression<Func<T, TProp>> expression,
         Func<PropertyColumnBuilder<T, TProp>, PropertyColumnBuilder<T, TProp>> config
-    ) =>
-        this with
+    )
+    {
+        var propertyName = ((PropertyInfo)((MemberExpression)expression.Body).Member).Name;
+
+        return this with
         {
             Columns = Columns.Add(
                 config
                     .Invoke(
-                        new PropertyColumnBuilder<T, TProp>().WithProperty(
-                            ((PropertyInfo)((MemberExpression)expression.Body).Member).Name
-                        )
+                        new PropertyColumnBuilder<T, TProp>().WithProperty(propertyName.ToCamelCase()).WithTitle(propertyName.Wordify())
                     )
                     .Column
             )
         };
+    }
 
-    public DataGridControl Build() => new() { Columns = Columns };
+    public DataGridControl Build() => new(elements) { Columns = Columns };
 }
