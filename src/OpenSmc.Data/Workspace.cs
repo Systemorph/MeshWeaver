@@ -1,5 +1,4 @@
 ﻿using System.Collections.Concurrent;
-using System.Reactive.Subjects;
 using System.Reflection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
@@ -44,14 +43,11 @@ public class Workspace : IWorkspace
 
     private record AddressAndReference(object Address, object Reference);
 
-    private readonly ConcurrentDictionary<WorkspaceReference, IChangeStream> streams = new();
     private readonly ConcurrentDictionary<AddressAndReference, IDisposable> subscriptions = new();
     private readonly ConcurrentDictionary<AddressAndReference, IChangeStream> externalClientStreams = new();
 
     private readonly IActivityService activityService;
 
-    public IChangeStream<TReduced> GetStream<TReduced>(WorkspaceReference<TReduced> reference) =>
-        GetStream(Hub.Address, reference);
 
     public IChangeStream<TReduced> GetStream<TReduced>(
         object id,
@@ -80,14 +76,6 @@ public class Workspace : IWorkspace
             ? GetInternalChangeStream<TReduced, TReference>(reference)
             : GetExternalClientChangeStream<TReduced, TReference>(address, reference);
 
-    private IChangeStream<TReduced, TReference> CreateChangeStream<TReduced, TReference>(
-        object id,
-        TReference reference
-    )
-        where TReference : WorkspaceReference<TReduced>
-    {
-        return new ChangeStream<TReduced, TReference>(id, Hub, reference, ReduceManager.ReduceTo<TReduced>());
-    }
 
     private IChangeStream<TReduced, TReference> GetInternalChangeStream<TReduced, TReference>(
         TReference reference
@@ -97,41 +85,52 @@ public class Workspace : IWorkspace
         return ReduceManager.ReduceStream<TReduced, TReference>(stream, reference);
     }
 
-    private IChangeStream<TReduced, TReference> ReduceStream<TReduced, TReference>(TReference reference) 
-        where TReference : WorkspaceReference<TReduced>
-    {
-        return ReduceManager.ReduceStream<TReduced, TReference>(stream, reference);
-    }
 
     private IChangeStream<TReduced, TReference> GetExternalClientChangeStream<
         TReduced,
         TReference
     >(object address, TReference reference)
+        where TReference : WorkspaceReference<TReduced> =>
+        (IChangeStream<TReduced, TReference>)externalClientStreams.GetOrAdd
+        (
+            new AddressAndReference(address, reference),
+            key =>
+                CreateExternalChangeStream<TReduced, TReference>(key, reference)
+        );
+
+    private IChangeStream CreateExternalChangeStream<TReduced, TReference>(AddressAndReference key, TReference reference) 
         where TReference : WorkspaceReference<TReduced>
     {
-        var key = new AddressAndReference(address, reference);
-
-
-        var ret = (IChangeStream<TReduced, TReference>)externalClientStreams.GetOrAdd(key, _ => CreateExternalChangeStream<TReduced, TReference>(key, reference));
-
-        Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(address));
-
-        return ret;
-    }
-
-    private IChangeStream CreateExternalChangeStream<TReduced, TReference>(AddressAndReference key, TReference reference) where TReference : WorkspaceReference<TReduced>
-    {
-        var ret = ReduceManager.ReduceStream<TReduced, TReference>(stream, reference);
-
-        if (ret != null)
-            ret.AddDisposable(ret.Subscribe(ret));
+        var ret = new ChangeStream<TReduced, TReference>(key.Address, Hub, reference, ReduceManager.ReduceTo<TReduced>());
 
         ret.AddDisposable(new AnonymousDisposable(() => externalClientStreams.Remove(key, out _)));
         ret.AddDisposable(
-            new Disposables.AnonymousDisposable(
+            new AnonymousDisposable(
                 () => Hub.Post(new UnsubscribeDataRequest(reference), o => o.WithTarget(key.Address))
             )
         );
+
+        var changesFromClientWorkspace = ReduceManager.ReduceStream<TReduced, TReference>(stream, reference);
+
+        if (changesFromClientWorkspace != null)
+        {
+            ret.AddDisposable(changesFromClientWorkspace.Subscribe(ret));
+
+        }
+
+        ret.AddDisposable(
+                ret.ToChangeStreamClient()
+                    .Subscribe(e =>
+                        {
+                            if (key.Address.Equals(e.ChangedBy))
+                                return;
+                            Hub.Post(e, o => o.WithTarget(key.Address));
+                        }
+                    )
+            )
+            ;
+        Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(key.Address));
+
         return ret;
     }
 
@@ -232,8 +231,6 @@ public class Workspace : IWorkspace
         foreach (var subscription in externalClientStreams.Values.Concat(subscriptions.Values))
             subscription.Dispose();
 
-        foreach (var s in streams.Values)
-            s.Dispose();
 
         stream.Dispose();
 
@@ -252,32 +249,13 @@ public class Workspace : IWorkspace
         object address,
         WorkspaceReference<TReduced> reference
     ) =>
-        SubscribeToClientMethod
+        s_subscribeToClientMethod
             .MakeGenericMethod(typeof(TReduced), reference.GetType())
             .Invoke(this, [address, reference]);
 
-    public IChangeStream<TReduced> GetRemoteStream<TReduced>(
-        object address,
-        WorkspaceReference<TReduced> reference
-    ) =>
-        (IChangeStream<TReduced>)
-            SubscribeMethod
-                .MakeGenericMethod(typeof(TReduced), reference.GetType())
-                .Invoke(this, [address, reference]);
 
-    private static readonly MethodInfo SubscribeMethod =
-        ReflectionHelper.GetMethodGeneric<Workspace>(x =>
-            x.Subscribe<object, WorkspaceReference<object>>(default, default)
-        );
 
-    private IChangeStream<TReduced, TReference> Subscribe<TReduced, TReference>(
-        object address,
-        TReference reference
-    )
-        where TReference : WorkspaceReference<TReduced> =>
-        GetStream<TReduced, TReference>(address, reference);
-
-    private static readonly MethodInfo SubscribeToClientMethod =
+    private static readonly MethodInfo s_subscribeToClientMethod =
         ReflectionHelper.GetMethodGeneric<Workspace>(x =>
             x.SubscribeToClient<object, WorkspaceReference<object>>(default, default)
         );
@@ -287,23 +265,23 @@ public class Workspace : IWorkspace
     {
         subscriptions.GetOrAdd(
             new(address, reference),
-            x =>
+            _ =>
                 CreateHost<TReduced, TReference>(address, reference)
         );
     }
 
     private IDisposable CreateHost<TReduced, TReference>(object address, TReference reference) where TReference : WorkspaceReference<TReduced>
     {
-        var ret = (IChangeStream<TReduced, TReference>)GetStream(reference);
-        ret
-            .ToChangeStreamHost()
+        var ret = ReduceManager.ReduceStream<TReduced, TReference>(stream, reference);
+        ret.AddDisposable(
+            ret.ToChangeStreamHost()
             .Subscribe(e =>
             {
                 if (address.Equals(e.ChangedBy))
                     return;
 
                 Hub.Post(e, o => o.WithTarget(address));
-            });
+            }));
         ret.AddDisposable(new AnonymousDisposable(() => subscriptions.Remove(new(address, reference), out _)));
         return ret;
     }
