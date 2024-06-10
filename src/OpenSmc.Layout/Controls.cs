@@ -19,6 +19,8 @@ public static class Controls
 
     public static ToolbarControl Toolbar() => new();
 
+    public static SelectControl Select() => new();
+
     public static SpinnerControl Spinner() => new();
 
     public static TextBoxControl TextBox(object data) => new(data);

@@ -3,6 +3,7 @@ using OpenSmc.Application.Styles;
 using OpenSmc.Data;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
+using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
 using OpenSmc.Northwind.Domain;
 using static OpenSmc.Layout.Controls;
@@ -44,6 +45,15 @@ public static class NorthwindViewModels
         return Stack()
             .WithOrientation(Orientation.Vertical)
             .WithView(Html("<h1>Northwind Dashboard</h1>"))
+            .WithView(Toolbar().WithControl(
+                    new[] { "2023", "2024" }
+                            .ToSelect(select => 
+                                select.WithLabel("Select year")
+                                    .WithOptionText(x => x)
+                                    .WithOptionValue(x => x)
+                                )
+                )
+            )
             .WithView(Stack().WithOrientation(Orientation.Horizontal)
                 .WithView(OrderSummary())
                 .WithView(ProductSummary())
