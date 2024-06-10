@@ -1,7 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
 using System.Text.Json;
-using OpenSmc.Serialization;
 using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Messaging;

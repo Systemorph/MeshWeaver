@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging.Serialization;
@@ -20,7 +20,7 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
     ) => configuration.WithTypes(typeof(GenericRequest<>));
 
     [Fact]
-    public async Task GenericTypes()
+    public void GenericTypes()
     {
         var host = GetHost();
         var typeRegistry = host.ServiceProvider.GetRequiredService<ITypeRegistry>();

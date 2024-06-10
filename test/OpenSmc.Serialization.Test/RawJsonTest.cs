@@ -32,13 +32,12 @@ public class RawJsonTest : TestBase
             hubConf =>
                 hubConf
                     .WithTypes(typeof(ClientAddress), typeof(HostAddress))
-                    .WithSerialization(serialization =>
-                        serialization.WithOptions(options =>
-                        {
-                            if (!options.Converters.Any(c => c is MessageDeliveryRawJsonConverter))
-                                options.Converters.Insert(0, new MessageDeliveryRawJsonConverter());
-                        })
-                    )
+            //.WithSerialization(serialization =>
+            //    serialization.WithOptions(options =>
+            //    {
+            //        if (!options.Converters.Any(c => c is MessageDeliveryRawJsonConverter))
+            //            options.Converters.Insert(0, new MessageDeliveryRawJsonConverter());
+            //    }
         );
     }
 
