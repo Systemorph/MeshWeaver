@@ -1,0 +1,16 @@
+@using System.Text.Json.Nodes
+@inherits BlazorView<SelectControl>
+
+<FluentSelect Label="@ViewModel.Label" 
+              Items="@Items" 
+              OptionValue="@(x => GetValue(x, @ViewModel.OptionValue) as string)"
+              OptionText="@(x => GetValue(x, "@ViewModel.OptionText") as string)"/>
+
+@code
+{
+    private object GetValue(JsonObject obj, string propertyName)
+        => obj.TryGetPropertyValue(propertyName, out var x) ? x : null;
+
+    // TODO V10: to be data-bound to data property (10.06.2024, Alexander Kravets)
+    private IQueryable<JsonObject> Items => null;
+}
