@@ -26,16 +26,20 @@ public static class NorthwindViewModels
         );
     }
 
+    private static readonly KeyValuePair<string, Icon>[] DashboardWidgets = new[]
+    {
+        new KeyValuePair<string, Icon>(nameof(Dashboard), FluentIcons.Grid),
+        new(nameof(OrderSummary), FluentIcons.Box), 
+        new(nameof(ProductSummary), FluentIcons.Box),
+        new(nameof(CustomerSummary), FluentIcons.Person),
+        new(nameof(SupplierSummary), FluentIcons.Person)
+    };
+
     private static object NavigationMenu()
     {
-        return NavMenu()
+        return DashboardWidgets.Aggregate(NavMenu()
             .WithCollapsible(true)
-            .WithWidth(250)
-            .WithNavLink(nameof(Dashboard), FluentIcons.Grid)
-            .WithNavLink(nameof(OrderSummary), FluentIcons.Box)
-            .WithNavLink(nameof(ProductSummary), FluentIcons.Box)
-            .WithNavLink(nameof(CustomerSummary), FluentIcons.Person)
-            .WithNavLink(nameof(SupplierSummary), FluentIcons.Person);
+            .WithWidth(250), (x, a) => x.WithNavLink(a.Key, $"app/Northwind/dev/{a.Key}", o => o.WithIcon(a.Value)));
     }
 
 

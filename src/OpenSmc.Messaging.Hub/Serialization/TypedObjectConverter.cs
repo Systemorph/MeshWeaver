@@ -11,7 +11,7 @@ public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry, Seriali
 {
     private const string TypeProperty = "$type";
 
-    public override bool CanConvert(Type typeToConvert) => typeToConvert == typeof(object);// || typeToConvert.IsAbstract;
+    public override bool CanConvert(Type typeToConvert) => !typeof(IEnumerable).IsAssignableFrom(typeToConvert) && (typeToConvert == typeof(object) || typeToConvert.IsAbstract);
 
     public override object Read(
         ref Utf8JsonReader reader,

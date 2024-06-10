@@ -1,44 +1,32 @@
 ﻿using System.Collections.Immutable;
 using OpenSmc.Application.Styles;
 
-namespace OpenSmc.Layout.Views;
+namespace OpenSmc.Layout;
 
 public record NavMenuControl()
     : UiControl<NavMenuControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
 {
-    public ImmutableList<INavItem> Items { get; init; } =
-        ImmutableList<INavItem>.Empty;
+    public ImmutableList<object> Items { get; init; } = ImmutableList<object>.Empty;
+
+    public NavMenuControl WithItem(INavItem item) => this with { Items = Items.Add(item) };
 
     public bool Collapsible { get; init; }
 
     public int? Width { get; init; }
 
-    public NavMenuControl WithGroup(NavGroup navGroup) =>
-        this with
-        {
-            Items = Items.Add(navGroup)
-        };
-
-    public NavMenuControl WithNavLink(NavLink navLink) => 
-        this with
-    {
-        Items = Items.Add(navLink)
-    };
 
     public NavMenuControl WithGroup(string title) =>
-        WithGroup(Controls.NavGroup.WithTitle(title));
+        WithGroup(title, x => x);
 
-    public NavMenuControl WithGroup(string area, string title, Icon icon) =>
-        WithGroup(Controls.NavGroup.WithArea(area).WithTitle(title).WithIcon(icon));
+    public NavMenuControl WithGroup(string title, Func<NavGroupControl, NavGroupControl> options) =>
+        this with { Items = Items.Add(options.Invoke(new(title))) };
 
-    public NavMenuControl WithNavLink(string area) =>
-        WithNavLink(Controls.NavLink(area));
+    public NavMenuControl WithNavLink(string title, string href) =>
+        WithNavLink(title, href, x => x);
 
-    public NavMenuControl WithNavLink(string area, Icon icon) => 
-        WithNavLink(Controls.NavLink(area).WithIcon(icon));
+    public NavMenuControl WithNavLink(string title, string href, Func<NavLinkControl, NavLinkControl> options) =>
+        this with { Items = Items.Add(options.Invoke(new(title, href))) };
 
-    public NavMenuControl WithNavLink(string area, string title, Icon icon) =>
-        WithNavLink(Controls.NavLink(area).WithTitle(title).WithIcon(icon));
 
     public NavMenuControl WithCollapsible(bool collapsible) => this with { Collapsible = collapsible };
 
@@ -47,36 +35,22 @@ public record NavMenuControl()
 
 public interface INavItem
 {
-    string Title { get; }
-    string Area { get; }
-    Icon Icon { get; }
-    string Href { get; }
+    public string Title { get; }
+    public Icon Icon { get; }
+    public string Href { get; }
 }
-
-public abstract record NavItem<TItem> : INavItem where TItem : NavItem<TItem>
+public record NavLinkControl(string Title, string Href) : UiControl<NavLinkControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null), INavItem
 {
-    public string Area { get; init; }
-
-    public string Title { get; init; }
-
     public Icon Icon { get; init; }
+    public NavLinkControl WithIcon(Icon icon) => this with { Icon = icon };
 
-    // TODO V10: un-hardcode app name and environment (07.06.2024, Alexander Kravets)
-    public string Href => $"/app/Northwind/dev/{Area}";
-
-    public TItem WithTitle(string title) => (TItem)(this with { Title = title });
-
-    public TItem WithArea(string area) => (TItem)(this with { Area = area });
-
-    public TItem WithIcon(Icon icon) => (TItem)(this with { Icon = icon });
 }
 
-public record NavLink : NavItem<NavLink>
+public record NavGroupControl(string Title) : UiControl<NavGroupControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null), INavItem
 {
-    public NavLink(string area)
-    {
-        Area = area;
-    }
-}
+    public string Href { get; init; }
+    public NavGroupControl WithHref(string href) => this with { Href = href };
+    public Icon Icon { get; init; }
+    public NavGroupControl WithIcon(Icon icon) => this with { Icon = icon };
 
-public record NavGroup : NavItem<NavGroup>;
+}

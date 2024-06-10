@@ -17,8 +17,6 @@ public interface IChangeStream : IDisposable
     Task Initialized { get; }
 
     IMessageHub Hub { get; }
-    IWorkspace Workspace { get; }
-
     public void Post(WorkspaceMessage message) =>
         Hub.Post(message with { Id = Id, Reference = Reference }, o => o.WithTarget(Id));
 }
@@ -38,6 +36,7 @@ public interface IChangeStream<TStream>
     new Task<TStream> Initialized { get; }
 
     DataChangeResponse RequestChange(Func<TStream, ChangeItem<TStream>> update);
+    ReduceManager<TStream> ReduceManager { get; }
 }
 
 public interface IChangeStream<TStream, out TReference> : IChangeStream<TStream>
@@ -65,8 +64,7 @@ public record ChangeStream<TStream, TReference> : IChangeStream<TStream, TRefere
         ChangeItem<WorkspaceState>
     > backfeed;
 
-    public IMessageHub Hub => Workspace.Hub;
-    public IWorkspace Workspace { get; }
+    public IMessageHub Hub { get; }
 
     private readonly TaskCompletionSource<TStream> initialized = new();
     public Task<TStream> Initialized => initialized.Task;
@@ -87,17 +85,19 @@ public record ChangeStream<TStream, TReference> : IChangeStream<TStream, TRefere
 
     public ChangeStream(
         object id,
+        IMessageHub hub,
         TReference reference,
-        IWorkspace workspace,
         ReduceManager<TStream> reduceManager
     )
     {
         Id = id;
+        Hub = hub;
         Reference = reference;
-        Workspace = workspace;
         this.reduceManager = reduceManager;
         backfeed = reduceManager.ReduceTo<TStream>().GetBackfeed<TReference>();
     }
+    public ReduceManager<TStream> ReduceManager => reduceManager;
+
 
     public IChangeStream<TReduced> Reduce<TReduced>(
         WorkspaceReference<TReduced> reference
@@ -109,7 +109,7 @@ public record ChangeStream<TStream, TReference> : IChangeStream<TStream, TRefere
     )
         where TReference2 : WorkspaceReference<TReduced>
         => 
-            reduceManager.ReduceStream(new ChangeStream<TReduced, TReference2>(Id, reference, Workspace, reduceManager.ReduceTo<TReduced>()), store, reference);
+            reduceManager.ReduceStream<TReduced, TReference2>(this, reference);
     public IDisposable Subscribe(IObserver<ChangeItem<TStream>> observer)
     {
         return store.Subscribe(observer);
@@ -182,7 +182,7 @@ public record ChangeStream<TStream, TReference> : IChangeStream<TStream, TRefere
     public DataChangeResponse RequestChange(Func<TStream, ChangeItem<TStream>> update)
     {
         if (backfeed != null)
-            return Workspace.RequestChange(state => backfeed(state, Reference, update(Current.Value)));
+            return Hub.GetWorkspace().RequestChange(state => backfeed(state, Reference, update(Current.Value)));
         Current = update(Current.Value);
         return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, null);
     }
