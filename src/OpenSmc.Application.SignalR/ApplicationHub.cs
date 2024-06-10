@@ -4,7 +4,6 @@ using Microsoft.Extensions.Logging;
 using OpenSmc.Application.Orleans;
 using OpenSmc.Application.SignalR.Streams;
 using OpenSmc.Messaging;
-using OpenSmc.Serialization;
 using Orleans.Streams;
 
 namespace OpenSmc.Application.SignalR;

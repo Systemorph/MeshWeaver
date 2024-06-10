@@ -1,6 +1,5 @@
 ﻿using FluentAssertions;
 using OpenSmc.Messaging;
-using OpenSmc.Serialization;
 using Xunit;
 
 namespace OpenSmc.Json.Assertions.Test;

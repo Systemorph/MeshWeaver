@@ -2,7 +2,6 @@
 using System.Text.Json;
 using System.Threading.Tasks.Dataflow;
 using Microsoft.Extensions.Logging;
-using OpenSmc.Serialization;
 
 namespace OpenSmc.Messaging;
 

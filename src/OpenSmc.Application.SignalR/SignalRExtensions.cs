@@ -53,13 +53,14 @@ public static class SignalRExtensions
     private static MessageHubConfiguration ConfigureSignalRHub(MessageHubConfiguration conf)
         => conf
             .WithTypes(typeof(UiAddress), typeof(ApplicationAddress))
-            .WithSerialization(serialization =>
-                serialization.WithOptions(options =>
-                {
-                    if (!options.Converters.Any(c => c is MessageDeliveryRawJsonConverter))
-                        options.Converters.Insert(0, new MessageDeliveryRawJsonConverter());
-                })
-            );
+            //.WithSerialization(serialization =>
+            //    //serialization.WithOptions(options =>
+                //{
+                //    if (!options.Converters.Any(c => c is MessageDeliveryRawJsonConverter))
+                //        options.Converters.Insert(0, new MessageDeliveryRawJsonConverter());
+                //})
+            //)
+            ;
 }
 
 public record SignalRAddress;
