@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using OpenSmc.Data.Serialization;
 
 namespace OpenSmc.Data;
@@ -40,9 +41,9 @@ public record ReduceManager<TStream>
             ReduceApplyRules(ws, r, reducer, node);
         Reducers.AddFirst(Lambda);
 
-        return AddWorkspaceReferenceStream<TReference, TReduced>(
+        return AddWorkspaceReferenceStream(
             (stream, reference) =>
-                (IChangeStream<TReduced, TReference>)CreateReducedStream<TReference, TReduced>(stream, reference, reducer),
+                (IChangeStream<TReduced, TReference>)CreateReducedStream(stream, reference, reducer),
             backTransformation
         ) with
         {
@@ -88,7 +89,7 @@ public record ReduceManager<TStream>
             reference,
             ReduceTo<TReduced>()
         );
-        ret.AddDisposable(stream.Subscribe(x => reducer.Invoke(x.Value, reference)));
+        ret.AddDisposable(stream.Select(x => x.SetValue(reducer.Invoke(x.Value, reference))).Subscribe(ret));
         return ret;
     }
 
