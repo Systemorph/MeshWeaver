@@ -11,4 +11,8 @@
     <PackageReference Include="Aspire.Hosting.AppHost" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\OpenSmc.Northwind.Application\OpenSmc.Northwind.Application.csproj" />
+  </ItemGroup>
+
 </Project>
