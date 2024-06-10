@@ -137,9 +137,12 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
     }
 
     public string FormatType(Type mainType)
+        => FormatType(mainType, t => t.GetGenericArguments().Select(FormatType));
+
+    public static string FormatType(Type mainOpenType, Func<Type, IEnumerable<string>> genericArgumentsGetter)
     {
-        var mainTypeName = (mainType.FullName ?? mainType.Name).Replace('\u002B', '.');
-        if (!mainType.IsGenericType || mainType.IsGenericTypeDefinition)
+        var mainTypeName = (mainOpenType.FullName ?? mainOpenType.Name).Replace('\u002B', '.');
+        if (!mainOpenType.IsGenericType || mainOpenType.IsGenericTypeDefinition)
             return mainTypeName;
 
         var typeDefinition = mainType.GetGenericTypeDefinition();

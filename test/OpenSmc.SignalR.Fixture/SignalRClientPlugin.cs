@@ -3,7 +3,6 @@ using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Messaging;
-using OpenSmc.Serialization;
 using static OpenSmc.SignalR.Fixture.SignalRTestClientConfig;
 
 namespace OpenSmc.SignalR.Fixture;
@@ -37,7 +36,7 @@ public class SignalRClientPlugin : MessageHubPlugin
         if (Debugger.IsAttached)
             Connection.ServerTimeout = signalRServerDebugTimeout;
 
-        onMessageReceivedSubscription = Connection.On<MessageDelivery<RawJson>>("HandleEvent", args =>
+        onMessageReceivedSubscription = Connection.On<IMessageDelivery>("HandleEvent", args =>
         {
             Hub.DeliverMessage(args);
         });
@@ -65,7 +64,7 @@ public class SignalRClientPlugin : MessageHubPlugin
     public override Task Initialized => initializeTaskCompletionSource.Task;
 
     private Task<IMessageDelivery> RouteMessageThroughSignalRAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
-        => SendThroughSignalR(delivery.Package(Hub.JsonSerializerOptions), Connection, cancellationToken);
+        => SendThroughSignalR(delivery, Connection, cancellationToken);
 
     public override async Task DisposeAsync()
     {
