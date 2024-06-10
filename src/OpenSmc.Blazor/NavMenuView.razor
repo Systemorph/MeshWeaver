@@ -4,14 +4,8 @@
 <FluentNavMenu Id="main-menu" Collapsible="@ViewModel.Collapsible" Width="@ViewModel.Width" @bind-Expanded="@expanded">
     @foreach (var item in ViewModel.Items)
     {
-        @if (item is NavLink navLink)
-        {
-            <NavLinkView ViewModel="@navLink"/>
-        }
-        else if (item is NavGroup navGroup)
-        {
-            <NavGroupView ViewModel="@navGroup"/>
-        }
+        // TODO V10: should probably create subareas? (09.06.2024, Roland Bürgi)
+        <DispatchView ViewModel="@item" Stream="@Stream" Area ="@Area" />
     }
 </FluentNavMenu>
 

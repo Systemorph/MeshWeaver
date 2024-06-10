@@ -28,7 +28,7 @@ public static class LayoutExtensions
             .WithServices(services => services.AddScoped<ILayout, LayoutPlugin>())
             .AddData(data =>
                 data.AddWorkspaceReferenceStream<LayoutAreaReference, JsonElement>(
-                    (changeStream, _, a) =>
+                    (changeStream, a) =>
                         data
                             .Hub.ServiceProvider.GetRequiredService<ILayout>()
                             .Render(changeStream, a)

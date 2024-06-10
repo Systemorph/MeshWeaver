@@ -1,5 +1,4 @@
 ﻿using System.Text.Json;
-using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Data;
@@ -9,12 +8,12 @@ using OpenSmc.Messaging;
 
 namespace OpenSmc.Blazor;
 
-public partial class LayoutAreaView
+public partial class LayoutArea
 {
     [Inject]
     private IMessageHub Hub { get; set; }
     [Inject] 
-    private ILogger<LayoutAreaView> Logger { get; set; }
+    private ILogger<LayoutArea> Logger { get; set; }
 
     private IWorkspace Workspace => Hub.GetWorkspace();
 

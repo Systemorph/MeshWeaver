@@ -18,6 +18,7 @@ public class Workspace : IWorkspace
         this.activityService = activityService;
         this.logger = logger;
         DataContext = Hub.GetDataConfiguration();
+        stream = new ChangeStream<WorkspaceState, WorkspaceReference>(Hub.Address, Hub, new WorkspaceStateReference(), new());
     }
 
     public WorkspaceReference Reference { get; } = new WorkspaceStateReference();
@@ -35,7 +36,7 @@ public class Workspace : IWorkspace
 
     private readonly ConcurrentDictionary<string, ITypeSource> typeSources = new();
 
-    private ReplaySubject<ChangeItem<WorkspaceState>> stream = new(1);
+    private readonly IChangeStream<WorkspaceState> stream ;
 
     public IObservable<ChangeItem<WorkspaceState>> Stream => stream;
 
@@ -85,13 +86,7 @@ public class Workspace : IWorkspace
     )
         where TReference : WorkspaceReference<TReduced>
     {
-        IChangeStream<TReduced, TReference> ret = new ChangeStream<TReduced, TReference>(
-            id,
-            reference,
-            this,
-            ReduceManager.ReduceTo<TReduced>()
-        );
-        return ret;
+        return new ChangeStream<TReduced, TReference>(id, Hub, reference, ReduceManager.ReduceTo<TReduced>());
     }
 
     private IChangeStream<TReduced, TReference> GetInternalChangeStream<TReduced, TReference>(
@@ -99,10 +94,13 @@ public class Workspace : IWorkspace
     )
         where TReference : WorkspaceReference<TReduced>
     {
-        var ret = (IChangeStream<TReduced, TReference>)streams.GetOrAdd(reference, _ => CreateChangeStream<TReduced, TReference>(Hub.Address, reference));
-        ret.AddDisposable(new AnonymousDisposable(() => streams.Remove(reference, out _)));
-        ret = ReduceManager.ReduceStream(ret, stream, reference);
-        return ret;
+        return ReduceManager.ReduceStream<TReduced, TReference>(stream, reference);
+    }
+
+    private IChangeStream<TReduced, TReference> ReduceStream<TReduced, TReference>(TReference reference) 
+        where TReference : WorkspaceReference<TReduced>
+    {
+        return ReduceManager.ReduceStream<TReduced, TReference>(stream, reference);
     }
 
     private IChangeStream<TReduced, TReference> GetExternalClientChangeStream<
@@ -112,31 +110,28 @@ public class Workspace : IWorkspace
         where TReference : WorkspaceReference<TReduced>
     {
         var key = new AddressAndReference(address, reference);
-        var ret = (IChangeStream<TReduced, TReference>)externalClientStreams.GetOrAdd(key, _ => CreateChangeStream<TReduced, TReference>(address, reference));
-        ret.AddDisposable(new AnonymousDisposable(() => externalClientStreams.Remove(key, out _)));
-        var myStream = GetStream(reference);
 
-        if (myStream != null)
-            ret.AddDisposable(myStream.Subscribe(ret));
 
-        ret.AddDisposable(
-            new Disposables.AnonymousDisposable(
-                () => Hub.Post(new UnsubscribeDataRequest(reference), o => o.WithTarget(address))
-            )
-        );
-
-        ret.AddDisposable(
-            ret.ToChangeStreamClient()
-                .Subscribe(e =>
-                {
-                    if (address.Equals(e.ChangedBy))
-                        return;
-                    Hub.Post(e, o => o.WithTarget(address));
-                })
-        );
+        var ret = (IChangeStream<TReduced, TReference>)externalClientStreams.GetOrAdd(key, _ => CreateExternalChangeStream<TReduced, TReference>(key, reference));
 
         Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(address));
 
+        return ret;
+    }
+
+    private IChangeStream CreateExternalChangeStream<TReduced, TReference>(AddressAndReference key, TReference reference) where TReference : WorkspaceReference<TReduced>
+    {
+        var ret = ReduceManager.ReduceStream<TReduced, TReference>(stream, reference);
+
+        if (ret != null)
+            ret.AddDisposable(ret.Subscribe(ret));
+
+        ret.AddDisposable(new AnonymousDisposable(() => externalClientStreams.Remove(key, out _)));
+        ret.AddDisposable(
+            new Disposables.AnonymousDisposable(
+                () => Hub.Post(new UnsubscribeDataRequest(reference), o => o.WithTarget(key.Address))
+            )
+        );
         return ret;
     }
 
@@ -292,17 +287,25 @@ public class Workspace : IWorkspace
     {
         subscriptions.GetOrAdd(
             new(address, reference),
-            _ =>
-                ((IChangeStream<TReduced, TReference>)GetStream(reference))
-                    .ToChangeStreamHost()
-                    .Subscribe(e =>
-                    {
-                        if (address.Equals(e.ChangedBy))
-                            return;
-
-                        Hub.Post(e, o => o.WithTarget(address));
-                    })
+            x =>
+                CreateHost<TReduced, TReference>(address, reference)
         );
+    }
+
+    private IDisposable CreateHost<TReduced, TReference>(object address, TReference reference) where TReference : WorkspaceReference<TReduced>
+    {
+        var ret = (IChangeStream<TReduced, TReference>)GetStream(reference);
+        ret
+            .ToChangeStreamHost()
+            .Subscribe(e =>
+            {
+                if (address.Equals(e.ChangedBy))
+                    return;
+
+                Hub.Post(e, o => o.WithTarget(address));
+            });
+        ret.AddDisposable(new AnonymousDisposable(() => subscriptions.Remove(new(address, reference), out _)));
+        return ret;
     }
 
     public void Unsubscribe(object address, WorkspaceReference reference)

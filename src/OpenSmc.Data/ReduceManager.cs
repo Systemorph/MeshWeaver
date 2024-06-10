@@ -1,5 +1,4 @@
 ﻿using System.Collections.Immutable;
-using System.Reactive.Linq;
 using OpenSmc.Data.Serialization;
 
 namespace OpenSmc.Data;
@@ -42,15 +41,8 @@ public record ReduceManager<TStream>
         Reducers.AddFirst(Lambda);
 
         return AddWorkspaceReferenceStream<TReference, TReduced>(
-            (changeStream, stream, r) =>
-            {
-                changeStream.AddDisposable(
-                    stream
-                        .Select(ws => ws.SetValue(reducer.Invoke(ws.Value, r)))
-                        .Subscribe(changeStream)
-                );
-                return changeStream;
-            },
+            (stream, reference) =>
+                (IChangeStream<TReduced, TReference>)CreateReducedStream<TReference, TReduced>(stream, reference, reducer),
             backTransformation
         ) with
         {
@@ -77,23 +69,27 @@ public record ReduceManager<TStream>
     )
         where TReference : WorkspaceReference<TReduced>
     {
-        IChangeStream Stream(
-            IChangeStream changeStream,
-            IObservable<ChangeItem<TStream>> stream,
-            WorkspaceReference reference
-        ) =>
-            reference is TReference @ref
-                ? reducer.Invoke((IChangeStream<TReduced, TReference>)changeStream, stream, @ref)
-                : null;
 
         return this with
         {
-            ReduceStreams = ReduceStreams.Insert(0, Stream),
+            ReduceStreams = ReduceStreams.Insert(0, (stream, reference) => reference is TReference tReference ? reducer.Invoke(stream, tReference) : null),
             BackTransformations = BackTransformations.SetItem(
                 typeof(TReference),
                 backTransformation
             )
         };
+    }
+
+    private IChangeStream CreateReducedStream<TReference, TReduced>(IChangeStream<TStream> stream, TReference reference, Func<TStream, TReference, TReduced> reducer) where TReference : WorkspaceReference<TReduced>
+    {
+        var ret = new ChangeStream<TReduced, TReference>(
+            stream.Id,
+            stream.Hub,
+            reference,
+            ReduceTo<TReduced>()
+        );
+        ret.AddDisposable(stream.Subscribe(x => reducer.Invoke(x.Value, reference)));
+        return ret;
     }
 
     private static object ReduceApplyRules<TReference, TReduced>(
@@ -122,15 +118,15 @@ public record ReduceManager<TStream>
     }
 
     public IChangeStream<TReduced, TReference> ReduceStream<TReduced, TReference>(
-        IChangeStream<TReduced> reducedStream,
-        IObservable<ChangeItem<TStream>> stream,
+        IChangeStream<TStream> stream,
         TReference reference
     )
         where TReference : WorkspaceReference<TReduced>
     {
+
         return (IChangeStream<TReduced, TReference>)
             ReduceStreams
-                .Select(reduceStream => reduceStream.Invoke(reducedStream, stream, reference))
+                .Select(reduceStream => reduceStream.Invoke(stream, reference))
                 .FirstOrDefault(x => x != null)
             ;
             //?? throw new ArgumentException($"No reducer defined for stream type {typeof(TStream).Name} and reference type {reference.GetType().Name}");
@@ -164,8 +160,7 @@ public record ReduceManager<TStream>
 }
 
 internal delegate IChangeStream ReduceStream<TStream>(
-    IChangeStream stream,
-    IObservable<ChangeItem<TStream>> state,
+    IChangeStream<TStream> stream,
     WorkspaceReference reference
 );
 
@@ -174,8 +169,7 @@ public delegate IChangeStream<TReduced, TReference> ReducedStreamProjection<
     TReference,
     TReduced
 >(
-    IChangeStream<TReduced, TReference> changeStream,
-    IObservable<ChangeItem<TStream>> observable,
+    IChangeStream<TStream> changeStream,
     TReference reference
 )
     where TReference : WorkspaceReference<TReduced>;
