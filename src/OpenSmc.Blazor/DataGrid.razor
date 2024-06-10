@@ -11,11 +11,14 @@
         {
             builder.OpenComponent(0, typeof(PropertyColumn<,>).MakeGenericType(typeof(JsonObject), column.GetPropertyType()));
             var index = 0;
-            builder.AddComponentParameter(++index, "Property", GetPropertyExpression((dynamic)column));
-            if(!string.IsNullOrEmpty(column.Format))
-                builder.AddAttribute(++index, "Format", column.Format);
-            if(column.Sortable)
+            builder.AddComponentParameter(++index, nameof(PropertyColumn<object,object>.Property), GetPropertyExpression((dynamic)column));
+            builder.AddAttribute(++index, "Title", column.Title);
+            if (!string.IsNullOrEmpty(column.Format))
+                builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Format), column.Format);
+            if (column.Sortable)
                 builder.AddAttribute(++index, "Sortable", column.Sortable);
+
+            builder.CloseComponent();
         }))
 
     }
@@ -25,7 +28,7 @@
     private object GetValue<T>(JsonObject obj, string propertyName)
         => obj.TryGetPropertyValue(propertyName, out var x) ? x : null;
 
-    private IQueryable<JsonObject> QueryableData => ((System.Collections.IEnumerable)DataContext)?.Cast<JsonObject>()?.AsQueryable();
+    private IQueryable<JsonObject> QueryableData => ((System.Collections.IEnumerable)ViewModel.Data)?.Cast<JsonObject>()?.AsQueryable();
 
     private Expression<Func<JsonObject, T>> GetPropertyExpression<T>(DataGridColumn<T> column)
     {
