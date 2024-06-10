@@ -1,17 +1,34 @@
-@inherits BlazorView<DataGridControl>
 @using System.Text.Json.Nodes
+@using System.Text.Json
+@using System.Linq.Expressions
+@inherits BlazorView<DataGridControl>
 
 <FluentDataGrid Items="@QueryableData">
-    @foreach (var column in ViewModel.Columns)
+    @foreach (DataGridColumn column in ViewModel.Columns)
     {
-        <PropertyColumn Property="@(x => GetValue(x, column.Property))" Sortable="@column.Sortable" Format="@column.Format"></PropertyColumn>
+
+        @((RenderFragment) (builder =>
+        {
+            builder.OpenComponent(0, typeof(PropertyColumn<,>).MakeGenericType(typeof(JsonObject), column.GetPropertyType()));
+            var index = 0;
+            builder.AddComponentParameter(++index, "Property", GetPropertyExpression((dynamic)column));
+            if(!string.IsNullOrEmpty(column.Format))
+                builder.AddAttribute(++index, "Format", column.Format);
+            if(column.Sortable)
+                builder.AddAttribute(++index, "Sortable", column.Sortable);
+        }))
 
     }
 </FluentDataGrid>
 
 @code{
-    private object GetValue(JsonObject obj, string propertyName)
+    private object GetValue<T>(JsonObject obj, string propertyName)
         => obj.TryGetPropertyValue(propertyName, out var x) ? x : null;
 
     private IQueryable<JsonObject> QueryableData => ((System.Collections.IEnumerable)DataContext)?.Cast<JsonObject>()?.AsQueryable();
+
+    private Expression<Func<JsonObject, T>> GetPropertyExpression<T>(DataGridColumn<T> column)
+    {
+        return e => e.ContainsKey(column.Property) ? e[column.Property].Deserialize<T>(Stream.Hub.JsonSerializerOptions) : default;
+    }
 }

@@ -31,8 +31,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     "Local",
                     ds =>
                         ds.WithType<DataRecord>(t =>
-                                t.WithInitialData([new("Hello", "Hello"), new("World", "World")])
-                            )
+                            t.WithInitialData([new("Hello", "Hello"), new("World", "World")])
+                        )
                 )
             )
             .AddLayout(layout =>
@@ -42,10 +42,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                         Controls.Stack().WithView("Hello", "Hello").WithView("World", "World")
                     )
                     .WithView(nameof(ViewWithProgress), ViewWithProgress)
-                    .WithView(
-                        nameof(UpdatingView),
-                        UpdatingView()
-                    )
+                    .WithView(nameof(UpdatingView), UpdatingView())
                     .WithView(
                         nameof(ItemTemplate),
                         area =>
@@ -60,10 +57,11 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                         _ => layout.Hub.GetWorkspace().Stream.Select(_ => Counter())
                     )
                     .WithView("int", 3)
+                    .WithView(nameof(DataGrid), DataGrid)
             );
     }
 
-    private object ItemTemplate(LayoutArea area,IReadOnlyCollection<DataRecord> data) =>
+    private object ItemTemplate(LayoutArea area, IReadOnlyCollection<DataRecord> data) =>
         area.Bind(
             data,
             nameof(ItemTemplate),
@@ -91,38 +89,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
     protected override MessageHubConfiguration ConfigureClient(
         MessageHubConfiguration configuration
-    ) =>
-        base.ConfigureClient(configuration)
-            .AddLayoutClient(d => d);
-
-    private record Toolbar(int Year);
-
-    private static async Task<object> ViewWithProgress(LayoutArea area)
-    {
-        var percentage = 0;
-        var progress = Controls.Progress("Processing", percentage);
-        for (var i = 0; i < 10; i++)
-        {
-            await Task.Delay(30);
-            area.UpdateLayout(
-                nameof(ViewWithProgress),
-                progress = progress with { Progress = percentage += 10 }
-            );
-        }
-
-        return Controls.Html("Report");
-    }
-
-    private static object UpdatingView()
-    {
-        var toolbar = new Toolbar(2024);
-        
-        return Controls
-            .Stack()
-            .WithView("Toolbar", layoutArea => layoutArea.Bind(toolbar, nameof(toolbar), tb => Controls.TextBox(tb.Year)))
-            .WithView("Content", area => area.GetDataStream<Toolbar>(nameof(toolbar))
-                .Select(tb =>  Controls.Html($"Report for year {tb.Year}")));
-    }
+    ) => base.ConfigureClient(configuration).AddLayoutClient(d => d);
 
     [HubFact]
     public async Task BasicArea()
@@ -142,12 +109,26 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var areaControls = await areas
             .ToAsyncEnumerable()
-            .SelectAwait(async a =>
-                await stream.GetControl(a)
-            )
+            .SelectAwait(async a => await stream.GetControl(a))
             .ToArrayAsync();
 
         areaControls.Should().HaveCount(2).And.AllBeOfType<HtmlControl>();
+    }
+
+    private static async Task<object> ViewWithProgress(LayoutArea area)
+    {
+        var percentage = 0;
+        var progress = Controls.Progress("Processing", percentage);
+        for (var i = 0; i < 10; i++)
+        {
+            await Task.Delay(30);
+            area.UpdateLayout(
+                nameof(ViewWithProgress),
+                progress = progress with { Progress = percentage += 10 }
+            );
+        }
+
+        return Controls.Html("Report");
     }
 
     [HubFact]
@@ -162,6 +143,27 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .TakeUntil(o => o is HtmlControl)
             .ToArray();
         controls.Should().HaveCountGreaterThan(1).And.HaveCountLessThan(12);
+    }
+
+    private record Toolbar(int Year);
+
+    private static object UpdatingView()
+    {
+        var toolbar = new Toolbar(2024);
+
+        return Controls
+            .Stack()
+            .WithView(
+                "Toolbar",
+                layoutArea =>
+                    layoutArea.Bind(toolbar, nameof(toolbar), tb => Controls.TextBox(tb.Year))
+            )
+            .WithView(
+                "Content",
+                area =>
+                    area.GetDataStream<Toolbar>(nameof(toolbar))
+                        .Select(tb => Controls.Html($"Report for year {tb.Year}"))
+            );
     }
 
     [HubFact]
@@ -184,11 +186,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var year = await stream.Reduce(jsonPath).FirstAsync();
         year.Value.Should().BeOfType<JsonElement>().Which.GetInt32().Should().Be(2024);
 
-
         stream.Update(ci => new Data.Serialization.ChangeItem<JsonElement>(
             stream.Id,
             stream.Reference,
-            new JsonPatch(PatchOperation.Replace(JsonPointer.Parse(jsonPath.Pointer), 2025)).Apply(ci),
+            new JsonPatch(PatchOperation.Replace(JsonPointer.Parse(jsonPath.Pointer), 2025)).Apply(
+                ci
+            ),
             hub.Address,
             hub.Version
         ));
@@ -219,10 +222,11 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
         var dataReference = itemTemplate.Data.Should().BeOfType<JsonPointerReference>().Which;
         dataReference.Pointer.Should().Be($"/data/{nameof(ItemTemplate)}");
-        var data =  await stream.Reduce(dataReference).FirstAsync();
+        var data = await stream.Reduce(dataReference).FirstAsync();
 
-
-        var deserialized = data.Value?.Deserialize<IEnumerable<DataRecord>>(hub.JsonSerializerOptions);
+        var deserialized = data.Value?.Deserialize<IEnumerable<DataRecord>>(
+            hub.JsonSerializerOptions
+        );
         deserialized
             .Should()
             .HaveCount(2)
@@ -254,6 +258,35 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         content.Should().BeOfType<HtmlControl>().Which.Data.Should().Be("1");
     }
 
+    private object DataGrid(LayoutArea area)
+    {
+        var data = new DataRecord[] { new("1", "1"), new("2", "2") };
+        return data.ToDataGrid(grid =>
+            grid.WithColumn(x => x.SystemName).WithColumn(x => x.DisplayName)
+        );
+    }
+
+    [HubFact]
+    public async Task TestDataGrid()
+    {
+        var reference = new LayoutAreaReference(nameof(DataGrid));
+
+        var hub = GetClient();
+        var workspace = hub.GetWorkspace();
+        var stream = workspace.GetStream(new HostAddress(), reference);
+        var content = await stream.GetControlStream(reference.Area).FirstAsync();
+        content
+            .Should()
+            .BeOfType<DataGridControl>()
+            .Which.Columns.Should()
+            .HaveCount(2)
+            .And.BeEquivalentTo(
+                [
+                    new DataGridColumn<string> { Property = nameof(DataRecord.SystemName) },
+                    new DataGridColumn<string> { Property = nameof(DataRecord.DisplayName) }
+                ]
+            );
+    }
 }
 
 public static class TestAreas
