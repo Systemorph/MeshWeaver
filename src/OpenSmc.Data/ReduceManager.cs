@@ -103,9 +103,7 @@ public record ReduceManager<TStream>
     {
         return @ref is TReference reference
             ? reducer.Invoke(state, reference)
-            : node.Next != null
-                ? node.Next.Value.Invoke(state, @ref, node.Next)
-                : null;
+            : node.Next?.Value(state, @ref, node.Next);
     }
 
     public object Reduce(TStream workspaceState, WorkspaceReference reference)

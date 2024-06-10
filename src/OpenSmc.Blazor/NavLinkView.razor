@@ -3,6 +3,7 @@
 @using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons
 @inherits BlazorView<NavLinkControl>
 
+<FluentNavLink Href="@ViewModel.Href" Icon="@Icon">@Title</FluentNavLink>
 @code {
     protected string Title => ViewModel.Title ?? ViewModel.Title;
 
