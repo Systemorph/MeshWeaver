@@ -1,7 +1,9 @@
 @using OpenSmc.Application.Styles
 @using Icon = Microsoft.FluentUI.AspNetCore.Components.Icon
 @using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons
-@inherits BlazorView<NavLinkControl>
+@inherits BlazorView<NavGroupControl>
+
+<FluentNavGroup Href="@ViewModel.Href" Icon="@Icon">@Title</FluentNavGroup>
 
 @code {
     protected string Title => ViewModel.Title ?? ViewModel.Title;
