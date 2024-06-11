@@ -72,6 +72,7 @@ public class RawJsonTest : TestBase
         deserialized.Should().NotBeNull()
             .And.NotBeSameAs(delivery)
             .And.BeEquivalentTo(delivery, o => o.Excluding(x => x.Message));
+        deserialized.Message.Should().NotBeNull().And.Subject.As<RawJson>().Content.Should().NotBeNullOrWhiteSpace();
 
         var serializedOnServer = JsonSerializer.Serialize(deserialized, Router.JsonSerializerOptions);
 
