@@ -28,7 +28,7 @@ public static class LayoutExtensions
             .WithServices(services => services.AddScoped<ILayout, LayoutPlugin>())
             .AddData(data =>
                 data.AddWorkspaceReferenceStream<LayoutAreaReference, JsonElement>(
-                    (changeStream, _, a) =>
+                    (changeStream, a) =>
                         data
                             .Hub.ServiceProvider.GetRequiredService<ILayout>()
                             .Render(changeStream, a)
@@ -38,8 +38,6 @@ public static class LayoutExtensions
             .Set(config.GetListOfLambdas().Add(layoutDefinition))
             .AddPlugin<LayoutPlugin>();
     }
-
-
 
     internal static ImmutableList<Func<LayoutDefinition, LayoutDefinition>> GetListOfLambdas(
         this MessageHubConfiguration config
@@ -56,33 +54,38 @@ public static class LayoutExtensions
                     .Assembly.GetTypes()
                     .Where(t => typeof(IUiControl).IsAssignableFrom(t) && !t.IsAbstract)
             )
-            .WithTypes(typeof(MessageAndAddress), typeof(LayoutAreaReference));
-
+            .WithTypes(
+                typeof(MessageAndAddress),
+                typeof(LayoutAreaReference),
+                typeof(DataGridColumn), // these area not controls
+                typeof(DataGridColumn<>) // these area not controls
+            );
 
     public static IObservable<object> GetControlStream(
         this IChangeStream<JsonElement> changeItems,
         string area
     ) =>
-        changeItems
-            .Select(i =>
-                JsonPointer.Parse($"/{LayoutAreaReference.Areas}/{area.Replace("/", "~1")}").Evaluate(i.Value)
-                    ?.Deserialize<object>(changeItems.Hub.JsonSerializerOptions)
-            );
+        changeItems.Select(i =>
+            JsonPointer
+                .Parse($"/{LayoutAreaReference.Areas}/{area.Replace("/", "~1")}")
+                .Evaluate(i.Value)
+                ?.Deserialize<object>(changeItems.Hub.JsonSerializerOptions)
+        );
 
-
-    public static async Task<object> GetControl(this IChangeStream<JsonElement> changeItems,
-        string area) => await changeItems.GetControlStream(area).FirstAsync(x => x != null);
-
+    public static async Task<object> GetControl(
+        this IChangeStream<JsonElement> changeItems,
+        string area
+    ) => await changeItems.GetControlStream(area).FirstAsync(x => x != null);
 
     public static IObservable<object> GetDataStream(
         this IChangeStream<JsonElement> stream,
         WorkspaceReference reference
     ) => stream.Reduce(reference);
 
-
-
-    public static MessageHubConfiguration AddLayoutClient(this MessageHubConfiguration config,
-        Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration)
+    public static MessageHubConfiguration AddLayoutClient(
+        this MessageHubConfiguration config,
+        Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration
+    )
     {
         return config
             .AddData()
@@ -91,19 +94,21 @@ public static class LayoutExtensions
             .Set(config.GetConfigurationFunctions().Add(configuration))
             .WithSerialization(serialization => serialization);
     }
-    internal static ImmutableList<Func<LayoutClientConfiguration, LayoutClientConfiguration>> GetConfigurationFunctions(this MessageHubConfiguration config)
-        => config.Get<ImmutableList<Func<LayoutClientConfiguration, LayoutClientConfiguration>>>()
-           ?? ImmutableList<Func<LayoutClientConfiguration, LayoutClientConfiguration>>.Empty;
 
+    internal static ImmutableList<
+        Func<LayoutClientConfiguration, LayoutClientConfiguration>
+    > GetConfigurationFunctions(this MessageHubConfiguration config) =>
+        config.Get<ImmutableList<Func<LayoutClientConfiguration, LayoutClientConfiguration>>>()
+        ?? ImmutableList<Func<LayoutClientConfiguration, LayoutClientConfiguration>>.Empty;
 
     public static JsonObject SetPath(this JsonObject obj, string path, JsonNode value)
     {
         var jsonPath = JsonPath.Parse(path);
         var existingValue = jsonPath.Evaluate(obj);
-        var op = existingValue.Matches?.Any() ?? false
-            ? PatchOperation.Replace(JsonPointer.Parse(path), value)
-            : PatchOperation.Add(JsonPointer.Parse(path), value);
-
+        var op =
+            existingValue.Matches?.Any() ?? false
+                ? PatchOperation.Replace(JsonPointer.Parse(path), value)
+                : PatchOperation.Add(JsonPointer.Parse(path), value);
 
         var patchDocument = new JsonPatch(op);
         return (JsonObject)patchDocument.Apply(obj).Result;

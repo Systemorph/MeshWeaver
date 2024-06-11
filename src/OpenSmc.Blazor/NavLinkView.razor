@@ -1,3 +1,18 @@
-@inherits NavItem<NavLink>
+@using OpenSmc.Application.Styles
+@using Icon = Microsoft.FluentUI.AspNetCore.Components.Icon
+@using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons
+@inherits BlazorView<NavLinkControl>
 
 <FluentNavLink Href="@ViewModel.Href" Icon="@Icon">@Title</FluentNavLink>
+@code {
+    protected string Title => ViewModel.Title ?? ViewModel.Title;
+
+    protected Icon Icon =>
+        ViewModel.Icon.Provider switch
+        {
+            FluentIcons.Provider => 
+                Icons.GetInstance(new IconInfo {Name = ViewModel.Icon.Id, Size = IconSize.Size24}),
+            _ => null
+            };
+
+}

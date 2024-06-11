@@ -1,5 +1,4 @@
 ﻿using Microsoft.FluentUI.AspNetCore.Components;
-using OpenSmc.Application;
 using OpenSmc.Hosting;
 using OpenSmc.Northwind.Application;
 using OpenSmc.Northwind.Application.Data;
@@ -22,9 +21,10 @@ builder.Services.AddFluentUIComponents();
 ;
 builder.Services.AddSingleton<WeatherForecastService>();
 builder.Services.AddLogging(config => config.AddConsole().AddDebug());
-builder.Services.AddFluentUIComponents(); 
+builder.Services.AddFluentUIComponents();
+
 builder.Host.UseOpenSmc(
-    new ApplicationAddress("Northwind", "dev"),
+    new BlazorServerAddress(),
     config => config.ConfigureNorthwindHubs()
 );
 var app = builder.Build();
@@ -46,3 +46,7 @@ app.MapBlazorHub();
 app.MapFallbackToPage("/_Host");
 
 app.Run();
+public record BlazorServerAddress
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+}

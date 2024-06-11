@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 
 namespace OpenSmc.Application.SignalR;
 
@@ -11,12 +12,13 @@ public static class SignalRExtensions
 
     public static IServiceCollection ConfigureApplicationSignalR(this IServiceCollection services)
     {
+        services.AddSingleton(sp => sp.CreateMessageHub(new SignalRAddress(), ConfigureSignalRHub));
         services.AddSignalR(o =>
             {
                 o.EnableDetailedErrors = true; // TODO: False for Prod environment (2021/05/14, Alexander Yolokhov)
                 o.MaximumReceiveMessageSize = 400000; // TODO: see what's recommended size (2021/12/07, Alexander Kravets)
             })
-            .AddJsonProtocolFromHub((o, hub) =>
+            .AddJsonProtocolFrom((JsonHubProtocolOptions o, IMessageHub<SignalRAddress> hub) =>
             {
                 o.PayloadSerializerOptions = hub.JsonSerializerOptions;
             });
@@ -47,4 +49,18 @@ public static class SignalRExtensions
 
         return app;
     }
+
+    private static MessageHubConfiguration ConfigureSignalRHub(MessageHubConfiguration conf)
+        => conf
+            .WithTypes(typeof(UiAddress), typeof(ApplicationAddress))
+            //.WithSerialization(serialization =>
+            //    //serialization.WithOptions(options =>
+                //{
+                //    if (!options.Converters.Any(c => c is MessageDeliveryRawJsonConverter))
+                //        options.Converters.Insert(0, new MessageDeliveryRawJsonConverter());
+                //})
+            //)
+            ;
 }
+
+public record SignalRAddress;
