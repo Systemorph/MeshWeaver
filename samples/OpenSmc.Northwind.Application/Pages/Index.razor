@@ -1,9 +1,34 @@
 ﻿@using OpenSmc.Blazor.ChartJs
+@using OpenSmc.Charting
 @page "/"
 
 <PageTitle>OpenSmc</PageTitle>
 
 <h1>Hello</h1>
-<Chart/>
+<Chart ViewModel="@ViewModel"/>
 
 Welcome to your new app.
+
+
+@code
+{
+    private ChartControl ViewModel = new ChartControl(new
+    {
+        type = "line",
+        data = new
+        {
+            labels = new[] { "Red", "Blue", "Yellow", "Green", "Purple" },
+            datasets = new[]
+            {
+                new
+                {
+                    label = "First dataset",
+                    data = new[] { 1, 2, 3, 4, 5 },
+                    fill = false,
+                    borderColor = "rgb(75, 192, 192)",
+                    tension = 0.1
+                }
+            }
+        }
+    });
+}

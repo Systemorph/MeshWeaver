@@ -1,5 +1,7 @@
 @using OpenSmc.Data.Serialization
 @using System.Text.Json
+@using System.Reactive.Linq
+@using System.Text.Json.Nodes
 @typeparam TViewModel
 
 @code {
@@ -9,12 +11,5 @@
     public IChangeStream<JsonElement, LayoutAreaReference> Stream { get; set; }
     [Parameter] 
     public string Area { get; set; }
-    protected object GetControl(ChangeItem<JsonElement> item, string area)
-    {
-        return item.Value.TryGetProperty(LayoutAreaReference.Areas, out var controls) && 
-            controls.TryGetProperty(area, out var node) 
-            ? node.Deserialize<object>(Stream.Hub.JsonSerializerOptions) 
-            : null;
-    }
 
 }
