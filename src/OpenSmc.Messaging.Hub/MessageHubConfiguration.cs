@@ -3,7 +3,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Messaging.Serialization;
-using OpenSmc.Serialization;
 using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Messaging;

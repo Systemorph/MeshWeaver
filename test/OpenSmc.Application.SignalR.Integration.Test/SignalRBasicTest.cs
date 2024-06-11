@@ -32,6 +32,7 @@ public class SignalRBasicTest : TestBase, IClassFixture<WebApplicationFactory<Pr
     private MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => configuration
             .WithTypes(typeof(TestRequest), typeof(ApplicationAddress), typeof(UiAddress))
+            .WithTypes(typeof(TestResponse), typeof(MessageDelivery<TestResponse>))
             .AddSignalRClient(conf => conf
                 .WithHubConnectionConfiguration(connectionConfig => connectionConfig
                     .WithUrl(new UriBuilder(webAppFactory.Server.BaseAddress) { Path = DefaultSignalREndpoint, }.Uri,

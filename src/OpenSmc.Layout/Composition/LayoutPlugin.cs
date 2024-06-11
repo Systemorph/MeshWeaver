@@ -1,5 +1,5 @@
 ﻿using System.Text.Json;
-using System.Text.Json.Nodes;
+using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 
@@ -10,7 +10,7 @@ public record LayoutExecutionAddress(object Host) : IHostedAddress;
 public interface ILayout
 {
     IChangeStream<JsonElement, LayoutAreaReference> Render(
-        IChangeStream<JsonElement, LayoutAreaReference> changeStream,
+        IChangeStream<WorkspaceState> changeStream,
         LayoutAreaReference reference
     );
 }
@@ -29,7 +29,7 @@ public sealed class LayoutPlugin : MessageHubPlugin, ILayout
     }
 
     public IChangeStream<JsonElement, LayoutAreaReference> Render(
-        IChangeStream<JsonElement, LayoutAreaReference> changeStream,
+        IChangeStream<WorkspaceState> changeStream,
         LayoutAreaReference reference
     ) => new LayoutManager(new(reference, Hub, changeStream), layoutDefinition).Render(reference);
 

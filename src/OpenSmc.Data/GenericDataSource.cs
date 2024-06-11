@@ -13,7 +13,6 @@ public interface IDataSource : IAsyncDisposable
     IReadOnlyDictionary<Type, ITypeSource> TypeSources { get; }
     IReadOnlyCollection<Type> MappedTypes { get; }
     object Id { get; }
-    IReadOnlyCollection<DataChangedReqeust> Change(DataChangedReqeust request);
     void Initialize();
     ValueTask<EntityStore> Initialized { get; }
 }
@@ -49,15 +48,6 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
     public ITypeSource GetTypeSource(string collectionName) =>
         TypeSources.Values.FirstOrDefault(x => x.CollectionName == collectionName);
 
-    public virtual IReadOnlyCollection<DataChangedReqeust> Change(DataChangedReqeust request)
-    {
-        if (request is DataChangedReqeust requestWithElements)
-            return Change(requestWithElements);
-
-        throw new ArgumentOutOfRangeException(
-            $"No implementation found for {request.GetType().FullName}"
-        );
-    }
 
     public ITypeSource GetTypeSource(Type type) => TypeSources.GetValueOrDefault(type);
 
@@ -79,7 +69,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
     public virtual void Initialize()
     {
         var reference = GetReference();
-        var stream = Workspace.GetStream(reference);
+        var stream = Workspace.GetStream(Hub.Address, reference);
         Streams = Streams.Add(stream);
         stream.Skip(1).Subscribe(Synchronize);
         Hub.Schedule(cancellationToken => InitializeAsync(stream, cancellationToken));
@@ -111,8 +101,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
             })
             .AggregateAsync(
                 new EntityStore(),
-                (store, selected) => store.Merge(selected.Reference, selected.Initialized)
-            );
+                (store, selected) => store.Merge(selected.Reference, selected.Initialized), cancellationToken: cancellationToken);
 
         stream.Initialize(initial);
     }
@@ -127,6 +116,9 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
 
     public virtual ValueTask DisposeAsync()
     {
+        foreach (var stream in Streams)
+            stream.Dispose();
+
         if (changesSubscriptions != null)
             foreach (var subscription in changesSubscriptions)
                 subscription.Dispose();

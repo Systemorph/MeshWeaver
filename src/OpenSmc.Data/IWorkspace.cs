@@ -1,5 +1,4 @@
-﻿using System.Reflection.Metadata;
-using OpenSmc.Data.Serialization;
+﻿using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
@@ -30,7 +29,6 @@ public interface IWorkspace : IAsyncDisposable
     ReduceManager<WorkspaceState> ReduceManager { get; }
     WorkspaceReference Reference { get; }
 
-    IChangeStream<TReduced> GetStream<TReduced>(WorkspaceReference<TReduced> reference);
     IChangeStream<TReduced> GetStream<TReduced>(
         object address,
         WorkspaceReference<TReduced> reference

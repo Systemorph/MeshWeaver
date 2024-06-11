@@ -12,7 +12,7 @@ using OpenSmc.Messaging;
 
 namespace OpenSmc.Layout.Composition;
 
-public record LayoutArea
+public record LayoutArea : IDisposable
 {
     private readonly IMessageHub hub;
     public IChangeStream<JsonElement, LayoutAreaReference> Stream { get; }
@@ -37,17 +37,18 @@ public record LayoutArea
     }
     private ChangeItem<JsonElement> UpdateImpl(string area, object control, ChangeItem<JsonElement> ws)
     {
+        // TODO V10: Dispose old areas (09.06.2024, Roland Bürgi)
         var path = $"/{LayoutAreaReference.Areas}/{area.Replace("/", "~1")}";
         return ws.SetValue(UpdateJsonElement(ws.Value, path, ConvertToControl(control)));
     }
 
-    public LayoutArea(LayoutAreaReference Reference, IMessageHub hub, IChangeStream<JsonElement, LayoutAreaReference> stream)
+    public LayoutArea(LayoutAreaReference Reference, IMessageHub hub, IChangeStream<WorkspaceState> workspaceStream)
     {
         this.hub = hub;
-        Stream = stream;
+        Stream = new ChangeStream<JsonElement, LayoutAreaReference>(hub.Address, hub, Reference, workspaceStream.ReduceManager.ReduceTo<JsonElement>());
         this.Reference = Reference;
         Workspace = hub.GetWorkspace();
-        updateStream
+        Stream.AddDisposable(updateStream
             .Scan(
                 new ChangeItem<JsonElement>(
                     hub.Address,
@@ -59,7 +60,8 @@ public record LayoutArea
                 (currentState, updateFunc) => updateFunc(currentState)
             )
             .Sample(TimeSpan.FromMilliseconds(100))
-            .Subscribe(Stream);
+            .Subscribe(Stream));
+        Stream.AddDisposable(this);
     }
 
     public void UpdateData(string pointer, object data)
@@ -102,5 +104,11 @@ public record LayoutArea
         return Stream.Select(ci => reference.Evaluate(ci.Value)?.Deserialize<T>(hub.JsonSerializerOptions))
             .Where(x => x != null)
             .DistinctUntilChanged();
+    }
+
+    public void Dispose()
+    {
+        foreach (var disposable in disposablesByArea)
+            disposable.Value.ForEach(d => d.Dispose());
     }
 }
