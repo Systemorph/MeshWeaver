@@ -27,5 +27,14 @@
     </div>
 
     <script src="_framework/blazor.server.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/2.3.0/Chart.js"></script>
+    <script>
+        window.renderChart = function (chartId, chartData) {
+            console.log(chartId);
+            console.log(chartData);
+            var ctx = document.getElementById(chartId).getContext('2d');
+            new Chart(ctx, chartData);
+        };
+    </script>
 </body>
 </html>
