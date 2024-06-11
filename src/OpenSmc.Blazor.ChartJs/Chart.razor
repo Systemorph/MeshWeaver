@@ -1,0 +1,54 @@
+﻿@using Microsoft.JSInterop
+@inherits BlazorView<OpenSmc.Charting.ChartControl>
+@implements IAsyncDisposable
+
+<canvas id="myChart"></canvas>
+
+@code
+{
+ 
+    [Inject] private IJSRuntime JsRuntime { get; set; }
+    private IJSObjectReference module;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+
+        if (firstRender)
+        {
+            module = await 
+                JsRuntime
+                    .InvokeAsync<IJSObjectReference>(
+                        "import",
+                        "./_content/OpenSmc.Blazor.ChartJs/chartJsAdapter.js"
+                    );
+            var options = new
+            {
+                type = "line",
+                data = new
+                {
+                    labels = new [] { "Red", "Blue", "Yellow", "Green", "Purple"},
+                    datasets = new[]
+                    {
+                        new
+                        {
+                            label = "First dataset",
+                            data = new[] { 1, 2, 3, 4, 5 },
+                            fill = false,
+                            borderColor = "rgb(75, 192, 192)",
+                            tension = 0.1
+                        }
+                    }
+                }
+            };
+
+            await JsRuntime.InvokeVoidAsync("renderChart", "myChart", options);
+        }
+
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (module != null) 
+            await module.DisposeAsync();
+    }
+}
