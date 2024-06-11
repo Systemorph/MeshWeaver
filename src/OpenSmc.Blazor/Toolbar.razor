@@ -3,6 +3,6 @@
 <FluentToolbar>
 @foreach (var item in ViewModel.Controls)
     {
-        <DispatchView ViewModel="@item"/>
+        <DispatchView ViewModel="@item" Stream="@Stream" Area="@Area"/>
     }
 </FluentToolbar>

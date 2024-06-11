@@ -1,16 +1,21 @@
-@using System.Text.Json.Nodes
+@using Json.More
+@using Json.Pointer
 @inherits BlazorView<SelectControl>
 
-<FluentSelect Label="@ViewModel.Label" 
-              Items="@Items" 
-              OptionValue="@(x => GetValue(x, @ViewModel.OptionValue) as string)"
-              OptionText="@(x => GetValue(x, "@ViewModel.OptionText") as string)"/>
+<FluentSelect Label="@ViewModel.Label.ToString()"
+              Items="@Items"
+              OptionText="@GetOptionText"
+              @bind-SelectedOption="@SelectedOption"
+/>
 
 @code
 {
-    private object GetValue(JsonObject obj, string propertyName)
-        => obj.TryGetPropertyValue(propertyName, out var x) ? x : null;
+    private IEnumerable<object> Items => ViewModel.Elements.Cast<object>();
 
-    // TODO V10: to be data-bound to data property (10.06.2024, Alexander Kravets)
-    private IQueryable<JsonObject> Items => null;
+    public string GetOptionText(object item) => 
+        JsonPointer.Parse(ViewModel.OptionText)
+            .Evaluate(item.ToJsonDocument().RootElement)?.GetString();
+
+    // TODO V10: bind to "data" property (11.06.2024, Alexander Kravets)
+    private object SelectedOption { get; set; }
 }

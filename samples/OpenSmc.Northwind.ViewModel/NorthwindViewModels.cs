@@ -43,21 +43,33 @@ public static class NorthwindViewModels
             .WithWidth(250), (x, a) => x.WithNavLink(a.Key, $"app/Northwind/dev/{a.Key}", o => o.WithIcon(a.Value)));
     }
 
+    private record Toolbar(int Year);
 
     public static object Dashboard(LayoutArea layoutArea)
     {
+        var toolbar = new Toolbar(1996);
+
         return Stack()
             .WithOrientation(Orientation.Vertical)
             .WithView(Html("<h1>Northwind Dashboard</h1>"))
-            .WithView(Toolbar().WithControl(
-                    new[] { "2023", "2024" }
-                            .ToSelect(select => 
-                                select.WithLabel("Select year")
-                                    .WithOptionText(x => x)
-                                    .WithOptionValue(x => x)
+            .WithView("Toolbar",
+                area =>
+                    area.Workspace.GetObservable<Order>()
+                        .Select(x =>
+                            area.Bind(
+                                toolbar, 
+                                nameof(toolbar),
+                                tb => Toolbar().WithControl(
+                                    x.Select(x => x.OrderDate.Year)
+                                    .Distinct()
+                                    .ToSelect(select =>
+                                        select.WithLabel("Select year")
+                                            .WithData(tb.Year)
+                                            .WithOptionText(x => x)
+                                    )
                                 )
-                )
-            )
+                            )
+                ))
             .WithView(Stack().WithOrientation(Orientation.Horizontal)
                 .WithView(OrderSummary())
                 .WithView(ProductSummary())
@@ -69,7 +81,7 @@ public static class NorthwindViewModels
             ;
 
     }
-
+    
     private static LayoutStackControl SupplierSummary() =>
         Stack().WithOrientation(Orientation.Vertical)
             .WithView(Html("<h2>Supplier Summary</h2>"));
@@ -85,6 +97,8 @@ public static class NorthwindViewModels
     private static LayoutStackControl OrderSummary() =>
         Stack().WithOrientation(Orientation.Vertical)
             .WithView(Html("<h2>Order Summary</h2>"))
+            .WithView("Year", area => area.GetDataStream<Toolbar>("toolbar")
+                .Select(tb => Controls.Html($"Orders for year {tb.Year}")))
             .WithView(area => area.Workspace.GetObservable<Order>()
                 .Select(x =>
                 x
