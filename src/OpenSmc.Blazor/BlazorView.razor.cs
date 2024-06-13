@@ -74,10 +74,10 @@ namespace OpenSmc.Blazor
                 return Observable.Empty<T>();
             if (value is IObservable<T> observable)
                 return observable;
-            if (value is T t)
-                return Observable.Return(t);
             if (value is WorkspaceReference reference)
                 return Stream.Reduce(reference).Select(ConvertTo<T>);
+            if (value is T t)
+                return Observable.Return(t);
             // TODO V10: Should we add more ways to convert? Converting to primitives? (11.06.2024, Roland Bürgi)
             throw new InvalidOperationException($"Cannot bind to {value.GetType().Name}");
         }
@@ -85,7 +85,7 @@ namespace OpenSmc.Blazor
         private T ConvertTo<T>(IChangeItem changeItem)
         {
             var value = changeItem.Value;
-            if (value is JsonNode node)
+            if (value is JsonElement node)
                 return node.Deserialize<T>(Stream.Hub.JsonSerializerOptions);
             if (value is T t)
                 return t;
