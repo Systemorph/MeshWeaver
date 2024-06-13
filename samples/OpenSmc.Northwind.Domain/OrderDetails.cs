@@ -1,8 +1,10 @@
-﻿namespace OpenSmc.Northwind.Domain;
+﻿using OpenSmc.Domain;
+
+namespace OpenSmc.Northwind.Domain;
 
 public record OrderDetails(
     int OrderId,
-    int ProductId,
+    [property: Dimension(typeof(Product))] int ProductId,
     double UnitPrice,
     int Quantity,
     double Discount
