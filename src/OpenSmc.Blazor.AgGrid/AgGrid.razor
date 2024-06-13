@@ -1,0 +1,51 @@
+﻿@using Microsoft.JSInterop
+@using OpenSmc.ShortGuid
+@inherits BlazorView<GridControl>
+@implements IAsyncDisposable
+
+<HeadContent>
+    <script>
+        function renderGrid(elementId, gridOptions) {
+            console.log(elementId, gridOptions);
+            var element = document.getElementById(elementId);
+            agGrid.createGrid(element, gridOptions);
+        }
+    </script>
+</HeadContent>
+
+<div id="@GridArea" class="ag-theme-quartz" style="height: 500px"></div>
+
+@code
+{
+ 
+    [Inject] private IJSRuntime JsRuntime { get; set; }
+    private IJSObjectReference agGridModule;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+
+        if (firstRender)
+        {
+            agGridModule = await
+                JsRuntime
+                    .InvokeAsync<IJSObjectReference>(
+                        "import",
+                        "./_content/OpenSmc.Blazor.AgGrid/ag-grid-community.js"
+                    );
+
+            DataBind<object>(ViewModel.Data, o => Options = o);
+        }
+
+        await JsRuntime.InvokeVoidAsync("renderGrid", GridArea, Options);
+    }
+
+    private object Options { get; set; }
+
+    private static readonly string GridArea = Guid.NewGuid().AsString();
+
+    public async ValueTask DisposeAsync()
+    {
+        if (agGridModule != null) 
+            await agGridModule.DisposeAsync();
+    }
+}
