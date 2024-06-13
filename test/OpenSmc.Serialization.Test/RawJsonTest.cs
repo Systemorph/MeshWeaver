@@ -47,7 +47,7 @@ public class RawJsonTest : TestBase
         => c;
 
     [Fact]
-    public void DeserializeToRawJson()
+    public void WayForward_DeserializeToRawJson()
     {
         // arrange
         var postOptions = new PostOptions(Client.Address, Client)
@@ -63,9 +63,13 @@ public class RawJsonTest : TestBase
         var subscribeRequest = new SubscribeRequest(new CollectionReference("TestCollection"));
         var delivery = new MessageDelivery<SubscribeRequest>(subscribeRequest, postOptions);
 
+        // act
         var serialized = JsonSerializer.Serialize(delivery, Client.JsonSerializerOptions);
 
-        serialized.Should().NotBeNull();
+        // assert
+        var actual = serialized.Should().NotBeNull().And.BeValidJson().Which;
+        var actualMessage = actual.Should().HaveElement("message").Which;
+        actualMessage.Should().HaveElement("$type").Which.Should().HaveValue(typeof(SubscribeRequest).FullName);
 
         // act
         var deserialized = JsonSerializer.Deserialize<MessageDelivery<RawJson>>(serialized, Router.JsonSerializerOptions);
@@ -74,11 +78,12 @@ public class RawJsonTest : TestBase
         deserialized.Should().NotBeNull()
             .And.NotBeSameAs(delivery)
             .And.BeEquivalentTo(delivery, o => o.Excluding(x => x.Message));
-        deserialized.Message.Should().NotBeNull().And.Subject.As<RawJson>().Content.Should().NotBeNullOrWhiteSpace();
-
-        var serializedOnServer = JsonSerializer.Serialize(deserialized, Router.JsonSerializerOptions);
-
-        serializedOnServer.Should().NotBeNull();
+        var rawJsonContent = deserialized.Message.Should().NotBeNull()
+            .And.Subject.As<RawJson>()
+                .Content.Should().NotBeNullOrWhiteSpace()
+                .And.Subject;
+        var jContent = rawJsonContent.Should().BeValidJson().Which;
+        jContent.Should().HaveElement("$type").Which.Should().HaveValue(typeof(SubscribeRequest).FullName);
     }
 
     [Fact]
