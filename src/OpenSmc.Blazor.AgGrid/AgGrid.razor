@@ -7,13 +7,54 @@
     <script>
         function renderGrid(elementId, gridOptions) {
             console.log(elementId, gridOptions);
+            evalJs(gridOptions, REGEXPS.func);
             var element = document.getElementById(elementId);
-            agGrid.createGrid(element, gridOptions);
+            return agGrid.createGrid(element, gridOptions);
         }
+
+        function evalJs(value, evalRegexps) {
+            var regexps = evalRegexps.map(e => isString(e) ? new RegExp(e) : e);
+
+            traverse(value);
+
+            function traverse(value, parent, key) {
+                if (isArray(value)) {
+                    for (let i = 0; i < value.length; i++) {
+                        traverse(value[i], value, i);
+                    }
+                } else if (isObjectLike(value)) {
+                    for (let key in value) {
+                        traverse(value[key], value, key);
+                    }
+                } else {
+                    if (isString(value) && regexps.some(regexp => regexp.test(value))) {
+                        eval(`parent[key] = ${value}`);
+                    } else {
+                        parent[key] = value;
+                    }
+                }
+            }
+        }
+
+        function isString(value) {
+            return typeof value === 'string' || value instanceof String;
+        }
+
+        function isArray(value) {
+            return Array.isArray(value);
+        }
+
+        function isObjectLike(value) {
+            return typeof value === 'object' && value !== null;
+        }
+
+        var REGEXPS = {
+            func: [/^function\b/, /^\(function\b/, /^\s*(\s*[a-zA-Z]\w*|\(\s*[a-zA-Z]\w*(\s*,\s*[a-zA-Z]\w*)*\s*\))\s*=>/],
+        };
     </script>
 </HeadContent>
 
-<div id="@GridArea" class="ag-theme-quartz" style="height: 500px"></div>
+<div id="@GridArea" class="ag-theme-quartz" style="height: 500px; width: 500px;"></div>
 
 @code
 {
