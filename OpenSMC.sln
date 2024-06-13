@@ -174,7 +174,9 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Northwind.Model", "
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Northwind.ViewModel", "samples\OpenSmc.Northwind.ViewModel\OpenSmc.Northwind.ViewModel.csproj", "{10B930C6-8879-4C86-B5A7-8414E92D12E8}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenSmc.Blazor.ChartJs", "src\OpenSmc.Blazor.ChartJs\OpenSmc.Blazor.ChartJs.csproj", "{2CA5BB18-A78B-43F2-A1EE-EC591DE5AE72}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OpenSmc.Blazor.ChartJs", "src\OpenSmc.Blazor.ChartJs\OpenSmc.Blazor.ChartJs.csproj", "{2CA5BB18-A78B-43F2-A1EE-EC591DE5AE72}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenSmc.Blazor.AgGrid", "src\OpenSmc.Blazor.AgGrid\OpenSmc.Blazor.AgGrid.csproj", "{03014EA4-3DE8-4161-A7DD-86AB96132B4E}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -498,6 +500,10 @@ Global
 		{2CA5BB18-A78B-43F2-A1EE-EC591DE5AE72}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{2CA5BB18-A78B-43F2-A1EE-EC591DE5AE72}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{2CA5BB18-A78B-43F2-A1EE-EC591DE5AE72}.Release|Any CPU.Build.0 = Release|Any CPU
+		{03014EA4-3DE8-4161-A7DD-86AB96132B4E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{03014EA4-3DE8-4161-A7DD-86AB96132B4E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{03014EA4-3DE8-4161-A7DD-86AB96132B4E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{03014EA4-3DE8-4161-A7DD-86AB96132B4E}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

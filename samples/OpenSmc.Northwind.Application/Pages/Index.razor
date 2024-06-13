@@ -1,11 +1,12 @@
-﻿@using OpenSmc.Blazor.ChartJs
-@using OpenSmc.Charting
+﻿@using OpenSmc.Charting
+@using OpenSmc.GridModel
 @page "/"
 
 <PageTitle>OpenSmc</PageTitle>
 
 <h1>Hello</h1>
-<DispatchView ViewModel="@ViewModel"/>
+@* <DispatchView ViewModel="@ViewModel"/> *@
+<DispatchView ViewModel="@GridViewModel"/>
 
 Welcome to your new app.
 
@@ -29,6 +30,23 @@ Welcome to your new app.
                     tension = 0.1
                 }
             }
+        }
+    });
+
+    private GridControl GridViewModel => new(new
+    {
+        rowData = new[]
+        {
+            new {make = "Tesla", model = "Model Y", price = 64950, electric = true},
+            new {make = "Ford", model = "F-Series", price = 33850, electric = false},
+            new {make = "Toyota", model = "Corolla", price = 29600, electric = false},
+        },
+        columnDefs = new[]
+        {
+            new {field = "make"},
+            new {field = "model"},
+            new {field = "price"},
+            new {field = "electric"}
         }
     });
 }
