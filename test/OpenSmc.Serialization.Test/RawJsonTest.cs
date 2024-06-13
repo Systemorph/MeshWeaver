@@ -44,7 +44,14 @@ public class RawJsonTest : TestBase
     }
 
     private static MessageHubConfiguration ConfigureClient(MessageHubConfiguration c)
-        => c;
+        => c
+            .WithSerialization(serialization =>
+                serialization.WithOptions(options =>
+                {
+                    if (!options.Converters.Any(c => c is RawJsonConverter))
+                        options.Converters.Insert(0, new RawJsonConverter());
+                })
+            );
 
     [Fact]
     public void WayForward_DeserializeToRawJson()
@@ -111,5 +118,20 @@ public class RawJsonTest : TestBase
         var actual = serialized.Should().NotBeNull().And.BeValidJson().Which;
         var actualMessage = actual.Should().HaveElement("message").Which;
         actualMessage.Should().HaveElement("$type").Which.Should().HaveValue(typeof(DataChangedEvent).FullName);
+
+        // act
+        var deserialized = JsonSerializer.Deserialize<MessageDelivery<RawJson>>(serialized, Client.JsonSerializerOptions);
+
+        // assert
+        deserialized.Should().NotBeNull()
+            .And.NotBeSameAs(delivery)
+            .And.BeEquivalentTo(delivery, o => o.Excluding(x => x.Message));
+        var rawJsonContent = deserialized.Message.Should().NotBeNull()
+            .And.Subject.As<RawJson>()
+                .Content.Should().NotBeNullOrWhiteSpace()
+                .And.Subject;
+        var jContent = rawJsonContent.Should().BeValidJson().Which;
+        jContent.Should().HaveElement("$type").Which.Should().HaveValue(typeof(DataChangedEvent).FullName);
+        jContent.Should().HaveElement("version").Which.Should().HaveValue("10");
     }
 }
