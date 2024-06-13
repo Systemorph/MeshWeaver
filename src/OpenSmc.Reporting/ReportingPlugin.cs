@@ -103,7 +103,7 @@ public record ReportDataCubeConfiguration<T>(
     )
     {
         var data = DataFunc(workspace, scopeFactory, request).ToDataCube();
-        var result = ReportFunc(PivotFactory.ForDataCube(data).WithState(workspace.State), request)
+        var result = ReportFunc(PivotFactory.Pivot(data).WithState(workspace.State), request)
             .Execute();
         return result;
     }

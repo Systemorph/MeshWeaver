@@ -1,11 +1,12 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using OpenSmc.Domain;
 
 namespace OpenSmc.Northwind.Domain;
 
 public record Order(
     [property: Key] int OrderId,
-    string CustomerId,
-    int EmployeeId,
+    [property: Dimension(typeof(Customer))] string CustomerId,
+    [property: Dimension(typeof(Employee))] int EmployeeId,
     DateTime OrderDate,
     DateTime RequiredDate,
     DateTime ShippedDate,
@@ -15,6 +16,6 @@ public record Order(
     string ShipAddress,
     string ShipCity,
     string ShipRegion,
-    string ShipPostalCode,
+    string ShipPostalCode, 
     string ShipCountry
 );

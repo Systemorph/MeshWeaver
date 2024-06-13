@@ -121,7 +121,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = GetClient().GetWorkspace();
         await workspace.Initialized;
 
-        var viewName = nameof(NorthwindViewModels.Dashboard);
+        var viewName = nameof(NorthwindLayoutAreas.Dashboard);
         var stream = workspace.GetStream(new HostAddress(), new LayoutAreaReference(viewName));
         var dashboard = (await stream.GetControl(viewName)).Should().BeOfType<LayoutStackControl>().Subject;
         var areas = dashboard.Areas;
