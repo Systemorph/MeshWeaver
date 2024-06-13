@@ -128,7 +128,7 @@
             Storage = storage;
         }
 
-        public IList<TScope> ToScopes<TScope>() where TScope:IScope
+        public IReadOnlyCollection<TScope> ToScopes<TScope>() where TScope:IScope
         {
             return CreateScopes<TScope>().ToArray();
         }

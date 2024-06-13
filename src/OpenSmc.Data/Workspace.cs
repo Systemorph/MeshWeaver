@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Reactive.Linq;
 using System.Reflection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
@@ -48,6 +49,15 @@ public class Workspace : IWorkspace
 
     private readonly IActivityService activityService;
 
+
+    public IObservable<IEnumerable<TCollection>> GetStream<TCollection>()
+    {
+        var collection =
+            DataContext.DataSources.Select(ds => ds.Value.TypeSources.GetValueOrDefault(typeof(TCollection))).FirstOrDefault(x => x != null);
+        if(collection == null)
+            return null;
+        return GetStream(Hub.Address, new CollectionReference(collection.CollectionName)).Select(x => x.Value.Instances.Values.Cast<TCollection>());
+    }
 
     public IChangeStream<TReduced> GetStream<TReduced>(
         object id,

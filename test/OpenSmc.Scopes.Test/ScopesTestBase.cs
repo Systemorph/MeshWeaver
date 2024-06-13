@@ -28,7 +28,7 @@ public class ScopesTestBase : HubTestBase
         return (scopes.First(), storage);
     }
 
-    protected virtual (ICollection<TScope> scopes, IdentitiesStorage storage) GetTestScopes<TScope>(
+    protected virtual (IReadOnlyCollection<TScope> scopes, IdentitiesStorage storage) GetTestScopes<TScope>(
         int nScopes = 1
     )
         where TScope : class, IScope
