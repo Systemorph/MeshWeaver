@@ -1,16 +1,20 @@
-﻿using System.Reactive.Linq;
+﻿using System.Diagnostics.CodeAnalysis;
+using System.Reactive.Linq;
 using OpenSmc.Application.Styles;
 using OpenSmc.Data;
+using OpenSmc.DataCubes;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
 using OpenSmc.Northwind.Domain;
+using OpenSmc.Pivot.Builder;
+using OpenSmc.Reporting.Models;
 using static OpenSmc.Layout.Controls;
 
 namespace OpenSmc.Northwind.ViewModel;
 
-public static class NorthwindViewModels
+public static class NorthwindLayoutAreas
 {
     public static MessageHubConfiguration AddNorthwindViewModels(
         this MessageHubConfiguration configuration
@@ -84,7 +88,37 @@ public static class NorthwindViewModels
     
     private static LayoutStackControl SupplierSummary() =>
         Stack().WithOrientation(Orientation.Vertical)
-            .WithView(Html("<h2>Supplier Summary</h2>"));
+            .WithView(Html("<h2>Supplier Summary</h2>"))
+            .WithView(SupplierSummaryReport);
+
+    private static IObservable<object> SupplierSummaryReport(LayoutArea area) => 
+        area.GetDataCube()
+            .Select(cube => 
+                cube.Pivot()
+                    .SliceRowsBy(nameof(Supplier))
+                    .Execute()
+                    .ToGridControl()
+                );
+
+    private static IObservable<IDataCube<NorthwindDataCube>> GetDataCube(this LayoutArea area) =>
+        area.Workspace.Stream
+            .Select(x =>
+            
+                new
+                {
+                    Orders = x.Value.GetData<Order>(),
+                    Details = x.Value.GetData<OrderDetails>(),
+                    Products = x.Value.GetData<Product>()
+                }
+            )
+            .DistinctUntilChanged()
+            .Select(x =>
+                x.Orders
+                    .Join(x.Details, o => o.OrderId, d => d.OrderId, (order, detail) => (order, detail))
+                    .Join(x.Products, od => od.detail.ProductId, p => p.ProductId, (od, product) => (od.order, od.detail, product))
+                    .Select(data => new NorthwindDataCube(data.order, data.detail, data.product))
+                    .ToDataCube()
+            );
 
     private static LayoutStackControl CustomerSummary() =>
         Stack().WithOrientation(Orientation.Vertical)

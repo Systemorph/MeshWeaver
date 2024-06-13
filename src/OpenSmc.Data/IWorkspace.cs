@@ -28,6 +28,7 @@ public interface IWorkspace : IAsyncDisposable
     IObservable<ChangeItem<WorkspaceState>> Stream { get; }
     ReduceManager<WorkspaceState> ReduceManager { get; }
     WorkspaceReference Reference { get; }
+    IObservable<IEnumerable<TCollection>> GetStream<TCollection>();
 
     IChangeStream<TReduced> GetStream<TReduced>(
         object address,

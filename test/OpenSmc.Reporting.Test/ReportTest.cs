@@ -70,7 +70,7 @@ namespace OpenSmc.Reporting.Test
         )
         {
             var initialPivotBuilder = PivotFactory
-                .ForObjects(data)
+                .Pivot(data)
                 .WithState(await GetWorkspaceStateAsync());
 
             var reportBuilder = toReportBuilder(initialPivotBuilder);
