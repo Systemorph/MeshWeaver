@@ -46,7 +46,7 @@ public record NorthwindDataCube()
     public string Customer { get; init; }
     [property: Dimension(typeof(Employee))]
     public int Employee { get; init; }
-    [Dimension(typeof(Supplier))]
+    //[Dimension(typeof(Supplier))]
     public int Supplier { get; init; }
 
     [Dimension(typeof(Category))]
