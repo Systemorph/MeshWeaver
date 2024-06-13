@@ -43,33 +43,45 @@ public static class NorthwindViewModels
             .WithWidth(250), (x, a) => x.WithNavLink(a.Key, $"app/Northwind/dev/{a.Key}", o => o.WithIcon(a.Value)));
     }
 
-    private record Toolbar(int Year);
+    private record Toolbar(string Year);
 
     public static object Dashboard(LayoutArea layoutArea)
     {
-        var toolbar = new Toolbar(1996);
+        var toolbar = new Toolbar("1997");
 
         return Stack()
             .WithOrientation(Orientation.Vertical)
             .WithView(Html("<h1>Northwind Dashboard</h1>"))
+            // .WithView("Toolbar",
+            //     area =>
+            //         area.Workspace.GetObservable<Order>()
+            //             .Select(x =>
+            //                 area.Bind(
+            //                     toolbar, 
+            //                     nameof(toolbar),
+            //                     tb => Toolbar().WithControl(
+            //                         x.Select(x => x.OrderDate.Year).Distinct()
+            //                         .ToSelect(select =>
+            //                             select.WithLabel("Select year")
+            //                                 .WithData(tb.Year)
+            //                                 .WithOptionText(x => x)
+            //                         )
+            //                     )
+            //                 )
+            //     ))
             .WithView("Toolbar",
-                area =>
-                    area.Workspace.GetObservable<Order>()
-                        .Select(x =>
-                            area.Bind(
-                                toolbar, 
-                                nameof(toolbar),
-                                tb => Toolbar().WithControl(
-                                    x.Select(x => x.OrderDate.Year)
-                                    .Distinct()
+    area => area.Bind(
+                            toolbar,
+                            nameof(toolbar),
+                            tb => Toolbar().WithControl(
+                                new[] { "1995", "1996", "1997" }
                                     .ToSelect(select =>
                                         select.WithLabel("Select year")
                                             .WithData(tb.Year)
                                             .WithOptionText(x => x)
                                     )
-                                )
                             )
-                ))
+            ))
             .WithView(Stack().WithOrientation(Orientation.Horizontal)
                 .WithView(OrderSummary())
                 .WithView(ProductSummary())

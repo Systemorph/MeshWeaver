@@ -51,6 +51,7 @@ public record SelectControlBuilder<TItem>
     {
         Elements = Elements,
         Label = Label,
+        Data = Data,
         OptionText = OptionText
     };
 }
