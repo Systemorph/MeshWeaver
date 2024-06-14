@@ -45,6 +45,7 @@ public class RawJsonTest : TestBase
 
     private static MessageHubConfiguration ConfigureClient(MessageHubConfiguration c)
         => c
+            .WithTypes(typeof(RawJson), typeof(MessageDelivery<>))
             .WithSerialization(serialization =>
                 serialization.WithOptions(options =>
                 {
