@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
 
@@ -14,7 +15,7 @@ public static class SignalRClientHubExtensions
                 serialization.WithOptions(options =>
                 {
                     if (!options.Converters.Any(c => c is RawJsonConverter))
-                        options.Converters.Insert(0, new RawJsonConverter());
+                        options.Converters.Insert(0, new RawJsonConverter(serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()));
                 })
             )
             .AddPlugin<SignalRClientPlugin>();

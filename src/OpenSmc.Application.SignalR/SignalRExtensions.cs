@@ -57,7 +57,7 @@ public static class SignalRExtensions
                 serialization.WithOptions(options =>
                 {
                     if (!options.Converters.Any(c => c is RawJsonConverter))
-                        options.Converters.Insert(0, new RawJsonConverter());
+                        options.Converters.Insert(0, new RawJsonConverter(serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()));
                 })
             );
 }
