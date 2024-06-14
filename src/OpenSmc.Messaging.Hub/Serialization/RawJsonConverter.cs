@@ -4,12 +4,15 @@ using System.Text.Json.Serialization;
 
 namespace OpenSmc.Messaging.Serialization;
 
-public class RawJsonConverter : JsonConverter<RawJson>
+public class RawJsonConverter(ITypeRegistry typeRegistry) : JsonConverter<RawJson>
 {
     public override RawJson Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         var node = JsonNode.Parse(ref reader);
-        var content = node.ToJsonString();
+        var type = node["$type"];
+        var content = type != null && typeRegistry.GetOrAddTypeName(typeof(RawJson)) == type.GetValue<string>()
+            ? node["content"].GetValue<string>()
+            : node.ToJsonString();
         return new RawJson(content);
     }
 
