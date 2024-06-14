@@ -121,7 +121,7 @@ public class RawJsonTest : TestBase
         actualMessage.Should().HaveElement("$type").Which.Should().HaveValue(typeof(DataChangedEvent).FullName);
 
         // act
-        var deserialized = JsonSerializer.Deserialize<MessageDelivery<RawJson>>(serialized, Client.JsonSerializerOptions);
+        var deserialized = JsonSerializer.Deserialize<IMessageDelivery>(serialized, Client.JsonSerializerOptions);
 
         // assert
         deserialized.Should().NotBeNull()
