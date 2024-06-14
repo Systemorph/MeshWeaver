@@ -57,8 +57,8 @@ public static class LayoutExtensions
             .WithTypes(
                 typeof(MessageAndAddress),
                 typeof(LayoutAreaReference),
-                typeof(DataGridColumn), // these area not controls
-                typeof(DataGridColumn<>) // these area not controls
+                typeof(DataGridColumn<>), // this is not a control
+                typeof(Option<>) // this is not a control
             );
 
     public static IObservable<object> GetControlStream(
