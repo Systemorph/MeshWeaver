@@ -108,7 +108,9 @@ public class RawJsonTest : TestBase
                     { "MyId2", "22394" },
                 }
             );
-        var dataChanged = new DataChangedEvent(new HostAddress(), new WorkspaceStateReference(), 10, new RawJson("{}"), ChangeType.Full, null);
+        var entityStore = new EntityStore();
+        var entityStoreSerialized = JsonSerializer.Serialize(entityStore, Router.JsonSerializerOptions);
+        var dataChanged = new DataChangedEvent(new HostAddress(), new WorkspaceStateReference(), 10, new RawJson(entityStoreSerialized), ChangeType.Full, null);
         var delivery = new MessageDelivery<DataChangedEvent>(dataChanged, postOptions);
         var packedDelivery = delivery.Package(Router.JsonSerializerOptions);
 
