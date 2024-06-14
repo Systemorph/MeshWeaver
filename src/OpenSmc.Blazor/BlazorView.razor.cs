@@ -1,19 +1,33 @@
 ﻿using System.Reactive.Linq;
 using System.Text.Json;
-using System.Text.Json.Nodes;
+using Json.Patch;
+using Json.Pointer;
+using Microsoft.AspNetCore.Components;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Layout;
+using OpenSmc.Messaging;
 
 namespace OpenSmc.Blazor
 {
     public partial class BlazorView<TViewModel> : IDisposable
+        where TViewModel : UiControl
     {
+        [Inject] private IMessageHub Hub { get; set; }
         protected override void OnParametersSet()
         {
+            ResetBindings();
             base.OnParametersSet();
-            BindDataContext();
+            if (ViewModel != null)
+            {
+                DataBind<string>(ViewModel.Skin, x => Skin = x);
+                DataBind<string>(ViewModel.Label, x => Label = x);
+            }
         }
+
+        protected string Skin { get; set; }
+
+        protected string Label { get; set; }
 
         protected object BindProperty(object instance, string propertyName)
         {
@@ -27,46 +41,69 @@ namespace OpenSmc.Blazor
             return property.GetValue(instance, null);
         }
 
-        protected object DataContext { get; set; }
 
-        public void BindDataContext()
-        {
-            if (ViewModel is UiControl control)
-                if (control.DataContext is WorkspaceReference reference)
-                    Disposables.Add(Stream
-                        .Reduce(reference)
-                        .Subscribe(v =>
-                        {
-                            DataContext = v;
-                            InvokeAsync(StateHasChanged);
-                        }));
-                else
-                    DataContext = control.DataContext;
-        }
 
         protected List<IDisposable> Disposables { get; } = new();
 
         public void Dispose()
         {
-            foreach (var d in Disposables)
+            foreach (var d in bindings.Concat(Disposables))
             {
                 d.Dispose();
             }
         }
 
-        protected object GetControl(ChangeItem<JsonElement> item, string area)
+        protected UiControl GetControl(ChangeItem<JsonElement> item, string area)
         {
             return item.Value.TryGetProperty(LayoutAreaReference.Areas, out var controls) &&
                    controls.TryGetProperty(area, out var node)
-                ? node.Deserialize<object>(Stream.Hub.JsonSerializerOptions)
+                ? node.Deserialize<UiControl>(Stream.Hub.JsonSerializerOptions)
                 : null;
         }
 
+        private readonly List<IDisposable> bindings = new();
         protected virtual void DataBind<T>(object value, Action<T> bindingAction)
         {
-            Disposables.Add(GetObservable<T>(value).Subscribe(bindingAction));
+            bindings.Add(GetObservable<T>(value).Subscribe(bindingAction));
+        }
+        protected T SubmitChange<T>(T value, JsonPointerReference reference)
+        {
+            if (reference != null)
+                Stream.Update(ci => new ChangeItem<JsonElement>(
+                    Stream.Id,
+                    Stream.Reference,
+                    GetPatch(value, reference, ci),
+                    Hub.Address,
+                    Hub.Version
+                ));
+            return value;
         }
 
+        private JsonElement GetPatch<T>(T value, JsonPointerReference reference, JsonElement current)
+        {
+            var pointer = JsonPointer.Parse(reference.Pointer);
+
+            var existing = pointer.Evaluate(current);
+            if (value == null) 
+                return existing == null 
+                    ? current 
+                    : new JsonPatch(PatchOperation.Remove(pointer)).Apply(current);
+
+            var valueSerialized = JsonSerializer.SerializeToNode(value, Hub.JsonSerializerOptions);
+
+            return existing == null 
+                ? new JsonPatch(PatchOperation.Add(pointer, valueSerialized)).Apply(current) 
+                : new JsonPatch(PatchOperation.Replace(pointer, valueSerialized)).Apply(current);
+        }
+
+        public void ResetBindings()
+        {
+            foreach (var d in bindings)
+            {
+                d.Dispose();
+            }
+            bindings.Clear();
+        }
 
         protected virtual IObservable<T> GetObservable<T>(object value)
         {
@@ -85,6 +122,8 @@ namespace OpenSmc.Blazor
         private T ConvertTo<T>(IChangeItem changeItem)
         {
             var value = changeItem.Value;
+            if (value == null)
+                return default;
             if (value is JsonElement node)
                 return node.Deserialize<T>(Stream.Hub.JsonSerializerOptions);
             if (value is T t)

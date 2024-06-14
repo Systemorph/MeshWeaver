@@ -6,9 +6,9 @@ namespace OpenSmc.Layout;
 public record NavMenuControl()
     : UiControl<NavMenuControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
 {
-    public ImmutableList<object> Items { get; init; } = ImmutableList<object>.Empty;
+    public ImmutableList<UiControl> Items { get; init; } = ImmutableList<UiControl>.Empty;
 
-    public NavMenuControl WithItem(INavItem item) => this with { Items = Items.Add(item) };
+    public NavMenuControl WithItem(INavItem item) => this with { Items = Items.Add((UiControl)item) };
 
     public bool Collapsible { get; init; }
 

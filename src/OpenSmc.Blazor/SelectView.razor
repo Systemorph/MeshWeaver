@@ -1,47 +1,37 @@
 @using Json.More
-@using Json.Patch
 @using Json.Pointer
-@using System.Text.Json
-@using System.Text.Json.Nodes
+
 @inherits BlazorView<SelectControl>
 
-<FluentSelect Label="@ViewModel.Label.ToString()"
-              Items="@Items"
-              OptionText="@GetOptionText"
-              SelectedOption="@Data"
-              @onchange="ChangeData"
-/>
+<FluentSelect Label="@Label"
+              Items="@Options"
+              TOption="Option"
+              OptionText="@(x => x.Text)"
+              OptionValue="@(x => x.GetItem()?.ToString())"
+              SelectedOption="@Data"></FluentSelect>
 
 @code
 {
-    private IEnumerable<object> Items => ViewModel.Elements.Cast<object>();
+    private IEnumerable<Option> Options { get; set; }
 
     public string GetOptionText(object item) => 
         JsonPointer.Parse(ViewModel.OptionText)
             .Evaluate(item.ToJsonDocument().RootElement)?.GetString();
 
-    private void ChangeData(object data)
+
+    private Option data;
+    public Option Data
     {
-        if (ViewModel.Data is JsonPointerReference pointerRef)
-        {
-            Stream.Update(ci => new Data.Serialization.ChangeItem<JsonElement>(
-                Stream.Id,
-                Stream.Reference,
-                new JsonPatch(
-                    PatchOperation.Replace(JsonPointer.Parse(pointerRef.Pointer),
-                        JsonValue.Create(data)))
-                    .Apply(ci),
-                Stream.Hub.Address,
-                Stream.Hub.Version
-                ));
-        }
+        get => data;
+        set => data = Equals(data, value) ? value : SubmitChange(value, ViewModel.Data as JsonPointerReference);
     }
 
-    public object Data { get; set; }
 
-    protected override void OnInitialized()
+    protected override void OnParametersSet()
     {
-        DataBind<object>(ViewModel.Data, 
-            data => Data = data);
+        base.OnParametersSet();
+        DataBind<IEnumerable<Option>>(ViewModel.Options, x => Options = x);
+        DataBind<object>(ViewModel.Data, d => Data = Options.FirstOrDefault(x => x.GetItem().Equals(d)));
     }
+
 }

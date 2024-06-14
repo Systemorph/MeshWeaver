@@ -1,18 +1,20 @@
 ﻿using System.Text.Json;
 using OpenSmc.Data.Serialization;
+using OpenSmc.Layout;
 
 namespace OpenSmc.Blazor;
 
 public partial class LayoutStack
 {
-    private IReadOnlyCollection<(string Area, object ViewModel)> Areas { get; set; } = Array.Empty<(string Area, object ViewModel)>();
-    protected override Task OnInitializedAsync()
+    private IReadOnlyCollection<(string Area, UiControl ViewModel)> Areas { get; set; } = Array.Empty<(string Area, UiControl ViewModel)>();
+    protected override async Task OnInitializedAsync()
     {
+        await base.OnInitializedAsync();
         Disposables.Add(Stream.Subscribe(item => InvokeAsync(() => Render(item)))); 
-        return base.OnInitializedAsync();
     }
 
-    private void Render(ChangeItem<JsonElement> item)
+
+private void Render(ChangeItem<JsonElement> item)
     {
         var newAreas = ViewModel.Areas.Select(a => (Area:a,ViewModel:GetControl(item, a)))
             .Where(x => x.ViewModel != null).ToArray();
