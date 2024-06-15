@@ -21,7 +21,5 @@ public record SelectControl(object Data)
     public IReadOnlyCollection<Option> Options { get; init; }
     public SelectControl WithOptions<T>(IReadOnlyCollection<Option<T>> options) => this with { Options = options };
     public SelectControl WithOptions<T>(IEnumerable<T> options) => WithOptions(options.Select(o => new Option<T>(o, o.ToString())).ToArray());
-
-    public string OptionText { get; init; }
 }
 

@@ -75,9 +75,9 @@
                     );
 
             DataBind<object>(ViewModel.Data, o => Options = o);
+            await JsRuntime.InvokeVoidAsync("renderGrid", GridArea, Options);
         }
 
-        await JsRuntime.InvokeVoidAsync("renderGrid", GridArea, Options);
     }
 
     private object Options { get; set; }

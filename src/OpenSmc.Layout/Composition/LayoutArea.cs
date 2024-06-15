@@ -59,7 +59,6 @@ public record LayoutArea : IDisposable
                 ),
                 (currentState, updateFunc) => updateFunc(currentState)
             )
-            .Sample(TimeSpan.FromMilliseconds(100))
             .Subscribe(Stream));
         Stream.AddDisposable(this);
     }
