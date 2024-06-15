@@ -55,8 +55,8 @@ namespace OpenSmc.Blazor
 
         protected UiControl GetControl(ChangeItem<JsonElement> item, string area)
         {
-            return item.Value.TryGetProperty(LayoutAreaReference.Areas, out var controls) &&
-                   controls.TryGetProperty(area, out var node)
+            return item.Value.TryGetProperty(LayoutAreaReference.Areas, out var controls) 
+                   && controls.TryGetProperty(area, out var node)
                 ? node.Deserialize<UiControl>(Stream.Hub.JsonSerializerOptions)
                 : null;
         }
@@ -66,20 +66,19 @@ namespace OpenSmc.Blazor
         {
             bindings.Add(GetObservable<T>(value).Subscribe(bindingAction));
         }
-        protected T SubmitChange<T>(T value, JsonPointerReference reference)
+        protected void UpdatePointer<T>(T value, JsonPointerReference reference)
         {
             if (reference != null)
                 Stream.Update(ci => new ChangeItem<JsonElement>(
                     Stream.Id,
                     Stream.Reference,
-                    GetPatch(value, reference, ci),
+                    ApplyPatch(value, reference, ci),
                     Hub.Address,
                     Hub.Version
                 ));
-            return value;
         }
 
-        private JsonElement GetPatch<T>(T value, JsonPointerReference reference, JsonElement current)
+        private JsonElement ApplyPatch<T>(T value, JsonPointerReference reference, JsonElement current)
         {
             var pointer = JsonPointer.Parse(reference.Pointer);
 
@@ -99,9 +98,8 @@ namespace OpenSmc.Blazor
         public void ResetBindings()
         {
             foreach (var d in bindings)
-            {
                 d.Dispose();
-            }
+
             bindings.Clear();
         }
 
@@ -111,12 +109,21 @@ namespace OpenSmc.Blazor
                 return Observable.Empty<T>();
             if (value is IObservable<T> observable)
                 return observable;
-            if (value is WorkspaceReference reference)
-                return Stream.Reduce(reference).Select(ConvertTo<T>);
+            if (value is JsonPointerReference reference)
+                return Stream.Where(x => !Hub.Address.Equals(x.ChangedBy)).Select(x => Extract<T>(x, reference));
             if (value is T t)
                 return Observable.Return(t);
             // TODO V10: Should we add more ways to convert? Converting to primitives? (11.06.2024, Roland Bürgi)
             throw new InvalidOperationException($"Cannot bind to {value.GetType().Name}");
+        }
+
+        private TResult Extract<TResult>(ChangeItem<JsonElement> changeItem, JsonPointerReference reference)
+        {
+            if (reference == null)
+                return default;
+            var pointer = JsonPointer.Parse(reference.Pointer);
+            var ret = pointer.Evaluate(changeItem.Value);
+            return ret == null ? default : ret.Value.Deserialize<TResult>(Stream.Hub.JsonSerializerOptions);
         }
 
         private T ConvertTo<T>(IChangeItem changeItem)

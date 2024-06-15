@@ -42,14 +42,15 @@ public static class NorthwindLayoutAreas
     {
         return DashboardWidgets.Aggregate(NavMenu()
             .WithCollapsible(true)
-            .WithWidth(250), (x, a) => x.WithNavLink(a.Key, $"app/Northwind/dev/{a.Key}", o => o.WithIcon(a.Value)));
+            .WithWidth(250), (x, a) => 
+            x.WithNavLink(a.Key, $"app/Northwind/dev/{a.Key}", 
+                o => o.WithIcon(a.Value)));
     }
 
     private record Toolbar(int Year);
 
     public static object Dashboard(LayoutArea layoutArea)
     {
-        var toolbar = new Toolbar(0);
         var years = 
             layoutArea.Workspace.GetObservable<Order>()
             .Select(x =>
@@ -57,13 +58,14 @@ public static class NorthwindLayoutAreas
                     .Select(year => new Option<int>(year, year.ToString()))
                                 .Prepend(new Option<int>(0, "All"))
                     .ToArray()
-                );
+                )
+                .DistinctUntilChanged();
 
         return Stack()
             .WithOrientation(Orientation.Vertical)
             .WithView(Html("<h1>Northwind Dashboard</h1>"))
             .WithView("Toolbar",
-    area => years.Select(y => area.Bind(toolbar, nameof(toolbar), tb => Controls.Select(tb.Year).WithOptions(y)))
+    area => years.Select(y => area.Bind(new Toolbar(y.Max(x => x.Item)), nameof(Toolbar), tb => Controls.Select(tb.Year).WithOptions(y)))
             )
             .WithView(Stack().WithOrientation(Orientation.Horizontal)
                 .WithView(OrderSummary())
@@ -113,7 +115,10 @@ public static class NorthwindLayoutAreas
 
     private static LayoutStackControl CustomerSummary() =>
         Stack().WithOrientation(Orientation.Vertical)
-            .WithView(Html("<h2>Customer Summary</h2>"));
+            .WithView(Html("<h2>Customer Summary</h2>"))
+            .WithView(a => 
+                a.GetDataStream<NorthwindLayoutAreas.Toolbar>(nameof(Toolbar))
+                    .Select(tb => $"Year selected: {tb.Year}"));
 
     private static LayoutStackControl ProductSummary() =>
         Stack().WithOrientation(Orientation.Vertical)
