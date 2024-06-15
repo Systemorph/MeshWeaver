@@ -47,17 +47,27 @@ public static class NorthwindLayoutAreas
                 o => o.WithIcon(a.Value)));
     }
 
-    private record Toolbar(int Year);
+    private record Toolbar
+    {
+        public Toolbar(int Year)
+        {
+            this.Year = Year;
+        }
+
+        public int Year { get; init; }
+
+    }
 
     public static object Dashboard(LayoutArea layoutArea)
     {
-        var years = 
+        var years =
             layoutArea.Workspace.GetObservable<Order>()
-            .Select(x =>
-                x.Select(x => x.OrderDate.Year).Distinct().OrderByDescending(year => year)
-                    .Select(year => new Option<int>(year, year.ToString()))
-                                .Prepend(new Option<int>(0, "All"))
-                    .ToArray()
+                .DistinctUntilChanged()
+                .Select(x =>
+                    x.Select(x => x.OrderDate.Year).Distinct().OrderByDescending(year => year)
+                        .Select(year => new Option<int>(year, year.ToString()))
+                        .Prepend(new Option<int>(0, "All"))
+                        .ToArray()
                 )
                 .DistinctUntilChanged();
 

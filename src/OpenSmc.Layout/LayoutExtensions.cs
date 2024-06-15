@@ -2,6 +2,7 @@
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Json.More;
 using Json.Patch;
 using Json.Path;
 using Json.Pointer;
@@ -11,7 +12,6 @@ using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Layout.Client;
 using OpenSmc.Layout.Composition;
-using OpenSmc.Layout.DataBinding;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
 
@@ -29,14 +29,44 @@ public static class LayoutExtensions
             .AddData(data =>
                 data.AddWorkspaceReferenceStream<LayoutAreaReference, JsonElement>(
                     (changeStream, a) =>
-                        data
-                            .Hub.ServiceProvider.GetRequiredService<ILayout>()
-                            .Render(changeStream, a)
+                        GetChangeStream(data, changeStream, a)
                 )
             )
             .AddLayoutTypes()
             .Set(config.GetListOfLambdas().Add(layoutDefinition))
             .AddPlugin<LayoutPlugin>();
+    }
+
+    private static IChangeStream<JsonElement, LayoutAreaReference> GetChangeStream(DataContext data, IChangeStream<WorkspaceState> changeStream, LayoutAreaReference reference)
+    {
+        var ret = new ChangeStream<JsonElement, LayoutAreaReference>(changeStream.Id, changeStream.Hub, reference, changeStream.ReduceManager.ReduceTo<JsonElement>());
+        var layoutStream = data
+            .Hub.ServiceProvider.GetRequiredService<ILayout>()
+            .Render(changeStream, reference);
+
+        ret.AddDisposable(layoutStream);
+        ret.AddDisposable(layoutStream.Where(x => ret.Hub.Address.Equals(x.ChangedBy)).Subscribe(o => ret.OnNext(ConvertToJsonElement(o, ret.Hub.JsonSerializerOptions))));
+        ret.AddDisposable(ret.Where(x => !ret.Hub.Address.Equals(x.ChangedBy)).Subscribe(o => layoutStream.OnNext(DeserializeToStore(o, ret.Hub.JsonSerializerOptions))));
+        return ret;
+    }
+
+    private static ChangeItem<EntityStore> DeserializeToStore(ChangeItem<JsonElement> changeItem, JsonSerializerOptions options)
+    {
+        var ret = new EntityStore();
+        var node = (JsonObject)changeItem.Value.AsNode();
+
+        ret = node?.Aggregate(ret, (current, kvp) => current.Update(kvp.Key, i => i with { Instances = (kvp.Value as JsonObject ?? new()).Aggregate(i.Instances, (c, y) => c.SetItem(y.Key, y.Value.Deserialize<object>(options))) }));
+
+        return changeItem.SetValue(ret);
+    }
+
+    private static ChangeItem<JsonElement> ConvertToJsonElement(ChangeItem<EntityStore> changeItem, JsonSerializerOptions options)
+    {
+        var obj = new JsonObject();
+        foreach (var property in changeItem.Value.Collections.Keys)
+            if (changeItem.Value.Collections.TryGetValue(property, out var areas))
+                obj[property] = new JsonObject(areas.Instances.Select(i => new KeyValuePair<string, JsonNode>(i.Key.ToString(), JsonSerializer.SerializeToNode(i.Value, options))));
+        return changeItem.SetValue(JsonDocument.Parse(obj.ToJsonString()).RootElement);
     }
 
     internal static ImmutableList<Func<LayoutDefinition, LayoutDefinition>> GetListOfLambdas(
