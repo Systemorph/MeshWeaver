@@ -20,14 +20,14 @@ public class ChangeStreamClient<TStream, TReference>
                     if (!isInitialized)
                     {
                         isInitialized = true;
-                        Stream.Initialize(GetFullState(delivery.Message));
+                        stream.Initialize(GetFullState(delivery.Message));
                     }
-
-                    stream.Update(state =>
-                    {
-                        var changeItem = Update(state, delivery.Message);
-                        return changeItem;
-                    });
+                    else
+                        stream.Update(state =>
+                        {
+                            var changeItem = Update(state, delivery.Message);
+                            return changeItem;
+                        });
                     return delivery.Processed();
                 },
                 d => stream.Id.Equals(d.Message.Id) && stream.Reference.Equals(d.Message.Reference)

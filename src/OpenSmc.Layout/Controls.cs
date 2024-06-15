@@ -96,7 +96,6 @@ public static class Controls
         var view = dataTemplate.Build(topLevel, out var _);
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
-        view = view with { DataContext = data };
         return view;
     }
 
@@ -105,9 +104,8 @@ public static class Controls
         if (data is JsonPointerReference reference)
             return reference.Pointer;
 
-        var topLevel = LayoutAreaReference.GetDataPointer(id);
-        area.UpdateData(topLevel, data);
-        return topLevel;
+        area.UpdateData(id, data);
+        return LayoutAreaReference.GetDataPointer(id);
     }
 
     public static ItemTemplateControl Bind<T, TView>(
