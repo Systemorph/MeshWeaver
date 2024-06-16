@@ -29,7 +29,7 @@ public record InstanceCollection
             Instances = Instances.SetItem(key, value)
         };
 
-    public InstanceCollection Change(DataChangedReqeust request)
+    public InstanceCollection Change(DataChangedRequest request)
     {
         switch (request)
         {

@@ -18,13 +18,6 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
 
     protected readonly IMessageService MessageService;
 
-    private ImmutableList<(
-        Func<IMessageDelivery, bool> Applies,
-        AsyncDelivery Delivery
-    )> messageHandlers = ImmutableList<(
-        Func<IMessageDelivery, bool> Applies,
-        AsyncDelivery Delivery
-    )>.Empty;
     public virtual IMessageHub Hub { get; }
 
     protected MessageHubBase(IMessageHub hub)
@@ -242,7 +235,7 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
         WithTypeAndRelatedTypesFor(typeof(TMessage));
         return Register(
             (d, c) => action((MessageDelivery<TMessage>)d, c),
-            d => d is IMessageDelivery<TMessage> md && filter(md)
+            d => (d.Target == null || Address.Equals(d.Target)) && d is IMessageDelivery<TMessage> md && filter(md)
         );
     }
 

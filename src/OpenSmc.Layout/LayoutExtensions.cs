@@ -24,12 +24,15 @@ public static class LayoutExtensions
         Func<LayoutDefinition, LayoutDefinition> layoutDefinition
     )
     {
+
         return config
             .WithServices(services => services.AddScoped<ILayout, LayoutPlugin>())
             .AddData(data =>
-                data.AddWorkspaceReferenceStream<LayoutAreaReference, JsonElement>(
-                    (changeStream, a) =>
-                        GetChangeStream(data, changeStream, a)
+                data.ConfigureReduction(reduction =>
+                    reduction.AddWorkspaceReferenceStream<LayoutAreaReference, JsonElement>(
+                        (changeStream, a) =>
+                            GetChangeStream(data, changeStream, a)
+                    )
                 )
             )
             .AddLayoutTypes()

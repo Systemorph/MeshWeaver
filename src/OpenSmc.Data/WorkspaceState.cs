@@ -81,7 +81,7 @@ public record WorkspaceState(
     public WorkspaceState Update(IReadOnlyCollection<object> instances, UpdateOptions options) =>
         Change(new UpdateDataRequest(instances) { Options = options });
 
-    public WorkspaceState Change(DataChangedReqeust request)
+    public WorkspaceState Change(DataChangedRequest request)
     {
         if (request.Elements == null)
             return null;
@@ -102,7 +102,7 @@ public record WorkspaceState(
             Version = updated.Version
         };
 
-    private EntityStore Merge(DataChangedReqeust request) =>
+    private EntityStore Merge(DataChangedRequest request) =>
         request switch
         {
             UpdateDataRequest update
