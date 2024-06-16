@@ -21,7 +21,7 @@ public interface IWorkspace : IAsyncDisposable
     internal void Initialize();
     void Unsubscribe(object address, WorkspaceReference reference);
     internal DataChangeResponse RequestChange(
-        DataChangedReqeust change,
+        DataChangedRequest change,
         WorkspaceReference reference
     );
 

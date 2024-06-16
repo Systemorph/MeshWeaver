@@ -32,7 +32,7 @@ public class DataPlugin(IMessageHub hub)
         IMessageDelivery<DeleteDataRequest> request
     ) => RequestChange(request, request.Message with { ChangedBy = request.Sender });
 
-    private IMessageDelivery RequestChange(IMessageDelivery request, DataChangedReqeust change)
+    private IMessageDelivery RequestChange(IMessageDelivery request, DataChangedRequest change)
     {
         var response = Workspace.RequestChange(change, null);
         if (request != null)

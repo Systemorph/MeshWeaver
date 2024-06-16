@@ -10,6 +10,7 @@ using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
+using OpenSmc.Utils;
 using Xunit.Abstractions;
 
 namespace OpenSmc.Layout.Test;
@@ -282,8 +283,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .HaveCount(2)
             .And.BeEquivalentTo(
                 [
-                    new DataGridColumn<string> { Property = nameof(DataRecord.SystemName) },
-                    new DataGridColumn<string> { Property = nameof(DataRecord.DisplayName) }
+                    new DataGridColumn<string> { Property = nameof(DataRecord.SystemName).ToCamelCase(), Title = nameof(DataRecord.SystemName).Wordify() },
+                    new DataGridColumn<string> { Property = nameof(DataRecord.DisplayName).ToCamelCase(), Title = nameof(DataRecord.DisplayName).Wordify()}
                 ]
             );
     }
