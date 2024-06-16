@@ -70,7 +70,7 @@ public record ReduceManager<TStream>
     }
 
 
-    public ReduceManager<TStream> AddPatchFunction(
+    public ReduceManager<TStream> WithPatchFunction(
         PatchFunction<TStream> patchFunction
     )
         => this with { PatchFunction = patchFunction };
@@ -125,7 +125,7 @@ public record ReduceManager<TStream>
         IChangeStream<TStream> stream,
         TReference reference
     )
-        where TReference : WorkspaceReference<TReduced>
+        where TReference : WorkspaceReference
     {
 
         return (IChangeStream<TReduced, TReference>)

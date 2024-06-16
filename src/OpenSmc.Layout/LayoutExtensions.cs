@@ -29,7 +29,7 @@ public static class LayoutExtensions
             .WithServices(services => services.AddScoped<ILayout, LayoutPlugin>())
             .AddData(data =>
                 data.ConfigureReduction(reduction =>
-                    reduction.AddWorkspaceReferenceStream<LayoutAreaReference, JsonElement>(
+                    reduction.AddWorkspaceReferenceStream<LayoutAreaReference, EntityStore>(
                         (changeStream, a) =>
                             GetChangeStream(data, changeStream, a)
                     )
@@ -40,17 +40,13 @@ public static class LayoutExtensions
             .AddPlugin<LayoutPlugin>();
     }
 
-    private static IChangeStream<JsonElement, LayoutAreaReference> GetChangeStream(DataContext data, IChangeStream<WorkspaceState> changeStream, LayoutAreaReference reference)
+
+    private static IChangeStream<EntityStore, LayoutAreaReference> GetChangeStream(DataContext data, IChangeStream<WorkspaceState> changeStream, LayoutAreaReference reference)
     {
-        var ret = new ChangeStream<JsonElement, LayoutAreaReference>(changeStream.Id, changeStream.Hub, reference, changeStream.ReduceManager.ReduceTo<JsonElement>());
         var layoutStream = data
             .Hub.ServiceProvider.GetRequiredService<ILayout>()
             .Render(changeStream, reference);
-
-        ret.AddDisposable(layoutStream);
-        ret.AddDisposable(layoutStream.Where(x => ret.Hub.Address.Equals(x.ChangedBy)).Subscribe(o => ret.OnNext(ConvertToJsonElement(o, ret.Hub.JsonSerializerOptions))));
-        ret.AddDisposable(ret.Where(x => !ret.Hub.Address.Equals(x.ChangedBy)).Subscribe(o => layoutStream.OnNext(DeserializeToStore(o, ret.Hub.JsonSerializerOptions))));
-        return ret;
+        return layoutStream;
     }
 
     private static ChangeItem<EntityStore> DeserializeToStore(ChangeItem<JsonElement> changeItem, JsonSerializerOptions options)
@@ -100,7 +96,7 @@ public static class LayoutExtensions
     ) =>
         changeItems.Select(i =>
             JsonPointer
-                .Parse($"/{LayoutAreaReference.Areas}/{area.Replace("/", "~1")}")
+                .Parse(LayoutAreaReference.GetControlPointer(area))
                 .Evaluate(i.Value)
                 ?.Deserialize<object>(changeItems.Hub.JsonSerializerOptions)
         );

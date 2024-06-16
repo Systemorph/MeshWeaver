@@ -90,4 +90,9 @@ public record InstanceCollection
             Instances = Instances.SetItems(updated.Instances)
         };
     }
+
+    public InstanceCollection Remove(object id)
+    {
+        return this with { Instances = Instances.Remove(id) };
+    }
 }

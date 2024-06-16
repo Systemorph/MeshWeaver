@@ -56,7 +56,7 @@ namespace OpenSmc.Blazor
         protected UiControl GetControl(ChangeItem<JsonElement> item, string area)
         {
             return item.Value.TryGetProperty(LayoutAreaReference.Areas, out var controls) 
-                   && controls.TryGetProperty(area, out var node)
+                   && controls.TryGetProperty(JsonSerializer.Serialize(area), out var node)
                 ? node.Deserialize<UiControl>(Stream.Hub.JsonSerializerOptions)
                 : null;
         }
