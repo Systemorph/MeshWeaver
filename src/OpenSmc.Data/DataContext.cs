@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json;
+using Json.Patch;
 using Json.Pointer;
 using OpenSmc.Messaging;
 
@@ -111,6 +112,7 @@ public sealed record DataContext(IMessageHub Hub) : IAsyncDisposable
                     )
                     .AddWorkspaceReference<WorkspaceStoreReference, EntityStore>(
                         (ws, _) => ws)
+                    .WithPatchFunction(PatchEntityStore)
             )
             .ForReducedStream<InstanceCollection>(reduced =>
                 reduced.AddWorkspaceReference<EntityReference, object>(
@@ -134,4 +136,67 @@ public sealed record DataContext(IMessageHub Hub) : IAsyncDisposable
             await dataSource.DisposeAsync();
         }
     }
+
+    private static EntityStore PatchEntityStore(EntityStore current, JsonElement currentJson, JsonPatch patch, JsonSerializerOptions options)
+    {
+        foreach (var op in patch.Operations)
+        {
+            switch (op.Path.Segments.Length)
+            {
+                case 0:
+                    throw new NotSupportedException();
+                case 1:
+                    current = UpdateCollection(current, op, op.Path.Segments[0].Value, options);
+                    break;
+                default:
+                    current = UpdateInstance(current, currentJson, op, op.Path.Segments[0].Value, op.Path.Segments[1].Value, options);
+                    break;
+            }
+        }
+
+        return current;
+    }
+
+    private static EntityStore UpdateInstance(
+        EntityStore current,
+        JsonElement currentJson,
+        PatchOperation op,
+        string collection,
+        string idSerialized,
+        JsonSerializerOptions options)
+    {
+        var id = JsonSerializer.Deserialize<object>(idSerialized.Replace("~1", "/"), options);
+        switch (op.Op)
+        {
+            case OperationType.Add:
+            case OperationType.Replace:
+                return current.Update(collection, i => i.Update(id, GetDeserializedValue(collection, idSerialized, currentJson, options)));
+            case OperationType.Remove:
+                return current.Update(collection, i => i.Remove(id));
+            default:
+                throw new NotSupportedException();
+        }
+    }
+
+    private static object GetDeserializedValue(string collection, string idSerialized, JsonElement currentJson, JsonSerializerOptions options)
+    {
+        var pointer = JsonPointer.Parse($"/{collection}/{idSerialized}");
+        var el = pointer.Evaluate(currentJson);
+        return el?.Deserialize<object>(options);
+    }
+
+    private static EntityStore UpdateCollection(EntityStore current, PatchOperation op, string collection, JsonSerializerOptions options)
+    {
+        switch (op.Op)
+        {
+            case OperationType.Add:
+            case OperationType.Replace:
+                return current.Update(collection, _ => op.Value.Deserialize<InstanceCollection>(options));
+            case OperationType.Remove:
+                return current.Remove(collection);
+            default:
+                throw new NotSupportedException();
+        }
+    }
+
 }

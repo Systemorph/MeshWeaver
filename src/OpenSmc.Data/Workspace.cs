@@ -74,14 +74,14 @@ public class Workspace : IWorkspace
         );
 
     public IChangeStream<TReduced, TReference> GetStream<TReduced, TReference>(TReference reference)
-        where TReference : WorkspaceReference<TReduced> =>
+        where TReference : WorkspaceReference =>
         GetStream<TReduced, TReference>(Hub.Address, reference);
 
     public IChangeStream<TReduced, TReference> GetStream<TReduced, TReference>(
         object address,
         TReference reference
     )
-        where TReference : WorkspaceReference<TReduced> =>
+        where TReference : WorkspaceReference =>
         Hub.Address.Equals(address)
             ? GetInternalChangeStream<TReduced, TReference>(reference)
             : GetExternalClientChangeStream<TReduced, TReference>(address, reference);
@@ -90,7 +90,7 @@ public class Workspace : IWorkspace
     private IChangeStream<TReduced, TReference> GetInternalChangeStream<TReduced, TReference>(
         TReference reference
     )
-        where TReference : WorkspaceReference<TReduced>
+        where TReference : WorkspaceReference
     {
         return ReduceManager.ReduceStream<TReduced, TReference>(stream, reference);
     }
@@ -100,7 +100,7 @@ public class Workspace : IWorkspace
         TReduced,
         TReference
     >(object address, TReference reference)
-        where TReference : WorkspaceReference<TReduced> =>
+        where TReference : WorkspaceReference =>
         (IChangeStream<TReduced, TReference>)externalClientStreams.GetOrAdd
         (
             new AddressAndReference(address, reference),
@@ -109,7 +109,7 @@ public class Workspace : IWorkspace
         );
 
     private IChangeStream CreateExternalChangeStream<TReduced, TReference>(AddressAndReference key, TReference reference) 
-        where TReference : WorkspaceReference<TReduced>
+        where TReference : WorkspaceReference
     {
         var ret = new ChangeStream<TReduced, TReference>(key.Address, Hub, reference, ReduceManager.ReduceTo<TReduced>());
 

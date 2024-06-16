@@ -1,6 +1,5 @@
 ﻿using System.Collections.Concurrent;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using Microsoft.DotNet.Interactive.Formatting;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
@@ -15,13 +14,11 @@ public record LayoutArea : IDisposable
 
     public LayoutAreaReference Reference { get; init; }
 
-    private readonly Subject<Func<ChangeItem<EntityStore>, ChangeItem<EntityStore>>> updateStream =
-        new();
     public readonly IWorkspace Workspace;
 
     public void UpdateLayout(string area, object control)
     {
-        updateStream.OnNext(ws => UpdateImpl(area, control, ws));
+        Stream.Update(ws => UpdateImpl(area, control, ws));
     }
     private static UiControl ConvertToControl(object instance)
     {
@@ -31,11 +28,11 @@ public record LayoutArea : IDisposable
         var mimeType = Formatter.GetPreferredMimeTypesFor(instance?.GetType()).FirstOrDefault();
         return Controls.Html(instance.ToDisplayString(mimeType));
     }
-    private ChangeItem<EntityStore> UpdateImpl(string area, object control, ChangeItem<EntityStore> ws)
+    private ChangeItem<EntityStore> UpdateImpl(string area, object control, EntityStore ws)
     {
         // TODO V10: Dispose old areas (09.06.2024, Roland Bürgi)
-        var path = $"/{LayoutAreaReference.Areas}/{area.Replace("/", "~1")}";
-        return ws.SetValue(ws.Value.Update(LayoutAreaReference.Areas, instances => instances.Update(area, ConvertToControl(control))));
+        var newStore = (ws??new()).Update(LayoutAreaReference.Areas, instances => instances.Update(area, ConvertToControl(control)));
+        return new(Stream.Id, Stream.Reference,newStore, Stream.Id, Stream.Hub.Version);
     }
 
     public LayoutArea(LayoutAreaReference Reference, IMessageHub hub, IChangeStream<WorkspaceState> workspaceStream)
@@ -44,25 +41,13 @@ public record LayoutArea : IDisposable
         Stream = new ChangeStream<EntityStore, LayoutAreaReference>(hub.Address, hub, Reference, workspaceStream.ReduceManager.ReduceTo<EntityStore>());
         this.Reference = Reference;
         Workspace = hub.GetWorkspace();
-        Stream.AddDisposable(updateStream
-            .Scan(
-                new ChangeItem<EntityStore>(
-                    hub.Address,
-                    Reference,
-                    new(),
-                    hub.Address,
-                    hub.Version
-                ),
-                (currentState, updateFunc) => updateFunc(currentState)
-            )
-            .Subscribe(Stream));
         Stream.AddDisposable(this);
     }
 
     public void UpdateData(string id, object data)
     {
-        updateStream.OnNext(ws =>
-            ws.SetValue(ws.Value.Update(LayoutAreaReference.Data, i => i.Update(id, data))));
+        Stream.Update(ws =>
+            new(Stream.Id, Stream.Reference, (ws ?? new()).Update(LayoutAreaReference.Data, i => i.Update(id, data)),Stream.Id, Stream.Hub.Version));
     }
 
 
