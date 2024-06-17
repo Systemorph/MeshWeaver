@@ -1,47 +1,70 @@
-@using Json.More
-@using Json.Patch
-@using Json.Pointer
-@using System.Text.Json
-@using System.Text.Json.Nodes
 @inherits BlazorView<SelectControl>
 
-<FluentSelect Label="@ViewModel.Label.ToString()"
-              Items="@Items"
-              OptionText="@GetOptionText"
-              SelectedOption="@Data"
-              @onchange="ChangeData"
+<FluentSelect Label="@Label"
+              Items="@Options"
+              TOption="Option"
+              OptionText="@(x => x.Text)"
+              OptionValue="@(x => x.ItemString)"
+              @bind-SelectedOption="Selected"
 />
 
 @code
 {
-    private IEnumerable<object> Items => ViewModel.Elements.Cast<object>();
+    private record Option(object Item, string Text, string ItemString);
+    private IReadOnlyCollection<Option> Options { get; set; }
 
-    public string GetOptionText(object item) => 
-        JsonPointer.Parse(ViewModel.OptionText)
-            .Evaluate(item.ToJsonDocument().RootElement)?.GetString();
 
-    private void ChangeData(object data)
+    private Option Selected
     {
-        if (ViewModel.Data is JsonPointerReference pointerRef)
+        get => selected;
+        set
         {
-            Stream.Update(ci => new Data.Serialization.ChangeItem<JsonElement>(
-                Stream.Id,
-                Stream.Reference,
-                new JsonPatch(
-                    PatchOperation.Replace(JsonPointer.Parse(pointerRef.Pointer),
-                        JsonValue.Create(data)))
-                    .Apply(ci),
-                Stream.Hub.Address,
-                Stream.Hub.Version
-                ));
+            var needsUpdate = selected?.ItemString != value?.ItemString;
+            selected = value;
+            if (needsUpdate)
+                UpdatePointer(selected?.Item, Pointer);
         }
     }
 
-    public object Data { get; set; }
-
-    protected override void OnInitialized()
+    protected override void OnParametersSet()
     {
-        DataBind<object>(ViewModel.Data, 
-            data => Data = data);
+        base.OnParametersSet();
+        DataBind<IEnumerable<Layout.Option>>(ViewModel.Options, BindOptions);
+        DataBind<object>(ViewModel.Data, UpdateSelection);
+        Pointer = ViewModel.Data as JsonPointerReference;
     }
+
+    private void UpdateSelection(object selection)
+    {
+        current = MapToString(selection);
+        Selected = Options.FirstOrDefault(x => x.ItemString == current);
+    }
+
+    private void BindOptions(IEnumerable<Layout.Option> enumerable)
+    {
+        Options = enumerable.Select
+            (x =>
+                new Option(x.GetItem(), x.Text, MapToString(x.GetItem()))
+            )
+            .ToArray();
+    }
+
+    private static string MapToString(object instance) => 
+        instance == null || IsDefault((dynamic)instance) 
+            ? null 
+            : instance.ToString();
+    private static bool IsDefault<T>(T instance) => instance.Equals(default(T));
+
+    private JsonPointerReference Pointer { get; set; }
+
+    private string current;
+    private Option selected;
+
+    private void ValueChanged(string value)
+    {
+        if (Pointer == null || Equals(value, current))
+            return;
+
+    }
+
 }

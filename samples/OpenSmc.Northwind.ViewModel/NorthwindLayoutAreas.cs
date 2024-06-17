@@ -1,11 +1,9 @@
-﻿using System.Diagnostics.CodeAnalysis;
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using OpenSmc.Application.Styles;
 using OpenSmc.Data;
 using OpenSmc.DataCubes;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
-using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
 using OpenSmc.Northwind.Domain;
 using OpenSmc.Pivot.Builder;
@@ -44,48 +42,41 @@ public static class NorthwindLayoutAreas
     {
         return DashboardWidgets.Aggregate(NavMenu()
             .WithCollapsible(true)
-            .WithWidth(250), (x, a) => x.WithNavLink(a.Key, $"app/Northwind/dev/{a.Key}", o => o.WithIcon(a.Value)));
+            .WithWidth(250), (x, a) => 
+            x.WithNavLink(a.Key, $"app/Northwind/dev/{a.Key}", 
+                o => o.WithIcon(a.Value)));
     }
 
-    private record Toolbar(string Year);
+    private record Toolbar
+    {
+        public Toolbar(int Year)
+        {
+            this.Year = Year;
+        }
+
+        public int Year { get; init; }
+
+    }
 
     public static object Dashboard(LayoutArea layoutArea)
     {
-        var toolbar = new Toolbar("1997");
+        var years =
+            layoutArea.Workspace.GetObservable<Order>()
+                .DistinctUntilChanged()
+                .Select(x =>
+                    x.Select(x => x.OrderDate.Year).Distinct().OrderByDescending(year => year)
+                        .Select(year => new Option<int>(year, year.ToString()))
+                        .Prepend(new Option<int>(0, "All"))
+                        .ToArray()
+                )
+                .DistinctUntilChanged();
 
         return Stack()
             .WithOrientation(Orientation.Vertical)
             .WithView(Html("<h1>Northwind Dashboard</h1>"))
-            // .WithView("Toolbar",
-            //     area =>
-            //         area.Workspace.GetObservable<Order>()
-            //             .Select(x =>
-            //                 area.Bind(
-            //                     toolbar, 
-            //                     nameof(toolbar),
-            //                     tb => Toolbar().WithControl(
-            //                         x.Select(x => x.OrderDate.Year).Distinct()
-            //                         .ToSelect(select =>
-            //                             select.WithLabel("Select year")
-            //                                 .WithData(tb.Year)
-            //                                 .WithOptionText(x => x)
-            //                         )
-            //                     )
-            //                 )
-            //     ))
             .WithView("Toolbar",
-    area => area.Bind(
-                            toolbar,
-                            nameof(toolbar),
-                            tb => Toolbar().WithControl(
-                                new[] { "1995", "1996", "1997" }
-                                    .ToSelect(select =>
-                                        select.WithLabel("Select year")
-                                            .WithData(tb.Year)
-                                            .WithOptionText(x => x)
-                                    )
-                            )
-            ))
+    area => years.Select(y => area.Bind(new Toolbar(y.Max(x => x.Item)), nameof(Toolbar), tb => Controls.Select(tb.Year).WithOptions(y)))
+            )
             .WithView(Stack().WithOrientation(Orientation.Horizontal)
                 .WithView(OrderSummary())
                 .WithView(ProductSummary())
@@ -134,7 +125,10 @@ public static class NorthwindLayoutAreas
 
     private static LayoutStackControl CustomerSummary() =>
         Stack().WithOrientation(Orientation.Vertical)
-            .WithView(Html("<h2>Customer Summary</h2>"));
+            .WithView(Html("<h2>Customer Summary</h2>"))
+            .WithView(a => 
+                a.GetDataStream<NorthwindLayoutAreas.Toolbar>(nameof(Toolbar))
+                    .Select(tb => $"Year selected: {tb.Year}"));
 
     private static LayoutStackControl ProductSummary() =>
         Stack().WithOrientation(Orientation.Vertical)
