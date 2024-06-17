@@ -9,6 +9,7 @@
 	</ItemGroup>
 
 	<ItemGroup>
+	  <ProjectReference Include="..\OpenSmc.Layout\OpenSmc.Layout.csproj" />
 	  <ProjectReference Include="..\OpenSmc.Utils\OpenSmc.Utils.csproj" />
 	</ItemGroup>
 

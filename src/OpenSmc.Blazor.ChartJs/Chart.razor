@@ -1,0 +1,41 @@
+﻿@using Microsoft.JSInterop
+@using OpenSmc.ShortGuid
+@inherits BlazorView<OpenSmc.Charting.ChartControl>
+@implements IAsyncDisposable
+
+<canvas id="@ChartArea"></canvas>
+
+@code
+{
+ 
+    [Inject] private IJSRuntime JsRuntime { get; set; }
+    private IJSObjectReference module;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+
+        if (firstRender)
+        {
+            module = await 
+                JsRuntime
+                    .InvokeAsync<IJSObjectReference>(
+                        "import",
+                        "./_content/OpenSmc.Blazor.ChartJs/chartJsAdapter.js"
+                    );
+
+            DataBind<object>(ViewModel.Data, o => Options = o);
+        }
+
+        await JsRuntime.InvokeVoidAsync("renderChart", ChartArea, Options);
+    }
+
+    private object Options { get; set; }
+
+    private static readonly string ChartArea = Guid.NewGuid().AsString();
+
+    public async ValueTask DisposeAsync()
+    {
+        if (module != null) 
+            await module.DisposeAsync();
+    }
+}

@@ -130,5 +130,7 @@ namespace OpenSmc.Reporting.Builder
 
             return gridOptions;
         }
+
+        public GridControl ToGridControl() => new(Execute());
     }
 }

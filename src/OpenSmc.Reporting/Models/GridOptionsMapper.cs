@@ -9,6 +9,9 @@ namespace OpenSmc.Reporting.Models
 {
     public static class GridOptionsMapper
     {
+        public static GridControl ToGridControl(this PivotModel pivotModel) => 
+            new(MapToGridOptions(pivotModel));
+
         public static GridOptions MapToGridOptions(PivotModel pivotModel)
         {
             var gridColumns = MapToColDef(pivotModel.Columns);

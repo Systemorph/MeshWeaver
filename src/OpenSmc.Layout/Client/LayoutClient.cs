@@ -17,7 +17,7 @@ public class LayoutClient(IMessageHub hub) : ILayoutClient
 {
     private readonly LayoutClientConfiguration configuration = hub.Configuration
         .GetConfigurationFunctions()
-        .Aggregate(new LayoutClientConfiguration(), (c,f) => f(c));
+        .Aggregate(new LayoutClientConfiguration(hub), (c,f) => f(c));
 
 
     public ViewDescriptor GetViewDescriptor(object instance, IChangeStream<JsonElement, LayoutAreaReference> stream, string area)

@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using System.Text.Json;
 using FluentAssertions;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
@@ -121,8 +122,8 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = GetClient().GetWorkspace();
         await workspace.Initialized;
 
-        var viewName = nameof(NorthwindViewModels.Dashboard);
-        var stream = workspace.GetStream(new HostAddress(), new LayoutAreaReference(viewName));
+        var viewName = nameof(NorthwindLayoutAreas.Dashboard);
+        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(new HostAddress(), new LayoutAreaReference(viewName));
         var dashboard = (await stream.GetControl(viewName)).Should().BeOfType<LayoutStackControl>().Subject;
         var areas = dashboard.Areas;
         var controls = new List<KeyValuePair<string, object>>();

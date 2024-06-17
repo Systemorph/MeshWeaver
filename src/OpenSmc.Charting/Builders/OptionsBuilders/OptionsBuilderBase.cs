@@ -1,5 +1,4 @@
-﻿using OpenSmc.Charting.Models.Layout;
-using OpenSmc.Charting.Models.Options;
+﻿using OpenSmc.Charting.Models.Options;
 using OpenSmc.Charting.Models.Options.Animation;
 using OpenSmc.Charting.Models.Options.Scales;
 
@@ -118,11 +117,11 @@ public abstract record OptionsBuilderBase<TOptionsBuilder>
     public TOptionsBuilder WithAspectRatio(double? maintainAspectRatio)
         => (TOptionsBuilder)(this with { Options = Options with { AspectRatio = maintainAspectRatio, MaintainAspectRatio = true } });
 
-    public TOptionsBuilder WithLayout(Layout layout)
+    public TOptionsBuilder WithLayout(Models.Layout.Layout layout)
         => (TOptionsBuilder)(this with { Options = Options with { Layout = layout } });
 
-    public TOptionsBuilder WithLayout(Func<Layout, Layout> layoutModifier)
-        => (TOptionsBuilder)(this with { Options = Options with { Layout = layoutModifier(Options.Layout ?? new Layout()) } });
+    public TOptionsBuilder WithLayout(Func<Models.Layout.Layout, Models.Layout.Layout> layoutModifier)
+        => (TOptionsBuilder)(this with { Options = Options with { Layout = layoutModifier(Options.Layout ?? new Models.Layout.Layout()) } });
 
     private TOptionsBuilder WithAxisMin(string axis, double minimum)
     {

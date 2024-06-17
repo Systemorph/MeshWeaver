@@ -6,7 +6,7 @@ namespace OpenSmc.Pivot.Builder;
 
 public static class PivotFactory
 {
-    public static PivotBuilder<T, T, T> ForObjects<T>(IEnumerable<T> objects)
+    public static PivotBuilder<T, T, T> Pivot<T>(this IEnumerable<T> objects)
     {
         return new PivotBuilder<T, T, T>(objects).WithAggregation(a => a.Sum());
     }
@@ -16,7 +16,7 @@ public static class PivotFactory
         TElement,
         TElement,
         TElement
-    > ForDataCubes<TElement>(IEnumerable<IDataCube<TElement>> cubes)
+    > ForDataCubes<TElement>(this IEnumerable<IDataCube<TElement>> cubes)
     {
         var pivotBuilder = new DataCubePivotBuilder<
             IDataCube<TElement>,
@@ -42,7 +42,7 @@ public static class PivotFactory
         TElement,
         TElement,
         TElement
-    > ForDataCube<TElement>(IDataCube<TElement> cube)
+    > Pivot<TElement>(this IDataCube<TElement> cube)
     {
         return ForDataCubes(cube.RepeatOnce());
     }
