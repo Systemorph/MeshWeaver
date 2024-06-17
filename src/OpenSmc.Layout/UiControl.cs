@@ -43,10 +43,8 @@ public abstract record UiControl(object Data) : IUiControl
     public string Tooltip { get; init; }
     public bool IsReadonly { get; init; } //TODO add concept of registering conventions for properties to distinguish if it is editable!!! have some defaults, no setter=> iseditable to false, or some attribute to mark as not editable, or checking if it has setter, so on... or BProcess open
 
-    //object instance to be bound to
-    public object DataContext { get; init; }
-
     public object Label { get; init; }
+    public object Skin { get; init; }
 
     public abstract bool IsUpToDate(object other);
 
@@ -142,6 +140,9 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion,
     {
         return WithBuildAction((c, sp) => (TControl)buildFunction(c, sp));
     }
+
+    public TControl WithSkin(object skin)
+        => This with { Skin = skin };
 }
 
 internal interface IExpandableUiControl : IUiControl

@@ -6,6 +6,7 @@ using OpenSmc.Layout;
 using OpenSmc.Layout.Client;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
+using static OpenSmc.Layout.Client.LayoutClientConfiguration;
 
 namespace OpenSmc.Blazor;
 
@@ -19,38 +20,7 @@ public static class BlazorClientExtensions
         Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration
     ) => config.AddLayoutClient(c => configuration.Invoke(c.WithView(DefaultFormatting)));
 
-    private static ViewDescriptor StandardView<TViewModel, TView>(
-        TViewModel instance,
-        IChangeStream<JsonElement, LayoutAreaReference> stream,
-        string area
-    ) =>
-        new(
-            typeof(TView),
-            new Dictionary<string, object>
-            {
-                { ViewModel, instance },
-                { nameof(Stream), stream },
-                { nameof(Area), area }
-            }
-        );
 
-    private static ViewDescriptor StandardView(
-        Type tView,
-        object instance,
-        IChangeStream<JsonElement, LayoutAreaReference> stream,
-        string area
-    ) =>
-        new(
-            tView,
-            new Dictionary<string, object>
-            {
-                { ViewModel, instance },
-                { nameof(Stream), stream },
-                { nameof(Area), area }
-            }
-        );
-
-    public const string ViewModel = nameof(ViewModel);
 
     #region Standard Formatting
     private static ViewDescriptor DefaultFormatting(
@@ -73,7 +43,8 @@ public static class BlazorClientExtensions
             LayoutAreaControl layoutArea
                 => StandardView<LayoutAreaControl, LayoutArea>(layoutArea, stream, area),
             DataGridControl gc => StandardView<DataGridControl, DataGrid>(gc, stream, area),
-            _ => DelegateToDotnetInteractive(instance, stream, area)
+            SelectControl select => StandardView<SelectControl, SelectView>(select, stream, area),
+            _ => DelegateToDotnetInteractive(instance, stream, area),
         };
     }
 

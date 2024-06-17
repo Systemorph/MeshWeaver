@@ -106,6 +106,14 @@ public record EntityStore
 
     public InstanceCollection GetCollection(string collection) =>
         Collections.GetValueOrDefault(collection);
+
+    public EntityStore Remove(string collection)
+    {
+        return this with
+        {
+            Collections = Collections.Remove(collection)
+        };
+    }
 }
 
 public record JsonPointerReference(string Pointer) : WorkspaceReference<JsonElement?>
