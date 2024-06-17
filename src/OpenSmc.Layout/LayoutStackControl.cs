@@ -54,6 +54,7 @@ public record LayoutStackControl()
     public Orientation Orientation { get; init; }
     public bool Wrap { get; init; }
     public string Width { get; init; }
+
     public LayoutStackControl WithHorizontalAlignment(HorizontalAlignment horizontalAlignment)
         => this with { HorizontalAlignment = horizontalAlignment };
     public LayoutStackControl WithVerticalAlignment(VerticalAlignment verticalAlignment)
@@ -68,4 +69,10 @@ public record LayoutStackControl()
         => this with { Wrap = wrap };
     public LayoutStackControl WithWidth(string width)
     => this with { Width = width };
+}
+
+
+public static class Skins
+{
+    public const string Toolbar = nameof(Toolbar);
 }

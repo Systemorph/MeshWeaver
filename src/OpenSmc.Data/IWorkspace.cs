@@ -21,7 +21,7 @@ public interface IWorkspace : IAsyncDisposable
     internal void Initialize();
     void Unsubscribe(object address, WorkspaceReference reference);
     internal DataChangeResponse RequestChange(
-        DataChangedReqeust change,
+        DataChangedRequest change,
         WorkspaceReference reference
     );
 
@@ -35,13 +35,13 @@ public interface IWorkspace : IAsyncDisposable
         WorkspaceReference<TReduced> reference
     );
     IChangeStream<TReduced, TReference> GetStream<TReduced, TReference>(TReference reference)
-        where TReference : WorkspaceReference<TReduced>;
+        where TReference : WorkspaceReference;
 
     IChangeStream<TReduced, TReference> GetStream<TReduced, TReference>(
         object address,
         TReference reference
     )
-        where TReference : WorkspaceReference<TReduced>;
+        where TReference : WorkspaceReference;
 
     void Synchronize(Func<WorkspaceState, ChangeItem<WorkspaceState>> change);
     DataChangeResponse RequestChange(Func<WorkspaceState, ChangeItem<WorkspaceState>> change);

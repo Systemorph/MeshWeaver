@@ -18,7 +18,7 @@ public class Workspace : IWorkspace
         this.activityService = activityService;
         this.logger = logger;
         DataContext = Hub.GetDataConfiguration();
-        stream = new ChangeStream<WorkspaceState, WorkspaceReference>(Hub.Address, Hub, new WorkspaceStateReference(), new());
+        stream = new ChangeStream<WorkspaceState, WorkspaceReference>(Hub.Address, Hub, new WorkspaceStateReference(), DataContext.ReduceManager);
     }
 
     public WorkspaceReference Reference { get; } = new WorkspaceStateReference();
@@ -74,14 +74,14 @@ public class Workspace : IWorkspace
         );
 
     public IChangeStream<TReduced, TReference> GetStream<TReduced, TReference>(TReference reference)
-        where TReference : WorkspaceReference<TReduced> =>
+        where TReference : WorkspaceReference =>
         GetStream<TReduced, TReference>(Hub.Address, reference);
 
     public IChangeStream<TReduced, TReference> GetStream<TReduced, TReference>(
         object address,
         TReference reference
     )
-        where TReference : WorkspaceReference<TReduced> =>
+        where TReference : WorkspaceReference =>
         Hub.Address.Equals(address)
             ? GetInternalChangeStream<TReduced, TReference>(reference)
             : GetExternalClientChangeStream<TReduced, TReference>(address, reference);
@@ -90,7 +90,7 @@ public class Workspace : IWorkspace
     private IChangeStream<TReduced, TReference> GetInternalChangeStream<TReduced, TReference>(
         TReference reference
     )
-        where TReference : WorkspaceReference<TReduced>
+        where TReference : WorkspaceReference
     {
         return ReduceManager.ReduceStream<TReduced, TReference>(stream, reference);
     }
@@ -100,7 +100,7 @@ public class Workspace : IWorkspace
         TReduced,
         TReference
     >(object address, TReference reference)
-        where TReference : WorkspaceReference<TReduced> =>
+        where TReference : WorkspaceReference =>
         (IChangeStream<TReduced, TReference>)externalClientStreams.GetOrAdd
         (
             new AddressAndReference(address, reference),
@@ -109,7 +109,7 @@ public class Workspace : IWorkspace
         );
 
     private IChangeStream CreateExternalChangeStream<TReduced, TReference>(AddressAndReference key, TReference reference) 
-        where TReference : WorkspaceReference<TReduced>
+        where TReference : WorkspaceReference
     {
         var ret = new ChangeStream<TReduced, TReference>(key.Address, Hub, reference, ReduceManager.ReduceTo<TReduced>());
 
@@ -121,24 +121,27 @@ public class Workspace : IWorkspace
         );
 
         var changesFromClientWorkspace = ReduceManager.ReduceStream<TReduced, TReference>(stream, reference);
-
         if (changesFromClientWorkspace != null)
-        {
             ret.AddDisposable(changesFromClientWorkspace.Subscribe(ret));
 
-        }
-
         ret.AddDisposable(
-                ret.ToChangeStreamClient()
-                    .Subscribe(e =>
-                        {
-                            if (key.Address.Equals(e.ChangedBy))
-                                return;
-                            Hub.Post(e, o => o.WithTarget(key.Address));
-                        }
-                    )
+            ret.Hub.Register<DataChangedEvent>(
+                delivery =>
+                {
+                    ret.NotifyChange(delivery.Message);
+                    return delivery.Processed();
+                },
+                d => ret.Id.Equals(d.Message.Id) && ret.Reference.Equals(d.Message.Reference)
             )
-            ;
+        );
+        ret.AddDisposable(
+            ret.DataChanged.Subscribe(e =>
+            {
+                if (!Hub.Address.Equals(e.ChangedBy))
+                    return;
+                Hub.Post(e, o => o.WithTarget(key.Address));
+            })
+        );
         Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(key.Address));
 
         return ret;
@@ -214,7 +217,7 @@ public class Workspace : IWorkspace
         //TODO Roland Bürgi 2024-05-06: Not sure yet how to implement
     }
 
-    public DataChangeResponse RequestChange(DataChangedReqeust change, WorkspaceReference reference)
+    public DataChangeResponse RequestChange(DataChangedRequest change, WorkspaceReference reference)
     {
         var log = new ActivityLog(ActivityCategory.DataUpdate);
         Current = new ChangeItem<WorkspaceState>(
@@ -284,7 +287,18 @@ public class Workspace : IWorkspace
     {
         var ret = ReduceManager.ReduceStream<TReduced, TReference>(stream, reference);
         ret.AddDisposable(
-            ret.ToChangeStreamHost()
+            ret.Hub.Register<DataChangedEvent>(
+                delivery =>
+                {
+                    var response = ret.RequestChange(delivery.Message, delivery.Sender);
+                    ret.Hub.Post(response, o => o.ResponseFor(delivery));
+                    return delivery.Processed();
+                },
+                x => ret.Id.Equals(x.Message.Id) && x.Message.Reference.Equals(ret.Reference)
+            )
+        );
+        ret.AddDisposable(
+            ret.DataSynchronization
             .Subscribe(e =>
             {
                 if (address.Equals(e.ChangedBy))

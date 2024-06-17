@@ -15,9 +15,9 @@ public static class Controls
 
     public static LayoutStackControl Stack() => new();
 
-    public static ToolbarControl Toolbar() => new();
+    public static LayoutStackControl Toolbar() => new LayoutStackControl().WithSkin(Skins.Toolbar);
 
-    public static SelectControl Select() => new();
+    public static SelectControl Select(object item) => new SelectControl(item);
 
     public static SpinnerControl Spinner() => new();
 
@@ -96,7 +96,6 @@ public static class Controls
         var view = dataTemplate.Build(topLevel, out var _);
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
-        view = view with { DataContext = data };
         return view;
     }
 
@@ -105,9 +104,8 @@ public static class Controls
         if (data is JsonPointerReference reference)
             return reference.Pointer;
 
-        var topLevel = LayoutAreaReference.GetDataPointer(id);
-        area.UpdateData(topLevel, data);
-        return topLevel;
+        area.UpdateData(id, data);
+        return LayoutAreaReference.GetDataPointer(id);
     }
 
     public static ItemTemplateControl Bind<T, TView>(
