@@ -29,8 +29,7 @@ public static class LayoutExtensions
             .AddData(data =>
                 data.ConfigureReduction(reduction =>
                     reduction.AddWorkspaceReferenceStream<LayoutAreaReference, EntityStore>(
-                        (changeStream, a, options) =>
-                            GetChangeStream(data, changeStream, a, options)
+                        (changeStream, a) => GetChangeStream(data, changeStream, a)
                     )
                 )
             )
@@ -42,13 +41,12 @@ public static class LayoutExtensions
     private static IChangeStream<EntityStore, LayoutAreaReference> GetChangeStream(
         DataContext data,
         IChangeStream<WorkspaceState> changeStream,
-        LayoutAreaReference reference,
-        ReduceOptions options
+        LayoutAreaReference reference
     )
     {
         var layoutStream = data
             .Hub.ServiceProvider.GetRequiredService<ILayout>()
-            .Render(changeStream, reference, options);
+            .Render(changeStream, reference);
         return layoutStream;
     }
 

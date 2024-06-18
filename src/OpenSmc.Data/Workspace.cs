@@ -98,14 +98,8 @@ public class Workspace : IWorkspace
     private IChangeStream<TReduced, TReference> GetInternalChangeStream<TReduced, TReference>(
         TReference reference
     )
-        where TReference : WorkspaceReference
-    {
-        return ReduceManager.ReduceStream<TReduced, TReference>(
-            stream,
-            reference,
-            o => o.WithJson()
-        );
-    }
+        where TReference : WorkspaceReference =>
+        ReduceManager.ReduceStream<TReduced, TReference>(stream, reference);
 
     private IChangeStream<TReduced, TReference> GetExternalClientChangeStream<TReduced, TReference>(
         object address,
@@ -124,7 +118,7 @@ public class Workspace : IWorkspace
     )
         where TReference : WorkspaceReference
     {
-        var ret = new JsonChangeStream<TReduced, TReference>(
+        var ret = new ChangeStream<TReduced, TReference>(
             key.Address,
             Hub,
             reference,
@@ -146,23 +140,28 @@ public class Workspace : IWorkspace
         if (changesFromClientWorkspace != null)
             ret.AddDisposable(changesFromClientWorkspace.Subscribe(ret));
 
+        var json = ret.ToJsonStream();
+
         ret.AddDisposable(
             ret.Hub.Register<DataChangedEvent>(
                 delivery =>
                 {
-                    ret.NotifyChange(delivery.Message);
+                    json.NotifyChange(delivery.Message);
                     return delivery.Processed();
                 },
                 d => ret.Id.Equals(d.Message.Id) && ret.Reference.Equals(d.Message.Reference)
             )
         );
         ret.AddDisposable(
-            ret.DataChanged.Subscribe(e =>
-            {
-                if (!Hub.Address.Equals(e.ChangedBy))
-                    return;
-                Hub.Post(e, o => o.WithTarget(key.Address));
-            })
+            // this is the "client" ==> never needs to submit full state
+            json.ToSynchronizationStream()
+                .Skip(1)
+                .Subscribe(e =>
+                {
+                    if (!Hub.Address.Equals(e.ChangedBy))
+                        return;
+                    Hub.Post(e, o => o.WithTarget(key.Address));
+                })
         );
         Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(key.Address));
 
@@ -304,13 +303,13 @@ public class Workspace : IWorkspace
     private IDisposable CreateHost<TReduced, TReference>(object address, TReference reference)
         where TReference : WorkspaceReference<TReduced>
     {
-        var ret = (IJsonChangeStream)
-            ReduceManager.ReduceStream<TReduced, TReference>(stream, reference, o => o.WithJson());
+        var ret = ReduceManager.ReduceStream<TReduced, TReference>(stream, reference);
+        var json = ret.ToJsonStream();
         ret.AddDisposable(
             ret.Hub.Register<DataChangedEvent>(
                 delivery =>
                 {
-                    var response = ret.RequestChange(delivery.Message);
+                    var response = json.RequestChange(delivery.Message);
                     ret.Hub.Post(response, o => o.ResponseFor(delivery));
                     return delivery.Processed();
                 },
@@ -318,13 +317,14 @@ public class Workspace : IWorkspace
             )
         );
         ret.AddDisposable(
-            ret.DataSynchronization.Subscribe(e =>
-            {
-                if (address.Equals(e.ChangedBy))
-                    return;
+            json.ToSynchronizationStream()
+                .Subscribe(e =>
+                {
+                    if (address.Equals(e.ChangedBy))
+                        return;
 
-                Hub.Post(e, o => o.WithTarget(address));
-            })
+                    Hub.Post(e, o => o.WithTarget(address));
+                })
         );
         ret.AddDisposable(
             new AnonymousDisposable(() => subscriptions.Remove(new(address, reference), out _))
@@ -354,25 +354,16 @@ public class Workspace : IWorkspace
         Current = change(Current.Value);
     }
 
-    public static ChangeStream<TReduced, TReference> CreateChangeStream<TStream, TReference, TReduced>(
-        IChangeStream<TStream> stream,
-        TReference reference,
-        ReduceOptions options
-    )
-        where TReference : WorkspaceReference<TReduced>
-    {
-        return options.JsonEnabled
-            ? new JsonChangeStream<TReduced, TReference>(
-                stream.Id,
-                stream.Hub,
-                reference,
-                stream.ReduceManager.ReduceTo<TReduced>()
-            )
-            : new ChangeStream<TReduced, TReference>(
-                stream.Id,
-                stream.Hub,
-                reference,
-                stream.ReduceManager.ReduceTo<TReduced>()
-            );
-    }
+    public static ChangeStream<TReduced, TReference> CreateChangeStream<
+        TStream,
+        TReference,
+        TReduced
+    >(IChangeStream<TStream> stream, TReference reference)
+        where TReference : WorkspaceReference<TReduced> =>
+        new ChangeStream<TReduced, TReference>(
+            stream.Id,
+            stream.Hub,
+            reference,
+            stream.ReduceManager.ReduceTo<TReduced>()
+        );
 }

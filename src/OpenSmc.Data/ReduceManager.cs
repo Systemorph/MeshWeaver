@@ -6,13 +6,6 @@ using OpenSmc.Data.Serialization;
 
 namespace OpenSmc.Data;
 
-public record ReduceOptions
-{
-    internal bool JsonEnabled { get; init; } = true;
-
-    public ReduceOptions WithJson(bool enabled = true) => this with { JsonEnabled = enabled };
-};
-
 public delegate TStream PatchFunction<TStream>(
     TStream current,
     JsonElement jsonCurrent,
@@ -79,9 +72,8 @@ public record ReduceManager<TStream>
         Reducers.AddFirst(Lambda);
 
         return AddWorkspaceReferenceStream<TReference, TReduced>(
-            (stream, reference, options) =>
-                (IChangeStream<TReduced, TReference>)
-                    CreateReducedStream(stream, reference, reducer, options)
+            (stream, reference) =>
+                (IChangeStream<TReduced, TReference>)CreateReducedStream(stream, reference, reducer)
         );
     }
 
@@ -99,10 +91,8 @@ public record ReduceManager<TStream>
         {
             ReduceStreams = ReduceStreams.Insert(
                 0,
-                (stream, reference, options) =>
-                    reference is TReference tReference
-                        ? reducer.Invoke(stream, tReference, options)
-                        : null
+                (stream, reference) =>
+                    reference is TReference tReference ? reducer.Invoke(stream, tReference) : null
             ),
         };
     }
@@ -128,16 +118,11 @@ public record ReduceManager<TStream>
     protected static IChangeStream CreateReducedStream<TReference, TReduced>(
         IChangeStream<TStream> stream,
         TReference reference,
-        ReduceFunction<TStream, TReference, TReduced> reducer,
-        ReduceOptions options
+        ReduceFunction<TStream, TReference, TReduced> reducer
     )
         where TReference : WorkspaceReference<TReduced>
     {
-        var ret = Workspace.CreateChangeStream<TStream, TReference, TReduced>(
-            stream,
-            reference,
-            options
-        );
+        var ret = Workspace.CreateChangeStream<TStream, TReference, TReduced>(stream, reference);
         ret.AddDisposable(
             stream
                 //.Where(x => !ret.Id.Equals(x.ChangedBy) && !x.Reference.Equals(reference))
@@ -172,29 +157,13 @@ public record ReduceManager<TStream>
 
     public IChangeStream<TReduced, TReference> ReduceStream<TReduced, TReference>(
         IChangeStream<TStream> stream,
-        TReference reference,
-        Func<ReduceOptions, ReduceOptions> options
-    )
-        where TReference : WorkspaceReference =>
-        ReduceStream<TReduced, TReference>(stream, reference, options(new ReduceOptions()));
-
-    public IChangeStream<TReduced, TReference> ReduceStream<TReduced, TReference>(
-        IChangeStream<TStream> stream,
         TReference reference
-    )
-        where TReference : WorkspaceReference =>
-        ReduceStream<TReduced, TReference>(stream, reference, new ReduceOptions());
-
-    public IChangeStream<TReduced, TReference> ReduceStream<TReduced, TReference>(
-        IChangeStream<TStream> stream,
-        TReference reference,
-        ReduceOptions options
     )
         where TReference : WorkspaceReference
     {
         return (IChangeStream<TReduced, TReference>)
             ReduceStreams
-                .Select(reduceStream => reduceStream.Invoke(stream, reference, options))
+                .Select(reduceStream => reduceStream.Invoke(stream, reference))
                 .FirstOrDefault(x => x != null);
         //?? throw new ArgumentException($"No reducer defined for stream type {typeof(TStream).Name} and reference type {reference.GetType().Name}");
     }
@@ -224,13 +193,12 @@ public record ReduceManager<TStream>
 
 internal delegate IChangeStream ReduceStream<TStream>(
     IChangeStream<TStream> stream,
-    WorkspaceReference reference,
-    ReduceOptions options
+    WorkspaceReference reference
 );
 
 public delegate IChangeStream<TReduced, TReference> ReducedStreamProjection<
     TStream,
     TReference,
     TReduced
->(IChangeStream<TStream> changeStream, TReference reference, ReduceOptions options)
+>(IChangeStream<TStream> changeStream, TReference reference)
     where TReference : WorkspaceReference<TReduced>;

@@ -2,7 +2,6 @@ using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reflection;
-using System.Text.Json;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 
@@ -65,25 +64,19 @@ public record ChangeStream<TStream, TReference> : IChangeStream<TStream, TRefere
 
     object IChangeStream.Reference => Reference;
 
-    public IChangeStream<TReduced> Reduce<TReduced>(
-        WorkspaceReference<TReduced> reference,
-        ReduceOptions options
-    ) =>
+    public IChangeStream<TReduced> Reduce<TReduced>(WorkspaceReference<TReduced> reference) =>
         (IChangeStream<TReduced>)
             ReduceMethod
                 .MakeGenericMethod(typeof(TReduced), reference.GetType())
-                .Invoke(this, [reference, options]);
+                .Invoke(this, [reference]);
 
     private static readonly MethodInfo ReduceMethod = ReflectionHelper.GetMethodGeneric<
         ChangeStream<TStream, TReference>
-    >(x => x.Reduce<object, WorkspaceReference<object>>(null, null));
+    >(x => x.Reduce<object, WorkspaceReference<object>>(null));
 
-    private IChangeStream<TReduced> Reduce<TReduced, TReference2>(
-        TReference2 reference,
-        ReduceOptions options
-    )
+    private IChangeStream<TReduced> Reduce<TReduced, TReference2>(TReference2 reference)
         where TReference2 : WorkspaceReference<TReduced> =>
-        ReduceManager.ReduceStream<TReduced, TReference2>(this, reference, options);
+        ReduceManager.ReduceStream<TReduced, TReference2>(this, reference);
 
     public virtual IDisposable Subscribe(IObserver<ChangeItem<TStream>> observer)
     {

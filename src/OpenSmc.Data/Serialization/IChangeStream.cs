@@ -2,14 +2,6 @@
 
 namespace OpenSmc.Data.Serialization;
 
-public interface IJsonChangeStream : IChangeStream
-{
-    IObservable<DataChangedEvent> DataChanged { get; }
-    IObservable<DataChangedEvent> DataSynchronization { get; }
-    DataChangeResponse RequestChange(DataChangedEvent request);
-    void NotifyChange(DataChangedEvent request);
-}
-
 public interface IChangeStream : IDisposable
 {
     object Id { get; }
@@ -32,13 +24,9 @@ public interface IChangeStream<TStream>
 {
     void Update(Func<TStream, ChangeItem<TStream>> update);
     void Initialize(TStream value);
-    IObservable<IChangeItem> Reduce(WorkspaceReference reference, ReduceOptions options = null) =>
-        Reduce((dynamic)reference, options);
+    IObservable<IChangeItem> Reduce(WorkspaceReference reference) => Reduce((dynamic)reference);
 
-    IChangeStream<TReduced> Reduce<TReduced>(
-        WorkspaceReference<TReduced> reference,
-        ReduceOptions options = null
-    );
+    IChangeStream<TReduced> Reduce<TReduced>(WorkspaceReference<TReduced> reference);
 
     new Task<TStream> Initialized { get; }
 
@@ -49,7 +37,3 @@ public interface IChangeStream<TStream, out TReference> : IChangeStream<TStream>
 {
     new TReference Reference { get; }
 }
-
-public interface IJsonChangeStream<TStream, out TReference>
-    : IChangeStream<TStream, TReference>,
-        IJsonChangeStream;
