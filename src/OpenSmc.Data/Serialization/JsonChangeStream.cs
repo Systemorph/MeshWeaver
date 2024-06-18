@@ -3,72 +3,71 @@ using System.Reactive.Subjects;
 using System.Text.Json;
 using Json.More;
 using Json.Patch;
-using OpenSmc.Messaging;
 
 namespace OpenSmc.Data.Serialization;
 
-public record JsonChangeStream<TStream, TReference>
-    : ChangeStream<TStream, TReference>,
-        IJsonChangeStream<TStream, TReference>
-    where TReference : WorkspaceReference
+public static class JsonSynchronizationStream
 {
-    // /// <summary>
-    // /// Current Json representation of stream state
-    // /// </summary>
-    private readonly IObservable<JsonStreamTuple> currentJsonStream;
+    public record ChangeItemJsonTuple<TStream>(ChangeItem<TStream> Current, JsonElement Json);
 
-    private record JsonStreamTuple(ChangeItem<TStream> Current, JsonElement Json);
+    public record JsonUpdateStream<TStream>(
+        IChangeStream<TStream> Stream,
+        IObservable<ChangeItemJsonTuple<TStream>> TupleStream,
+        Subject<Func<ChangeItemJsonTuple<TStream>, ChangeItemJsonTuple<TStream>>> Update
+    );
 
-    private Subject<Func<JsonStreamTuple, JsonStreamTuple>> jsonUpdateStream = new();
-
-    /// <summary>
-    /// My current state deserialized as stream
-    /// </summary>
-    public IObservable<DataChangedEvent> DataChanged => DataSynchronization.Skip(1);
-
-    public IObservable<DataChangedEvent> DataSynchronization => CreateSynchronizationStream();
-
-    public JsonChangeStream(
-        object id,
-        IMessageHub hub,
-        TReference reference,
-        ReduceManager<TStream> reduceManager
+    public static JsonUpdateStream<TStream> ToJsonStream<TStream>(
+        this IChangeStream<TStream> stream
     )
-        : base(id, hub, reference, reduceManager)
     {
-        currentJsonStream = Store
-            .Select(x => new JsonStreamTuple(x, ConvertToJsonElement(x)))
-            .CombineLatest(
-                jsonUpdateStream.StartWith(x => x),
-                (shadow, updateFunc) => updateFunc(shadow)
-            )
-            .Replay(1)
-            .RefCount();
+        Subject<Func<ChangeItemJsonTuple<TStream>, ChangeItemJsonTuple<TStream>>> jsonUpdateStream =
+            new();
+        return new(
+            stream,
+            stream
+                .Select(x => new ChangeItemJsonTuple<TStream>(
+                    x,
+                    ConvertToJsonElement(x, stream.Hub.JsonSerializerOptions)
+                ))
+                .CombineLatest(
+                    jsonUpdateStream.StartWith(x => x),
+                    (shadow, updateFunc) => updateFunc(shadow)
+                )
+                .Replay(1)
+                .RefCount(),
+            jsonUpdateStream
+        );
     }
 
-    private JsonElement ConvertToJsonElement(ChangeItem<TStream> changeItem) =>
-        JsonSerializer.SerializeToElement(changeItem.Value, Hub.JsonSerializerOptions);
+    private static JsonElement ConvertToJsonElement<TStream>(
+        ChangeItem<TStream> changeItem,
+        JsonSerializerOptions options
+    ) => JsonSerializer.SerializeToElement(changeItem.Value, options);
 
-    private IObservable<DataChangedEvent> CreateSynchronizationStream()
+    public static IObservable<DataChangedEvent> ToSynchronizationStream<TStream>(
+        this JsonUpdateStream<TStream> json
+    )
     {
+        var stream = json.Stream;
         JsonElement? currentSync = null;
-        return currentJsonStream
-            .Select(x =>
+        return json
+            .TupleStream.Select(x =>
                 currentSync == null
                     ? new DataChangedEvent(
-                        Id,
-                        Reference,
-                        Hub.Version,
+                        stream.Id,
+                        stream.Reference,
+                        stream.Hub.Version,
                         new((currentSync = x.Json).Value.ToJsonString()),
                         ChangeType.Full,
                         null
                     )
-                    : GetPatch(currentSync.Value, x.Json, x.Current.ChangedBy)
+                    : stream.GetPatch(currentSync.Value, x.Json, x.Current.ChangedBy)
             )
             .Where(x => x != null);
     }
 
-    private DataChangedEvent GetPatch(
+    private static DataChangedEvent GetPatch(
+        this IChangeStream stream,
         JsonElement currentSync,
         JsonElement serialized,
         object changedBy
@@ -78,66 +77,79 @@ public record JsonChangeStream<TStream, TReference>
         if (jsonPatch.Operations.Count == 0)
             return null;
         return new DataChangedEvent(
-            Id,
-            Reference,
-            Hub.Version,
-            new(JsonSerializer.Serialize(jsonPatch, Hub.JsonSerializerOptions)),
+            stream.Id,
+            stream.Reference,
+            stream.Hub.Version,
+            new(JsonSerializer.Serialize(jsonPatch, stream.Hub.JsonSerializerOptions)),
             ChangeType.Patch,
             changedBy
         );
     }
 
-    private void Change(DataChangedEvent request)
+    public static void Change<TStream>(
+        this JsonUpdateStream<TStream> json,
+        DataChangedEvent request
+    )
     {
         if (request.ChangeType == ChangeType.Full)
         {
             var item = JsonSerializer.Deserialize<TStream>(
                 request.Change.Content,
-                Hub.JsonSerializerOptions
+                json.Stream.Hub.JsonSerializerOptions
             );
-            Current = new ChangeItem<TStream>(Id, Reference, item, request.ChangedBy, Hub.Version);
+            json.Stream.Initialize(item);
             return;
         }
 
         var patch = JsonSerializer.Deserialize<JsonPatch>(request.Change.Content);
-        jsonUpdateStream.OnNext(x =>
+        json.Update.OnNext(x =>
         {
-            var updatedJson = patch.Apply(x.Json, Hub.JsonSerializerOptions);
-            return new JsonStreamTuple(UpdateImpl(request, x, patch, updatedJson), updatedJson);
+            var updatedJson = patch.Apply(x.Json, json.Stream.Hub.JsonSerializerOptions);
+            return new ChangeItemJsonTuple<TStream>(
+                json.UpdateImpl(request, x, patch, updatedJson),
+                updatedJson
+            );
         });
     }
 
-    private ChangeItem<TStream> UpdateImpl(
+    private static ChangeItem<TStream> UpdateImpl<TStream>(
+        this JsonUpdateStream<TStream> json,
         DataChangedEvent request,
-        JsonStreamTuple x,
+        ChangeItemJsonTuple<TStream> tuple,
         JsonPatch patch,
         JsonElement updatedJson
     )
     {
         var ret = new ChangeItem<TStream>(
-            Id,
-            Reference,
-            ReduceManager.PatchFunction.Invoke(
-                x.Current.Value,
+            json.Stream.Id,
+            json.Stream.Reference,
+            json.Stream.ReduceManager.PatchFunction.Invoke(
+                tuple.Current.Value,
                 updatedJson,
                 patch,
-                Hub.JsonSerializerOptions
+                json.Stream.Hub.JsonSerializerOptions
             ),
             request.ChangedBy,
-            Hub.Version
+            json.Stream.Hub.Version
         );
-        Backfeed(_ => ret);
+        json.Stream.Update(_ => ret);
         return ret;
     }
 
-    public DataChangeResponse RequestChange(DataChangedEvent request)
+    public static DataChangeResponse RequestChange<TStream>(
+        this JsonUpdateStream<TStream> json,
+        DataChangedEvent request
+    )
     {
-        Change(request);
-        return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, null);
+        json.Change(request);
+        return new DataChangeResponse(json.Stream.Hub.Version, DataChangeStatus.Committed, null);
     }
 
-    public void NotifyChange(DataChangedEvent request)
+    public static void NotifyChange<TStream>(
+        this JsonUpdateStream<TStream> json,
+        DataChangedEvent request
+    )
     {
-        Change(request);
+        json.Change(request);
     }
 }

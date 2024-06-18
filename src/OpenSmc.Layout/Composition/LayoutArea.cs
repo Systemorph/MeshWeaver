@@ -43,8 +43,7 @@ public record LayoutArea : IDisposable
     public LayoutArea(
         LayoutAreaReference Reference,
         IMessageHub hub,
-        IChangeStream<WorkspaceState> workspaceStream,
-        ReduceOptions options
+        IChangeStream<WorkspaceState> workspaceStream
     )
     {
         this.hub = hub;
@@ -52,7 +51,7 @@ public record LayoutArea : IDisposable
             WorkspaceState,
             LayoutAreaReference,
             EntityStore
-        >(workspaceStream, Reference, options);
+        >(workspaceStream, Reference);
         this.Reference = Reference;
         Workspace = hub.GetWorkspace();
         Stream.AddDisposable(this);

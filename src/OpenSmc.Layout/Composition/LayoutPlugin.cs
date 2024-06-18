@@ -10,8 +10,7 @@ public interface ILayout
 {
     IChangeStream<EntityStore, LayoutAreaReference> Render(
         IChangeStream<WorkspaceState> changeStream,
-        LayoutAreaReference reference,
-        ReduceOptions options
+        LayoutAreaReference reference
     );
 }
 
@@ -29,9 +28,8 @@ public sealed class LayoutPlugin : MessageHubPlugin, ILayout
 
     public IChangeStream<EntityStore, LayoutAreaReference> Render(
         IChangeStream<WorkspaceState> changeStream,
-        LayoutAreaReference reference,
-        ReduceOptions options
-    ) => new LayoutManager(new(reference, Hub, changeStream, options), layoutDefinition).Render(reference);
+        LayoutAreaReference reference
+    ) => new LayoutManager(new(reference, Hub, changeStream), layoutDefinition).Render(reference);
 
     public override async Task StartAsync(CancellationToken cancellationToken)
     {
