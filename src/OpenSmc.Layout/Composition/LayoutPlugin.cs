@@ -10,7 +10,8 @@ public interface ILayout
 {
     IChangeStream<EntityStore, LayoutAreaReference> Render(
         IChangeStream<WorkspaceState> changeStream,
-        LayoutAreaReference reference
+        LayoutAreaReference reference,
+        ReduceOptions options
     );
 }
 
@@ -24,13 +25,13 @@ public sealed class LayoutPlugin : MessageHubPlugin, ILayout
         layoutDefinition = Hub
             .Configuration.GetListOfLambdas()
             .Aggregate(new LayoutDefinition(Hub), (x, y) => y.Invoke(x));
-
     }
 
     public IChangeStream<EntityStore, LayoutAreaReference> Render(
         IChangeStream<WorkspaceState> changeStream,
-        LayoutAreaReference reference
-    ) => new LayoutManager(new(reference, Hub, changeStream), layoutDefinition).Render(reference);
+        LayoutAreaReference reference,
+        ReduceOptions options
+    ) => new LayoutManager(new(reference, Hub, changeStream, options), layoutDefinition).Render(reference);
 
     public override async Task StartAsync(CancellationToken cancellationToken)
     {
