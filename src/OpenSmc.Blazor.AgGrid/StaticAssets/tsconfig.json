@@ -1,5 +1,7 @@
 {
   "compilerOptions": {
+    "target": "ES2015",
+    "moduleResolution": "bundler",
     "isolatedModules": true,
     "noEmit": true
   }

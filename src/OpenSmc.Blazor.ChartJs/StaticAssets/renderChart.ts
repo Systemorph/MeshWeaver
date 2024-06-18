@@ -1,5 +1,5 @@
 import { Chart, registerables, ChartConfiguration } from 'chart.js';
-import 'chartjs-plugin-colorschemes-v3'
+import 'chartjs-plugin-colorschemes-v3';
 import 'chartjs-adapter-moment';
 import ChartDataLabels from 'chartjs-plugin-datalabels';
 import { cloneDeepWith, isString } from "lodash-es";
