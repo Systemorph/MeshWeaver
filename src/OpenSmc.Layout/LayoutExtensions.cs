@@ -24,14 +24,13 @@ public static class LayoutExtensions
         Func<LayoutDefinition, LayoutDefinition> layoutDefinition
     )
     {
-
         return config
             .WithServices(services => services.AddScoped<ILayout, LayoutPlugin>())
             .AddData(data =>
                 data.ConfigureReduction(reduction =>
                     reduction.AddWorkspaceReferenceStream<LayoutAreaReference, EntityStore>(
-                        (changeStream, a) =>
-                            GetChangeStream(data, changeStream, a)
+                        (changeStream, a, options) =>
+                            GetChangeStream(data, changeStream, a, options)
                     )
                 )
             )
@@ -40,31 +39,60 @@ public static class LayoutExtensions
             .AddPlugin<LayoutPlugin>();
     }
 
-
-    private static IChangeStream<EntityStore, LayoutAreaReference> GetChangeStream(DataContext data, IChangeStream<WorkspaceState> changeStream, LayoutAreaReference reference)
+    private static IChangeStream<EntityStore, LayoutAreaReference> GetChangeStream(
+        DataContext data,
+        IChangeStream<WorkspaceState> changeStream,
+        LayoutAreaReference reference,
+        ReduceOptions options
+    )
     {
         var layoutStream = data
             .Hub.ServiceProvider.GetRequiredService<ILayout>()
-            .Render(changeStream, reference);
+            .Render(changeStream, reference, options);
         return layoutStream;
     }
 
-    private static ChangeItem<EntityStore> DeserializeToStore(ChangeItem<JsonElement> changeItem, JsonSerializerOptions options)
+    private static ChangeItem<EntityStore> DeserializeToStore(
+        ChangeItem<JsonElement> changeItem,
+        JsonSerializerOptions options
+    )
     {
         var ret = new EntityStore();
         var node = (JsonObject)changeItem.Value.AsNode();
 
-        ret = node?.Aggregate(ret, (current, kvp) => current.Update(kvp.Key, i => i with { Instances = (kvp.Value as JsonObject ?? new()).Aggregate(i.Instances, (c, y) => c.SetItem(y.Key, y.Value.Deserialize<object>(options))) }));
+        ret = node?.Aggregate(
+            ret,
+            (current, kvp) =>
+                current.Update(
+                    kvp.Key,
+                    i =>
+                        i with
+                        {
+                            Instances = (kvp.Value as JsonObject ?? new()).Aggregate(
+                                i.Instances,
+                                (c, y) => c.SetItem(y.Key, y.Value.Deserialize<object>(options))
+                            )
+                        }
+                )
+        );
 
         return changeItem.SetValue(ret);
     }
 
-    private static ChangeItem<JsonElement> ConvertToJsonElement(ChangeItem<EntityStore> changeItem, JsonSerializerOptions options)
+    private static ChangeItem<JsonElement> ConvertToJsonElement(
+        ChangeItem<EntityStore> changeItem,
+        JsonSerializerOptions options
+    )
     {
         var obj = new JsonObject();
         foreach (var property in changeItem.Value.Collections.Keys)
             if (changeItem.Value.Collections.TryGetValue(property, out var areas))
-                obj[property] = new JsonObject(areas.Instances.Select(i => new KeyValuePair<string, JsonNode>(i.Key.ToString(), JsonSerializer.SerializeToNode(i.Value, options))));
+                obj[property] = new JsonObject(
+                    areas.Instances.Select(i => new KeyValuePair<string, JsonNode>(
+                        i.Key.ToString(),
+                        JsonSerializer.SerializeToNode(i.Value, options)
+                    ))
+                );
         return changeItem.SetValue(JsonDocument.Parse(obj.ToJsonString()).RootElement);
     }
 
