@@ -23,8 +23,12 @@ export const renderGrid = (id: string, element: HTMLElement, options: GridOption
     gridInstances.set(id, createGrid(element, clonedOptions));
 }
 
-export const destroyGrid = (id: string) => 
-    gridInstances.get(id)?.destroy();
+export const destroyGrid = (id: string) => {
+    if (gridInstances.has(id)) {
+        gridInstances.get(id).destroy();
+        gridInstances.delete(id);
+    }
+}
 
 const funcRegexps = [
     /^function\b/,

@@ -15,8 +15,10 @@ const renderGrid = (id, element, options) => {
   gridInstances.set(id, createGrid(element, clonedOptions));
 };
 const destroyGrid = (id2) => {
-  var _a;
-  return (_a = gridInstances.get(id2)) == null ? void 0 : _a.destroy();
+  if (gridInstances.has(id2)) {
+    gridInstances.get(id2).destroy();
+    gridInstances.delete(id2);
+  }
 };
 const funcRegexps = [
   /^function\b/,

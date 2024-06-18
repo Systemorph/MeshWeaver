@@ -1,0 +1,22 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "npm run build:Release",
+    "build:Release": "vite build",
+    "build:Debug": "cross-env NODE_ENV=development vite build --mode development"
+  },
+  "dependencies": {
+    "chart.js": "^3.9.1",
+    "chartjs-adapter-moment": "0.1.2",
+    "chartjs-plugin-colorschemes-v3": "^0.5.4",
+    "chartjs-plugin-datalabels": "^2.2.0",
+    "lodash-es": "^4.17.21"
+  },
+  "devDependencies": {
+    "@types/chart.js": "2.7.42",
+    "@types/lodash-es": "^4.14.202",
+    "cross-env": "^7.0.3",
+    "typescript": "^5.2.2",
+    "vite": "^5.1.3"
+  }
+}

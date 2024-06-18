@@ -21,7 +21,7 @@
         if (firstRender)
         {
             jsModule = await JsRuntime.InvokeAsync<IJSObjectReference>("import", 
-                "./_content/OpenSmc.Blazor.AgGrid/ag-grid.mjs");
+                "./_content/OpenSmc.Blazor.AgGrid/index.mjs");
             DataBind<object>(ViewModel.Data, o => Options = o);
         }
 

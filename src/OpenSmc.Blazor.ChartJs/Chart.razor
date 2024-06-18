@@ -1,41 +1,53 @@
 ﻿@using Microsoft.JSInterop
-@using OpenSmc.ShortGuid
 @inherits BlazorView<OpenSmc.Charting.ChartControl>
 @implements IAsyncDisposable
 
-<canvas id="@ChartArea"></canvas>
+<div @ref="element" className="chart-container">
+    <canvas></canvas>
+</div>
 
 @code
 {
- 
+    ElementReference element;
+
     [Inject] private IJSRuntime JsRuntime { get; set; }
-    private IJSObjectReference module;
+    private IJSObjectReference jsModule;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
 
         if (firstRender)
         {
-            module = await 
-                JsRuntime
-                    .InvokeAsync<IJSObjectReference>(
+            jsModule = await JsRuntime.InvokeAsync<IJSObjectReference>(
                         "import",
-                        "./_content/OpenSmc.Blazor.ChartJs/chartJsAdapter.js"
+                        "./_content/OpenSmc.Blazor.ChartJs/index.mjs"
                     );
 
             DataBind<object>(ViewModel.Data, o => Options = o);
         }
 
-        await JsRuntime.InvokeVoidAsync("renderChart", ChartArea, Options);
+        if (jsModule is not null)
+        {
+            await jsModule.InvokeVoidAsync("renderChart", Id, element, Options);
+        }
     }
+
+    private string Id => Guid.NewGuid().ToString();
 
     private object Options { get; set; }
 
-    private static readonly string ChartArea = Guid.NewGuid().AsString();
-
     public async ValueTask DisposeAsync()
     {
-        if (module != null) 
-            await module.DisposeAsync();
+        if (jsModule is not null)
+        {
+            try
+            {
+                await jsModule.InvokeVoidAsync("destroyChart", Id);
+                await jsModule.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
     }
 }
