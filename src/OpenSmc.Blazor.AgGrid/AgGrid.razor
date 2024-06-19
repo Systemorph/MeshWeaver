@@ -17,7 +17,6 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-
         if (firstRender)
         {
             jsModule = await JsRuntime.InvokeAsync<IJSObjectReference>("import", 
@@ -27,11 +26,11 @@
 
         if (jsModule is not null)
         {
-            await jsModule.InvokeVoidAsync("renderGrid", Id, element, Options);
+            await jsModule.InvokeVoidAsync("renderGrid", id, element, Options);
         }
     }
 
-    private string Id => Guid.NewGuid().ToString();
+    private string id = Guid.NewGuid().ToString();
 
     private object Options { get; set; }
 
@@ -41,7 +40,6 @@
         {
             try
             {
-                await jsModule.InvokeVoidAsync("destroyGrid", Id);
                 await jsModule.DisposeAsync();
             }
             catch (JSDisconnectedException)

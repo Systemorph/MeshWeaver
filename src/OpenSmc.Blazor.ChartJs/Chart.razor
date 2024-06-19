@@ -2,9 +2,7 @@
 @inherits BlazorView<OpenSmc.Charting.ChartControl>
 @implements IAsyncDisposable
 
-<div @ref="element" className="chart-container">
-    <canvas></canvas>
-</div>
+<canvas @ref="element"></canvas>
 
 @code
 {
@@ -28,11 +26,9 @@
 
         if (jsModule is not null)
         {
-            await jsModule.InvokeVoidAsync("renderChart", Id, element, Options);
+            await jsModule.InvokeVoidAsync("renderChart", element, Options);
         }
     }
-
-    private string Id => Guid.NewGuid().ToString();
 
     private object Options { get; set; }
 
@@ -42,7 +38,6 @@
         {
             try
             {
-                await jsModule.InvokeVoidAsync("destroyChart", Id);
                 await jsModule.DisposeAsync();
             }
             catch (JSDisconnectedException)

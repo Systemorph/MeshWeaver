@@ -4,12 +4,23 @@ import "ag-grid-community/styles/ag-theme-quartz.css";
 import 'ag-grid-enterprise';
 import { cloneDeepWith, isString } from 'lodash-es';
 
-const gridInstances = new Map<string, GridApi>();
+const instances = new Map<string, GridApi>();
 
 export const renderGrid = (id: string, element: HTMLElement, options: GridOptions) => {
-    destroyGrid(id);
+    const instance = instances.get(id);
+    
+    if (instance) {
+        instance.destroy();
+        instances.delete(id);
+    }
 
-    const clonedOptions = cloneDeepWith(options, value => {
+    const gridOptions = deserialize(options);
+
+    instances.set(id, createGrid(element, gridOptions));
+}
+
+function deserialize(data: unknown) {
+    return cloneDeepWith(data, value => {
         if (isString(value) && funcRegexps.some(regexp => regexp.test(value))) {
             try {
                 return eval(`(${value})`);
@@ -19,15 +30,6 @@ export const renderGrid = (id: string, element: HTMLElement, options: GridOption
             }
         }
     });
-
-    gridInstances.set(id, createGrid(element, clonedOptions));
-}
-
-export const destroyGrid = (id: string) => {
-    if (gridInstances.has(id)) {
-        gridInstances.get(id).destroy();
-        gridInstances.delete(id);
-    }
 }
 
 const funcRegexps = [
