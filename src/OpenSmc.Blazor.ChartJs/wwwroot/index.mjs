@@ -7,22 +7,15 @@ Chart.defaults.plugins.legend.display = false;
 Chart.defaults.plugins.datalabels.display = false;
 Chart.defaults.font.family = 'roboto, "sans-serif"';
 Chart.defaults.font.size = 14;
-const instances = /* @__PURE__ */ new Map();
-const renderChart = (id, element, config2) => {
-  destroyChart(id);
-  const ctx = element.querySelector("canvas").getContext("2d");
-  const cnf = deserialize(config2);
-  const chart = new Chart(ctx, cnf);
-  instances.set(id, chart);
+const renderChart = (element, config) => {
+  var _a;
+  (_a = Chart.getChart(element)) == null ? void 0 : _a.destroy;
+  const ctx = element.getContext("2d");
+  const chartConfig = deserialize(config);
+  new Chart(ctx, chartConfig).attached;
 };
-const destroyChart = (id) => {
-  if (instances.has(id)) {
-    instances.get(id).destroy();
-    instances.delete(id);
-  }
-};
-function deserialize(config) {
-  return cloneDeepWith(config, (value) => {
+function deserialize(data) {
+  return cloneDeepWith(data, (value) => {
     if (isString(value) && funcRegexps.some((regexp) => regexp.test(value))) {
       try {
         return eval(`(${value})`);
@@ -39,6 +32,5 @@ const funcRegexps = [
   /^\s*(\s*[a-zA-Z]\w*|\(\s*[a-zA-Z]\w*(\s*,\s*[a-zA-Z]\w*)*\s*\))\s*=>/
 ];
 export {
-  destroyChart,
   renderChart
 };

@@ -15,28 +15,15 @@ Chart.defaults.plugins.datalabels.display = false; // default is no DataLabels.
 Chart.defaults.font.family = "roboto, \"sans-serif\"";
 Chart.defaults.font.size = 14;
 
-const instances = new Map<string, Chart>();
-
-export const renderChart = (id, element, config) => {
-    destroyChart(id);
-
-    const ctx = element.querySelector("canvas").getContext("2d");
-
-    const cnf = deserialize(config);
-
-    const chart = new Chart(ctx, cnf);
-    instances.set(id, chart);
+export const renderChart = (element: HTMLCanvasElement, config: ChartConfiguration) => {
+    Chart.getChart(element)?.destroy;
+    const ctx = element.getContext("2d");
+    const chartConfig = deserialize(config);
+    new Chart(ctx, chartConfig).attached;
 }
 
-export const destroyChart = id => {
-    if (instances.has(id)) {
-        instances.get(id).destroy();
-        instances.delete(id);
-    }
-}
-
-function deserialize(config: ChartConfiguration) {
-    return cloneDeepWith(config, value => {
+function deserialize(data: unknown) {
+    return cloneDeepWith(data, value => {
         if (isString(value) && funcRegexps.some(regexp => regexp.test(value))) {
             try {
                 return eval(`(${value})`);
