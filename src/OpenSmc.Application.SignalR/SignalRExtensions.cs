@@ -10,9 +10,10 @@ public static class SignalRExtensions
 {
     public const string DefaultSignalREndpoint = "/signalR/application";
 
-    public static IServiceCollection ConfigureApplicationSignalR(this IServiceCollection services)
+    public static IServiceCollection ConfigureApplicationSignalR(this IServiceCollection services, Func<MessageHubConfiguration, MessageHubConfiguration> configuration = null)
     {
-        services.AddSingleton(sp => sp.CreateMessageHub(new SignalRAddress(), ConfigureSignalRHub));
+        Func<MessageHubConfiguration, MessageHubConfiguration> combinedconfiguration = configuration == null ? ApplyDefaultSignalRConfiguration : (c => configuration(ApplyDefaultSignalRConfiguration(c)));
+        services.AddSingleton(sp => sp.CreateMessageHub(new SignalRAddress(), combinedconfiguration));
         services.AddSignalR(o =>
             {
                 o.EnableDetailedErrors = true; // TODO: False for Prod environment (2021/05/14, Alexander Yolokhov)
@@ -50,17 +51,16 @@ public static class SignalRExtensions
         return app;
     }
 
-    private static MessageHubConfiguration ConfigureSignalRHub(MessageHubConfiguration conf)
+    private static MessageHubConfiguration ApplyDefaultSignalRConfiguration(MessageHubConfiguration conf)
         => conf
             .WithTypes(typeof(UiAddress), typeof(ApplicationAddress))
-            //.WithSerialization(serialization =>
-            //    //serialization.WithOptions(options =>
-                //{
-                //    if (!options.Converters.Any(c => c is MessageDeliveryRawJsonConverter))
-                //        options.Converters.Insert(0, new MessageDeliveryRawJsonConverter());
-                //})
-            //)
-            ;
+            .WithSerialization(serialization =>
+                serialization.WithOptions(options =>
+                {
+                    if (!options.Converters.Any(c => c is RawJsonConverter))
+                        options.Converters.Insert(0, new RawJsonConverter(serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()));
+                })
+            );
 }
 
 public record SignalRAddress;

@@ -18,8 +18,9 @@ public static class BenchmarkUtils
         string fileName
     )
     {
-        options.WriteIndented = true;
-        var modelSerialized = JsonSerializer.Serialize(model, model.GetType(), options);
+        var clonedOptions = CloneOptions(options);
+        clonedOptions.WriteIndented = true;
+        var modelSerialized = JsonSerializer.Serialize(model, model.GetType(), clonedOptions);
         var filePath = Path.Combine(@"../../../Json", fileName);
 #if REGENERATE
         var benchmark = JsonSerializer.Serialize(model, model.GetType(), options);
@@ -29,4 +30,6 @@ public static class BenchmarkUtils
 #endif
         modelSerialized.Should().Be(benchmark);
     }
+
+    private static JsonSerializerOptions CloneOptions(JsonSerializerOptions options) => new(options);
 }
