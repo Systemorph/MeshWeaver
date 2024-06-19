@@ -19,4 +19,20 @@ public static class OrleansMessageHubConfigurationExtensions
         await stream.OnNextAsync(delivery);
         return delivery.Forwarded();
     }
+
+    public static MessageHubConfiguration WithForwardToOrleansGrain<TAddress, TGrainInterface>(this MessageHubConfiguration config, Func<TAddress, string> grainIdFunc, Func<TGrainInterface, IMessageDelivery, Task<IMessageDelivery>> grainDeliveryFunc)
+        where TGrainInterface : IGrainWithStringKey
+        => config
+            .WithRoutes(forward =>
+                forward.RouteAddress<TAddress>((routedAddress, d, _) => SendToGrainAsync(forward.Hub, d, grainIdFunc(routedAddress), grainDeliveryFunc))
+            );
+
+    private static async Task<IMessageDelivery> SendToGrainAsync<TGrainInterface>(IMessageHub hub, IMessageDelivery delivery, string grainId, Func<TGrainInterface, IMessageDelivery, Task<IMessageDelivery>> grainDeliveryFunc)
+        where TGrainInterface : IGrainWithStringKey
+    {
+        var clusterClient = hub.ServiceProvider.GetRequiredService<IClusterClient>();
+        var grain = clusterClient.GetGrain<TGrainInterface>(grainId);
+
+        return await grainDeliveryFunc(grain, delivery);
+    }
 }

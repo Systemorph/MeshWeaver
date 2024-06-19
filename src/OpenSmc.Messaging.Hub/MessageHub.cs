@@ -127,6 +127,9 @@ public sealed class MessageHub<TAddress>
         return delivery;
     }
 
+    private readonly TaskCompletionSource hasStarted = new();
+    public Task HasStarted => hasStarted.Task;
+
     private async Task StartAsync(CancellationToken cancellationToken)
     {
         foreach (var (_, factory) in Configuration.PluginFactories)
@@ -138,6 +141,7 @@ public sealed class MessageHub<TAddress>
 
         deferral.Dispose();
         RunLevel = MessageHubRunLevel.Started;
+        hasStarted.SetResult();
     }
 
     public override bool Filter(IMessageDelivery d) => true;

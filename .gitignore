@@ -139,6 +139,9 @@ _TeamCity*
 *.coverage
 *.coveragexml
 
+# KDiff3 temporary files
+*.orig
+
 # NCrunch
 _NCrunch_*
 .*crunch*.local.xml
