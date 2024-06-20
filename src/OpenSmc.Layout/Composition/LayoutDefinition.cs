@@ -79,15 +79,6 @@ public record LayoutDefinition(IMessageHub Hub)
     public LayoutDefinition WithView(string area, Func<LayoutArea, object> view)
         => WithView(area, a => Observable.Return(view(a)));
 
-    internal ImmutableList<Func<CancellationToken, Task>> Initializations { get; init; } =
-        ImmutableList<Func<CancellationToken, Task>>.Empty;
-
-    public LayoutDefinition WithInitialization(Func<CancellationToken, Task> func) =>
-        this with
-        {
-            Initializations = Initializations.Add(func)
-        };
-
 
     internal ViewElement GetViewElement(LayoutAreaReference reference)
     {

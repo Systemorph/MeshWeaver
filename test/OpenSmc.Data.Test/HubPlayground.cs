@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
 using Xunit;
@@ -6,8 +6,8 @@ using Xunit.Abstractions;
 
 namespace OpenSmc.Hub.Data.Test;
 
-public class ChangeStreamTest : HubTestBase
+public class SynchronizationStreamTest : HubTestBase
 {
-    protected ChangeStreamTest(ITestOutputHelper output)
+    protected SynchronizationStreamTest(ITestOutputHelper output)
         : base(output) { }
 }

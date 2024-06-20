@@ -70,7 +70,7 @@ namespace OpenSmc.Blazor
         {
             if (reference != null)
                 Stream.Update(ci => new ChangeItem<JsonElement>(
-                    Stream.Id,
+                    Stream.Owner,
                     Stream.Reference,
                     ApplyPatch(value, reference, ci),
                     Hub.Address,

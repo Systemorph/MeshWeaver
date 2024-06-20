@@ -9,12 +9,10 @@ namespace OpenSmc.Layout.Composition;
 
 public record LayoutArea : IDisposable
 {
-    private readonly IMessageHub hub;
-    public IChangeStream<EntityStore, LayoutAreaReference> Stream { get; }
+    public ISynchronizationStream<EntityStore, LayoutAreaReference> Stream { get; }
+    public IMessageHub Hub => Stream.Hub;
+    public IWorkspace Workspace => Hub.GetWorkspace();
 
-    public LayoutAreaReference Reference { get; init; }
-
-    public readonly IWorkspace Workspace;
 
     public void UpdateLayout(string area, object control)
     {
@@ -37,34 +35,27 @@ public record LayoutArea : IDisposable
             LayoutAreaReference.Areas,
             instances => instances.Update(area, ConvertToControl(control))
         );
-        return new(Stream.Id, Stream.Reference, newStore, Stream.Id, Stream.Hub.Version);
+        return new(Stream.Owner, Stream.Reference, newStore, Stream.Owner, Stream.Hub.Version);
     }
 
     public LayoutArea(
-        LayoutAreaReference Reference,
-        IMessageHub hub,
-        IChangeStream<WorkspaceState> workspaceStream
+        ISynchronizationStream<EntityStore, LayoutAreaReference> stream
     )
     {
-        this.hub = hub;
-        Stream = Data.Workspace.CreateChangeStream<
-            WorkspaceState,
-            LayoutAreaReference,
-            EntityStore
-        >(workspaceStream, Reference);
-        this.Reference = Reference;
-        Workspace = hub.GetWorkspace();
+        Stream = stream;
         Stream.AddDisposable(this);
+        executionHub =
+            Stream.Hub.GetHostedHub(new LayoutExecutionAddress(Stream.Hub.Address), x => x);
     }
-
+    private readonly IMessageHub executionHub;
     public void UpdateData(string id, object data)
     {
         Stream.Update(ws =>
             new(
-                Stream.Id,
+                Stream.Owner,
                 Stream.Reference,
                 (ws ?? new()).Update(LayoutAreaReference.Data, i => i.Update(id, data)),
-                Stream.Id,
+                Stream.Owner,
                 Stream.Hub.Version
             )
         );
@@ -92,4 +83,16 @@ public record LayoutArea : IDisposable
         foreach (var disposable in disposablesByArea)
             disposable.Value.ForEach(d => d.Dispose());
     }
+
+    public void InvokeAsync(Func<CancellationToken, Task> action)
+    {
+        executionHub.Schedule(action);
+    }
+
+    public void InvokeAsync(Action action)
+        => InvokeAsync(_ =>
+        {
+            action();
+            return Task.CompletedTask;
+        });
 }

@@ -187,7 +187,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         year.Value.Should().BeOfType<JsonElement>().Which.GetInt32().Should().Be(2024);
 
         stream.Update(ci => new Data.Serialization.ChangeItem<JsonElement>(
-            stream.Id,
+            stream.Owner,
             stream.Reference,
             new JsonPatch(PatchOperation.Replace(JsonPointer.Parse(jsonPath.Pointer), 2025)).Apply(
                 ci

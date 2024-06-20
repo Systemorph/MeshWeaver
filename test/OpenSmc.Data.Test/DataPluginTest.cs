@@ -62,7 +62,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
         var updateItems = new object[] { new MyData("1", "AAA"), new MyData("3", "CCC"), };
 
-        TimeSpan timeout = TimeSpan.FromSeconds(9999);
+        var timeout = TimeSpan.FromSeconds(9999);
         var clientWorkspace = GetWorkspace(client);
         await clientWorkspace.Initialized;
         var data = (

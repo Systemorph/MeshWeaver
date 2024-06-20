@@ -6,7 +6,7 @@
     [Parameter] 
     public TViewModel ViewModel { get; set; }
     [Parameter] 
-    public IChangeStream<JsonElement, LayoutAreaReference> Stream { get; set; }
+    public ISynchronizationStream<JsonElement, LayoutAreaReference> Stream { get; set; }
     [Parameter] 
     public string Area { get; set; }
 

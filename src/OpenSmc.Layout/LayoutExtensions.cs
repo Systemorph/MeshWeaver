@@ -2,7 +2,6 @@
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Json.More;
 using Json.Patch;
 using Json.Path;
 using Json.Pointer;
@@ -25,74 +24,25 @@ public static class LayoutExtensions
     )
     {
         return config
-            .WithServices(services => services.AddScoped<ILayout, LayoutPlugin>())
             .AddData(data =>
                 data.ConfigureReduction(reduction =>
                     reduction.AddWorkspaceReferenceStream<LayoutAreaReference, EntityStore>(
-                        (changeStream, a) => GetChangeStream(data, changeStream, a)
+                        (_, stream) => new LayoutArea(stream).Render(stream.Hub.GetLayoutDefinition())
                     )
                 )
             )
             .AddLayoutTypes()
             .Set(config.GetListOfLambdas().Add(layoutDefinition))
-            .AddPlugin<LayoutPlugin>();
+            ;
+
+
     }
 
-    private static IChangeStream<EntityStore, LayoutAreaReference> GetChangeStream(
-        DataContext data,
-        IChangeStream<WorkspaceState> changeStream,
-        LayoutAreaReference reference
-    )
-    {
-        var layoutStream = data
-            .Hub.ServiceProvider.GetRequiredService<ILayout>()
-            .Render(changeStream, reference);
-        return layoutStream;
-    }
+    private static LayoutDefinition GetLayoutDefinition(this IMessageHub hub) =>
+        hub.Configuration.GetListOfLambdas()
+            .Aggregate(new LayoutDefinition(hub), (x, y) => y.Invoke(x));
 
-    private static ChangeItem<EntityStore> DeserializeToStore(
-        ChangeItem<JsonElement> changeItem,
-        JsonSerializerOptions options
-    )
-    {
-        var ret = new EntityStore();
-        var node = (JsonObject)changeItem.Value.AsNode();
 
-        ret = node?.Aggregate(
-            ret,
-            (current, kvp) =>
-                current.Update(
-                    kvp.Key,
-                    i =>
-                        i with
-                        {
-                            Instances = (kvp.Value as JsonObject ?? new()).Aggregate(
-                                i.Instances,
-                                (c, y) => c.SetItem(y.Key, y.Value.Deserialize<object>(options))
-                            )
-                        }
-                )
-        );
-
-        return changeItem.SetValue(ret);
-    }
-
-    private static ChangeItem<JsonElement> ConvertToJsonElement(
-        ChangeItem<EntityStore> changeItem,
-        JsonSerializerOptions options
-    )
-    {
-        var obj = new JsonObject();
-        foreach (var property in changeItem.Value.Collections.Keys)
-            if (changeItem.Value.Collections.TryGetValue(property, out var areas))
-                obj[property] = new JsonObject(
-                    areas.Instances.Select(i => new KeyValuePair<string, JsonNode>(
-                        i.Key.ToString(),
-                        JsonSerializer.SerializeToNode(i.Value, options)
-                    ))
-                );
-        return changeItem.SetValue(JsonDocument.Parse(obj.ToJsonString()).RootElement);
-    }
 
     internal static ImmutableList<Func<LayoutDefinition, LayoutDefinition>> GetListOfLambdas(
         this MessageHubConfiguration config
@@ -117,23 +67,23 @@ public static class LayoutExtensions
             );
 
     public static IObservable<object> GetControlStream(
-        this IChangeStream<JsonElement> changeItems,
+        this ISynchronizationStream<JsonElement> synchronizationItems,
         string area
     ) =>
-        changeItems.Select(i =>
+        synchronizationItems.Select(i =>
             JsonPointer
                 .Parse(LayoutAreaReference.GetControlPointer(area))
                 .Evaluate(i.Value)
-                ?.Deserialize<object>(changeItems.Hub.JsonSerializerOptions)
+                ?.Deserialize<object>(synchronizationItems.Hub.JsonSerializerOptions)
         );
 
     public static async Task<object> GetControl(
-        this IChangeStream<JsonElement> changeItems,
+        this ISynchronizationStream<JsonElement> synchronizationItems,
         string area
-    ) => await changeItems.GetControlStream(area).FirstAsync(x => x != null);
+    ) => await synchronizationItems.GetControlStream(area).FirstAsync(x => x != null);
 
     public static IObservable<object> GetDataStream(
-        this IChangeStream<JsonElement> stream,
+        this ISynchronizationStream<JsonElement> stream,
         WorkspaceReference reference
     ) => stream.Reduce(reference);
 

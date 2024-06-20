@@ -24,7 +24,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
 
     protected virtual TDataSource This => (TDataSource)this;
 
-    protected ImmutableList<IChangeStream<EntityStore>> Streams { get; set; } = [];
+    protected ImmutableList<ISynchronizationStream<EntityStore>> Streams { get; set; } = [];
 
     public ValueTask<EntityStore> Initialized =>
         Streams
@@ -85,7 +85,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
     }
 
     private async Task InitializeAsync(
-        IChangeStream<EntityStore> stream,
+        ISynchronizationStream<EntityStore> stream,
         CancellationToken cancellationToken
     )
     {
@@ -103,7 +103,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
                 new EntityStore(),
                 (store, selected) => store.Merge(selected.Reference, selected.Initialized), cancellationToken: cancellationToken);
 
-        stream.Initialize(initial);
+        stream.OnNext(new ChangeItem<EntityStore>(stream.Owner, stream.Reference, initial, Id, Hub.Version));
     }
 
     protected virtual WorkspaceReference<EntityStore> GetReference()
