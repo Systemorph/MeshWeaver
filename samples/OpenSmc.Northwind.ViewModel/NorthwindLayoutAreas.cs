@@ -62,7 +62,7 @@ public static class NorthwindLayoutAreas
             .Workspace.GetObservable<Order>()
             .DistinctUntilChanged()
             .Select(x =>
-                x.Select(x => x.OrderDate.Year)
+                x.Select(y => y.OrderDate.Year)
                     .Distinct()
                     .OrderByDescending(year => year)
                     .Select(year => new Option<int>(year, year.ToString()))
@@ -140,7 +140,7 @@ public static class NorthwindLayoutAreas
             .WithOrientation(Orientation.Vertical)
             .WithView(Html("<h2>Customer Summary</h2>"))
             .WithView(a =>
-                a.GetDataStream<NorthwindLayoutAreas.Toolbar>(nameof(Toolbar))
+                a.GetDataStream<Toolbar>(nameof(Toolbar))
                     .Select(tb => $"Year selected: {tb.Year}")
             );
 

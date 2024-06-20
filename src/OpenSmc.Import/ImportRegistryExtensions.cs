@@ -111,7 +111,7 @@ public record ImportDataSource(Source Source, IMessageHub Hub)
                 cancellationToken
             );
 
-            ret.Initialize(state.Store);
+            ret.OnNext(new(ret.Owner, ret.Reference, state.Store, Hub.Address, Hub.Version));
         });
         Streams = Streams.Add(ret);
     }

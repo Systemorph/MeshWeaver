@@ -1,5 +1,4 @@
-using System.Collections.Immutable;
-using System.Reactive.Linq;
+﻿using System.Collections.Immutable;
 using System.Reactive.Subjects;
 using System.Reflection;
 using OpenSmc.Messaging;
@@ -7,13 +6,23 @@ using OpenSmc.Reflection;
 
 namespace OpenSmc.Data.Serialization;
 
-public record ChangeStream<TStream, TReference> : IChangeStream<TStream, TReference>
+public record SynchronizationStream<TStream, TReference> : ISynchronizationStream<TStream, TReference>
     where TReference : WorkspaceReference
 {
     /// <summary>
-    /// Id of the stream, e.g. the Hub Address or Id of datasource.
+    /// Owner of the stream, e.g. the Hub Address or Id of datasource.
     /// </summary>
-    public object Id { get; init; }
+    public object Owner { get; init; }
+
+    /// <summary>
+    /// Who is subscribing to the stream
+    /// </summary>
+    public object Subscriber { get; init; }
+
+    /// <summary>
+    /// The address of the remote party
+    /// </summary>
+    public object RemoteAddress { get; init; }
 
     /// <summary>
     /// The projected reference of the stream, e.g. a collection (CollectionReference),
@@ -33,17 +42,20 @@ public record ChangeStream<TStream, TReference> : IChangeStream<TStream, TRefere
 
     public ReduceManager<TStream> ReduceManager { get; }
 
-    public ChangeStream(
-        object id,
+    public SynchronizationStream(
+        object owner,
+        object subscriber,
         IMessageHub hub,
         TReference reference,
         ReduceManager<TStream> reduceManager
     )
     {
-        Id = id;
+        Owner = owner;
+        Subscriber = subscriber;
         Hub = hub;
         Reference = reference;
         ReduceManager = reduceManager;
+        RemoteAddress = hub.Address.Equals(owner) ? subscriber : owner;
         backfeed = reduceManager.GetBackTransformation<TStream, TReference>();
     }
 
@@ -60,23 +72,30 @@ public record ChangeStream<TStream, TReference> : IChangeStream<TStream, TRefere
 
     private readonly TaskCompletionSource<TStream> initialized = new();
     public Task<TStream> Initialized => initialized.Task;
-    Task IChangeStream.Initialized => initialized.Task;
+    Task ISynchronizationStream.Initialized => initialized.Task;
 
-    object IChangeStream.Reference => Reference;
+    object ISynchronizationStream.Reference => Reference;
 
-    public IChangeStream<TReduced> Reduce<TReduced>(WorkspaceReference<TReduced> reference) =>
-        (IChangeStream<TReduced>)
+    public ISynchronizationStream<TReduced> Reduce<TReduced>(WorkspaceReference<TReduced> reference) =>
+        (ISynchronizationStream<TReduced>)
             ReduceMethod
                 .MakeGenericMethod(typeof(TReduced), reference.GetType())
                 .Invoke(this, [reference]);
 
     private static readonly MethodInfo ReduceMethod = ReflectionHelper.GetMethodGeneric<
-        ChangeStream<TStream, TReference>
+        SynchronizationStream<TStream, TReference>
     >(x => x.Reduce<object, WorkspaceReference<object>>(null));
 
-    private IChangeStream<TReduced> Reduce<TReduced, TReference2>(TReference2 reference)
+    private ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(TReference2 reference)
         where TReference2 : WorkspaceReference<TReduced> =>
-        ReduceManager.ReduceStream<TReduced, TReference2>(this, reference);
+        new SynchronizationStream<TReduced, TReference2>(
+            Owner,
+            Subscriber,
+            Hub,
+            reference,
+            ReduceManager.ReduceTo<TReduced>()
+        );
+
 
     public virtual IDisposable Subscribe(IObserver<ChangeItem<TStream>> observer)
     {
@@ -96,7 +115,6 @@ public record ChangeStream<TStream, TReference> : IChangeStream<TStream, TRefere
     protected ChangeItem<TStream> Current
     {
         get => current;
-        set => SetCurrent(value);
     }
 
     private void SetCurrent(ChangeItem<TStream> value)
@@ -107,8 +125,6 @@ public record ChangeStream<TStream, TReference> : IChangeStream<TStream, TRefere
             initialized.SetResult(value.Value);
     }
 
-    public void Initialize(TStream initial) =>
-        Initialize(new ChangeItem<TStream>(Id, Reference, initial, null, Hub.Version));
 
     private void Initialize(ChangeItem<TStream> initial)
     {
@@ -132,7 +148,7 @@ public record ChangeStream<TStream, TReference> : IChangeStream<TStream, TRefere
 
     public void AddDisposable(IDisposable disposable) => Disposables.Add(disposable);
 
-    IMessageDelivery IChangeStream.DeliverMessage(IMessageDelivery<WorkspaceMessage> delivery)
+    IMessageDelivery ISynchronizationStream.DeliverMessage(IMessageDelivery<WorkspaceMessage> delivery)
     {
         return messageHandlers
                 .Where(x => x.Applies(delivery))

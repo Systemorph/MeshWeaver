@@ -40,7 +40,7 @@ public enum ChangeType
 }
 
 public record DataChangedEvent(
-    object Id,
+    object Owner,
     object Reference,
     long Version,
     RawJson Change,
