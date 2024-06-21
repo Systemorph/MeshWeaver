@@ -6,16 +6,16 @@ public class DeferralContainer : IAsyncDisposable
 {
     private readonly LinkedList<DeferralItem> deferralChain = new();
 
-    public DeferralContainer(AsyncDelivery asyncDelivery)
+    public DeferralContainer(AsyncDelivery asyncDelivery, SyncDelivery failure)
     {
-        deferralChain.AddFirst(new DeferralItem(_ => false, asyncDelivery));
+        deferralChain.AddFirst(new DeferralItem(_ => false, asyncDelivery, failure));
     }
 
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter)
     {
         var deferralItem = deferralChain.First;
 
-        var deliveryLink = new DeferralItem(deferredFilter, deferralItem!.Value.DeliverMessage);
+        var deliveryLink = new DeferralItem(deferredFilter, deferralItem!.Value.DeliverMessage, deferralItem!.Value.Failure);
         deferralChain.AddFirst(deliveryLink);
         return new AnonymousDisposable(deliveryLink.Release);
     }
