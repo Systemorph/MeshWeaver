@@ -85,7 +85,7 @@ public static class LayoutExtensions
     public static IObservable<object> GetDataStream(
         this ISynchronizationStream<JsonElement> stream,
         WorkspaceReference reference
-    ) => stream.Reduce(reference);
+    ) => (IObservable<object>)stream.Reduce(reference, stream.Owner, stream.Subscriber);
 
     public static MessageHubConfiguration AddLayoutClient(
         this MessageHubConfiguration config,

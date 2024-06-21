@@ -186,15 +186,18 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var year = await stream.Reduce(jsonPath).FirstAsync();
         year.Value.Should().BeOfType<JsonElement>().Which.GetInt32().Should().Be(2024);
 
-        stream.Update(ci => new Data.Serialization.ChangeItem<JsonElement>(
-            stream.Owner,
-            stream.Reference,
-            new JsonPatch(PatchOperation.Replace(JsonPointer.Parse(jsonPath.Pointer), 2025)).Apply(
-                ci
-            ),
-            hub.Address,
-            hub.Version
-        ));
+        stream.Update(ci =>
+        {
+            var patch = new JsonPatch(PatchOperation.Replace(JsonPointer.Parse(jsonPath.Pointer), 2025));
+            return new Data.Serialization.ChangeItem<JsonElement>(
+                stream.Owner,
+                stream.Reference,
+                patch.Apply(ci),
+                hub.Address,
+                patch,
+                hub.Version
+            );
+        });
 
         var updatedControls = await stream
             .GetControlStream(reportArea)

@@ -103,7 +103,7 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
                 new EntityStore(),
                 (store, selected) => store.Merge(selected.Reference, selected.Initialized), cancellationToken: cancellationToken);
 
-        stream.OnNext(new ChangeItem<EntityStore>(stream.Owner, stream.Reference, initial, Id, Hub.Version));
+        stream.OnNext(new ChangeItem<EntityStore>(stream.Owner, stream.Reference, initial, Id, null, Hub.Version));
     }
 
     protected virtual WorkspaceReference<EntityStore> GetReference()

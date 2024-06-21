@@ -1,4 +1,5 @@
-﻿using OpenSmc.Activities;
+﻿using Json.Patch;
+using OpenSmc.Activities;
 
 namespace OpenSmc.Data.Serialization;
 
@@ -16,12 +17,13 @@ public record ChangeItem<TStream>(
     object Reference,
     TStream Value,
     object ChangedBy,
+    JsonPatch Patch,
     long Version
 ) : IChangeItem
 {
     object IChangeItem.Value => Value;
     public ChangeItem<TReduced> SetValue<TReduced>(TReduced value) =>
-        new(Owner,  Reference, value, ChangedBy, Version);
+        new(Owner,  Reference, value, ChangedBy, Patch, Version);
 
     public ActivityLog Log { get; init; }
 }

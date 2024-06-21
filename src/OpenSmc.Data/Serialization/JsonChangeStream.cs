@@ -22,7 +22,7 @@ public static class JsonSynchronizationStream
                         json.Hub.Version,
                         new((currentSync = x.Value).Value.ToJsonString()),
                         ChangeType.Full,
-                        null
+                        x.ChangedBy
                     )
                     : json.GetPatch(currentSync.Value, x.Value, x.ChangedBy)
             )
@@ -92,9 +92,16 @@ public static class JsonSynchronizationStream
 
     private static ChangeItem<JsonElement> Parse(this ISynchronizationStream<JsonElement> json, JsonElement state,
         DataChangedEvent request) =>
-        new(json.Owner, json.Reference,
-            request.ChangeType == ChangeType.Full
-                ? JsonDocument.Parse(request.Change.Content).RootElement
-                : JsonSerializer.Deserialize<JsonPatch>(request.Change.Content).Apply(state),
-            request.ChangedBy, json.Hub.Version);
+        request.ChangeType == ChangeType.Full
+            ? new(json.Owner, json.Reference, JsonDocument.Parse(request.Change.Content).RootElement, request.ChangedBy, null, json.Hub.Version)
+            : CreatePatch(json, state, request);
+
+    private static ChangeItem<JsonElement> CreatePatch(ISynchronizationStream<JsonElement> json, JsonElement state, DataChangedEvent request)
+    {
+        var patch = JsonSerializer.Deserialize<JsonPatch>(request.Change.Content);
+
+        return new(json.Owner, json.Reference,
+            patch.Apply(state), request.ChangedBy, patch,
+            json.Hub.Version);
+    }
 }
