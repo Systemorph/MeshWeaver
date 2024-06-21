@@ -1,0 +1,11 @@
+@inherits BlazorView<SplitterPaneControl>
+
+<FluentMultiSplitterPane
+    Collapsible="@ViewModel.Collapsible"
+    Collapsed="@ViewModel.Collapsed"
+    Max="@ViewModel.Max"
+    Min="@ViewModel.Min"
+    Size="@ViewModel.Size"
+    Resizable="@ViewModel.Resizable">
+    <DispatchView ViewModel="@ViewModel.Content" Stream="@Stream" Area="@Area" />
+</FluentMultiSplitterPane>

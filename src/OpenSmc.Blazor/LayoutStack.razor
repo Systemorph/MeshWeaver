@@ -1,13 +1,33 @@
 @inherits BlazorView<LayoutStackControl>
+@{
+#pragma warning disable FluentMultiSplitter
+}
 
-
-@if (Skin == Skins.Toolbar)
+@if (Skin is ToolbarSkin)
 {
-    <FluentToolbar Orientation="@Orientation">
+    <FluentToolbar 
+        Orientation="@Orientation"
+        Style="@Style"
+    >
         @foreach(var (area,viewModel) in Areas){
             <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area"/>
         }
     </FluentToolbar>
+}
+else if (Skin is SplitterSkin splitterSkin)
+{
+    <FluentMultiSplitter 
+        Orientation="@Orientation"
+        BarSize="@splitterSkin.BarSize"
+        Width="@splitterSkin.Width"
+        Height="@splitterSkin.Height"
+        Style="@Style"
+        >
+        @foreach(var (area,viewModel) in Areas){
+            var pane = viewModel is SplitterPaneControl ? viewModel : new SplitterPaneControl(viewModel);
+            <DispatchView ViewModel="@pane" Stream="@Stream" Area="@area" />
+        }
+    </FluentMultiSplitter>
 }
 else
 {
@@ -16,7 +36,7 @@ else
                  VerticalAlignment="@Vertical"
                  VerticalGap="@ViewModel.VerticalGap"
                  HorizontalGap="@ViewModel.HorizontalGap"
-                 Style="@ViewModel.Style?.ToString()">
+                 Style="@Style">
         @foreach (var (area, viewModel) in Areas)
         {
             <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area"/>
@@ -25,6 +45,7 @@ else
 }
 
 @code{
+    private string Style => ViewModel.Style?.ToString();
 
     private Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment Vertical => ViewModel.VerticalAlignment 
         switch

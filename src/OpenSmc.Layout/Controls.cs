@@ -15,7 +15,9 @@ public static class Controls
 
     public static LayoutStackControl Stack() => new();
 
-    public static LayoutStackControl Toolbar() => new LayoutStackControl().WithSkin(Skins.Toolbar);
+    public static SplitterPaneControl SplitterPane(UiControl content) => new(content);
+
+    public static LayoutStackControl Toolbar() => new LayoutStackControl().WithSkin(Skins.Toolbar());
 
     public static SelectControl Select(object item) => new SelectControl(item);
 
