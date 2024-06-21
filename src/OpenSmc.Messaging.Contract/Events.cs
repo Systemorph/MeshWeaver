@@ -2,6 +2,8 @@
 
 namespace OpenSmc.Messaging;
 
+
+
 public record ConnectToHubRequest : IRequest<HubInfo>;
 
 public record DeleteHubRequest(object Address) : IRequest<HubDeleted>;
