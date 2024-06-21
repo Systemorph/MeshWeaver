@@ -58,25 +58,4 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
     }
 
-    [Fact(Skip = "Currently not supported")]
-    public async Task Subscribers()
-    {
-        // arrange: initiate subscription from client to host
-        var client = GetClient();
-        await client.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new HostAddress()));
-        var clientOut = client.AddObservable().Timeout(500.Milliseconds());
-        var clientMessagesTask = clientOut
-            .Select(d => d.Message)
-            .OfType<HelloEvent>()
-            .FirstAsync()
-            .GetAwaiter();
-
-        // act
-        var host = GetHost();
-        host.Post(new HelloEvent(), o => o.WithTarget(MessageTargets.Subscribers));
-
-        // assert
-        var clientMessages = await clientMessagesTask;
-        clientMessages.Should().BeAssignableTo<HelloEvent>();
-    }
 }
