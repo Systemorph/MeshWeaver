@@ -48,7 +48,7 @@ public class RawJsonTest : TestBase
     public void DeserializeToRawJson()
     {
         // arrange
-        var postOptions = new PostOptions(Client.Address, Client)
+        var postOptions = new PostOptions(Client.Address)
             .WithTarget(new HostAddress())
             .WithProperties(
                 new Dictionary<string, object>
