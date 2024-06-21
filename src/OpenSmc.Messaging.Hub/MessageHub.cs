@@ -278,7 +278,7 @@ public sealed class MessageHub<TAddress>
         Func<PostOptions, PostOptions> configure = null
     )
     {
-        var options = new PostOptions(Address, this);
+        var options = new PostOptions(Address);
         if (configure != null)
             options = configure(options);
 

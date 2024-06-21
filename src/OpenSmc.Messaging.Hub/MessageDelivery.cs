@@ -7,8 +7,6 @@ namespace OpenSmc.Messaging;
 
 public abstract record MessageDelivery(object Sender, object Target) : IMessageDelivery
 {
-    protected IMessageHub SenderHub;
-
     public string Id { get; init; } = Guid.NewGuid().AsString();
     public ImmutableDictionary<string, object> Properties { get; init; } = ImmutableDictionary<string, object>.Empty;
     public string State { get; init; } = MessageDeliveryState.Submitted;
@@ -102,7 +100,6 @@ public record MessageDelivery<TMessage>(object Sender, object Target, TMessage M
         : this(options.Sender, options.Target, message)
     {
         Properties = options.Properties;
-        SenderHub = options.SenderHub;
     }
 
     protected override object GetMessage()

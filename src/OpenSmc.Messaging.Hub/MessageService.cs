@@ -41,7 +41,7 @@ public class MessageService : IMessageService
             {
                 var delivery = x.Delivery;
                 logger.LogInformation("An exception occurred processing {message} from {sender} in {address}: {exception}", delivery.Message, delivery.Sender, Address, e);
-                //Post()
+                Post(new DeliveryFailure(x.Delivery, e.ToString()), new PostOptions(Address).ResponseFor(x.Delivery));
                 return Task.CompletedTask;
             }
         });
