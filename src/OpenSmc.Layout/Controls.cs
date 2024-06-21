@@ -36,8 +36,6 @@ public static class Controls
     public static MenuItemControl Button(object title, object icon) =>
         new(title, icon) { Style = "button" };
 
-    public static ExpandControl Expand(object collapsed) => new(collapsed);
-
     public static ExceptionControl Exception(Exception ex) => new(ex.Message, ex.GetType().Name);
 
     public static CodeSampleControl CodeSample(object data) => new(data);
@@ -72,8 +70,6 @@ public static class Controls
     public static RedirectControl Redirect(LayoutAreaReference message, object address) =>
         new(message, address, message.Area);
 
-    public record ExpandControl(object Data)
-        : ExpandableUiControl<ExpandControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);
 
     #region DataBinding
 

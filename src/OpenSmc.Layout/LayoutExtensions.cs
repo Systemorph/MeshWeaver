@@ -60,7 +60,6 @@ public static class LayoutExtensions
                     .Where(t => typeof(IUiControl).IsAssignableFrom(t) && !t.IsAbstract)
             )
             .WithTypes(
-                typeof(MessageAndAddress),
                 typeof(LayoutAreaReference),
                 typeof(DataGridColumn<>), // this is not a control
                 typeof(Option<>) // this is not a control

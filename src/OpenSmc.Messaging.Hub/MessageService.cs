@@ -39,7 +39,9 @@ public class MessageService : IMessageService
             }
             catch (Exception e)
             {
-                logger.LogError(e, "Error when calling DeferMessage");
+                var delivery = x.Delivery;
+                logger.LogInformation("An exception occurred processing {message} from {sender} in {address}: {exception}", delivery.Message, delivery.Sender, Address, e);
+                //Post()
                 return Task.CompletedTask;
             }
         });
