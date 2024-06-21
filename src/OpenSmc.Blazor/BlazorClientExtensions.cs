@@ -45,6 +45,7 @@ public static class BlazorClientExtensions
             DataGridControl gc => StandardView<DataGridControl, DataGrid>(gc, stream, area),
             SelectControl select => StandardView<SelectControl, SelectView>(select, stream, area),
             SplitterPaneControl splitter => StandardView<SplitterPaneControl, SplitterPane>(splitter, stream, area),
+            LayoutGridItemControl gridItem => StandardView<LayoutGridItemControl, LayoutGridItem>(gridItem, stream, area),
             _ => DelegateToDotnetInteractive(instance, stream, area),
         };
     }

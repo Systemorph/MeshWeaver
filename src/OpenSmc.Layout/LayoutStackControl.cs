@@ -76,6 +76,7 @@ public static class Skins
 {
     public static ToolbarSkin Toolbar() => new();
     public static SplitterSkin Splitter() => new();
+    public static GridSkin Grid() => new();
 }
 
 public record ToolbarSkin : Skin;
@@ -111,4 +112,62 @@ public record SplitterPaneControl(UiControl Content)
     public SplitterPaneControl WithMin(string min) => this with { Min = min };
     public SplitterPaneControl WithResizable(bool resizable) => this with { Resizable = resizable };
     public SplitterPaneControl WithSize(string size) => this with { Size = size };
+}
+
+public record GridSkin : Skin
+{
+    public bool AdaptiveRendering { get; init; }
+    public JustifyContent Justify { get; init; }
+    public int Spacing { get; init; }
+
+    public GridSkin WithAdaptiveRendering(bool adaptiveRendering) => this with { AdaptiveRendering = adaptiveRendering };
+    public GridSkin WithJustify(JustifyContent justify) => this with { Justify = justify };
+    public GridSkin WithSpacing(int spacing) => this with { Spacing = spacing };
+}
+
+public record LayoutGridItemControl(UiControl Content)
+    : UiControl<LayoutGridItemControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
+{
+    public bool? AdaptiveRendering { get; init; }
+    public JustifyContent Justify { get; init; }
+    public LayoutGridItemHidden HiddenWhen { get; init; }
+    public string Gap { get; init; }
+    public int? Lg { get; init; }
+    public int? Md { get; init; }
+    public int? Sm { get; init; }
+    public int? Xl { get; init; }
+    public int? Xs { get; init; }
+    public int? Xxl { get; init;}
+
+    public LayoutGridItemControl WithAdaptiveRendering(bool adaptiveRendering) => this with { AdaptiveRendering = adaptiveRendering };
+    public LayoutGridItemControl WithGap(string gap) => this with { Gap = gap };
+    public LayoutGridItemControl WithLg(int lg) => this with { Lg = lg };
+    public LayoutGridItemControl WithMd(int md) => this with { Md = md };
+    public LayoutGridItemControl WithSm(int sm) => this with { Sm = sm };
+    public LayoutGridItemControl WithXl(int xl) => this with { Xl = xl };
+    public LayoutGridItemControl WithXs(int xs) => this with { Xs = xs };
+    public LayoutGridItemControl WithXxl(int xxl) => this with { Xxl = xxl };
+}
+
+public enum LayoutGridItemHidden
+{
+    None,
+    Xs,
+    XsAndDown,
+    Sm,
+    SmAndDown,
+    Md,
+    MdAndDown,
+    Lg,
+    LgAndDown,
+    Xl,
+    XlAndDown,
+    Xxl,
+    XxlAndUp,
+    XlAndUp,
+    LgAndUp,
+    MdAndUp,
+    SmAndUp,
+    XxlAndDown,
+    XsAndUp
 }

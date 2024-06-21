@@ -76,32 +76,20 @@ public static class NorthwindLayoutAreas
             .WithOrientation(Orientation.Horizontal)
             .WithView(
                 Stack()
-                    .WithOrientation(Orientation.Vertical)
-                    .WithView("Toolbar", Toolbar()
-                        .WithStyle(style => style.WithWidth("100%"))
-                        .WithView(area =>
-                            years.Select(y => area.Bind(new Toolbar(y.Max(x => x.Item)), nameof(Toolbar),
-                                tb => Select(tb.Year).WithOptions(y)))
+                    .WithSkin(Skins.Grid())
+                    .WithView("Toolbar", 
+                        LayoutGridItem(Toolbar()
+                                .WithView(area => years.Select(y => area.Bind(new Toolbar(y.Max(x => x.Item)), nameof(Toolbar),
+                                        tb => Select(tb.Year).WithOptions(y)))
+                                )
                             )
+                            .WithXs(12)
                     )
-                    .WithView(
-                        "MainContent", 
-                        Stack()
-                                .WithView(
-                                    Stack()
-                                        .WithOrientation(Orientation.Horizontal)
-                                        .WithView(OrderSummary())
-                                        .WithView(ProductSummary())
-                                )
-                                .WithView(
-                                    Stack()
-                                        .WithOrientation(Orientation.Horizontal)
-                                        .WithView(CustomerSummary())
-                                        .WithView(SupplierSummary())
-                                )
-                            )
-                    
-                )
+                    .WithView(LayoutGridItem(OrderSummary()).WithXs(12).WithSm(6))
+                    .WithView(LayoutGridItem(ProductSummary()).WithXs(12).WithSm(6))
+                    .WithView(LayoutGridItem(CustomerSummary()).WithXs(12).WithSm(6))
+                    .WithView(LayoutGridItem(SupplierSummary()).WithXs(12).WithSm(6))
+            )
             .WithView(
                 "ContextPanel", 
                 SplitterPane(Html("<h3>Context panel</h3>"))
