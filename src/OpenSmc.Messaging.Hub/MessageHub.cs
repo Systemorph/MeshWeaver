@@ -233,6 +233,9 @@ public sealed class MessageHub<TAddress>
         async Task<IMessageDelivery> ResolveCallback(IMessageDelivery d, CancellationToken ct)
         {
             var ret = await callback(d, ct);
+
+            if (d.Message is DeliveryFailure failure) 
+                tcs.SetException(new DeliveryFailureException(failure));
             tcs.SetResult(ret);
             return ret;
         }
