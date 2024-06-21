@@ -6,29 +6,36 @@ using OpenSmc.Reflection;
 
 namespace OpenSmc.Data.Serialization;
 
-public record SynchronizationStream<TStream, TReference> : ISynchronizationStream<TStream, TReference>
+public record SynchronizationStream<TStream, TReference>(
+    object Owner,
+    object Subscriber,
+    IMessageHub Hub,
+    TReference Reference,
+    ReduceManager<TStream> ReduceManager,
+    InitializationMode InitializationMode)
+    : ISynchronizationStream<TStream, TReference>
     where TReference : WorkspaceReference
 {
     /// <summary>
     /// Owner of the stream, e.g. the Hub Address or Id of datasource.
     /// </summary>
-    public object Owner { get; init; }
+    public object Owner { get; init; } = Owner;
 
     /// <summary>
-    /// Who is subscribing to the stream
+    /// The subscriber of the stream, e.g. the Hub Address or Id of the subscriber.
     /// </summary>
-    public object Subscriber { get; init; }
+    public object Subscriber { get; init; } = Subscriber;
 
     /// <summary>
     /// The address of the remote party
     /// </summary>
-    public object RemoteAddress { get; init; }
+    public object RemoteAddress { get; init; } = Owner.Equals(Hub.Address) ? Subscriber : Owner;
 
     /// <summary>
     /// The projected reference of the stream, e.g. a collection (CollectionReference),
     /// a layout area (LayoutAreaReference), etc.
     /// </summary>
-    public TReference Reference { get; init; }
+    public TReference Reference { get; init; } = Reference;
 
     /// <summary>
     /// My current state deserialized as snapshot
@@ -40,25 +47,6 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
     /// </summary>
     protected readonly ReplaySubject<ChangeItem<TStream>> Store = new(1);
 
-    public ReduceManager<TStream> ReduceManager { get; }
-
-    public SynchronizationStream(
-        object owner,
-        object subscriber,
-        IMessageHub hub,
-        TReference reference,
-        ReduceManager<TStream> reduceManager
-    )
-    {
-        Owner = owner;
-        Subscriber = subscriber;
-        Hub = hub;
-        Reference = reference;
-        ReduceManager = reduceManager;
-        RemoteAddress = hub.Address.Equals(owner) ? subscriber : owner;
-        backfeed = reduceManager.GetBackTransformation<TStream, TReference>();
-    }
-
     private readonly ImmutableArray<(
         Func<IMessageDelivery<WorkspaceMessage>, bool> Applies,
         Func<IMessageDelivery<WorkspaceMessage>, IMessageDelivery> Process
@@ -66,36 +54,36 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
         Func<IMessageDelivery<WorkspaceMessage>, bool> Applies,
         Func<IMessageDelivery<WorkspaceMessage>, IMessageDelivery> Process
     )>.Empty;
-    private readonly BackTransformation<TReference, TStream> backfeed;
 
-    public IMessageHub Hub { get; }
 
     private readonly TaskCompletionSource<TStream> initialized = new();
+    public ISynchronizationStream<TReduced> GetClient<TReduced>(WorkspaceReference<TReduced> reference, object host)
+    {
+        throw new NotImplementedException();
+    }
+
     public Task<TStream> Initialized => initialized.Task;
+
+    public InitializationMode InitializationMode { get; } = InitializationMode;
+
     Task ISynchronizationStream.Initialized => initialized.Task;
 
     object ISynchronizationStream.Reference => Reference;
 
-    public ISynchronizationStream<TReduced> Reduce<TReduced>(WorkspaceReference<TReduced> reference) =>
+
+    public ISynchronizationStream<TReduced> Reduce<TReduced>(WorkspaceReference<TReduced> reference, object owner, object subscriber) =>
         (ISynchronizationStream<TReduced>)
             ReduceMethod
                 .MakeGenericMethod(typeof(TReduced), reference.GetType())
-                .Invoke(this, [reference]);
+                .Invoke(this, [reference, owner, subscriber]);
 
     private static readonly MethodInfo ReduceMethod = ReflectionHelper.GetMethodGeneric<
         SynchronizationStream<TStream, TReference>
-    >(x => x.Reduce<object, WorkspaceReference<object>>(null));
+    >(x => x.Reduce<object, WorkspaceReference<object>>(null, null, null));
 
-    private ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(TReference2 reference)
+    private ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(TReference2 reference, object owner, object subscriber)
         where TReference2 : WorkspaceReference<TReduced> =>
-        new SynchronizationStream<TReduced, TReference2>(
-            Owner,
-            Subscriber,
-            Hub,
-            reference,
-            ReduceManager.ReduceTo<TReduced>()
-        );
-
+        ReduceManager.ReduceStream<TReduced, TReference2>(this,reference, owner, subscriber);
 
     public virtual IDisposable Subscribe(IObserver<ChangeItem<TStream>> observer)
     {
@@ -126,7 +114,7 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
     }
 
 
-    private void Initialize(ChangeItem<TStream> initial)
+    public virtual void Initialize(ChangeItem<TStream> initial)
     {
         if (initial == null)
             throw new ArgumentNullException(nameof(initial));
@@ -158,31 +146,26 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
     }
 
     public void Update(Func<TStream, ChangeItem<TStream>> update)
-    {
-        if (!initialized.Task.IsCompleted)
-            Initialize(update(default));
-        else
-        {
-            SetCurrent(update(Current.Value));
-        }
-    }
+        => NotifyChange(update);
 
     public void OnNext(ChangeItem<TStream> value)
     {
-        SetCurrent(value);
+        NotifyChange(_ => value);
     }
 
-    public DataChangeResponse RequestChange(Func<TStream, ChangeItem<TStream>> update)
+    public virtual DataChangeResponse RequestChange(Func<TStream, ChangeItem<TStream>> update)
     {
-        SetCurrent(update(Current.Value));
-        return Backfeed(update);
-    }
-
-    protected DataChangeResponse Backfeed(Func<TStream, ChangeItem<TStream>> update)
-    {
-        if (backfeed != null)
-            return Hub.GetWorkspace()
-                .RequestChange(state => backfeed(state, Reference, update(Current.Value)));
+        SetCurrent(update.Invoke(Current.Value));
         return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, null);
     }
+    public virtual void NotifyChange(Func<TStream, ChangeItem<TStream>> update)
+    {
+        if (Current != null)
+            SetCurrent(update.Invoke(Current.Value));
+        else if (InitializationMode == InitializationMode.Automatic)
+            Initialize(update(default));
+    }
+
+
+
 }

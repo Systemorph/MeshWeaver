@@ -69,30 +69,37 @@ namespace OpenSmc.Blazor
         protected void UpdatePointer<T>(T value, JsonPointerReference reference)
         {
             if (reference != null)
-                Stream.Update(ci => new ChangeItem<JsonElement>(
-                    Stream.Owner,
-                    Stream.Reference,
-                    ApplyPatch(value, reference, ci),
-                    Hub.Address,
-                    Hub.Version
-                ));
+                Stream.Update(ci =>
+                {
+                    var patch = GetPatch(value, reference, ci);
+
+                    return new ChangeItem<JsonElement>(
+                        Stream.Owner,
+                        Stream.Reference,
+                        patch?.Apply(ci) ?? ci,
+                        Hub.Address,
+                        patch,
+                        Hub.Version
+                    );
+                });
         }
 
-        private JsonElement ApplyPatch<T>(T value, JsonPointerReference reference, JsonElement current)
+        private JsonPatch GetPatch<T>(T value, JsonPointerReference reference, JsonElement current)
         {
             var pointer = JsonPointer.Parse(reference.Pointer);
 
             var existing = pointer.Evaluate(current);
             if (value == null) 
                 return existing == null 
-                    ? current 
-                    : new JsonPatch(PatchOperation.Remove(pointer)).Apply(current);
+                    ? null 
+                    : new JsonPatch(PatchOperation.Remove(pointer));
 
             var valueSerialized = JsonSerializer.SerializeToNode(value, Hub.JsonSerializerOptions);
 
-            return existing == null 
-                ? new JsonPatch(PatchOperation.Add(pointer, valueSerialized)).Apply(current) 
-                : new JsonPatch(PatchOperation.Replace(pointer, valueSerialized)).Apply(current);
+            return existing == null
+                ? new JsonPatch(PatchOperation.Add(pointer, valueSerialized))
+                : new JsonPatch(PatchOperation.Replace(pointer, valueSerialized))
+            ;
         }
 
         public void ResetBindings()

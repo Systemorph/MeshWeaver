@@ -164,3 +164,5 @@ public record PartitionedCollectionsReference(
 
     public override string ToString() => Path;
 }
+
+public record JsonElementReference : WorkspaceReference<JsonElement>;

@@ -35,7 +35,13 @@ public record LayoutArea : IDisposable
             LayoutAreaReference.Areas,
             instances => instances.Update(area, ConvertToControl(control))
         );
-        return new(Stream.Owner, Stream.Reference, newStore, Stream.Owner, Stream.Hub.Version);
+        return new(
+            Stream.Owner, 
+            Stream.Reference, 
+            newStore, 
+            Stream.Owner,
+            null, // todo we can fill this in here and use.
+            Stream.Hub.Version);
     }
 
     public LayoutArea(
@@ -56,6 +62,7 @@ public record LayoutArea : IDisposable
                 Stream.Reference,
                 (ws ?? new()).Update(LayoutAreaReference.Data, i => i.Update(id, data)),
                 Stream.Owner,
+                null, // todo we can fill this in here and use.
                 Stream.Hub.Version
             )
         );
