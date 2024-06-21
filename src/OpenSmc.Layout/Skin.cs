@@ -1,6 +1,6 @@
 ﻿namespace OpenSmc.Layout;
 
-public static class Skin
+public record Skin
 {
     public const string Modal = nameof(Modal);
     public const string ContextMenu = nameof(ContextMenu);

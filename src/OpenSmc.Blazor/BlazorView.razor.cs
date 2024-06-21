@@ -20,12 +20,12 @@ namespace OpenSmc.Blazor
             base.OnParametersSet();
             if (ViewModel != null)
             {
-                DataBind<string>(ViewModel.Skin, x => Skin = x);
+                DataBind<Skin>(ViewModel.Skin, x => Skin = x);
                 DataBind<string>(ViewModel.Label, x => Label = x);
             }
         }
 
-        protected string Skin { get; set; }
+        protected Skin Skin { get; set; }
 
         protected string Label { get; set; }
 

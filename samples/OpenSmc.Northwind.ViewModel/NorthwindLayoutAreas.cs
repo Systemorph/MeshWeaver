@@ -72,21 +72,41 @@ public static class NorthwindLayoutAreas
                 .DistinctUntilChanged();
 
         return Stack()
-            .WithOrientation(Orientation.Vertical)
-            .WithView(Html("<h1>Northwind Dashboard</h1>"))
-            .WithView("Toolbar",
-    area => years.Select(y => area.Bind(new Toolbar(y.Max(x => x.Item)), nameof(Toolbar), tb => Controls.Select(tb.Year).WithOptions(y)))
-            )
-            .WithView(Stack().WithOrientation(Orientation.Horizontal)
-                .WithView(OrderSummary())
-                .WithView(ProductSummary())
-            )
-            .WithView(Stack().WithOrientation(Orientation.Horizontal)
-                .WithView(CustomerSummary())
-                .WithView(SupplierSummary())
-            )
-            ;
-
+            .WithSkin(Skins.Splitter())
+            .WithOrientation(Orientation.Horizontal)
+            .WithView(
+                Stack()
+                    .WithOrientation(Orientation.Vertical)
+                    .WithView("Toolbar", Toolbar()
+                        .WithStyle(style => style.WithWidth("100%"))
+                        .WithView(area =>
+                            years.Select(y => area.Bind(new Toolbar(y.Max(x => x.Item)), nameof(Toolbar),
+                                tb => Select(tb.Year).WithOptions(y)))
+                            )
+                    )
+                    .WithView(
+                        "MainContent", 
+                        Stack()
+                                .WithView(
+                                    Stack()
+                                        .WithOrientation(Orientation.Horizontal)
+                                        .WithView(OrderSummary())
+                                        .WithView(ProductSummary())
+                                )
+                                .WithView(
+                                    Stack()
+                                        .WithOrientation(Orientation.Horizontal)
+                                        .WithView(CustomerSummary())
+                                        .WithView(SupplierSummary())
+                                )
+                            )
+                    
+                )
+            .WithView(
+                "ContextPanel", 
+                SplitterPane(Html("<h3>Context panel</h3>"))
+                        .WithCollapsible(true)
+            );
     }
     
     private static LayoutStackControl SupplierSummary() =>

@@ -74,5 +74,41 @@ public record LayoutStackControl()
 
 public static class Skins
 {
-    public const string Toolbar = nameof(Toolbar);
+    public static ToolbarSkin Toolbar() => new();
+    public static SplitterSkin Splitter() => new();
+}
+
+public record ToolbarSkin : Skin;
+
+public record SplitterSkin : Skin
+{
+    public string BarSize { get; init; }
+    public string Width { get; init; }
+    public string Height { get; init; }
+
+    public SplitterSkin WithBarSize(string barSize) => this with { BarSize = barSize };
+
+    public SplitterSkin WithWidth(string width) => this with { Width = width };
+
+    public SplitterSkin WithHeight(string height) => this with { Height = height };
+}
+
+public record SplitterPaneControl(UiControl Content)
+    : UiControl<SplitterPaneControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
+{
+    public bool Collapsible { get; init; }
+    public bool Collapsed { get; init; }
+
+    public string Max { get; init; }
+    public string Min { get; init; }
+    public bool Resizable { get; init; } = true;
+
+    public string Size { get; init; }
+
+    public SplitterPaneControl WithCollapsible(bool collapsible) => this with { Collapsible = collapsible };
+    public SplitterPaneControl WithCollapsed(bool collapsed) => this with { Collapsed = collapsed };
+    public SplitterPaneControl WithMax(string max) => this with { Max = max };
+    public SplitterPaneControl WithMin(string min) => this with { Min = min };
+    public SplitterPaneControl WithResizable(bool resizable) => this with { Resizable = resizable };
+    public SplitterPaneControl WithSize(string size) => this with { Size = size };
 }
