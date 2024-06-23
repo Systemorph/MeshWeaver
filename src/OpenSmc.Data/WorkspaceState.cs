@@ -40,16 +40,20 @@ public record WorkspaceState(
         ReduceManager.Reduce(this, reference);
 
     internal EntityStore ReduceImpl(PartitionedCollectionsReference reference) =>
-        new()
-        {
-            Collections = ((EntityStore)Reduce((dynamic)reference.Collections))
-                .Collections.Select(c => new KeyValuePair<string, InstanceCollection>(
-                    c.Key,
-                    GetPartitionedCollection(c.Key, reference.Partition, c.Value)
-                ))
-                .Where(x => x.Value != null)
-                .ToImmutableDictionary()
-        };
+        reference
+            .Reference.Collections.Select(x => TypeSources.GetValueOrDefault(x))
+            .GroupBy(x => x is IPartitionedTypeSource)
+            .Select(g =>
+                g.Key
+                    ? Store.Reduce(
+                        new PartitionedCollectionsReference(
+                            new(g.Select(x => x.CollectionName).ToArray()),
+                            reference.Partition
+                        )
+                    )
+                    : Reduce(reference.Reference)
+            )
+            .Aggregate((x, y) => x.Merge(y));
 
     private InstanceCollection GetPartitionedCollection(
         string collection,
