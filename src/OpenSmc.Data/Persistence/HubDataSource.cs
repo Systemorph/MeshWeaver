@@ -30,10 +30,20 @@ public record PartitionedHubDataSource(object Id, IMessageHub Hub)
         throw new NotSupportedException("Please use method with partition");
     }
 
-    protected WorkspaceReference<EntityStore> GetReference(object partition)
+    protected PartitionedCollectionsReference GetReference(object partition)
     {
-        var ret = new PartitionedCollectionsReference(GetReference(), partition);
-        return ret;
+        if (TypeSources.Count != 1)
+            throw new NotSupportedException("Only one type is supported");
+
+        return new PartitionedCollectionsReference(GetReference(), partition);
+    }
+
+    private string GetCollectionName()
+    {
+        if (TypeSources.Count != 1)
+            throw new NotSupportedException("Only one type is supported");
+
+        return TypeSources.Values.First().CollectionName;
     }
 
     public PartitionedHubDataSource InitializingPartitions(IEnumerable<object> partitions) =>

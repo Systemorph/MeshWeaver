@@ -43,13 +43,9 @@ public sealed record DataContext(IMessageHub Hub) : IAsyncDisposable
             InitializationTimeout = timeout
         };
 
-
-    public DataContext ConfigureReduction(Func<ReduceManager<WorkspaceState>, ReduceManager<WorkspaceState>> change) =>
-        this with
-        {
-            ReduceManager = change.Invoke(ReduceManager)
-        };
-
+    public DataContext ConfigureReduction(
+        Func<ReduceManager<WorkspaceState>, ReduceManager<WorkspaceState>> change
+    ) => this with { ReduceManager = change.Invoke(ReduceManager) };
 
     public delegate IDataSource DataSourceBuilder(IMessageHub hub);
 
@@ -79,20 +75,23 @@ public sealed record DataContext(IMessageHub Hub) : IAsyncDisposable
             .AddWorkspaceReference<CollectionsReference, EntityStore>(
                 (ws, reference) => ws.Store.ReduceImpl(reference)
             )
-            .AddWorkspaceReference<WorkspaceStoreReference, EntityStore>(
-                (ws, _) => ws.Store
+            .AddWorkspaceReference<WorkspaceStoreReference, EntityStore>((ws, _) => ws.Store)
+            .AddWorkspaceReference<WorkspaceStateReference, WorkspaceState>((ws, _) => ws)
+            .AddBackTransformation<EntityStore>(
+                (ws, reference, update) =>
+                    update.SetValue(ws with { Store = ws.Store.Update(reference, update.Value) })
             )
-            .AddWorkspaceReference<WorkspaceStateReference, WorkspaceState>(
-                (ws, _) => ws
+            .AddBackTransformation<WorkspaceState>(
+                (ws, _, update) =>
+                    update.SetValue(ws with { Store = ws.Store.Merge(update.Value.Store) })
             )
-            .AddBackTransformation<EntityStore>((ws, reference, update) =>
-                update.SetValue(ws with { Store = ws.Store.Update(reference, update.Value) })
+            .AddBackTransformation<InstanceCollection>(
+                (ws, reference, update) =>
+                    update.SetValue(ws with { Store = ws.Store.Update(reference, update.Value) })
             )
-            .AddBackTransformation<WorkspaceState>((ws, _, update) =>
-                update.SetValue(ws with { Store = ws.Store.Merge(update.Value.Store) })
-            )
-            .AddBackTransformation<InstanceCollection>((ws, reference, update) =>
-                update.SetValue(ws with { Store = ws.Store.Update(reference, update.Value) })
+            .AddBackTransformation<PartitionedCollectionsReference>(
+                (ws, reference, update) =>
+                    update.SetValue(ws with { Store = ws.Store.Update(reference, update.Value) })
             )
             .ForReducedStream<EntityStore>(reduced =>
                 reduced
@@ -105,18 +104,25 @@ public sealed record DataContext(IMessageHub Hub) : IAsyncDisposable
                     .AddWorkspaceReference<CollectionsReference, EntityStore>(
                         (ws, reference) => ws.ReduceImpl(reference)
                     )
-                    .AddWorkspaceReference<WorkspaceStoreReference, EntityStore>(
-                        (ws, _) => ws)
-                    .AddBackTransformation<JsonElement>((current,_ , change) => PatchEntityStore(current,change, hub.JsonSerializerOptions))
+                    .AddWorkspaceReference<CollectionsReference, EntityStore>(
+                        (ws, reference) => ws.ReduceImpl(reference)
+                    )
+                    .AddWorkspaceReference<WorkspaceStoreReference, EntityStore>((ws, _) => ws)
+                    .AddBackTransformation<JsonElement>(
+                        (current, _, change) =>
+                            PatchEntityStore(current, change, hub.JsonSerializerOptions)
+                    )
             )
             .ForReducedStream<InstanceCollection>(reduced =>
                 reduced.AddWorkspaceReference<EntityReference, object>(
                     (ws, reference) => ws.Instances.GetValueOrDefault(reference.Id)
                 )
-
             )
-            .ForReducedStream<JsonElement>(conf => conf.AddWorkspaceReference<JsonPointerReference, JsonElement?>(ReduceJsonPointer));
+            .ForReducedStream<JsonElement>(conf =>
+                conf.AddWorkspaceReference<JsonPointerReference, JsonElement?>(ReduceJsonPointer)
+            );
     }
+
     private static JsonElement? ReduceJsonPointer(JsonElement obj, JsonPointerReference pointer)
     {
         var parsed = JsonPointer.Parse(pointer.Pointer);
@@ -132,9 +138,13 @@ public sealed record DataContext(IMessageHub Hub) : IAsyncDisposable
         }
     }
 
-    private static ChangeItem<EntityStore> PatchEntityStore(EntityStore current, ChangeItem<JsonElement> changeItem,  JsonSerializerOptions options)
+    private static ChangeItem<EntityStore> PatchEntityStore(
+        EntityStore current,
+        ChangeItem<JsonElement> changeItem,
+        JsonSerializerOptions options
+    )
     {
-        if(changeItem.Patch is not null)
+        if (changeItem.Patch is not null)
             foreach (var op in changeItem.Patch.Operations)
             {
                 switch (op.Path.Segments.Length)
@@ -145,8 +155,14 @@ public sealed record DataContext(IMessageHub Hub) : IAsyncDisposable
                         current = UpdateCollection(current, op, op.Path.Segments[0].Value, options);
                         break;
                     default:
-                        current = UpdateInstance(current, changeItem.Value, op, op.Path.Segments[0].Value,
-                            op.Path.Segments[1].Value, options);
+                        current = UpdateInstance(
+                            current,
+                            changeItem.Value,
+                            op,
+                            op.Path.Segments[0].Value,
+                            op.Path.Segments[1].Value,
+                            options
+                        );
                         break;
                 }
             }
@@ -160,14 +176,22 @@ public sealed record DataContext(IMessageHub Hub) : IAsyncDisposable
         PatchOperation op,
         string collection,
         string idSerialized,
-        JsonSerializerOptions options)
+        JsonSerializerOptions options
+    )
     {
         var id = JsonSerializer.Deserialize<object>(idSerialized.Replace("~1", "/"), options);
         switch (op.Op)
         {
             case OperationType.Add:
             case OperationType.Replace:
-                return current.Update(collection, i => i.Update(id, GetDeserializedValue(collection, idSerialized, currentJson, options)));
+                return current.Update(
+                    collection,
+                    i =>
+                        i.Update(
+                            id,
+                            GetDeserializedValue(collection, idSerialized, currentJson, options)
+                        )
+                );
             case OperationType.Remove:
                 return current.Update(collection, i => i.Remove(id));
             default:
@@ -175,25 +199,37 @@ public sealed record DataContext(IMessageHub Hub) : IAsyncDisposable
         }
     }
 
-    private static object GetDeserializedValue(string collection, string idSerialized, JsonElement currentJson, JsonSerializerOptions options)
+    private static object GetDeserializedValue(
+        string collection,
+        string idSerialized,
+        JsonElement currentJson,
+        JsonSerializerOptions options
+    )
     {
         var pointer = JsonPointer.Parse($"/{collection}/{idSerialized}");
         var el = pointer.Evaluate(currentJson);
         return el?.Deserialize<object>(options);
     }
 
-    private static EntityStore UpdateCollection(EntityStore current, PatchOperation op, string collection, JsonSerializerOptions options)
+    private static EntityStore UpdateCollection(
+        EntityStore current,
+        PatchOperation op,
+        string collection,
+        JsonSerializerOptions options
+    )
     {
         switch (op.Op)
         {
             case OperationType.Add:
             case OperationType.Replace:
-                return current.Update(collection, _ => op.Value.Deserialize<InstanceCollection>(options));
+                return current.Update(
+                    collection,
+                    _ => op.Value.Deserialize<InstanceCollection>(options)
+                );
             case OperationType.Remove:
                 return current.Remove(collection);
             default:
                 throw new NotSupportedException();
         }
     }
-
 }

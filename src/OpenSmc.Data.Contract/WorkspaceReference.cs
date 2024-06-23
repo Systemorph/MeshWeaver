@@ -32,7 +32,9 @@ public record EntityStore
         var reduced = (InstanceCollection)Reduce(reference);
         var collectionName = reference switch
         {
-            CollectionReference collectionReference => collectionReference.Collection,
+            CollectionReference collectionReference => collectionReference.Name,
+            PartitionedCollectionsReference collectionReference
+                => collectionReference.CollectionName,
             _
                 => throw new NotSupportedException(
                     $"reducer type {reference.GetType().FullName} not supported"
@@ -41,7 +43,7 @@ public record EntityStore
         return this with
         {
             Collections = Collections.SetItem(
-                ((CollectionReference)reference).Collection,
+                ((CollectionReference)reference).Name,
                 reduced == null ? updated : reduced.Merge(updated)
             )
         };
@@ -66,7 +68,12 @@ public record EntityStore
             EntityReference entityReference
                 => Update(entityReference.Collection, c => c.Update(entityReference.Id, value)),
             CollectionReference collectionReference
-                => Update(collectionReference.Collection, c => c.Merge((InstanceCollection)value)),
+                => Update(collectionReference.Name, c => c.Merge((InstanceCollection)value)),
+            PartitionedCollectionsReference partitionedReference
+                => Update(
+                    partitionedReference.CollectionName,
+                    c => c.Merge((InstanceCollection)value)
+                ),
             WorkspaceReference<EntityStore> collectionsReference => Merge((EntityStore)value),
 
             _
@@ -90,7 +97,10 @@ public record EntityStore
         GetCollection(reference.Collection)?.GetData(reference.Id);
 
     internal InstanceCollection ReduceImpl(CollectionReference reference) =>
-        GetCollection(reference.Collection);
+        GetCollection(reference.Name);
+
+    internal InstanceCollection ReduceImpl(PartitionedCollectionsReference reference) =>
+        GetCollection(reference.CollectionName);
 
     internal EntityStore ReduceImpl(CollectionsReference reference) =>
         this with
@@ -109,10 +119,7 @@ public record EntityStore
 
     public EntityStore Remove(string collection)
     {
-        return this with
-        {
-            Collections = Collections.Remove(collection)
-        };
+        return this with { Collections = Collections.Remove(collection) };
     }
 }
 
@@ -123,23 +130,23 @@ public record JsonPointerReference(string Pointer) : WorkspaceReference<JsonElem
 
 public record InstanceReference(object Id) : WorkspaceReference<object>
 {
-    public virtual string Path => $"$.['{Id}']";
+    public virtual string Pointer => $"$.['{Id}']";
 
-    public override string ToString() => Path;
+    public override string ToString() => Pointer;
 }
 
 public record EntityReference(string Collection, object Id) : InstanceReference(Id)
 {
-    public override string Path => $"$.['{Collection}']['{Id}']";
+    public override string Pointer => $"/{Collection}/'{Id}'";
 
-    public override string ToString() => Path;
+    public override string ToString() => Pointer;
 }
 
-public record CollectionReference(string Collection) : WorkspaceReference<InstanceCollection>
+public record CollectionReference(string Name) : WorkspaceReference<InstanceCollection>
 {
-    public string Path => $"$['{Collection}']";
+    public string Pointer => $"/{Name}";
 
-    public override string ToString() => Path;
+    public override string ToString() => Pointer;
 }
 
 public record CollectionsReference(IReadOnlyCollection<string> Collections)
@@ -155,14 +162,14 @@ public record CollectionsReference(IReadOnlyCollection<string> Collections)
     public override int GetHashCode() => Collections.Aggregate(17, (a, b) => a ^ b.GetHashCode());
 }
 
-public record PartitionedCollectionsReference(
-    WorkspaceReference<EntityStore> Collections,
-    object Partition
-) : WorkspaceReference<EntityStore>
+public record PartitionedCollectionsReference(CollectionsReference Reference, object Partition)
+    : WorkspaceReference<EntityStore>
 {
-    public string Path => $"{Collections}@{Partition}";
+    public string CollectionName => $"{Reference}@{Partition}".Replace("/", "_");
 
-    public override string ToString() => Path;
+    public string Pointer => $"/{CollectionName}";
+
+    public override string ToString() => Pointer;
 }
 
 public record JsonElementReference : WorkspaceReference<JsonElement>;

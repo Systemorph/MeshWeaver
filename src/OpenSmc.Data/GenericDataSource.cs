@@ -48,7 +48,6 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
     public ITypeSource GetTypeSource(string collectionName) =>
         TypeSources.Values.FirstOrDefault(x => x.CollectionName == collectionName);
 
-
     public ITypeSource GetTypeSource(Type type) => TypeSources.GetValueOrDefault(type);
 
     public virtual TDataSource WithType(Type type, Func<ITypeSource, ITypeSource> config) =>
@@ -101,18 +100,24 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
             })
             .AggregateAsync(
                 new EntityStore(),
-                (store, selected) => store.Merge(selected.Reference, selected.Initialized), cancellationToken: cancellationToken);
+                (store, selected) => store.Merge(selected.Reference, selected.Initialized),
+                cancellationToken: cancellationToken
+            );
 
-        stream.OnNext(new ChangeItem<EntityStore>(stream.Owner, stream.Reference, initial, Id, null, Hub.Version));
-    }
-
-    protected virtual WorkspaceReference<EntityStore> GetReference()
-    {
-        WorkspaceReference<EntityStore> collections = new CollectionsReference(
-            TypeSources.Values.Select(ts => ts.CollectionName).ToArray()
+        stream.OnNext(
+            new ChangeItem<EntityStore>(
+                stream.Owner,
+                stream.Reference,
+                initial,
+                Id,
+                null,
+                Hub.Version
+            )
         );
-        return collections;
     }
+
+    protected virtual CollectionsReference GetReference() =>
+        new CollectionsReference(TypeSources.Values.Select(ts => ts.CollectionName).ToArray());
 
     public virtual ValueTask DisposeAsync()
     {
