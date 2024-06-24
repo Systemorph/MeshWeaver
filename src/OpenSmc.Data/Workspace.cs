@@ -37,9 +37,8 @@ public class Workspace : IWorkspace
         DataContext.Initialized.ContinueWith(task =>
         {
             logger.LogDebug("Finished initialization of data context of address {address}", Id);
-            stream.Initialize(
-                new(Hub.Address, Reference, task.Result, Hub.Address, null, Hub.Version)
-            );
+            current = new(Hub.Address, Reference, task.Result, Hub.Address, null, Hub.Version);
+            stream.Initialize(current);
             initialized.SetResult();
         });
     }

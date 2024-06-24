@@ -136,7 +136,8 @@ public record WorkspaceState(
         object Id,
         object Reference,
         ImmutableDictionary<object, object> Elements,
-        string Collection
+        string Collection,
+        ITypeSource TypeSource
     )> MapToIdAndAddress(IEnumerable<object> e, Type type)
     {
         if (
@@ -152,7 +153,8 @@ public record WorkspaceState(
                 dataSource.Id,
                 dataSource.Reference,
                 e.ToImmutableDictionary(x => ts.GetKey(x)),
-                GetCollectionName(type)
+                GetCollectionName(type),
+                ts
             );
         else
             foreach (var partition in e.GroupBy(x => partitioned.GetPartition(x)))
@@ -160,7 +162,8 @@ public record WorkspaceState(
                     partition.Key,
                     dataSource.Reference,
                     partition.ToImmutableDictionary(x => ts.GetKey(x)),
-                    GetCollectionName(type)
+                    GetCollectionName(type),
+                    ts
                 );
     }
 
@@ -177,7 +180,7 @@ public record WorkspaceState(
                 StoresByStream.TryGetValue(e.Key, out var existing)
                     ? e.Aggregate(
                         existing,
-                        (s, c) => s.Update(c.Collection, v => v.Remove(c.Elements))
+                        (s, c) => s.Update(c.Collection, v => v.Remove(c.Elements.Keys))
                     )
                     : null
             ))
