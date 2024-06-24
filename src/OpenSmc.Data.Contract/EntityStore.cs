@@ -13,12 +13,32 @@ public record EntityStore
     public ImmutableDictionary<string, InstanceCollection> Collections { get; init; } =
         ImmutableDictionary<string, InstanceCollection>.Empty;
 
-    public EntityStore Merge(EntityStore updated) =>
+    public EntityStore Merge(EntityStore updated) => Merge(updated, UpdateOptions.Default);
+
+    public EntityStore Merge(EntityStore updated, Func<UpdateOptions, UpdateOptions> options) =>
         this with
         {
-            Collections = updated
-                .Collections.Concat(Collections.Where(x => !updated.Collections.ContainsKey(x.Key)))
-                .ToImmutableDictionary()
+            Collections = Collections.SetItems(
+                options.Invoke(new()).Snapshot
+                    ? updated.Collections
+                    : updated.Collections.Select(c => new KeyValuePair<string, InstanceCollection>(
+                        c.Key,
+                        Collections.GetValueOrDefault(c.Key)?.Merge(c.Value) ?? c.Value
+                    ))
+            )
+        };
+
+    public EntityStore Merge(EntityStore updated, UpdateOptions options) =>
+        this with
+        {
+            Collections = Collections.SetItems(
+                options.Snapshot
+                    ? updated.Collections
+                    : updated.Collections.Select(c => new KeyValuePair<string, InstanceCollection>(
+                        c.Key,
+                        Collections.GetValueOrDefault(c.Key)?.Merge(c.Value) ?? c.Value
+                    ))
+            )
         };
 
     public EntityStore Update(
@@ -33,7 +53,14 @@ public record EntityStore
             )
         };
 
-    public EntityStore Update(WorkspaceReference reference, object value)
+    public EntityStore Update(WorkspaceReference reference, object value) =>
+        Update(reference, value, x => x);
+
+    public EntityStore Update(
+        WorkspaceReference reference,
+        object value,
+        Func<UpdateOptions, UpdateOptions> options
+    )
     {
         return reference switch
         {
@@ -47,8 +74,9 @@ public record EntityStore
                     Collections = Collections.SetItems(((EntityStore)value).Collections)
                 },
             PartitionedCollectionsReference partitionedReference
-                => Update(partitionedReference.Reference, value),
-            WorkspaceReference<EntityStore> collectionsReference => Merge((EntityStore)value),
+                => Update(partitionedReference.Reference, value, options),
+            WorkspaceReference<EntityStore> collectionsReference
+                => Merge((EntityStore)value, options),
 
             _
                 => throw new NotSupportedException(
