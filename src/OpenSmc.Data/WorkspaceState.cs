@@ -1,9 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
-using System.Security.Cryptography.X509Certificates;
-using AngleSharp.Common;
-using Json.Pointer;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
@@ -69,21 +66,94 @@ public record WorkspaceState(
 
     #endregion
 
-    public WorkspaceState Update(
-        (object Id, object Reference) key,
-        Func<EntityStore, EntityStore> update
-    ) =>
-        this with
-        {
-            StoresByStream = StoresByStream.SetItem(
-                key,
-                update.Invoke(StoresByStream.GetValueOrDefault(key) ?? new())
-            ),
-            Version = Hub.Version
-        };
+    // public WorkspaceState Update(
+    //     (object Id, object Reference) key,
+    //     Func<EntityStore, EntityStore> update
+    // )
+    // {
+    //     return this with
+    //         {
+    //             StoresByStream = StoresByStream.SetItem(
+    //                 key,
+    //                 update.Invoke(StoresByStream.GetValueOrDefault(key) ?? new())
+    //             ),
+    //             Version = Hub.Version
+    //         };
+    //}
 
     public WorkspaceState Update(IReadOnlyCollection<object> instances, UpdateOptions options) =>
         Change(new UpdateDataRequest(instances) { Options = options });
+
+    public WorkspaceState Update(WorkspaceReference reference, EntityStore entityStore) =>
+        reference switch
+        {
+            PartitionedCollectionsReference part
+                => this with
+                {
+                    StoresByStream = StoresByStream.SetItems(
+                        entityStore
+                            .Collections.Select(x => new
+                            {
+                                TypeSource = TypeSources.GetValueOrDefault(x.Key),
+                                Instances = x.Value,
+                                DataSource = GetDataSource(x.Key)
+                            })
+                            .Where(x => x.TypeSource != null)
+                            .SelectMany(x =>
+                                x.Instances.Instances.Select(i => new
+                                    {
+                                        Partition = x.TypeSource is IPartitionedTypeSource p
+                                            ? p.GetPartition(x)
+                                            : x.DataSource.Id,
+                                        EntityId = i.Key,
+                                        Entity = i.Value,
+                                        x.TypeSource,
+                                        x.DataSource
+                                    })
+                                    .Where(x => x.Partition != null)
+                                    .GroupBy(x => (x.Partition, x.DataSource.Reference))
+                                    .Select(x => new KeyValuePair<
+                                        (object Id, object Reference),
+                                        EntityStore
+                                    >(
+                                        x.Key,
+                                        new EntityStore(
+                                            x.GroupBy(y => y.TypeSource.CollectionName)
+                                                .ToDictionary(
+                                                    y => y.Key,
+                                                    y => new InstanceCollection(
+                                                        y.ToDictionary(z => z.Entity, z => z.Entity)
+                                                    )
+                                                )
+                                        )
+                                    ))
+                            )
+                    ),
+                    Version = Hub.Version
+                },
+            _
+                => this with
+                {
+                    StoresByStream = StoresByStream.SetItems(
+                        entityStore
+                            .Collections.Select(x => new
+                            {
+                                DataSource = GetDataSource(x.Key),
+                                Collection = x.Key,
+                                Instances = x.Value
+                            })
+                            .GroupBy(x => x.DataSource)
+                            .Select(x => new KeyValuePair<
+                                (object Id, object Reference),
+                                EntityStore
+                            >(
+                                (x.Key.Id, x.Key.Reference),
+                                new EntityStore(x.ToDictionary(y => y.Collection, x => x.Instances))
+                            ))
+                    ),
+                    Version = Hub.Version
+                },
+        };
 
     public WorkspaceState Change(DataChangedRequest request)
     {
@@ -250,17 +320,23 @@ public record WorkspaceState(
 
     internal EntityStore ReduceImpl(CollectionsReference reference)
     {
-        return reference
-            .Collections.Select(x => new { DataSource = GetDataSource(x), Collection = x })
-            .GroupBy(x => x.DataSource)
-            .Select(x => new
-            {
-                DataSource = x.Key,
-                Store = StoresByStream
-                    .GetValueOrDefault((x.Key.Id, x.Key.Reference))
-                    ?.ReduceImpl(new CollectionsReference(x.Select(y => y.Collection).ToArray())),
-            })
-            .Aggregate(new EntityStore(), (store, el) => store.Merge(el.Store));
+        return new(
+            reference
+                .Collections.Select(x => new { DataSource = GetDataSource(x), Collection = x })
+                .GroupBy(x => x.DataSource)
+                .Select(x => new
+                {
+                    DataSource = x.Key,
+                    Store = StoresByStream
+                        .GetValueOrDefault((x.Key.Id, x.Key.Reference))
+                        ?.ReduceImpl(
+                            new CollectionsReference(x.Select(y => y.Collection).ToArray())
+                        ),
+                })
+                .Where(x => x.Store != null)
+                .SelectMany(x => x.Store.Collections)
+                .ToImmutableDictionary()
+        );
     }
 
     public WorkspaceState Merge(WorkspaceState that) =>

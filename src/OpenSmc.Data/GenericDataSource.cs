@@ -119,7 +119,7 @@ public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorksp
         var reference = GetReference();
         var stream = Workspace.GetStream(Hub.Address, reference);
         Streams = Streams.Add(stream);
-        stream.Skip(1).Subscribe(Synchronize);
+        stream.Skip(1).Subscribe(e => Synchronize(e));
         Hub.Schedule(cancellationToken => InitializeAsync(stream, cancellationToken));
 
         base.Initialize(state);
