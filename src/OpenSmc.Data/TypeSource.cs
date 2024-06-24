@@ -107,18 +107,17 @@ public static class KeyFunctionBuilder
 public abstract record TypeSource<TTypeSource> : ITypeSource
     where TTypeSource : TypeSource<TTypeSource>
 {
-    protected TypeSource(IMessageHub hub, Type ElementType, object DataSource)
+    protected TypeSource(IWorkspace workspace, Type ElementType, object DataSource)
     {
-        this.hub = hub;
         this.ElementType = ElementType;
         this.DataSource = DataSource;
-        var typeRegistry = hub
-            .ServiceProvider.GetRequiredService<ITypeRegistry>()
+        Workspace = workspace;
+        var typeRegistry = Workspace
+            .Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()
             .WithType(ElementType);
         CollectionName = typeRegistry.TryGetTypeName(ElementType, out var typeName)
             ? typeName
             : ElementType.FullName;
-        Workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
         Key = KeyFunctionBuilder.GetKeyFunction(ElementType);
     }
 
@@ -139,7 +138,6 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
     }
 
     private IDisposable workspaceSubscription;
-    private readonly IMessageHub hub;
 
     protected virtual InstanceCollection UpdateImpl(InstanceCollection myCollection) =>
         myCollection;

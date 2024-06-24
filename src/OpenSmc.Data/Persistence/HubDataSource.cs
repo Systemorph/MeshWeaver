@@ -5,8 +5,8 @@ using OpenSmc.Messaging.Serialization;
 
 namespace OpenSmc.Data.Persistence;
 
-public record PartitionedHubDataSource(object Id, IMessageHub Hub)
-    : HubDataSourceBase<PartitionedHubDataSource>(Id, Hub)
+public record PartitionedHubDataSource(object Id, IWorkspace Workspace)
+    : HubDataSourceBase<PartitionedHubDataSource>(Id, Workspace)
 {
     public PartitionedHubDataSource WithType<T>(Func<T, object> partitionFunction) =>
         WithType(partitionFunction, x => x);
@@ -22,7 +22,9 @@ public record PartitionedHubDataSource(object Id, IMessageHub Hub)
     ) =>
         WithTypeSource(
             typeof(T),
-            typeSource.Invoke(new PartitionedTypeSourceWithType<T>(Hub, partitionFunction, Id))
+            typeSource.Invoke(
+                new PartitionedTypeSourceWithType<T>(Workspace, partitionFunction, Id)
+            )
         );
 
     protected override PartitionedHubDataSource WithType<T>(Func<ITypeSource, ITypeSource> config)
@@ -54,7 +56,7 @@ public record PartitionedHubDataSource(object Id, IMessageHub Hub)
 
     private object[] InitializePartitions { get; init; } = Array.Empty<object>();
 
-    public override void Initialize()
+    public override void Initialize(WorkspaceState state)
     {
         foreach (var partition in InitializePartitions)
         {
@@ -70,8 +72,8 @@ public abstract record HubDataSourceBase<TDataSource> : DataSource<TDataSource>
     private readonly ITypeRegistry typeRegistry;
     protected JsonSerializerOptions Options => Hub.JsonSerializerOptions;
 
-    protected HubDataSourceBase(object Id, IMessageHub Hub)
-        : base(Id, Hub)
+    protected HubDataSourceBase(object Id, IWorkspace Workspace)
+        : base(Id, Workspace)
     {
         typeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
     }
@@ -84,16 +86,17 @@ public record HubDataSource : HubDataSourceBase<HubDataSource>
 
     public HubDataSource WithType<T>(
         Func<TypeSourceWithType<T>, TypeSourceWithType<T>> typeSource
-    ) => WithTypeSource(typeof(T), typeSource.Invoke(new TypeSourceWithType<T>(Hub, Id)));
+    ) => WithTypeSource(typeof(T), typeSource.Invoke(new TypeSourceWithType<T>(Workspace, Id)));
 
-    public HubDataSource(object Id, IMessageHub Hub)
-        : base(Id, Hub) { }
+    public HubDataSource(object Id, IWorkspace Workspace)
+        : base(Id, Workspace) { }
 
-    public override void Initialize()
+    public override void Initialize(WorkspaceState state)
     {
         var reference = new CollectionsReference(
             TypeSources.Values.Select(ts => ts.CollectionName).ToArray()
         );
         Streams = Streams.Add(Workspace.GetStream(Id, reference));
+        base.Initialize(state);
     }
 }

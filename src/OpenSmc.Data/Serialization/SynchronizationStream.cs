@@ -12,8 +12,8 @@ public record SynchronizationStream<TStream, TReference>(
     IMessageHub Hub,
     TReference Reference,
     ReduceManager<TStream> ReduceManager,
-    InitializationMode InitializationMode)
-    : ISynchronizationStream<TStream, TReference>
+    InitializationMode InitializationMode
+) : ISynchronizationStream<TStream, TReference>
     where TReference : WorkspaceReference
 {
     /// <summary>
@@ -55,9 +55,12 @@ public record SynchronizationStream<TStream, TReference>(
         Func<IMessageDelivery<WorkspaceMessage>, IMessageDelivery> Process
     )>.Empty;
 
-
     private readonly TaskCompletionSource<TStream> initialized = new();
-    public ISynchronizationStream<TReduced> GetClient<TReduced>(WorkspaceReference<TReduced> reference, object host)
+
+    public ISynchronizationStream<TReduced> GetClient<TReduced>(
+        WorkspaceReference<TReduced> reference,
+        object host
+    )
     {
         throw new NotImplementedException();
     }
@@ -70,8 +73,11 @@ public record SynchronizationStream<TStream, TReference>(
 
     object ISynchronizationStream.Reference => Reference;
 
-
-    public ISynchronizationStream<TReduced> Reduce<TReduced>(WorkspaceReference<TReduced> reference, object owner, object subscriber) =>
+    public ISynchronizationStream<TReduced> Reduce<TReduced>(
+        WorkspaceReference<TReduced> reference,
+        object owner,
+        object subscriber
+    ) =>
         (ISynchronizationStream<TReduced>)
             ReduceMethod
                 .MakeGenericMethod(typeof(TReduced), reference.GetType())
@@ -81,9 +87,13 @@ public record SynchronizationStream<TStream, TReference>(
         SynchronizationStream<TStream, TReference>
     >(x => x.Reduce<object, WorkspaceReference<object>>(null, null, null));
 
-    private ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(TReference2 reference, object owner, object subscriber)
+    private ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
+        TReference2 reference,
+        object owner,
+        object subscriber
+    )
         where TReference2 : WorkspaceReference<TReduced> =>
-        ReduceManager.ReduceStream<TReduced, TReference2>(this,reference, owner, subscriber);
+        ReduceManager.ReduceStream<TReduced, TReference2>(this, reference, owner, subscriber);
 
     public virtual IDisposable Subscribe(IObserver<ChangeItem<TStream>> observer)
     {
@@ -113,7 +123,6 @@ public record SynchronizationStream<TStream, TReference>(
             initialized.SetResult(value.Value);
     }
 
-
     public virtual void Initialize(ChangeItem<TStream> initial)
     {
         if (initial == null)
@@ -136,7 +145,9 @@ public record SynchronizationStream<TStream, TReference>(
 
     public void AddDisposable(IDisposable disposable) => Disposables.Add(disposable);
 
-    IMessageDelivery ISynchronizationStream.DeliverMessage(IMessageDelivery<WorkspaceMessage> delivery)
+    IMessageDelivery ISynchronizationStream.DeliverMessage(
+        IMessageDelivery<WorkspaceMessage> delivery
+    )
     {
         return messageHandlers
                 .Where(x => x.Applies(delivery))
@@ -145,8 +156,7 @@ public record SynchronizationStream<TStream, TReference>(
                 ?.Invoke(delivery) ?? delivery;
     }
 
-    public void Update(Func<TStream, ChangeItem<TStream>> update)
-        => NotifyChange(update);
+    public void Update(Func<TStream, ChangeItem<TStream>> update) => NotifyChange(update);
 
     public void OnNext(ChangeItem<TStream> value)
     {
@@ -158,6 +168,7 @@ public record SynchronizationStream<TStream, TReference>(
         SetCurrent(update.Invoke(Current.Value));
         return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, null);
     }
+
     public virtual void NotifyChange(Func<TStream, ChangeItem<TStream>> update)
     {
         if (Current != null)
@@ -165,7 +176,4 @@ public record SynchronizationStream<TStream, TReference>(
         else if (InitializationMode == InitializationMode.Automatic)
             Initialize(update(default));
     }
-
-
-
 }

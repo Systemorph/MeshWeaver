@@ -15,7 +15,7 @@ public delegate TReduced ReduceFunction<in TStream, in TReference, out TReduced>
 
 public delegate ChangeItem<TStream> PatchFunction<TStream, TReduced>(
     TStream current,
-    WorkspaceReference reference,
+    ISynchronizationStream<TStream> stream,
     ChangeItem<TReduced> change
 );
 

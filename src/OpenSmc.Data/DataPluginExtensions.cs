@@ -11,10 +11,8 @@ namespace OpenSmc.Data;
 
 public static class DataPluginExtensions
 {
-    public static MessageHubConfiguration AddData(
-        this MessageHubConfiguration config
-    )
-        => config.AddData(x => x);
+    public static MessageHubConfiguration AddData(this MessageHubConfiguration config) =>
+        config.AddData(x => x);
 
     public static MessageHubConfiguration AddData(
         this MessageHubConfiguration config,
@@ -28,11 +26,6 @@ public static class DataPluginExtensions
             .WithSerialization(serialization =>
                 serialization.WithOptions(options =>
                 {
-                    if (!options.Converters.Any(c => c is WorkspaceStateConverter))
-                        options.Converters.Insert(
-                            0,
-                            new WorkspaceStateConverter(serialization.Hub)
-                        );
                     if (!options.Converters.Any(c => c is EntityStoreConverter))
                         options.Converters.Insert(
                             0,
@@ -74,44 +67,42 @@ public static class DataPluginExtensions
             ?? ImmutableList<Func<DataContext, DataContext>>.Empty;
     }
 
-    internal static DataContext GetDataConfiguration(this IMessageHub hub)
+    internal static DataContext GetDataConfiguration(this IWorkspace workspace)
     {
-        var dataPluginConfig = hub.Configuration.GetListOfLambdas();
-        var ret = new DataContext(hub);
+        var dataPluginConfig = workspace.Hub.Configuration.GetListOfLambdas();
+        var ret = new DataContext(workspace.Hub, workspace);
         foreach (var func in dataPluginConfig)
             ret = func.Invoke(ret);
         return ret;
     }
 
     public static DataContext FromPartitionedHubs(
-        this DataContext dataSource,
+        this DataContext dataContext,
         object id,
         Func<PartitionedHubDataSource, PartitionedHubDataSource> configuration
     ) =>
-        dataSource.WithDataSourceBuilder(
+        dataContext.WithDataSourceBuilder(
             id,
-            hub => configuration.Invoke(new PartitionedHubDataSource(id, hub))
+            hub => configuration.Invoke(new PartitionedHubDataSource(id, dataContext.Workspace))
         );
 
     public static DataContext FromHub(
-        this DataContext dataSource,
+        this DataContext dataContext,
         object address,
         Func<HubDataSource, HubDataSource> configuration
     ) =>
-        dataSource.WithDataSourceBuilder(
+        dataContext.WithDataSourceBuilder(
             address,
-            hub => configuration.Invoke(new HubDataSource(address, hub))
+            hub => configuration.Invoke(new HubDataSource(address, dataContext.Workspace))
         );
 
     public static DataContext FromConfigurableDataSource(
-        this DataContext dataSource,
+        this DataContext dataContext,
         object address,
         Func<GenericDataSource, GenericDataSource> configuration
     ) =>
-        dataSource.WithDataSourceBuilder(
+        dataContext.WithDataSourceBuilder(
             address,
-            hub => configuration.Invoke(new GenericDataSource(address, hub))
+            hub => configuration.Invoke(new GenericDataSource(address, dataContext.Workspace))
         );
-
-
 }

@@ -17,8 +17,6 @@ public interface IWorkspace : IAsyncDisposable
     void Delete(object instance) => Delete([instance]);
 
     void Rollback();
-    WorkspaceState CreateState(EntityStore deserialize);
-    internal void Initialize();
     void Unsubscribe(object address, WorkspaceReference reference);
     internal DataChangeResponse RequestChange(
         DataChangedRequest change,
@@ -34,7 +32,9 @@ public interface IWorkspace : IAsyncDisposable
         object address,
         WorkspaceReference<TReduced> reference
     );
-    ISynchronizationStream<TReduced, TReference> GetStream<TReduced, TReference>(TReference reference)
+    ISynchronizationStream<TReduced, TReference> GetStream<TReduced, TReference>(
+        TReference reference
+    )
         where TReference : WorkspaceReference;
 
     ISynchronizationStream<TReduced, TReference> GetStream<TReduced, TReference>(

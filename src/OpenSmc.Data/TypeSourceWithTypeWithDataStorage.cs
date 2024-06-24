@@ -10,11 +10,11 @@ public record TypeSourceWithTypeWithDataStorage<T>
     where T : class
 {
     public TypeSourceWithTypeWithDataStorage(
-        IMessageHub hub,
+        IWorkspace Workspace,
         object DataSource,
         IDataStorage Storage
     )
-        : base(hub, DataSource)
+        : base(Workspace, DataSource)
     {
         this.Storage = Storage;
     }

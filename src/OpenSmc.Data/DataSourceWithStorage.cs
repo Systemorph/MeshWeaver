@@ -12,17 +12,17 @@ public interface IDataSourceWithStorage
 
 public abstract record DataSourceWithStorage<TDataSource>(
     object Id,
-    IMessageHub Hub,
+    IWorkspace Workspace,
     IDataStorage Storage
-) : DataSource<TDataSource>(Id, Hub), IDataSourceWithStorage
+) : TypeSourceBasedDataSource<TDataSource>(Id, Workspace), IDataSourceWithStorage
     where TDataSource : DataSourceWithStorage<TDataSource>
 {
-    private readonly IMessageHub persistenceHub = Hub.ServiceProvider.CreateMessageHub(
-        new PersistenceAddress(Hub.Address),
+    private readonly IMessageHub persistenceHub = Workspace.Hub.ServiceProvider.CreateMessageHub(
+        new PersistenceAddress(Workspace.Hub.Address),
         c => c
     );
 
-    private readonly ILogger logger = Hub.ServiceProvider.GetRequiredService<
+    private readonly ILogger logger = Workspace.Hub.ServiceProvider.GetRequiredService<
         ILogger<TDataSource>
     >();
 
