@@ -196,8 +196,8 @@ public record WorkspaceState(
             )
             .Select(e => new KeyValuePair<(object Id, object Reference), EntityStore>(
                 e.Key,
-                !request.Options.Snapshot && StoresByStream.TryGetValue(e.Key, out var existing)
-                    ? existing.Merge(e.Store)
+                StoresByStream.TryGetValue(e.Key, out var existing)
+                    ? existing.Merge(e.Store, request.Options ?? UpdateOptions.Default)
                     : e.Store
             ));
     }
@@ -310,7 +310,7 @@ public record WorkspaceState(
             .Select(x =>
                 GetStore(x.Key, new CollectionsReference(x.Select(y => y.Collection).ToArray()))
             )
-            .Aggregate((store, el) => store.Merge(el));
+            .Aggregate((store, el) => store.Merge(el, x => x));
 
     internal InstanceCollection ReduceImpl(CollectionReference reference)
     {
