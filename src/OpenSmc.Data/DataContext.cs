@@ -247,7 +247,7 @@ public sealed record DataContext : IAsyncDisposable
                         )
                 );
             case OperationType.Remove:
-                return current.Update(collection, i => i.Remove(id));
+                return current.Update(collection, i => i.Remove([id]));
             default:
                 throw new NotSupportedException();
         }
