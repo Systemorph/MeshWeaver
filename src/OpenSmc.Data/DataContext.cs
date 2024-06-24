@@ -124,28 +124,10 @@ public sealed record DataContext : IAsyncDisposable
             .AddWorkspaceReference<WorkspaceStateReference, WorkspaceState>((ws, _) => ws)
             .AddBackTransformation<EntityStore>(
                 (ws, stream, update) =>
-                    update.SetValue(ws.Update((stream.Owner, stream.Reference), _ => update.Value))
+                    update.SetValue(ws.Update((WorkspaceReference)stream.Reference, update.Value))
             )
             .AddBackTransformation<WorkspaceState>(
                 (ws, _, update) => update.SetValue(ws.Merge(update.Value))
-            )
-            .AddBackTransformation<InstanceCollection>(
-                (ws, stream, update) =>
-                    update.SetValue(
-                        ws.Update(
-                            (stream.Owner, stream.Reference),
-                            store => store.Update((WorkspaceReference)stream.Reference, update)
-                        )
-                    )
-            )
-            .AddBackTransformation<PartitionedCollectionsReference>(
-                (ws, stream, update) =>
-                    update.SetValue(
-                        ws.Update(
-                            (stream.Owner, stream.Reference),
-                            store => store.Update((WorkspaceReference)stream.Reference, update)
-                        )
-                    )
             )
             .ForReducedStream<EntityStore>(reduced =>
                 reduced
@@ -175,6 +157,13 @@ public sealed record DataContext : IAsyncDisposable
             .ForReducedStream<JsonElement>(conf =>
                 conf.AddWorkspaceReference<JsonPointerReference, JsonElement?>(ReduceJsonPointer)
             );
+    }
+
+    private static string GetCollectionName(object reference)
+    {
+        return reference is CollectionReference coll
+            ? coll.Name
+            : throw new NotSupportedException();
     }
 
     private static JsonElement? ReduceJsonPointer(JsonElement obj, JsonPointerReference pointer)
