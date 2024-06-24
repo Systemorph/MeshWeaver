@@ -301,8 +301,8 @@ public record WorkspaceState(
             .Reference.Collections.Select(c => TypeSources.GetValueOrDefault(c))
             .Select(ts => new
             {
-                Id = ts is IPartitionedTypeSource partitioned
-                    ? partitioned.GetPartition(reference.Partition)
+                Id = ts is IPartitionedTypeSource
+                    ? reference.Partition
                     : DataSources.GetValueOrDefault(ts.ElementType).Id,
                 Collection = ts.CollectionName
             })
