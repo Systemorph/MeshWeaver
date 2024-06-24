@@ -63,6 +63,8 @@ public record PartitionedHubDataSource(object Id, IWorkspace Workspace)
             var reference = GetReference(partition);
             Streams = Streams.Add(Workspace.GetStream(partition, reference));
         }
+
+        base.Initialize(state);
     }
 }
 

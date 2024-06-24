@@ -41,11 +41,11 @@ public sealed record DataContext : IAsyncDisposable
     {
         var dict = await DataSources
             .Values.ToAsyncEnumerable()
-            .SelectAwait(async ds => new KeyValuePair<(object Id, object Reference), EntityStore>(
-                (ds.Id, ds.Reference),
-                await ds.Initialized
-            ))
-            .ToArrayAsync();
+            .SelectAwait(async ds => await ds.Initialized)
+            .AggregateAsync(
+                ImmutableDictionary<(object Id, object Reference), EntityStore>.Empty,
+                (acc, x) => acc.SetItems(x)
+            );
 
         return new WorkspaceState(
             Hub,
@@ -57,7 +57,7 @@ public sealed record DataContext : IAsyncDisposable
             ReduceManager
         )
         {
-            StoresByStream = dict.ToImmutableDictionary()
+            StoresByStream = dict
         };
     }
 
