@@ -1,8 +1,6 @@
-﻿using System.Collections.Immutable;
-using System.Data;
+﻿using System.Data;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.Messaging;
@@ -42,9 +40,10 @@ public static class ImportExtensions
         var source = new EmbeddedResource(typeof(T).Assembly, resource);
         return dataContext.WithDataSourceBuilder(
             source,
-            hub => ConfigureDataSource(configuration, hub, source)
+            hub => ConfigureDataSource(configuration, dataContext.Workspace, source)
         );
     }
+
     public static DataContext FromEmbeddedResource<T>(
         this DataContext dataContext,
         EmbeddedResource resource,
@@ -53,17 +52,17 @@ public static class ImportExtensions
     {
         return dataContext.WithDataSourceBuilder(
             resource,
-            hub => ConfigureDataSource(configuration, hub, resource)
+            hub => ConfigureDataSource(configuration, dataContext.Workspace, resource)
         );
     }
 
     private static ImportDataSource ConfigureDataSource(
         Func<ImportDataSource, ImportDataSource> configuration,
-        IMessageHub hub,
+        IWorkspace workspace,
         EmbeddedResource source
     )
     {
-        var ret = configuration.Invoke(new(source, hub));
+        var ret = configuration.Invoke(new(source, workspace));
 
         var mappedTypes = ret.MappedTypes;
         if (!mappedTypes.Any())
@@ -79,49 +78,3 @@ public static class ImportExtensions
 }
 
 public record EmbeddedResource(Assembly Assembly, string Resource) : Source;
-
-public record ImportDataSource(Source Source, IMessageHub Hub)
-    : GenericDataSource<ImportDataSource>(Source, Hub)
-{
-    private ILogger logger = Hub.ServiceProvider.GetRequiredService<ILogger<ImportDataSource>>();
-    private ImportRequest ImportRequest { get; init; } = new(Source);
-
-    public ImportDataSource WithRequest(Func<ImportRequest, ImportRequest> config) =>
-        this with
-        {
-            ImportRequest = config.Invoke(ImportRequest)
-        };
-
-    public override void Initialize()
-    {
-        var config = new ImportConfiguration(
-            Hub,
-            MappedTypes,
-            Hub.ServiceProvider.GetRequiredService<ILogger<ImportDataSource>>()
-        );
-        config = Configurations.Aggregate(config, (c, f) => f.Invoke(c));
-        ImportManager importManager = new(config);
-        var ret = Workspace.GetStream(Id, GetReference());
-        Hub.Schedule(async cancellationToken =>
-        {
-            var (state, hasError) = await importManager.ImportAsync(
-                ImportRequest,
-                Workspace.CreateState(Workspace.State?.Store),
-                logger,
-                cancellationToken
-            );
-
-            ret.OnNext(new(ret.Owner, ret.Reference, state.Store, Hub.Address, null, Hub.Version));
-        });
-        Streams = Streams.Add(ret);
-    }
-
-    private ImmutableList<
-        Func<ImportConfiguration, ImportConfiguration>
-    > Configurations { get; init; } =
-        ImmutableList<Func<ImportConfiguration, ImportConfiguration>>.Empty;
-
-    public ImportDataSource WithImportConfiguration(
-        Func<ImportConfiguration, ImportConfiguration> config
-    ) => this with { Configurations = Configurations.Add(config) };
-}
