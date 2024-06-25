@@ -24,13 +24,14 @@ public static class JsonSynchronizationStream
                         ChangeType.Full,
                         x.ChangedBy
                     )
-                    : json.GetPatch(currentSync.Value, x.Value, x.ChangedBy)
+                    : json.GetPatch(reference, currentSync.Value, x.Value, x.ChangedBy)
             )
             .Where(x => x != null);
     }
 
     private static DataChangedEvent GetPatch(
         this ISynchronizationStream stream,
+        object reference,
         JsonElement currentSync,
         JsonElement serialized,
         object changedBy
@@ -41,7 +42,7 @@ public static class JsonSynchronizationStream
             return null;
         return new DataChangedEvent(
             stream.Owner,
-            stream.Reference,
+            reference,
             stream.Hub.Version,
             new(JsonSerializer.Serialize(jsonPatch, stream.Hub.JsonSerializerOptions)),
             ChangeType.Patch,
