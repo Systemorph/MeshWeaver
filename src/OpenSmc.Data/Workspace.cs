@@ -23,7 +23,7 @@ public class Workspace : IWorkspace
 
         stream = new SynchronizationStream<WorkspaceState, WorkspaceReference>(
             Hub.Address,
-            Hub.Address,
+            new object(),
             Hub,
             new WorkspaceStateReference(),
             DataContext.ReduceManager,

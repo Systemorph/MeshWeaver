@@ -27,10 +27,12 @@ namespace OpenSmc.Data
         {
             this.parent = parent;
             backTransform = parent.ReduceManager.GetPatchFunction<TReduced>();
+
             if(backTransform != null)
                 AddDisposable(
                     this.Where(value => RemoteAddress.Equals(value.ChangedBy))
                         .Subscribe(UpdateParent));
+
         }
 
         public override DataChangeResponse RequestChange(

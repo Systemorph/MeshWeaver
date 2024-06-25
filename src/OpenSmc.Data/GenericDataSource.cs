@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Reflection;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
@@ -84,14 +85,6 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
             )
         };
 
-    protected virtual void Synchronize(ChangeItem<EntityStore> item)
-    {
-        if (item.ChangedBy == null || Id.Equals(item.ChangedBy))
-            return;
-
-        foreach (var typeSource in TypeSources.Values)
-            typeSource.Update(item);
-    }
 
     public CollectionsReference Reference => GetReference();
 
@@ -131,16 +124,26 @@ public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorksp
     public override void Initialize(WorkspaceState state)
     {
         var reference = GetReference();
+
+        var workspaceSync = Workspace.GetStream(Hub.Address, reference);
+
         var stream = new ChainedSynchronizationStream<EntityStore, CollectionsReference, EntityStore>(
-            Workspace.GetStream(Hub.Address, reference),
+            workspaceSync,
             Id,
             Hub.Address,
             reference
         );
 
+        stream.AddDisposable(workspaceSync);
+        stream.AddDisposable(workspaceSync.Where(x => !Id.Equals(x.ChangedBy)).Subscribe(Synchronize));
         Streams = Streams.Add(stream);
         Hub.Schedule(cancellationToken => InitializeAsync(stream, cancellationToken));
         base.Initialize(state);
+    }
+    protected virtual void Synchronize(ChangeItem<EntityStore> item)
+    {
+        foreach (var typeSource in TypeSources.Values)
+            typeSource.Update(item);
     }
 
     private async Task InitializeAsync(
