@@ -1,5 +1,4 @@
-using System.Collections.Immutable;
-using System.Security.Cryptography;
+﻿using System.Collections.Immutable;
 
 namespace OpenSmc.Data;
 
@@ -68,14 +67,12 @@ public record EntityStore
                 => Update(entityReference.Collection, c => c.Update(entityReference.Id, value)),
             CollectionReference collectionReference
                 => Update(collectionReference.Name, _ => (InstanceCollection)value),
-            CollectionsReference collectionsReference
+            CollectionsReference 
                 => this with
                 {
                     Collections = Collections.SetItems(((EntityStore)value).Collections)
                 },
-            PartitionedCollectionsReference partitionedReference
-                => Update(partitionedReference.Reference, value, options),
-            WorkspaceReference<EntityStore> collectionsReference
+            WorkspaceReference<EntityStore> 
                 => Merge((EntityStore)value, options),
 
             _
@@ -101,8 +98,6 @@ public record EntityStore
     internal InstanceCollection ReduceImpl(CollectionReference reference) =>
         GetCollection(reference.Name);
 
-    internal InstanceCollection ReduceImpl(PartitionedCollectionsReference reference) =>
-        ReduceImpl((dynamic)reference.Reference);
 
     internal EntityStore ReduceImpl(CollectionsReference reference) =>
         this with

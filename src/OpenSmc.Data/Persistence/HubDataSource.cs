@@ -32,14 +32,6 @@ public record PartitionedHubDataSource(object Id, IWorkspace Workspace)
         throw new NotSupportedException("Please use method with partition");
     }
 
-    protected PartitionedCollectionsReference GetReference(object partition)
-    {
-        if (TypeSources.Count != 1)
-            throw new NotSupportedException("Only one type is supported");
-
-        return new PartitionedCollectionsReference(GetReference(), partition);
-    }
-
     private string GetCollectionName()
     {
         if (TypeSources.Count != 1)
@@ -60,7 +52,7 @@ public record PartitionedHubDataSource(object Id, IWorkspace Workspace)
     {
         foreach (var partition in InitializePartitions)
         {
-            var reference = GetReference(partition);
+            var reference = GetReference();
             Streams = Streams.Add(Workspace.GetStream(partition, reference));
         }
 

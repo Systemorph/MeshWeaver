@@ -1,7 +1,4 @@
 ﻿using System.Collections.Immutable;
-using System.Reactive.Linq;
-using System.Runtime.CompilerServices;
-using OpenSmc.Data.Persistence;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
@@ -40,30 +37,6 @@ public record WorkspaceState(
     public TReference Reduce<TReference>(WorkspaceReference<TReference> reference) =>
         ReduceManager.Reduce(this, reference);
 
-    private InstanceCollection GetPartitionedCollection(
-        string collection,
-        object partition,
-        InstanceCollection instances
-    )
-    {
-        var ret = instances;
-        if (ret == null)
-            return null;
-        if (
-            TypeSources.TryGetValue(collection, out var ts)
-            && partition != null
-            && ts is IPartitionedTypeSource partitionedTypeSource
-        )
-            ret = ret with
-            {
-                Instances = ret
-                    .Instances.Where(kvp =>
-                        partition.Equals(partitionedTypeSource.GetPartition(kvp.Value))
-                    )
-                    .ToImmutableDictionary()
-            };
-        return ret;
-    }
 
     #endregion
 
@@ -86,74 +59,24 @@ public record WorkspaceState(
         Change(new UpdateDataRequest(instances) { Options = options });
 
     public WorkspaceState Update(WorkspaceReference reference, EntityStore entityStore) =>
-        reference switch
+        this with
         {
-            PartitionedCollectionsReference part
-                => this with
-                {
-                    StoresByStream = StoresByStream.SetItems(
-                        entityStore
-                            .Collections.Select(x => new
-                            {
-                                TypeSource = TypeSources.GetValueOrDefault(x.Key),
-                                Instances = x.Value,
-                                DataSource = GetDataSource(x.Key)
-                            })
-                            .Where(x => x.TypeSource != null)
-                            .SelectMany(x =>
-                                x.Instances.Instances.Select(i => new
-                                    {
-                                        Partition = x.TypeSource is IPartitionedTypeSource p
-                                            ? p.GetPartition(x)
-                                            : x.DataSource.Id,
-                                        EntityId = i.Key,
-                                        Entity = i.Value,
-                                        x.TypeSource,
-                                        x.DataSource
-                                    })
-                                    .Where(x => x.Partition != null)
-                                    .GroupBy(x => (x.Partition, x.DataSource.Reference))
-                                    .Select(x => new KeyValuePair<
-                                        (object Id, object Reference),
-                                        EntityStore
-                                    >(
-                                        x.Key,
-                                        new EntityStore(
-                                            x.GroupBy(y => y.TypeSource.CollectionName)
-                                                .ToDictionary(
-                                                    y => y.Key,
-                                                    y => new InstanceCollection(
-                                                        y.ToDictionary(z => z.Entity, z => z.Entity)
-                                                    )
-                                                )
-                                        )
-                                    ))
-                            )
-                    ),
-                    Version = Hub.Version
-                },
-            _
-                => this with
-                {
-                    StoresByStream = StoresByStream.SetItems(
-                        entityStore
-                            .Collections.Select(x => new
-                            {
-                                DataSource = GetDataSource(x.Key),
-                                Collection = x.Key,
-                                Instances = x.Value
-                            })
-                            .GroupBy(x => x.DataSource)
-                            .Select(x => new KeyValuePair<
-                                (object Id, object Reference),
-                                EntityStore
-                            >(
-                                (x.Key.Id, x.Key.Reference),
-                                new EntityStore(x.ToDictionary(y => y.Collection, x => x.Instances))
-                            ))
-                    ),
-                    Version = Hub.Version
-                },
+            StoresByStream = StoresByStream.SetItems(
+                entityStore
+                    .Collections.Select(x => new
+                    {
+                        DataSource = GetDataSource(x.Key), Collection = x.Key, Instances = x.Value
+                    })
+                    .GroupBy(x => x.DataSource)
+                    .Select(x => new KeyValuePair<
+                        (object Id, object Reference),
+                        EntityStore
+                    >(
+                        (x.Key.Id, x.Key.Reference),
+                        new EntityStore(x.ToDictionary(y => y.Collection, y => y.Instances))
+                    ))
+            ),
+            Version = Hub.Version
         };
 
     public WorkspaceState Change(DataChangedRequest request)
@@ -284,17 +207,14 @@ public record WorkspaceState(
         if (store != null)
             return store;
 
-        switch (reference)
+        return reference switch
         {
-            case CollectionsReference collectionsReference:
-                return ReduceImpl(collectionsReference);
-            case PartitionedCollectionsReference partitionedReference:
-                return ReduceImpl(partitionedReference);
-        }
+            CollectionsReference collectionsReference
+                => ReduceImpl(collectionsReference),
+            _ =>
+                throw new DataSourceConfigurationException($"Store for {id} not initialized")
 
-        return store;
-
-        throw new DataSourceConfigurationException($"Store for {id} not initialized");
+        };
     }
 
     private IDataSource GetDataSource(string collection)
@@ -308,21 +228,6 @@ public record WorkspaceState(
         return dataSource;
     }
 
-    internal EntityStore ReduceImpl(PartitionedCollectionsReference reference) =>
-        reference
-            .Reference.Collections.Select(c => TypeSources.GetValueOrDefault(c))
-            .Select(ts => new
-            {
-                Id = ts is IPartitionedTypeSource
-                    ? reference.Partition
-                    : DataSources.GetValueOrDefault(ts.ElementType).Id,
-                Collection = ts.CollectionName
-            })
-            .GroupBy(x => x.Id)
-            .Select(x =>
-                GetStore(x.Key, new CollectionsReference(x.Select(y => y.Collection).ToArray()))
-            )
-            .Aggregate((store, el) => store.Merge(el, x => x));
 
     internal InstanceCollection ReduceImpl(CollectionReference reference)
     {
