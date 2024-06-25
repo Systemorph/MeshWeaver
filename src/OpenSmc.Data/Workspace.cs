@@ -182,7 +182,7 @@ public class Workspace : IWorkspace
             )
         );
         json.AddDisposable(
-            json.ToDataChangedStream()
+            json.ToDataChangedStream(reference)
                 .Where(x => !json.RemoteAddress.Equals(x.ChangedBy))
                 .Subscribe(e => Hub.Post(e, o => o.WithTarget(json.RemoteAddress)))
         );
@@ -222,7 +222,7 @@ public class Workspace : IWorkspace
 
         json.AddDisposable(
             // this is the "client" ==> never needs to submit full state
-            json.ToDataChangedStream()
+            json.ToDataChangedStream(reference)
                 .Skip(1)
                 .Subscribe(e =>
                 {

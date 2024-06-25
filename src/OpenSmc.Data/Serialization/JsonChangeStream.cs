@@ -10,7 +10,7 @@ public static class JsonSynchronizationStream
     public record ChangeItemJsonTuple<TStream>(ChangeItem<TStream> Current, JsonElement Json);
 
     public static IObservable<DataChangedEvent> ToDataChangedStream(
-        this ISynchronizationStream<JsonElement> json)
+        this ISynchronizationStream<JsonElement> json, object reference)
     {
         JsonElement? currentSync = null;
         return json
@@ -18,7 +18,7 @@ public static class JsonSynchronizationStream
                 currentSync == null
                     ? new DataChangedEvent(
                         json.Owner,
-                        json.Reference,
+                        reference,
                         json.Hub.Version,
                         new((currentSync = x.Value).Value.ToJsonString()),
                         ChangeType.Full,
