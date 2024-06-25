@@ -132,18 +132,9 @@ public record ReduceManager<TStream>
     )
         where TReference : WorkspaceReference<TReduced>
     {
-        if (stream.Hub.Address.Equals(stream.Owner))
             reducedStream.AddDisposable(
                 stream
                     .Where(x => !reducedStream.RemoteAddress.Equals(x.ChangedBy))
-                    .Select(x => x.SetValue(reducer.Invoke(x.Value, reducedStream.Reference)))
-                    .DistinctUntilChanged()
-                    .Subscribe(reducedStream)
-            );
-        else
-            reducedStream.AddDisposable(
-                stream
-                    .Where(x => !stream.Hub.Address.Equals(x.ChangedBy))
                     .Select(x => x.SetValue(reducer.Invoke(x.Value, reducedStream.Reference)))
                     .DistinctUntilChanged()
                     .Subscribe(reducedStream)

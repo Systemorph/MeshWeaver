@@ -23,7 +23,7 @@ public class Workspace : IWorkspace
 
         stream = new SynchronizationStream<WorkspaceState, WorkspaceReference>(
             Hub.Address,
-            new object(),
+            null,
             Hub,
             new WorkspaceStateReference(),
             DataContext.ReduceManager,
@@ -206,7 +206,7 @@ public class Workspace : IWorkspace
                     return delivery.Processed();
                 },
                 d =>
-                    json.Owner.Equals(d.Message.Owner) && json.Reference.Equals(d.Message.Reference)
+                    json.Owner.Equals(d.Message.Owner) && reference.Equals(d.Message.Reference)
             )
         );
         json.AddDisposable(
@@ -223,7 +223,7 @@ public class Workspace : IWorkspace
         json.AddDisposable(
             // this is the "client" ==> never needs to submit full state
             json.ToDataChangedStream(reference)
-                .Where(x => x.ChangeType != ChangeType.Full)
+                .Where(x => !json.RemoteAddress.Equals(x.ChangedBy))
                 .Subscribe(e =>
                 {
                     Hub.Post(e, o => o.WithTarget(json.RemoteAddress));

@@ -1,6 +1,5 @@
 ﻿using System.Reactive.Linq;
 using System.Text.Json;
-using Json.More;
 using Json.Patch;
 
 namespace OpenSmc.Data.Serialization;
@@ -14,18 +13,19 @@ public static class JsonSynchronizationStream
     {
         JsonElement? currentSync = null;
         return json
-            .Select(x =>
-                currentSync == null
-                    ? new DataChangedEvent(
-                        json.Owner,
-                        reference,
-                        json.Hub.Version,
-                        new((currentSync = x.Value).Value.ToJsonString()),
-                        ChangeType.Full,
-                        x.ChangedBy
-                    )
-                    : json.GetPatch(reference, currentSync.Value, x.Value, x.ChangedBy)
+            .Take(1).Select(x =>
+                new DataChangedEvent
+                (
+                    json.Owner,
+                    reference,
+                    x.Version,
+                    new((currentSync = x.Value).ToString()),
+                    ChangeType.Full,
+                    x.ChangedBy)
             )
+            .Concat(json.Skip(1)
+                .Select(x =>
+                    json.GetPatch(reference, currentSync!.Value, x.Value, x.ChangedBy)))
             .Where(x => x != null);
     }
 
