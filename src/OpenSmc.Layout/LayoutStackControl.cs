@@ -94,9 +94,10 @@ public record SplitterSkin : Skin
     public SplitterSkin WithHeight(string height) => this with { Height = height };
 }
 
-public record SplitterPaneControl(UiControl Content)
+public record SplitterPaneControl()
     : UiControl<SplitterPaneControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
 {
+    public UiControl ChildContent { get; init; }
     public bool Collapsible { get; init; }
     public bool Collapsed { get; init; }
 
@@ -112,6 +113,7 @@ public record SplitterPaneControl(UiControl Content)
     public SplitterPaneControl WithMin(string min) => this with { Min = min };
     public SplitterPaneControl WithResizable(bool resizable) => this with { Resizable = resizable };
     public SplitterPaneControl WithSize(string size) => this with { Size = size };
+    public SplitterPaneControl WithChildContent(UiControl childContent) => this with { ChildContent = childContent };
 }
 
 public record GridSkin : Skin
@@ -125,11 +127,12 @@ public record GridSkin : Skin
     public GridSkin WithSpacing(int spacing) => this with { Spacing = spacing };
 }
 
-public record LayoutGridItemControl(UiControl Content)
+public record LayoutGridItemControl()
     : UiControl<LayoutGridItemControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
 {
+    public UiControl ChildContent { get; init; }
     public bool? AdaptiveRendering { get; init; }
-    public JustifyContent Justify { get; init; }
+    public JustifyContent? Justify { get; init; }
     public LayoutGridItemHidden HiddenWhen { get; init; }
     public string Gap { get; init; }
     public int? Lg { get; init; }
@@ -147,6 +150,7 @@ public record LayoutGridItemControl(UiControl Content)
     public LayoutGridItemControl WithXl(int xl) => this with { Xl = xl };
     public LayoutGridItemControl WithXs(int xs) => this with { Xs = xs };
     public LayoutGridItemControl WithXxl(int xxl) => this with { Xxl = xxl };
+    public LayoutGridItemControl WithChildContent(UiControl childContent) => this with { ChildContent = childContent };
 }
 
 public enum LayoutGridItemHidden

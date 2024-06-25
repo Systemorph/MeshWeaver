@@ -1,3 +1,5 @@
+@using System.Text.Json
+@using OpenSmc.Data.Serialization
 @inherits BlazorView<SplitterPaneControl>
 
 <FluentMultiSplitterPane
@@ -6,6 +8,28 @@
     Max="@ViewModel.Max"
     Min="@ViewModel.Min"
     Size="@ViewModel.Size"
-    Resizable="@ViewModel.Resizable">
-    <DispatchView ViewModel="@ViewModel.Content" Stream="@Stream" Area="@Area" />
+    Resizable="@ViewModel.Resizable"
+    Class="@Class"
+    >
+    <DispatchView ViewModel="@ContentViewModel" Stream="@Stream" Area="@ContentArea" />
 </FluentMultiSplitterPane>
+
+
+@code
+{
+    UiControl ContentViewModel { get; set; }
+
+    private string ContentArea => $"{Area}/ChildContent";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        Disposables.Add(Stream.Subscribe(item => InvokeAsync(() => Render(item)))); 
+    }
+
+    private void Render(ChangeItem<JsonElement> item)
+    {
+        ContentViewModel = GetControl(item, ContentArea);
+        StateHasChanged();
+    }
+}

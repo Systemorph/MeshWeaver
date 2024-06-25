@@ -39,6 +39,16 @@ public class LayoutManager
             };
         }
 
+        if (viewModel is LayoutGridItemControl gridItem)
+        {
+            RenderArea($"{area}/ChildContent", new ViewElementWithView("ChildContent", gridItem.ChildContent));
+        }
+
+        if (viewModel is SplitterPaneControl splitterPane)
+        {
+            RenderArea($"{area}/ChildContent", new ViewElementWithView("ChildContent", splitterPane.ChildContent));
+        }
+
         //if (viewModel is UiControl { DataContext: not null } control)
         //    viewModel = control with { DataContext = layoutArea.UpdateData(control.DataContext) };
 

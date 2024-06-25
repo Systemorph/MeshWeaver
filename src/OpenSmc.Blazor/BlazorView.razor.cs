@@ -22,12 +22,15 @@ namespace OpenSmc.Blazor
             {
                 DataBind<Skin>(ViewModel.Skin, x => Skin = x);
                 DataBind<string>(ViewModel.Label, x => Label = x);
+                DataBind<string>(ViewModel.Class, x => Class = x);
             }
         }
 
         protected Skin Skin { get; set; }
 
         protected string Label { get; set; }
+
+        protected string Class { get; set; }
 
         protected object BindProperty(object instance, string propertyName)
         {
