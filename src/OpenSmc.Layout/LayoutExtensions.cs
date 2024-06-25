@@ -29,6 +29,9 @@ public static class LayoutExtensions
                     reduction.AddWorkspaceReferenceStream<LayoutAreaReference, EntityStore>(
                         (_, stream) => new LayoutArea(stream).Render(stream.Hub.GetLayoutDefinition())
                     )
+                    .AddBackTransformation<EntityStore>(
+                        BackTransformLayoutArea, 
+                        (_, reference) => reference is LayoutAreaReference)
                 )
             )
             .AddLayoutTypes()
@@ -36,6 +39,12 @@ public static class LayoutExtensions
             ;
 
 
+    }
+
+    private static ChangeItem<WorkspaceState> BackTransformLayoutArea(WorkspaceState current, ISynchronizationStream<WorkspaceState> stream, ChangeItem<EntityStore> change)
+    {
+        // TODO V10: Must check if types are mapped in workspace and if yes write back here. (25.06.2024, Roland Bürgi)
+        return change.SetValue(current);
     }
 
     private static LayoutDefinition GetLayoutDefinition(this IMessageHub hub) =>

@@ -18,6 +18,10 @@ public delegate ChangeItem<TStream> PatchFunction<TStream, TReduced>(
     ISynchronizationStream<TStream> stream,
     ChangeItem<TReduced> change
 );
+public delegate bool PatchFunctionFilter(
+    ISynchronizationStream stream,
+    object reference
+);
 
 public record ReduceManager<TStream>
 {
@@ -28,15 +32,16 @@ public record ReduceManager<TStream>
     private ImmutableDictionary<Type, object> ReduceManagers { get; init; } =
         ImmutableDictionary<Type, object>.Empty;
 
-    private ImmutableDictionary<Type, Delegate> PatchFunctions { get; init; } =
-        ImmutableDictionary<Type, Delegate>.Empty;
+    private ImmutableDictionary<Type, ImmutableList<(Delegate Filter, Delegate Function)>>
+        PatchFunctions { get; init; } = 
+        ImmutableDictionary<Type, ImmutableList<(Delegate Filter, Delegate Function)>>.Empty;
 
     public ReduceManager(IMessageHub hub)
     {
         this.hub = hub;
         ChangeItem<TStream> PatchFromJson(TStream current, ISynchronizationStream<TStream> stream, ChangeItem<JsonElement> change) => change.SetValue(change.Value.Deserialize<TStream>(hub.JsonSerializerOptions));
 
-        PatchFunctions = PatchFunctions.SetItem(typeof(JsonElement), (PatchFunction<TStream, JsonElement>)PatchFromJson);
+        PatchFunctions = PatchFunctions.SetItem(typeof(JsonElement), [((PatchFunctionFilter)((_,_) => true),(PatchFunction<TStream, JsonElement>)PatchFromJson)]);
 
         ReduceStreams = ReduceStreams.Add(
             (ReduceStream<TStream, JsonElementReference, JsonElement>)(
@@ -106,7 +111,19 @@ public record ReduceManager<TStream>
 
     public ReduceManager<TStream> AddBackTransformation<TReduced>(
         PatchFunction<TStream, TReduced> patchFunction
-    ) => this with { PatchFunctions = PatchFunctions.SetItem(typeof(TReduced), patchFunction) };
+
+    ) => AddBackTransformation(patchFunction, (_, _) => true);
+    public ReduceManager<TStream> AddBackTransformation<TReduced>(
+        PatchFunction<TStream, TReduced> patchFunction,
+        PatchFunctionFilter patchFunctionFilter
+
+    ) => this with
+    {
+        PatchFunctions = PatchFunctions.SetItem(typeof(TReduced),
+            (PatchFunctions.GetValueOrDefault(typeof(TReduced)) ??
+             ImmutableList<(Delegate Filter, Delegate Function)>.Empty)
+            .Insert(0,(patchFunctionFilter, patchFunction)))
+    };
 
     protected static ISynchronizationStream CreateReducedStream<TReference, TReduced>(
         ISynchronizationStream<TStream> stream,
@@ -196,8 +213,15 @@ public record ReduceManager<TStream>
                 ReduceManagers = ReduceManagers
             };
 
-    public PatchFunction<TStream, TReduced> GetPatchFunction<TReduced>() =>
-        (PatchFunction<TStream, TReduced>)PatchFunctions.GetValueOrDefault(typeof(TReduced));
+    public PatchFunction<TStream, TReduced> GetPatchFunction<TReduced>(ISynchronizationStream<TStream> parent,
+        object reference) =>
+        (PatchFunction<TStream, TReduced>)
+        (
+            PatchFunctions.GetValueOrDefault(typeof(TReduced))
+                ?.FirstOrDefault(x =>
+                    ((PatchFunctionFilter)x.Filter)
+                    .Invoke(parent, reference)).Function
+        );
 
     internal delegate object ReduceDelegate(
         TStream state,
