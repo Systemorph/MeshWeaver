@@ -26,7 +26,7 @@ namespace OpenSmc.Data
             )
         {
             this.parent = parent;
-            backTransform = parent.ReduceManager.GetPatchFunction<TReduced>();
+            backTransform = parent.ReduceManager.GetPatchFunction<TReduced>(parent, reference);
 
             if(backTransform != null)
                 AddDisposable(
