@@ -1,7 +1,5 @@
 ﻿using System.Collections.Immutable;
-using System.Reactive.Linq;
 using System.Reflection;
-using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
@@ -112,7 +110,7 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
 }
 
 public record GenericDataSource(object Id, IWorkspace Workspace)
-    : GenericDataSource<GenericDataSource>(Id, Workspace) { }
+    : GenericDataSource<GenericDataSource>(Id, Workspace);
 
 public record GenericDataSource<TDataSource>(object Id, IWorkspace Workspace)
     : TypeSourceBasedDataSource<TDataSource>(Id, Workspace)
@@ -132,11 +130,15 @@ public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorksp
     public override void Initialize(WorkspaceState state)
     {
         var reference = GetReference();
-        var stream = Workspace.GetStream(Hub.Address, reference);
-        Streams = Streams.Add(stream);
-        stream.Skip(1).Subscribe(e => Synchronize(e));
-        Hub.Schedule(cancellationToken => InitializeAsync(stream, cancellationToken));
+        var stream = new ChainedSynchronizationStream<EntityStore, CollectionsReference, EntityStore>(
+            Workspace.GetStream(Hub.Address, reference),
+            Id,
+            Hub.Address,
+            reference
+        );
 
+        Streams = Streams.Add(stream);
+        Hub.Schedule(cancellationToken => InitializeAsync(stream, cancellationToken));
         base.Initialize(state);
     }
 
