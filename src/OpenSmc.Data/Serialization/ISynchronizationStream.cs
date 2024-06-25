@@ -32,7 +32,7 @@ public interface ISynchronizationStream<TStream>
 {
     void Update(Func<TStream, ChangeItem<TStream>> update);
 
-
+    StreamReference StreamReference { get; }
     new Task<TStream> Initialized { get; }
     void Initialize(ChangeItem<TStream> current);
 

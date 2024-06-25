@@ -16,7 +16,9 @@ public interface IDataSource : IAsyncDisposable
     Task<WorkspaceState> Initialized { get; }
 
     IReadOnlyCollection<ISynchronizationStream<EntityStore>> Streams { get; }
+
 }
+
 
 public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) : IDataSource
     where TDataSource : DataSource<TDataSource>
@@ -75,11 +77,10 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
                     .ToAsyncEnumerable()
                     .SelectAwait(async stream => new
                     {
-                        stream.Owner,
-                        stream.Reference,
+                        stream.StreamReference,
                         Store = await stream.Initialized
                     })
-                    .ToDictionaryAsync(x => (x.Owner, x.Reference), x => x.Store)
+                    .ToDictionaryAsync(x => x.StreamReference, x => x.Store)
             )
         };
 

@@ -16,6 +16,8 @@ public record SynchronizationStream<TStream, TReference>(
 ) : ISynchronizationStream<TStream, TReference>
     where TReference : WorkspaceReference
 {
+    public StreamReference StreamReference { get;  } = new(Owner, Reference);
+
     /// <summary>
     /// Owner of the stream, e.g. the Hub Address or Id of datasource.
     /// </summary>

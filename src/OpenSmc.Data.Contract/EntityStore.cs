@@ -110,6 +110,8 @@ public record EntityStore
                 .Where(x => x.Value != null)
                 .ToImmutableDictionary()
         };
+    internal EntityStore ReduceImpl(StreamReference reference) =>
+        ReduceImpl((dynamic)reference.Reference);
 
     public InstanceCollection GetCollection(string collection) =>
         Collections.GetValueOrDefault(collection);

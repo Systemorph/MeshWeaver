@@ -134,6 +134,9 @@ public sealed record DataContext : IAsyncDisposable
                     .AddWorkspaceReference<CollectionsReference, EntityStore>(
                         (ws, reference) => ws.ReduceImpl(reference)
                     )
+                    .AddWorkspaceReference<StreamReference, EntityStore>(
+                        (ws, reference) => ws.ReduceImpl(reference)
+                    )
                     .AddWorkspaceReference<CollectionsReference, EntityStore>(
                         (ws, reference) => ws.ReduceImpl(reference)
                     )
