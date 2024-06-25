@@ -160,7 +160,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
         var instance = await hostWorkspace
             .GetObservable<MyData>("1")
-            .FirstAsync(i => i?.Text == TextChange);
+            .FirstAsync(i => i?.Text == TextChange)
+            //.Timeout(TimeSpan.FromSeconds(5))
+            ;
         instance.Should().NotBeNull();
         storage.Values.Should().Contain(i => (i as MyData).Text == TextChange);
     }
