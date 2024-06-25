@@ -163,17 +163,15 @@ public record ReduceManager<TStream>
         >(stream, owner, subscriber, reference);
 
         var reduced = (ISynchronizationStream<TReduced, TReference>)
-                ReduceStreams
-                    .Select(reduceStream =>
-                        (reduceStream as ReduceStream<TStream, TReference, TReduced>)?.Invoke(
-                            stream,
-                            ret
-                        )
+            ReduceStreams
+                .Select(reduceStream =>
+                    (reduceStream as ReduceStream<TStream, TReference, TReduced>)?.Invoke(
+                        stream,
+                        ret
                     )
-                    .FirstOrDefault(x => x != null);
+                )
+                .FirstOrDefault(x => x != null);
 
-        if(reduced != null)
-            reduced.AddDisposable(ret);
         return reduced ?? ret;
 
     }

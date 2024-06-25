@@ -104,6 +104,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             .ToArray();
 
         data.ToArray().Should().BeEquivalentTo(expectedItems);
+        await Task.Delay(200);
         storage.Values.Cast<MyData>().OrderBy(x => x.Id).Should().BeEquivalentTo(expectedItems);
     }
 
@@ -161,7 +162,6 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             .GetObservable<MyData>("1")
             .FirstAsync(i => i?.Text == TextChange);
         instance.Should().NotBeNull();
-
         storage.Values.Should().Contain(i => (i as MyData).Text == TextChange);
     }
 
