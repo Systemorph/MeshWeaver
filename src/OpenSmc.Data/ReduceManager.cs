@@ -182,7 +182,7 @@ public record ReduceManager<TStream>
         if (ret == null)
             // TODO V10: Should we be silent and return null? (20.06.2024, Roland Bürgi)
             throw new NotSupportedException(
-                $"No reducer found for reference type {typeof(TStream).Name}"
+                $"No reducer found for stream type {typeof(TStream).Name} and reference type {typeof(TReference).Namespace}"
             );
 
         return ret;

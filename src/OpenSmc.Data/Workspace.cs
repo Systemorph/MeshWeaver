@@ -1,5 +1,4 @@
 ﻿using System.Collections.Concurrent;
-using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
@@ -18,7 +17,6 @@ public class Workspace : IWorkspace
     {
         Hub = hub;
         this.activityService = activityService;
-        this.logger = logger;
 
         logger.LogDebug("Creating data context of address {address}", Id);
         DataContext = this.GetDataConfiguration();
@@ -255,11 +253,10 @@ public class Workspace : IWorkspace
     Problem is that IWorkspace is injected in DI and DataContext is parsed only at startup.
     Need to bootstrap DataContext constructor time. */
     public ReduceManager<WorkspaceState> ReduceManager =>
-        DataContext?.ReduceManager ?? DataContext.CreateReduceManager(Hub);
+        DataContext?.ReduceManager ?? StandardReducers.CreateReduceManager(Hub);
 
     public IMessageHub Hub { get; }
     public object Id => Hub.Address;
-    private ILogger logger;
 
     WorkspaceState IWorkspace.State => Current.Value;
 
