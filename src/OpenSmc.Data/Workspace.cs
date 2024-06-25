@@ -178,7 +178,7 @@ public class Workspace : IWorkspace
                     return delivery.Processed();
                 },
                 x =>
-                    json.Owner.Equals(x.Message.Owner) && x.Message.Reference.Equals(json.Reference)
+                    json.Owner.Equals(x.Message.Owner) && x.Message.Reference.Equals(reference)
             )
         );
         json.AddDisposable(
@@ -223,7 +223,7 @@ public class Workspace : IWorkspace
         json.AddDisposable(
             // this is the "client" ==> never needs to submit full state
             json.ToDataChangedStream(reference)
-                .Skip(1)
+                .Where(x => x.ChangeType != ChangeType.Full)
                 .Subscribe(e =>
                 {
                     Hub.Post(e, o => o.WithTarget(json.RemoteAddress));
