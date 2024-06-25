@@ -39,13 +39,10 @@ public sealed record DataContext : IAsyncDisposable
 
     private async Task<WorkspaceState> CreateInitializationTask()
     {
-        var dict = await DataSources
+        var state = await DataSources
             .Values.ToAsyncEnumerable()
             .SelectAwait(async ds => await ds.Initialized)
-            .AggregateAsync(
-                ImmutableDictionary<(object Id, object Reference), EntityStore>.Empty,
-                (acc, x) => acc.SetItems(x)
-            );
+            .AggregateAsync((x, y) => x.Merge(y));
 
         return new WorkspaceState(
             Hub,
@@ -57,7 +54,7 @@ public sealed record DataContext : IAsyncDisposable
             ReduceManager
         )
         {
-            StoresByStream = dict
+            StoresByStream = state.StoresByStream
         };
     }
 
