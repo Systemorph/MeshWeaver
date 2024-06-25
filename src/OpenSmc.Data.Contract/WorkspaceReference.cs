@@ -35,22 +35,13 @@ public record CollectionReference(string Name) : WorkspaceReference<InstanceColl
 public record CollectionsReference(IReadOnlyCollection<string> Collections)
     : WorkspaceReference<EntityStore>
 {
-    public string Path => $"$[{Collections.Select(c => $"'{c}'").Aggregate((x, y) => $"{x},{y}")}]";
 
-    public override string ToString() => Path;
+    public override string ToString() => string.Join(',',Collections);
 
     public virtual bool Equals(CollectionsReference other) =>
         other != null && Collections.SequenceEqual(other.Collections);
 
     public override int GetHashCode() => Collections.Aggregate(17, (a, b) => a ^ b.GetHashCode());
-}
-
-public record PartitionedCollectionsReference(CollectionsReference Reference, object Partition)
-    : WorkspaceReference<EntityStore>
-{
-    public string Pointer => $"/{Reference}/{Partition}";
-
-    public override string ToString() => Pointer;
 }
 
 public record JsonElementReference : WorkspaceReference<JsonElement>;
