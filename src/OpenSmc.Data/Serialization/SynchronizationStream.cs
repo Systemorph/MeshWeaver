@@ -89,12 +89,12 @@ public record SynchronizationStream<TStream, TReference>(
         SynchronizationStream<TStream, TReference>
     >(x => x.Reduce<object, WorkspaceReference<object>>(null, null, null));
 
-    private ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
+    public ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
         TReference2 reference,
         object owner,
         object subscriber
     )
-        where TReference2 : WorkspaceReference<TReduced> =>
+        where TReference2 : WorkspaceReference =>
         ReduceManager.ReduceStream<TReduced, TReference2>(this, reference, owner, subscriber);
 
     public virtual IDisposable Subscribe(IObserver<ChangeItem<TStream>> observer)

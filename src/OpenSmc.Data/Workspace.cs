@@ -131,10 +131,10 @@ public class Workspace : IWorkspace
         (ISynchronizationStream<TReduced, TReference>)
             remoteStreams.GetOrAdd(
                 (address, reference),
-                _ => CreateSynchronizationStream(address, Hub.Address, reference)
+                _ => CreateSynchronizationStream<TReduced, TReference>(address, Hub.Address, reference)
             );
 
-    private ISynchronizationStream CreateSynchronizationStream<TReference>(
+    private ISynchronizationStream CreateSynchronizationStream<TReduced, TReference>(
         object owner,
         object subscriber,
         TReference reference
@@ -144,8 +144,10 @@ public class Workspace : IWorkspace
         // link to deserialized world. Will also potentially link to workspace.
 
 
-        var ret = stream.Reduce(reference, owner, subscriber);
-        var json = ret.Reduce(new JsonElementReference());
+        var ret = stream.Reduce<TReduced, TReference>(reference, owner, subscriber);
+        var json = 
+            ret as ISynchronizationStream<JsonElement>
+            ?? ret.Reduce(new JsonElementReference());
 
         if (subscriber.Equals(Hub.Address))
             RegisterSubscriber(reference, json);
@@ -253,7 +255,7 @@ public class Workspace : IWorkspace
     Problem is that IWorkspace is injected in DI and DataContext is parsed only at startup.
     Need to bootstrap DataContext constructor time. */
     public ReduceManager<WorkspaceState> ReduceManager =>
-        DataContext?.ReduceManager ?? StandardReducers.CreateReduceManager(Hub);
+        DataContext?.ReduceManager ?? StandardWorkspaceReferenceImplementations.CreateReduceManager(Hub);
 
     public IMessageHub Hub { get; }
     public object Id => Hub.Address;
@@ -326,7 +328,7 @@ public class Workspace : IWorkspace
     {
         subscriptions.GetOrAdd(
             new(address, reference),
-            _ => CreateSynchronizationStream(Hub.Address, address, reference)
+            _ => CreateSynchronizationStream<TReduced, TReference>(Hub.Address, address, reference)
         );
     }
 

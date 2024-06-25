@@ -7,7 +7,7 @@ using OpenSmc.Messaging;
 
 namespace OpenSmc.Data
 {
-    public static class StandardReducers
+    public static class StandardWorkspaceReferenceImplementations
     {
 
         internal static ReduceManager<WorkspaceState> CreateReduceManager(IMessageHub hub)
@@ -77,6 +77,7 @@ namespace OpenSmc.Data
                     conf.AddWorkspaceReference<JsonPointerReference, JsonElement?>(ReduceJsonPointer)
                 );
         }
+
 
         private static string GetCollectionName(object reference)
         {

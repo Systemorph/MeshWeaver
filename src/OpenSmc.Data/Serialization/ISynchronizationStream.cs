@@ -18,6 +18,13 @@ public interface ISynchronizationStream : IDisposable
     ISynchronizationStream<TReduced> Reduce<TReduced>(WorkspaceReference<TReduced> reference, object owner, object subscriber);
     ISynchronizationStream<TReduced> Reduce<TReduced>(WorkspaceReference<TReduced> reference) => Reduce(reference, Owner, Subscriber);
 
+    ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
+        TReference2 reference,
+        object owner,
+        object subscriber
+    )
+        where TReference2 : WorkspaceReference;
+
     IMessageHub Hub { get; }
 
 

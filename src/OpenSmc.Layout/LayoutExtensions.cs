@@ -25,7 +25,7 @@ public static class LayoutExtensions
     {
         return config
             .AddData(data =>
-                data.ConfigureReduction(reduction =>
+                data.Configure(reduction =>
                     reduction.AddWorkspaceReferenceStream<LayoutAreaReference, EntityStore>(
                         (_, stream) => new LayoutArea(stream).Render(stream.Hub.GetLayoutDefinition())
                     )
@@ -92,6 +92,7 @@ public static class LayoutExtensions
     )
     {
         return config
+            //.AddData(data => data.Configure(c => c.AddWorkspaceReferenceStream<LayoutAreaReference, EntityStore>((parent,reduced) => parent.Select(e => e.SetValue(e.Value.StoresByStream.GetValueOrDefault(reduced.StreamReference))))
             .AddData()
             .AddLayoutTypes()
             .WithServices(services => services.AddScoped<ILayoutClient, LayoutClient>())

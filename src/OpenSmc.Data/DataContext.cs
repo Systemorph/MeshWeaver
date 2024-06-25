@@ -9,7 +9,7 @@ public sealed record DataContext : IAsyncDisposable
     {
         Hub = hub;
         Workspace = workspace;
-        ReduceManager = StandardReducers.CreateReduceManager(Hub);
+        ReduceManager = StandardWorkspaceReferenceImplementations.CreateReduceManager(Hub);
     }
 
     internal ImmutableDictionary<object, IDataSource> DataSources { get; private set; } =
@@ -37,20 +37,16 @@ public sealed record DataContext : IAsyncDisposable
         var state = await DataSources
             .Values.ToAsyncEnumerable()
             .SelectAwait(async ds => await ds.Initialized)
-            .AggregateAsync((x, y) => x.Merge(y));
-
-        return new WorkspaceState(
-            Hub,
-            DataSources
-                .Values.SelectMany(ds =>
-                    ds.TypeSources.Select(ts => new { DataSource = ds, TypeSource = ts })
-                )
-                .ToDictionary(x => x.TypeSource.Key, x => x.DataSource),
-            ReduceManager
-        )
-        {
-            StoresByStream = state.StoresByStream
-        };
+            .AggregateAsync(new WorkspaceState(
+                Hub,
+                DataSources
+                    .Values.SelectMany(ds =>
+                        ds.TypeSources.Select(ts => new { DataSource = ds, TypeSource = ts })
+                    )
+                    .ToDictionary(x => x.TypeSource.Key, x => x.DataSource),
+                ReduceManager
+            ), (x, y) => x.Merge(y));
+        return state;
     }
 
     public ImmutableDictionary<object, DataSourceBuilder> DataSourceBuilders { get; set; } =
@@ -66,7 +62,7 @@ public sealed record DataContext : IAsyncDisposable
             InitializationTimeout = timeout
         };
 
-    public DataContext ConfigureReduction(
+    public DataContext Configure(
         Func<ReduceManager<WorkspaceState>, ReduceManager<WorkspaceState>> change
     ) => this with { ReduceManager = change.Invoke(ReduceManager) };
 

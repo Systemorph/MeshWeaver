@@ -34,15 +34,9 @@ public record ReduceManager<TStream>
     public ReduceManager(IMessageHub hub)
     {
         this.hub = hub;
+        ChangeItem<TStream> PatchFromJson(TStream current, ISynchronizationStream<TStream> stream, ChangeItem<JsonElement> change) => change.SetValue(change.Value.Deserialize<TStream>(hub.JsonSerializerOptions));
 
-        ChangeItem<TStream> PatchFromJson(
-            TStream current,
-            object reference,
-            ChangeItem<JsonElement> change,
-            JsonPatch patch
-        ) => change.SetValue(change.Value.Deserialize<TStream>(hub.JsonSerializerOptions));
-
-        PatchFunctions = PatchFunctions.SetItem(typeof(JsonElement), PatchFromJson);
+        PatchFunctions = PatchFunctions.SetItem(typeof(JsonElement), (PatchFunction<TStream, JsonElement>)PatchFromJson);
 
         ReduceStreams = ReduceStreams.Add(
             (ReduceStream<TStream, JsonElementReference, JsonElement>)(
@@ -125,6 +119,7 @@ public record ReduceManager<TStream>
             stream
                 .Where(x => !reducedStream.RemoteAddress.Equals(x.ChangedBy))
                 .Select(x => x.SetValue(reducer.Invoke(x.Value, reducedStream.Reference)))
+                .DistinctUntilChanged()
                 .Subscribe(reducedStream)
         );
         return reducedStream;
@@ -167,9 +162,7 @@ public record ReduceManager<TStream>
             TReduced
         >(stream, owner, subscriber, reference);
 
-        stream.AddDisposable(ret);
-        ret =
-            (ISynchronizationStream<TReduced, TReference>)
+        var reduced = (ISynchronizationStream<TReduced, TReference>)
                 ReduceStreams
                     .Select(reduceStream =>
                         (reduceStream as ReduceStream<TStream, TReference, TReduced>)?.Invoke(
@@ -179,13 +172,10 @@ public record ReduceManager<TStream>
                     )
                     .FirstOrDefault(x => x != null);
 
-        if (ret == null)
-            // TODO V10: Should we be silent and return null? (20.06.2024, Roland Bürgi)
-            throw new NotSupportedException(
-                $"No reducer found for stream type {typeof(TStream).Name} and reference type {typeof(TReference).Namespace}"
-            );
+        if(reduced != null)
+            reduced.AddDisposable(ret);
+        return reduced ?? ret;
 
-        return ret;
     }
 
     public ReduceManager<TReduced> ReduceTo<TReduced>() =>
