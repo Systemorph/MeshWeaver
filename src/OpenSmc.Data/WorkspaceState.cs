@@ -23,10 +23,10 @@ public record WorkspaceState(
     public string GetCollectionName(Type type) => CollectionsByType.GetValueOrDefault(type);
 
     public ImmutableDictionary<
-        (object Id, object Reference),
+        StreamReference,
         EntityStore
     > StoresByStream { get; init; } =
-        ImmutableDictionary<(object Id, object Reference), EntityStore>.Empty;
+        ImmutableDictionary<StreamReference, EntityStore>.Empty;
 
     public long Version { get; init; } = Hub.Version;
 
@@ -39,21 +39,6 @@ public record WorkspaceState(
 
 
     #endregion
-
-    // public WorkspaceState Update(
-    //     (object Id, object Reference) key,
-    //     Func<EntityStore, EntityStore> update
-    // )
-    // {
-    //     return this with
-    //         {
-    //             StoresByStream = StoresByStream.SetItem(
-    //                 key,
-    //                 update.Invoke(StoresByStream.GetValueOrDefault(key) ?? new())
-    //             ),
-    //             Version = Hub.Version
-    //         };
-    //}
 
     public WorkspaceState Update(IReadOnlyCollection<object> instances, UpdateOptions options) =>
         Change(new UpdateDataRequest(instances) { Options = options });
@@ -69,10 +54,10 @@ public record WorkspaceState(
                     })
                     .GroupBy(x => x.DataSource)
                     .Select(x => new KeyValuePair<
-                        (object Id, object Reference),
+                        StreamReference,
                         EntityStore
                     >(
-                        (x.Key.Id, x.Key.Reference),
+                        new(x.Key.Id, x.Key.Reference),
                         new EntityStore(x.ToDictionary(y => y.Collection, y => y.Instances))
                     ))
             ),
@@ -98,14 +83,14 @@ public record WorkspaceState(
         };
     }
 
-    private IEnumerable<KeyValuePair<(object Id, object Reference), EntityStore>> MergeUpdate(
+    private IEnumerable<KeyValuePair<StreamReference, EntityStore>> MergeUpdate(
         UpdateDataRequest request
     )
     {
         return request
             .Elements.GroupBy(e => e.GetType())
             .SelectMany(e => MapToIdAndAddress(e, e.Key))
-            .GroupBy(e => (e.Id, e.Reference))
+            .GroupBy(e => new StreamReference(e.Id, e.Reference))
             .Select(e =>
                 (
                     e.Key,
@@ -118,7 +103,7 @@ public record WorkspaceState(
                     )
                 )
             )
-            .Select(e => new KeyValuePair<(object Id, object Reference), EntityStore>(
+            .Select(e => new KeyValuePair<StreamReference, EntityStore>(
                 e.Key,
                 StoresByStream.TryGetValue(e.Key, out var existing)
                     ? existing.Merge(e.Store, request.Options ?? UpdateOptions.Default)
@@ -161,15 +146,15 @@ public record WorkspaceState(
                 );
     }
 
-    private IEnumerable<KeyValuePair<(object Id, object Reference), EntityStore>> MergeDelete(
+    private IEnumerable<KeyValuePair<StreamReference, EntityStore>> MergeDelete(
         DeleteDataRequest request
     )
     {
         return request
             .Elements.GroupBy(e => e.GetType())
             .SelectMany(e => MapToIdAndAddress(e, e.Key))
-            .GroupBy(e => (e.Id, e.Reference))
-            .Select(e => new KeyValuePair<(object Id, object Reference), EntityStore>(
+            .GroupBy(e => new StreamReference(e.Id, e.Reference))
+            .Select(e => new KeyValuePair<StreamReference, EntityStore>(
                 e.Key,
                 StoresByStream.TryGetValue(e.Key, out var existing)
                     ? e.Aggregate(
@@ -199,23 +184,12 @@ public record WorkspaceState(
     }
 
     private EntityStore GetStore(IDataSource dataSource) =>
-        GetStore(dataSource.Id, dataSource.Reference);
+        dataSource.Streams.Select(s => 
+            StoresByStream.GetValueOrDefault(s.StreamReference))
+            .Where(x => x != null)
+            .Aggregate((x,y) => x.Merge(y)
+            );
 
-    private EntityStore GetStore(object id, object reference)
-    {
-        var store = StoresByStream.GetValueOrDefault((id, reference));
-        if (store != null)
-            return store;
-
-        return reference switch
-        {
-            CollectionsReference collectionsReference
-                => ReduceImpl(collectionsReference),
-            _ =>
-                throw new DataSourceConfigurationException($"Store for {id} not initialized")
-
-        };
-    }
 
     private IDataSource GetDataSource(string collection)
     {
@@ -239,9 +213,11 @@ public record WorkspaceState(
         reference
             .Collections.Select(x => new { DataSource = GetDataSource(x), Collection = x })
             .GroupBy(x => x.DataSource)
-            .SelectMany(x => x.Key.Streams.Select(p => GetStore(p.Owner, x.Key.Reference)))
+            .SelectMany(x => x.Key.Streams.Select(p => StoresByStream.GetValueOrDefault(p.StreamReference)))
             .Where(x => x != null)
             .Aggregate((x, y) => x.Merge(y, UpdateOptions.Default));
+    internal EntityStore ReduceImpl(StreamReference reference) =>
+StoresByStream.GetValueOrDefault(reference);
 
     public WorkspaceState Merge(WorkspaceState that) =>
         this with
