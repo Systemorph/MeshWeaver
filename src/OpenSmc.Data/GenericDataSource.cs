@@ -15,7 +15,9 @@ public interface IDataSource : IAsyncDisposable
     object Id { get; }
     CollectionsReference Reference { get; }
     void Initialize(WorkspaceState state);
-    Task<IReadOnlyDictionary<(object Id, object Reference), EntityStore>> Initialized { get; }
+    Task<WorkspaceState> Initialized { get; }
+
+    IReadOnlyCollection<ISynchronizationStream<EntityStore>> Streams { get; }
 }
 
 public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) : IDataSource
@@ -25,12 +27,9 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
     protected IMessageHub Hub => Workspace.Hub;
 
     protected ImmutableList<ISynchronizationStream<EntityStore>> Streams { get; set; } = [];
+    IReadOnlyCollection<ISynchronizationStream<EntityStore>> IDataSource.Streams => Streams;
 
-    public Task<IReadOnlyDictionary<(object Id, object Reference), EntityStore>> Initialized
-    {
-        get;
-        private set;
-    }
+    public Task<WorkspaceState> Initialized { get; private set; }
 
     IReadOnlyDictionary<Type, ITypeSource> IDataSource.TypeSources => TypeSources;
 
@@ -67,21 +66,24 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
 
     public virtual void Initialize(WorkspaceState state)
     {
-        Initialized = InitializeStreams();
+        Initialized = InitializeStreams(state);
     }
 
-    private async Task<
-        IReadOnlyDictionary<(object Id, object Reference), EntityStore>
-    > InitializeStreams() =>
-        await Streams
-            .ToAsyncEnumerable()
-            .SelectAwait(async stream => new
-            {
-                stream.Owner,
-                stream.Reference,
-                Store = await stream.Initialized
-            })
-            .ToDictionaryAsync(x => (x.Owner, x.Reference), x => x.Store);
+    private async Task<WorkspaceState> InitializeStreams(WorkspaceState state) =>
+        state with
+        {
+            StoresByStream = state.StoresByStream.SetItems(
+                await Streams
+                    .ToAsyncEnumerable()
+                    .SelectAwait(async stream => new
+                    {
+                        stream.Owner,
+                        stream.Reference,
+                        Store = await stream.Initialized
+                    })
+                    .ToDictionaryAsync(x => (x.Owner, x.Reference), x => x.Store)
+            )
+        };
 
     protected virtual void Synchronize(ChangeItem<EntityStore> item)
     {

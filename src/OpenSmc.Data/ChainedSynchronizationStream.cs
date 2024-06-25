@@ -1,4 +1,5 @@
-﻿using OpenSmc.Data.Serialization;
+﻿using System.Reactive.Linq;
+using OpenSmc.Data.Serialization;
 
 namespace OpenSmc.Data
 {
@@ -26,6 +27,10 @@ namespace OpenSmc.Data
         {
             this.parent = parent;
             backTransform = parent.ReduceManager.GetPatchFunction<TReduced>();
+            if(backTransform != null)
+                AddDisposable(
+                    this.Where(value => RemoteAddress.Equals(value.ChangedBy))
+                        .Subscribe(UpdateParent));
         }
 
         public override DataChangeResponse RequestChange(
@@ -44,24 +49,8 @@ namespace OpenSmc.Data
             );
         }
 
-        public override void NotifyChange(Func<TReduced, ChangeItem<TReduced>> update)
-        {
-            base.NotifyChange(update);
-            UpdateParent(Current);
-        }
-
-        public override void Initialize(ChangeItem<TReduced> initial)
-        {
-            base.Initialize(initial);
-            UpdateParent(Current);
-        }
-
         private void UpdateParent(ChangeItem<TReduced> value)
         {
-            // if we cannot back transform or if the change was not made by the remote party, we do not need to notify the parent
-            if (backTransform == null || !RemoteAddress.Equals(value.ChangedBy))
-                return;
-
             // if the parent is initialized, we will update the parent
             if (parent.Initialized.IsCompleted)
                 parent.Update(state => backTransform(state, parent, value));

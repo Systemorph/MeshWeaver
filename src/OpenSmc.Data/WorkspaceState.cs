@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
+using OpenSmc.Data.Persistence;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
@@ -280,9 +281,20 @@ public record WorkspaceState(
     private EntityStore GetStore(object id, object reference)
     {
         var store = StoresByStream.GetValueOrDefault((id, reference));
-        if (store == null)
-            throw new DataSourceConfigurationException($"Store for {id} not initialized");
+        if (store != null)
+            return store;
+
+        switch (reference)
+        {
+            case CollectionsReference collectionsReference:
+                return ReduceImpl(collectionsReference);
+            case PartitionedCollectionsReference partitionedReference:
+                return ReduceImpl(partitionedReference);
+        }
+
         return store;
+
+        throw new DataSourceConfigurationException($"Store for {id} not initialized");
     }
 
     private IDataSource GetDataSource(string collection)
@@ -318,26 +330,13 @@ public record WorkspaceState(
             ?.Collections.GetValueOrDefault(reference.Name);
     }
 
-    internal EntityStore ReduceImpl(CollectionsReference reference)
-    {
-        return new(
-            reference
-                .Collections.Select(x => new { DataSource = GetDataSource(x), Collection = x })
-                .GroupBy(x => x.DataSource)
-                .Select(x => new
-                {
-                    DataSource = x.Key,
-                    Store = StoresByStream
-                        .GetValueOrDefault((x.Key.Id, x.Key.Reference))
-                        ?.ReduceImpl(
-                            new CollectionsReference(x.Select(y => y.Collection).ToArray())
-                        ),
-                })
-                .Where(x => x.Store != null)
-                .SelectMany(x => x.Store.Collections)
-                .ToImmutableDictionary()
-        );
-    }
+    internal EntityStore ReduceImpl(CollectionsReference reference) =>
+        reference
+            .Collections.Select(x => new { DataSource = GetDataSource(x), Collection = x })
+            .GroupBy(x => x.DataSource)
+            .SelectMany(x => x.Key.Streams.Select(p => GetStore(p.Owner, x.Key.Reference)))
+            .Where(x => x != null)
+            .Aggregate((x, y) => x.Merge(y, UpdateOptions.Default));
 
     public WorkspaceState Merge(WorkspaceState that) =>
         this with
