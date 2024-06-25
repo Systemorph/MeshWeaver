@@ -47,3 +47,5 @@ public record CollectionsReference(IReadOnlyCollection<string> Collections)
 public record JsonElementReference : WorkspaceReference<JsonElement>;
 
 public record StreamReference(object Partition, object Reference) : WorkspaceReference<EntityStore>;
+
+public record PartitionedCollectionsReference(object Partition, CollectionsReference Reference) : WorkspaceReference<EntityStore>;

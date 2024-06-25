@@ -209,6 +209,10 @@ public record WorkspaceState(
             ?.Collections.GetValueOrDefault(reference.Name);
     }
 
+    internal EntityStore ReduceImpl(PartitionedCollectionsReference reference) =>
+        StoresByStream.GetValueOrDefault(new(reference.Partition, reference.Reference))
+        ?? ReduceImpl(reference.Reference);
+
     internal EntityStore ReduceImpl(CollectionsReference reference) =>
         reference
             .Collections.Select(x => new { DataSource = GetDataSource(x), Collection = x })

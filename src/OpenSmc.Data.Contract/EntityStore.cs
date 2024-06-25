@@ -72,6 +72,8 @@ public record EntityStore
                 {
                     Collections = Collections.SetItems(((EntityStore)value).Collections)
                 },
+            PartitionedCollectionsReference partitioned
+                => Update(partitioned.Reference, value, options),
             WorkspaceReference<EntityStore> 
                 => Merge((EntityStore)value, options),
 
@@ -110,6 +112,9 @@ public record EntityStore
                 .Where(x => x.Value != null)
                 .ToImmutableDictionary()
         };
+
+    internal EntityStore ReduceImpl(PartitionedCollectionsReference reference) =>
+        ReduceImpl(reference.Reference);
     internal EntityStore ReduceImpl(StreamReference reference) =>
         ReduceImpl((dynamic)reference.Reference);
 
