@@ -43,7 +43,7 @@ public record WorkspaceState(
     public WorkspaceState Update(IReadOnlyCollection<object> instances, UpdateOptions options) =>
         Change(new UpdateDataRequest(instances) { Options = options });
 
-    public WorkspaceState Update(WorkspaceReference reference, EntityStore entityStore) =>
+    public WorkspaceState Update(EntityStore entityStore) =>
         this with
         {
             StoresByStream = StoresByStream.SetItems(
@@ -63,6 +63,9 @@ public record WorkspaceState(
             ),
             Version = Hub.Version
         };
+
+    public WorkspaceState Update(StreamReference reference, EntityStore store) =>
+        this with { StoresByStream = StoresByStream.SetItem(reference, store) };
 
     public WorkspaceState Change(DataChangedRequest request)
     {

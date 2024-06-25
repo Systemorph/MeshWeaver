@@ -33,16 +33,20 @@ namespace OpenSmc.Data
                 )
                 .AddWorkspaceReference<WorkspaceStateReference, WorkspaceState>((ws, _) => ws)
                 .AddBackTransformation<EntityStore>(
-                    (ws, stream, update) =>
-                        update.SetValue(ws.Update((WorkspaceReference)stream.Reference, update.Value))
+                    (ws, _, update) =>
+                        update.SetValue(ws.Update(update.Value))
                 )
                 .AddBackTransformation<WorkspaceState>(
                     (ws, _, update) => update.SetValue(ws.Merge(update.Value))
                 )
+                .AddBackTransformation<JsonElement>(
+                    (current, stream, change) =>
+                        PatchWorkspace(stream.StreamReference, current, change, hub.JsonSerializerOptions)
+                    )
                 .ForReducedStream<EntityStore>(reduced =>
                     reduced
                         .AddWorkspaceReference<StreamReference, EntityStore>(
-                            (ws, reference) => ws
+                            (ws, _) => ws
                         )
                         .AddWorkspaceReference<EntityReference, object>(
                             (ws, reference) => ws.ReduceImpl(reference)
@@ -78,13 +82,6 @@ namespace OpenSmc.Data
                 );
         }
 
-
-        private static string GetCollectionName(object reference)
-        {
-            return reference is CollectionReference coll
-                ? coll.Name
-                : throw new NotSupportedException();
-        }
 
         private static JsonElement? ReduceJsonPointer(JsonElement obj, JsonPointerReference pointer)
         {
@@ -187,6 +184,21 @@ namespace OpenSmc.Data
                 default:
                     throw new NotSupportedException();
             }
+        }
+        private static ChangeItem<WorkspaceState> PatchWorkspace(
+            StreamReference streamReference,
+            WorkspaceState current,
+            ChangeItem<JsonElement> changeItem,
+            JsonSerializerOptions options)
+        {
+            var entityStore = current.StoresByStream.GetValueOrDefault(streamReference);
+            return changeItem.SetValue(current.Update(streamReference,
+
+                changeItem.Patch == null || entityStore == null ?
+                changeItem.Value.Deserialize<EntityStore>(options)
+                :
+                PatchEntityStore(entityStore, changeItem, options).Value
+                ));
         }
 
     }
