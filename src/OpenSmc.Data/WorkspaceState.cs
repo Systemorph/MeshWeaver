@@ -139,7 +139,7 @@ public record WorkspaceState(
             foreach (var partition in e.GroupBy(x => partitioned.GetPartition(x)))
                 yield return (
                     partition.Key,
-                    dataSource.Reference,
+                    new PartitionedCollectionsReference(partition.Key,dataSource.Reference),
                     partition.ToImmutableDictionary(x => ts.GetKey(x)),
                     GetCollectionName(type),
                     ts
@@ -210,7 +210,7 @@ public record WorkspaceState(
     }
 
     internal EntityStore ReduceImpl(PartitionedCollectionsReference reference) =>
-        StoresByStream.GetValueOrDefault(new(reference.Partition, reference.Reference))
+    StoresByStream.GetValueOrDefault(new (reference.Partition, reference))
         ?? ReduceImpl(reference.Reference);
 
     internal EntityStore ReduceImpl(CollectionsReference reference) =>
