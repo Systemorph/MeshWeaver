@@ -1,4 +1,5 @@
-﻿using OpenSmc.Messaging;
+﻿using Autofac.Builder;
+using OpenSmc.Messaging;
 
 namespace OpenSmc.Data.Serialization;
 
@@ -6,7 +7,6 @@ public interface ISynchronizationStream : IDisposable
 {
     object Owner { get; }
     object Reference { get; }
-    object RemoteAddress { get; }
     object Subscriber { get; }
 
 
@@ -16,7 +16,8 @@ public interface ISynchronizationStream : IDisposable
     Task Initialized { get; }
     ISynchronizationStream Reduce(WorkspaceReference reference, object owner, object subscriber) => Reduce((dynamic)reference, owner, subscriber);
     ISynchronizationStream<TReduced> Reduce<TReduced>(WorkspaceReference<TReduced> reference, object owner, object subscriber);
-    ISynchronizationStream<TReduced> Reduce<TReduced>(WorkspaceReference<TReduced> reference) => Reduce(reference, Owner, Subscriber);
+    ISynchronizationStream<TReduced> Reduce<TReduced>(WorkspaceReference<TReduced> reference) => 
+        Reduce(reference, Owner, Subscriber);
 
     ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
         TReference2 reference,

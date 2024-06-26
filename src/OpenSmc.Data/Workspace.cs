@@ -131,7 +131,7 @@ public class Workspace : IWorkspace
         (ISynchronizationStream<TReduced, TReference>)
             remoteStreams.GetOrAdd(
                 (address, reference),
-                _ => CreateSynchronizationStream<TReduced, TReference>(address, Hub.Address, reference)
+                _ => CreateSynchronizationStream<TReduced, TReference>(address, address, reference)
             );
 
     private ISynchronizationStream CreateSynchronizationStream<TReduced, TReference>(
@@ -149,10 +149,10 @@ public class Workspace : IWorkspace
             ret as ISynchronizationStream<JsonElement>
             ?? ret.Reduce(new JsonElementReference());
 
-        if (subscriber.Equals(Hub.Address))
-            RegisterSubscriber(reference, json);
-        else
+        if (owner.Equals(Hub.Address))
             RegisterOwner(reference, json);
+        else
+            RegisterSubscriber(reference, json);
 
         return ret;
     }
@@ -183,8 +183,8 @@ public class Workspace : IWorkspace
         );
         json.AddDisposable(
             json.ToDataChangedStream(reference)
-                .Where(x => !json.RemoteAddress.Equals(x.ChangedBy))
-                .Subscribe(e => Hub.Post(e, o => o.WithTarget(json.RemoteAddress)))
+                .Where(x => !json.Subscriber.Equals(x.ChangedBy))
+                .Subscribe(e => Hub.Post(e, o => o.WithTarget(json.Subscriber)))
         );
         json.AddDisposable(
             new AnonymousDisposable(() => subscriptions.Remove(new(subscriber, reference), out _))
@@ -211,7 +211,7 @@ public class Workspace : IWorkspace
         );
         json.AddDisposable(
             new AnonymousDisposable(
-                () => remoteStreams.Remove((json.RemoteAddress, reference), out _)
+                () => remoteStreams.Remove((json.Owner, reference), out _)
             )
         );
         json.AddDisposable(
@@ -223,10 +223,10 @@ public class Workspace : IWorkspace
         json.AddDisposable(
             // this is the "client" ==> never needs to submit full state
             json.ToDataChangedStream(reference)
-                .Where(x => !json.RemoteAddress.Equals(x.ChangedBy))
+                .Where(x => !json.Owner.Equals(x.ChangedBy))
                 .Subscribe(e =>
                 {
-                    Hub.Post(e, o => o.WithTarget(json.RemoteAddress));
+                    Hub.Post(e, o => o.WithTarget(json.Owner));
                 })
         );
         Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(owner));

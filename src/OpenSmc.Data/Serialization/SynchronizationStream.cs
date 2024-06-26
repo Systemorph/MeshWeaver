@@ -31,7 +31,7 @@ public record SynchronizationStream<TStream, TReference>(
     /// <summary>
     /// The address of the remote party
     /// </summary>
-    public object RemoteAddress { get; init; } = Owner.Equals(Hub.Address) ? Subscriber : Owner;
+    //public object RemoteAddress { get; init; } = Owner.Equals(Hub.Address) ? Subscriber : Owner;
 
     /// <summary>
     /// The projected reference of the stream, e.g. a collection (CollectionReference),
