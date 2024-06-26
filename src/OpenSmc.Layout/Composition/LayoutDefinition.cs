@@ -18,11 +18,11 @@ public record LayoutDefinition(IMessageHub Hub)
 
     public LayoutDefinition WithView(
         string area,
-        Func<LayoutAreaHost, IObservable<object>> generator
+        Func<LayoutAreaHost, RenderingContext, IObservable<object>> generator
     ) =>
         WithViewGenerator(
             r => r.Area == area,
-            new ViewElementWithViewStream(area, a => generator(a))
+            new ViewElementWithViewStream(area, (a,ctx) => generator(a, ctx))
         );
 
     public LayoutDefinition WithViewDefinition(
@@ -70,14 +70,14 @@ public record LayoutDefinition(IMessageHub Hub)
 
     public LayoutDefinition WithView(string area, object view) =>
         WithViewGenerator(r => r.Area == area, new ViewElementWithView(area, view));
-    public LayoutDefinition WithView(string area, Func<LayoutAreaHost, Task<object>> view)
+    public LayoutDefinition WithView(string area, Func<LayoutAreaHost,RenderingContext, Task<object>> view)
     {
         return WithViewGenerator(r => r.Area == area,
             new ViewElementWithViewDefinition(area, Observable.Return<ViewDefinition>(view.Invoke)));
     }
 
-    public LayoutDefinition WithView(string area, Func<LayoutAreaHost, object> view)
-        => WithView(area, a => Observable.Return(view(a)));
+    public LayoutDefinition WithView(string area, Func<LayoutAreaHost,RenderingContext, object> view)
+        => WithView(area, (a,ctx) => Observable.Return(view(a, ctx)));
 
 
     internal ViewElement GetViewElement(LayoutAreaReference reference)

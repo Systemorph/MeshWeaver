@@ -32,7 +32,7 @@ public record LayoutAreaHost : IDisposable
     private IMessageDelivery OnClick(IMessageDelivery<ClickedEvent> request)
     {
         if (GetControl(request.Message.Area) is UiControl { ClickAction: not null } control)
-            control.ClickAction.Invoke(new(request.Message.Payload, Hub, this));
+            control.ClickAction.Invoke(new(request.Message.Area, request.Message.Payload, Hub, this));
         return request.Processed();
     }
 

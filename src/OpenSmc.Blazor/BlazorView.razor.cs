@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Components;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Layout;
+using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Blazor
@@ -143,6 +144,10 @@ namespace OpenSmc.Blazor
             if (value is T t)
                 return t;
             throw new InvalidOperationException($"Cannot convert to {typeof(T).Name}");
+        }
+        protected void OnClick()
+        {
+            Stream.Hub.Post(new ClickedEvent(Area) { Reference = Stream.Reference, Owner = Stream.Owner }, o => o.WithTarget(Stream.Owner));
         }
 
     }
