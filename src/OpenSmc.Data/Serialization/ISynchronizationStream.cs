@@ -29,7 +29,7 @@ public interface ISynchronizationStream : IDisposable
 
 
     public void Post(WorkspaceMessage message) =>
-        Hub.Post(message with { Id = Owner, Reference = Reference }, o => o.WithTarget(Owner));
+        Hub.Post(message with { Owner = Owner, Reference = Reference }, o => o.WithTarget(Owner));
 }
 
 public interface ISynchronizationStream<TStream>

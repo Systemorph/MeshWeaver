@@ -33,8 +33,8 @@ public static class Controls
 
     public static MenuItemControl Menu(object title, object icon) => new(title, icon);
 
-    public static MenuItemControl Button(object title, object icon) =>
-        new(title, icon) { Style = "button" };
+    public static ButtonControl Button(object title) =>
+        new(title) { Style = "button" };
 
     public static ExceptionControl Exception(Exception ex) => new(ex.Message, ex.GetType().Name);
 
