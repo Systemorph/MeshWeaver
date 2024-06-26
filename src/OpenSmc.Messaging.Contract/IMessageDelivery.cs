@@ -37,7 +37,6 @@ public interface IMessageDelivery
     internal IMessageDelivery WithRoutedTarget(object address);
     IReadOnlyCollection<object> ToBeForwarded(IEnumerable<object> addresses);
     IMessageDelivery Forwarded(IEnumerable<object> addresses);
-    IMessageDelivery Mask(object hostAddress);
 }
 
 public interface IMessageDelivery<out TMessage> : IMessageDelivery

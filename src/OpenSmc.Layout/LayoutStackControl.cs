@@ -38,11 +38,11 @@ public record LayoutStackControl()
 
     public LayoutStackControl WithView(IObservable<ViewDefinition> viewDefinition)
         => WithView(GetAutoName(), viewDefinition);
-    public LayoutStackControl WithView(Func<LayoutArea, IObservable<object>> viewDefinition)
+    public LayoutStackControl WithView(Func<LayoutAreaHost, IObservable<object>> viewDefinition)
         => WithView(GetAutoName(), viewDefinition);
-    public LayoutStackControl WithView(string area, Func<LayoutArea, IObservable<object>> viewDefinition)
+    public LayoutStackControl WithView(string area, Func<LayoutAreaHost, IObservable<object>> viewDefinition)
         => this with { ViewElements = ViewElements.Add(new ViewElementWithViewStream(area, viewDefinition.Invoke)) };
-    public LayoutStackControl WithView(string area, Func<LayoutArea, object> viewDefinition)
+    public LayoutStackControl WithView(string area, Func<LayoutAreaHost, object> viewDefinition)
         => WithView(area, la => Observable.Return(viewDefinition.Invoke(la)));
 
 

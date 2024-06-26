@@ -2,7 +2,7 @@
 
 namespace OpenSmc.Messaging;
 
-public record PostOptions(object Sender, IMessageHub SenderHub)
+public record PostOptions(object Sender)
 {
     public const string RequestId = nameof(RequestId);
     internal object Target { get; init; }

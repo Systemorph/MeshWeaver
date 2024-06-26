@@ -5,16 +5,16 @@ using OpenSmc.Messaging.Serialization;
 namespace OpenSmc.Data;
 
 public record PartitionedTypeSourceWithType<T>(
-    IMessageHub Hub,
+    IWorkspace Workspace,
     Func<T, object> PartitionFunction,
     object DataSource
-) : TypeSourceWithType<T>(Hub, DataSource), IPartitionedTypeSource
+) : TypeSourceWithType<T>(Workspace, DataSource), IPartitionedTypeSource
 {
     public object GetPartition(object instance) => PartitionFunction.Invoke((T)instance);
 }
 
-public record TypeSourceWithType<T>(IMessageHub Hub, object DataSource)
-    : TypeSourceWithType<T, TypeSourceWithType<T>>(Hub, DataSource)
+public record TypeSourceWithType<T>(IWorkspace Workspace, object DataSource)
+    : TypeSourceWithType<T, TypeSourceWithType<T>>(Workspace, DataSource)
 {
     protected override InstanceCollection UpdateImpl(InstanceCollection instances) =>
         UpdateAction.Invoke(instances);
@@ -46,10 +46,10 @@ public record TypeSourceWithType<T>(IMessageHub Hub, object DataSource)
 public abstract record TypeSourceWithType<T, TTypeSource> : TypeSource<TTypeSource>
     where TTypeSource : TypeSourceWithType<T, TTypeSource>
 {
-    protected TypeSourceWithType(IMessageHub hub, object DataSource)
-        : base(hub, typeof(T), DataSource)
+    protected TypeSourceWithType(IWorkspace workspace, object DataSource)
+        : base(workspace, typeof(T), DataSource)
     {
-        hub.ServiceProvider.GetRequiredService<ITypeRegistry>().WithType(typeof(T));
+        workspace.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().WithType(typeof(T));
     }
 
     public TTypeSource WithKey(Func<T, object> key) => This with { Key = o => key.Invoke((T)o) };

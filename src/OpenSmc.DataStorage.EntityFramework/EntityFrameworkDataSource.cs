@@ -9,14 +9,14 @@ namespace OpenSmc.DataStorage.EntityFramework;
 
 public record EntityFrameworkDataSource(
     object Id,
-    IMessageHub Hub,
+    IWorkspace Workspace,
     EntityFrameworkDataStorage EntityFrameworkDataStorage
-) : DataSourceWithStorage<EntityFrameworkDataSource>(Id, Hub, EntityFrameworkDataStorage)
+) : DataSourceWithStorage<EntityFrameworkDataSource>(Id, Workspace, EntityFrameworkDataStorage)
 {
-    public override void Initialize()
+    public override void Initialize(WorkspaceState state)
     {
         EntityFrameworkDataStorage.Initialize(ModelBuilder ?? ConvertDataSourceMappings);
-        base.Initialize();
+        base.Initialize(state);
     }
 
     public EntityFrameworkDataSource WithModel(Action<ModelBuilder> modelBuilder) =>
@@ -55,7 +55,7 @@ public record EntityFrameworkDataSource(
         {
             TypeSources = TypeSources.Add(
                 typeof(T),
-                typeSource.Invoke(new TypeSourceWithTypeWithDataStorage<T>(Hub, Id, Storage))
+                typeSource.Invoke(new TypeSourceWithTypeWithDataStorage<T>(Workspace, Id, Storage))
             )
         };
 }

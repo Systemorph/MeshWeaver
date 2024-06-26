@@ -5,6 +5,8 @@ namespace OpenSmc.Messaging;
 public record DeferralItem : IAsyncDisposable, IDisposable
 {
     private readonly AsyncDelivery asyncDelivery;
+    private readonly SyncDelivery failure;
+
     private readonly ActionBlock<(
         IMessageDelivery Delivery,
         CancellationToken CancellationToken
@@ -15,15 +17,21 @@ public record DeferralItem : IAsyncDisposable, IDisposable
     )> deferral = new();
     private bool isReleased;
 
-    public DeferralItem(Predicate<IMessageDelivery> Filter, AsyncDelivery asyncDelivery)
+    public DeferralItem(Predicate<IMessageDelivery> Filter, AsyncDelivery asyncDelivery, SyncDelivery failure)
     {
         this.asyncDelivery = asyncDelivery;
+        this.failure = failure;
         executionBuffer = new ActionBlock<(
             IMessageDelivery Delivery,
             CancellationToken CancellationToken
         )>(d => asyncDelivery(d.Delivery, d.CancellationToken));
         this.Filter = Filter;
     }
+
+    public IMessageDelivery Failure(
+        IMessageDelivery delivery
+    )
+        => failure.Invoke(delivery);
 
     public async Task<IMessageDelivery> DeliverMessage(
         IMessageDelivery delivery,
@@ -36,7 +44,19 @@ public record DeferralItem : IAsyncDisposable, IDisposable
             return null;
         }
 
-        return await asyncDelivery.Invoke(delivery, cancellationToken);
+        try
+        {
+            var ret = await asyncDelivery.Invoke(delivery, cancellationToken);
+            if(ret?.State == MessageDeliveryState.Failed)
+                return failure(ret);
+            return ret;
+        }
+        catch (Exception e)
+        {
+            var ret = delivery.Failed(e.Message);
+            failure.Invoke(ret);
+            return ret;
+        }
     }
 
     private bool isLinked;

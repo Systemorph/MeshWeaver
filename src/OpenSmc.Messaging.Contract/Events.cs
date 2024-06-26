@@ -1,29 +1,27 @@
-﻿using OpenSmc.Activities;
+﻿namespace OpenSmc.Messaging;
 
-namespace OpenSmc.Messaging;
+public class DeliveryFailureException : Exception
+{
+    internal DeliveryFailureException()
+        : base() { }
 
-public record ConnectToHubRequest : IRequest<HubInfo>;
+    public DeliveryFailureException(DeliveryFailure failure)
+        : base($"Delivery of message {failure.Delivery.Id} failed : {failure.Delivery.Message}")
+    {
+        Failure = failure;
+    }
 
-public record DeleteHubRequest(object Address) : IRequest<HubDeleted>;
-public record HubDeleted(object Address);
-public record HubInfo(object Address);
+    internal DeliveryFailureException(string message)
+        : base(message) { }
 
-public record DisconnectHubRequest();
+    internal DeliveryFailureException(string message, Exception innerException)
+        : base(message, innerException) { }
+
+    internal DeliveryFailure Failure { get; }
+}
+
+public record DeliveryFailure(IMessageDelivery Delivery);
 
 public record PersistenceAddress(object Host) : IHostedAddress;
 
-
-public record GetRequest<T> : IRequest<T>
-{
-    public object Id { get; init; }
-    public object Options { get; init; }
-}
-
-
-public interface IVersioned
-{
-    long Version { get; }
-}
 public record HeartbeatEvent(SyncDelivery Route);
-
-

@@ -19,7 +19,6 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
     IMessageDelivery DeliverMessage(IMessageDelivery delivery);
     object Address { get; }
     IServiceProvider ServiceProvider { get; }
-    void ConnectTo(IMessageHub hub);
 
     Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request) =>
         AwaitResponse(request, new CancellationTokenSource(DefaultTimeout).Token);

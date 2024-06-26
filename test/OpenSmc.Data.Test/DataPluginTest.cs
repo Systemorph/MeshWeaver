@@ -62,7 +62,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
         var updateItems = new object[] { new MyData("1", "AAA"), new MyData("3", "CCC"), };
 
-        TimeSpan timeout = TimeSpan.FromSeconds(9999);
+        var timeout = TimeSpan.FromSeconds(9999);
         var clientWorkspace = GetWorkspace(client);
         await clientWorkspace.Initialized;
         var data = (
@@ -104,6 +104,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             .ToArray();
 
         data.ToArray().Should().BeEquivalentTo(expectedItems);
+        await Task.Delay(200);
         storage.Values.Cast<MyData>().OrderBy(x => x.Id).Should().BeEquivalentTo(expectedItems);
     }
 
@@ -159,9 +160,10 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
         var instance = await hostWorkspace
             .GetObservable<MyData>("1")
-            .FirstAsync(i => i?.Text == TextChange);
+            .FirstAsync(i => i?.Text == TextChange)
+            //.Timeout(TimeSpan.FromSeconds(5))
+            ;
         instance.Should().NotBeNull();
-
         storage.Values.Should().Contain(i => (i as MyData).Text == TextChange);
     }
 

@@ -23,7 +23,6 @@ public record UpdateDataRequest(IReadOnlyCollection<object> Elements) : DataChan
 public record DeleteDataRequest(IReadOnlyCollection<object> Elements)
     : DataChangedRequest(Elements);
 
-
 public record DataChangeResponse(long Version, DataChangeStatus Status, ActivityLog Log);
 
 public enum DataChangeStatus
@@ -40,13 +39,13 @@ public enum ChangeType
 }
 
 public record DataChangedEvent(
-    object Id,
+    object Owner,
     object Reference,
     long Version,
     RawJson Change,
     ChangeType ChangeType,
-    object ChangedBy)
-;
+    object ChangedBy
+);
 
 public record SubscribeRequest(WorkspaceReference Reference) : IRequest<DataChangedEvent>;
 

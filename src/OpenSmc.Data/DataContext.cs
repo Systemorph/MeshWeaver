@@ -1,13 +1,17 @@
 ﻿using System.Collections.Immutable;
-using System.Text.Json;
-using Json.Patch;
-using Json.Pointer;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
 
-public sealed record DataContext(IMessageHub Hub) : IAsyncDisposable
+public sealed record DataContext : IAsyncDisposable
 {
+    public DataContext(IMessageHub hub, IWorkspace workspace)
+    {
+        Hub = hub;
+        Workspace = workspace;
+        ReduceManager = StandardWorkspaceReferenceImplementations.CreateReduceManager(Hub);
+    }
+
     internal ImmutableDictionary<object, IDataSource> DataSources { get; private set; } =
         ImmutableDictionary<object, IDataSource>.Empty;
 
@@ -26,15 +30,31 @@ public sealed record DataContext(IMessageHub Hub) : IAsyncDisposable
             .Values.Select(ds => ds.TypeSources.GetValueOrDefault(type))
             .FirstOrDefault(ts => ts is not null);
 
-    public ValueTask<EntityStore> Initialized =>
-        DataSources
+    public Task<WorkspaceState> Initialized { get; private set; }
+
+    private async Task<WorkspaceState> CreateInitializationTask()
+    {
+        var state = await DataSources
             .Values.ToAsyncEnumerable()
             .SelectAwait(async ds => await ds.Initialized)
-            .AggregateAsync(new EntityStore(), (store, el) => store.Merge(el));
+            .AggregateAsync(new WorkspaceState(
+                Hub,
+                DataSources
+                    .Values.SelectMany(ds =>
+                        ds.TypeSources.Select(ts => new { DataSource = ds, TypeSource = ts })
+                    )
+                    .ToDictionary(x => x.TypeSource.Key, x => x.DataSource),
+                ReduceManager
+            ), (x, y) => x.Merge(y));
+        return state;
+    }
+
     public ImmutableDictionary<object, DataSourceBuilder> DataSourceBuilders { get; set; } =
         ImmutableDictionary<object, DataSourceBuilder>.Empty;
-    internal ReduceManager<WorkspaceState> ReduceManager { get; init; } = CreateReduceManager();
+    internal ReduceManager<WorkspaceState> ReduceManager { get; init; }
     internal TimeSpan InitializationTimeout { get; set; } = TimeSpan.FromHours(60);
+    public IMessageHub Hub { get; }
+    public IWorkspace Workspace { get; }
 
     public DataContext WithInitializationTimeout(TimeSpan timeout) =>
         this with
@@ -42,13 +62,9 @@ public sealed record DataContext(IMessageHub Hub) : IAsyncDisposable
             InitializationTimeout = timeout
         };
 
-
-    public DataContext ConfigureReduction(Func<ReduceManager<WorkspaceState>, ReduceManager<WorkspaceState>> change) =>
-        this with
-        {
-            ReduceManager = change.Invoke(ReduceManager)
-        };
-
+    public DataContext Configure(
+        Func<ReduceManager<WorkspaceState>, ReduceManager<WorkspaceState>> change
+    ) => this with { ReduceManager = change.Invoke(ReduceManager) };
 
     public delegate IDataSource DataSourceBuilder(IMessageHub hub);
 
@@ -59,76 +75,21 @@ public sealed record DataContext(IMessageHub Hub) : IAsyncDisposable
             kvp => kvp.Value.Invoke(Hub)
         );
 
-        foreach (var dataSource in DataSources.Values)
-            dataSource.Initialize();
-    }
-
-    internal static ReduceManager<WorkspaceState> CreateReduceManager()
-    {
-        return new ReduceManager<WorkspaceState>()
-            .AddWorkspaceReference<EntityReference, object>(
-                (ws, reference) => ws.Store.ReduceImpl(reference)
-            )
-            .AddWorkspaceReference<PartitionedCollectionsReference, EntityStore>(
-                (ws, reference) => ws.ReduceImpl(reference)
-            )
-            .AddWorkspaceReference<CollectionReference, InstanceCollection>(
-                (ws, reference) => ws.Store.ReduceImpl(reference)
-            )
-            .AddWorkspaceReference<CollectionsReference, EntityStore>(
-                (ws, reference) => ws.Store.ReduceImpl(reference)
-            )
-            .AddWorkspaceReference<WorkspaceStoreReference, EntityStore>(
-                (ws, _) => ws.Store
-            )
-            .AddWorkspaceReference<WorkspaceStateReference, WorkspaceState>(
-                (ws, _) => ws
-            )
-            .AddBackTransformation<PartitionedCollectionsReference, EntityStore>((ws, reference, update) =>
-                update.SetValue(ws with { Store = ws.Store.Update(reference, update.Value) })
-            )
-            .AddBackTransformation<WorkspaceStoreReference, EntityStore>((ws, reference, update) =>
-                update.SetValue(ws with { Store = ws.Store.Update(reference, update.Value) })
-            )
-            .AddBackTransformation<WorkspaceStoreReference, WorkspaceState>((ws, _, update) =>
-                update.SetValue(ws with { Store = ws.Store.Merge(update.Value.Store) })
-            )
-            .AddBackTransformation<CollectionsReference, EntityStore>((ws, reference, update) =>
-                update.SetValue(ws with { Store = ws.Store.Update(reference, update.Value) })
-            )
-            .AddBackTransformation<CollectionReference, InstanceCollection>((ws, reference, update) =>
-                update.SetValue(ws with { Store = ws.Store.Update(reference, update.Value) })
-            )
-            .ForReducedStream<EntityStore>(reduced =>
-                reduced
-                    .AddWorkspaceReference<EntityReference, object>(
-                        (ws, reference) => ws.ReduceImpl(reference)
-                    )
-                    .AddWorkspaceReference<CollectionReference, InstanceCollection>(
-                        (ws, reference) => ws.ReduceImpl(reference)
-                    )
-                    .AddWorkspaceReference<CollectionsReference, EntityStore>(
-                        (ws, reference) => ws.ReduceImpl(reference)
-                    )
-                    .AddWorkspaceReference<WorkspaceStoreReference, EntityStore>(
-                        (ws, _) => ws)
-                    .WithPatchFunction(PatchEntityStore)
-            )
-            .ForReducedStream<InstanceCollection>(reduced =>
-                reduced.AddWorkspaceReference<EntityReference, object>(
-                    (ws, reference) => ws.Instances.GetValueOrDefault(reference.Id)
+        var state = new WorkspaceState(
+            Hub,
+            DataSources
+                .Values.SelectMany(ds =>
+                    ds.TypeSources.Values.Select(ts => new { DataSource = ds, TypeSource = ts })
                 )
+                .ToDictionary(x => x.TypeSource.ElementType, x => x.DataSource),
+            ReduceManager
+        );
 
-            )
-            .ForReducedStream<JsonElement>(conf => conf.AddWorkspaceReference<JsonPointerReference, JsonElement?>(ReduceJsonPointer));
-    }
-    private static JsonElement? ReduceJsonPointer(JsonElement obj, JsonPointerReference pointer)
-    {
-        var parsed = JsonPointer.Parse(pointer.Pointer);
-        var result = parsed.Evaluate(obj);
-        return result;
-    }
+        foreach (var dataSource in DataSources.Values)
+            dataSource.Initialize(state);
 
+        Initialized = CreateInitializationTask();
+    }
     public async ValueTask DisposeAsync()
     {
         foreach (var dataSource in DataSources.Values)
@@ -136,67 +97,4 @@ public sealed record DataContext(IMessageHub Hub) : IAsyncDisposable
             await dataSource.DisposeAsync();
         }
     }
-
-    private static EntityStore PatchEntityStore(EntityStore current, JsonElement currentJson, JsonPatch patch, JsonSerializerOptions options)
-    {
-        foreach (var op in patch.Operations)
-        {
-            switch (op.Path.Segments.Length)
-            {
-                case 0:
-                    throw new NotSupportedException();
-                case 1:
-                    current = UpdateCollection(current, op, op.Path.Segments[0].Value, options);
-                    break;
-                default:
-                    current = UpdateInstance(current, currentJson, op, op.Path.Segments[0].Value, op.Path.Segments[1].Value, options);
-                    break;
-            }
-        }
-
-        return current;
-    }
-
-    private static EntityStore UpdateInstance(
-        EntityStore current,
-        JsonElement currentJson,
-        PatchOperation op,
-        string collection,
-        string idSerialized,
-        JsonSerializerOptions options)
-    {
-        var id = JsonSerializer.Deserialize<object>(idSerialized.Replace("~1", "/"), options);
-        switch (op.Op)
-        {
-            case OperationType.Add:
-            case OperationType.Replace:
-                return current.Update(collection, i => i.Update(id, GetDeserializedValue(collection, idSerialized, currentJson, options)));
-            case OperationType.Remove:
-                return current.Update(collection, i => i.Remove(id));
-            default:
-                throw new NotSupportedException();
-        }
-    }
-
-    private static object GetDeserializedValue(string collection, string idSerialized, JsonElement currentJson, JsonSerializerOptions options)
-    {
-        var pointer = JsonPointer.Parse($"/{collection}/{idSerialized}");
-        var el = pointer.Evaluate(currentJson);
-        return el?.Deserialize<object>(options);
-    }
-
-    private static EntityStore UpdateCollection(EntityStore current, PatchOperation op, string collection, JsonSerializerOptions options)
-    {
-        switch (op.Op)
-        {
-            case OperationType.Add:
-            case OperationType.Replace:
-                return current.Update(collection, _ => op.Value.Deserialize<InstanceCollection>(options));
-            case OperationType.Remove:
-                return current.Remove(collection);
-            default:
-                throw new NotSupportedException();
-        }
-    }
-
 }

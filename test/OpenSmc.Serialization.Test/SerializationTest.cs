@@ -100,7 +100,7 @@ public class SerializationTest : TestBase
     {
         var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
 
-        var postOptions = new PostOptions(client.Address, client)
+        var postOptions = new PostOptions(client.Address)
             .WithTarget(new HostAddress())
             .WithProperties(
                 new Dictionary<string, object>

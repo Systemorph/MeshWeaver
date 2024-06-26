@@ -93,7 +93,6 @@ public record MessageHubConfiguration
     protected virtual ServiceCollection ConfigureServices<TAddress>(IMessageHub parent)
     {
         var services = new ServiceCollection();
-        services.Replace(ServiceDescriptor.Singleton<MessageHubConnections>(_ => new()));
         services.Replace(ServiceDescriptor.Singleton<IMessageHub>(sp => new MessageHub<TAddress>(sp, sp.GetRequiredService<HostedHubsCollection>(), this, parent)));
         services.Replace(ServiceDescriptor.Singleton<HostedHubsCollection, HostedHubsCollection>());
         services.Replace(ServiceDescriptor.Singleton(typeof(ITypeRegistry),

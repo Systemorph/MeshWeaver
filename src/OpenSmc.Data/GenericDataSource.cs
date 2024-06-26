@@ -1,7 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reflection;
-using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
@@ -13,24 +12,25 @@ public interface IDataSource : IAsyncDisposable
     IReadOnlyDictionary<Type, ITypeSource> TypeSources { get; }
     IReadOnlyCollection<Type> MappedTypes { get; }
     object Id { get; }
-    void Initialize();
-    ValueTask<EntityStore> Initialized { get; }
+    CollectionsReference Reference { get; }
+    void Initialize(WorkspaceState state);
+    Task<WorkspaceState> Initialized { get; }
+
+    IReadOnlyCollection<ISynchronizationStream<EntityStore>> Streams { get; }
+
 }
 
-public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDataSource
+
+public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) : IDataSource
     where TDataSource : DataSource<TDataSource>
 {
-    protected readonly IWorkspace Workspace = Hub.ServiceProvider.GetRequiredService<IWorkspace>();
-
     protected virtual TDataSource This => (TDataSource)this;
+    protected IMessageHub Hub => Workspace.Hub;
 
-    protected ImmutableList<IChangeStream<EntityStore>> Streams { get; set; } = [];
+    protected ImmutableList<ISynchronizationStream<EntityStore>> Streams { get; set; } = [];
+    IReadOnlyCollection<ISynchronizationStream<EntityStore>> IDataSource.Streams => Streams;
 
-    public ValueTask<EntityStore> Initialized =>
-        Streams
-            .ToAsyncEnumerable()
-            .SelectAwait(async stream => await stream.Initialized)
-            .AggregateAsync(new EntityStore(), (store, el) => store.Merge(el));
+    public Task<WorkspaceState> Initialized { get; private set; }
 
     IReadOnlyDictionary<Type, ITypeSource> IDataSource.TypeSources => TypeSources;
 
@@ -48,7 +48,6 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
     public ITypeSource GetTypeSource(string collectionName) =>
         TypeSources.Values.FirstOrDefault(x => x.CollectionName == collectionName);
 
-
     public ITypeSource GetTypeSource(Type type) => TypeSources.GetValueOrDefault(type);
 
     public virtual TDataSource WithType(Type type, Func<ITypeSource, ITypeSource> config) =>
@@ -60,32 +59,104 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
 
     public TDataSource WithType<T>()
         where T : class => WithType<T>(d => d);
+    public TDataSource WithTypes(IEnumerable<Type> types)=>
+    types.Aggregate(This, (ds, t) => ds.WithType(t, x => x));
 
     protected abstract TDataSource WithType<T>(Func<ITypeSource, ITypeSource> config)
         where T : class;
 
     private IReadOnlyCollection<IDisposable> changesSubscriptions;
 
-    public virtual void Initialize()
+    public virtual void Initialize(WorkspaceState state)
+    {
+        Initialized = InitializeStreams(state);
+    }
+
+    private async Task<WorkspaceState> InitializeStreams(WorkspaceState state) =>
+        state with
+        {
+            StoresByStream = state.StoresByStream.SetItems(
+                await Streams
+                    .ToAsyncEnumerable()
+                    .SelectAwait(async stream => new
+                    {
+                        stream.StreamReference,
+                        Store = await stream.Initialized
+                    })
+                    .ToDictionaryAsync(x => x.StreamReference, x => x.Store)
+            )
+        };
+
+
+    public CollectionsReference Reference => GetReference();
+
+    protected virtual CollectionsReference GetReference() =>
+        new CollectionsReference(TypeSources.Values.Select(ts => ts.CollectionName).ToArray());
+
+    public virtual ValueTask DisposeAsync()
+    {
+        foreach (var stream in Streams)
+            stream.Dispose();
+
+        if (changesSubscriptions != null)
+            foreach (var subscription in changesSubscriptions)
+                subscription.Dispose();
+        return default;
+    }
+}
+
+public record GenericDataSource(object Id, IWorkspace Workspace)
+    : GenericDataSource<GenericDataSource>(Id, Workspace);
+
+public record GenericDataSource<TDataSource>(object Id, IWorkspace Workspace)
+    : TypeSourceBasedDataSource<TDataSource>(Id, Workspace)
+    where TDataSource : GenericDataSource<TDataSource>
+{
+    protected override TDataSource WithType<T>(Func<ITypeSource, ITypeSource> config) =>
+        WithType<T>(x => (TypeSourceWithType<T>)config(x));
+
+    public TDataSource WithType<T>(Func<TypeSourceWithType<T>, TypeSourceWithType<T>> configurator)
+        where T : class => WithTypeSource(typeof(T), configurator.Invoke(new(Workspace, Id)));
+}
+
+public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorkspace Workspace)
+    : DataSource<TDataSource>(Id, Workspace)
+    where TDataSource : TypeSourceBasedDataSource<TDataSource>
+{
+    public override void Initialize(WorkspaceState state)
+    {
+        var stream = SetupDataSourceStream(state);
+        Streams = Streams.Add(stream);
+        Hub.Schedule(cancellationToken => InitializeAsync(stream, cancellationToken));
+        base.Initialize(state);
+    }
+
+    protected virtual ISynchronizationStream<EntityStore, CollectionsReference> SetupDataSourceStream(WorkspaceState state)
     {
         var reference = GetReference();
-        var stream = Workspace.GetStream(Hub.Address, reference);
-        Streams = Streams.Add(stream);
-        stream.Skip(1).Subscribe(Synchronize);
-        Hub.Schedule(cancellationToken => InitializeAsync(stream, cancellationToken));
+
+        var workspaceSync = Workspace.GetStream(Hub.Address, reference);
+
+        var stream = new ChainedSynchronizationStream<EntityStore, CollectionsReference, EntityStore>(
+            workspaceSync,
+            Id,
+            Hub.Address,
+            reference
+        );
+
+        stream.AddDisposable(workspaceSync);
+        stream.AddDisposable(workspaceSync.Where(x => !Id.Equals(x.ChangedBy)).Subscribe(Synchronize));
+        return stream;
     }
 
     protected virtual void Synchronize(ChangeItem<EntityStore> item)
     {
-        if (item.ChangedBy == null || Id.Equals(item.ChangedBy))
-            return;
-
         foreach (var typeSource in TypeSources.Values)
             typeSource.Update(item);
     }
 
     private async Task InitializeAsync(
-        IChangeStream<EntityStore> stream,
+        ISynchronizationStream<EntityStore> stream,
         CancellationToken cancellationToken
     )
     {
@@ -101,41 +172,19 @@ public abstract record DataSource<TDataSource>(object Id, IMessageHub Hub) : IDa
             })
             .AggregateAsync(
                 new EntityStore(),
-                (store, selected) => store.Merge(selected.Reference, selected.Initialized), cancellationToken: cancellationToken);
+                (store, selected) => store.Update(selected.Reference, selected.Initialized),
+                cancellationToken: cancellationToken
+            );
 
-        stream.Initialize(initial);
-    }
-
-    protected virtual WorkspaceReference<EntityStore> GetReference()
-    {
-        WorkspaceReference<EntityStore> collections = new CollectionsReference(
-            TypeSources.Values.Select(ts => ts.CollectionName).ToArray()
+        stream.OnNext(
+            new ChangeItem<EntityStore>(
+                stream.Owner,
+                stream.Reference,
+                initial,
+                Id,
+                null,
+                Hub.Version
+            )
         );
-        return collections;
     }
-
-    public virtual ValueTask DisposeAsync()
-    {
-        foreach (var stream in Streams)
-            stream.Dispose();
-
-        if (changesSubscriptions != null)
-            foreach (var subscription in changesSubscriptions)
-                subscription.Dispose();
-        return default;
-    }
-}
-
-public record GenericDataSource(object Id, IMessageHub Hub)
-    : GenericDataSource<GenericDataSource>(Id, Hub) { }
-
-public record GenericDataSource<TDataSource>(object Id, IMessageHub Hub)
-    : DataSource<TDataSource>(Id, Hub)
-    where TDataSource : GenericDataSource<TDataSource>
-{
-    protected override TDataSource WithType<T>(Func<ITypeSource, ITypeSource> config) =>
-        WithType<T>(x => (TypeSourceWithType<T>)config(x));
-
-    public TDataSource WithType<T>(Func<TypeSourceWithType<T>, TypeSourceWithType<T>> configurator)
-        where T : class => WithTypeSource(typeof(T), configurator.Invoke(new(Hub, Id)));
 }

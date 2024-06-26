@@ -45,7 +45,7 @@ public class ReportDataCubeTest : HubTestBase
             );
     }
 
-    private async Task<WorkspaceState> GetWorkspaceStateAsync()
+    private async Task<WorkspaceState>GetWorkspaceStateAsync()
     {
         var workspace = GetHost().GetWorkspace();
         await workspace.Initialized;

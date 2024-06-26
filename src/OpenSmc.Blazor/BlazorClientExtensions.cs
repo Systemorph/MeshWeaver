@@ -25,7 +25,7 @@ public static class BlazorClientExtensions
     #region Standard Formatting
     private static ViewDescriptor DefaultFormatting(
         object instance,
-        IChangeStream<JsonElement, LayoutAreaReference> stream,
+        ISynchronizationStream<JsonElement, LayoutAreaReference> stream,
         string area
     )
     {
@@ -52,7 +52,7 @@ public static class BlazorClientExtensions
 
     private static ViewDescriptor DelegateToDotnetInteractive(
         object instance,
-        IChangeStream<JsonElement, LayoutAreaReference> stream,
+        ISynchronizationStream<JsonElement, LayoutAreaReference> stream,
         string area
     )
     {

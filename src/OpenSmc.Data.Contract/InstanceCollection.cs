@@ -91,8 +91,8 @@ public record InstanceCollection
         };
     }
 
-    public InstanceCollection Remove(object id)
+    public InstanceCollection Remove(IEnumerable<object> ids)
     {
-        return this with { Instances = Instances.Remove(id) };
+        return this with { Instances = Instances.RemoveRange(ids) };
     }
 }
