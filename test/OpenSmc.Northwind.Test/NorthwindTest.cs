@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using System.Text.Json;
 using FluentAssertions;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
@@ -9,7 +10,6 @@ using OpenSmc.Northwind.Model;
 using OpenSmc.Northwind.ViewModel;
 using Xunit;
 using Xunit.Abstractions;
-using Category = DocumentFormat.OpenXml.Drawing.Diagrams.Category;
 
 namespace OpenSmc.Northwind.Test;
 
@@ -45,7 +45,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
                     .FromHub(new CustomerAddress(), c => c.WithType<Customer>())
                     .FromHub(new ProductAddress(), c => c.WithType<Product>())
                     .FromHub(new EmployeeAddress(), c => c.WithType<Employee>())
-                    .FromHub(new OrderAddress(), c => c.WithType<Order>())
+                    .FromHub(new OrderAddress(), c => c.WithType<Order>().WithType<OrderDetails>())
                     .FromHub(new SupplierAddress(), c => c.WithType<Supplier>())
             );
     }
@@ -121,8 +121,8 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = GetClient().GetWorkspace();
         await workspace.Initialized;
 
-        var viewName = nameof(NorthwindViewModels.Dashboard);
-        var stream = workspace.GetStream(new HostAddress(), new LayoutAreaReference(viewName));
+        var viewName = nameof(NorthwindLayoutAreas.Dashboard);
+        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(new HostAddress(), new LayoutAreaReference(viewName));
         var dashboard = (await stream.GetControl(viewName)).Should().BeOfType<LayoutStackControl>().Subject;
         var areas = dashboard.Areas;
         var controls = new List<KeyValuePair<string, object>>();

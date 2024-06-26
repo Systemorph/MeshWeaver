@@ -29,7 +29,7 @@ public record InstanceCollection
             Instances = Instances.SetItem(key, value)
         };
 
-    public InstanceCollection Change(DataChangedReqeust request)
+    public InstanceCollection Change(DataChangedRequest request)
     {
         switch (request)
         {
@@ -89,5 +89,10 @@ public record InstanceCollection
             //TODO Roland Bürgi 2024-05-10: this won't work for deletions ==> need to create unit test and implement deletion via sync
             Instances = Instances.SetItems(updated.Instances)
         };
+    }
+
+    public InstanceCollection Remove(object id)
+    {
+        return this with { Instances = Instances.Remove(id) };
     }
 }

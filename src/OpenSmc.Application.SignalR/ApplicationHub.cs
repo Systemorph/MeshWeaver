@@ -8,7 +8,7 @@ using Orleans.Streams;
 
 namespace OpenSmc.Application.SignalR;
 
-public class ApplicationHub(IClusterClient clusterClient, IHubContext<ApplicationHub> hubContext, GroupsSubscriptions<string> subscriptions, ILogger<ApplicationHub> logger) : Hub
+public class ApplicationHub(IClusterClient clusterClient, IMessageHub<SignalRAddress> hub, IHubContext<ApplicationHub> hubContext, GroupsSubscriptions<string> subscriptions, ILogger<ApplicationHub> logger) : Hub
 {
     public const string HandleEvent = nameof(HandleEvent); // TODO V10: This name is to be clarified with Ui side (2024/04/17, Dmitry Kalabin)
 
@@ -30,8 +30,6 @@ public class ApplicationHub(IClusterClient clusterClient, IHubContext<Applicatio
     public async Task DeliverMessageAsync(MessageDelivery<RawJson> delivery)
     {
         logger.LogTrace("Received incoming message in SignalR Hub to deliver: {delivery}", delivery);
-        var grainId = delivery.Target.ToString(); // TODO V10: need to make this deterministic (2024/04/22, Dmitry Kalabin)
-        var grain = clusterClient.GetGrain<IApplicationGrain>(grainId);
 
         var uiId = (delivery.Sender as UiAddress)?.Id;
         if (uiId != null)
@@ -39,7 +37,7 @@ public class ApplicationHub(IClusterClient clusterClient, IHubContext<Applicatio
             await subscriptions.SubscribeAsync(Context.ConnectionId, uiId, SubscribeBackwardDelivery);
         }
 
-        await grain.DeliverMessage(delivery);
+        hub.DeliverMessage(delivery);
     }
 
     private Task<IAsyncDisposable> SubscribeBackwardDelivery(string uiId, Func<IReadOnlyCollection<string>> getConnections)

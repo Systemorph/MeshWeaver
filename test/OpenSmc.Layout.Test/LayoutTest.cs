@@ -1,5 +1,4 @@
-﻿using System.Collections;
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Text.Json;
 using FluentAssertions;
@@ -10,6 +9,7 @@ using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
+using OpenSmc.Utils;
 using Xunit.Abstractions;
 
 namespace OpenSmc.Layout.Test;
@@ -97,7 +97,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var reference = new LayoutAreaReference(StaticView);
 
         var workspace = GetClient().GetWorkspace();
-        var stream = workspace.GetStream(new HostAddress(), reference);
+        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(new HostAddress(), reference);
 
         var control = await stream.GetControl(reference.Area);
         var areas = control
@@ -137,7 +137,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var reference = new LayoutAreaReference(nameof(ViewWithProgress));
 
         var workspace = GetClient().GetWorkspace();
-        var stream = workspace.GetStream(new HostAddress(), reference);
+        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(new HostAddress(), reference);
         var controls = await stream
             .GetControlStream(reference.Area)
             .TakeUntil(o => o is HtmlControl)
@@ -173,7 +173,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetStream(new HostAddress(), reference);
+        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(new HostAddress(), reference);
         var reportArea = $"{reference.Area}/Content";
         var content = await stream.GetControlStream(reportArea).FirstAsync(x => x != null);
         content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
@@ -182,7 +182,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var toolbarArea = $"{reference.Area}/Toolbar";
         var yearTextBox = (TextBoxControl)await stream.GetControlStream(toolbarArea).FirstAsync();
         var jsonPath = yearTextBox.Data.Should().BeOfType<JsonPointerReference>().Which;
-        jsonPath.Pointer.Should().Be("/data/toolbar/year");
+        jsonPath.Pointer.Should().Be("/data/\"toolbar\"/year");
         var year = await stream.Reduce(jsonPath).FirstAsync();
         year.Value.Should().BeOfType<JsonElement>().Which.GetInt32().Should().Be(2024);
 
@@ -216,12 +216,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetStream(new HostAddress(), reference);
+        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(new HostAddress(), reference);
         var controlArea = $"{reference.Area}";
         var content = await stream.GetControlStream(controlArea).FirstAsync(x => x != null);
         var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
         var dataReference = itemTemplate.Data.Should().BeOfType<JsonPointerReference>().Which;
-        dataReference.Pointer.Should().Be($"/data/{nameof(ItemTemplate)}");
+        dataReference.Pointer.Should().Be($"/data/\"{nameof(ItemTemplate)}\"");
         var data = await stream.Reduce(dataReference).FirstAsync();
 
         var deserialized = data.Value?.Deserialize<IEnumerable<DataRecord>>(
@@ -241,7 +241,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetStream(new HostAddress(), reference);
+        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(new HostAddress(), reference);
         var buttonArea = $"{reference.Area}/Button";
         var content = await stream.GetControlStream(buttonArea).FirstAsync();
         content
@@ -273,7 +273,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetStream(new HostAddress(), reference);
+        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(new HostAddress(), reference);
         var content = await stream.GetControlStream(reference.Area).FirstAsync();
         content
             .Should()
@@ -282,8 +282,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .HaveCount(2)
             .And.BeEquivalentTo(
                 [
-                    new DataGridColumn<string> { Property = nameof(DataRecord.SystemName) },
-                    new DataGridColumn<string> { Property = nameof(DataRecord.DisplayName) }
+                    new DataGridColumn<string> { Property = nameof(DataRecord.SystemName).ToCamelCase(), Title = nameof(DataRecord.SystemName).Wordify() },
+                    new DataGridColumn<string> { Property = nameof(DataRecord.DisplayName).ToCamelCase(), Title = nameof(DataRecord.DisplayName).Wordify()}
                 ]
             );
     }
