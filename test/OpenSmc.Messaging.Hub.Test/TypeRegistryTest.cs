@@ -20,9 +20,11 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
     ) => configuration.WithTypes(typeof(GenericRequest<>));
 
     [Fact]
-    public void GenericTypes()
+    public async Task GenericTypes()
     {
         var host = GetHost();
+        await host.HasStarted;
+
         var typeRegistry = host.ServiceProvider.GetRequiredService<ITypeRegistry>();
         var canMap = typeRegistry.TryGetTypeName(typeof(GenericRequest<int>), out var typeName);
         canMap.Should().BeTrue();
