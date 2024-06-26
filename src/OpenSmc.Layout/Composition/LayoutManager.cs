@@ -39,14 +39,16 @@ public class LayoutManager
             };
         }
 
+
+
         if (viewModel is LayoutGridItemControl gridItem)
         {
-            RenderArea($"{area}/ChildContent", new ViewElementWithView("ChildContent", gridItem.ChildContent));
+            RenderArea($"{area}/{LayoutGridItemControl.ChildContentArea}",  gridItem.ChildContent);
         }
 
         if (viewModel is SplitterPaneControl splitterPane)
         {
-            RenderArea($"{area}/ChildContent", new ViewElementWithView("ChildContent", splitterPane.ChildContent));
+            RenderArea($"{area}/{SplitterPaneControl.ChildContentArea}", splitterPane.ChildContent);
         }
 
         //if (viewModel is UiControl { DataContext: not null } control)

@@ -97,6 +97,7 @@ public record SplitterSkin : Skin
 public record SplitterPaneControl()
     : UiControl<SplitterPaneControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
 {
+    public static string ChildContentArea => nameof(ChildContent);
     public UiControl ChildContent { get; init; }
     public bool Collapsible { get; init; }
     public bool Collapsed { get; init; }
@@ -130,6 +131,7 @@ public record GridSkin : Skin
 public record LayoutGridItemControl()
     : UiControl<LayoutGridItemControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
 {
+    public static string ChildContentArea => nameof(ChildContent);
     public UiControl ChildContent { get; init; }
     public bool? AdaptiveRendering { get; init; }
     public JustifyContent? Justify { get; init; }
