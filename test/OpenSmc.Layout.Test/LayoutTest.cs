@@ -61,7 +61,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             );
     }
 
-    private object ItemTemplate(LayoutArea area, IReadOnlyCollection<DataRecord> data) =>
+    private object ItemTemplate(LayoutAreaHost area, IReadOnlyCollection<DataRecord> data) =>
         area.Bind(
             data,
             nameof(ItemTemplate),
@@ -115,7 +115,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         areaControls.Should().HaveCount(2).And.AllBeOfType<HtmlControl>();
     }
 
-    private static async Task<object> ViewWithProgress(LayoutArea area)
+    private static async Task<object> ViewWithProgress(LayoutAreaHost area)
     {
         var percentage = 0;
         var progress = Controls.Progress("Processing", percentage);
@@ -259,7 +259,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         content.Should().BeOfType<HtmlControl>().Which.Data.Should().Be("1");
     }
 
-    private object DataGrid(LayoutArea area)
+    private object DataGrid(LayoutAreaHost area)
     {
         var data = new DataRecord[] { new("1", "1"), new("2", "2") };
         return data.ToDataGrid(grid =>

@@ -25,7 +25,11 @@ public static class JsonSynchronizationStream
             )
             .Concat(json.Skip(1)
                 .Select(x =>
-                    json.GetPatch(reference, currentSync!.Value, x.Value, x.ChangedBy)))
+                {
+                    var ret = json.GetPatch(reference, currentSync!.Value, x.Value, x.ChangedBy);
+                    currentSync = x.Value;
+                    return ret;
+                }))
             .Where(x => x != null);
     }
 
@@ -91,7 +95,9 @@ public static class JsonSynchronizationStream
         json.Update(state => json.Parse(state, request));
     }
 
-    private static ChangeItem<JsonElement> Parse(this ISynchronizationStream<JsonElement> json, JsonElement state,
+    private static ChangeItem<JsonElement> Parse(
+        this ISynchronizationStream<JsonElement> json, 
+        JsonElement state,
         DataChangedEvent request) =>
         request.ChangeType == ChangeType.Full
             ? new(json.Owner, json.Reference, JsonDocument.Parse(request.Change.Content).RootElement, request.ChangedBy, null, json.Hub.Version)

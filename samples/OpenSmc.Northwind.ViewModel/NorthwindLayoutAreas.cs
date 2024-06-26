@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using AngleSharp.Common;
 using OpenSmc.Application.Styles;
 using OpenSmc.Data;
 using OpenSmc.DataCubes;
@@ -56,7 +57,7 @@ public static class NorthwindLayoutAreas
         public int Year { get; init; }
     }
 
-    public static object Dashboard(LayoutArea layoutArea)
+    public static object Dashboard(LayoutAreaHost layoutArea)
     {
         var years = layoutArea
             .Workspace.GetObservable<Order>()
@@ -69,7 +70,7 @@ public static class NorthwindLayoutAreas
                     .Prepend(new Option<int>(0, "All"))
                     .ToArray()
             )
-            .DistinctUntilChanged();
+            .DistinctUntilChanged(x => string.Join(',',x.Select(y => y.Item)));
 
         return Stack()
             .WithOrientation(Orientation.Vertical)
@@ -77,7 +78,7 @@ public static class NorthwindLayoutAreas
             .WithView(
                 "Toolbar",
                 area =>
-                    years.Select(y =>
+                    years.DistinctUntilChanged().Select(y =>
                         area.Bind(
                             new Toolbar(y.Max(x => x.Item)),
                             nameof(Toolbar),
@@ -105,11 +106,11 @@ public static class NorthwindLayoutAreas
             .WithView(Html("<h2>Supplier Summary</h2>"))
             .WithView(SupplierSummaryReport);
 
-    private static IObservable<object> SupplierSummaryReport(LayoutArea area) =>
+    private static IObservable<object> SupplierSummaryReport(LayoutAreaHost area) =>
         area.GetDataCube()
             .Select(cube => cube.Pivot().SliceRowsBy(nameof(Supplier)).Execute().ToGridControl());
 
-    private static IObservable<IDataCube<NorthwindDataCube>> GetDataCube(this LayoutArea area) =>
+    private static IObservable<IDataCube<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area) =>
         area
             .Workspace.Stream.Select(x => new
             {

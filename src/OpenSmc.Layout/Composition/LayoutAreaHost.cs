@@ -1,6 +1,5 @@
 ﻿using System.Collections.Concurrent;
 using System.Reactive.Linq;
-using System.Text.Json;
 using Microsoft.DotNet.Interactive.Formatting;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
@@ -8,7 +7,7 @@ using OpenSmc.Messaging;
 
 namespace OpenSmc.Layout.Composition;
 
-public record LayoutArea : IDisposable
+public record LayoutAreaHost : IDisposable
 {
     public ISynchronizationStream<EntityStore, LayoutAreaReference> Stream { get; }
     public IMessageHub Hub => Stream.Hub;
@@ -45,7 +44,7 @@ public record LayoutArea : IDisposable
             Stream.Hub.Version);
     }
 
-    public LayoutArea(
+    public LayoutAreaHost(
         ISynchronizationStream<WorkspaceState> workspaceStream, LayoutAreaReference reference, object subscriber
     )
     {
