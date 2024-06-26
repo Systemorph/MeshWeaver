@@ -19,7 +19,7 @@
 {
     UiControl ContentViewModel { get; set; }
 
-    private string ContentArea => $"{Area}/ChildContent";
+    private string ContentArea => $"{Area}/{SplitterPaneControl.ChildContentArea}";
 
     protected override async Task OnInitializedAsync()
     {
