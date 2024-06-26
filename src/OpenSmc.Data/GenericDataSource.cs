@@ -59,6 +59,8 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
 
     public TDataSource WithType<T>()
         where T : class => WithType<T>(d => d);
+    public TDataSource WithTypes(IEnumerable<Type> types)=>
+    types.Aggregate(This, (ds, t) => ds.WithType(t, x => x));
 
     protected abstract TDataSource WithType<T>(Func<ITypeSource, ITypeSource> config)
         where T : class;
@@ -123,6 +125,14 @@ public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorksp
 {
     public override void Initialize(WorkspaceState state)
     {
+        var stream = SetupDataSourceStream(state);
+        Streams = Streams.Add(stream);
+        Hub.Schedule(cancellationToken => InitializeAsync(stream, cancellationToken));
+        base.Initialize(state);
+    }
+
+    protected virtual ISynchronizationStream<EntityStore, CollectionsReference> SetupDataSourceStream(WorkspaceState state)
+    {
         var reference = GetReference();
 
         var workspaceSync = Workspace.GetStream(Hub.Address, reference);
@@ -136,10 +146,9 @@ public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorksp
 
         stream.AddDisposable(workspaceSync);
         stream.AddDisposable(workspaceSync.Where(x => !Id.Equals(x.ChangedBy)).Subscribe(Synchronize));
-        Streams = Streams.Add(stream);
-        Hub.Schedule(cancellationToken => InitializeAsync(stream, cancellationToken));
-        base.Initialize(state);
+        return stream;
     }
+
     protected virtual void Synchronize(ChangeItem<EntityStore> item)
     {
         foreach (var typeSource in TypeSources.Values)

@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Data;
@@ -20,8 +20,9 @@ public record ImportDataSource(Source Source, IWorkspace Workspace)
             ImportRequest = config.Invoke(ImportRequest)
         };
 
-    public override void Initialize(WorkspaceState state)
+    protected override ISynchronizationStream<EntityStore, CollectionsReference> SetupDataSourceStream(WorkspaceState state)
     {
+        var ret = base.SetupDataSourceStream(state);
         var config = new ImportConfiguration(
             Hub,
             MappedTypes,
@@ -29,11 +30,10 @@ public record ImportDataSource(Source Source, IWorkspace Workspace)
         );
         config = Configurations.Aggregate(config, (c, f) => f.Invoke(c));
         ImportManager importManager = new(config);
-        var reference = GetReference();
-        var ret = Workspace.GetStream(Id, reference);
+
         Hub.Schedule(async cancellationToken =>
         {
-            var (s, hasError) = await importManager.ImportAsync(
+            var (s, _) = await importManager.ImportAsync(
                 ImportRequest,
                 state,
                 logger,
@@ -42,15 +42,16 @@ public record ImportDataSource(Source Source, IWorkspace Workspace)
 
             ret.Update(_ => new ChangeItem<EntityStore>(
                 Id,
-                reference,
-                s.Reduce(reference),
+                ret.Reference,
+                s.Reduce(ret.Reference),
                 Id,
                 null,
                 Hub.Version
             ));
         });
-        Streams = Streams.Add(ret);
+        return ret;
     }
+
 
     private ImmutableList<
         Func<ImportConfiguration, ImportConfiguration>
