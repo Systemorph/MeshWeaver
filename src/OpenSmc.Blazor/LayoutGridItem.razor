@@ -19,21 +19,8 @@
 
 @code
 {
-    UiControl ContentViewModel { get; set; }
-
-    private string ContentArea => $"{Area}/{LayoutGridItemControl.ChildContentArea}";
-
-    protected override async Task OnInitializedAsync()
-    {
-        await base.OnInitializedAsync();
-        Disposables.Add(Stream.Subscribe(item => InvokeAsync(() => Render(item)))); 
-    }
-
-    private void Render(ChangeItem<JsonElement> item)
-    {
-        ContentViewModel = GetControl(item, ContentArea);
-        StateHasChanged();
-    }
+    private string ContentArea => $"{Area}/{SplitterPaneControl.ChildContentArea}";
+    private UiControl ContentViewModel => GetControl(Stream.Current, ContentArea);
 
     private GridItemHidden HiddenWhen => ViewModel.HiddenWhen switch
     {
