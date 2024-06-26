@@ -7,7 +7,7 @@ public static class LayoutManager
 {
 
     public static ISynchronizationStream<EntityStore, LayoutAreaReference> Render(
-        this LayoutArea layoutArea,
+        this LayoutAreaHost layoutArea,
         LayoutDefinition layoutDefinition
     )
     {
@@ -20,7 +20,7 @@ public static class LayoutManager
         return layoutArea.Stream;
     }
 
-    private static void RenderArea(this LayoutArea layoutArea, string area, object viewModel)
+    private static void RenderArea(this LayoutAreaHost layoutArea, string area, object viewModel)
     {
         if (viewModel == null)
             return;
@@ -41,7 +41,7 @@ public static class LayoutManager
         layoutArea.UpdateLayout(area, viewModel);
     }
 
-    private static void RenderArea(this LayoutArea layoutArea, string area, ViewElementWithViewDefinition viewDefinition)
+    private static void RenderArea(this LayoutAreaHost layoutArea, string area, ViewElementWithViewDefinition viewDefinition)
     {
         var stream = viewDefinition.ViewDefinition;
         layoutArea.UpdateLayout(area, new SpinnerControl());
@@ -56,7 +56,7 @@ public static class LayoutManager
         ));
     }
 
-    private static void RenderArea(this LayoutArea layoutArea, string area, ViewElement viewElement)
+    private static void RenderArea(this LayoutAreaHost layoutArea, string area, ViewElement viewElement)
     {
         switch (viewElement)
         {

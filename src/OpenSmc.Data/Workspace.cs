@@ -223,7 +223,7 @@ public class Workspace : IWorkspace
         json.AddDisposable(
             // this is the "client" ==> never needs to submit full state
             json.ToDataChangedStream(reference)
-                .Where(x => !json.Owner.Equals(x.ChangedBy))
+                .Where(x => json.Hub.Address.Equals(x.ChangedBy))
                 .Subscribe(e =>
                 {
                     Hub.Post(e, o => o.WithTarget(json.Owner));

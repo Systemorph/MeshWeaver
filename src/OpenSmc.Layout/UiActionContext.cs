@@ -3,4 +3,4 @@ using OpenSmc.Messaging;
 
 namespace OpenSmc.Layout;
 
-public record UiActionContext(object Payload, IMessageHub Hub, LayoutArea Layout);
+public record UiActionContext(object Payload, IMessageHub Hub, LayoutAreaHost Layout);

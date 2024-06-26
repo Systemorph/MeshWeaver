@@ -77,11 +77,11 @@ public static class Controls
     /// <summary>
     /// Takes expression tree of data template and replaces all property getters by binding instances and sets data context property
     /// </summary>
-    public static UiControl Bind<T, TView>(this LayoutArea area, T data, string id, Expression<Func<T, TView>> dataTemplate)
+    public static UiControl Bind<T, TView>(this LayoutAreaHost area, T data, string id, Expression<Func<T, TView>> dataTemplate)
         where TView : UiControl => BindObject(area, data, id, dataTemplate);
 
     internal static UiControl BindObject<T, TView>(
-        this LayoutArea area,
+        this LayoutAreaHost area,
         object data,
         string id,
         Expression<Func<T, TView>> dataTemplate
@@ -95,7 +95,7 @@ public static class Controls
         return view;
     }
 
-    private static string UpdateData(LayoutArea area, object data, string id)
+    private static string UpdateData(LayoutAreaHost area, object data, string id)
     {
         if (data is JsonPointerReference reference)
             return reference.Pointer;
@@ -105,7 +105,7 @@ public static class Controls
     }
 
     public static ItemTemplateControl Bind<T, TView>(
-        this LayoutArea area,
+        this LayoutAreaHost area,
         IEnumerable<T> data,
         string id,
         Expression<Func<T, TView>> dataTemplate
@@ -113,7 +113,7 @@ public static class Controls
         where TView : UiControl => BindEnumerable(area, data, id, dataTemplate);
 
     internal static ItemTemplateControl BindEnumerable<T, TView>(
-        this LayoutArea area,
+        this LayoutAreaHost area,
         object data,
         string id,
         Expression<Func<T, TView>> dataTemplate

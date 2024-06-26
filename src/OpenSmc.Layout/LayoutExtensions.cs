@@ -27,7 +27,7 @@ public static class LayoutExtensions
             .AddData(data =>
                 data.Configure(reduction =>
                     reduction.AddWorkspaceReferenceStream<LayoutAreaReference, EntityStore>(
-                        (stream, reference, subscriber) => new LayoutArea(
+                        (stream, reference, subscriber) => new LayoutAreaHost(
                             stream, reference, subscriber
             ).Render(stream.Hub.GetLayoutDefinition())
                     )
