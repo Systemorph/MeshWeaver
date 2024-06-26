@@ -40,12 +40,12 @@ public static class LayoutManager
 
         if (viewModel is LayoutGridItemControl gridItem)
         {
-            RenderArea($"{area}/{LayoutGridItemControl.ChildContentArea}",  gridItem.ChildContent);
+            layoutArea.RenderArea(new($"{area}/{LayoutGridItemControl.ChildContentArea}"),  gridItem.ChildContent);
         }
 
         if (viewModel is SplitterPaneControl splitterPane)
         {
-            RenderArea($"{area}/{SplitterPaneControl.ChildContentArea}", splitterPane.ChildContent);
+            layoutArea.RenderArea(new($"{area}/{SplitterPaneControl.ChildContentArea}"), splitterPane.ChildContent);
         }
 
         layoutArea.UpdateLayout(area, viewModel);

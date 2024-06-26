@@ -34,10 +34,8 @@ public static class NorthwindLayoutAreas
     private static readonly KeyValuePair<string, Icon>[] DashboardWidgets = new[]
     {
         new KeyValuePair<string, Icon>(nameof(Dashboard), FluentIcons.Grid),
-        new(nameof(OrderSummary), FluentIcons.Box),
-        new(nameof(ProductSummary), FluentIcons.Box),
-        new(nameof(CustomerSummary), FluentIcons.Person),
-        new(nameof(SupplierSummary), FluentIcons.Person)
+        new(nameof(OrderSummary), FluentIcons.Box), new(nameof(ProductSummary), FluentIcons.Box),
+        new(nameof(CustomerSummary), FluentIcons.Person), new(nameof(SupplierSummary), FluentIcons.Person)
     };
 
     private static object NavigationMenu(LayoutAreaHost layoutArea, RenderingContext ctx)
@@ -71,7 +69,7 @@ public static class NorthwindLayoutAreas
                     .Prepend(new Option<int>(0, "All"))
                     .ToArray()
             )
-            .DistinctUntilChanged(x => string.Join(',',x.Select(y => y.Item)));
+            .DistinctUntilChanged(x => string.Join(',', x.Select(y => y.Item)));
 
         return Stack()
                 .WithSkin(Skins.Splitter())
@@ -92,13 +90,13 @@ public static class NorthwindLayoutAreas
                                     Stack()
                                         .WithSkin(Skins.Grid().WithSpacing(1))
                                         .WithClass("main-content")
-                                        .WithView(
-                                            LayoutGridItem().WithChildContent(OrderSummary()).WithXs(12).WithSm(6))
-                                        .WithView(LayoutGridItem().WithChildContent(ProductSummary()).WithXs(12)
+                                        .WithView((area,ctx)=>
+                                            LayoutGridItem().WithChildContent(OrderSummary (area, ctx)).WithXs(12).WithSm(6))
+                                        .WithView((area, ctx) => LayoutGridItem().WithChildContent(ProductSummary(area,ctx)).WithXs(12)
                                             .WithSm(6))
-                                        .WithView(LayoutGridItem().WithChildContent(CustomerSummary()).WithXs(12)
+                                        .WithView((area, ctx) => LayoutGridItem().WithChildContent(CustomerSummary(area,ctx)).WithXs(12)
                                             .WithSm(6))
-                                        .WithView(LayoutGridItem().WithChildContent(SupplierSummary()).WithXs(12))
+                                        .WithView((area, ctx) => LayoutGridItem().WithChildContent(SupplierSummary(area, ctx)).WithXs(12))
                                 )
                         )
 
@@ -154,7 +152,7 @@ public static class NorthwindLayoutAreas
         Stack()
             .WithOrientation(Orientation.Vertical)
             .WithView(Html("<h2>Customer Summary</h2>"))
-            .WithView((a,_) =>
+            .WithView((a, _) =>
                 a.GetDataStream<Toolbar>(nameof(Toolbar))
                     .Select(tb => $"Year selected: {tb.Year}")
             );
@@ -164,8 +162,8 @@ public static class NorthwindLayoutAreas
             .WithView(Html("<h2>Product Summary</h2>"))
             .WithView(Counter);
 
-    private static object Counter(LayoutAreaHost area, RenderingContext context)
-        Stack().WithOrientation(Orientation.Vertical)
+    private static object Counter(LayoutAreaHost area, RenderingContext context) 
+    {
         var counter = 0;
         return Controls
             .Stack()
@@ -186,8 +184,9 @@ public static class NorthwindLayoutAreas
     private static object Counter(int counter) => Controls.Title(counter.ToString(), 1);
 
     private static LayoutStackControl OrderSummary(LayoutAreaHost layoutArea, RenderingContext ctx) =>
+    Stack().WithOrientation(Orientation.Vertical)
             .WithView(Html("<h2>Order Summary</h2>"))
-            .WithView(area => area.GetDataStream<Toolbar>(nameof(Toolbar))
+            .WithView((area, _) => area.GetDataStream<Toolbar>(nameof(Toolbar))
                 .CombineLatest(area.Workspace.GetObservable<Order>(),
                     (tb, orders) =>
                         orders.Where(x => x.OrderDate.Year == tb.Year).OrderByDescending(y => y.OrderDate)
