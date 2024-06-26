@@ -44,6 +44,7 @@ public abstract record UiControl(object Data) : IUiControl
 
     public object Label { get; init; }
     public object Skin { get; init; }
+    public object Class { get; init; }
 
     public abstract bool IsUpToDate(object other);
 
@@ -137,6 +138,9 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion,
 
     public TControl WithSkin(object skin)
         => This with { Skin = skin };
+
+    public TControl WithClass(object @class)
+        => This with { Class = @class };
 }
 
 public interface IExpandableUiControl<out TControl> : IUiControl<TControl>

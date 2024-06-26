@@ -1,0 +1,18 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "npm run build:Release",
+    "build:Release": "vite build",
+    "build:Debug": "cross-env NODE_ENV=development vite build --mode development"
+  },
+  "dependencies": {
+    "ag-grid-enterprise": "^31.3.2",
+    "lodash-es": "^4.17.21"
+  },
+  "devDependencies": {
+    "@types/lodash-es": "^4.14.202",
+    "cross-env": "^7.0.3",
+    "typescript": "^5.2.2",
+    "vite": "^5.1.3"
+  }
+}

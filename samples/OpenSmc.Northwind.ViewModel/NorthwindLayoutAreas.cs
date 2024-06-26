@@ -7,6 +7,7 @@ using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
 using OpenSmc.Northwind.Domain;
 using OpenSmc.Pivot.Builder;
+using OpenSmc.Reflection;
 using OpenSmc.Reporting.Models;
 using OpenSmc.Utils;
 using static OpenSmc.Layout.Controls;
@@ -73,32 +74,44 @@ public static class NorthwindLayoutAreas
             .DistinctUntilChanged(x => string.Join(',',x.Select(y => y.Item)));
 
         return Stack()
-            .WithOrientation(Orientation.Vertical)
-            .WithView(Html("<h1>Northwind Dashboard</h1>"))
-            .WithView(
-                "Toolbar",
-                (area,_) =>
-                    years.DistinctUntilChanged().Select(y =>
-                        area.Bind(
-                            new Toolbar(y.Max(x => x.Item)),
-                            nameof(Toolbar),
-                            tb =>
-                                Controls.Select(tb.Year).WithOptions(y)
+                .WithSkin(Skins.Splitter())
+                .WithOrientation(Orientation.Horizontal)
+                .WithView(
+                    SplitterPane()
+                        .WithChildContent(
+                            Stack()
+                                .WithOrientation(Orientation.Vertical)
+                                .WithView("Toolbar", Toolbar()
+                                    .WithView((area, _) => years.Select(y => area.Bind(new Toolbar(y.Max(x => x.Item)),
+                                        nameof(Toolbar),
+                                        tb => Select(tb.Year).WithOptions(y)))
+
+                                    )
+                                )
+                                .WithView("MainContent",
+                                    Stack()
+                                        .WithSkin(Skins.Grid().WithSpacing(1))
+                                        .WithClass("main-content")
+                                        .WithView(
+                                            LayoutGridItem().WithChildContent(OrderSummary()).WithXs(12).WithSm(6))
+                                        .WithView(LayoutGridItem().WithChildContent(ProductSummary()).WithXs(12)
+                                            .WithSm(6))
+                                        .WithView(LayoutGridItem().WithChildContent(CustomerSummary()).WithXs(12)
+                                            .WithSm(6))
+                                        .WithView(LayoutGridItem().WithChildContent(SupplierSummary()).WithXs(12))
+                                )
                         )
-                    )
-            )
-            .WithView(
-                Stack()
-                    .WithOrientation(Orientation.Horizontal)
-                    .WithView(OrderSummary)
-                    .WithView(ProductSummary)
-            )
-            .WithView(
-                Stack()
-                    .WithOrientation(Orientation.Horizontal)
-                    .WithView(CustomerSummary)
-                    .WithView(SupplierSummary)
-            );
+
+                )
+                .WithView(
+                    "ContextPanel",
+                    SplitterPane()
+                        .WithClass("context-panel")
+                        .WithChildContent(Html("<h3>Context panel</h3>"))
+                        .WithSize("350px")
+                        .WithCollapsible(true)
+                )
+            ;
     }
 
     private static LayoutStackControl SupplierSummary(LayoutAreaHost layoutArea, RenderingContext ctx) =>
@@ -152,7 +165,7 @@ public static class NorthwindLayoutAreas
             .WithView(Counter);
 
     private static object Counter(LayoutAreaHost area, RenderingContext context)
-    {
+        Stack().WithOrientation(Orientation.Vertical)
         var counter = 0;
         return Controls
             .Stack()
@@ -173,35 +186,25 @@ public static class NorthwindLayoutAreas
     private static object Counter(int counter) => Controls.Title(counter.ToString(), 1);
 
     private static LayoutStackControl OrderSummary(LayoutAreaHost layoutArea, RenderingContext ctx) =>
-        Stack()
-            .WithOrientation(Orientation.Vertical)
             .WithView(Html("<h2>Order Summary</h2>"))
-            .WithView(
-                "Year",
-                (area,_) =>
-                    area.GetDataStream<Toolbar>("toolbar")
-                        .Select(tb => Controls.Html($"Orders for year {tb.Year}"))
-            )
-            .WithView((area,_) =>
-                area.Workspace.GetObservable<Order>()
-                    .Select(x =>
-                        x.OrderByDescending(y => y.OrderDate)
+            .WithView(area => area.GetDataStream<Toolbar>(nameof(Toolbar))
+                .CombineLatest(area.Workspace.GetObservable<Order>(),
+                    (tb, orders) =>
+                        orders.Where(x => x.OrderDate.Year == tb.Year).OrderByDescending(y => y.OrderDate)
                             .Take(5)
-                            .Select(order => new OrderSummaryItem(
-                                area.Workspace.GetData<Customer>(order.CustomerId)?.ContactName,
-                                area.Workspace.GetData<OrderDetails>()
-                                    .Count(d => d.OrderId == order.OrderId),
-                                order.OrderDate
-                            ))
+                            .Select(order =>
+                                new OrderSummaryItem(area.Workspace.GetData<Customer>(order.CustomerId)?.ContactName,
+                                    area.Workspace.GetData<OrderDetails>().Count(d => d.OrderId == order.OrderId),
+                                    order.OrderDate))
                             .ToArray()
                             .ToDataGrid(conf =>
-                                conf.WithColumn(o => o.Customer)
+                                conf
+                                    .WithColumn(o => o.Customer)
                                     .WithColumn(o => o.Products)
-                                    .WithColumn(
-                                        o => o.Purchased,
-                                        column => column.WithFormat("yyyy-MM-dd")
-                                    )
-                            )
-                    )
+                                    .WithColumn(o => o.Purchased, column => column.WithFormat("yyyy-MM-dd"))
+                            ))
             );
+
+
+
 }
