@@ -30,7 +30,7 @@ namespace OpenSmc.Data
 
             if (backTransform != null)
                     AddDisposable(
-                        this.Where(value => RemoteAddress.Equals(value.ChangedBy))
+                        this.Where(value => Subscriber.Equals(value.ChangedBy))
                             .Subscribe(UpdateParent));
         }
 
@@ -39,8 +39,6 @@ namespace OpenSmc.Data
         )
         {
             var ret = base.RequestChange(update);
-            if (backTransform == null || !RemoteAddress.Equals(Current.ChangedBy))
-                return ret;
 
             if (!parent.Initialized.IsCompleted)
                 throw new InvalidOperationException("Parent is not initialized yet");
