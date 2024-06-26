@@ -27,6 +27,7 @@ public record StyleBuilder
     public StyleBuilder WithFlexShrink(object value) => With(d => d.FlexShrink = value);
     public StyleBuilder WithOrder(object value) => With(d => d.Order = value);
     public StyleBuilder WithMargin(object value) => With(d => d.Margin = value);
+    public StyleBuilder WithPadding(object value) => With(d => d.Padding = value);
 
 
     private StyleBuilder With(Action<dynamic> action)

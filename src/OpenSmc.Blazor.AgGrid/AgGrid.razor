@@ -1,92 +1,50 @@
 ﻿@using Microsoft.JSInterop
-@using OpenSmc.ShortGuid
 @inherits BlazorView<GridControl>
 @implements IAsyncDisposable
 
 <HeadContent>
-    <script>
-        function renderGrid(elementId, gridOptions) {
-            console.log(elementId, gridOptions);
-            evalJs(gridOptions, REGEXPS.func);
-            var element = document.getElementById(elementId);
-            return agGrid.createGrid(element, gridOptions);
-        }
-
-        function evalJs(value, evalRegexps) {
-            var regexps = evalRegexps.map(e => isString(e) ? new RegExp(e) : e);
-
-            traverse(value);
-
-            function traverse(value, parent, key) {
-                if (isArray(value)) {
-                    for (let i = 0; i < value.length; i++) {
-                        traverse(value[i], value, i);
-                    }
-                } else if (isObjectLike(value)) {
-                    for (let key in value) {
-                        traverse(value[key], value, key);
-                    }
-                } else {
-                    if (isString(value) && regexps.some(regexp => regexp.test(value))) {
-                        eval(`parent[key] = ${value}`);
-                    } else {
-                        parent[key] = value;
-                    }
-                }
-            }
-        }
-
-        function isString(value) {
-            return typeof value === 'string' || value instanceof String;
-        }
-
-        function isArray(value) {
-            return Array.isArray(value);
-        }
-
-        function isObjectLike(value) {
-            return typeof value === 'object' && value !== null;
-        }
-
-        var REGEXPS = {
-            func: [/^function\b/, /^\(function\b/, /^\s*(\s*[a-zA-Z]\w*|\(\s*[a-zA-Z]\w*(\s*,\s*[a-zA-Z]\w*)*\s*\))\s*=>/],
-        };
-    </script>
+    <link href="_content/OpenSmc.Blazor.AgGrid/style.css" rel="stylesheet" />
 </HeadContent>
 
-<div id="@GridArea" class="ag-theme-quartz" style="height: 500px; width: 500px;"></div>
+<div @ref="element" class="ag-theme-quartz" style="height: 500px; width: 100%;"></div>
 
 @code
 {
- 
+    ElementReference element;
+
     [Inject] private IJSRuntime JsRuntime { get; set; }
-    private IJSObjectReference agGridModule;
+    private IJSObjectReference jsModule;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-
         if (firstRender)
         {
-            agGridModule = await
-                JsRuntime
-                    .InvokeAsync<IJSObjectReference>(
-                        "import",
-                        "./_content/OpenSmc.Blazor.AgGrid/ag-grid-enterprise.min.js"
-                    );
-
+            jsModule = await JsRuntime.InvokeAsync<IJSObjectReference>("import", 
+                "./_content/OpenSmc.Blazor.AgGrid/index.mjs");
             DataBind<object>(ViewModel.Data, o => Options = o);
-            await JsRuntime.InvokeVoidAsync("renderGrid", GridArea, Options);
         }
 
+        if (jsModule is not null)
+        {
+            await jsModule.InvokeVoidAsync("renderGrid", id, element, Options);
+        }
     }
+
+    private string id = Guid.NewGuid().ToString();
 
     private object Options { get; set; }
 
-    private static readonly string GridArea = Guid.NewGuid().AsString();
-
     public async ValueTask DisposeAsync()
     {
-        if (agGridModule != null) 
-            await agGridModule.DisposeAsync();
+        if (jsModule is not null)
+        {
+            try
+            {
+                await jsModule.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }   
     }
 }

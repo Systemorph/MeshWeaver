@@ -37,7 +37,7 @@ namespace OpenSmc.Reporting.Models
             if (input.Length == 0) return "null";
             //x = Regex.Replace(x, "([A-Z])([A-Z]+)($|[A-Z])",
             //                  m => m.Groups[1].Value + m.Groups[2].Value.ToLower() + m.Groups[3].Value);
-            var binderName = input.IsNumeric() ? input : "'" + input.ToCamelCase() + "'";
+            var binderName = input.IsNumeric() ? input : "'" + input + "'";
             binderName = "[" + binderName + "]";
             return binderName;
         }
