@@ -3,7 +3,7 @@ using OpenSmc.Data.Serialization;
 
 namespace OpenSmc.Data
 {
-    internal record ChainedSynchronizationStream<TStream, TReference, TReduced>
+    public record ChainedSynchronizationStream<TStream, TReference, TReduced>
         : SynchronizationStream<TReduced, TReference>
         where TReference : WorkspaceReference
     {

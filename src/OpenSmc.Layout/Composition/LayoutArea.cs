@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Reactive.Linq;
+using System.Text.Json;
 using Microsoft.DotNet.Interactive.Formatting;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
@@ -45,10 +46,14 @@ public record LayoutArea : IDisposable
     }
 
     public LayoutArea(
-        ISynchronizationStream<EntityStore, LayoutAreaReference> stream
+        ISynchronizationStream<WorkspaceState> workspaceStream, LayoutAreaReference reference, object subscriber
     )
     {
-        Stream = stream;
+        Stream = new ChainedSynchronizationStream<
+            WorkspaceState,
+            LayoutAreaReference,
+            EntityStore
+        >(workspaceStream, workspaceStream.Owner, subscriber, reference);
         Stream.AddDisposable(this);
         executionHub =
             Stream.Hub.GetHostedHub(new LayoutExecutionAddress(Stream.Hub.Address), x => x);

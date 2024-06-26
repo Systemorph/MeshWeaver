@@ -104,8 +104,15 @@ public record SynchronizationStream<TStream, TReference>(
 
     public readonly List<IDisposable> Disposables = new();
 
+    private bool isDisposing;
     public void Dispose()
     {
+        lock (this)
+        {
+            if (isDisposing)
+                return;
+            isDisposing = true;
+        }
         foreach (var disposeAction in Disposables)
             disposeAction.Dispose();
 

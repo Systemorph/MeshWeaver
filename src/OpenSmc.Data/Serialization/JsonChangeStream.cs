@@ -99,7 +99,7 @@ public static class JsonSynchronizationStream
 
     private static ChangeItem<JsonElement> CreatePatch(ISynchronizationStream<JsonElement> json, JsonElement state, DataChangedEvent request)
     {
-        var patch = JsonSerializer.Deserialize<JsonPatch>(request.Change.Content);
+        var patch = JsonSerializer.Deserialize<JsonPatch>(request.Change.Content, json.Hub.JsonSerializerOptions);
 
         return new(json.Owner, json.Reference,
             patch.Apply(state), request.ChangedBy, patch,
