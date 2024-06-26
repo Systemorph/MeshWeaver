@@ -35,9 +35,6 @@ public static class LayoutManager
             };
         }
 
-        //if (viewModel is UiControl { DataContext: not null } control)
-        //    viewModel = control with { DataContext = layoutArea.UpdateData(control.DataContext) };
-
         layoutArea.UpdateLayout(area, viewModel);
     }
 
