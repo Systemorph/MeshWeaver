@@ -1,5 +1,5 @@
 ﻿using System.Collections.Immutable;
-using Newtonsoft.Json;
+using System.Text.Json.Serialization;
 
 namespace OpenSmc.Layout;
 

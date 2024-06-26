@@ -1,7 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
-using Json.Patch;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 
@@ -44,10 +43,10 @@ public record ReduceManager<TStream>
         PatchFunctions = PatchFunctions.SetItem(typeof(JsonElement), [((PatchFunctionFilter)((_,_) => true),(PatchFunction<TStream, JsonElement>)PatchFromJson)]);
 
         ReduceStreams = ReduceStreams.Add(
-            (ReduceStream<TStream, JsonElementReference, JsonElement>)(
-                (parent, reducedStream) =>
+            (ReduceStream<TStream, JsonElementReference>)(
+                (parent, reference, subscriber) =>
                     (ISynchronizationStream<JsonElement, JsonElementReference>)
-                        CreateReducedStream(parent, reducedStream, JsonElementReducer)
+                        CreateReducedStream(parent, reference, subscriber, JsonElementReducer)
             )
         );
 
@@ -82,9 +81,9 @@ public record ReduceManager<TStream>
         Reducers.AddFirst(Lambda);
 
         return AddWorkspaceReferenceStream<TReference, TReduced>(
-            (parent, reducedStream) =>
+            (parent, reference, subscriber) =>
                 (ISynchronizationStream<TReduced, TReference>)
-                    CreateReducedStream(parent, reducedStream, reducer)
+                    CreateReducedStream(parent, reference,subscriber, reducer)
         );
     }
 
@@ -102,8 +101,8 @@ public record ReduceManager<TStream>
         {
             ReduceStreams = ReduceStreams.Insert(
                 0,
-                (ReduceStream<TStream, TReference, TReduced>)(
-                    (parent, reducedStream) => reducer.Invoke(parent, reducedStream)
+                (ReduceStream<TStream, TReference>)(
+                    reducer.Invoke
                 )
             ),
         };
@@ -127,18 +126,26 @@ public record ReduceManager<TStream>
 
     protected static ISynchronizationStream CreateReducedStream<TReference, TReduced>(
         ISynchronizationStream<TStream> stream,
-        ISynchronizationStream<TReduced, TReference> reducedStream,
+        TReference reference,
+        object subscriber,
         ReduceFunction<TStream, TReference, TReduced> reducer
     )
         where TReference : WorkspaceReference<TReduced>
     {
-            reducedStream.AddDisposable(
+        var reducedStream = new ChainedSynchronizationStream<
+            TStream,
+            TReference,
+            TReduced
+        >(stream, stream.Owner, subscriber, reference);
+
+        reducedStream.AddDisposable(
                 stream
                     .Where(x => !reducedStream.Subscriber.Equals(x.ChangedBy))
                     .Select(x => x.SetValue(reducer.Invoke(x.Value, reducedStream.Reference)))
                     .DistinctUntilChanged()
                     .Subscribe(reducedStream)
             );
+        stream.AddDisposable(reducedStream);
         return reducedStream;
     }
 
@@ -173,23 +180,24 @@ public record ReduceManager<TStream>
     )
         where TReference : WorkspaceReference
     {
-        ISynchronizationStream<TReduced, TReference> ret = new ChainedSynchronizationStream<
-            TStream,
-            TReference,
-            TReduced
-        >(stream, owner, subscriber, reference);
 
         var reduced = (ISynchronizationStream<TReduced, TReference>)
             ReduceStreams
                 .Select(reduceStream =>
-                    (reduceStream as ReduceStream<TStream, TReference, TReduced>)?.Invoke(
+                    (reduceStream as ReduceStream<TStream, TReference>)?.Invoke(
                         stream,
-                        ret
+                        reference,
+                        subscriber
                     )
                 )
                 .FirstOrDefault(x => x != null);
 
-        return reduced ?? ret;
+        return reduced ?? 
+               new ChainedSynchronizationStream<
+            TStream,
+            TReference,
+            TReduced
+        >(stream, owner, subscriber, reference);
 
     }
 
@@ -221,9 +229,10 @@ public record ReduceManager<TStream>
     );
 }
 
-internal delegate ISynchronizationStream ReduceStream<TStream, in TReference, TReduced>(
+internal delegate ISynchronizationStream ReduceStream<TStream, in TReference>(
     ISynchronizationStream<TStream> parentStream,
-    ISynchronizationStream<TReduced, TReference> reducedStream
+    TReference reference,
+    object subscriber
 );
 
 public delegate ISynchronizationStream<TReduced, TReference> ReducedStreamProjection<
@@ -232,6 +241,7 @@ public delegate ISynchronizationStream<TReduced, TReference> ReducedStreamProjec
     TReduced
 >(
     ISynchronizationStream<TStream> parentStream,
-    ISynchronizationStream<TReduced, TReference> reducedStream
+    TReference reference,
+    object subscriber
 )
     where TReference : WorkspaceReference<TReduced>;

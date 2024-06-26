@@ -2,7 +2,6 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.DotNet.Interactive.Formatting" />
-    <PackageReference Include="Newtonsoft.Json" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\OpenSmc.Application.Styles\OpenSmc.Application.Styles.csproj" />

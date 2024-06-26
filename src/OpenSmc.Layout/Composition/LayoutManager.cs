@@ -67,7 +67,7 @@ public static class LayoutManager
                 layoutArea.RenderArea(area, viewDefinition);
                 break;
             case ViewElementWithViewStream s:
-                s.Stream.Invoke(layoutArea).Subscribe(c => layoutArea.RenderArea(area, c));
+                layoutArea.Stream.AddDisposable(s.Stream.Invoke(layoutArea).Subscribe(c => layoutArea.RenderArea(area, c)));
                 break;
             default:
                 throw new NotSupportedException($"Unknown type: {viewElement.GetType().FullName}");
