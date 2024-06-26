@@ -10,7 +10,6 @@ using OpenSmc.Northwind.Model;
 using OpenSmc.Northwind.ViewModel;
 using Xunit;
 using Xunit.Abstractions;
-using Category = DocumentFormat.OpenXml.Drawing.Diagrams.Category;
 
 namespace OpenSmc.Northwind.Test;
 
@@ -46,7 +45,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
                     .FromHub(new CustomerAddress(), c => c.WithType<Customer>())
                     .FromHub(new ProductAddress(), c => c.WithType<Product>())
                     .FromHub(new EmployeeAddress(), c => c.WithType<Employee>())
-                    .FromHub(new OrderAddress(), c => c.WithType<Order>())
+                    .FromHub(new OrderAddress(), c => c.WithType<Order>().WithType<OrderDetails>())
                     .FromHub(new SupplierAddress(), c => c.WithType<Supplier>())
             );
     }
