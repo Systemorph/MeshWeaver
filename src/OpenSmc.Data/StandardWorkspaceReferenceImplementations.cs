@@ -119,8 +119,10 @@ namespace OpenSmc.Data
                             break;
                     }
                 }
+            else 
+                current = changeItem.Value.Deserialize<EntityStore>(options);
 
-            return changeItem.SetValue(changeItem.Value.Deserialize<EntityStore>(options));
+            return changeItem.SetValue(current);
         }
 
         private static EntityStore UpdateInstance(
