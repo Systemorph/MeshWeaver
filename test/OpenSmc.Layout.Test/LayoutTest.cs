@@ -183,8 +183,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var yearTextBox = (TextBoxControl)await stream.GetControlStream(toolbarArea).FirstAsync();
         var jsonPath = yearTextBox.Data.Should().BeOfType<JsonPointerReference>().Which;
         jsonPath.Pointer.Should().Be("/data/\"toolbar\"/year");
-        var year = await stream.Reduce(jsonPath).FirstAsync();
-        year.Value.Should().BeOfType<JsonElement>().Which.GetInt32().Should().Be(2024);
+        var year = await stream.GetDataStream<int>(jsonPath).FirstAsync();
+        year.Should().Be(2024);
 
         stream.Update(ci =>
         {
@@ -225,12 +225,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
         var dataReference = itemTemplate.Data.Should().BeOfType<JsonPointerReference>().Which;
         dataReference.Pointer.Should().Be($"/data/\"{nameof(ItemTemplate)}\"");
-        var data = await stream.Reduce(dataReference).FirstAsync();
+        var data = await stream.GetDataStream<IEnumerable<DataRecord>>(dataReference).FirstAsync();
 
-        var deserialized = data.Value?.Deserialize<IEnumerable<DataRecord>>(
-            hub.JsonSerializerOptions
-        );
-        deserialized
+        data
             .Should()
             .HaveCount(2)
             .And.Contain(r => r.SystemName == "Hello")
