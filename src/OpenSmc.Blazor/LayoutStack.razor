@@ -1,15 +1,28 @@
 @inherits BlazorView<LayoutStackControl>
-<FluentStack Orientation="@Orientation"
-             HorizontalAlignment="@Horizontal"
-             VerticalAlignment="@Vertical"
-             VerticalGap="@ViewModel.VerticalGap"
-             HorizontalGap="@ViewModel.HorizontalGap"
-             Style="@ViewModel.Style?.ToString()">
-    @foreach(var (area,viewModel) in Areas){
-        <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area"/>
-    }
-</FluentStack>
 
+
+@if (Skin == Skins.Toolbar)
+{
+    <FluentToolbar Orientation="@Orientation">
+        @foreach(var (area,viewModel) in Areas){
+            <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area"/>
+        }
+    </FluentToolbar>
+}
+else
+{
+    <FluentStack Orientation="@Orientation"
+                 HorizontalAlignment="@Horizontal"
+                 VerticalAlignment="@Vertical"
+                 VerticalGap="@ViewModel.VerticalGap"
+                 HorizontalGap="@ViewModel.HorizontalGap"
+                 Style="@ViewModel.Style?.ToString()">
+        @foreach (var (area, viewModel) in Areas)
+        {
+            <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area"/>
+        }
+    </FluentStack>
+}
 
 @code{
 

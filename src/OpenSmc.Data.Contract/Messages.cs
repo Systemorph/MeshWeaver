@@ -1,33 +1,28 @@
-﻿using Json.Patch;
-using OpenSmc.Activities;
+﻿using OpenSmc.Activities;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
 
 public record WorkspaceMessage
 {
-    public object Id { get; init; }
-    public object Reference { get; init; }
+    public virtual object Id { get; init; }
+    public virtual object Reference { get; init; }
 }
 
-public abstract record DataChangedReqeust(IReadOnlyCollection<object> Elements)
+public abstract record DataChangedRequest(IReadOnlyCollection<object> Elements)
     : IRequest<DataChangeResponse>
 {
     public object ChangedBy { get; init; }
 };
 
-public record UpdateDataRequest(IReadOnlyCollection<object> Elements) : DataChangedReqeust(Elements)
+public record UpdateDataRequest(IReadOnlyCollection<object> Elements) : DataChangedRequest(Elements)
 {
     public UpdateOptions Options { get; init; }
 }
 
 public record DeleteDataRequest(IReadOnlyCollection<object> Elements)
-    : DataChangedReqeust(Elements);
+    : DataChangedRequest(Elements);
 
-public record PatchChangeRequest(JsonPatch Change, long Version) : WorkspaceMessage, IRequest<DataChangeResponse>
-{
-    public object ChangedBy { get; init; }
-}
 
 public record DataChangeResponse(long Version, DataChangeStatus Status, ActivityLog Log);
 
@@ -44,8 +39,14 @@ public enum ChangeType
     Instance
 }
 
-public record DataChangedEvent(long Version, RawJson Change, ChangeType ChangeType, object ChangedBy)
-    : WorkspaceMessage;
+public record DataChangedEvent(
+    object Id,
+    object Reference,
+    long Version,
+    RawJson Change,
+    ChangeType ChangeType,
+    object ChangedBy)
+;
 
 public record SubscribeRequest(WorkspaceReference Reference) : IRequest<DataChangedEvent>;
 

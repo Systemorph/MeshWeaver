@@ -90,7 +90,7 @@ public class PivotTest : HubTestBase
         Func<PivotBuilder<T, T, T>, PivotBuilder<T, TAggregate, TAggregate>> builder
     )
     {
-        var initial = PivotFactory.ForObjects(data).WithState(await GetStateAsync());
+        var initial = PivotFactory.Pivot(data).WithState(await GetStateAsync());
 
         var pivotBuilder = builder(initial);
 
@@ -107,7 +107,7 @@ public class PivotTest : HubTestBase
     )
     {
         var state = await GetStateAsync();
-        var initial = PivotFactory.ForObjects(data).WithState(state);
+        var initial = PivotFactory.Pivot(data).WithState(state);
 
         var pivotBuilder = builder(initial);
 
@@ -195,7 +195,7 @@ public class PivotTest : HubTestBase
         var exception = Record.Exception(
             () =>
                 qs = PivotFactory
-                    .ForDataCube(ValueWithHierarchicalDimension.Data.ToDataCube())
+                    .Pivot(ValueWithHierarchicalDimension.Data.ToDataCube())
                     .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
                     .Execute()
         );
@@ -203,7 +203,7 @@ public class PivotTest : HubTestBase
         Assert.NotNull(qs);
 
         var flattened = PivotFactory
-            .ForDataCube(ValueWithHierarchicalDimension.Data.ToDataCube())
+            .Pivot(ValueWithHierarchicalDimension.Data.ToDataCube())
             .WithHierarchicalDimensionOptions(o => o.Flatten<TestHierarchicalDimensionA>())
             .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
             .Execute();

@@ -1,5 +1,5 @@
 ﻿using System.Collections.Concurrent;
-using System.Text.Json;
+using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
@@ -79,7 +79,7 @@ public class LayoutManager
     }
 
     private readonly ConcurrentDictionary<string, Func<UiActionContext, Task>> clickActions = new();
-    public IChangeStream<JsonElement, LayoutAreaReference> Render(LayoutAreaReference reference)
+    public IChangeStream<EntityStore, LayoutAreaReference> Render(LayoutAreaReference reference)
     {
         var viewElement = LayoutDefinition.GetViewElement(reference);
         if (viewElement == null)

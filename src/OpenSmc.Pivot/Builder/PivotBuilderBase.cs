@@ -76,5 +76,6 @@ namespace OpenSmc.Pivot.Builder
             TAggregate,
             TPivotBuilder
         > GetReportProcessor();
+
     }
 }

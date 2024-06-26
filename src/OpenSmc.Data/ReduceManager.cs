@@ -1,19 +1,31 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Text.Json;
+using Json.Patch;
 using OpenSmc.Data.Serialization;
 
 namespace OpenSmc.Data;
+public delegate TStream PatchFunction<TStream>(TStream current, JsonElement jsonCurrent, JsonPatch patch, JsonSerializerOptions options);
 
+public delegate TReduced ReduceFunction<in TStream, in TReference, out TReduced>(TStream current, TReference reference) where TReference : WorkspaceReference;
+public delegate ChangeItem<WorkspaceState> BackTransformation<in TReference, TReduced>(WorkspaceState current, TReference reference, ChangeItem<TReduced> change) where TReference: WorkspaceReference;
 public record ReduceManager<TStream>
 {
     internal readonly LinkedList<ReduceDelegate> Reducers = new();
     internal ImmutableList<ReduceStream<TStream>> ReduceStreams { get; init; } =
         ImmutableList<ReduceStream<TStream>>.Empty;
-    private ImmutableDictionary<Type, object> BackTransformations { get; init; } =
-        ImmutableDictionary<Type, object>.Empty;
+    private ImmutableDictionary<(Type TReduced, Type TReference), object> BackTransformations { get; init; } =
+        ImmutableDictionary<(Type TReduced, Type TReference), object>.Empty;
 
     private ImmutableDictionary<Type, object> ReduceManagers { get; init; } =
         ImmutableDictionary<Type, object>.Empty;
+
+    internal PatchFunction<TStream> PatchFunction { get; init; } = DefaultReduceFunction;
+
+    private static TStream DefaultReduceFunction(TStream current, JsonElement jsonCurrent, JsonPatch patch, JsonSerializerOptions options)
+    {
+        return jsonCurrent.Deserialize<TStream>(options);
+    }
 
     public ReduceManager<TStream> ForReducedStream<TReducedStream>(
         Func<ReduceManager<TReducedStream>, ReduceManager<TReducedStream>> configuration
@@ -27,13 +39,7 @@ public record ReduceManager<TStream>
         };
 
     public ReduceManager<TStream> AddWorkspaceReference<TReference, TReduced>(
-        Func<TStream, TReference, TReduced> reducer,
-        Func<
-            WorkspaceState,
-            TReference,
-            ChangeItem<TReduced>,
-            ChangeItem<WorkspaceState>
-        > backTransformation
+        ReduceFunction<TStream, TReference, TReduced> reducer
     )
         where TReference : WorkspaceReference<TReduced>
     {
@@ -41,17 +47,9 @@ public record ReduceManager<TStream>
             ReduceApplyRules(ws, r, reducer, node);
         Reducers.AddFirst(Lambda);
 
-        return AddWorkspaceReferenceStream(
-            (stream, reference) =>
-                (IChangeStream<TReduced, TReference>)CreateReducedStream(stream, reference, reducer),
-            backTransformation
-        ) with
-        {
-            BackTransformations =
-                backTransformation == null
-                    ? BackTransformations
-                    : BackTransformations.SetItem(typeof(TReference), backTransformation)
-        };
+        return AddWorkspaceReferenceStream<TReference, TReduced>(
+            (stream, reference) => (IChangeStream<TReduced, TReference>)CreateReducedStream(stream, reference, reducer)
+        );
     }
 
     public TReduced Reduce<TReduced>(TStream value, WorkspaceReference<TReduced> reference)
@@ -60,13 +58,7 @@ public record ReduceManager<TStream>
     }
 
     public ReduceManager<TStream> AddWorkspaceReferenceStream<TReference, TReduced>(
-        ReducedStreamProjection<TStream, TReference, TReduced> reducer,
-        Func<
-            WorkspaceState,
-            TReference,
-            ChangeItem<TReduced>,
-            ChangeItem<WorkspaceState>
-        > backTransformation
+        ReducedStreamProjection<TStream, TReference, TReduced> reducer
     )
         where TReference : WorkspaceReference<TReduced>
     {
@@ -74,20 +66,33 @@ public record ReduceManager<TStream>
         return this with
         {
             ReduceStreams = ReduceStreams.Insert(0, (stream, reference) => reference is TReference tReference ? reducer.Invoke(stream, tReference) : null),
-            BackTransformations = BackTransformations.SetItem(
-                typeof(TReference),
-                backTransformation
-            )
         };
     }
 
-    private IChangeStream CreateReducedStream<TReference, TReduced>(IChangeStream<TStream> stream, TReference reference, Func<TStream, TReference, TReduced> reducer) where TReference : WorkspaceReference<TReduced>
+
+    public ReduceManager<TStream> WithPatchFunction(
+        PatchFunction<TStream> patchFunction
+    )
+        => this with { PatchFunction = patchFunction };
+
+    public ReduceManager<TStream> AddBackTransformation<TReference, TReduced>(
+        BackTransformation<TReference, TReduced> backTransformation
+    )
+    where TReference : WorkspaceReference
+        => this with
+        {
+            BackTransformations = BackTransformations.SetItem(
+                (typeof(TReduced), typeof(TReference)),
+                backTransformation
+            )
+        };
+    private static IChangeStream CreateReducedStream<TReference, TReduced>(IChangeStream<TStream> stream, TReference reference, ReduceFunction<TStream, TReference, TReduced> reducer) where TReference : WorkspaceReference<TReduced>
     {
         var ret = new ChangeStream<TReduced, TReference>(
             stream.Id,
             stream.Hub,
             reference,
-            ReduceTo<TReduced>()
+            stream.ReduceManager.ReduceTo<TReduced>()
         );
         ret.AddDisposable(stream.Select(x => x.SetValue(reducer.Invoke(x.Value, reference))).Subscribe(ret));
         return ret;
@@ -96,7 +101,7 @@ public record ReduceManager<TStream>
     private static object ReduceApplyRules<TReference, TReduced>(
         TStream state,
         WorkspaceReference @ref,
-        Func<TStream, TReference, TReduced> reducer,
+        ReduceFunction<TStream, TReference, TReduced> reducer,
         LinkedListNode<ReduceDelegate> node
     )
         where TReference : WorkspaceReference<TReduced>
@@ -120,7 +125,7 @@ public record ReduceManager<TStream>
         IChangeStream<TStream> stream,
         TReference reference
     )
-        where TReference : WorkspaceReference<TReduced>
+        where TReference : WorkspaceReference
     {
 
         return (IChangeStream<TReduced, TReference>)
@@ -142,14 +147,11 @@ public record ReduceManager<TStream>
                 BackTransformations = BackTransformations
             };
 
-    public Func<
-        WorkspaceState,
-        TReference,
-        ChangeItem<TStream>,
-        ChangeItem<WorkspaceState>
-    > GetBackfeed<TReference>() =>
-        (Func<WorkspaceState, TReference, ChangeItem<TStream>, ChangeItem<WorkspaceState>>)
-            BackTransformations.GetValueOrDefault(typeof(TReference));
+    public BackTransformation<TReference, TReduced> GetBackTransformation<TReduced, TReference>()
+        where TReference : WorkspaceReference 
+        =>
+        (BackTransformation<TReference, TReduced>)
+            BackTransformations.GetValueOrDefault((typeof(TReduced), typeof(TReference)));
 
     internal delegate object ReduceDelegate(
         TStream state,

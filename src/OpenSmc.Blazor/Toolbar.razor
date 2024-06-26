@@ -1,8 +1,0 @@
-@inherits BlazorView<ToolbarControl>
-
-<FluentToolbar>
-@foreach (var item in ViewModel.Controls)
-    {
-        <DispatchView ViewModel="@item"/>
-    }
-</FluentToolbar>
