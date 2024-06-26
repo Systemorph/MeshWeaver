@@ -18,11 +18,11 @@ public static class NorthwindDataConfiguration
             .AddImport()
             .AddData(data =>
                 data.FromEmbeddedResource<Category>(
-                        new EmbeddedResource(MyAssembly,"Files.categories.csv"),
+                        new EmbeddedResource(MyAssembly, "Files.categories.csv"),
                         config => config.WithType<Category>()
                     )
                     .FromEmbeddedResource<Region>(
-                        new EmbeddedResource(MyAssembly,"Files.regions.csv"),
+                        new EmbeddedResource(MyAssembly, "Files.regions.csv"),
                         config => config.WithType<Region>()
                     )
                     .FromEmbeddedResource<Territory>(
@@ -40,10 +40,13 @@ public static class NorthwindDataConfiguration
             .AddImport()
             .AddData(data =>
                 data.FromEmbeddedResource<Order>(
-                    new EmbeddedResource(MyAssembly, "Files.orders.csv"),
-                    config => config.WithType<Order>()
-                )
-                .FromEmbeddedResource<OrderDetails>(new EmbeddedResource(MyAssembly,"Files.orders_details.csv"), conf => conf.WithType<OrderDetails>())
+                        new EmbeddedResource(MyAssembly, "Files.orders.csv"),
+                        config => config.WithType<Order>()
+                    )
+                    .FromEmbeddedResource<OrderDetails>(
+                        new EmbeddedResource(MyAssembly, "Files.orders_details.csv"),
+                        conf => conf.WithType<OrderDetails>()
+                    )
             );
     }
 
@@ -105,14 +108,15 @@ public static class NorthwindDataConfiguration
 
     public static TDataSource AddNorthwindDomain<TDataSource>(this TDataSource dataSource)
         where TDataSource : DataSource<TDataSource> =>
-        NorthwindDomain.ReferenceDataTypes.Concat(NorthwindDomain.OperationalTypes).Aggregate(dataSource, (ds, t) => ds.WithType(t, x => x));
+        NorthwindDomain
+            .ReferenceDataTypes.Concat(NorthwindDomain.OperationalTypes)
+            .Aggregate(dataSource, (ds, t) => ds.WithType(t, x => x));
 
     public static TDataSource AddNorthwindReferenceData<TDataSource>(this TDataSource dataSource)
         where TDataSource : DataSource<TDataSource>
     {
         return dataSource.WithType<Category>().WithType<Region>().WithType<Territory>();
     }
-
 
     public static IMessageHub GetCustomerHub(this IServiceProvider serviceProvider, object address)
     {

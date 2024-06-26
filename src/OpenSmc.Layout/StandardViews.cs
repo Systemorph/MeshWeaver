@@ -1,7 +1,5 @@
 ﻿using OpenSmc.Activities;
 using OpenSmc.Application.Styles;
-using OpenSmc.Layout.Views;
-using OpenSmc.Utils;
 using static OpenSmc.Layout.Controls;
 
 namespace OpenSmc.Layout;
@@ -106,64 +104,6 @@ public static class StandardViews
 
         return stack;
     }
-
-    public static LayoutStackControl RenderImportButton(
-        string title,
-        string description,
-        string buttonArea,
-        object address,
-        string buttonId
-    )
-    {
-        return Stack()
-            .WithStyle(x => x.WithMinWidth(120))
-            .WithView(Icon(Icons.OpenSmc.UploadCloud, Colors.Button))
-            .WithView(Html($"<strong>{title}</strong> <em>{description}</em>"))
-            .WithView(
-                Menu("Import")
-                    .WithId(buttonId)
-                    .WithColor(Colors.Button)
-                    .WithClickMessage(new ClickedEvent(buttonArea), address)
-            );
-    }
-
-    public static ActivityControl RenderHistoryLog(
-        this ActivityLog log,
-        Func<string, string> colorPickerFunction
-    )
-    {
-        return new ActivityControl(
-            log.User,
-            log.Messages.FirstOrDefault()?.Message
-                ?? //this is good for demo, if we want to make this complete, we need to change this logic
-                log.SubActivities.FirstOrDefault()?.Messages.FirstOrDefault()?.Message
-                ?? $"Has performed {log.Category.Wordify()}",
-            null,
-            Title(
-                log.Messages.FirstOrDefault()?.Message ?? $"Has performed {log.Category.Wordify()}",
-                5
-            ),
-            log.GetColorBasedOnStatus(colorPickerFunction),
-            log.Start,
-            null,
-            null
-        );
-    }
-
-    private static string GetColorBasedOnStatus(
-        this ActivityLog log,
-        Func<string, string> colorPickerFunction
-    )
-    {
-        return log.Status == ActivityLogStatus.Failed
-            ? Colors.Failed
-            : colorPickerFunction(log.Category);
-    }
-
-    public static LayoutStackControl VerticalStackWithGap(
-        this LayoutStackControl control,
-        string gap = "16px"
-    ) => control.WithOrientation(Orientation.Vertical).WithStyle(style => style.WithGap(gap));
 
     public static LayoutStackControl DialogBodyStack() => Stack().WithDialogBodyStyle();
 

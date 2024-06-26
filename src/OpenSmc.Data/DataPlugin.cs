@@ -17,13 +17,6 @@ public class DataPlugin(IMessageHub hub)
 
     public override Task Initialized => Workspace.Initialized;
 
-    public override async Task StartAsync(CancellationToken cancellationToken) // This loads the persisted state
-    {
-        logger.LogDebug($"Starting data plugin at address {Address}");
-        await base.StartAsync(cancellationToken);
-        Workspace.Initialize();
-    }
-
     IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(
         IMessageDelivery<UpdateDataRequest> request
     ) => RequestChange(request, request.Message with { ChangedBy = request.Sender });

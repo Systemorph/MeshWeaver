@@ -39,8 +39,6 @@ public static class Controls
     public static MenuItemControl Button(object title, object icon) =>
         new(title, icon) { Style = "button" };
 
-    public static ExpandControl Expand(object collapsed) => new(collapsed);
-
     public static ExceptionControl Exception(Exception ex) => new(ex.Message, ex.GetType().Name);
 
     public static CodeSampleControl CodeSample(object data) => new(data);
@@ -75,8 +73,6 @@ public static class Controls
     public static RedirectControl Redirect(LayoutAreaReference message, object address) =>
         new(message, address, message.Area);
 
-    public record ExpandControl(object Data)
-        : ExpandableUiControl<ExpandControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);
 
     #region DataBinding
 
@@ -84,11 +80,11 @@ public static class Controls
     /// <summary>
     /// Takes expression tree of data template and replaces all property getters by binding instances and sets data context property
     /// </summary>
-    public static UiControl Bind<T, TView>(this LayoutArea area, T data, string id, Expression<Func<T, TView>> dataTemplate)
+    public static UiControl Bind<T, TView>(this LayoutAreaHost area, T data, string id, Expression<Func<T, TView>> dataTemplate)
         where TView : UiControl => BindObject(area, data, id, dataTemplate);
 
     internal static UiControl BindObject<T, TView>(
-        this LayoutArea area,
+        this LayoutAreaHost area,
         object data,
         string id,
         Expression<Func<T, TView>> dataTemplate
@@ -102,7 +98,7 @@ public static class Controls
         return view;
     }
 
-    private static string UpdateData(LayoutArea area, object data, string id)
+    private static string UpdateData(LayoutAreaHost area, object data, string id)
     {
         if (data is JsonPointerReference reference)
             return reference.Pointer;
@@ -112,7 +108,7 @@ public static class Controls
     }
 
     public static ItemTemplateControl Bind<T, TView>(
-        this LayoutArea area,
+        this LayoutAreaHost area,
         IEnumerable<T> data,
         string id,
         Expression<Func<T, TView>> dataTemplate
@@ -120,7 +116,7 @@ public static class Controls
         where TView : UiControl => BindEnumerable(area, data, id, dataTemplate);
 
     internal static ItemTemplateControl BindEnumerable<T, TView>(
-        this LayoutArea area,
+        this LayoutAreaHost area,
         object data,
         string id,
         Expression<Func<T, TView>> dataTemplate

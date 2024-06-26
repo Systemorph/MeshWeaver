@@ -29,25 +29,31 @@ public class MessageService : IMessageService
         Address = address;
         this.logger = logger;
 
-        deferralContainer = new DeferralContainer(NotifyAsync);
+        deferralContainer = new DeferralContainer(NotifyAsync, ReportFailure);
 
-        deliveryAction = new(x =>
+        deliveryAction = new(async x =>
         {
             try
             {
-                return deferralContainer.DeliverAsync(x.Delivery, x.CancellationToken);
+                var ret = await deferralContainer.DeliverAsync(x.Delivery, x.CancellationToken);
+                if(ret?.State == MessageDeliveryState.Failed)
+                    Post(new DeliveryFailure(x.Delivery), new PostOptions(Address).ResponseFor(x.Delivery));
             }
             catch (Exception e)
             {
-                logger.LogError(e, "Error when calling DeferMessage");
-                return Task.CompletedTask;
+                ReportFailure(x.Delivery.Failed(e.ToString()));
             }
         });
         buffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = true });
 
     }
 
-
+    private IMessageDelivery ReportFailure(IMessageDelivery delivery)
+    {
+        logger.LogInformation("An exception occurred processing {message} from {sender} in {address}: {exception}", delivery.Message, delivery.Sender, Address, delivery.Message);
+        Post(new DeliveryFailure(delivery), new PostOptions(Address).ResponseFor(delivery));
+        return delivery;
+    }
 
 
     public object Address { get; }

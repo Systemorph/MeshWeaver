@@ -12,9 +12,9 @@ public record LayoutClientConfiguration(IMessageHub Hub)
 {
     private readonly ITypeRegistry typeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
 
-    public delegate ViewDescriptor ViewMap(object instance, IChangeStream<JsonElement, LayoutAreaReference> stream, string area);
+    public delegate ViewDescriptor ViewMap(object instance, ISynchronizationStream<JsonElement, LayoutAreaReference> stream, string area);
 
-    public delegate ViewDescriptor ViewMap<in T>(T instance, IChangeStream<JsonElement, LayoutAreaReference> stream, string area);
+    public delegate ViewDescriptor ViewMap<in T>(T instance, ISynchronizationStream<JsonElement, LayoutAreaReference> stream, string area);
 
     internal ImmutableList<ViewMap> ViewMaps { get; init; } = ImmutableList<ViewMap>.Empty;
 
@@ -31,14 +31,14 @@ public record LayoutClientConfiguration(IMessageHub Hub)
         return WithView((i, s, a) => i is not TViewModel vm ? null : StandardView<TViewModel, TView>(vm, s, a));
     }
 
-    public ViewDescriptor GetViewDescriptor(object instance, IChangeStream<JsonElement, LayoutAreaReference> stream, string area) =>
+    public ViewDescriptor GetViewDescriptor(object instance, ISynchronizationStream<JsonElement, LayoutAreaReference> stream, string area) =>
         ViewMaps.Select(m => m.Invoke(instance, stream, area)).FirstOrDefault(d => d is not null);
 
     public const string ViewModel = nameof(ViewModel);
 
     public static ViewDescriptor StandardView<TViewModel, TView>(
         TViewModel instance,
-        IChangeStream<JsonElement, LayoutAreaReference> stream,
+        ISynchronizationStream<JsonElement, LayoutAreaReference> stream,
         string area
     ) =>
         new(

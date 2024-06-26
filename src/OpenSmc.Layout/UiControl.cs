@@ -1,6 +1,5 @@
 ﻿using System.Collections.Immutable;
-using Newtonsoft.Json;
-using OpenSmc.Messaging;
+using System.Text.Json.Serialization;
 
 namespace OpenSmc.Layout;
 
@@ -49,7 +48,6 @@ public abstract record UiControl(object Data) : IUiControl
 
     public abstract bool IsUpToDate(object other);
 
-    public MessageAndAddress ClickMessage { get; init; }
 
     // ReSharper disable once IdentifierTypo
     public bool IsClickable => ClickAction != null;
@@ -88,10 +86,6 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion,
         return This with { ClickAction = onClick, };
     }
 
-    public TControl WithClickMessage(object message, object target)
-    {
-        return This with { ClickMessage = new(message, target), };
-    }
 
     public TControl WithDisposeAction(Action<TControl> action)
     {
@@ -149,12 +143,6 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion,
         => This with { Class = @class };
 }
 
-internal interface IExpandableUiControl : IUiControl
-{
-    internal Func<UiActionContext, Task<UiControl>> ExpandFunc { get; init; }
-    public ViewRequest ExpandMessage { get; }
-}
-
 public interface IExpandableUiControl<out TControl> : IUiControl<TControl>
     where TControl : IExpandableUiControl<TControl>
 {
@@ -165,37 +153,3 @@ public interface IExpandableUiControl<out TControl> : IUiControl<TControl>
     );
 }
 
-public abstract record ExpandableUiControl<TControl>(
-    string ModuleName,
-    string ApiVersion,
-    object Data
-) : UiControl<TControl>(ModuleName, ApiVersion, Data), IExpandableUiControl
-    where TControl : ExpandableUiControl<TControl>
-{
-    public const string Expand = nameof(Expand);
-    public bool IsExpandable => ExpandFunc != null;
-    public ViewRequest ExpandMessage { get; init; }
-    public Action<object> CloseAction { get; init; }
-
-    public TControl WithCloseAction(Action<object> closeAction) =>
-        (TControl)(this with { CloseAction = closeAction });
-
-    Func<UiActionContext, Task<UiControl>> IExpandableUiControl.ExpandFunc
-    {
-        get => ExpandFunc;
-        init => ExpandFunc = value;
-    }
-
-    internal Func<UiActionContext, Task<UiControl>> ExpandFunc { get; init; }
-
-    public TControl WithExpand(object message, object target, object area) =>
-        This with
-        {
-            ExpandMessage = new(message, target, area)
-        };
-
-    public TControl WithExpand(Func<UiActionContext, Task<UiControl>> expand)
-    {
-        return This with { ExpandFunc = expand, };
-    }
-}

@@ -1,194 +1,172 @@
 ﻿using System.Collections.Immutable;
-using System.Reactive.Linq;
-using System.Text.Json;
-using System.Text.Json.Nodes;
-using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
 
 public record WorkspaceState(
     IMessageHub Hub,
-    EntityStore Store,
-    IReadOnlyDictionary<string, ITypeSource> TypeSources,
+    IReadOnlyDictionary<Type, IDataSource> DataSources,
     ReduceManager<WorkspaceState> ReduceManager
 )
 {
-    //private readonly ISerializationService serializationService;
-    private ImmutableDictionary<Type, string> CollectionsByType { get; init; } =
-        TypeSources
-            .Values.Where(x => x.ElementType != null)
+    IReadOnlyDictionary<string, ITypeSource> TypeSources { get; } =
+        DataSources
+            .Values.SelectMany(x => x.TypeSources.Values)
+            .ToImmutableDictionary(x => x.CollectionName);
+
+    private ImmutableDictionary<Type, string> CollectionsByType { get; } =
+        DataSources
+            .Values.SelectMany(x => x.TypeSources.Values)
+            .Where(x => x.ElementType != null)
             .ToImmutableDictionary(x => x.ElementType, x => x.CollectionName);
 
     public string GetCollectionName(Type type) => CollectionsByType.GetValueOrDefault(type);
 
-    public WorkspaceState(
-        IMessageHub Hub,
-        IReadOnlyDictionary<string, ITypeSource> TypeSources,
-        ReduceManager<WorkspaceState> Reduce
-    )
-        : this(Hub, new(), TypeSources, Reduce) { }
+    public ImmutableDictionary<
+        StreamReference,
+        EntityStore
+    > StoresByStream { get; init; } =
+        ImmutableDictionary<StreamReference, EntityStore>.Empty;
 
     public long Version { get; init; } = Hub.Version;
 
     #region Reducers
-
 
     public object Reduce(WorkspaceReference reference) => ReduceManager.Reduce(this, reference);
 
     public TReference Reduce<TReference>(WorkspaceReference<TReference> reference) =>
         ReduceManager.Reduce(this, reference);
 
-    internal EntityStore ReduceImpl(PartitionedCollectionsReference reference) =>
-        new()
-        {
-            Collections = ((EntityStore)Reduce((dynamic)reference.Collections))
-                .Collections.Select(c => new KeyValuePair<string, InstanceCollection>(
-                    c.Key,
-                    GetPartitionedCollection(c.Key, reference.Partition, c.Value)
-                ))
-                .Where(x => x.Value != null)
-                .ToImmutableDictionary()
-        };
-
-    private InstanceCollection GetPartitionedCollection(
-        string collection,
-        object partition,
-        InstanceCollection instances
-    )
-    {
-        var ret = instances;
-        if (ret == null)
-            return null;
-        if (
-            TypeSources.TryGetValue(collection, out var ts)
-            && partition != null
-            && ts is IPartitionedTypeSource partitionedTypeSource
-        )
-            ret = ret with
-            {
-                Instances = ret
-                    .Instances.Where(kvp =>
-                        partition.Equals(partitionedTypeSource.GetPartition(kvp.Value))
-                    )
-                    .ToImmutableDictionary()
-            };
-        return ret;
-    }
 
     #endregion
 
     public WorkspaceState Update(IReadOnlyCollection<object> instances, UpdateOptions options) =>
         Change(new UpdateDataRequest(instances) { Options = options });
 
+    public WorkspaceState Update(EntityStore entityStore) =>
+        this with
+        {
+            StoresByStream = StoresByStream.SetItems(
+                entityStore
+                    .Collections.Select(x => new
+                    {
+                        DataSource = GetDataSource(x.Key), Collection = x.Key, Instances = x.Value
+                    })
+                    .GroupBy(x => x.DataSource)
+                    .Select(x => new KeyValuePair<
+                        StreamReference,
+                        EntityStore
+                    >(
+                        new(x.Key.Id, x.Key.Reference),
+                        new EntityStore(x.ToDictionary(y => y.Collection, y => y.Instances))
+                    ))
+            ),
+            Version = Hub.Version
+        };
+
+    public WorkspaceState Update(StreamReference reference, EntityStore store) =>
+        this with { StoresByStream = StoresByStream.SetItem(reference, store) };
+
     public WorkspaceState Change(DataChangedRequest request)
     {
         if (request.Elements == null)
             return null;
 
-        var newElements = Merge(request);
+        if (request is UpdateDataRequest update)
+            return this with
+            {
+                StoresByStream = StoresByStream.SetItems(MergeUpdate(update)),
+                Version = Hub.Version
+            };
 
         return this with
         {
-            Store = newElements,
+            StoresByStream = StoresByStream.SetItems(MergeDelete((DeleteDataRequest)request)),
             Version = Hub.Version
         };
     }
 
-    public WorkspaceState Merge(WorkspaceState updated) =>
-        this with
-        {
-            Store = Store.Merge(updated.Store),
-            Version = updated.Version
-        };
-
-    private EntityStore Merge(DataChangedRequest request) =>
-        request switch
-        {
-            UpdateDataRequest update
-                => Store with
-                {
-                    Collections = Store.Collections.SetItems(MergeUpdate(update))
-                },
-            DeleteDataRequest delete
-                => Store with
-                {
-                    Collections = Store.Collections.SetItems(MergeDelete(delete))
-                },
-
-            _ => throw new NotSupportedException()
-        };
-
-    private IEnumerable<KeyValuePair<string, InstanceCollection>> MergeDelete(
-        DeleteDataRequest update
+    private IEnumerable<KeyValuePair<StreamReference, EntityStore>> MergeUpdate(
+        UpdateDataRequest request
     )
     {
-        var instances = GetChanges(update.Elements);
-        foreach (var kvp in instances)
-        {
-            var collection = kvp.Key;
-            var existing = Store.GetCollection(collection);
-            if (existing != null)
-                yield return new(
-                    kvp.Key,
-                    kvp.Value with
-                    {
-                        Instances = existing.Instances.RemoveRange(kvp.Value.Instances.Keys)
-                    }
-                );
-        }
+        return request
+            .Elements.GroupBy(e => e.GetType())
+            .SelectMany(e => MapToIdAndAddress(e, e.Key))
+            .GroupBy(e => new StreamReference(e.Id, e.Reference))
+            .Select(e =>
+                (
+                    e.Key,
+                    Store: new EntityStore(
+                        e.Select(y => new KeyValuePair<string, InstanceCollection>(
+                                y.Collection,
+                                new(y.Elements)
+                            ))
+                            .ToImmutableDictionary()
+                    )
+                )
+            )
+            .Select(e => new KeyValuePair<StreamReference, EntityStore>(
+                e.Key,
+                StoresByStream.TryGetValue(e.Key, out var existing)
+                    ? existing.Merge(e.Store, request.Options ?? UpdateOptions.Default)
+                    : e.Store
+            ));
     }
 
-    private IEnumerable<KeyValuePair<string, InstanceCollection>> MergeUpdate(
-        UpdateDataRequest update
-    )
+    private IEnumerable<(
+        object Id,
+        object Reference,
+        ImmutableDictionary<object, object> Elements,
+        string Collection,
+        ITypeSource TypeSource
+    )> MapToIdAndAddress(IEnumerable<object> e, Type type)
     {
-        var instances = GetChanges(update.Elements);
-        foreach (var kvp in instances)
-        {
-            var collection = kvp.Key;
-            var existing = Store.GetCollection(collection);
-            bool snapshotMode = update.Options?.Snapshot ?? false;
-            if (existing == null || snapshotMode)
-                yield return kvp;
-            else
-                yield return new(
-                    kvp.Key,
-                    existing with
-                    {
-                        Instances = existing.Instances.SetItems(kvp.Value.Instances)
-                    }
-                );
-        }
-    }
-
-    private IEnumerable<KeyValuePair<string, InstanceCollection>> GetChanges(
-        IReadOnlyCollection<object> instances
-    )
-    {
-        foreach (var g in instances.GroupBy(x => x.GetType()))
-        {
-            var collection = CollectionsByType.GetValueOrDefault(g.Key);
-            if (collection == null)
-                throw new ArgumentException(
-                    $"Type {g.Key.FullName} is not mapped to data source.",
-                    nameof(instances)
-                );
-            var typeProvider = TypeSources.GetValueOrDefault(collection);
-            if (typeProvider == null)
-                throw new ArgumentException(
-                    $"Type {g.Key.FullName} is not mapped to data source.",
-                    nameof(instances)
-                );
-            yield return new(
-                typeProvider.CollectionName,
-                new()
-                {
-                    Instances = g.ToImmutableDictionary(typeProvider.GetKey),
-                    GetKey = typeProvider.GetKey
-                }
+        if (
+            !DataSources.TryGetValue(type, out var dataSource)
+            || !dataSource.TypeSources.TryGetValue(type, out var ts)
+        )
+            throw new InvalidOperationException(
+                $"Type {type.FullName} is not mapped to data source."
             );
-        }
+
+        if (ts is not IPartitionedTypeSource partitioned)
+            yield return (
+                dataSource.Id,
+                dataSource.Reference,
+                e.ToImmutableDictionary(x => ts.GetKey(x)),
+                GetCollectionName(type),
+                ts
+            );
+        else
+            foreach (var partition in e.GroupBy(x => partitioned.GetPartition(x)))
+                yield return (
+                    partition.Key,
+                    new PartitionedCollectionsReference(partition.Key,dataSource.Reference),
+                    partition.ToImmutableDictionary(x => ts.GetKey(x)),
+                    GetCollectionName(type),
+                    ts
+                );
+    }
+
+    private IEnumerable<KeyValuePair<StreamReference, EntityStore>> MergeDelete(
+        DeleteDataRequest request
+    )
+    {
+        return request
+            .Elements.GroupBy(e => e.GetType())
+            .SelectMany(e => MapToIdAndAddress(e, e.Key))
+            .GroupBy(e => new StreamReference(e.Id, e.Reference))
+            .Select(e => new KeyValuePair<StreamReference, EntityStore>(
+                e.Key,
+                StoresByStream.TryGetValue(e.Key, out var existing)
+                    ? e.Aggregate(
+                        existing,
+                        (s, c) => s.Update(c.Collection, v => v.Remove(c.Elements.Keys))
+                    )
+                    : null
+            ))
+            .Where(e => e.Value != null);
     }
 
     public IEnumerable<Type> MappedTypes => CollectionsByType.Keys;
@@ -198,55 +176,59 @@ public record WorkspaceState(
         throw new NotImplementedException();
     }
 
-    public WorkspaceState Synchronize(ChangeItem<EntityStore> item)
-    {
-        var newStore = CreateNewStore(item);
-        return this with { Store = newStore, Version = Hub.Version, };
-    }
-
-    private EntityStore CreateNewStore(ChangeItem<EntityStore> item) =>
-        Store with
-        {
-            Collections = Store.Collections.SetItems(
-                item.Value.Collections.Select(kvp => new KeyValuePair<string, InstanceCollection>(
-                    kvp.Key,
-                    TypeSources.TryGetValue(kvp.Key, out var ts)
-                    && ts is IPartitionedTypeSource
-                    && Store.Collections.TryGetValue(kvp.Key, out var existing)
-                        ? existing.Merge(kvp.Value)
-                        : kvp.Value
-                ))
-            )
-        };
-
-    public WorkspaceState Update(
-        string collection,
-        Func<InstanceCollection, InstanceCollection> change
-    ) => this with { Store = Store.Update(collection, change) };
-
-    public WorkspaceState Update(Func<EntityStore, EntityStore> change) =>
-        this with
-        {
-            Store = change(Store)
-        };
-
-    public WorkspaceState Update(object instance)
-    {
-        if (instance == null)
-            throw new ArgumentNullException(nameof(instance));
-        var type = instance.GetType();
-        if (!CollectionsByType.TryGetValue(type, out var collection))
-            throw new InvalidOperationException(
-                $"Type {type.FullName} is not mapped to data source."
-            );
-        var typeProvider = TypeSources.GetValueOrDefault(collection);
-        if (typeProvider == null)
-            throw new InvalidOperationException(
-                $"Type {type.FullName} is not mapped to data source."
-            );
-        return Update(collection, c => c.Update(typeProvider.GetKey(instance), instance));
-    }
-
     public ITypeSource GetTypeSource(Type type) =>
         TypeSources.GetValueOrDefault(GetCollectionName(type));
+
+    internal object ReduceImpl(EntityReference reference)
+    {
+        var collection = reference.Collection;
+        var store = GetStore(GetDataSource(collection));
+        return store.Collections.GetValueOrDefault(collection)?.GetData(reference.Id);
+    }
+
+    private EntityStore GetStore(IDataSource dataSource) =>
+        dataSource.Streams.Select(s => 
+            StoresByStream.GetValueOrDefault(s.StreamReference))
+            .Where(x => x != null)
+            .Aggregate((x,y) => x.Merge(y)
+            );
+
+
+    private IDataSource GetDataSource(string collection)
+    {
+        var typeSource = TypeSources.GetValueOrDefault(collection);
+        if (typeSource == null)
+            throw new DataSourceConfigurationException($"Collection {collection} not found");
+        var dataSource = DataSources.GetValueOrDefault(typeSource.ElementType);
+        if (dataSource == null)
+            throw new DataSourceConfigurationException($"Type {typeSource.ElementType} not found");
+        return dataSource;
+    }
+
+
+    internal InstanceCollection ReduceImpl(CollectionReference reference)
+    {
+        return GetStore(GetDataSource(reference.Name))
+            ?.Collections.GetValueOrDefault(reference.Name);
+    }
+
+    internal EntityStore ReduceImpl(PartitionedCollectionsReference reference) =>
+    StoresByStream.GetValueOrDefault(new (reference.Partition, reference))
+        ?? ReduceImpl(reference.Reference);
+
+    internal EntityStore ReduceImpl(CollectionsReference reference) =>
+        reference
+            .Collections.Select(x => new { DataSource = GetDataSource(x), Collection = x })
+            .GroupBy(x => x.DataSource)
+            .SelectMany(x => x.Key.Streams.Select(p => StoresByStream.GetValueOrDefault(p.StreamReference)))
+            .Where(x => x != null)
+            .Aggregate((x, y) => x.Merge(y, UpdateOptions.Default));
+    internal EntityStore ReduceImpl(StreamReference reference) =>
+StoresByStream.GetValueOrDefault(reference);
+
+    public WorkspaceState Merge(WorkspaceState that) =>
+        this with
+        {
+            StoresByStream = StoresByStream.SetItems(that.StoresByStream)
+        };
 }

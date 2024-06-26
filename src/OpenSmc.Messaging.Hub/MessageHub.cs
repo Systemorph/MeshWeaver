@@ -237,6 +237,9 @@ public sealed class MessageHub<TAddress>
         async Task<IMessageDelivery> ResolveCallback(IMessageDelivery d, CancellationToken ct)
         {
             var ret = await callback(d, ct);
+
+            if (d.Message is DeliveryFailure failure) 
+                tcs.SetException(new DeliveryFailureException(failure));
             tcs.SetResult(ret);
             return ret;
         }
@@ -276,29 +279,13 @@ public sealed class MessageHub<TAddress>
 
     object IMessageHub.Address => Address;
 
-    public void ConnectTo(IMessageHub hub)
-    {
-        hub.DeliverMessage(
-            new MessageDelivery<ConnectToHubRequest>
-            {
-                Message = new ConnectToHubRequest(),
-                Sender = Address,
-                Target = hub.Address
-            }
-        );
-    }
-
-    public void Disconnect(IMessageHub hub)
-    {
-        Post(new DisconnectHubRequest(), o => o.WithTarget(hub.Address));
-    }
 
     public IMessageDelivery<TMessage> Post<TMessage>(
         TMessage message,
         Func<PostOptions, PostOptions> configure = null
     )
     {
-        var options = new PostOptions(Address, this);
+        var options = new PostOptions(Address);
         if (configure != null)
             options = configure(options);
 
@@ -334,7 +321,6 @@ public sealed class MessageHub<TAddress>
         return this;
     }
 
-    // TODO V10: replace two ser/des to this single one (2023/09/27, Dmitry Kalabin)
     public JsonSerializerOptions JsonSerializerOptions { get; }
 
     private bool IsDisposing => disposingTaskCompletionSource != null;

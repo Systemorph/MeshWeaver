@@ -5,11 +5,8 @@ using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Messaging;
 
-public record MaskedRequest(IMessageDelivery Request, object HostAddress);
 public abstract record MessageDelivery(object Sender, object Target) : IMessageDelivery
 {
-    protected IMessageHub SenderHub;
-
     public string Id { get; init; } = Guid.NewGuid().AsString();
     public ImmutableDictionary<string, object> Properties { get; init; } = ImmutableDictionary<string, object>.Empty;
     public string State { get; init; } = MessageDeliveryState.Submitted;
@@ -43,8 +40,6 @@ public abstract record MessageDelivery(object Sender, object Target) : IMessageD
     IReadOnlyCollection<object> IMessageDelivery.ToBeForwarded(IEnumerable<object> addresses) => addresses.Where(a => !ForwardedTo.Contains(a)).ToArray();
     IMessageDelivery IMessageDelivery.Forwarded(IEnumerable<object> addresses) => this with { ForwardedTo = ForwardedTo.Union(addresses), State = MessageDeliveryState.Forwarded };
 
-    internal const string MaskedRequest = nameof(MaskedRequest);
-    public IMessageDelivery Mask(object hostAddress) => this with { Properties = Properties.SetItem(MaskedRequest, new MaskedRequest(this, hostAddress)) };
 
 
     IMessageDelivery IMessageDelivery.WithRoutedSender(object address)
@@ -105,7 +100,6 @@ public record MessageDelivery<TMessage>(object Sender, object Target, TMessage M
         : this(options.Sender, options.Target, message)
     {
         Properties = options.Properties;
-        SenderHub = options.SenderHub;
     }
 
     protected override object GetMessage()

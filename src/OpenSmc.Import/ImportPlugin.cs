@@ -1,13 +1,10 @@
-﻿using System.Diagnostics;
-using System.Text;
-using AngleSharp;
+﻿using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
-using OpenSmc.ServiceProvider;
 
 namespace OpenSmc.Import;
 
@@ -78,6 +75,7 @@ public class ImportPlugin : MessageHubPlugin, IMessageHandlerAsync<ImportRequest
                     workspace.Reference,
                     s.Merge(state),
                     Hub.Address,
+                    null,
                     Hub.Version
                 ));
             }
