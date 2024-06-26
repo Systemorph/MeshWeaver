@@ -88,7 +88,8 @@ public static class NorthwindLayoutAreas
                                 )
                                 .WithView("MainContent",
                                     Stack()
-                                        .WithSkin(Skins.Grid())
+                                        .WithSkin(Skins.Grid().WithSpacing(1))
+                                        .WithClass("main-content")
                                         .WithView(
                                             LayoutGridItem().WithChildContent(OrderSummary()).WithXs(12).WithSm(6))
                                         .WithView(LayoutGridItem().WithChildContent(ProductSummary()).WithXs(12)

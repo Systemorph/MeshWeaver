@@ -37,6 +37,10 @@ fluent-toolbar {
     border-bottom: 1px solid #eee;
 }
 
+.main-content {
+    padding: 12px;
+}
+
 .context-panel {
     padding: 12px;
 }
