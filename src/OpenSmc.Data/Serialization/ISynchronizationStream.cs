@@ -1,5 +1,4 @@
-﻿using Autofac.Builder;
-using OpenSmc.Messaging;
+﻿using OpenSmc.Messaging;
 
 namespace OpenSmc.Data.Serialization;
 
@@ -38,6 +37,8 @@ public interface ISynchronizationStream<TStream>
         IObservable<ChangeItem<TStream>>,
         IObserver<ChangeItem<TStream>>
 {
+
+    ChangeItem<TStream> Current { get; }
     void Update(Func<TStream, ChangeItem<TStream>> update);
 
     StreamReference StreamReference { get; }
