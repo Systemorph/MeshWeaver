@@ -1,0 +1,27 @@
+@using System.Reactive.Linq
+@inherits BlazorView<ItemTemplateControl>
+
+<FluentStack
+    Class="@Class"
+    Style="@Style">
+    @foreach (var item in data)
+    {
+        <DispatchView ViewModel="@view" Stream="@Stream" Area="@ViewArea" />
+    }
+</FluentStack>
+
+@code
+{
+    private IEnumerable<object> data;
+
+    private UiControl view;
+
+    private string ViewArea => $"{Area}/{ItemTemplateControl.ViewArea}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        DataBind<IEnumerable<object>>(ViewModel.Data, d => data = d);
+        view = GetControl(await Stream.FirstAsync(), ViewArea);
+    }
+}

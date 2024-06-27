@@ -8,6 +8,8 @@ namespace OpenSmc.Layout;
 //result into ui control with DataBinding set
 public record ItemTemplateControl : UiControl<ItemTemplateControl>
 {
+    public static string ViewArea = nameof(View);
+
     public ItemTemplateControl(object view, object data)
         : base(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
     {
