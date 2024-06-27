@@ -119,7 +119,6 @@ public class Workspace : IWorkspace
         ReduceManager.ReduceStream<TReduced, TReference>(
             stream,
             reference,
-            Hub.Address,
             subscriber
         );
 
@@ -143,11 +142,19 @@ public class Workspace : IWorkspace
     {
         // link to deserialized world. Will also potentially link to workspace.
 
+        var ret = new ChainedSynchronizationStream<
+            WorkspaceState,
+            TReference,
+            TReduced
+        >(stream, owner, subscriber, reference);
 
-        var ret = stream.Reduce<TReduced, TReference>(reference, owner, subscriber);
+        var fromWorkspace = stream.Reduce<TReduced, TReference>(reference, subscriber);
+        if (fromWorkspace != null)
+            ret.AddDisposable(fromWorkspace.Subscribe(ret));
+
         var json = 
             ret as ISynchronizationStream<JsonElement>
-            ?? ret.Reduce(new JsonElementReference());
+            ?? ret.Reduce(new JsonElementReference(), subscriber);
 
         if (owner.Equals(Hub.Address))
             RegisterOwner(reference, json);
@@ -184,7 +191,9 @@ public class Workspace : IWorkspace
         json.AddDisposable(
             json.ToDataChangedStream(reference)
                 .Where(x => !json.Subscriber.Equals(x.ChangedBy))
-                .Subscribe(e => Hub.Post(e, o => o.WithTarget(json.Subscriber)))
+                .Subscribe(e => 
+                    Hub.Post(e, o => o.WithTarget(json.Subscriber))
+                    )
         );
         json.AddDisposable(
             new AnonymousDisposable(() => subscriptions.Remove(new(subscriber, reference), out _))

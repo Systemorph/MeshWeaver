@@ -135,4 +135,15 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         }
 
     }
+
+    [Fact]
+    public async Task ProductSummaryReport()
+    {
+        var workspace = GetHost().GetWorkspace();
+        await workspace.Initialized;
+
+        var viewName = nameof(NorthwindLayoutAreas.SupplierSummaryGrid);
+        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(new HostAddress(), new LayoutAreaReference(viewName));
+        var grid = (await stream.GetControl(viewName)).Should().BeOfType<GridControl>().Subject;
+    }
 }
