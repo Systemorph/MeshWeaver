@@ -1,15 +1,12 @@
 ﻿using System.Reactive.Linq;
 using OpenSmc.Application.Styles;
-using OpenSmc.Collections;
 using OpenSmc.Data;
 using OpenSmc.DataCubes;
-using OpenSmc.Domain;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
 using OpenSmc.Northwind.Domain;
 using OpenSmc.Pivot.Builder;
-using OpenSmc.Reflection;
 using OpenSmc.Reporting.Models;
 using OpenSmc.Utils;
 using static OpenSmc.Layout.Controls;
@@ -74,62 +71,48 @@ public static class NorthwindLayoutAreas
             .DistinctUntilChanged(x => string.Join(',', x.Select(y => y.Item)));
 
         return Stack()
-                .WithSkin(Skins.Splitter())
+                .WithSkin(Skins.Splitter)
                 .WithOrientation(Orientation.Horizontal)
                 .WithView(
-                    SplitterPane()
-                        .WithChildContent(
                             Stack()
                                 .WithOrientation(Orientation.Vertical)
-                                .WithView("Toolbar", Toolbar()
+                                .WithView(Toolbar()
                                     .WithView((area, _) => years.Select(y => area.Bind(new Toolbar(y.Max(x => x.Item)),
                                         nameof(Toolbar),
                                         tb => Select(tb.Year).WithOptions(y)))
-
                                     )
                                 )
-                                .WithView("MainContent",
-                                    Stack()
-                                        .WithSkin(Skins.Grid().WithSpacing(1))
+                                .WithView(Stack()
+                                        .WithSkin(Skins.LayoutGrid.WithSpacing(1))
                                         .WithClass("main-content")
-                                        .WithView((area,ctx)=>
-                                            LayoutGridItem().WithChildContent(OrderSummary (area, ctx)).WithXs(12).WithSm(6))
-                                        .WithView((area, ctx) => LayoutGridItem().WithChildContent(ProductSummary(area,ctx)).WithXs(12)
-                                            .WithSm(6))
-                                        .WithView((area, ctx) => LayoutGridItem().WithChildContent(CustomerSummary(area,ctx)).WithXs(12)
-                                            .WithSm(6))
-                                        .WithView((area, ctx) => LayoutGridItem().WithChildContent(SupplierSummary(area, ctx)).WithXs(12))
+                                        .WithView((area, ctx)=> OrderSummary(area, ctx).ToLayoutGridItem(item => item.WithXs(12).WithSm(6)))
+                                        .WithView((area, ctx) => ProductSummary(area, ctx).ToLayoutGridItem(item => item.WithXs(12).WithSm(6)))
+                                        .WithView((area, ctx) => CustomerSummary(area,ctx).ToLayoutGridItem(item => item.WithXs(12).WithSm(6)))
+                                        .WithView((area, ctx) => SupplierSummary(area, ctx).ToLayoutGridItem(item => item.WithXs(12)))
                                 )
+                                .ToSplitterPane()
                         )
-
-                )
-                .WithView("ContextPanel", ContextPanel);
+                .WithView(ContextPanel);
     }
 
-    private static SplitterPaneControl ContextPanel(LayoutAreaHost area)
+    private static SplitterPaneControl ContextPanel(LayoutAreaHost area, RenderingContext ctx)
     {
-        return SplitterPane()
+        return Stack()
             .WithClass("context-panel")
-            .WithSize("350px")
-            .WithCollapsible(true)
-            .WithChildContent(
+            .WithOrientation(Orientation.Vertical)
+            .WithView(Html("<h3>Context panel</h3>"))
+            .WithView(
                 Stack()
-                    .WithView(Html("<h3>Context panel</h3>"))
-                    .WithView(
-                        Stack()
-                            .WithOrientation(Orientation.Horizontal)
-                            .WithView(nameof(Dimensions), Dimensions)
-                            .WithView("Values")
-                        )
-            );
+                    .WithOrientation(Orientation.Horizontal)
+                    .WithView((area, ctx) => area.Bind(
+                        new[] {"Product", "Customer", "Supplier"},
+                        "dimensions",
+                        (string item) => Menu(item)
+                    ))
+                    .WithView("Values")
+            )
+            .ToSplitterPane(x => x.WithSize("350px").WithCollapsible(true));
     }
-
-    private static ItemTemplateControl Dimensions(LayoutAreaHost area) =>
-        area.Bind(
-            new[] { "Product", "Customer", "Supplier" },
-            nameof(Dimensions),
-            (string item) => Button(item, null)
-        );
 
     private static LayoutStackControl SupplierSummary(LayoutAreaHost layoutArea, RenderingContext ctx) =>
         Stack()

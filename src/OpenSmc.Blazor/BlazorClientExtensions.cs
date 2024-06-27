@@ -33,7 +33,13 @@ public static class BlazorClientExtensions
         {
             HtmlControl html => StandardView<HtmlControl, HtmlView>(html, stream, area),
             LayoutStackControl stack
-                => StandardView<LayoutStackControl, LayoutStack>(stack, stream, area),
+                => stack.Skin switch
+                {
+                    ToolbarSkin _ => StandardView<LayoutStackControl, Toolbar>(stack, stream, area),
+                    LayoutGridSkin _ => StandardView<LayoutStackControl, LayoutGrid>(stack, stream, area),
+                    SplitterSkin _ => StandardView<LayoutStackControl, Splitter>(stack, stream, area),
+                    _ => StandardView<LayoutStackControl, LayoutStack>(stack, stream, area)
+                },
             MenuItemControl menu => StandardView<MenuItemControl, MenuItem>(menu, stream, area),
             NavLinkControl link => StandardView<NavLinkControl, NavLinkView>(link, stream, area),
             NavMenuControl navMenu

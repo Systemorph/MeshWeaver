@@ -1,6 +1,4 @@
-﻿using AngleSharp.Media.Dom;
-
-namespace OpenSmc.Layout.Composition;
+﻿namespace OpenSmc.Layout.Composition;
 
 public delegate Task<object> ViewDefinition(LayoutAreaHost area, RenderingContext context);
 
