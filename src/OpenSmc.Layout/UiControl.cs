@@ -7,11 +7,6 @@ public interface IUiControl : IDisposable
 {
     object Id { get; }
 
-    object Label { get; }
-    object Skin { get; }
-    object Class { get; }
-    object Style { get; }
-
     //object Data { get; init; }
     IUiControl WithBuildAction(Func<IUiControl, IServiceProvider, IUiControl> buildFunction);
     bool IsClickable { get; }
