@@ -5,6 +5,8 @@ using OpenSmc.Northwind.Application.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.AddServiceDefaults();
+
 // Add services to the container.
 builder.Services.AddRazorPages();
 builder.Services.AddServerSideBlazor();
@@ -28,6 +30,8 @@ builder.Host.UseOpenSmc(
     config => config.ConfigureNorthwindHubs()
 );
 var app = builder.Build();
+
+app.MapDefaultEndpoints();
 
 // Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())
