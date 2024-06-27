@@ -98,7 +98,7 @@ public class RawJsonTest : TestBase
     public void WayBack()
     {
         // arrange
-        var postOptions = new PostOptions(Client.Address, Client)
+        var postOptions = new PostOptions(Client.Address)
             .WithTarget(new HostAddress())
             .WithProperties(
                 new Dictionary<string, object>

@@ -1,2 +1,20 @@
-﻿<button>@ViewModel.Title</button>
-@inherits BlazorView<MenuItemControl>
+﻿@inherits BlazorView<MenuItemControl>
+<FluentMenuButton @onclick="@OnClick"></FluentMenuButton>
+@code
+{
+    private string Title { get; set; }
+    protected override void OnParametersSet()
+    {
+        base.OnParametersSet();
+        if (ViewModel != null)
+        {
+            DataBind<string>(ViewModel.Title, x => Title = x);
+        }
+
+    }
+
+    protected void OnClick()
+    {
+        Stream.Hub.Post(new ClickedEvent(Area), o => o.WithTarget(Stream.Owner));
+    }
+}
