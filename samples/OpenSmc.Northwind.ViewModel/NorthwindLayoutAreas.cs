@@ -1,8 +1,10 @@
 ﻿using System.Reactive.Linq;
 using AngleSharp.Common;
 using OpenSmc.Application.Styles;
+using OpenSmc.Collections;
 using OpenSmc.Data;
 using OpenSmc.DataCubes;
+using OpenSmc.Domain;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
@@ -102,16 +104,33 @@ public static class NorthwindLayoutAreas
                         )
 
                 )
-                .WithView(
-                    "ContextPanel",
-                    SplitterPane()
-                        .WithClass("context-panel")
-                        .WithChildContent(Html("<h3>Context panel</h3>"))
-                        .WithSize("350px")
-                        .WithCollapsible(true)
-                )
-            ;
+                .WithView("ContextPanel", ContextPanel);
     }
+
+    private static SplitterPaneControl ContextPanel(LayoutAreaHost area)
+    {
+        return SplitterPane()
+            .WithClass("context-panel")
+            .WithSize("350px")
+            .WithCollapsible(true)
+            .WithChildContent(
+                Stack()
+                    .WithView(Html("<h3>Context panel</h3>"))
+                    .WithView(
+                        Stack()
+                            .WithOrientation(Orientation.Horizontal)
+                            .WithView(nameof(Dimensions), Dimensions)
+                            .WithView("Values")
+                        )
+            );
+    }
+
+    private static ItemTemplateControl Dimensions(LayoutAreaHost area) =>
+        area.Bind(
+            new[] { "Product", "Customer", "Supplier" },
+            nameof(Dimensions),
+            (string item) => Button(item, null)
+        );
 
     private static LayoutStackControl SupplierSummary() =>
         Stack()
