@@ -5,7 +5,7 @@ namespace OpenSmc.Data;
 
 public record WorkspaceMessage
 {
-    public virtual object Id { get; init; }
+    public virtual object Owner { get; init; }
     public virtual object Reference { get; init; }
 }
 

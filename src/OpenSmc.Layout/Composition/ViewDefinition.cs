@@ -1,8 +1,12 @@
-﻿namespace OpenSmc.Layout.Composition;
+﻿using AngleSharp.Media.Dom;
 
-public delegate Task<object> ViewDefinition(LayoutAreaHost area);
+namespace OpenSmc.Layout.Composition;
 
-public delegate IObservable<object> ViewStream(LayoutAreaHost area);
+public delegate Task<object> ViewDefinition(LayoutAreaHost area, RenderingContext context);
+
+public record RenderingContext(string Area);
+
+public delegate IObservable<object> ViewStream(LayoutAreaHost area, RenderingContext context);
 
 public abstract record ViewElement(string Area);
 
