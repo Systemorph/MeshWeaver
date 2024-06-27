@@ -95,12 +95,12 @@ public static class LayoutExtensions
     public static IObservable<object> GetDataStream(
         this ISynchronizationStream<JsonElement> stream,
         JsonPointerReference reference
-    ) => stream.Reduce(reference, stream.Owner, stream.Hub.Address).Select(x => x.Value?.Deserialize<object>(stream.Hub.JsonSerializerOptions));
+    ) => stream.Reduce(reference, stream.Hub.Address).Select(x => x.Value?.Deserialize<object>(stream.Hub.JsonSerializerOptions));
 
     public static IObservable<T> GetDataStream<T>(
         this ISynchronizationStream<JsonElement> stream,
         JsonPointerReference reference
-    ) => stream.Reduce(reference, stream.Owner, stream.Hub.Address).Select(x =>
+    ) => stream.Reduce(reference, stream.Hub.Address).Select(x =>
         x.Value == null ? default : x.Value.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions));
 
     public static MessageHubConfiguration AddLayoutClient(

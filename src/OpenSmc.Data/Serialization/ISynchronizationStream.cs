@@ -13,14 +13,13 @@ public interface ISynchronizationStream : IDisposable
     void AddDisposable(IDisposable disposable);
 
     Task Initialized { get; }
-    ISynchronizationStream Reduce(WorkspaceReference reference, object owner, object subscriber) => Reduce((dynamic)reference, owner, subscriber);
-    ISynchronizationStream<TReduced> Reduce<TReduced>(WorkspaceReference<TReduced> reference, object owner, object subscriber);
+    ISynchronizationStream Reduce(WorkspaceReference reference, object subscriber) => Reduce((dynamic)reference, subscriber);
+    ISynchronizationStream<TReduced> Reduce<TReduced>(WorkspaceReference<TReduced> reference,  object subscriber);
     ISynchronizationStream<TReduced> Reduce<TReduced>(WorkspaceReference<TReduced> reference) => 
-        Reduce(reference, Owner, Subscriber);
+        Reduce(reference, Subscriber);
 
     ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
         TReference2 reference,
-        object owner,
         object subscriber
     )
         where TReference2 : WorkspaceReference;

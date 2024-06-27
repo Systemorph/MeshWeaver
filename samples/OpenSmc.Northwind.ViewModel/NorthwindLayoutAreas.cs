@@ -7,7 +7,6 @@ using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
 using OpenSmc.Northwind.Domain;
 using OpenSmc.Pivot.Builder;
-using OpenSmc.Reflection;
 using OpenSmc.Reporting.Models;
 using OpenSmc.Utils;
 using static OpenSmc.Layout.Controls;
@@ -28,6 +27,7 @@ public static class NorthwindLayoutAreas
                 .WithView(nameof(CustomerSummary), CustomerSummary)
                 .WithView(nameof(SupplierSummary), SupplierSummary)
                 .WithView(nameof(NavigationMenu), NavigationMenu)
+                .WithView(nameof(SupplierSummaryGrid), SupplierSummaryGrid)
         );
     }
 
@@ -42,7 +42,9 @@ public static class NorthwindLayoutAreas
     {
         return DashboardWidgets.Aggregate(
             NavMenu().WithCollapsible(true).WithWidth(250),
-            (x, a) => x.WithNavLink(a.Key.Wordify(), $"app/Northwind/dev/{a.Key}", o => o.WithIcon(a.Value))
+            (x, 
+                a) => x.WithNavLink(a.Key.Wordify(), $"app/Northwind/dev/{a.Key}", 
+                o => o.WithIcon(a.Value))
         );
     }
 
@@ -56,7 +58,7 @@ public static class NorthwindLayoutAreas
         public int Year { get; init; }
     }
 
-    public static object Dashboard(LayoutAreaHost layoutArea, RenderingContext ctx)
+    public static object Dashboard(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         var years = layoutArea
             .Workspace.GetObservable<Order>()
@@ -112,17 +114,20 @@ public static class NorthwindLayoutAreas
             ;
     }
 
-    private static LayoutStackControl SupplierSummary(LayoutAreaHost layoutArea, RenderingContext ctx) =>
+    public static LayoutStackControl SupplierSummary(this LayoutAreaHost layoutArea, RenderingContext ctx) =>
         Stack()
             .WithOrientation(Orientation.Vertical)
             .WithView(Html("<h2>Supplier Summary</h2>"))
-            .WithView(SupplierSummaryReport);
+            .WithView(SupplierSummaryGrid);
 
-    private static IObservable<object> SupplierSummaryReport(LayoutAreaHost area, RenderingContext ctx) =>
+    public static IObservable<object> SupplierSummaryGrid(this LayoutAreaHost area, RenderingContext ctx) =>
         area.GetDataCube()
-            .Select(cube => cube.Pivot().SliceRowsBy(nameof(Supplier)).Execute().ToGridControl());
+            .Select(cube => cube.Pivot()
+                .SliceRowsBy(nameof(Supplier))
+                .Execute()
+                .ToGridControl());
 
-    private static IObservable<IDataCube<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area) =>
+    public static IObservable<IDataCube<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area) =>
         area
             .Workspace.Stream.Select(x => new
             {
@@ -148,7 +153,7 @@ public static class NorthwindLayoutAreas
                     .ToDataCube()
             );
 
-    private static LayoutStackControl CustomerSummary(LayoutAreaHost layoutArea, RenderingContext ctx) =>
+    public static LayoutStackControl CustomerSummary(this LayoutAreaHost layoutArea, RenderingContext ctx) =>
         Stack()
             .WithOrientation(Orientation.Vertical)
             .WithView(Html("<h2>Customer Summary</h2>"))
@@ -157,12 +162,12 @@ public static class NorthwindLayoutAreas
                     .Select(tb => $"Year selected: {tb.Year}")
             );
 
-    private static LayoutStackControl ProductSummary(LayoutAreaHost layoutArea, RenderingContext ctx) =>
+    public static LayoutStackControl ProductSummary(this LayoutAreaHost layoutArea, RenderingContext ctx) =>
         Stack().WithOrientation(Orientation.Vertical)
             .WithView(Html("<h2>Product Summary</h2>"))
             .WithView(Counter);
 
-    private static object Counter(LayoutAreaHost area, RenderingContext context) 
+    public static object Counter(this LayoutAreaHost area, RenderingContext context) 
     {
         var counter = 0;
         return Controls
@@ -181,9 +186,9 @@ public static class NorthwindLayoutAreas
             .WithView(nameof(Counter), Counter(counter));
     }
 
-    private static object Counter(int counter) => Controls.Title(counter.ToString(), 1);
+    public static object Counter(int counter) => Controls.Title(counter.ToString(), 1);
 
-    private static LayoutStackControl OrderSummary(LayoutAreaHost layoutArea, RenderingContext ctx) =>
+    public static LayoutStackControl OrderSummary(LayoutAreaHost layoutArea, RenderingContext ctx) =>
     Stack().WithOrientation(Orientation.Vertical)
             .WithView(Html("<h2>Order Summary</h2>"))
             .WithView((area, _) => area.GetDataStream<Toolbar>(nameof(Toolbar))

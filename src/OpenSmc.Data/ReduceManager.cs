@@ -175,7 +175,6 @@ public record ReduceManager<TStream>
     internal ISynchronizationStream<TReduced, TReference> ReduceStream<TReduced, TReference>(
         ISynchronizationStream<TStream> stream,
         TReference reference,
-        object owner,
         object subscriber
     )
         where TReference : WorkspaceReference
@@ -192,12 +191,7 @@ public record ReduceManager<TStream>
                 )
                 .FirstOrDefault(x => x != null);
 
-        return reduced ?? 
-               new ChainedSynchronizationStream<
-            TStream,
-            TReference,
-            TReduced
-        >(stream, owner, subscriber, reference);
+        return reduced;
 
     }
 
