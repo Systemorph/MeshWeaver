@@ -4,8 +4,16 @@ using OpenSmc.Layout.Composition;
 
 namespace OpenSmc.Layout;
 
+public interface IContainerControl : IUiControl
+{
+    IEnumerable<ViewElement> ChildControls { get; }
+    IReadOnlyCollection<string> Areas { get; }
+    IContainerControl SetAreas(IReadOnlyCollection<string> areas);
+}
+
 public record LayoutStackControl()
-    : UiControl<LayoutStackControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
+    : UiControl<LayoutStackControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null),
+        IContainerControl
 {
     internal const string Root = "";
 
@@ -71,14 +79,16 @@ public record LayoutStackControl()
         => this with { Wrap = wrap };
     public LayoutStackControl WithWidth(string width)
     => this with { Width = width };
-}
 
+    IEnumerable<ViewElement> IContainerControl.ChildControls => ViewElements;
+    IContainerControl IContainerControl.SetAreas(IReadOnlyCollection<string> areas) => this with { Areas = areas };
+}
 
 public static class Skins
 {
-    public static ToolbarSkin Toolbar() => new();
-    public static SplitterSkin Splitter() => new();
-    public static GridSkin Grid() => new();
+    public static ToolbarSkin Toolbar => new();
+    public static SplitterSkin Splitter => new();
+    public static LayoutGridSkin LayoutGrid => new();
 }
 
 public record ToolbarSkin : Skin;
@@ -96,11 +106,9 @@ public record SplitterSkin : Skin
     public SplitterSkin WithHeight(string height) => this with { Height = height };
 }
 
-public record SplitterPaneControl()
-    : UiControl<SplitterPaneControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
+public record SplitterPaneControl(object ChildControl)
+    : UiControl<SplitterPaneControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null), IContainerControl
 {
-    public static string ChildContentArea => nameof(ChildContent);
-    public UiControl ChildContent { get; init; }
     public bool Collapsible { get; init; }
     public bool Collapsed { get; init; }
 
@@ -116,25 +124,28 @@ public record SplitterPaneControl()
     public SplitterPaneControl WithMin(string min) => this with { Min = min };
     public SplitterPaneControl WithResizable(bool resizable) => this with { Resizable = resizable };
     public SplitterPaneControl WithSize(string size) => this with { Size = size };
-    public SplitterPaneControl WithChildContent(UiControl childContent) => this with { ChildContent = childContent };
+
+    public IReadOnlyCollection<string> Areas { get; init; }
+
+    IEnumerable<ViewElement> IContainerControl.ChildControls => new[] { new ViewElementWithView(nameof(ChildControl), ChildControl) };
+
+    IContainerControl IContainerControl.SetAreas(IReadOnlyCollection<string> areas) => this with { Areas = areas };
 }
 
-public record GridSkin : Skin
+public record LayoutGridSkin : Skin
 {
     public bool AdaptiveRendering { get; init; }
     public JustifyContent Justify { get; init; }
     public int Spacing { get; init; }
 
-    public GridSkin WithAdaptiveRendering(bool adaptiveRendering) => this with { AdaptiveRendering = adaptiveRendering };
-    public GridSkin WithJustify(JustifyContent justify) => this with { Justify = justify };
-    public GridSkin WithSpacing(int spacing) => this with { Spacing = spacing };
+    public LayoutGridSkin WithAdaptiveRendering(bool adaptiveRendering) => this with { AdaptiveRendering = adaptiveRendering };
+    public LayoutGridSkin WithJustify(JustifyContent justify) => this with { Justify = justify };
+    public LayoutGridSkin WithSpacing(int spacing) => this with { Spacing = spacing };
 }
 
-public record LayoutGridItemControl()
-    : UiControl<LayoutGridItemControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
+public record LayoutGridItemControl(object ChildControl)
+    : UiControl<LayoutGridItemControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null), IContainerControl
 {
-    public static string ChildContentArea => nameof(ChildContent);
-    public UiControl ChildContent { get; init; }
     public bool? AdaptiveRendering { get; init; }
     public JustifyContent? Justify { get; init; }
     public LayoutGridItemHidden HiddenWhen { get; init; }
@@ -154,7 +165,12 @@ public record LayoutGridItemControl()
     public LayoutGridItemControl WithXl(int xl) => this with { Xl = xl };
     public LayoutGridItemControl WithXs(int xs) => this with { Xs = xs };
     public LayoutGridItemControl WithXxl(int xxl) => this with { Xxl = xxl };
-    public LayoutGridItemControl WithChildContent(UiControl childContent) => this with { ChildContent = childContent };
+
+    public IReadOnlyCollection<string> Areas { get; init; }
+
+    IEnumerable<ViewElement> IContainerControl.ChildControls => new[] { new ViewElementWithView(nameof(ChildControl), ChildControl) };
+
+    IContainerControl IContainerControl.SetAreas(IReadOnlyCollection<string> areas) => this with { Areas = areas };
 }
 
 public enum LayoutGridItemHidden

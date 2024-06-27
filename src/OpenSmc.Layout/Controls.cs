@@ -15,10 +15,7 @@ public static class Controls
 
     public static LayoutStackControl Stack() => new();
 
-    public static LayoutGridItemControl LayoutGridItem() => new();
-    public static SplitterPaneControl SplitterPane() => new();
-
-    public static LayoutStackControl Toolbar() => new LayoutStackControl().WithSkin(Skins.Toolbar());
+    public static LayoutStackControl Toolbar() => new LayoutStackControl().WithSkin(Skins.Toolbar);
 
     public static SelectControl Select(object item) => new SelectControl(item);
 
@@ -57,6 +54,16 @@ public static class Controls
         new(isChecked) { Label = label };
 
     public static SliderControl Slider(int min, int max, int step) => new(min, max, step);
+
+    public static LayoutGridItemControl ToLayoutGridItem(this IUiControl control,
+        Func<LayoutGridItemControl, LayoutGridItemControl> builder) => builder.Invoke(new LayoutGridItemControl(control));
+
+    public static LayoutGridItemControl ToLayoutGridItem(this IUiControl control) => new(control);
+
+    public static SplitterPaneControl ToSplitterPane(this IUiControl control,
+               Func<SplitterPaneControl, SplitterPaneControl> builder) => builder.Invoke(new SplitterPaneControl(control));
+
+    public static SplitterPaneControl ToSplitterPane(this IUiControl control) => new(control);
 
     /// <summary>
     /// Control representing a progress bar

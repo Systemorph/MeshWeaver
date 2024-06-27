@@ -4,19 +4,22 @@ using OpenSmc.Layout;
 
 namespace OpenSmc.Blazor;
 
-public partial class LayoutStack
+public record RenderedArea(string Area, UiControl ViewModel);
+
+public abstract class ContainerView<TViewModel> : BlazorView<TViewModel>
+    where TViewModel : IContainerControl
 {
-    private IReadOnlyCollection<(string Area, UiControl ViewModel)> Areas { get; set; } = Array.Empty<(string Area, UiControl ViewModel)>();
+    protected IReadOnlyCollection<RenderedArea> Areas { get; set; } = Array.Empty<RenderedArea>();
+    
     protected override async Task OnInitializedAsync()
     {
         await base.OnInitializedAsync();
         Disposables.Add(Stream.Subscribe(item => InvokeAsync(() => Render(item)))); 
     }
 
-
-private void Render(ChangeItem<JsonElement> item)
+    private void Render(ChangeItem<JsonElement> item)
     {
-        var newAreas = ViewModel.Areas.Select(a => (Area:a,ViewModel:GetControl(item, a)))
+        var newAreas = ViewModel.Areas.Select(area => new RenderedArea(area,GetControl(item, area)))
             .Where(x => x.ViewModel != null).ToArray();
         if (Areas.Count == newAreas.Length && Areas.Zip(newAreas, (x, y) => x.Equals(y)).All(x => x))
             return;

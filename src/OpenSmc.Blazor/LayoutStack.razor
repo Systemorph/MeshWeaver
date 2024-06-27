@@ -1,63 +1,18 @@
-@inherits BlazorView<LayoutStackControl>
-@{
-#pragma warning disable FluentMultiSplitter
-}
+@inherits ContainerView<LayoutStackControl>
 
-@if (Skin is ToolbarSkin)
-{
-    <FluentToolbar
-        Class="@Class"
-        Orientation="@Orientation"
-        Style="@Style"
-        >
-            @foreach(var (area,viewModel) in Areas){
-                <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area"/>
-            }
-        </FluentToolbar>
-}
-else if (Skin is GridSkin gridSkin)
-{
-    <FluentGrid 
-        Class="@Class"
-        AdaptiveRendering="@gridSkin.AdaptiveRendering"
-        Justify="@gridSkin.Justify.ToFluentJustifyContent()"
-        Spacing="@gridSkin.Spacing">
-        @foreach(var (area,viewModel) in Areas){
-            <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area" />
-        }
-    </FluentGrid>
-}
-else if (Skin is SplitterSkin splitterSkin)
-{
-    <FluentMultiSplitter 
-        Class="@Class"
-        Orientation="@Orientation"
-        BarSize="@splitterSkin.BarSize"
-        Width="@splitterSkin.Width"
-        Height="@splitterSkin.Height"
-        Style="@Style"
-        >
-        @foreach(var (area,viewModel) in Areas){
-            <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area" />
-        }
-    </FluentMultiSplitter>
-}
-else
-{
-    <FluentStack
-        Class="@Class"
-        Orientation="@Orientation"
-        HorizontalAlignment="@Horizontal"
-        VerticalAlignment="@Vertical"
-        VerticalGap="@ViewModel.VerticalGap"
-        HorizontalGap="@ViewModel.HorizontalGap"
-        Style="@Style">
-        @foreach (var (area, viewModel) in Areas)
-        {
-            <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area"/>
-        }
-    </FluentStack>
-}
+<FluentStack
+    Class="@Class"
+    Orientation="@Orientation"
+    HorizontalAlignment="@Horizontal"
+    VerticalAlignment="@Vertical"
+    VerticalGap="@ViewModel.VerticalGap"
+    HorizontalGap="@ViewModel.HorizontalGap"
+    Style="@Style">
+    @foreach (var (area, viewModel) in Areas)
+    {
+        <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area"/>
+    }
+</FluentStack>
 
 @code{
     private Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment Vertical => ViewModel.VerticalAlignment 
@@ -69,7 +24,6 @@ else
         _ => Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment.Top
     };
 
-
     private Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment Horizontal => ViewModel.HorizontalAlignment
         switch
         {
@@ -80,7 +34,8 @@ else
         Layout.HorizontalAlignment.End => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.End,
             _ => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Left
         };
-    private Microsoft.FluentUI.AspNetCore.Components.Orientation Orientation => ViewModel.Orientation
+
+    protected Microsoft.FluentUI.AspNetCore.Components.Orientation Orientation => ViewModel.Orientation
         switch
         {
             OpenSmc.Layout.Orientation.Horizontal => Microsoft.FluentUI.AspNetCore.Components.Orientation.Horizontal,

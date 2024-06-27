@@ -12,7 +12,7 @@ using OpenSmc.Messaging;
 namespace OpenSmc.Blazor
 {
     public partial class BlazorView<TViewModel> : IDisposable
-        where TViewModel : UiControl
+        where TViewModel : IUiControl
     {
         [Inject] private IMessageHub Hub { get; set; }
         protected override void OnParametersSet()

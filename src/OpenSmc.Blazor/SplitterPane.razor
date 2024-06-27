@@ -1,5 +1,4 @@
-@using System.Reactive.Linq
-@inherits BlazorView<SplitterPaneControl>
+@inherits ContainerView<SplitterPaneControl>
 
 <FluentMultiSplitterPane
     Collapsible="@ViewModel.Collapsible"
@@ -10,19 +9,10 @@
     Resizable="@ViewModel.Resizable"
     Class="@Class"
     >
-    <DispatchView ViewModel="@contentViewModel" Stream="@Stream" Area="@ContentArea" />
+    <DispatchView ViewModel="@ChildControlArea.ViewModel" Stream="@Stream" Area="@ChildControlArea.Area" />
 </FluentMultiSplitterPane>
-
 
 @code
 {
-    private string ContentArea => $"{Area}/{SplitterPaneControl.ChildContentArea}";
-    
-    private UiControl contentViewModel;
-    
-    protected override async Task OnInitializedAsync()
-    {
-        await base.OnInitializedAsync();
-        contentViewModel = GetControl(await Stream.FirstAsync(), ContentArea);
-    }
+    private RenderedArea ChildControlArea => Areas.First();
 }
