@@ -7,7 +7,7 @@ namespace OpenSmc.Blazor;
 public record RenderedArea(string Area, UiControl ViewModel);
 
 public abstract class ContainerView<TViewModel> : BlazorView<TViewModel>
-    where TViewModel : IContainerControl
+    where TViewModel : UiControl, IContainerControl
 {
     protected IReadOnlyCollection<RenderedArea> Areas { get; set; } = Array.Empty<RenderedArea>();
     
