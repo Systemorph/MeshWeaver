@@ -21,6 +21,10 @@
         {
             jsModule = await JsRuntime.InvokeAsync<IJSObjectReference>("import", 
                 "./_content/OpenSmc.Blazor.AgGrid/index.mjs");
+
+            await jsModule.InvokeVoidAsync("LicenseManager.setLicenseKey",
+                Environment.GetEnvironmentVariable("AG_GRID_LICENSE_KEY"));
+            
             DataBind<object>(ViewModel.Data, o => Options = o);
         }
 

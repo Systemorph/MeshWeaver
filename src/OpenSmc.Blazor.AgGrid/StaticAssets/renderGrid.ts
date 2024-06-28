@@ -3,6 +3,7 @@ import 'ag-grid-community/styles/ag-grid.css';
 import "ag-grid-community/styles/ag-theme-quartz.css";
 import 'ag-grid-enterprise';
 import { cloneDeepWith, isString } from 'lodash-es';
+export { LicenseManager } from 'ag-grid-enterprise';
 
 const instances = new Map<string, GridApi>();
 
@@ -19,7 +20,7 @@ export const renderGrid = (id: string, element: HTMLElement, options: GridOption
     instances.set(id, createGrid(element, gridOptions));
 }
 
-function deserialize(data: unknown) {
+function deserialize<T>(data: T): T {
     return cloneDeepWith(data, value => {
         if (isString(value) && funcRegexps.some(regexp => regexp.test(value))) {
             try {
