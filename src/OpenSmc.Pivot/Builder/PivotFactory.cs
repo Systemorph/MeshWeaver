@@ -1,4 +1,5 @@
 ﻿using OpenSmc.Collections;
+using OpenSmc.Data;
 using OpenSmc.DataCubes;
 using OpenSmc.Pivot.Aggregations;
 
@@ -6,9 +7,9 @@ namespace OpenSmc.Pivot.Builder;
 
 public static class PivotFactory
 {
-    public static PivotBuilder<T, T, T> Pivot<T>(this IEnumerable<T> objects)
+    public static PivotBuilder<T, T, T> Pivot<T>(this WorkspaceState state, IEnumerable<T> objects)
     {
-        return new PivotBuilder<T, T, T>(objects).WithAggregation(a => a.Sum());
+        return new PivotBuilder<T, T, T>(state, objects).WithAggregation(a => a.Sum());
     }
 
     public static DataCubePivotBuilder<
@@ -16,14 +17,14 @@ public static class PivotFactory
         TElement,
         TElement,
         TElement
-    > ForDataCubes<TElement>(this IEnumerable<IDataCube<TElement>> cubes)
+    > ForDataCubes<TElement>(this WorkspaceState state, IEnumerable<IDataCube<TElement>> cubes)
     {
         var pivotBuilder = new DataCubePivotBuilder<
             IDataCube<TElement>,
             TElement,
             TElement,
             TElement
-        >(cubes);
+        >(state,cubes);
         pivotBuilder = pivotBuilder with
         {
             Aggregations = new Aggregations<DataSlice<TElement>, TElement>
@@ -42,8 +43,8 @@ public static class PivotFactory
         TElement,
         TElement,
         TElement
-    > Pivot<TElement>(this IDataCube<TElement> cube)
+    > Pivot<TElement>(this WorkspaceState state, IDataCube<TElement> cube)
     {
-        return ForDataCubes(cube.RepeatOnce());
+        return state.ForDataCubes(cube.RepeatOnce());
     }
 }

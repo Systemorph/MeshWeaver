@@ -3,11 +3,13 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Json.More;
+using OpenSmc.Messaging.Serialization;
 
 namespace OpenSmc.Data.Serialization;
 
-public class InstancesInCollectionConverter : JsonConverter<InstanceCollection>
+public class InstancesInCollectionConverter(ITypeRegistry typeRegistry) : JsonConverter<InstanceCollection>
 {
+    public const string CollectionProperty = "$collection";
 
 
     private JsonNode Serialize(InstanceCollection instances, JsonSerializerOptions options)
@@ -19,15 +21,20 @@ public class InstancesInCollectionConverter : JsonConverter<InstanceCollection>
 
     public override InstanceCollection Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        using JsonDocument doc = JsonDocument.ParseValue(ref reader);
+        using var doc = JsonDocument.ParseValue(ref reader);
         var obj = (JsonObject)doc.RootElement.AsNode();
         if (obj == null)
             return null;
+        var collection = obj[CollectionProperty]?.ToString();
+        var keyType = typeRegistry.GetKeyFunction(collection).KeyType;
+        var type = keyType ?? typeof(object);
         return new InstanceCollection
         {
-            Instances = obj.Select(i =>
+            Instances = obj
+                .Where(i => i.Key != CollectionProperty)
+                .Select(i =>
                     new KeyValuePair<object, object>(
-                        JsonSerializer.Deserialize<object>(i.Key, options),
+                        JsonSerializer.Deserialize(i.Key, type, options),
                         i.Value.Deserialize<object>(options)
                     )
                 )

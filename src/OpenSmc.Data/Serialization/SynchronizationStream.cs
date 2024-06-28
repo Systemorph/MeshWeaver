@@ -98,9 +98,10 @@ public record SynchronizationStream<TStream, TReference>(
     public readonly List<IDisposable> Disposables = new();
 
     private bool isDisposing;
+    private readonly object disposeLock = new();
     public void Dispose()
     {
-        lock (this)
+        lock (disposeLock)
         {
             if (isDisposing)
                 return;

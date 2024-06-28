@@ -1,15 +1,11 @@
-﻿using DocumentFormat.OpenXml.Office2010.Excel;
-using OpenSmc.Collections;
-using OpenSmc.Data;
+﻿using OpenSmc.Data;
 using OpenSmc.DataCubes;
-using OpenSmc.Fixture;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using OpenSmc.Pivot.Builder;
 using OpenSmc.Reporting.Builder;
 using OpenSmc.TestDomain;
 using OpenSmc.TestDomain.Cubes;
-using OpenSmc.TestDomain.SimpleData;
 using Xunit.Abstractions;
 
 namespace OpenSmc.Reporting.Test
@@ -54,7 +50,7 @@ namespace OpenSmc.Reporting.Test
                 );
         }
 
-        private async Task<WorkspaceState> GetWorkspaceStateAsync()
+        private async Task<WorkspaceState> GetStateAsync()
         {
             var workspace = GetHost().GetWorkspace();
             await workspace.Initialized;
@@ -69,9 +65,9 @@ namespace OpenSmc.Reporting.Test
             Func<PivotBuilder<T, T, T>, ReportBuilder<T, T, T>> toReportBuilder
         )
         {
-            var initialPivotBuilder = PivotFactory
+            var initialPivotBuilder = (await GetStateAsync())
                 .Pivot(data)
-                .WithState(await GetWorkspaceStateAsync());
+                ;
 
             var reportBuilder = toReportBuilder(initialPivotBuilder);
 

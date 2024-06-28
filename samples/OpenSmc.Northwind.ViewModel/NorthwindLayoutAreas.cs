@@ -122,7 +122,7 @@ public static class NorthwindLayoutAreas
 
     public static IObservable<object> SupplierSummaryGrid(this LayoutAreaHost area, RenderingContext ctx) =>
         area.GetDataCube()
-            .Select(cube => cube.Pivot()
+            .Select(cube => area.Workspace.State.Pivot(cube)
                 .SliceRowsBy(nameof(Supplier))
                 .Execute()
                 .ToGridControl());

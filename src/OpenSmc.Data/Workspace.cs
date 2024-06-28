@@ -148,15 +148,21 @@ public class Workspace : IWorkspace
             TReduced
         >(stream, owner, subscriber, reference);
 
+        var isOwner = owner.Equals(Hub.Address);
+
         var fromWorkspace = stream.Reduce<TReduced, TReference>(reference, subscriber);
         if (fromWorkspace != null)
-            ret.AddDisposable(fromWorkspace.Subscribe(ret));
+            if(isOwner)
+                ret.AddDisposable(fromWorkspace.Subscribe(ret));
+            else
+                ret.AddDisposable(fromWorkspace.Skip(1).Subscribe(ret));
+
 
         var json = 
             ret as ISynchronizationStream<JsonElement>
             ?? ret.Reduce(new JsonElementReference(), subscriber);
 
-        if (owner.Equals(Hub.Address))
+        if (isOwner)
             RegisterOwner(reference, json);
         else
             RegisterSubscriber(reference, json);

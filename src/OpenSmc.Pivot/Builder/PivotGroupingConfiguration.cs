@@ -1,29 +1,31 @@
 ﻿using System.Collections;
 using System.Collections.Immutable;
 using System.Linq.Expressions;
-using AngleSharp.Html.Dom.Events;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Collections;
 using OpenSmc.Data;
 using OpenSmc.Domain;
 using OpenSmc.Hierarchies;
+using OpenSmc.Messaging.Serialization;
 using OpenSmc.Pivot.Grouping;
 using OpenSmc.Pivot.Models;
 using OpenSmc.Pivot.Models.Interfaces;
 
 namespace OpenSmc.Pivot.Builder;
 
-public abstract record PivotGroupingConfiguration<T, TGroup>
+public abstract record PivotGroupingConfiguration<T, TGroup>(WorkspaceState State)
     : IEnumerable<PivotGroupingConfigItem<T, TGroup>>
     where TGroup : class, IGroup, new()
 {
+    private readonly ITypeRegistry typeRegistry = State.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
     internal ImmutableList<PivotGroupingConfigItem<T, TGroup>> ConfigItems { get; init; }
 
-    protected static PivotGroupingConfigItem<T, TGroup> CreateDefaultAutomaticNumbering()
+    protected PivotGroupingConfigItem<T, TGroup> CreateDefaultAutomaticNumbering()
     {
         // TODO V10: this should be a new Column(){ Field = "", HeaderName = "Name", ValueGetter = "node.id"}  (2021/10/05, Ekaterina Mishina)
         if (typeof(INamed).IsAssignableFrom(typeof(T)))
         {
-            var keyFunction = GetKeySelector();
+            var keyFunction = typeRegistry.GetKeyFunction(typeof(T)).Function;
             var grouper = Activator.CreateInstance(
                 typeof(NamedPivotGrouper<,>).MakeGenericType(typeof(T), typeof(TGroup)),
                 PivotConst.AutomaticEnumerationPivotGrouperName,
@@ -35,12 +37,6 @@ public abstract record PivotGroupingConfiguration<T, TGroup>
         return new(new AutomaticEnumerationPivotGrouper<T, TGroup>());
     }
 
-    private static Func<T, string> GetKeySelector()
-    {
-        //TODO Roland Bürgi 2024-05-21: This should be taken from WorkspaceState and type sources
-        var objSelector = KeyFunctionBuilder.GetKeyFunction(typeof(T));
-        return x => objSelector(x).ToString();
-    }
 
     public PivotGroupingConfiguration<T, TGroup> GroupBy<TSelected>(
         WorkspaceState state,
@@ -99,8 +95,6 @@ public abstract record PivotGroupingConfiguration<T, TGroup>
 
 public record PivotRowsGroupingConfiguration<T> : PivotGroupingConfiguration<T, RowGroup>
 {
-    private static readonly PivotGroupingConfigItem<T, RowGroup> DefaultRowGrouping =
-        CreateDefaultAutomaticNumbering();
     private static readonly PivotGroupingConfigItem<T, RowGroup> DefaultTransposedRowGrouping =
         new(
             new DirectPivotGrouper<T, RowGroup>(
@@ -109,9 +103,9 @@ public record PivotRowsGroupingConfiguration<T> : PivotGroupingConfiguration<T, 
             )
         );
 
-    public PivotRowsGroupingConfiguration()
+    public PivotRowsGroupingConfiguration(WorkspaceState State) : base(State)
     {
-        Default = DefaultRowGrouping;
+        Default = CreateDefaultAutomaticNumbering();
     }
 
     internal override PivotGroupingConfiguration<T, RowGroup> Transpose()
@@ -132,7 +126,7 @@ public record PivotColumnsGroupingConfiguration<T> : PivotGroupingConfiguration<
     private PivotGroupingConfigItem<T, ColumnGroup> DefaultTransposedGrouping =>
         CreateDefaultAutomaticNumbering();
 
-    public PivotColumnsGroupingConfiguration()
+    public PivotColumnsGroupingConfiguration(WorkspaceState state) : base(state)
     {
         Default = DefaultColumnGrouping;
     }
