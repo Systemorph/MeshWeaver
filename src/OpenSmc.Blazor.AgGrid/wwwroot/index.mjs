@@ -1,4 +1,5 @@
-import { c as createGrid, a as cloneDeepWith, i as isString } from "./vendor-DpIhZ_dQ.mjs";
+import { c as createGrid, a as cloneDeepWith, i as isString } from "./vendor-DtSUmGs7.mjs";
+import { G } from "./vendor-DtSUmGs7.mjs";
 const instances = /* @__PURE__ */ new Map();
 const renderGrid = (id, element, options) => {
   const instance = instances.get(id);
@@ -27,5 +28,6 @@ const funcRegexps = [
   /^\s*(\s*[a-zA-Z]\w*|\(\s*[a-zA-Z]\w*(\s*,\s*[a-zA-Z]\w*)*\s*\))\s*=>/
 ];
 export {
+  G as LicenseManager,
   renderGrid
 };
