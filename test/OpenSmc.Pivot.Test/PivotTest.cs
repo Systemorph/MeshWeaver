@@ -90,7 +90,7 @@ public class PivotTest : HubTestBase
         Func<PivotBuilder<T, T, T>, PivotBuilder<T, TAggregate, TAggregate>> builder
     )
     {
-        var initial = PivotFactory.Pivot(data).WithState(await GetStateAsync());
+        var initial = (await GetStateAsync()).Pivot(data);
 
         var pivotBuilder = builder(initial);
 
@@ -106,8 +106,7 @@ public class PivotTest : HubTestBase
         Func<PivotBuilder<T, T, T>, PivotBuilder<T, int, int>> builder
     )
     {
-        var state = await GetStateAsync();
-        var initial = PivotFactory.Pivot(data).WithState(state);
+        var initial = (await GetStateAsync()).Pivot(data);
 
         var pivotBuilder = builder(initial);
 
@@ -192,9 +191,9 @@ public class PivotTest : HubTestBase
     {
         PivotModel qs = null;
         var state = await GetStateAsync();
-        var exception = Record.Exception(
-            () =>
-                qs = PivotFactory
+        var exception = await Record.ExceptionAsync(
+            async () =>
+                qs = (await GetStateAsync())
                     .Pivot(ValueWithHierarchicalDimension.Data.ToDataCube())
                     .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
                     .Execute()
@@ -202,7 +201,7 @@ public class PivotTest : HubTestBase
         Assert.Null(exception);
         Assert.NotNull(qs);
 
-        var flattened = PivotFactory
+        var flattened = (await GetStateAsync())
             .Pivot(ValueWithHierarchicalDimension.Data.ToDataCube())
             .WithHierarchicalDimensionOptions(o => o.Flatten<TestHierarchicalDimensionA>())
             .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
@@ -214,29 +213,29 @@ public class PivotTest : HubTestBase
     }
 
     [Fact]
-    public void DataCubeScopeWithDimensionPropertiesErr()
+    public async Task DataCubeScopeWithDimensionPropertiesErr()
     {
         var storage = new YearAndQuarterAndCompanyIdentityStorage((2021, 1));
         var scopes = ScopeFactory
             .ForIdentities(storage.Identities, storage)
             .ToScopes<IDataCubeScopeWithValueAndDimensionErr>();
 
-        void Report() =>
-            PivotFactory.ForDataCubes(scopes).SliceColumnsBy(nameof(Country)).Execute();
-        var ex = Assert.Throws<InvalidOperationException>(Report);
+        async Task Report() =>
+            (await GetStateAsync()).ForDataCubes(scopes).SliceColumnsBy(nameof(Country)).Execute();
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(Report);
         ex.Message.Should().Be($"Duplicate dimensions: '{nameof(Country)}'");
     }
 
     [Fact]
-    public void DataCubeScopeWithDimensionPropertiesErr1()
+    public async Task DataCubeScopeWithDimensionPropertiesErr1()
     {
         var storage = new YearAndQuarterAndCompanyIdentityStorage((2021, 1));
         var scopes = ScopeFactory
             .ForIdentities(storage.Identities, storage)
             .ToScopes<IDataCubeScopeWithValueAndDimensionErr1>();
 
-        void Report() => PivotFactory.ForDataCubes(scopes).SliceColumnsBy("MyCountry").Execute();
-        var ex = Assert.Throws<InvalidOperationException>(Report); //.WithMessage<InvalidOperationException>("Duplicate dimensions: 'MyCountry'");
+        async Task Report() => (await GetStateAsync()).ForDataCubes(scopes).SliceColumnsBy("MyCountry").Execute();
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(Report); //.WithMessage<InvalidOperationException>("Duplicate dimensions: 'MyCountry'");
         ex.Message.Should().Be("Duplicate dimensions: 'MyCountry'");
     }
 
@@ -1095,7 +1094,7 @@ public class PivotTest : HubTestBase
         > builder
     )
     {
-        var initial = PivotFactory.ForDataCubes(data).WithState(await GetStateAsync());
+        var initial = (await GetStateAsync()).ForDataCubes(data);
 
         var pivotBuilder = builder(initial);
 
@@ -1112,7 +1111,7 @@ public class PivotTest : HubTestBase
         > builder
     )
     {
-        var initial = PivotFactory.ForDataCubes(data).WithState(await GetStateAsync());
+        var initial = (await GetStateAsync()).ForDataCubes(data);
 
         var pivotBuilder = builder(initial);
 
@@ -1129,7 +1128,7 @@ public class PivotTest : HubTestBase
         > builder
     )
     {
-        var initial = PivotFactory.ForDataCubes(data).WithState(await GetStateAsync());
+        var initial = (await GetStateAsync()).ForDataCubes(data);
 
         var pivotBuilder = builder(initial);
 

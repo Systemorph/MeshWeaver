@@ -30,11 +30,12 @@ public static class DataPluginExtensions
                         options.Converters.Insert(
                             0,
                             new EntityStoreConverter(
-                                serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()
                             )
                         );
                     if (!options.Converters.Any(c => c is InstancesInCollectionConverter))
-                        options.Converters.Insert(0, new InstancesInCollectionConverter());
+                        options.Converters.Insert(0, new InstancesInCollectionConverter(
+                            serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()
+                            ));
                 })
             )
             .Set(existingLambdas.Add(dataPluginConfiguration))
@@ -70,7 +71,7 @@ public static class DataPluginExtensions
     internal static DataContext GetDataConfiguration(this IWorkspace workspace)
     {
         var dataPluginConfig = workspace.Hub.Configuration.GetListOfLambdas();
-        var ret = new DataContext(workspace.Hub, workspace);
+        var ret = new DataContext(workspace);
         foreach (var func in dataPluginConfig)
             ret = func.Invoke(ret);
         return ret;

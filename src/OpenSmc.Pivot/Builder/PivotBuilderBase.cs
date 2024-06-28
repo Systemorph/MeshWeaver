@@ -31,11 +31,13 @@ namespace OpenSmc.Pivot.Builder
         public Func<IEnumerable<T>, IEnumerable<TTransformed>> Transformation { get; init; }
         protected Type TransposedValue { get; init; }
 
-        protected PivotBuilderBase(IEnumerable<T> objects)
+        protected PivotBuilderBase(WorkspaceState state, IEnumerable<T> objects)
         {
             Objects = objects as IList<T> ?? objects.ToArray();
             Aggregations = new Aggregations<TTransformed, TIntermediate, TAggregate>();
             HierarchicalDimensionOptions = new HierarchicalDimensionOptions();
+            State = state;
+            HierarchicalDimensionCache = new HierarchicalDimensionCache(state);
         }
 
         public TPivotBuilder WithHierarchicalDimensionOptions(
@@ -48,14 +50,6 @@ namespace OpenSmc.Pivot.Builder
             };
         }
 
-        public TPivotBuilder WithState(WorkspaceState state)
-        {
-            return (TPivotBuilder)this with
-            {
-                State = state,
-                HierarchicalDimensionCache = new HierarchicalDimensionCache(state)
-            };
-        }
 
         public virtual TPivotBuilder Transpose<TValue>()
         {

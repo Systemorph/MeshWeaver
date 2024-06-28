@@ -7,7 +7,7 @@ using OpenSmc.Messaging.Serialization;
 
 namespace OpenSmc.Data.Serialization;
 
-public class EntityStoreConverter(ITypeRegistry typeRegistry) : JsonConverter<EntityStore>
+public class EntityStoreConverter : JsonConverter<EntityStore>
 {
     public override EntityStore Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
@@ -51,13 +51,11 @@ public class EntityStoreConverter(ITypeRegistry typeRegistry) : JsonConverter<En
 
     private KeyValuePair<string, InstanceCollection> DeserializeCollection(string collection, JsonNode node, JsonSerializerOptions options)
     {
+        node[InstancesInCollectionConverter.CollectionProperty] = collection;
         return
             new(
                 collection,
-                node.Deserialize<InstanceCollection>(options) with
-                {
-                    GetKey = typeRegistry.GetKeyFunction(collection)
-                }
+                node.Deserialize<InstanceCollection>(options) 
             );
     }
 

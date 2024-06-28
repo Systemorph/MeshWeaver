@@ -97,7 +97,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     private static readonly IDataCube<RecordWithValues> CubeWithValues =
         RecordsWithValues.ToDataCube();
 
-    private async Task<WorkspaceState> GetWorkspaceState()
+    private async Task<WorkspaceState> GetStateAsync()
     {
         var workspace = GetHost().GetWorkspace();
         await workspace.Initialized;
@@ -109,9 +109,9 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task BarChartAggregatedByCountry()
     {
-        var charSlicedByName = PivotFactory
+        var charSlicedByName = (await GetStateAsync())
             .Pivot(CubeWithValues)
-            .WithState(await GetWorkspaceState())
+            
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .SliceRowsBy(nameof(Name))
             .ToBarChart()
@@ -126,9 +126,9 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task BarChartAggregatedByName()
     {
-        var charSliceByCountry = PivotFactory
+        var charSliceByCountry = (await GetStateAsync())
             .Pivot(CubeWithValues)
-            .WithState(await GetWorkspaceState())
+            
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .SliceRowsBy(nameof(Country))
             .ToBarChart()
@@ -142,9 +142,9 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task StackedBarChartTestLabelSetting()
     {
-        var charStacked = PivotFactory
+        var charStacked = (await GetStateAsync())
             .Pivot(CubeWithValues)
-            .WithState(await GetWorkspaceState())
+            
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .SliceRowsBy(nameof(Name), nameof(Country))
             .ToBarChart()
@@ -160,9 +160,9 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task BarChartTestWithOption()
     {
-        var doubleColumnSlice = PivotFactory
+        var doubleColumnSlice = (await GetStateAsync())
             .Pivot(CubeWithValues)
-            .WithState(await GetWorkspaceState())
+            
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex), nameof(Country))
             .ToBarChart()
             .WithOptions(m => m)
@@ -173,9 +173,9 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task BarChartWithHierarchicalColumns()
     {
-        var doubleColumnSliceTwoRows = PivotFactory
+        var doubleColumnSliceTwoRows = (await GetStateAsync())
             .Pivot(CubeWithValues)
-            .WithState(await GetWorkspaceState())
+            
             .SliceColumnsBy(nameof(Country), nameof(RecordWithValues.ValueIndex))
             .SliceRowsBy(nameof(Name))
             .ToBarChart()
@@ -189,9 +189,9 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task BarChartWithOneDefaultColumnReport()
     {
-        var noColumnSlice = PivotFactory
+        var noColumnSlice = (await GetStateAsync())
             .Pivot(CubeWithValues)
-            .WithState(await GetWorkspaceState())
+            
             .SliceRowsBy(nameof(RecordWithValues.ValueIndex))
             .ToBarChart()
             .Execute();
@@ -204,9 +204,9 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task StackedBarChartWithManyColumns()
     {
-        var stackOneOne = PivotFactory
+        var stackOneOne = (await GetStateAsync())
             .Pivot(CubeWithValues)
-            .WithState(await GetWorkspaceState())
+            
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .SliceRowsBy(nameof(Country))
             .ToBarChart()
@@ -221,9 +221,9 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task StackedBarPlotsWithRestrictedColumns()
     {
-        var stackTwoTwo = PivotFactory
+        var stackTwoTwo = (await GetStateAsync())
             .Pivot(CubeWithValues)
-            .WithState(await GetWorkspaceState())
+            
             .SliceColumnsBy(nameof(Name))
             .SliceRowsBy(nameof(Country))
             .ToBarChart()
@@ -238,9 +238,9 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task BarChartWithRenaming()
     {
-        var charSlicedByName = PivotFactory
+        var charSlicedByName = (await GetStateAsync())
             .Pivot(CubeWithValues)
-            .WithState(await GetWorkspaceState())
+            
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .SliceRowsBy(nameof(Country))
             .ToBarChart()
@@ -257,9 +257,9 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task BarChartWithOptionsAndRenaming()
     {
-        var charSliceByName = PivotFactory
+        var charSliceByName = (await GetStateAsync())
             .Pivot(CubeWithValues)
-            .WithState(await GetWorkspaceState())
+            
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .SliceRowsBy(nameof(Name), nameof(Country))
             .ToBarChart()
@@ -283,9 +283,9 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task MixedChart()
     {
-        var mixedPlot1 = PivotFactory
+        var mixedPlot1 = (await GetStateAsync())
             .Pivot(CubeWithValues)
-            .WithState(await GetWorkspaceState())
+            
             .SliceRowsBy(nameof(Name))
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .ToBarChart()
@@ -297,9 +297,9 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task LineChart()
     {
-        var linePlot1 = PivotFactory
+        var linePlot1 = (await GetStateAsync())
             .Pivot(CubeWithValues)
-            .WithState(await GetWorkspaceState())
+            
             .SliceRowsBy(nameof(Name), nameof(Country))
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .ToLineChart()
@@ -314,9 +314,9 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task SimpleRadarChart()
     {
-        var radarChart = PivotFactory
+        var radarChart = (await GetStateAsync())
             .Pivot(CubeWithValues)
-            .WithState(await GetWorkspaceState())
+            
             .SliceRowsBy((nameof(Name)))
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .ToRadarChart()
@@ -327,9 +327,9 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task RadarChartWithExtraOptions()
     {
-        var radarChart = PivotFactory
+        var radarChart = (await GetStateAsync())
             .Pivot(CubeWithValues)
-            .WithState(await GetWorkspaceState())
+            
             .SliceRowsBy(nameof(Name), nameof(Country))
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .ToRadarChart()
@@ -347,9 +347,9 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     {
         var filteredCube = CubeWithValues;
         //.Filter(x => x.Country == "RU" && x.Name == "A");
-        var waterfall = PivotFactory
+        var waterfall = (await GetStateAsync())
             .Pivot(filteredCube)
-            .WithState(await GetWorkspaceState())
+            
             .SliceColumnsBy(nameof(Country), nameof(Name))
             .ToWaterfallChart()
             .WithStylingOptions(b =>

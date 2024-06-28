@@ -1,4 +1,5 @@
-﻿using OpenSmc.DataCubes;
+﻿using OpenSmc.Data;
+using OpenSmc.DataCubes;
 using OpenSmc.GridModel;
 using OpenSmc.Pivot.Aggregations;
 using OpenSmc.Pivot.Builder;
@@ -13,12 +14,14 @@ namespace OpenSmc.Reporting.Builder
                                                                                       IReportBuilder<DataCubeReportBuilder<TCube, TElement, TIntermediate, TAggregate>>
         where TCube : IDataCube<TElement>
     {
+        public WorkspaceState State { get; }
         private readonly IList<Func<GridOptions, GridOptions>> postProcessors = new List<Func<GridOptions, GridOptions>>(){x => x};
         private DataCubePivotBuilder<TCube, TElement, TIntermediate, TAggregate> PivotBuilder { get; init; }
 
-        private DataCubeReportBuilder(IEnumerable<TCube> cubes)
+        private DataCubeReportBuilder(WorkspaceState state, IEnumerable<TCube> cubes)
         {
-            PivotBuilder = new DataCubePivotBuilder<TCube, TElement, TIntermediate, TAggregate>(cubes);
+            State = state;
+            PivotBuilder = new DataCubePivotBuilder<TCube, TElement, TIntermediate, TAggregate>(State, cubes);
         }
 
         public DataCubeReportBuilder(DataCubePivotBuilder<TCube, TElement, TIntermediate, TAggregate> pivotBuilder, Func<GridOptions, GridOptions> gridOptionsPostProcessor = null)
@@ -27,9 +30,10 @@ namespace OpenSmc.Reporting.Builder
             if (gridOptionsPostProcessor is not null) postProcessors.Add(gridOptionsPostProcessor);
         }
 
-        public DataCubeReportBuilder(IEnumerable<TCube> cubes, Aggregations<DataSlice<TElement>, TIntermediate, TAggregate> aggregations)
+        public DataCubeReportBuilder(WorkspaceState state, IEnumerable<TCube> cubes, Aggregations<DataSlice<TElement>, TIntermediate, TAggregate> aggregations)
         {
-            PivotBuilder = new DataCubePivotBuilder<TCube, TElement, TIntermediate, TAggregate>(cubes)
+            State = state;
+            PivotBuilder = new DataCubePivotBuilder<TCube, TElement, TIntermediate, TAggregate>(state, cubes)
             {
                 Aggregations = aggregations
             };
@@ -41,7 +45,7 @@ namespace OpenSmc.Reporting.Builder
         {
             var aggregations = aggregationsFunc(new Aggregations<TElement, TIntermediate, TAggregate>());
 
-            var builder = new DataCubeReportBuilder<TCube, TElement, TNewIntermediate, TNewAggregate>(PivotBuilder.Objects);
+            var builder = new DataCubeReportBuilder<TCube, TElement, TNewIntermediate, TNewAggregate>(State, PivotBuilder.Objects);
 
             return builder with
             {
@@ -66,7 +70,7 @@ namespace OpenSmc.Reporting.Builder
         {
             var aggregations = aggregationsFunc(new Aggregations<TElement, TIntermediate, TAggregate>());
 
-            var builder = new DataCubeReportBuilder<TCube, TElement, TNewAggregate, TNewAggregate>(PivotBuilder.Objects);
+            var builder = new DataCubeReportBuilder<TCube, TElement, TNewAggregate, TNewAggregate>(State, PivotBuilder.Objects);
 
             return builder with
             {

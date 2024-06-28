@@ -87,8 +87,20 @@ public static class LayoutExtensions
                 ?.Deserialize<object>(synchronizationItems.Hub.JsonSerializerOptions)
         );
 
+    public static IObservable<object> GetControlStream(
+        this ISynchronizationStream<EntityStore> synchronizationItems,
+        string area
+    ) =>
+        synchronizationItems.Select(i =>
+            i.Value.Collections.GetValueOrDefault(LayoutAreaReference.Areas)?.Instances.GetValueOrDefault(area)
+        );
+
     public static async Task<object> GetControl(
         this ISynchronizationStream<JsonElement> synchronizationItems,
+        string area
+    ) => await synchronizationItems.GetControlStream(area).FirstAsync(x => x != null);
+    public static async Task<object> GetControl(
+        this ISynchronizationStream<EntityStore> synchronizationItems,
         string area
     ) => await synchronizationItems.GetControlStream(area).FirstAsync(x => x != null);
 
