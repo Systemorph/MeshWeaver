@@ -1,12 +1,14 @@
 ﻿using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Disposables;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 using OpenSmc.Reflection;
 
 namespace OpenSmc.Data;
@@ -266,9 +268,11 @@ public class Workspace : IWorkspace
     private readonly TaskCompletionSource initialized = new();
     public Task Initialized => initialized.Task;
 
-    /* TODO HACK Roland Bürgi 2024-05-19: This is still unclean in the startup.
-    Problem is that IWorkspace is injected in DI and DataContext is parsed only at startup.
-    Need to bootstrap DataContext constructor time. */
+    public ISynchronizationStream<EntityStore> GetTypes(params Type[] types)
+    {
+        return ReduceManager.ReduceStream<EntityStore, CollectionsReference>(stream, new CollectionsReference(types.Select(t => DataContext.TypeRegistry.TryGetTypeName(t, out var name) ? name : throw new ArgumentException($"Type {t.FullName} is unknown.")).ToArray()), Hub.Address);
+    }
+
     public ReduceManager<WorkspaceState> ReduceManager =>
         DataContext?.ReduceManager ?? StandardWorkspaceReferenceImplementations.CreateReduceManager(Hub);
 
@@ -277,7 +281,7 @@ public class Workspace : IWorkspace
 
     WorkspaceState IWorkspace.State => Current.Value;
 
-    public DataContext DataContext { get; private set; }
+    public DataContext DataContext { get; }
 
     public void Rollback()
     {
@@ -301,7 +305,10 @@ public class Workspace : IWorkspace
         return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, log.Finish());
     }
 
+    ISynchronizationStream<WorkspaceState> IWorkspace.Stream => stream1;
+
     private bool isDisposing;
+    private ISynchronizationStream<WorkspaceState> stream1;
 
     public async ValueTask DisposeAsync()
     {

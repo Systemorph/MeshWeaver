@@ -30,6 +30,7 @@ public static class DataPluginExtensions
                         options.Converters.Insert(
                             0,
                             new EntityStoreConverter(
+                                serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()
                             )
                         );
                     if (!options.Converters.Any(c => c is InstancesInCollectionConverter))

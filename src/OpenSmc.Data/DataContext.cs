@@ -9,18 +9,20 @@ namespace OpenSmc.Data;
 
 public sealed record DataContext : IAsyncDisposable
 {
+    public ITypeRegistry TypeRegistry { get; }
     public DataContext(IWorkspace workspace)
     {
         Hub = workspace.Hub;
         Workspace = workspace;
         ReduceManager = StandardWorkspaceReferenceImplementations.CreateReduceManager(Hub);
 
-        Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().WithKeyFunctionProvider(type =>
-                KeyFunctionBuilder.GetFromProperties(
-                    type,
-                    type.GetProperties().Where(x => x.HasAttribute<DimensionAttribute>()).ToArray()
-                )
-            );
+        TypeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
+        TypeRegistry.WithKeyFunctionProvider(type =>
+            KeyFunctionBuilder.GetFromProperties(
+                type,
+                type.GetProperties().Where(x => x.HasAttribute<DimensionAttribute>()).ToArray()
+            )
+        );
     }
 
     internal ImmutableDictionary<object, IDataSource> DataSources { get; private set; } =
