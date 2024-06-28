@@ -53,9 +53,14 @@ public class Playground
     }
 
     [Fact]
-    public void JsonPath()
+    public void Equality()
     {
-        var methods = typeof(MyData).GetMethods(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        var a = new { A = 1, B = 2 };
+        var b = new { A = 1, B = 2 };
+        a.Equals(b).Should().BeTrue();
+
     }
+
+
 
 }

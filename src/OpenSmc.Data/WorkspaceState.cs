@@ -9,7 +9,7 @@ public record WorkspaceState(
     ReduceManager<WorkspaceState> ReduceManager
 )
 {
-    IReadOnlyDictionary<string, ITypeSource> TypeSources { get; } =
+    public IReadOnlyDictionary<string, ITypeSource> TypeSources { get; } =
         DataSources
             .Values.SelectMany(x => x.TypeSources.Values)
             .ToImmutableDictionary(x => x.CollectionName);
@@ -104,6 +104,9 @@ public record WorkspaceState(
                             ))
                             .ToImmutableDictionary()
                     )
+                    {
+                        GetCollectionName = GetCollectionName
+                    }
                 )
             )
             .Select(e => new KeyValuePair<StreamReference, EntityStore>(

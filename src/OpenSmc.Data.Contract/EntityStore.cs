@@ -12,6 +12,8 @@ public record EntityStore
     public ImmutableDictionary<string, InstanceCollection> Collections { get; init; } =
         ImmutableDictionary<string, InstanceCollection>.Empty;
 
+    public Func<Type, string> GetCollectionName { get; init; }
+
     public EntityStore Merge(EntityStore updated) => Merge(updated, UpdateOptions.Default);
 
     public EntityStore Merge(EntityStore updated, Func<UpdateOptions, UpdateOptions> options) =>
@@ -84,6 +86,8 @@ public record EntityStore
         };
     }
 
+    public IEnumerable<T> GetData<T>()
+    =>  GetCollection(GetCollectionName.Invoke(typeof(T))).Get<T>();
     public object Reduce(WorkspaceReference reference) => ReduceImpl((dynamic)reference);
 
     public TReference Reduce<TReference>(WorkspaceReference<TReference> reference) =>
@@ -125,4 +129,18 @@ public record EntityStore
     {
         return this with { Collections = Collections.Remove(collection) };
     }
+
+    public virtual bool Equals(EntityStore other)
+    {
+        if(other == null)
+            return false;
+        return other.Collections.Count == Collections.Count
+            && other.Collections.All(x => Collections.TryGetValue(x.Key, out var value) 
+                                          && value.Equals(x.Value));
+    }
+
+    public override int GetHashCode()
+    => Collections.Values
+        .Select(x => x.GetHashCode())
+        .Aggregate((x, y) => x ^ y);
 }

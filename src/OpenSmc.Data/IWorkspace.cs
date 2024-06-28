@@ -23,7 +23,8 @@ public interface IWorkspace : IAsyncDisposable
         WorkspaceReference reference
     );
 
-    IObservable<ChangeItem<WorkspaceState>> Stream { get; }
+    ISynchronizationStream<WorkspaceState> Stream { get; }
+    ISynchronizationStream<EntityStore> GetTypes(params Type[] types);
     ReduceManager<WorkspaceState> ReduceManager { get; }
     WorkspaceReference Reference { get; }
     IObservable<IEnumerable<TCollection>> GetStream<TCollection>();

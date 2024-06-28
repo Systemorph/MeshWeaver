@@ -129,22 +129,17 @@ public static class NorthwindLayoutAreas
 
     public static IObservable<IDataCube<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area) =>
         area
-            .Workspace.Stream.Select(x => new
-            {
-                Orders = x.Value.GetData<Order>(),
-                Details = x.Value.GetData<OrderDetails>(),
-                Products = x.Value.GetData<Product>()
-            })
+            .Workspace.GetTypes(typeof(Order), typeof(OrderDetails), typeof(Product))
             .DistinctUntilChanged()
             .Select(x =>
-                x.Orders.Join(
-                        x.Details,
+                x.Value.GetData<Order>().Join(
+                        x.Value.GetData<OrderDetails>(),
                         o => o.OrderId,
                         d => d.OrderId,
                         (order, detail) => (order, detail)
                     )
                     .Join(
-                        x.Products,
+                        x.Value.GetData<Product>(),
                         od => od.detail.ProductId,
                         p => p.ProductId,
                         (od, product) => (od.order, od.detail, product)
