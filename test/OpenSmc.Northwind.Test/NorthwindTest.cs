@@ -2,6 +2,7 @@
 using System.Text.Json;
 using FluentAssertions;
 using OpenSmc.Data;
+using OpenSmc.GridModel;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout;
 using OpenSmc.Messaging;

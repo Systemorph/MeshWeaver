@@ -268,9 +268,14 @@ public class Workspace : IWorkspace
     private readonly TaskCompletionSource initialized = new();
     public Task Initialized => initialized.Task;
 
-    public ISynchronizationStream<EntityStore> GetTypes(params Type[] types)
+    public ISynchronizationStream<EntityStore> ReduceToTypes(object subscriber, params Type[] types)
     {
-        return ReduceManager.ReduceStream<EntityStore, CollectionsReference>(stream, new CollectionsReference(types.Select(t => DataContext.TypeRegistry.TryGetTypeName(t, out var name) ? name : throw new ArgumentException($"Type {t.FullName} is unknown.")).ToArray()), Hub.Address);
+        return ReduceManager.ReduceStream<EntityStore, CollectionsReference>
+        (
+            stream, 
+            new CollectionsReference(types.Select(t => DataContext.TypeRegistry.TryGetTypeName(t, out var name) ? name : throw new ArgumentException($"Type {t.FullName} is unknown.")).ToArray()), 
+            subscriber
+            );
     }
 
     public ReduceManager<WorkspaceState> ReduceManager =>
