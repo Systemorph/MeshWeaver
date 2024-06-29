@@ -127,9 +127,9 @@ public static class NorthwindLayoutAreas
                 .Execute()
                 .ToGridControl());
 
-    public static IObservable<IDataCube<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area) =>
+    private static IObservable<IDataCube<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area) =>
         area
-            .Workspace.GetTypes(typeof(Order), typeof(OrderDetails), typeof(Product))
+            .Workspace.ReduceToTypes(typeof(Order), typeof(OrderDetails), typeof(Product))
             .DistinctUntilChanged()
             .Select(x =>
                 x.Value.GetData<Order>().Join(

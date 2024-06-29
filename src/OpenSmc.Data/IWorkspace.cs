@@ -24,7 +24,8 @@ public interface IWorkspace : IAsyncDisposable
     );
 
     ISynchronizationStream<WorkspaceState> Stream { get; }
-    ISynchronizationStream<EntityStore> GetTypes(params Type[] types);
+    ISynchronizationStream<EntityStore> ReduceToTypes(params Type[] types) => ReduceToTypes(null, types);
+    ISynchronizationStream<EntityStore> ReduceToTypes(object subscriber, params Type[] types);
     ReduceManager<WorkspaceState> ReduceManager { get; }
     WorkspaceReference Reference { get; }
     IObservable<IEnumerable<TCollection>> GetStream<TCollection>();

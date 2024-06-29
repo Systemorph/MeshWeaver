@@ -7,8 +7,8 @@ namespace OpenSmc.Data
         : SynchronizationStream<TReduced, TReference>
         where TReference : WorkspaceReference
     {
-        private readonly ISynchronizationStream<TStream> parent;
         private readonly PatchFunction<TStream, TReduced> backTransform;
+        private readonly ISynchronizationStream<TStream> parent;
 
         public ChainedSynchronizationStream(
             ISynchronizationStream<TStream> parent,
@@ -29,9 +29,11 @@ namespace OpenSmc.Data
             backTransform = parent.ReduceManager.GetPatchFunction<TReduced>(parent, reference);
 
             if (backTransform != null)
-                    AddDisposable(
-                        this.Where(value => Subscriber.Equals(value.ChangedBy))
-                            .Subscribe(UpdateParent));
+            {
+                AddDisposable(
+                    this.Where(value => Subscriber == null || Subscriber.Equals(value.ChangedBy))
+                        .Subscribe(UpdateParent));
+            }
         }
 
         public override DataChangeResponse RequestChange(
@@ -41,7 +43,9 @@ namespace OpenSmc.Data
             var ret = base.RequestChange(update);
 
             if (!parent.Initialized.IsCompleted)
+            {
                 throw new InvalidOperationException("Parent is not initialized yet");
+            }
 
             return parent.RequestChange(state =>
                 backTransform(state, parent, update(Current.Value))
@@ -52,12 +56,16 @@ namespace OpenSmc.Data
         {
             // if the parent is initialized, we will update the parent
             if (parent.Initialized.IsCompleted)
+            {
                 parent.Update(state => backTransform(state, parent, value));
+            }
             // if we are in automatic mode, we will initialize the parent
             else if (parent.InitializationMode == InitializationMode.Automatic)
+            {
                 parent.Initialize(
                     backTransform(Activator.CreateInstance<TStream>(), parent, value)
                 );
+            }
         }
     }
 }

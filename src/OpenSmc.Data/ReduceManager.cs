@@ -140,7 +140,7 @@ public record ReduceManager<TStream>
 
         reducedStream.AddDisposable(
                 stream
-                    .Where(x => !reducedStream.Subscriber.Equals(x.ChangedBy))
+                    .Where(x => reducedStream.Subscriber == null || !reducedStream.Subscriber.Equals(x.ChangedBy))
                     .Select(x => x.SetValue(reducer.Invoke(x.Value, reducedStream.Reference)))
                     .DistinctUntilChanged()
                     .Subscribe(reducedStream)
