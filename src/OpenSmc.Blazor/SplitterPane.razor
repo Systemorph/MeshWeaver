@@ -1,4 +1,4 @@
-@inherits BlazorView<SplitterPaneControl>
+@inherits ContainerView<SplitterPaneControl>
 
 <FluentMultiSplitterPane
     Collapsible="@ViewModel.Collapsible"
@@ -9,12 +9,10 @@
     Resizable="@ViewModel.Resizable"
     Class="@Class"
     >
-    <DispatchView ViewModel="@ContentViewModel" Stream="@Stream" Area="@ContentArea" />
+    <DispatchView ViewModel="@ChildControlArea.ViewModel" Stream="@Stream" Area="@ChildControlArea.Area" />
 </FluentMultiSplitterPane>
-
 
 @code
 {
-    private string ContentArea => $"{Area}/{SplitterPaneControl.ChildContentArea}";
-    private UiControl ContentViewModel => GetControl(Stream.Current, ContentArea);
+    private RenderedArea ChildControlArea => Areas.First();
 }

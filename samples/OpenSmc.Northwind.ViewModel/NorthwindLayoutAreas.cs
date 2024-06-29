@@ -74,44 +74,47 @@ public static class NorthwindLayoutAreas
             .DistinctUntilChanged(x => string.Join(',', x.Select(y => y.Item)));
 
         return Stack()
-                .WithSkin(Skins.Splitter())
+                .WithSkin(Skins.Splitter)
                 .WithOrientation(Orientation.Horizontal)
                 .WithView(
-                    SplitterPane()
-                        .WithChildContent(
                             Stack()
                                 .WithOrientation(Orientation.Vertical)
-                                .WithView("Toolbar", Toolbar()
+                                .WithView(Toolbar()
                                     .WithView((area, _) => years.Select(y => area.Bind(new Toolbar(y.Max(x => x.Item)),
                                         nameof(Toolbar),
                                         tb => Select(tb.Year).WithOptions(y)))
-
                                     )
                                 )
-                                .WithView("MainContent",
-                                    Stack()
-                                        .WithSkin(Skins.Grid().WithSpacing(1))
+                                .WithView(Stack()
+                                        .WithSkin(Skins.LayoutGrid.WithSpacing(1))
                                         .WithClass("main-content")
-                                        .WithView((area,ctx)=>
-                                            LayoutGridItem().WithChildContent(OrderSummary (area, ctx)).WithXs(12).WithSm(6))
-                                        .WithView((area, ctx) => LayoutGridItem().WithChildContent(ProductSummary(area,ctx)).WithXs(12)
-                                            .WithSm(6))
-                                        .WithView((area, ctx) => LayoutGridItem().WithChildContent(CustomerSummary(area,ctx)).WithXs(12)
-                                            .WithSm(6))
-                                        .WithView((area, ctx) => LayoutGridItem().WithChildContent(SupplierSummary(area, ctx)).WithXs(12))
+                                        .WithView((area, ctx)=> OrderSummary(area, ctx).ToLayoutGridItem(item => item.WithXs(12).WithSm(6)))
+                                        .WithView((area, ctx) => ProductSummary(area, ctx).ToLayoutGridItem(item => item.WithXs(12).WithSm(6)))
+                                        .WithView((area, ctx) => CustomerSummary(area,ctx).ToLayoutGridItem(item => item.WithXs(12).WithSm(6)))
+                                        .WithView((area, ctx) => SupplierSummary(area, ctx).ToLayoutGridItem(item => item.WithXs(12)))
                                 )
+                                .ToSplitterPane()
                         )
+                .WithView(ContextPanel);
+    }
 
-                )
-                .WithView(
-                    "ContextPanel",
-                    SplitterPane()
-                        .WithClass("context-panel")
-                        .WithChildContent(Html("<h3>Context panel</h3>"))
-                        .WithSize("350px")
-                        .WithCollapsible(true)
-                )
-            ;
+    private static SplitterPaneControl ContextPanel(LayoutAreaHost area, RenderingContext ctx)
+    {
+        return Stack()
+            .WithClass("context-panel")
+            .WithOrientation(Orientation.Vertical)
+            .WithView(Html("<h3>Context panel</h3>"))
+            .WithView(
+                Stack()
+                    .WithOrientation(Orientation.Horizontal)
+                    .WithView((area, ctx) => area.Bind(
+                        new[] {"Product", "Customer", "Supplier"},
+                        "dimensions",
+                        (string item) => Menu(item)
+                    ))
+                    .WithView("Values")
+            )
+            .ToSplitterPane(x => x.WithSize("350px").WithCollapsible(true));
     }
 
     public static LayoutStackControl SupplierSummary(this LayoutAreaHost layoutArea, RenderingContext ctx) =>
@@ -162,7 +165,7 @@ public static class NorthwindLayoutAreas
             .WithView(Html("<h2>Product Summary</h2>"))
             .WithView(Counter);
 
-    public static object Counter(this LayoutAreaHost area, RenderingContext context) 
+    private static object Counter(this LayoutAreaHost area, RenderingContext context)
     {
         var counter = 0;
         return Controls

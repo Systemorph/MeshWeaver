@@ -26,26 +26,12 @@ public static class LayoutManager
             return;
 
         var area = context.Area;
-        if (viewModel is LayoutStackControl stack)
+        if (viewModel is IContainerControl control)
         {
-            foreach (var ve in stack.ViewElements)
+            foreach (var ve in control.ChildControls)
                 layoutArea.RenderArea(context with{Area = $"{area}/{ve.Area}" }, ve);
-            viewModel = stack with
-            {
-                Areas = stack.ViewElements.Select(ve => $"{area}/{ve.Area}").ToArray()
-            };
-        }
 
-
-
-        if (viewModel is LayoutGridItemControl gridItem)
-        {
-            layoutArea.RenderArea(new($"{area}/{LayoutGridItemControl.ChildContentArea}"),  gridItem.ChildContent);
-        }
-
-        if (viewModel is SplitterPaneControl splitterPane)
-        {
-            layoutArea.RenderArea(new($"{area}/{SplitterPaneControl.ChildContentArea}"), splitterPane.ChildContent);
+            viewModel = control.SetAreas(control.ChildControls.Select(ve => $"{area}/{ve.Area}").ToArray());
         }
 
         layoutArea.UpdateLayout(area, viewModel);

@@ -1,0 +1,22 @@
+@inherits LayoutStack
+@{
+    #pragma warning disable FluentMultiSplitter
+}
+
+<FluentMultiSplitter 
+    Class="@Class"
+    Orientation="@Orientation"
+    BarSize="@SplitterSkin.BarSize"
+    Width="@SplitterSkin.Width"
+    Height="@SplitterSkin.Height"
+    Style="@Style"
+>
+    @foreach(var (area,viewModel) in Areas){
+        <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area" />
+    }
+</FluentMultiSplitter>
+
+@code
+{
+    private SplitterSkin SplitterSkin => ViewModel.Skin as SplitterSkin;
+}

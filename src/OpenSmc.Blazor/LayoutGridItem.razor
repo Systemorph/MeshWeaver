@@ -1,6 +1,4 @@
-@using System.Text.Json
-@using OpenSmc.Data.Serialization
-@inherits BlazorView<LayoutGridItemControl>
+@inherits ContainerView<LayoutGridItemControl>
 
 <FluentGridItem
     AdaptiveRendering="@ViewModel.AdaptiveRendering"
@@ -14,13 +12,12 @@
     xs="@ViewModel.Xs"
     xxl="@ViewModel.Xxl"
     >
-    <DispatchView ViewModel="@ContentViewModel" Stream="@Stream" Area="@ContentArea" />
+    <DispatchView ViewModel="@ChildControlArea.ViewModel" Stream="@Stream" Area="@ChildControlArea.Area" />
 </FluentGridItem>
 
 @code
 {
-    private string ContentArea => $"{Area}/{SplitterPaneControl.ChildContentArea}";
-    private UiControl ContentViewModel => GetControl(Stream.Current, ContentArea);
+    private RenderedArea ChildControlArea => Areas.First();
 
     private GridItemHidden HiddenWhen => ViewModel.HiddenWhen switch
     {
