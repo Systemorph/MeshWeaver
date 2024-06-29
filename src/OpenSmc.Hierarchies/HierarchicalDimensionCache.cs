@@ -5,6 +5,11 @@ namespace OpenSmc.Hierarchies;
 
 public class HierarchicalDimensionCache(WorkspaceState state) : IHierarchicalDimensionCache
 {
+    public bool Has(Type type)
+    {
+        return state.Has(type);
+    }
+
     public HierarchyNode<T> Get<T>(object id)
         where T : class, IHierarchicalDimension
     {

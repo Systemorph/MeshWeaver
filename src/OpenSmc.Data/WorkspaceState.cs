@@ -186,13 +186,14 @@ public record WorkspaceState(
     {
         var collection = reference.Collection;
         var store = GetStore(GetDataSource(collection));
-        return store.Collections.GetValueOrDefault(collection)?.GetData(reference.Id);
+        return store?.Collections.GetValueOrDefault(collection)?.GetData(reference.Id);
     }
 
     private EntityStore GetStore(IDataSource dataSource) =>
         dataSource.Streams.Select(s => 
             StoresByStream.GetValueOrDefault(s.StreamReference))
             .Where(x => x != null)
+            .DefaultIfEmpty()
             .Aggregate((x,y) => x.Merge(y)
             );
 

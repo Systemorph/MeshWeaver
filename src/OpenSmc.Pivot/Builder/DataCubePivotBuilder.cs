@@ -42,6 +42,19 @@ namespace OpenSmc.Pivot.Builder
             : base(state, cubes)
         {
             AggregateByDimensionDescriptors = GetAggregationPropertiesDescriptors().ToArray();
+            SliceColumns = new SlicePivotGroupingConfigItem<TElement, ColumnGroup>(
+                [],
+                State,
+                HierarchicalDimensionCache,
+                HierarchicalDimensionOptions
+            );
+            SliceRows = new SlicePivotGroupingConfigItem<TElement, RowGroup>(
+                GetAggregateBySliceRowsDimensionDescriptors(this),
+                State,
+                HierarchicalDimensionCache,
+                HierarchicalDimensionOptions
+            );
+
         }
 
         public DataCubePivotBuilder<TCube, TElement, TIntermediate, TAggregate> SliceRowsBy(
