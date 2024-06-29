@@ -1,5 +1,6 @@
 ﻿using OpenSmc.Activities;
 using OpenSmc.DataSetReader;
+using OpenSmc.Import.Configuration;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Import;

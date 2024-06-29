@@ -192,8 +192,8 @@ public class PivotTest : HubTestBase
     {
         PivotModel qs = null;
         var state = (await GetStateAsync()) with { StoresByStream = ImmutableDictionary<StreamReference, EntityStore>.Empty };
-        var exception = await Record.ExceptionAsync(
-            async () =>
+        var exception = Record.Exception(
+            () =>
                 qs = state
                     .Pivot(ValueWithHierarchicalDimension.Data.ToDataCube())
                     .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))

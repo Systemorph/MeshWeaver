@@ -4,7 +4,7 @@ using OpenSmc.Data;
 using OpenSmc.DataStructures;
 using OpenSmc.Messaging;
 
-namespace OpenSmc.Import;
+namespace OpenSmc.Import.Configuration;
 
 public record ImportFormat(
     string Format,

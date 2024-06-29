@@ -1,12 +1,10 @@
 using System.Text;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.DataStructures;
-using OpenSmc.Messaging;
+using OpenSmc.Import.Configuration;
 
-namespace OpenSmc.Import;
+namespace OpenSmc.Import.Implementation;
 
 public class ImportManager(ImportConfiguration configuration)
 {

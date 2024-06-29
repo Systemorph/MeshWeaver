@@ -4,9 +4,10 @@ using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
+using OpenSmc.Import.Configuration;
 using OpenSmc.Messaging;
 
-namespace OpenSmc.Import;
+namespace OpenSmc.Import.Implementation;
 
 public static class ActivityCategory
 {

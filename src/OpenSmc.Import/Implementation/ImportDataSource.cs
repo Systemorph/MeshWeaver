@@ -3,8 +3,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
+using OpenSmc.Import.Configuration;
 
-namespace OpenSmc.Import;
+namespace OpenSmc.Import.Implementation;
 
 public record ImportDataSource(Source Source, IWorkspace Workspace)
     : GenericDataSource<ImportDataSource>(Source, Workspace)
@@ -20,7 +21,10 @@ public record ImportDataSource(Source Source, IWorkspace Workspace)
             ImportRequest = config.Invoke(ImportRequest)
         };
 
-    protected override ISynchronizationStream<EntityStore, CollectionsReference> SetupDataSourceStream(WorkspaceState state)
+    protected override ISynchronizationStream<
+        EntityStore,
+        CollectionsReference
+    > SetupDataSourceStream(WorkspaceState state)
     {
         var ret = base.SetupDataSourceStream(state);
         var config = new ImportConfiguration(
@@ -51,7 +55,6 @@ public record ImportDataSource(Source Source, IWorkspace Workspace)
         });
         return ret;
     }
-
 
     private ImmutableList<
         Func<ImportConfiguration, ImportConfiguration>

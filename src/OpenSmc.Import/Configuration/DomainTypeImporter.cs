@@ -1,7 +1,7 @@
 ﻿using System.Collections.Immutable;
 using OpenSmc.DataStructures;
 
-namespace OpenSmc.Import;
+namespace OpenSmc.Import.Configuration;
 
 public record DomainTypeImporter
 {

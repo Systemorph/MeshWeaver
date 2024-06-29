@@ -4,6 +4,7 @@ using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.Data.TestDomain;
 using OpenSmc.Hub.Fixture;
+using OpenSmc.Import.Configuration;
 using OpenSmc.Messaging;
 using Xunit;
 using Xunit.Abstractions;

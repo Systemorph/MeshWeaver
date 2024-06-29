@@ -3,6 +3,8 @@ using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Activities;
 using OpenSmc.Data;
+using OpenSmc.Import.Configuration;
+using OpenSmc.Import.Implementation;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Import;
