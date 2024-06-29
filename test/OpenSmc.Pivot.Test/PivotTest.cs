@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Collections.Immutable;
+using System.Text.Json;
 using FluentAssertions;
 using OpenSmc.Arithmetics;
 using OpenSmc.Collections;
@@ -190,10 +191,10 @@ public class PivotTest : HubTestBase
     public async Task NullQuerySourceShouldFlatten()
     {
         PivotModel qs = null;
-        var state = await GetStateAsync();
+        var state = (await GetStateAsync()) with { StoresByStream = ImmutableDictionary<StreamReference, EntityStore>.Empty };
         var exception = await Record.ExceptionAsync(
             async () =>
-                qs = (await GetStateAsync())
+                qs = state
                     .Pivot(ValueWithHierarchicalDimension.Data.ToDataCube())
                     .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
                     .Execute()

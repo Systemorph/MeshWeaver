@@ -1,4 +1,5 @@
-﻿using AngleSharp.Common;
+﻿using System.Collections.Immutable;
+using AngleSharp.Common;
 using AngleSharp.Dom;
 using OpenSmc.Collections;
 using OpenSmc.Data;
@@ -14,8 +15,8 @@ public class Hierarchy<T> : IHierarchy<T>
 
     public Hierarchy(IReadOnlyDictionary<object, object> elementsById)
     {
-        this.elementsById = elementsById;
-        hierarchy = elementsById
+        this.elementsById = elementsById ?? ImmutableDictionary<object, object>.Empty;
+        hierarchy = this.elementsById
             .Select(kvp => new KeyValuePair<object, T>(kvp.Key, (T)kvp.Value))
             .Select(dim => new HierarchyNode<T>(
                 dim.Key,
@@ -23,7 +24,7 @@ public class Hierarchy<T> : IHierarchy<T>
                 dim.Value.Parent,
                 dim.Value.Parent == null
                     ? null
-                    : (T)elementsById.GetValueOrDefault(dim.Value.Parent)
+                    : (T)this.elementsById.GetValueOrDefault(dim.Value.Parent)
             ))
             .ToDictionary(x => x.Id);
 

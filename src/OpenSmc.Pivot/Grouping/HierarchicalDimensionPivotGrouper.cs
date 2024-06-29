@@ -106,7 +106,7 @@ namespace OpenSmc.Pivot.Grouping
         )
         {
             HierarchicalDimensionCache = hierarchicalDimensionCache;
-            if (HierarchicalDimensionCache == null)
+            if (HierarchicalDimensionCache == null || !hierarchicalDimensionCache.Has(typeof(TDimension)))
             {
                 flat = true;
                 return;
@@ -141,9 +141,12 @@ namespace OpenSmc.Pivot.Grouping
             if (flat)
                 return;
             var dimSystemName = Selector(element, 0);
+            var hierarchyNode = HierarchicalDimensionCache.Get<TDimension>(dimSystemName);
+            if(hierarchyNode == null)
+                return;
             maxLevelData = Math.Max(
                 maxLevelData,
-                Math.Min(maxLevel, HierarchicalDimensionCache.Get<TDimension>(dimSystemName).Level)
+                Math.Min(maxLevel, hierarchyNode.Level)
             );
         }
 
