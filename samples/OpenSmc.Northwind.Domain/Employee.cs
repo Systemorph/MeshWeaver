@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using OpenSmc.Domain;
 
 namespace OpenSmc.Northwind.Domain;
 
@@ -21,4 +22,7 @@ public record Employee(
     string Notes,
     int ReportsTo,
     string PhotoPath
-);
+) : INamed
+{
+    string INamed.DisplayName => $"{FirstName} {LastName}";
+}

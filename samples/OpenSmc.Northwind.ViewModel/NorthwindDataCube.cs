@@ -37,7 +37,8 @@ namespace OpenSmc.Northwind.ViewModel
             Discontinued = product.Discontinued;
         }
 
-        [property: Key] public int OrderId { get; init; }
+        [property: Key]
+        public int OrderId { get; init; }
 
         [property: Dimension(typeof(Customer))]
         public string Customer { get; init; }
@@ -45,12 +46,14 @@ namespace OpenSmc.Northwind.ViewModel
         [property: Dimension(typeof(Employee))]
         public int Employee { get; init; }
 
-        [Dimension(typeof(Supplier))] public int Supplier { get; init; }
+        [Dimension(typeof(Supplier))]
+        public int Supplier { get; init; }
 
-        [Dimension(typeof(Category))] public int Category { get; init; }
+        [Dimension(typeof(Category))]
+        public int Category { get; init; }
 
-        [property: Dimension(typeof(Region))] public string Region { get; init; }
-
+        [property: Dimension(typeof(Region))]
+        public string Region { get; init; }
 
         public DateTime OrderDate { get; init; }
         public DateTime RequiredDate { get; init; }
@@ -73,6 +76,6 @@ namespace OpenSmc.Northwind.ViewModel
         public short UnitsInStock { get; init; }
         public short UnitsOnOrder { get; init; }
         public short ReorderLevel { get; init; }
-        public int Discontinued { get; init; }
+        public bool Discontinued { get; init; }
     }
 }
