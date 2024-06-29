@@ -3,9 +3,7 @@ using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
 using System.Reflection;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.DataSetReader;
 using OpenSmc.DataSetReader.Csv;
@@ -14,7 +12,7 @@ using OpenSmc.Domain;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 
-namespace OpenSmc.Import;
+namespace OpenSmc.Import.Configuration;
 
 public record ImportConfiguration
 {

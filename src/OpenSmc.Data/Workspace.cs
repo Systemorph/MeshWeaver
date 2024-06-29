@@ -118,11 +118,7 @@ public class Workspace : IWorkspace
         TReference
     >(TReference reference, object subscriber)
         where TReference : WorkspaceReference =>
-        ReduceManager.ReduceStream<TReduced, TReference>(
-            stream,
-            reference,
-            subscriber
-        );
+        ReduceManager.ReduceStream<TReduced, TReference>(stream, reference, subscriber);
 
     private ISynchronizationStream<TReduced, TReference> GetExternalClientSynchronizationStream<
         TReduced,
@@ -144,23 +140,23 @@ public class Workspace : IWorkspace
     {
         // link to deserialized world. Will also potentially link to workspace.
 
-        var ret = new ChainedSynchronizationStream<
-            WorkspaceState,
-            TReference,
-            TReduced
-        >(stream, owner, subscriber, reference);
+        var ret = new ChainedSynchronizationStream<WorkspaceState, TReference, TReduced>(
+            stream,
+            owner,
+            subscriber,
+            reference
+        );
 
         var isOwner = owner.Equals(Hub.Address);
 
         var fromWorkspace = stream.Reduce<TReduced, TReference>(reference, subscriber);
         if (fromWorkspace != null)
-            if(isOwner)
+            if (isOwner)
                 ret.AddDisposable(fromWorkspace.Subscribe(ret));
             else
                 ret.AddDisposable(fromWorkspace.Skip(1).Subscribe(ret));
 
-
-        var json = 
+        var json =
             ret as ISynchronizationStream<JsonElement>
             ?? ret.Reduce(new JsonElementReference(), subscriber);
 
@@ -192,16 +188,13 @@ public class Workspace : IWorkspace
                     json.Hub.Post(response, o => o.ResponseFor(delivery));
                     return delivery.Processed();
                 },
-                x =>
-                    json.Owner.Equals(x.Message.Owner) && x.Message.Reference.Equals(reference)
+                x => json.Owner.Equals(x.Message.Owner) && x.Message.Reference.Equals(reference)
             )
         );
         json.AddDisposable(
             json.ToDataChangedStream(reference)
                 .Where(x => !json.Subscriber.Equals(x.ChangedBy))
-                .Subscribe(e => 
-                    Hub.Post(e, o => o.WithTarget(json.Subscriber))
-                    )
+                .Subscribe(e => Hub.Post(e, o => o.WithTarget(json.Subscriber)))
         );
         json.AddDisposable(
             new AnonymousDisposable(() => subscriptions.Remove(new(subscriber, reference), out _))
@@ -222,14 +215,11 @@ public class Workspace : IWorkspace
                     json.NotifyChange(delivery.Message with { ChangedBy = delivery.Sender });
                     return delivery.Processed();
                 },
-                d =>
-                    json.Owner.Equals(d.Message.Owner) && reference.Equals(d.Message.Reference)
+                d => json.Owner.Equals(d.Message.Owner) && reference.Equals(d.Message.Reference)
             )
         );
         json.AddDisposable(
-            new AnonymousDisposable(
-                () => remoteStreams.Remove((json.Owner, reference), out _)
-            )
+            new AnonymousDisposable(() => remoteStreams.Remove((json.Owner, reference), out _))
         );
         json.AddDisposable(
             new AnonymousDisposable(
@@ -270,16 +260,24 @@ public class Workspace : IWorkspace
 
     public ISynchronizationStream<EntityStore> ReduceToTypes(object subscriber, params Type[] types)
     {
-        return ReduceManager.ReduceStream<EntityStore, CollectionsReference>
-        (
-            stream, 
-            new CollectionsReference(types.Select(t => DataContext.TypeRegistry.TryGetTypeName(t, out var name) ? name : throw new ArgumentException($"Type {t.FullName} is unknown.")).ToArray()), 
+        return ReduceManager.ReduceStream<EntityStore, CollectionsReference>(
+            stream,
+            new CollectionsReference(
+                types
+                    .Select(t =>
+                        DataContext.TypeRegistry.TryGetTypeName(t, out var name)
+                            ? name
+                            : throw new ArgumentException($"Type {t.FullName} is unknown.")
+                    )
+                    .ToArray()
+            ),
             subscriber
-            );
+        );
     }
 
     public ReduceManager<WorkspaceState> ReduceManager =>
-        DataContext?.ReduceManager ?? StandardWorkspaceReferenceImplementations.CreateReduceManager(Hub);
+        DataContext?.ReduceManager
+        ?? StandardWorkspaceReferenceImplementations.CreateReduceManager(Hub);
 
     public IMessageHub Hub { get; }
     public object Id => Hub.Address;
@@ -310,10 +308,9 @@ public class Workspace : IWorkspace
         return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, log.Finish());
     }
 
-    ISynchronizationStream<WorkspaceState> IWorkspace.Stream => stream1;
+    ISynchronizationStream<WorkspaceState> IWorkspace.Stream => stream;
 
     private bool isDisposing;
-    private ISynchronizationStream<WorkspaceState> stream1;
 
     public async ValueTask DisposeAsync()
     {
