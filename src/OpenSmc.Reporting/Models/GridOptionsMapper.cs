@@ -11,10 +11,10 @@ namespace OpenSmc.Reporting.Models
 {
     public static class GridOptionsMapper
     {
-        public static GridControl ToGridControl(this IPivotBuilder pivotBuilder) =>
-            pivotBuilder.Execute().ToGridControl();
+        public static GridControl ToGrid(this IPivotBuilder pivotBuilder) =>
+            pivotBuilder.Execute().ToGrid();
 
-        public static GridControl ToGridControl(this PivotModel pivotModel) =>
+        public static GridControl ToGrid(this PivotModel pivotModel) =>
             new(MapToGridOptions(pivotModel));
 
         public static GridOptions MapToGridOptions(PivotModel pivotModel)

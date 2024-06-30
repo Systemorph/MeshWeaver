@@ -8,7 +8,6 @@ public interface IPivotBuilder
 }
 
 public interface IPivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-    : IPivotBuilder
     where TPivotBuilder : IPivotBuilderBase<
             T,
             TTransformed,

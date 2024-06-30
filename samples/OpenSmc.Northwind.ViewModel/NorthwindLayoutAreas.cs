@@ -164,7 +164,7 @@ public static class NorthwindLayoutAreas
     ) =>
         area.GetDataCube()
             .Select(cube =>
-                area.Workspace.State.Pivot(cube).SliceRowsBy(nameof(Supplier)).ToGridControl()
+                area.Workspace.State.Pivot(cube).SliceRowsBy(nameof(Supplier)).ToGrid()
             );
 
     private static IObservable<IDataCube<NorthwindDataCube>> GetDataCube(

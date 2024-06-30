@@ -13,7 +13,7 @@ namespace OpenSmc.Pivot.Builder
         TIntermediate,
         TAggregate,
         TPivotBuilder
-    > : IPivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
+    > : IPivotBuilder, IPivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
         where TPivotBuilder : PivotBuilderBase<
                 T,
                 TTransformed,
@@ -50,7 +50,6 @@ namespace OpenSmc.Pivot.Builder
             };
         }
 
-
         public virtual TPivotBuilder Transpose<TValue>()
         {
             return (TPivotBuilder)this with { TransposedValue = typeof(TValue) };
@@ -70,6 +69,5 @@ namespace OpenSmc.Pivot.Builder
             TAggregate,
             TPivotBuilder
         > GetReportProcessor();
-
     }
 }

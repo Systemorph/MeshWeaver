@@ -54,7 +54,6 @@ namespace OpenSmc.Pivot.Builder
                 HierarchicalDimensionCache,
                 HierarchicalDimensionOptions
             );
-
         }
 
         public DataCubePivotBuilder<TCube, TElement, TIntermediate, TAggregate> SliceRowsBy(
@@ -279,7 +278,10 @@ namespace OpenSmc.Pivot.Builder
                 new Aggregations<TElement, TIntermediate, TAggregate>()
             );
 
-            return new DataCubePivotBuilder<TCube, TElement, TNewAggregate, TNewAggregate>(State,Objects)
+            return new DataCubePivotBuilder<TCube, TElement, TNewAggregate, TNewAggregate>(
+                State,
+                Objects
+            )
             {
                 SliceColumns = SliceColumns,
                 SliceRows = SliceRows,
