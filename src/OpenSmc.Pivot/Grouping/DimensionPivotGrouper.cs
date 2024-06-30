@@ -58,10 +58,10 @@ namespace OpenSmc.Pivot.Grouping
             var displayName = GetDisplayName(value);
             return new TGroup
             {
-                SystemName = value.ToString(),
+                Id = value,
                 DisplayName = displayName?.ToString(),
                 GrouperName = Id,
-                Coordinates = ImmutableList<string>.Empty.Add(value.ToString())
+                Coordinates = ImmutableList<object>.Empty.Add(value)
             };
         }
 

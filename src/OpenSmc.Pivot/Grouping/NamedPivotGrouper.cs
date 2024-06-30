@@ -15,7 +15,7 @@ namespace OpenSmc.Pivot.Grouping
                         var id = keySelector(o);
                         return new TGroup
                         {
-                            SystemName = id.ToString(),
+                            Id = id.ToString(),
                             DisplayName = o.DisplayName,
                             GrouperName = name,
                             Coordinates = [id.ToString()]

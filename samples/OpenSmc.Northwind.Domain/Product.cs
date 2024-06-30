@@ -13,7 +13,7 @@ public record Product(
     short UnitsInStock,
     short UnitsOnOrder,
     short ReorderLevel,
-    bool Discontinued
+    string Discontinued
 ) : INamed
 {
     string INamed.DisplayName => ProductName;

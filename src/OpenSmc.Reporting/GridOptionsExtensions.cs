@@ -276,7 +276,7 @@ namespace OpenSmc.Reporting
                     x.RowGroup != null
                     && Regex
                         .Match(
-                            x.RowGroup.SystemName.ToString(),
+                            x.RowGroup.Id.ToString(),
                             systemNameRegex ?? string.Empty,
                             RegexOptions.IgnoreCase
                         )
