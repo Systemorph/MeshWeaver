@@ -9,7 +9,7 @@ namespace OpenSmc.Reporting.Models
 {
     public static class GridOptionsMapper
     {
-        public static GridControl ToGridControl(this PivotModel pivotModel) => 
+        public static GridControl ToGridControl(this PivotModel pivotModel) =>
             new(MapToGridOptions(pivotModel));
 
         public static GridOptions MapToGridOptions(PivotModel pivotModel)
@@ -60,7 +60,7 @@ namespace OpenSmc.Reporting.Models
         {
             return new()
             {
-                ColId = item.SystemName,
+                ColId = item.Id,
                 HeaderName = item.DisplayName,
                 ValueGetter = ValueGetter(item)
             };
@@ -87,14 +87,14 @@ namespace OpenSmc.Reporting.Models
                 .ToImmutableList();
 
             var show =
-                item.Coordinates.Last() == IPivotGrouper<object, ColumnGroup>.TotalGroup.SystemName
+                item.Coordinates.Last() == IPivotGrouper<object, ColumnGroup>.TotalGroup.Id
                     ? "closed"
                     : "open";
 
             var colGroupDef = new ColGroupDef
             {
                 ColumnGroupShow = show,
-                GroupId = item.SystemName,
+                GroupId = item.Id,
                 HeaderName = item.DisplayName,
                 Children = children
             };

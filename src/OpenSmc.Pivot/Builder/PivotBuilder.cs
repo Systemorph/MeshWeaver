@@ -12,23 +12,14 @@ public record PivotBuilder<T, TIntermediate, TAggregate>
     : PivotBuilderBase<T, T, TIntermediate, TAggregate, PivotBuilder<T, TIntermediate, TAggregate>>,
         IPivotBuilder<T, TIntermediate, TAggregate, PivotBuilder<T, TIntermediate, TAggregate>>
 {
-    public WorkspaceState State { get; }
-
     public PivotBuilder(WorkspaceState state, IEnumerable<T> objects)
         : base(state, objects)
     {
         this.State = state;
-
-        ColumnGroupConfig = DefaultColumnGrouping =
-            new PivotColumnsGroupingConfiguration<T>(state);
-        RowGroupConfig =
-            new PivotRowsGroupingConfiguration<T>(state);
-
     }
 
-
-    public PivotGroupingConfiguration<T, ColumnGroup> ColumnGroupConfig { get; init; } 
-    public PivotGroupingConfiguration<T, RowGroup> RowGroupConfig { get; init; } 
+    public PivotGroupingConfiguration<T, ColumnGroup> ColumnGroupConfig { get; init; }
+    public PivotGroupingConfiguration<T, RowGroup> RowGroupConfig { get; init; }
 
     public PivotBuilder<T, TIntermediate, TAggregate> GroupRowsBy<TSelected>(
         Expression<Func<T, TSelected>> selector

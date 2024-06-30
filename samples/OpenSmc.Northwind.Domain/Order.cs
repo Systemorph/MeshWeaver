@@ -16,6 +16,6 @@ public record Order(
     string ShipAddress,
     string ShipCity,
     string ShipRegion,
-    string ShipPostalCode, 
+    string ShipPostalCode,
     string ShipCountry
 );

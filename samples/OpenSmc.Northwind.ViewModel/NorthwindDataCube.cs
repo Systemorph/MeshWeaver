@@ -24,10 +24,6 @@ namespace OpenSmc.Northwind.ViewModel
             Discount = details.Discount;
             Region = order.ShipRegion;
             Supplier = product.SupplierId;
-            ShipName = order.ShipName;
-            ShipAddress = order.ShipAddress;
-            ShipCity = order.ShipCity;
-            ShipPostalCode = order.ShipPostalCode;
             ShipCountry = order.ShipCountry;
             Category = product.CategoryId;
             QuantityPerUnit = product.QuantityPerUnit;
@@ -55,27 +51,51 @@ namespace OpenSmc.Northwind.ViewModel
         [property: Dimension(typeof(Region))]
         public string Region { get; init; }
 
+        [NotVisible]
         public DateTime OrderDate { get; init; }
+
+        [NotVisible]
         public DateTime RequiredDate { get; init; }
+
+        [NotVisible]
         public DateTime ShippedDate { get; init; }
 
+        [NotVisible]
         public int ShipVia { get; init; }
 
+        [NotVisible]
         public string ShipCountry { get; init; }
+
+        [NotVisible]
         public decimal Freight { get; init; }
 
+        [NotVisible]
         public string Product { get; init; }
+
+        public double Amount => UnitPrice * Quantity * (1 - Discount);
+
+        [NotVisible]
         public double UnitPrice { get; init; }
+
+        [NotVisible]
         public int Quantity { get; init; }
+
+        [NotVisible]
         public double Discount { get; init; }
-        public string ShipName { get; init; }
-        public string ShipAddress { get; init; }
-        public string ShipCity { get; init; }
-        public string ShipPostalCode { get; init; }
+
+        [NotVisible]
         public string QuantityPerUnit { get; init; }
+
+        [NotVisible]
         public short UnitsInStock { get; init; }
+
+        [NotVisible]
         public short UnitsOnOrder { get; init; }
+
+        [NotVisible]
         public short ReorderLevel { get; init; }
-        public bool Discontinued { get; init; }
+
+        [NotVisible]
+        public string Discontinued { get; init; }
     }
 }

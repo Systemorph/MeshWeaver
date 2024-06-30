@@ -30,7 +30,7 @@ namespace OpenSmc.Pivot.Grouping
 
             var nullGroupPrivate = new TGroup
             {
-                SystemName = nullGroup.SystemName,
+                Id = nullGroup.Id,
                 DisplayName = nullGroup.DisplayName,
                 Coordinates = nullGroup.Coordinates,
                 GrouperName = Name
