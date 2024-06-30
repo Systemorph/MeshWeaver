@@ -1,6 +1,8 @@
 ﻿using System.Collections.Immutable;
 using OpenSmc.GridModel;
 using OpenSmc.Pivot;
+using OpenSmc.Pivot.Builder;
+using OpenSmc.Pivot.Builder.Interfaces;
 using OpenSmc.Pivot.Grouping;
 using OpenSmc.Pivot.Models;
 using OpenSmc.Pivot.Models.Interfaces;
@@ -9,6 +11,9 @@ namespace OpenSmc.Reporting.Models
 {
     public static class GridOptionsMapper
     {
+        public static GridControl ToGridControl(this IPivotBuilder pivotBuilder) =>
+            pivotBuilder.Execute().ToGridControl();
+
         public static GridControl ToGridControl(this PivotModel pivotModel) =>
             new(MapToGridOptions(pivotModel));
 

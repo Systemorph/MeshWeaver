@@ -34,17 +34,22 @@ public static class NorthwindLayoutAreas
     private static readonly KeyValuePair<string, Icon>[] DashboardWidgets = new[]
     {
         new KeyValuePair<string, Icon>(nameof(Dashboard), FluentIcons.Grid),
-        new(nameof(OrderSummary), FluentIcons.Box), new(nameof(ProductSummary), FluentIcons.Box),
-        new(nameof(CustomerSummary), FluentIcons.Person), new(nameof(SupplierSummary), FluentIcons.Person)
+        new(nameof(OrderSummary), FluentIcons.Box),
+        new(nameof(ProductSummary), FluentIcons.Box),
+        new(nameof(CustomerSummary), FluentIcons.Person),
+        new(nameof(SupplierSummary), FluentIcons.Person)
     };
 
     private static object NavigationMenu(LayoutAreaHost layoutArea, RenderingContext ctx)
     {
         return DashboardWidgets.Aggregate(
             NavMenu().WithCollapsible(true).WithWidth(250),
-            (x, 
-                a) => x.WithNavLink(a.Key.Wordify(), $"app/Northwind/dev/{a.Key}", 
-                o => o.WithIcon(a.Value))
+            (x, a) =>
+                x.WithNavLink(
+                    a.Key.Wordify(),
+                    $"app/Northwind/dev/{a.Key}",
+                    o => o.WithIcon(a.Value)
+                )
         );
     }
 
@@ -74,28 +79,52 @@ public static class NorthwindLayoutAreas
             .DistinctUntilChanged(x => string.Join(',', x.Select(y => y.Item)));
 
         return Stack()
-                .WithSkin(Skins.Splitter)
-                .WithOrientation(Orientation.Horizontal)
-                .WithView(
-                            Stack()
-                                .WithOrientation(Orientation.Vertical)
-                                .WithView(Toolbar()
-                                    .WithView((area, _) => years.Select(y => area.Bind(new Toolbar(y.Max(x => x.Item)),
-                                        nameof(Toolbar),
-                                        tb => Select(tb.Year).WithOptions(y)))
+            .WithSkin(Skins.Splitter)
+            .WithOrientation(Orientation.Horizontal)
+            .WithView(
+                Stack()
+                    .WithOrientation(Orientation.Vertical)
+                    .WithView(
+                        Toolbar()
+                            .WithView(
+                                (area, _) =>
+                                    years.Select(y =>
+                                        area.Bind(
+                                            new Toolbar(y.Max(x => x.Item)),
+                                            nameof(Toolbar),
+                                            tb => Select(tb.Year).WithOptions(y)
+                                        )
                                     )
-                                )
-                                .WithView(Stack()
-                                        .WithSkin(Skins.LayoutGrid.WithSpacing(1))
-                                        .WithClass("main-content")
-                                        .WithView((area, ctx)=> OrderSummary(area, ctx).ToLayoutGridItem(item => item.WithXs(12).WithSm(6)))
-                                        .WithView((area, ctx) => ProductSummary(area, ctx).ToLayoutGridItem(item => item.WithXs(12).WithSm(6)))
-                                        .WithView((area, ctx) => CustomerSummary(area,ctx).ToLayoutGridItem(item => item.WithXs(12).WithSm(6)))
-                                        .WithView((area, ctx) => SupplierSummary(area, ctx).ToLayoutGridItem(item => item.WithXs(12)))
-                                )
-                                .ToSplitterPane()
-                        )
-                .WithView(ContextPanel);
+                            )
+                    )
+                    .WithView(
+                        Stack()
+                            .WithSkin(Skins.LayoutGrid.WithSpacing(1))
+                            .WithClass("main-content")
+                            .WithView(
+                                (area, ctx) =>
+                                    OrderSummary(area, ctx)
+                                        .ToLayoutGridItem(item => item.WithXs(12).WithSm(6))
+                            )
+                            .WithView(
+                                (area, ctx) =>
+                                    ProductSummary(area, ctx)
+                                        .ToLayoutGridItem(item => item.WithXs(12).WithSm(6))
+                            )
+                            .WithView(
+                                (area, ctx) =>
+                                    CustomerSummary(area, ctx)
+                                        .ToLayoutGridItem(item => item.WithXs(12).WithSm(6))
+                            )
+                            .WithView(
+                                (area, ctx) =>
+                                    SupplierSummary(area, ctx)
+                                        .ToLayoutGridItem(item => item.WithXs(12))
+                            )
+                    )
+                    .ToSplitterPane()
+            )
+            .WithView(ContextPanel);
     }
 
     private static SplitterPaneControl ContextPanel(LayoutAreaHost area, RenderingContext ctx)
@@ -107,35 +136,46 @@ public static class NorthwindLayoutAreas
             .WithView(
                 Stack()
                     .WithOrientation(Orientation.Horizontal)
-                    .WithView((area, ctx) => area.Bind(
-                        new[] {"Product", "Customer", "Supplier"},
-                        "dimensions",
-                        (string item) => Menu(item)
-                    ))
+                    .WithView(
+                        (area, ctx) =>
+                            area.Bind(
+                                new[] { "Product", "Customer", "Supplier" },
+                                "dimensions",
+                                (string item) => Menu(item)
+                            )
+                    )
                     .WithView("Values")
             )
             .ToSplitterPane(x => x.WithSize("350px").WithCollapsible(true));
     }
 
-    public static LayoutStackControl SupplierSummary(this LayoutAreaHost layoutArea, RenderingContext ctx) =>
+    public static LayoutStackControl SupplierSummary(
+        this LayoutAreaHost layoutArea,
+        RenderingContext ctx
+    ) =>
         Stack()
             .WithOrientation(Orientation.Vertical)
             .WithView(Html("<h2>Supplier Summary</h2>"))
             .WithView(SupplierSummaryGrid);
 
-    public static IObservable<object> SupplierSummaryGrid(this LayoutAreaHost area, RenderingContext ctx) =>
+    public static IObservable<object> SupplierSummaryGrid(
+        this LayoutAreaHost area,
+        RenderingContext ctx
+    ) =>
         area.GetDataCube()
-            .Select(cube => area.Workspace.State.Pivot(cube)
-                .SliceRowsBy(nameof(Supplier))
-                .Execute()
-                .ToGridControl());
+            .Select(cube =>
+                area.Workspace.State.Pivot(cube).SliceRowsBy(nameof(Supplier)).ToGridControl()
+            );
 
-    private static IObservable<IDataCube<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area) =>
+    private static IObservable<IDataCube<NorthwindDataCube>> GetDataCube(
+        this LayoutAreaHost area
+    ) =>
         area
             .Workspace.ReduceToTypes(typeof(Order), typeof(OrderDetails), typeof(Product))
             .DistinctUntilChanged()
             .Select(x =>
-                x.Value.GetData<Order>().Join(
+                x.Value.GetData<Order>()
+                    .Join(
                         x.Value.GetData<OrderDetails>(),
                         o => o.OrderId,
                         d => d.OrderId,
@@ -151,17 +191,25 @@ public static class NorthwindLayoutAreas
                     .ToDataCube()
             );
 
-    public static LayoutStackControl CustomerSummary(this LayoutAreaHost layoutArea, RenderingContext ctx) =>
+    public static LayoutStackControl CustomerSummary(
+        this LayoutAreaHost layoutArea,
+        RenderingContext ctx
+    ) =>
         Stack()
             .WithOrientation(Orientation.Vertical)
             .WithView(Html("<h2>Customer Summary</h2>"))
-            .WithView((a, _) =>
-                a.GetDataStream<Toolbar>(nameof(Toolbar))
-                    .Select(tb => $"Year selected: {tb.Year}")
+            .WithView(
+                (a, _) =>
+                    a.GetDataStream<Toolbar>(nameof(Toolbar))
+                        .Select(tb => $"Year selected: {tb.Year}")
             );
 
-    public static LayoutStackControl ProductSummary(this LayoutAreaHost layoutArea, RenderingContext ctx) =>
-        Stack().WithOrientation(Orientation.Vertical)
+    public static LayoutStackControl ProductSummary(
+        this LayoutAreaHost layoutArea,
+        RenderingContext ctx
+    ) =>
+        Stack()
+            .WithOrientation(Orientation.Vertical)
             .WithView(Html("<h2>Product Summary</h2>"))
             .WithView(Counter);
 
@@ -186,27 +234,40 @@ public static class NorthwindLayoutAreas
 
     public static object Counter(int counter) => Controls.Title(counter.ToString(), 1);
 
-    public static LayoutStackControl OrderSummary(LayoutAreaHost layoutArea, RenderingContext ctx) =>
-    Stack().WithOrientation(Orientation.Vertical)
+    public static LayoutStackControl OrderSummary(
+        LayoutAreaHost layoutArea,
+        RenderingContext ctx
+    ) =>
+        Stack()
+            .WithOrientation(Orientation.Vertical)
             .WithView(Html("<h2>Order Summary</h2>"))
-            .WithView((area, _) => area.GetDataStream<Toolbar>(nameof(Toolbar))
-                .CombineLatest(area.Workspace.GetObservable<Order>(),
-                    (tb, orders) =>
-                        orders.Where(x => x.OrderDate.Year == tb.Year).OrderByDescending(y => y.OrderDate)
-                            .Take(5)
-                            .Select(order =>
-                                new OrderSummaryItem(area.Workspace.GetData<Customer>(order.CustomerId)?.ContactName,
-                                    area.Workspace.GetData<OrderDetails>().Count(d => d.OrderId == order.OrderId),
-                                    order.OrderDate))
-                            .ToArray()
-                            .ToDataGrid(conf =>
-                                conf
-                                    .WithColumn(o => o.Customer)
-                                    .WithColumn(o => o.Products)
-                                    .WithColumn(o => o.Purchased, column => column.WithFormat("yyyy-MM-dd"))
-                            ))
+            .WithView(
+                (area, _) =>
+                    area.GetDataStream<Toolbar>(nameof(Toolbar))
+                        .CombineLatest(
+                            area.Workspace.GetObservable<Order>(),
+                            (tb, orders) =>
+                                orders
+                                    .Where(x => x.OrderDate.Year == tb.Year)
+                                    .OrderByDescending(y => y.OrderDate)
+                                    .Take(5)
+                                    .Select(order => new OrderSummaryItem(
+                                        area.Workspace.GetData<Customer>(
+                                            order.CustomerId
+                                        )?.ContactName,
+                                        area.Workspace.GetData<OrderDetails>()
+                                            .Count(d => d.OrderId == order.OrderId),
+                                        order.OrderDate
+                                    ))
+                                    .ToArray()
+                                    .ToDataGrid(conf =>
+                                        conf.WithColumn(o => o.Customer)
+                                            .WithColumn(o => o.Products)
+                                            .WithColumn(
+                                                o => o.Purchased,
+                                                column => column.WithFormat("yyyy-MM-dd")
+                                            )
+                                    )
+                        )
             );
-
-
-
 }

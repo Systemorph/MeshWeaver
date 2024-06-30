@@ -1,7 +1,9 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 using AspectCore.Extensions.Reflection;
+using OpenSmc.Domain;
 using OpenSmc.Pivot.Models;
 using OpenSmc.Pivot.Processors;
+using OpenSmc.Reflection;
 
 namespace OpenSmc.Pivot.Grouping
 {
@@ -29,7 +31,10 @@ namespace OpenSmc.Pivot.Grouping
             var propertiesToHideHashSet = new HashSet<string>(propertiesToHide);
             var propertiesForProcessing = ValueType
                 .GetPropertiesForProcessing(null)
-                .Where(p => !propertiesToHideHashSet.Contains(p.SystemName))
+                .Where(p =>
+                    !propertiesToHideHashSet.Contains(p.SystemName)
+                    && !p.Property.HasAttribute<DimensionAttribute>()
+                )
                 .ToArray();
             if (propertiesForProcessing.Length == 0)
             {
