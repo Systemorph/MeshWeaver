@@ -1,9 +1,24 @@
-﻿namespace OpenSmc.Pivot.Builder.Interfaces
+﻿using OpenSmc.Pivot.Models;
+
+namespace OpenSmc.Pivot.Builder.Interfaces;
+
+public interface IPivotBuilder
 {
-    public interface IPivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-        where TPivotBuilder : IPivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-    {
-        public TPivotBuilder WithHierarchicalDimensionOptions(Func<IHierarchicalDimensionOptions, IHierarchicalDimensionOptions> optionsFunc);
-        public TPivotBuilder Transpose<TValue>();
-    }
+    PivotModel Execute();
+}
+
+public interface IPivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
+    : IPivotBuilder
+    where TPivotBuilder : IPivotBuilderBase<
+            T,
+            TTransformed,
+            TIntermediate,
+            TAggregate,
+            TPivotBuilder
+        >
+{
+    public TPivotBuilder WithHierarchicalDimensionOptions(
+        Func<IHierarchicalDimensionOptions, IHierarchicalDimensionOptions> optionsFunc
+    );
+    public TPivotBuilder Transpose<TValue>();
 }

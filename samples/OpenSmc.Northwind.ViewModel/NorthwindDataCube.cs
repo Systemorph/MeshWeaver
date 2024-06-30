@@ -31,9 +31,11 @@ namespace OpenSmc.Northwind.ViewModel
             UnitsOnOrder = product.UnitsOnOrder;
             ReorderLevel = product.ReorderLevel;
             Discontinued = product.Discontinued;
+            Amount = details.UnitPrice * details.Quantity * (1 - details.Discount);
         }
 
         [property: Key]
+        [Dimension(typeof(Order))]
         public int OrderId { get; init; }
 
         [property: Dimension(typeof(Customer))]
@@ -72,7 +74,7 @@ namespace OpenSmc.Northwind.ViewModel
         [NotVisible]
         public string Product { get; init; }
 
-        public double Amount => UnitPrice * Quantity * (1 - Discount);
+        public double Amount { get; init; }
 
         [NotVisible]
         public double UnitPrice { get; init; }

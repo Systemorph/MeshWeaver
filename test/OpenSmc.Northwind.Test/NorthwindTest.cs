@@ -2,6 +2,7 @@
 using System.Text.Json;
 using FluentAssertions;
 using OpenSmc.Data;
+using OpenSmc.DataStructures;
 using OpenSmc.GridModel;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout;
@@ -9,6 +10,7 @@ using OpenSmc.Messaging;
 using OpenSmc.Northwind.Domain;
 using OpenSmc.Northwind.Model;
 using OpenSmc.Northwind.ViewModel;
+using OpenSmc.Reporting.Models;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -123,18 +125,33 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         await workspace.Initialized;
 
         var viewName = nameof(NorthwindLayoutAreas.Dashboard);
-        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(new HostAddress(), new LayoutAreaReference(viewName));
-        var dashboard = (await stream.GetControl(viewName)).Should().BeOfType<LayoutStackControl>().Subject;
+        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            new LayoutAreaReference(viewName)
+        );
+        var dashboard = (await stream.GetControl(viewName))
+            .Should()
+            .BeOfType<LayoutStackControl>()
+            .Subject;
         var areas = dashboard.Areas;
         var controls = new List<KeyValuePair<string, object>>();
 
         while (areas.Count > 0)
         {
-            var children = await areas.ToAsyncEnumerable().SelectAwait(async s => new KeyValuePair<string,object>(s, await stream.GetControl(s))).ToArrayAsync();
+            var children = await areas
+                .ToAsyncEnumerable()
+                .SelectAwait(async s => new KeyValuePair<string, object>(
+                    s,
+                    await stream.GetControl(s)
+                ))
+                .ToArrayAsync();
             controls.AddRange(children);
-            areas = children.SelectMany(c => (c.Value as LayoutStackControl)?.Areas ?? Enumerable.Empty<string>()).ToArray();
+            areas = children
+                .SelectMany(c =>
+                    (c.Value as LayoutStackControl)?.Areas ?? Enumerable.Empty<string>()
+                )
+                .ToArray();
         }
-
     }
 
     [Fact]
@@ -144,7 +161,21 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         await workspace.Initialized;
 
         var viewName = nameof(NorthwindLayoutAreas.SupplierSummaryGrid);
-        var stream = workspace.GetStream<EntityStore, LayoutAreaReference>(new HostAddress(), new LayoutAreaReference(viewName));
+        var stream = workspace.GetStream<EntityStore, LayoutAreaReference>(
+            new HostAddress(),
+            new LayoutAreaReference(viewName)
+        );
         var grid = (await stream.GetControl(viewName)).Should().BeOfType<GridControl>().Subject;
+        grid.Data.Should()
+            .BeOfType<GridOptions>()
+            .Which.RowData.Should()
+            .BeOfType<List<object>>()
+            .Which.Should()
+            .HaveCountGreaterThan(2)
+            .And.Subject.First()
+            .Should()
+            .BeOfType<GridRow>()
+            .Which.RowGroup.DisplayName.Should()
+            .MatchRegex(@"[^0-9]+"); // should contain at least one non-numeric character, i.e. dimsnsion is matched.
     }
 }
