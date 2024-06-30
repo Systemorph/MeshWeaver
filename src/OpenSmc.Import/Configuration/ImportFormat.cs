@@ -59,16 +59,10 @@ public record ImportFormat(
         WorkspaceState state
     );
 
-    public ImportFormat WithAutoMappingsForTypes(IReadOnlyCollection<Type> types) =>
-        WithImportFunction(
-            (_, ds, _, _) =>
-                new DomainTypeImporter { TableMappings = AutoMapper.Create(types) }.Import(ds)
-        );
+    public ImportFormat WithMappings(Func<ImportMapContainer, ImportMapContainer> config) =>
+        WithImportFunction((request, dataSet, hub, state) => config(new()).Import(dataSet));
 
     public ImportFormat WithAutoMappings() => WithAutoMappingsForTypes(MappedTypes);
-
-    public ImportFormat WithMappings(Func<DomainTypeImporter, DomainTypeImporter> config) =>
-        WithImportFunction((_, ds, _, _) => config(new DomainTypeImporter()).Import(ds));
 
     public ImportFormat WithValidation(ValidationFunction validationRule)
     {
@@ -76,6 +70,9 @@ public record ImportFormat(
             return this;
         return this with { Validations = Validations.Add(validationRule) };
     }
+
+    internal ImportFormat WithAutoMappingsForTypes(IReadOnlyCollection<Type> types) =>
+        WithMappings(x => types.Aggregate(x, (a, b) => a.MapType(b)));
 }
 
 public delegate bool ValidationFunction(object instance, ValidationContext context);
