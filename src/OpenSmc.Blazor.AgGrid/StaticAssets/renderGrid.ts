@@ -1,6 +1,6 @@
 import { GridOptions, GridApi, createGrid } from 'ag-grid-community';
 import 'ag-grid-community/styles/ag-grid.css';
-import "ag-grid-community/styles/ag-theme-quartz.css";
+import "ag-grid-community/styles/ag-theme-alpine.css";
 import 'ag-grid-enterprise';
 import { cloneDeepWith, isString } from 'lodash-es';
 export { LicenseManager } from 'ag-grid-enterprise';
