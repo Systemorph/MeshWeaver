@@ -3,7 +3,6 @@ using OpenSmc.Application.Styles;
 using OpenSmc.Data;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.DataBinding;
-using OpenSmc.Layout.Views;
 
 namespace OpenSmc.Layout;
 

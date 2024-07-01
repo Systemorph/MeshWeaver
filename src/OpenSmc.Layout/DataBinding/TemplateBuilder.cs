@@ -16,12 +16,12 @@ public static class TemplateBuilder
         where TView : UiControl
     {
         var rootParameter = layout.Parameters.First();
-        var visitor = new TemplateBuilderVisitor(rootParameter, rootName);
+        var visitor = new TemplateBuilderVisitor(rootParameter, "/");
         var body = visitor.Visit(layout.Body);
         var lambda = Expression.Lambda<Func<TView>>(body);
         var ret = lambda.Compile().Invoke();
         types = visitor.DataBoundTypes;
-        return ret;
+        return ret with { DataContext = new JsonPointerReference(rootName) };
     }
 
     private class TemplateBuilderVisitor : ExpressionVisitor
