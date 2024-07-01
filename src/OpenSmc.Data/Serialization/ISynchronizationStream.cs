@@ -1,5 +1,4 @@
-﻿using Autofac.Builder;
-using OpenSmc.Messaging;
+﻿using OpenSmc.Messaging;
 
 namespace OpenSmc.Data.Serialization;
 
@@ -30,7 +29,7 @@ public interface ISynchronizationStream : IDisposable
 
 
     public void Post(WorkspaceMessage message) =>
-        Hub.Post(message with { Id = Owner, Reference = Reference }, o => o.WithTarget(Owner));
+        Hub.Post(message with { Owner = Owner, Reference = Reference }, o => o.WithTarget(Owner));
 }
 
 public interface ISynchronizationStream<TStream>
@@ -38,6 +37,8 @@ public interface ISynchronizationStream<TStream>
         IObservable<ChangeItem<TStream>>,
         IObserver<ChangeItem<TStream>>
 {
+
+    ChangeItem<TStream> Current { get; }
     void Update(Func<TStream, ChangeItem<TStream>> update);
 
     StreamReference StreamReference { get; }

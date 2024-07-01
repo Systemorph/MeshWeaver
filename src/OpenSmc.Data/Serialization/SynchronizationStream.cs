@@ -29,11 +29,6 @@ public record SynchronizationStream<TStream, TReference>(
     public object Subscriber { get; init; } = Subscriber;
 
     /// <summary>
-    /// The address of the remote party
-    /// </summary>
-    //public object RemoteAddress { get; init; } = Owner.Equals(Hub.Address) ? Subscriber : Owner;
-
-    /// <summary>
     /// The projected reference of the stream, e.g. a collection (CollectionReference),
     /// a layout area (LayoutAreaReference), etc.
     /// </summary>
@@ -119,7 +114,7 @@ public record SynchronizationStream<TStream, TReference>(
         Store.Dispose();
     }
 
-    protected ChangeItem<TStream> Current
+    public ChangeItem<TStream> Current
     {
         get => current;
     }

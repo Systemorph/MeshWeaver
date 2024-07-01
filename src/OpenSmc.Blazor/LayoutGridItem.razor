@@ -1,0 +1,44 @@
+@inherits ContainerView<LayoutGridItemControl>
+
+<FluentGridItem
+    AdaptiveRendering="@ViewModel.AdaptiveRendering"
+    Gap="@ViewModel.Gap"
+    HiddenWhen="@HiddenWhen"
+    Justify="@ViewModel.Justify?.ToFluentJustifyContent()"
+    lg="@ViewModel.Lg"
+    md="@ViewModel.Md"
+    sm="@ViewModel.Sm"
+    xl="@ViewModel.Xl"
+    xs="@ViewModel.Xs"
+    xxl="@ViewModel.Xxl"
+    >
+    <DispatchView ViewModel="@ChildControlArea.ViewModel" Stream="@Stream" Area="@ChildControlArea.Area" />
+</FluentGridItem>
+
+@code
+{
+    private RenderedArea ChildControlArea => Areas.First();
+
+    private GridItemHidden HiddenWhen => ViewModel.HiddenWhen switch
+    {
+        LayoutGridItemHidden.Lg => GridItemHidden.Lg,
+        LayoutGridItemHidden.LgAndDown => GridItemHidden.LgAndDown,
+        LayoutGridItemHidden.LgAndUp => GridItemHidden.LgAndUp,
+        LayoutGridItemHidden.Md => GridItemHidden.Md,
+        LayoutGridItemHidden.Sm => GridItemHidden.Sm,
+        LayoutGridItemHidden.Xl => GridItemHidden.Xl,
+        LayoutGridItemHidden.Xs => GridItemHidden.Xs,
+        LayoutGridItemHidden.XsAndDown => GridItemHidden.XsAndDown,
+        LayoutGridItemHidden.XsAndUp => GridItemHidden.XsAndUp,
+        LayoutGridItemHidden.Xxl => GridItemHidden.Xxl,
+        LayoutGridItemHidden.XxlAndDown => GridItemHidden.XxlAndDown,
+        LayoutGridItemHidden.XxlAndUp => GridItemHidden.XxlAndUp,
+        LayoutGridItemHidden.SmAndDown => GridItemHidden.SmAndDown,
+        LayoutGridItemHidden.SmAndUp => GridItemHidden.SmAndUp,
+        LayoutGridItemHidden.MdAndDown => GridItemHidden.MdAndDown,
+        LayoutGridItemHidden.MdAndUp => GridItemHidden.MdAndUp,
+        LayoutGridItemHidden.XlAndDown => GridItemHidden.XlAndDown,
+        LayoutGridItemHidden.XlAndUp => GridItemHidden.XlAndUp,
+        _ => GridItemHidden.None
+    };
+}

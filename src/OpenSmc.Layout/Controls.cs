@@ -33,8 +33,8 @@ public static class Controls
 
     public static MenuItemControl Menu(object title, object icon) => new(title, icon);
 
-    public static MenuItemControl Button(object title, object icon) =>
-        new(title, icon) { Style = "button" };
+    public static ButtonControl Button(object title) =>
+        new(title) { Style = "button" };
 
     public static ExceptionControl Exception(Exception ex) => new(ex.Message, ex.GetType().Name);
 
@@ -54,6 +54,16 @@ public static class Controls
         new(isChecked) { Label = label };
 
     public static SliderControl Slider(int min, int max, int step) => new(min, max, step);
+
+    public static LayoutGridItemControl ToLayoutGridItem(this IUiControl control,
+        Func<LayoutGridItemControl, LayoutGridItemControl> builder) => builder.Invoke(new LayoutGridItemControl(control));
+
+    public static LayoutGridItemControl ToLayoutGridItem(this IUiControl control) => new(control);
+
+    public static SplitterPaneControl ToSplitterPane(this IUiControl control,
+               Func<SplitterPaneControl, SplitterPaneControl> builder) => builder.Invoke(new SplitterPaneControl(control));
+
+    public static SplitterPaneControl ToSplitterPane(this IUiControl control) => new(control);
 
     /// <summary>
     /// Control representing a progress bar

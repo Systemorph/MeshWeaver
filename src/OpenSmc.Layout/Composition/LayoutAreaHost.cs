@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using Microsoft.DotNet.Interactive.Formatting;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
+using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Layout.Composition;
@@ -13,7 +14,30 @@ public record LayoutAreaHost : IDisposable
     public IMessageHub Hub => Stream.Hub;
     public IWorkspace Workspace => Hub.GetWorkspace();
 
+    public LayoutAreaHost(
+        ISynchronizationStream<WorkspaceState> workspaceStream, LayoutAreaReference reference, object subscriber
+    )
+    {
+        Stream = new ChainedSynchronizationStream<
+            WorkspaceState,
+            LayoutAreaReference,
+            EntityStore
+        >(workspaceStream, workspaceStream.Owner, subscriber, reference);
+        Stream.AddDisposable(this);
+        Stream.AddDisposable(Stream.Hub.Register<ClickedEvent>(OnClick, delivery => Stream.Reference.Equals(delivery.Message.Reference)));
+        executionHub =
+            Stream.Hub.GetHostedHub(new LayoutExecutionAddress(Stream.Hub.Address), x => x);
+    }
 
+    private IMessageDelivery OnClick(IMessageDelivery<ClickedEvent> request)
+    {
+        if (GetControl(request.Message.Area) is UiControl { ClickAction: not null } control)
+            control.ClickAction.Invoke(new(request.Message.Area, request.Message.Payload, Hub, this));
+        return request.Processed();
+    }
+
+    public object GetControl(string area)
+    => Stream.Current.Value.Collections.GetValueOrDefault(LayoutAreaReference.Areas)?.Instances.GetValueOrDefault(area);
     public void UpdateLayout(string area, object control)
     {
         Stream.Update(ws => UpdateImpl(area, control, ws));
@@ -30,11 +54,13 @@ public record LayoutAreaHost : IDisposable
 
     private ChangeItem<EntityStore> UpdateImpl(string area, object control, EntityStore ws)
     {
-        // TODO V10: Dispose old areas (09.06.2024, Roland Bürgi)
+        var converted = ConvertToControl(control);
+
         var newStore = (ws ?? new()).Update(
             LayoutAreaReference.Areas,
-            instances => instances.Update(area, ConvertToControl(control))
+            instances => instances.Update(area, converted)
         );
+
         return new(
             Stream.Owner, 
             Stream.Reference, 
@@ -44,19 +70,6 @@ public record LayoutAreaHost : IDisposable
             Stream.Hub.Version);
     }
 
-    public LayoutAreaHost(
-        ISynchronizationStream<WorkspaceState> workspaceStream, LayoutAreaReference reference, object subscriber
-    )
-    {
-        Stream = new ChainedSynchronizationStream<
-            WorkspaceState,
-            LayoutAreaReference,
-            EntityStore
-        >(workspaceStream, workspaceStream.Owner, subscriber, reference);
-        Stream.AddDisposable(this);
-        executionHub =
-            Stream.Hub.GetHostedHub(new LayoutExecutionAddress(Stream.Hub.Address), x => x);
-    }
     private readonly IMessageHub executionHub;
     public void UpdateData(string id, object data)
     {

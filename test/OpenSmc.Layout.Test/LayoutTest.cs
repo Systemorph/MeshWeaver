@@ -45,7 +45,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     .WithView(nameof(UpdatingView), UpdatingView())
                     .WithView(
                         nameof(ItemTemplate),
-                        area =>
+                        (area,_) =>
                             layout
                                 .Hub.GetWorkspace()
                                 .Stream.Select(x => x.Value.GetData<DataRecord>())
@@ -54,7 +54,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     )
                     .WithView(
                         nameof(Counter),
-                        _ => layout.Hub.GetWorkspace().Stream.Select(_ => Counter())
+                        (_,_) => layout.Hub.GetWorkspace().Stream.Select(_ => Counter())
                     )
                     .WithView("int", 3)
                     .WithView(nameof(DataGrid), DataGrid)
@@ -115,7 +115,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         areaControls.Should().HaveCount(2).And.AllBeOfType<HtmlControl>();
     }
 
-    private static async Task<object> ViewWithProgress(LayoutAreaHost area)
+    private static async Task<object> ViewWithProgress(LayoutAreaHost area, RenderingContext ctx)
     {
         var percentage = 0;
         var progress = Controls.Progress("Processing", percentage);
@@ -155,12 +155,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Stack()
             .WithView(
                 "Toolbar",
-                layoutArea =>
+                (layoutArea, _) =>
                     layoutArea.Bind(toolbar, nameof(toolbar), tb => Controls.TextBox(tb.Year))
             )
             .WithView(
                 "Content",
-                area =>
+                (area, _) =>
                     area.GetDataStream<Toolbar>(nameof(toolbar))
                         .Select(tb => Controls.Html($"Report for year {tb.Year}"))
             );
@@ -259,7 +259,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         content.Should().BeOfType<HtmlControl>().Which.Data.Should().Be("1");
     }
 
-    private object DataGrid(LayoutAreaHost area)
+    private object DataGrid(LayoutAreaHost area, RenderingContext ctx)
     {
         var data = new DataRecord[] { new("1", "1"), new("2", "2") };
         return data.ToDataGrid(grid =>
