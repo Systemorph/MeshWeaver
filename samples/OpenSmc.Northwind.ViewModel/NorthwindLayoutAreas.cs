@@ -55,7 +55,7 @@ public static class NorthwindLayoutAreas
         public int Year { get; init; }
     }
 
-    public static object Dashboard(LayoutAreaHost layoutArea, RenderingContext ctx)
+    public static object Dashboard(LayoutAreaHost layoutArea, RenderingContext context)
     {
         var years = layoutArea
             .Workspace.GetObservable<Order>()
@@ -70,6 +70,8 @@ public static class NorthwindLayoutAreas
             )
             .DistinctUntilChanged(x => string.Join(',', x.Select(y => y.Item)));
 
+        var contextPanelCollapsed = true;
+
         return Stack()
                 .WithSkin(Skins.Splitter)
                 .WithOrientation(Orientation.Horizontal)
@@ -80,6 +82,18 @@ public static class NorthwindLayoutAreas
                                     .WithView((area, _) => years.Select(y => area.Bind(new Toolbar(y.Max(x => x.Item)),
                                         nameof(Toolbar),
                                         tb => Select(tb.Year).WithOptions(y)))
+                                    )
+                                    .WithView((area, ctx) =>
+                                        Button("Analyze")
+                                            .WithIcon(FluentIcons.CalendarDataBar)
+                                            .WithClickAction(ctx =>
+                                            {
+                                                contextPanelCollapsed = !contextPanelCollapsed;
+                                                ctx.Layout.RenderArea(
+                                                    context with { Area = $"{context.Area}/{nameof(ContextPanel)}" },
+                                                    ContextPanel(contextPanelCollapsed)
+                                                );
+                                            })
                                     )
                                 )
                                 .WithView(Stack()
@@ -92,10 +106,10 @@ public static class NorthwindLayoutAreas
                                 )
                                 .ToSplitterPane()
                         )
-                .WithView(ContextPanel);
+                .WithView(nameof(ContextPanel), ContextPanel(contextPanelCollapsed));
     }
 
-    private static SplitterPaneControl ContextPanel(LayoutAreaHost area, RenderingContext ctx)
+    private static SplitterPaneControl ContextPanel(bool collapsed)
     {
         return Stack()
             .WithClass("context-panel")
@@ -111,7 +125,11 @@ public static class NorthwindLayoutAreas
                     ))
                     .WithView("Values")
             )
-            .ToSplitterPane(x => x.WithSize("350px").WithCollapsible(true));
+            .ToSplitterPane(x =>
+                x.WithSize("350px")
+                    .WithCollapsible(true)
+                    .WithCollapsed(collapsed)
+            );
     }
 
     private static LayoutStackControl SupplierSummary(LayoutAreaHost layoutArea, RenderingContext ctx) =>
