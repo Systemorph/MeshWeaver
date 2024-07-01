@@ -151,10 +151,26 @@ public class Workspace : IWorkspace
 
         var fromWorkspace = stream.Reduce<TReduced, TReference>(reference, subscriber);
         if (fromWorkspace != null)
+        {
+            ret.AddDisposable(fromWorkspace);
+            fromWorkspace.AddDisposable(
+                ret.Where(x => ret.Subscriber != null && ret.Subscriber.Equals(x.ChangedBy))
+                    .Subscribe(fromWorkspace)
+            );
             if (isOwner)
-                ret.AddDisposable(fromWorkspace.Subscribe(ret));
+            {
+                fromWorkspace.AddDisposable(
+                    fromWorkspace
+                        .Where(x => ret.Subscriber == null || !ret.Subscriber.Equals(x.ChangedBy))
+                        .Subscribe(ret)
+                );
+            }
             else
+            {
                 ret.AddDisposable(fromWorkspace.Skip(1).Subscribe(ret));
+                fromWorkspace.AddDisposable(ret.Subscribe(fromWorkspace));
+            }
+        }
 
         var json =
             ret as ISynchronizationStream<JsonElement>
