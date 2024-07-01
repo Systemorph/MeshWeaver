@@ -16,6 +16,8 @@ public record PivotBuilder<T, TIntermediate, TAggregate>
         : base(state, objects)
     {
         this.State = state;
+        ColumnGroupConfig = DefaultColumnGrouping = new PivotColumnsGroupingConfiguration<T>(state);
+        RowGroupConfig = new PivotRowsGroupingConfiguration<T>(state);
     }
 
     public PivotGroupingConfiguration<T, ColumnGroup> ColumnGroupConfig { get; init; }
