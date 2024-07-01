@@ -1,31 +1,20 @@
-@inherits BlazorView<LayoutStackControl>
+@inherits ContainerView<LayoutStackControl>
 
-
-@if (Skin == Skins.Toolbar)
-{
-    <FluentToolbar Orientation="@Orientation">
-        @foreach(var (area,viewModel) in Areas){
-            <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area"/>
-        }
-    </FluentToolbar>
-}
-else
-{
-    <FluentStack Orientation="@Orientation"
-                 HorizontalAlignment="@Horizontal"
-                 VerticalAlignment="@Vertical"
-                 VerticalGap="@ViewModel.VerticalGap"
-                 HorizontalGap="@ViewModel.HorizontalGap"
-                 Style="@ViewModel.Style?.ToString()">
-        @foreach (var (area, viewModel) in Areas)
-        {
-            <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area"/>
-        }
-    </FluentStack>
-}
+<FluentStack
+    Class="@Class"
+    Orientation="@Orientation"
+    HorizontalAlignment="@Horizontal"
+    VerticalAlignment="@Vertical"
+    VerticalGap="@ViewModel.VerticalGap"
+    HorizontalGap="@ViewModel.HorizontalGap"
+    Style="@Style">
+    @foreach (var (area, viewModel) in Areas)
+    {
+        <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area"/>
+    }
+</FluentStack>
 
 @code{
-
     private Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment Vertical => ViewModel.VerticalAlignment 
         switch
     {
@@ -34,7 +23,6 @@ else
         Layout.VerticalAlignment.Bottom => Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment.Bottom,
         _ => Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment.Top
     };
-
 
     private Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment Horizontal => ViewModel.HorizontalAlignment
         switch
@@ -46,12 +34,12 @@ else
         Layout.HorizontalAlignment.End => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.End,
             _ => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Left
         };
-    private Microsoft.FluentUI.AspNetCore.Components.Orientation Orientation => ViewModel.Orientation
+
+    protected Microsoft.FluentUI.AspNetCore.Components.Orientation Orientation => ViewModel.Orientation
         switch
         {
             OpenSmc.Layout.Orientation.Horizontal => Microsoft.FluentUI.AspNetCore.Components.Orientation.Horizontal,
             OpenSmc.Layout.Orientation.Vertical => Microsoft.FluentUI.AspNetCore.Components.Orientation.Vertical,
             _ => Microsoft.FluentUI.AspNetCore.Components.Orientation.Vertical
         };
-
 }

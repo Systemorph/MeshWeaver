@@ -1,0 +1,18 @@
+@inherits ContainerView<SplitterPaneControl>
+
+<FluentMultiSplitterPane
+    Collapsible="@ViewModel.Collapsible"
+    Collapsed="@ViewModel.Collapsed"
+    Max="@ViewModel.Max"
+    Min="@ViewModel.Min"
+    Size="@ViewModel.Size"
+    Resizable="@ViewModel.Resizable"
+    Class="@Class"
+    >
+    <DispatchView ViewModel="@ChildControlArea.ViewModel" Stream="@Stream" Area="@ChildControlArea.Area" />
+</FluentMultiSplitterPane>
+
+@code
+{
+    private RenderedArea ChildControlArea => Areas.First();
+}

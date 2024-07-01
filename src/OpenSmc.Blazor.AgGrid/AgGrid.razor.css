@@ -1,6 +1,24 @@
-﻿.my-component {
-    border: 2px dashed red;
-    padding: 1em;
-    margin: 1em 0;
-    background-image: url('background.png');
+﻿.container {
+    --ag-header-foreground-color: #292b36;
+    --ag-header-background-color: #f4f4f4;
+    --ag-odd-row-background-color: rgba(244, 244, 244, 0.4);
+    --ag-row-hover-color: rgba(204, 227, 255, 0.2);
+    --ag-column-hover-color: rgba(204, 227, 255, 0.2);
+    --ag-cell-horizontal-padding: 12px;
+    font-family: roboto, "sans-serif";
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 16px;
+}
+
+.container ::deep .ag-header {
+    font-family: overpass, "sans-serif";
+    font-size: 12px;
+    line-height: 14px;
+    letter-spacing: 0.24px;
+    text-transform: uppercase;
+}
+
+.container ::deep .ag-header-group-cell {
+    font-weight: 600;
 }

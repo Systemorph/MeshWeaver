@@ -16,18 +16,33 @@ body {
     min-height: calc(100dvh - 86px);
     color: var(--neutral-foreground-rest);
     align-items: stretch !important;
+    column-gap: 0 !important;
 }
 
 .body-content {
     align-self: stretch;
     height: calc(100dvh - 86px) !important;
     display: flex;
+    padding-left: 4px
 }
 
 .content {
-    padding: 0.5rem 1.5rem;
     align-self: stretch !important;
     width: 100%;
+}
+
+fluent-toolbar {
+    width: 100%;
+    padding: 12px;
+    border-bottom: 1px solid #eee;
+}
+
+.main-content {
+    padding: 12px;
+}
+
+.context-panel {
+    padding: 12px;
 }
 
 .manage {
