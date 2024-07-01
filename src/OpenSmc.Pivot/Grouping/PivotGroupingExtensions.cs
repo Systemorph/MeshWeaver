@@ -233,7 +233,7 @@ namespace OpenSmc.Pivot.Grouping
             WorkspaceState state,
             IHierarchicalDimensionCache hierarchicalDimensionCache,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions,
-            Func<TTransformed, string> selector,
+            Func<TTransformed, object> selector,
             DimensionDescriptor descriptor
         )
             where TDimension : class, IHierarchicalDimension

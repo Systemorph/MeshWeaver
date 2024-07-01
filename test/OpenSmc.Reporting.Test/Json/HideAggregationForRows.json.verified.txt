@@ -5,7 +5,7 @@
         {
           ColId: B.Value,
           HeaderName: Value,
-          ValueGetter: data.data && data.data['b'] && data.data['b']['value']
+          ValueGetter: data.data && data.data['B'] && data.data['B']['Value']
         }
       ],
       GroupId: B,
@@ -17,7 +17,7 @@
         {
           ColId: D.Value,
           HeaderName: Value,
-          ValueGetter: data.data && data.data['d'] && data.data['d']['value']
+          ValueGetter: data.data && data.data['D'] && data.data['D']['Value']
         }
       ],
       GroupId: D,
@@ -31,7 +31,7 @@
         Coordinates: [
           E
         ],
-        SystemName: E,
+        Id: E,
         DisplayName: Expenses,
         GrouperName: AmountType
       }
@@ -42,7 +42,7 @@
           E,
           C
         ],
-        SystemName: E.C,
+        Id: E.C,
         DisplayName: Casualty,
         GrouperName: LineOfBusiness
       },
@@ -61,7 +61,7 @@
           E,
           H
         ],
-        SystemName: E.H,
+        Id: E.H,
         DisplayName: Health,
         GrouperName: LineOfBusiness
       },
@@ -80,7 +80,7 @@
           E,
           L
         ],
-        SystemName: E.L,
+        Id: E.L,
         DisplayName: Life,
         GrouperName: LineOfBusiness
       },
@@ -99,7 +99,7 @@
           E,
           P
         ],
-        SystemName: E.P,
+        Id: E.P,
         DisplayName: Property,
         GrouperName: LineOfBusiness
       },
@@ -117,7 +117,7 @@
         Coordinates: [
           P
         ],
-        SystemName: P,
+        Id: P,
         DisplayName: Premium,
         GrouperName: AmountType
       }
@@ -128,7 +128,7 @@
           P,
           C
         ],
-        SystemName: P.C,
+        Id: P.C,
         DisplayName: Casualty,
         GrouperName: LineOfBusiness
       },
@@ -147,7 +147,7 @@
           P,
           H
         ],
-        SystemName: P.H,
+        Id: P.H,
         DisplayName: Health,
         GrouperName: LineOfBusiness
       },
@@ -166,7 +166,7 @@
           P,
           L
         ],
-        SystemName: P.L,
+        Id: P.L,
         DisplayName: Life,
         GrouperName: LineOfBusiness
       },
@@ -185,7 +185,7 @@
           P,
           P
         ],
-        SystemName: P.P,
+        Id: P.P,
         DisplayName: Property,
         GrouperName: LineOfBusiness
       },
@@ -203,7 +203,7 @@
         Coordinates: [
           C
         ],
-        SystemName: C,
+        Id: C,
         DisplayName: Cost,
         GrouperName: AmountType
       }
@@ -214,7 +214,7 @@
           C,
           C
         ],
-        SystemName: C.C,
+        Id: C.C,
         DisplayName: Casualty,
         GrouperName: LineOfBusiness
       },
@@ -233,7 +233,7 @@
           C,
           H
         ],
-        SystemName: C.H,
+        Id: C.H,
         DisplayName: Health,
         GrouperName: LineOfBusiness
       },
@@ -252,7 +252,7 @@
           C,
           L
         ],
-        SystemName: C.L,
+        Id: C.L,
         DisplayName: Life,
         GrouperName: LineOfBusiness
       },
@@ -271,7 +271,7 @@
           C,
           P
         ],
-        SystemName: C.P,
+        Id: C.P,
         DisplayName: Property,
         GrouperName: LineOfBusiness
       },
@@ -289,7 +289,7 @@
         Coordinates: [
           B
         ],
-        SystemName: B,
+        Id: B,
         DisplayName: Benefit,
         GrouperName: AmountType
       }
@@ -300,7 +300,7 @@
           B,
           C
         ],
-        SystemName: B.C,
+        Id: B.C,
         DisplayName: Casualty,
         GrouperName: LineOfBusiness
       },
@@ -319,7 +319,7 @@
           B,
           H
         ],
-        SystemName: B.H,
+        Id: B.H,
         DisplayName: Health,
         GrouperName: LineOfBusiness
       },
@@ -338,7 +338,7 @@
           B,
           L
         ],
-        SystemName: B.L,
+        Id: B.L,
         DisplayName: Life,
         GrouperName: LineOfBusiness
       },
@@ -357,7 +357,7 @@
           B,
           P
         ],
-        SystemName: B.P,
+        Id: B.P,
         DisplayName: Property,
         GrouperName: LineOfBusiness
       },

@@ -3,7 +3,7 @@
     {
       ColId: Value,
       HeaderName: Value,
-      ValueGetter: data.data && data.data['value']
+      ValueGetter: data.data && data.data['Value']
     }
   ],
   DefaultColDef: {
