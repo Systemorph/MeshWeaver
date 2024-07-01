@@ -8,7 +8,7 @@ public record NavMenuControl()
 {
     public ImmutableList<UiControl> Items { get; init; } = ImmutableList<UiControl>.Empty;
 
-    public NavMenuControl WithItem(INavItem item) => this with { Items = Items.Add((UiControl)item) };
+    public NavMenuControl WithItem(INavItemControl item) => this with { Items = Items.Add((UiControl)item) };
 
     public bool Collapsible { get; init; }
 
@@ -33,24 +33,26 @@ public record NavMenuControl()
     public NavMenuControl WithWidth(int width) => this with { Width = width };
 }
 
-public interface INavItem
+public interface INavItemControl : IUiControl
 {
-    public string Title { get; }
-    public Icon Icon { get; }
-    public string Href { get; }
+    public object Icon { get; }
+    public object Href { get; }
 }
-public record NavLinkControl(string Title, string Href) : UiControl<NavLinkControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null), INavItem
+
+public record NavLinkControl(object Title, object Href) 
+    : UiControl<NavLinkControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Title), INavItemControl
 {
-    public Icon Icon { get; init; }
+    public object Icon { get; init; }
     public NavLinkControl WithIcon(Icon icon) => this with { Icon = icon };
-
 }
 
-public record NavGroupControl(string Title) : UiControl<NavGroupControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null), INavItem
+public record NavGroupControl(object Title) 
+    : UiControl<NavGroupControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null), INavItemControl
 {
-    public string Href { get; init; }
-    public NavGroupControl WithHref(string href) => this with { Href = href };
-    public Icon Icon { get; init; }
-    public NavGroupControl WithIcon(Icon icon) => this with { Icon = icon };
+    public object Href { get; init; }
+    public object Icon { get; init; }
+    public NavGroupControl WithHref(object href) => this with { Href = href };
+
+    public NavGroupControl WithIcon(object icon) => this with { Icon = icon };
 
 }

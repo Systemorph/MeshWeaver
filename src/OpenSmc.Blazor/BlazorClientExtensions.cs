@@ -41,11 +41,11 @@ public static class BlazorClientExtensions
                     _ => StandardView<LayoutStackControl, LayoutStack>(stack, stream, area)
                 },
             MenuItemControl menu => StandardView<MenuItemControl, MenuItem>(menu, stream, area),
-            NavLinkControl link => StandardView<NavLinkControl, NavLinkView>(link, stream, area),
+            NavLinkControl link => StandardView<NavLinkControl, NavLink>(link, stream, area),
             NavMenuControl navMenu
                 => StandardView<NavMenuControl, NavMenuView>(navMenu, stream, area),
             NavGroupControl group
-                => StandardView<NavGroupControl, NavGroupView>(group, stream, area),
+                => StandardView<NavGroupControl, NavGroup>(group, stream, area),
             LayoutAreaControl layoutArea
                 => StandardView<LayoutAreaControl, LayoutArea>(layoutArea, stream, area),
             DataGridControl gc => StandardView<DataGridControl, DataGrid>(gc, stream, area),

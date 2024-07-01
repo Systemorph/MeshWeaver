@@ -6,6 +6,7 @@ using Json.Patch;
 using Json.Path;
 using Json.Pointer;
 using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Application.Styles;
 using OpenSmc.Blazor;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
@@ -68,12 +69,13 @@ public static class LayoutExtensions
             .WithTypes(
                 typeof(UiControl)
                     .Assembly.GetTypes()
-                    .Where(t => (typeof(IUiControl).IsAssignableFrom(t) || typeof(Skin).IsAssignableFrom(t) )&& !t.IsAbstract)
+                    .Where(t => (typeof(IUiControl).IsAssignableFrom(t) || typeof(Skin).IsAssignableFrom(t)) && !t.IsAbstract)
             )
             .WithTypes(
                 typeof(LayoutAreaReference),
                 typeof(DataGridColumn<>), // this is not a control
-                typeof(Option<>) // this is not a control
+                typeof(Option<>), // this is not a control
+                typeof(Icon)
             );
 
     public static IObservable<object> GetControlStream(
