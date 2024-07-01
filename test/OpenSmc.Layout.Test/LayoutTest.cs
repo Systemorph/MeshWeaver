@@ -9,6 +9,7 @@ using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
+using OpenSmc.Reflection;
 using OpenSmc.Utils;
 using Xunit.Abstractions;
 
@@ -190,15 +191,28 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         // Get toolbar and change value.
         var toolbarArea = $"{reference.Area}/Toolbar";
         var yearTextBox = (TextBoxControl)await stream.GetControlStream(toolbarArea).FirstAsync();
-        var jsonPath = yearTextBox.Data.Should().BeOfType<JsonPointerReference>().Which;
-        jsonPath.Pointer.Should().Be("/data/\"toolbar\"/year");
-        var year = await stream.GetDataStream<int>(jsonPath).FirstAsync();
-        year.Should().Be(2024);
+        var dataContextPointer = yearTextBox
+            .DataContext.Should()
+            .BeOfType<JsonPointerReference>()
+            .Which;
+        dataContextPointer.Pointer.Should().Be("/data/\"toolbar\"");
+
+        var dataPointer = yearTextBox.Data.Should().BeOfType<JsonPointerReference>().Which;
+        dataPointer.Pointer.Should().Be("/year");
+        var pointer = JsonPointer.Parse(dataPointer.Pointer);
+        var year = await stream
+            .GetDataStream<JsonElement>(dataContextPointer)
+            .Select(s => pointer.Evaluate(s))
+            .FirstAsync();
+        year.Value.GetInt32().Should().Be(2024);
 
         stream.Update(ci =>
         {
             var patch = new JsonPatch(
-                PatchOperation.Replace(JsonPointer.Parse(jsonPath.Pointer), 2025)
+                PatchOperation.Replace(
+                    JsonPointer.Parse(dataContextPointer.Pointer + dataPointer.Pointer),
+                    2025
+                )
             );
             return new Data.Serialization.ChangeItem<JsonElement>(
                 stream.Owner,
