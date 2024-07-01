@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Text.Json;
 using FluentAssertions;
 using Json.Patch;
+using Json.Pointer;
 using Xunit;
 
 namespace OpenSmc.Data.Test;
@@ -55,12 +56,12 @@ public class Playground
     [Fact]
     public void Equality()
     {
-        var a = new { A = 1, B = 2 };
-        var b = new { A = 1, B = 2 };
-        a.Equals(b).Should().BeTrue();
-
+        var json = "{\"grandParent\":{\"parent\":{\"child\":{\"name\":\"John\"}}}}";
+        var element = JsonDocument.Parse(json).RootElement;
+        var pointer = JsonPointer.Parse("/grandParent");
+        var grandParent = pointer.Evaluate(element);
+        pointer = JsonPointer.Parse("/parent/child");
+        var child = pointer.Evaluate(grandParent.Value);
+        child.Value.GetProperty("name").GetString().Should().Be("John");
     }
-
-
-
 }
