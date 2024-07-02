@@ -155,15 +155,13 @@ public record ReduceManager<TStream>
         );
 
         stream.AddDisposable(reducedStream);
-            stream
-                .Where(x =>
-                    reducedStream.Subscriber == null
-                    || !reducedStream.Subscriber.Equals(x.ChangedBy)
-                )
-                .Select(x => x.SetValue(reducer.Invoke(x.Value, reducedStream.Reference)))
-                .DistinctUntilChanged()
-                .Subscribe(reducedStream)
-        );
+        stream
+            .Where(x =>
+                reducedStream.Subscriber == null || !reducedStream.Subscriber.Equals(x.ChangedBy)
+            )
+            .Select(x => x.SetValue(reducer.Invoke(x.Value, reducedStream.Reference)))
+            .DistinctUntilChanged()
+            .Subscribe(reducedStream);
 
         reducedStream.AddUpdateOfParent(
             stream,
