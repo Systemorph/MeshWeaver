@@ -21,7 +21,7 @@ public static class TemplateBuilder
         var lambda = Expression.Lambda<Func<TView>>(body);
         var ret = lambda.Compile().Invoke();
         types = visitor.DataBoundTypes;
-        return ret with { DataContext = new JsonPointerReference(rootName) };
+        return ret with { DataContext = rootName };
     }
 
     private class TemplateBuilderVisitor : ExpressionVisitor

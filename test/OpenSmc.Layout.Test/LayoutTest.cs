@@ -191,17 +191,15 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         // Get toolbar and change value.
         var toolbarArea = $"{reference.Area}/Toolbar";
         var yearTextBox = (TextBoxControl)await stream.GetControlStream(toolbarArea).FirstAsync();
-        var dataContextPointer = yearTextBox
+        yearTextBox
             .DataContext.Should()
-            .BeOfType<JsonPointerReference>()
-            .Which;
-        dataContextPointer.Pointer.Should().Be("/data/\"toolbar\"");
+            .Be("/data/\"toolbar\"");
 
         var dataPointer = yearTextBox.Data.Should().BeOfType<JsonPointerReference>().Which;
         dataPointer.Pointer.Should().Be("/year");
         var pointer = JsonPointer.Parse(dataPointer.Pointer);
         var year = await stream
-            .GetDataStream<JsonElement>(dataContextPointer)
+            .GetDataStream<JsonElement>(new JsonPointerReference(yearTextBox.DataContext))
             .Select(s => pointer.Evaluate(s))
             .FirstAsync();
         year.Value.GetInt32().Should().Be(2024);
@@ -210,7 +208,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         {
             var patch = new JsonPatch(
                 PatchOperation.Replace(
-                    JsonPointer.Parse(dataContextPointer.Pointer + dataPointer.Pointer),
+                    JsonPointer.Parse(yearTextBox.DataContext + dataPointer.Pointer),
                     2025
                 )
             );
