@@ -1,14 +1,12 @@
 ﻿using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Activities;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Disposables;
 using OpenSmc.Messaging;
-using OpenSmc.Messaging.Serialization;
 using OpenSmc.Reflection;
 
 namespace OpenSmc.Data;
@@ -80,11 +78,11 @@ public class Workspace : IWorkspace
             .FirstOrDefault(x => x != null);
         if (collection == null)
             return null;
-        return GetStream(Hub.Address, new CollectionReference(collection.CollectionName))
+        return GetRemoteStream(Hub.Address, new CollectionReference(collection.CollectionName))
             .Select(x => x.Value.Instances.Values.Cast<TCollection>());
     }
 
-    public ISynchronizationStream<TReduced> GetStream<TReduced>(
+    public ISynchronizationStream<TReduced> GetRemoteStream<TReduced>(
         object id,
         WorkspaceReference<TReduced> reference
     ) =>
@@ -95,23 +93,32 @@ public class Workspace : IWorkspace
 
     private static readonly MethodInfo GetSynchronizationStreamMethod =
         ReflectionHelper.GetMethodGeneric<Workspace>(x =>
-            x.GetStream<object, WorkspaceReference<object>>(default, default)
+            x.GetRemoteStream<object, WorkspaceReference<object>>(default, default)
         );
 
-    public ISynchronizationStream<TReduced, TReference> GetStream<TReduced, TReference>(
+    public ISynchronizationStream<TReduced, TReference> GetRemoteStream<TReduced, TReference>(
         TReference reference
     )
         where TReference : WorkspaceReference =>
-        GetStream<TReduced, TReference>(Hub.Address, reference);
+        GetRemoteStream<TReduced, TReference>(Hub.Address, reference);
 
-    public ISynchronizationStream<TReduced, TReference> GetStream<TReduced, TReference>(
-        object address,
+    public ISynchronizationStream<TReduced, TReference> GetRemoteStream<TReduced, TReference>(
+        object owner,
         TReference reference
     )
         where TReference : WorkspaceReference =>
-        Hub.Address.Equals(address)
-            ? GetInternalSynchronizationStream<TReduced, TReference>(reference, address)
-            : GetExternalClientSynchronizationStream<TReduced, TReference>(address, reference);
+        Hub.Address.Equals(owner)
+            ? throw new ArgumentException("Owner cannot be the same as the subscriber.")
+            : GetExternalClientSynchronizationStream<TReduced, TReference>(owner, reference);
+
+    public ISynchronizationStream<TReduced, TReference> GetStreamFor<TReduced, TReference>(
+        object subscriber,
+        TReference reference
+    )
+        where TReference : WorkspaceReference =>
+        Hub.Address.Equals(subscriber)
+            ? throw new ArgumentException("Owner cannot be the same as the subscriber.")
+            : GetInternalSynchronizationStream<TReduced, TReference>(reference, subscriber);
 
     private ISynchronizationStream<TReduced, TReference> GetInternalSynchronizationStream<
         TReduced,
@@ -119,6 +126,15 @@ public class Workspace : IWorkspace
     >(TReference reference, object subscriber)
         where TReference : WorkspaceReference =>
         ReduceManager.ReduceStream<TReduced, TReference>(stream, reference, subscriber);
+
+    public ISynchronizationStream<TReduced> GetStreamFor<TReduced>(
+        object subscriber,
+        WorkspaceReference<TReduced> reference
+    ) =>
+        GetInternalSynchronizationStream<TReduced, WorkspaceReference<TReduced>>(
+            reference,
+            subscriber
+        );
 
     private ISynchronizationStream<TReduced, TReference> GetExternalClientSynchronizationStream<
         TReduced,
@@ -128,7 +144,7 @@ public class Workspace : IWorkspace
         (ISynchronizationStream<TReduced, TReference>)
             remoteStreams.GetOrAdd(
                 (address, reference),
-                _ => CreateSynchronizationStream<TReduced, TReference>(address, address, reference)
+                _ => CreateExternalClient<TReduced, TReference>(address, reference)
             );
 
     private ISynchronizationStream CreateSynchronizationStream<TReduced, TReference>(
@@ -140,46 +156,56 @@ public class Workspace : IWorkspace
     {
         // link to deserialized world. Will also potentially link to workspace.
 
-        var ret = new ChainedSynchronizationStream<WorkspaceState, TReference, TReduced>(
-            stream,
-            owner,
-            subscriber,
-            reference
-        );
 
         var isOwner = owner.Equals(Hub.Address);
 
         var fromWorkspace = stream.Reduce<TReduced, TReference>(reference, subscriber);
-        if (fromWorkspace != null)
-        {
-            ret.AddDisposable(fromWorkspace);
-            fromWorkspace.AddDisposable(
-                ret.Where(x => ret.Subscriber != null && ret.Subscriber.Equals(x.ChangedBy))
-                    .Subscribe(fromWorkspace)
+        var ret =
+            fromWorkspace
+            ?? throw new DataSourceConfigurationException(
+                $"No reducer defined for {typeof(TReference).Name} from  {typeof(TReference).Name}"
             );
-            if (isOwner)
-            {
-                fromWorkspace.AddDisposable(
-                    fromWorkspace
-                        .Where(x => ret.Subscriber == null || !ret.Subscriber.Equals(x.ChangedBy))
-                        .Subscribe(ret)
-                );
-            }
-            else
-            {
-                ret.AddDisposable(fromWorkspace.Skip(1).Subscribe(ret));
-                fromWorkspace.AddDisposable(ret.Subscribe(fromWorkspace));
-            }
-        }
+
+        ret.AddUpdateOfParent(stream, reference);
 
         var json =
             ret as ISynchronizationStream<JsonElement>
             ?? ret.Reduce(new JsonElementReference(), subscriber);
 
-        if (isOwner)
-            RegisterOwner(reference, json);
-        else
-            RegisterSubscriber(reference, json);
+        RegisterOwner(reference, json);
+
+        return ret;
+    }
+
+    private ISynchronizationStream CreateExternalClient<TReduced, TReference>(
+        object subscriber,
+        TReference reference
+    )
+        where TReference : WorkspaceReference
+    {
+        // link to deserialized world. Will also potentially link to workspace.
+
+        var ret = new SynchronizationStream<TReduced, TReference>(
+            Hub.Address,
+            subscriber,
+            Hub,
+            reference,
+            ReduceManager.ReduceTo<TReduced>(),
+            InitializationMode.Automatic
+        );
+        var fromWorkspace = stream.Reduce<TReduced, TReference>(reference, subscriber);
+        if (fromWorkspace != null)
+            ret.AddDisposable(
+                fromWorkspace.Where(x => Hub.Address.Equals(x.ChangedBy)).Subscribe(ret)
+            );
+
+        ret.AddUpdateOfParent(stream, reference);
+
+        var json =
+            ret as ISynchronizationStream<JsonElement>
+            ?? ret.Reduce(new JsonElementReference(), subscriber);
+
+        RegisterSubscriber(reference, json);
 
         return ret;
     }

@@ -16,7 +16,7 @@ public record SynchronizationStream<TStream, TReference>(
 ) : ISynchronizationStream<TStream, TReference>
     where TReference : WorkspaceReference
 {
-    public StreamReference StreamReference { get;  } = new(Owner, Reference);
+    public StreamReference StreamReference { get; } = new(Owner, Reference);
 
     /// <summary>
     /// Owner of the stream, e.g. the Hub Address or Id of datasource.
@@ -83,7 +83,7 @@ public record SynchronizationStream<TStream, TReference>(
         SynchronizationStream<TStream, TReference>
     >(x => x.Reduce<object, WorkspaceReference<object>>(null, null));
 
-    public ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
+    public ISynchronizationStream<TReduced, TReference2> Reduce<TReduced, TReference2>(
         TReference2 reference,
         object subscriber
     )
@@ -99,6 +99,7 @@ public record SynchronizationStream<TStream, TReference>(
 
     private bool isDisposing;
     private readonly object disposeLock = new();
+
     public void Dispose()
     {
         lock (disposeLock)
