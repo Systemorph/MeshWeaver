@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using Castle.Core.Resource;
 using OpenSmc.Application.Styles;
 using OpenSmc.Data;
 using OpenSmc.DataCubes;
@@ -221,7 +222,8 @@ public static class NorthwindLayoutAreas
                 (a, _) =>
                     a.GetDataStream<Toolbar>(nameof(Toolbar))
                         .Select(tb => $"Year selected: {tb.Year}")
-            );
+    ).WithView((a,c) => 
+                a.Workspace.GetObservable<Customer>().Select(customers => a.Bind(customers.Take(5), "itemtemplate", customer => Controls.Html(customer.CompanyName))));
 
     public static LayoutStackControl ProductSummary(
         this LayoutAreaHost layoutArea,

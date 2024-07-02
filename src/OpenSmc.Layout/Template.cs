@@ -10,11 +10,11 @@ public record ItemTemplateControl : UiControl<ItemTemplateControl>
 {
     public static string ViewArea = nameof(View);
 
-    public ItemTemplateControl(object view, object data)
+    public ItemTemplateControl(UiControl view, string dataContext)
         : base(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
     {
         View = view;
-        Data = data;
+        DataContext = dataContext;
     }
 
 
@@ -34,7 +34,7 @@ public record ItemTemplateControl : UiControl<ItemTemplateControl>
     //    return ret;
     //}
 
-    public object View { get; init; }
+    public UiControl View { get; init; }
 
 }
 
