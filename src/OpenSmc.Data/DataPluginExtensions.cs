@@ -115,7 +115,8 @@ public static class DataPluginExtensions
     public static void AddUpdateOfParent<TStream, TReduced>(
         this ISynchronizationStream<TReduced> ret,
         ISynchronizationStream<TStream> stream,
-        WorkspaceReference reference
+        WorkspaceReference reference,
+        Func<ChangeItem<TReduced>, bool> filter
     )
     {
         var backTransform = stream.ReduceManager.GetPatchFunction<TReduced>(stream, reference);
@@ -123,8 +124,7 @@ public static class DataPluginExtensions
         if (backTransform != null)
         {
             ret.AddDisposable(
-                ret.Where(value => !ret.Subscriber.Equals(value.ChangedBy))
-                    .Subscribe(x => UpdateParent(stream, x, backTransform))
+                ret.Where(filter).Subscribe(x => UpdateParent(stream, x, backTransform))
             );
         }
     }
