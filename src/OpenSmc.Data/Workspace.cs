@@ -148,7 +148,6 @@ public class Workspace : IWorkspace
             );
 
     private ISynchronizationStream CreateSynchronizationStream<TReduced, TReference>(
-        object owner,
         object subscriber,
         TReference reference
     )
@@ -156,8 +155,6 @@ public class Workspace : IWorkspace
     {
         // link to deserialized world. Will also potentially link to workspace.
 
-
-        var isOwner = owner.Equals(Hub.Address);
 
         var fromWorkspace = stream.Reduce<TReduced, TReference>(reference, subscriber);
         var ret =
@@ -170,7 +167,30 @@ public class Workspace : IWorkspace
             ret as ISynchronizationStream<JsonElement>
             ?? ret.Reduce(new JsonElementReference(), subscriber);
 
-        RegisterOwner(reference, json);
+        json.AddDisposable(
+            json.Hub.Register<DataChangedEvent>(
+                delivery =>
+                {
+                    var response = json.RequestChangeFromJson(
+                        delivery.Message with
+                        {
+                            ChangedBy = delivery.Sender
+                        }
+                    );
+                    json.Hub.Post(response, o => o.ResponseFor(delivery));
+                    return delivery.Processed();
+                },
+                x => json.Owner.Equals(x.Message.Owner) && x.Message.Reference.Equals(reference)
+            )
+        );
+        json.AddDisposable(
+            json.ToDataChangedStream(reference)
+                .Where(x => !json.Subscriber.Equals(x.ChangedBy))
+                .Subscribe(e => Hub.Post(e, o => o.WithTarget(json.Subscriber)))
+        );
+        json.AddDisposable(
+            new AnonymousDisposable(() => subscriptions.Remove(new(subscriber, reference), out _))
+        );
 
         return ret;
     }
@@ -185,7 +205,7 @@ public class Workspace : IWorkspace
 
         var ret = new SynchronizationStream<TReduced, TReference>(
             owner,
-            Hub.Address,
+            owner,
             Hub,
             reference,
             ReduceManager.ReduceTo<TReduced>(),
@@ -201,7 +221,7 @@ public class Workspace : IWorkspace
 
         var json =
             ret as ISynchronizationStream<JsonElement>
-            ?? ret.Reduce(new JsonElementReference(), Hub.Address);
+            ?? ret.Reduce(new JsonElementReference(), owner);
 
         json.AddDisposable(
             json.Hub.Register<DataChangedEvent>(
@@ -235,39 +255,6 @@ public class Workspace : IWorkspace
         Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(owner));
 
         return ret;
-    }
-
-    private void RegisterOwner<TReference>(
-        TReference reference,
-        ISynchronizationStream<JsonElement> json
-    )
-        where TReference : WorkspaceReference
-    {
-        var subscriber = json.Subscriber;
-        json.AddDisposable(
-            json.Hub.Register<DataChangedEvent>(
-                delivery =>
-                {
-                    var response = json.RequestChangeFromJson(
-                        delivery.Message with
-                        {
-                            ChangedBy = delivery.Sender
-                        }
-                    );
-                    json.Hub.Post(response, o => o.ResponseFor(delivery));
-                    return delivery.Processed();
-                },
-                x => json.Owner.Equals(x.Message.Owner) && x.Message.Reference.Equals(reference)
-            )
-        );
-        json.AddDisposable(
-            json.ToDataChangedStream(reference)
-                .Where(x => !json.Subscriber.Equals(x.ChangedBy))
-                .Subscribe(e => Hub.Post(e, o => o.WithTarget(json.Subscriber)))
-        );
-        json.AddDisposable(
-            new AnonymousDisposable(() => subscriptions.Remove(new(subscriber, reference), out _))
-        );
     }
 
     public void Update(IEnumerable<object> instances, UpdateOptions updateOptions) =>
@@ -383,7 +370,7 @@ public class Workspace : IWorkspace
     {
         subscriptions.GetOrAdd(
             new(address, reference),
-            _ => CreateSynchronizationStream<TReduced, TReference>(Hub.Address, address, reference)
+            _ => CreateSynchronizationStream<TReduced, TReference>(address, reference)
         );
     }
 

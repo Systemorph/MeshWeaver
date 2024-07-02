@@ -154,48 +154,23 @@ public record ReduceManager<TStream>
             InitializationMode.Automatic
         );
 
-        var isOwner = stream.Hub.Address.Equals(reducedStream.Owner);
-
         stream.AddDisposable(reducedStream);
-        if (isOwner)
-        {
-            reducedStream.AddDisposable(
-                stream
-                    .Where(x =>
-                        reducedStream.Subscriber == null
-                        || !reducedStream.Subscriber.Equals(x.ChangedBy)
-                    )
-                    .Select(x => x.SetValue(reducer.Invoke(x.Value, reducedStream.Reference)))
-                    .DistinctUntilChanged()
-                    .Subscribe(reducedStream)
-            );
+            stream
+                .Where(x =>
+                    reducedStream.Subscriber == null
+                    || !reducedStream.Subscriber.Equals(x.ChangedBy)
+                )
+                .Select(x => x.SetValue(reducer.Invoke(x.Value, reducedStream.Reference)))
+                .DistinctUntilChanged()
+                .Subscribe(reducedStream)
+        );
 
-            reducedStream.AddUpdateOfParent(
-                stream,
-                reference,
-                value =>
-                    reducedStream.Subscriber != null
-                    && reducedStream.Subscriber.Equals(value.ChangedBy)
-            );
-        }
-        else
-        {
-            reducedStream.AddDisposable(
-                stream
-                    .Where(value => reducedStream.Hub.Address.Equals(value.ChangedBy))
-                    .Select(value =>
-                        value.SetValue(reducer.Invoke(value.Value, reducedStream.Reference))
-                    )
-                    .DistinctUntilChanged()
-                    .Subscribe(reducedStream)
-            );
-
-            reducedStream.AddUpdateOfParent(
-                stream,
-                reference,
-                value => !reducedStream.Hub.Address.Equals(value.ChangedBy)
-            );
-        }
+        reducedStream.AddUpdateOfParent(
+            stream,
+            reference,
+            value =>
+                reducedStream.Subscriber != null && reducedStream.Subscriber.Equals(value.ChangedBy)
+        );
         return reducedStream;
     }
 
