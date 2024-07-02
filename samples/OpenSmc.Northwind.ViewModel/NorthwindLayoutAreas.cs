@@ -96,21 +96,22 @@ public static class NorthwindLayoutAreas
                                             nameof(Toolbar),
                                             tb => Select(tb.Year).WithOptions(y)
                                         )
-                                    .WithView((area, ctx) =>
-                                        Button("Analyze")
-                                            .WithIcon(FluentIcons.CalendarDataBar)
-                                            .WithClickAction(ctx =>
-                                            {
-                                                contextPanelCollapsed = !contextPanelCollapsed;
-                                                ctx.Layout.RenderArea(
-                                                    context with { Area = $"{context.Area}/{nameof(ContextPanel)}" },
-                                                    ContextPanel(contextPanelCollapsed)
-                                                );
-                                            })
-                                    )
                                     )
                             )
+                            .WithView((_, _) =>
+                                Button("Analyze")
+                                    .WithIcon(FluentIcons.CalendarDataBar)
+                                    .WithClickAction(ctx =>
+                                    {
+                                        contextPanelCollapsed = !contextPanelCollapsed;
+                                        ctx.Layout.RenderArea(
+                                            context with { Area = $"{context.Area}/{nameof(ContextPanel)}" },
+                                            ContextPanel(contextPanelCollapsed)
+                                        );
+                                    })
+                            )
                     )
+
                     .WithView(
                         Stack()
                             .WithSkin(Skins.LayoutGrid.WithSpacing(1))
@@ -138,7 +139,7 @@ public static class NorthwindLayoutAreas
                     )
                     .ToSplitterPane()
             )
-                .WithView(nameof(ContextPanel), ContextPanel(contextPanelCollapsed));
+            .WithView(nameof(ContextPanel), ContextPanel(contextPanelCollapsed));
     }
 
     private static SplitterPaneControl ContextPanel(bool collapsed)
@@ -151,7 +152,7 @@ public static class NorthwindLayoutAreas
                 Stack()
                     .WithOrientation(Orientation.Horizontal)
                     .WithView(
-                        (area, ctx) =>
+                        (area, _) =>
                             area.Bind(
                                 new[] { "Product", "Customer", "Supplier" },
                                 "dimensions",
