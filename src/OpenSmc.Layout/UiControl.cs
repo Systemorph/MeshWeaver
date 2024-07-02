@@ -56,7 +56,7 @@ public abstract record UiControl(object Data) : IUiControl
     internal Task ClickAsync(UiActionContext context) =>
         ClickAction?.Invoke(context) ?? Task.CompletedTask;
 
-    public object DataContext { get; init; }
+    public string DataContext { get; init; }
 }
 
 public abstract record UiControl<TControl>(string ModuleName, string ApiVersion, object Data)
