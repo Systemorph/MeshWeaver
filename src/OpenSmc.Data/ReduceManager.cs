@@ -144,11 +144,13 @@ public record ReduceManager<TStream>
     )
         where TReference : WorkspaceReference<TReduced>
     {
-        var reducedStream = new ChainedSynchronizationStream<TStream, TReference, TReduced>(
-            stream,
+        var reducedStream = new SynchronizationStream<TReduced, TReference>(
             stream.Owner,
             subscriber,
-            reference
+            stream.Hub,
+            reference,
+            stream.ReduceManager.ReduceTo<TReduced>(),
+            InitializationMode.Automatic
         );
 
         reducedStream.AddDisposable(
@@ -161,6 +163,9 @@ public record ReduceManager<TStream>
                 .DistinctUntilChanged()
                 .Subscribe(reducedStream)
         );
+
+        reducedStream.AddUpdateOfParent(stream, reference);
+
         stream.AddDisposable(reducedStream);
         return reducedStream;
     }
@@ -188,7 +193,7 @@ public record ReduceManager<TStream>
         return first.Value(workspaceState, reference, first);
     }
 
-    internal ISynchronizationStream<TReduced, TReference> ReduceStream<TReduced, TReference>(
+    public ISynchronizationStream<TReduced, TReference> ReduceStream<TReduced, TReference>(
         ISynchronizationStream<TStream> stream,
         TReference reference,
         object subscriber

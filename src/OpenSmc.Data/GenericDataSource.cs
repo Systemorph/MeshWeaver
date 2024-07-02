@@ -17,9 +17,7 @@ public interface IDataSource : IAsyncDisposable
     Task<WorkspaceState> Initialized { get; }
 
     IReadOnlyCollection<ISynchronizationStream<EntityStore>> Streams { get; }
-
 }
-
 
 public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) : IDataSource
     where TDataSource : DataSource<TDataSource>
@@ -59,8 +57,9 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
 
     public TDataSource WithType<T>()
         where T : class => WithType<T>(d => d);
-    public TDataSource WithTypes(IEnumerable<Type> types)=>
-    types.Aggregate(This, (ds, t) => ds.WithType(t, x => x));
+
+    public TDataSource WithTypes(IEnumerable<Type> types) =>
+        types.Aggregate(This, (ds, t) => ds.WithType(t, x => x));
 
     protected abstract TDataSource WithType<T>(Func<ITypeSource, ITypeSource> config)
         where T : class;
@@ -86,7 +85,6 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
                     .ToDictionaryAsync(x => x.StreamReference, x => x.Store)
             )
         };
-
 
     public CollectionsReference Reference => GetReference();
 
@@ -131,21 +129,28 @@ public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorksp
         base.Initialize(state);
     }
 
-    protected virtual ISynchronizationStream<EntityStore, CollectionsReference> SetupDataSourceStream(WorkspaceState state)
+    protected virtual ISynchronizationStream<
+        EntityStore,
+        CollectionsReference
+    > SetupDataSourceStream(WorkspaceState state)
     {
         var reference = GetReference();
 
-        var workspaceSync = Workspace.GetStream(Hub.Address, reference);
+        var workspaceSync = Workspace.Stream.Reduce(reference, Id);
 
-        var stream = new ChainedSynchronizationStream<EntityStore, CollectionsReference, EntityStore>(
-            workspaceSync,
+        var stream = new SynchronizationStream<EntityStore, CollectionsReference>(
             Id,
             Hub.Address,
-            reference
+            Hub,
+            reference,
+            workspaceSync.ReduceManager.ReduceTo<EntityStore>(),
+            InitializationMode.Automatic
         );
 
+        stream.AddDisposable(
+            workspaceSync.Skip(1).Where(x => !Id.Equals(x.ChangedBy)).Subscribe(Synchronize)
+        );
         stream.AddDisposable(workspaceSync);
-        stream.AddDisposable(workspaceSync.Where(x => !Id.Equals(x.ChangedBy)).Subscribe(Synchronize));
         return stream;
     }
 
@@ -171,7 +176,10 @@ public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorksp
                 )
             })
             .AggregateAsync(
-                new EntityStore(){GetCollectionName = Workspace.DataContext.TypeRegistry.GetOrAddTypeName },
+                new EntityStore()
+                {
+                    GetCollectionName = Workspace.DataContext.TypeRegistry.GetOrAddTypeName
+                },
                 (store, selected) => store.Update(selected.Reference, selected.Initialized),
                 cancellationToken: cancellationToken
             );

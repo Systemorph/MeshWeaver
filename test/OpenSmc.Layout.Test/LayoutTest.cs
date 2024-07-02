@@ -98,7 +98,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var reference = new LayoutAreaReference(StaticView);
 
         var workspace = GetClient().GetWorkspace();
-        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new HostAddress(),
             reference
         );
@@ -141,7 +141,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var reference = new LayoutAreaReference(nameof(ViewWithProgress));
 
         var workspace = GetClient().GetWorkspace();
-        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new HostAddress(),
             reference
         );
@@ -180,7 +180,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new HostAddress(),
             reference
         );
@@ -244,7 +244,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new HostAddress(),
             reference
         );
@@ -280,7 +280,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new HostAddress(),
             reference
         );
@@ -316,7 +316,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new HostAddress(),
             reference
         );

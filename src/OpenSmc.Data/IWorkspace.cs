@@ -24,22 +24,22 @@ public interface IWorkspace : IAsyncDisposable
     );
 
     ISynchronizationStream<WorkspaceState> Stream { get; }
-    ISynchronizationStream<EntityStore> ReduceToTypes(params Type[] types) => ReduceToTypes(null, types);
+    ISynchronizationStream<EntityStore> ReduceToTypes(params Type[] types) =>
+        ReduceToTypes(null, types);
     ISynchronizationStream<EntityStore> ReduceToTypes(object subscriber, params Type[] types);
     ReduceManager<WorkspaceState> ReduceManager { get; }
     WorkspaceReference Reference { get; }
-    IObservable<IEnumerable<TCollection>> GetStream<TCollection>();
 
-    ISynchronizationStream<TReduced> GetStream<TReduced>(
-        object address,
+    ISynchronizationStream<TReduced> GetRemoteStream<TReduced>(
+        object owner,
         WorkspaceReference<TReduced> reference
     );
-    ISynchronizationStream<TReduced, TReference> GetStream<TReduced, TReference>(
-        TReference reference
-    )
-        where TReference : WorkspaceReference;
+    ISynchronizationStream<TReduced> GetStreamFor<TReduced>(
+        object subscriber,
+        WorkspaceReference<TReduced> reference
+    );
 
-    ISynchronizationStream<TReduced, TReference> GetStream<TReduced, TReference>(
+    ISynchronizationStream<TReduced, TReference> GetRemoteStream<TReduced, TReference>(
         object address,
         TReference reference
     )

@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Activities;
@@ -34,9 +35,12 @@ public static class DataPluginExtensions
                             )
                         );
                     if (!options.Converters.Any(c => c is InstancesInCollectionConverter))
-                        options.Converters.Insert(0, new InstancesInCollectionConverter(
-                            serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()
-                            ));
+                        options.Converters.Insert(
+                            0,
+                            new InstancesInCollectionConverter(
+                                serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()
+                            )
+                        );
                 })
             )
             .Set(existingLambdas.Add(dataPluginConfiguration))
@@ -107,4 +111,39 @@ public static class DataPluginExtensions
             address,
             hub => configuration.Invoke(new GenericDataSource(address, dataContext.Workspace))
         );
+
+    public static void AddUpdateOfParent<TStream, TReduced>(
+        this ISynchronizationStream<TReduced> ret,
+        ISynchronizationStream<TStream> stream,
+        WorkspaceReference reference
+    )
+    {
+        var backTransform = stream.ReduceManager.GetPatchFunction<TReduced>(stream, reference);
+
+        if (backTransform != null)
+        {
+            ret.AddDisposable(
+                ret.Where(value => !ret.Subscriber.Equals(value.ChangedBy))
+                    .Subscribe(x => UpdateParent(stream, x, backTransform))
+            );
+        }
+    }
+
+    internal static void UpdateParent<TStream, TReduced>(
+        ISynchronizationStream<TStream> parent,
+        ChangeItem<TReduced> value,
+        PatchFunction<TStream, TReduced> backTransform
+    )
+    {
+        // if the parent is initialized, we will update the parent
+        if (parent.Initialized.IsCompleted)
+        {
+            parent.Update(state => backTransform(state, parent, value));
+        }
+        // if we are in automatic mode, we will initialize the parent
+        else if (parent.InitializationMode == InitializationMode.Automatic)
+        {
+            parent.Initialize(backTransform(Activator.CreateInstance<TStream>(), parent, value));
+        }
+    }
 }

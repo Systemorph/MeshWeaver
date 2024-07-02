@@ -15,29 +15,46 @@ public record LayoutAreaHost : IDisposable
     public IWorkspace Workspace => Hub.GetWorkspace();
 
     public LayoutAreaHost(
-        ISynchronizationStream<WorkspaceState> workspaceStream, LayoutAreaReference reference, object subscriber
+        ISynchronizationStream<WorkspaceState> workspaceStream,
+        LayoutAreaReference reference,
+        object subscriber
     )
     {
-        Stream = new ChainedSynchronizationStream<
-            WorkspaceState,
-            LayoutAreaReference,
-            EntityStore
-        >(workspaceStream, workspaceStream.Owner, subscriber, reference);
+        Stream = new SynchronizationStream<EntityStore, LayoutAreaReference>(
+            workspaceStream.Owner,
+            subscriber,
+            workspaceStream.Hub,
+            reference,
+            workspaceStream.ReduceManager.ReduceTo<EntityStore>(),
+            InitializationMode.Automatic
+        );
         Stream.AddDisposable(this);
-        Stream.AddDisposable(Stream.Hub.Register<ClickedEvent>(OnClick, delivery => Stream.Reference.Equals(delivery.Message.Reference)));
-        executionHub =
-            Stream.Hub.GetHostedHub(new LayoutExecutionAddress(Stream.Hub.Address), x => x);
+        Stream.AddDisposable(
+            Stream.Hub.Register<ClickedEvent>(
+                OnClick,
+                delivery => Stream.Reference.Equals(delivery.Message.Reference)
+            )
+        );
+        executionHub = Stream.Hub.GetHostedHub(
+            new LayoutExecutionAddress(Stream.Hub.Address),
+            x => x
+        );
     }
 
     private IMessageDelivery OnClick(IMessageDelivery<ClickedEvent> request)
     {
         if (GetControl(request.Message.Area) is UiControl { ClickAction: not null } control)
-            control.ClickAction.Invoke(new(request.Message.Area, request.Message.Payload, Hub, this));
+            control.ClickAction.Invoke(
+                new(request.Message.Area, request.Message.Payload, Hub, this)
+            );
         return request.Processed();
     }
 
-    public object GetControl(string area)
-    => Stream.Current.Value.Collections.GetValueOrDefault(LayoutAreaReference.Areas)?.Instances.GetValueOrDefault(area);
+    public object GetControl(string area) =>
+        Stream
+            .Current.Value.Collections.GetValueOrDefault(LayoutAreaReference.Areas)
+            ?.Instances.GetValueOrDefault(area);
+
     public void UpdateLayout(string area, object control)
     {
         Stream.Update(ws => UpdateImpl(area, control, ws));
@@ -62,15 +79,17 @@ public record LayoutAreaHost : IDisposable
         );
 
         return new(
-            Stream.Owner, 
-            Stream.Reference, 
-            newStore, 
+            Stream.Owner,
+            Stream.Reference,
+            newStore,
             Stream.Owner,
             null, // todo we can fill this in here and use.
-            Stream.Hub.Version);
+            Stream.Hub.Version
+        );
     }
 
     private readonly IMessageHub executionHub;
+
     public void UpdateData(string id, object data)
     {
         Stream.Update(ws =>
@@ -113,8 +132,8 @@ public record LayoutAreaHost : IDisposable
         executionHub.Schedule(action);
     }
 
-    public void InvokeAsync(Action action)
-        => InvokeAsync(_ =>
+    public void InvokeAsync(Action action) =>
+        InvokeAsync(_ =>
         {
             action();
             return Task.CompletedTask;
