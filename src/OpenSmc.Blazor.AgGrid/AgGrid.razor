@@ -6,7 +6,7 @@
     <link href="_content/OpenSmc.Blazor.AgGrid/style.css" rel="stylesheet" />
 </HeadContent>
 
-<div @ref="element" class="ag-theme-quartz" style="height: 500px; width: 100%;"></div>
+<div @ref="element" class="ag-theme-alpine container" style="height: 500px; width: 100%;"></div>
 
 @code
 {
@@ -21,6 +21,10 @@
         {
             jsModule = await JsRuntime.InvokeAsync<IJSObjectReference>("import", 
                 "./_content/OpenSmc.Blazor.AgGrid/index.mjs");
+
+            await jsModule.InvokeVoidAsync("LicenseManager.setLicenseKey",
+                Environment.GetEnvironmentVariable("AG_GRID_LICENSE_KEY"));
+            
             DataBind<object>(ViewModel.Data, o => Options = o);
         }
 

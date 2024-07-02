@@ -78,6 +78,8 @@ public static class NorthwindLayoutAreas
             )
             .DistinctUntilChanged(x => string.Join(',', x.Select(y => y.Item)));
 
+        var contextPanelCollapsed = true;
+
         return Stack()
             .WithSkin(Skins.Splitter)
             .WithOrientation(Orientation.Horizontal)
@@ -94,6 +96,18 @@ public static class NorthwindLayoutAreas
                                             nameof(Toolbar),
                                             tb => Select(tb.Year).WithOptions(y)
                                         )
+                                    .WithView((area, ctx) =>
+                                        Button("Analyze")
+                                            .WithIcon(FluentIcons.CalendarDataBar)
+                                            .WithClickAction(ctx =>
+                                            {
+                                                contextPanelCollapsed = !contextPanelCollapsed;
+                                                ctx.Layout.RenderArea(
+                                                    context with { Area = $"{context.Area}/{nameof(ContextPanel)}" },
+                                                    ContextPanel(contextPanelCollapsed)
+                                                );
+                                            })
+                                    )
                                     )
                             )
                     )
@@ -124,10 +138,10 @@ public static class NorthwindLayoutAreas
                     )
                     .ToSplitterPane()
             )
-            .WithView(ContextPanel);
+                .WithView(nameof(ContextPanel), ContextPanel(contextPanelCollapsed));
     }
 
-    private static SplitterPaneControl ContextPanel(LayoutAreaHost area, RenderingContext ctx)
+    private static SplitterPaneControl ContextPanel(bool collapsed)
     {
         return Stack()
             .WithClass("context-panel")
@@ -146,7 +160,11 @@ public static class NorthwindLayoutAreas
                     )
                     .WithView("Values")
             )
-            .ToSplitterPane(x => x.WithSize("350px").WithCollapsible(true));
+            .ToSplitterPane(x =>
+                x.WithSize("350px")
+                    .WithCollapsible(true)
+                    .WithCollapsed(collapsed)
+            );
     }
 
     public static LayoutStackControl SupplierSummary(

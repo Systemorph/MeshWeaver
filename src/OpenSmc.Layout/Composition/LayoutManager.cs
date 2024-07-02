@@ -20,7 +20,7 @@ public static class LayoutManager
         return layoutArea.Stream;
     }
 
-    private static void RenderArea(this LayoutAreaHost layoutArea, RenderingContext context, object viewModel)
+    public static void RenderArea(this LayoutAreaHost layoutArea, RenderingContext context, object viewModel)
     {
         if (viewModel == null)
             return;
