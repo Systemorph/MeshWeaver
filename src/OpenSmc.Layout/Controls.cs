@@ -121,7 +121,7 @@ public static class Controls
         area.UpdateData(id, data);
         return LayoutAreaReference.GetDataPointer(id);
     }
-
+    
     public static ItemTemplateControl Bind<T, TView>(
         this LayoutAreaHost area,
         IEnumerable<T> data,
@@ -142,7 +142,7 @@ public static class Controls
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
 
-        return new ItemTemplateControl(view, new JsonPointerReference(UpdateData(area, data, id)));
+        return new ItemTemplateControl(view, UpdateData(area, data, id));
     }
 
     #endregion
