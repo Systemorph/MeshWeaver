@@ -134,7 +134,7 @@ namespace OpenSmc.Data
             JsonSerializerOptions options
         )
         {
-            var id = JsonSerializer.Deserialize<object>(idSerialized.Replace("~1", "/"), options);
+            var id = JsonSerializer.Deserialize<object>(idSerialized, options);
             switch (op.Op)
             {
                 case OperationType.Add:
