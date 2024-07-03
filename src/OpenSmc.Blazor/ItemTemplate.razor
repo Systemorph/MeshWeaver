@@ -18,9 +18,9 @@
 
     private string ViewArea => $"{Area}/{ItemTemplateControl.ViewArea}";
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnParametersSetAsync()
     {
-        await base.OnInitializedAsync();
+        await base.OnParametersSetAsync();
         DataBind<IReadOnlyCollection<object>>(new JsonPointerReference(""), d => Data = d);
         view = GetControl(await Stream.FirstAsync(), ViewArea);
     }
