@@ -16,7 +16,7 @@ public record SynchronizationStream<TStream, TReference>(
 ) : ISynchronizationStream<TStream, TReference>
     where TReference : WorkspaceReference
 {
-    public StreamReference StreamReference { get;  } = new(Owner, Reference);
+    public StreamReference StreamReference { get; } = new(Owner, Reference);
 
     /// <summary>
     /// Owner of the stream, e.g. the Hub Address or Id of datasource.
@@ -72,25 +72,23 @@ public record SynchronizationStream<TStream, TReference>(
 
     public ISynchronizationStream<TReduced> Reduce<TReduced>(
         WorkspaceReference<TReduced> reference,
-        object owner,
         object subscriber
     ) =>
         (ISynchronizationStream<TReduced>)
             ReduceMethod
                 .MakeGenericMethod(typeof(TReduced), reference.GetType())
-                .Invoke(this, [reference, owner, subscriber]);
+                .Invoke(this, [reference, subscriber]);
 
     private static readonly MethodInfo ReduceMethod = ReflectionHelper.GetMethodGeneric<
         SynchronizationStream<TStream, TReference>
-    >(x => x.Reduce<object, WorkspaceReference<object>>(null, null, null));
+    >(x => x.Reduce<object, WorkspaceReference<object>>(null, null));
 
-    public ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
+    public ISynchronizationStream<TReduced, TReference2> Reduce<TReduced, TReference2>(
         TReference2 reference,
-        object owner,
         object subscriber
     )
         where TReference2 : WorkspaceReference =>
-        ReduceManager.ReduceStream<TReduced, TReference2>(this, reference, owner, subscriber);
+        ReduceManager.ReduceStream<TReduced, TReference2>(this, reference, subscriber);
 
     public virtual IDisposable Subscribe(IObserver<ChangeItem<TStream>> observer)
     {
@@ -100,9 +98,11 @@ public record SynchronizationStream<TStream, TReference>(
     public readonly List<IDisposable> Disposables = new();
 
     private bool isDisposing;
+    private readonly object disposeLock = new();
+
     public void Dispose()
     {
-        lock (this)
+        lock (disposeLock)
         {
             if (isDisposing)
                 return;

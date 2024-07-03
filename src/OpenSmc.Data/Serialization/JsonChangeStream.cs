@@ -54,30 +54,6 @@ public static class JsonSynchronizationStream
         );
     }
 
-
-    //    private static ChangeItem<TStream> UpdateImpl<TStream>(
-    //        this JsonUpdateStream<TStream> json,
-    //        DataChangedEvent request,
-    //        ChangeItemJsonTuple<TStream> tuple,
-    //        JsonPatch patch,
-    //        JsonElement updatedJson
-    //    )
-    //    {
-    //        var ret = new ChangeItem<TStream>(
-    //            json.Stream.Owner,
-    //            json.Stream.Reference,
-    //            json.Stream.ReduceManager.PatchFunction.Invoke(
-    //                tuple.Current.Value,
-    //                updatedJson,
-    //                patch,
-    //                json.Stream.Hub.JsonSerializerOptions
-    //            ),
-    //            request.ChangedBy,
-    //            json.Stream.Hub.Version
-    //        );
-    //        return ret;
-    //    }
-
     public static DataChangeResponse RequestChangeFromJson(
         this ISynchronizationStream<JsonElement> json,
         DataChangedEvent request

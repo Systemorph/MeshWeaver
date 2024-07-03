@@ -3,7 +3,7 @@
     {
       ColId: Value,
       HeaderName: Value,
-      ValueGetter: data.data && data.data['value']
+      ValueGetter: data.data && data.data['Value']
     }
   ],
   RowData: [
@@ -12,7 +12,7 @@
         Coordinates: [
           A1
         ],
-        SystemName: A1,
+        Id: A1,
         DisplayName: A 1,
         GrouperName: DimA0
       },
@@ -26,7 +26,7 @@
           A1,
           A11
         ],
-        SystemName: A1.A11,
+        Id: A1.A11,
         DisplayName: A 11,
         GrouperName: DimA1
       }
@@ -38,7 +38,7 @@
           A11,
           A111
         ],
-        SystemName: A1.A11.A111,
+        Id: A1.A11.A111,
         DisplayName: A 111,
         GrouperName: DimA2
       },
@@ -54,7 +54,7 @@
           A111,
           D1
         ],
-        SystemName: A1.A11.A111.D1,
+        Id: A1.A11.A111.D1,
         DisplayName: D1,
         GrouperName: DimD
       }
@@ -67,7 +67,7 @@
           A111,
           D2
         ],
-        SystemName: A1.A11.A111.D2,
+        Id: A1.A11.A111.D2,
         DisplayName: D2,
         GrouperName: DimD
       },
@@ -82,7 +82,7 @@
           A11,
           A112
         ],
-        SystemName: A1.A11.A112,
+        Id: A1.A11.A112,
         DisplayName: A 112,
         GrouperName: DimA2
       },
@@ -98,7 +98,7 @@
           A112,
           D1
         ],
-        SystemName: A1.A11.A112.D1,
+        Id: A1.A11.A112.D1,
         DisplayName: D1,
         GrouperName: DimD
       }
@@ -111,7 +111,7 @@
           A112,
           D3
         ],
-        SystemName: A1.A11.A112.D3,
+        Id: A1.A11.A112.D3,
         DisplayName: D3,
         GrouperName: DimD
       },

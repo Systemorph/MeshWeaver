@@ -44,6 +44,7 @@ public class EntityStoreConverter(ITypeRegistry typeRegistry) : JsonConverter<En
             new EntityStore()
             {
                 Collections = obj.Where(kvp => kvp.Key != "$type").Select(kvp => DeserializeCollection(kvp.Key, kvp.Value, options)).ToImmutableDictionary(),
+                GetCollectionName = typeRegistry.GetOrAddTypeName
             };
 
         return newStore;
@@ -51,13 +52,11 @@ public class EntityStoreConverter(ITypeRegistry typeRegistry) : JsonConverter<En
 
     private KeyValuePair<string, InstanceCollection> DeserializeCollection(string collection, JsonNode node, JsonSerializerOptions options)
     {
+        node[InstancesInCollectionConverter.CollectionProperty] = collection;
         return
             new(
                 collection,
-                node.Deserialize<InstanceCollection>(options) with
-                {
-                    GetKey = typeRegistry.GetKeyFunction(collection)
-                }
+                node.Deserialize<InstanceCollection>(options) 
             );
     }
 

@@ -22,7 +22,9 @@
                 )
             );
 
-        protected override PartitionedHubDataSource WithType<T>(Func<ITypeSource, ITypeSource> config)
+        protected override PartitionedHubDataSource WithType<T>(
+            Func<ITypeSource, ITypeSource> config
+        )
         {
             throw new NotSupportedException("Please use method with partition");
         }
@@ -48,8 +50,11 @@
             foreach (var partition in InitializePartitions)
             {
                 var reference = GetReference();
-                var partitionedReference = new PartitionedCollectionsReference(partition, reference);
-                Streams = Streams.Add(Workspace.GetStream(partition, partitionedReference));
+                var partitionedReference = new PartitionedCollectionsReference(
+                    partition,
+                    reference
+                );
+                Streams = Streams.Add(Workspace.GetRemoteStream(partition, partitionedReference));
             }
 
             base.Initialize(state);

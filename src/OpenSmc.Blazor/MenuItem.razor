@@ -1,5 +1,5 @@
 ﻿@inherits BlazorView<MenuItemControl>
-<FluentMenuButton @onclick="@OnClick"></FluentMenuButton>
+<FluentMenuButton @onclick="@OnClick">@Title</FluentMenuButton>
 @code
 {
     private string Title { get; set; }
@@ -13,8 +13,4 @@
 
     }
 
-    protected void OnClick()
-    {
-        Stream.Hub.Post(new ClickedEvent(Area), o => o.WithTarget(Stream.Owner));
-    }
 }

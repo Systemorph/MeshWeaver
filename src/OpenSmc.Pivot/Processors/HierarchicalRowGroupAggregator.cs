@@ -7,7 +7,7 @@ namespace OpenSmc.Pivot.Processors
         where TGroup : IGroup, new()
     {
         private readonly IDictionary<
-            string,
+            object,
             HierarchicalRowGroupAggregator<TIntermediate, TAggregate, TGroup>
         > subAggregates;
         public ICollection<PivotGrouping<TGroup, TIntermediate>> AggregatedGroupings { get; }
@@ -22,7 +22,7 @@ namespace OpenSmc.Pivot.Processors
             > subAggregates
         )
         {
-            this.subAggregates = subAggregates?.ToDictionary(x => x.Key.SystemName, x => x.Value);
+            this.subAggregates = subAggregates?.ToDictionary(x => x.Key.Id, x => x.Value);
             //this.subAggregates.Add("Agg",);
             AggregatedGroupings = aggregatedGroupings;
             foreach (var agg in AggregatedGroupings)
@@ -53,8 +53,8 @@ namespace OpenSmc.Pivot.Processors
                 // TODO V10: check the case of a single group which is not Total (2022/03/31, Ekaterina Mishina)
                 if (
                     AggregatedGroupings.Count == 1
-                    && AggregatedGroupings.First().Identity.SystemName
-                        == IPivotGrouper<TValue, TGroup>.TopGroup.SystemName
+                    && AggregatedGroupings.First().Identity.Id
+                        == IPivotGrouper<TValue, TGroup>.TopGroup.Id
                 )
                     return valueSelectors
                         .Select(s =>
@@ -77,10 +77,7 @@ namespace OpenSmc.Pivot.Processors
                             var total = Equals(Total.Object, default(TAggregate))
                                 ? default
                                 : vs(resultTransformation(Total.Object));
-                            dictionary.Add(
-                                IPivotGrouper<TValue, TGroup>.TotalGroup.SystemName,
-                                total
-                            );
+                            dictionary.Add(IPivotGrouper<TValue, TGroup>.TotalGroup.Id, total);
                         }
                         return dictionary;
                     })
@@ -122,10 +119,7 @@ namespace OpenSmc.Pivot.Processors
                             var total = Equals(Total.Object, default(TAggregate))
                                 ? default
                                 : vs(resultTransformation(Total.Object));
-                            dictionary.Add(
-                                IPivotGrouper<TValue, TGroup>.TotalGroup.SystemName,
-                                total
-                            );
+                            dictionary.Add(IPivotGrouper<TValue, TGroup>.TotalGroup.Id, total);
                         }
 
                         return dictionary;

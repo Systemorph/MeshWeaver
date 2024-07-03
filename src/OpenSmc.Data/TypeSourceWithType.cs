@@ -1,5 +1,4 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
-using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
 
 namespace OpenSmc.Data;
@@ -46,19 +45,21 @@ public record TypeSourceWithType<T>(IWorkspace Workspace, object DataSource)
 public abstract record TypeSourceWithType<T, TTypeSource> : TypeSource<TTypeSource>
     where TTypeSource : TypeSourceWithType<T, TTypeSource>
 {
+    private readonly ITypeRegistry typeRegistry;
+
     protected TypeSourceWithType(IWorkspace workspace, object DataSource)
         : base(workspace, typeof(T), DataSource)
     {
-        workspace.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().WithType(typeof(T));
+        typeRegistry = workspace.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
+        typeRegistry.WithType(typeof(T));
     }
 
-    public TTypeSource WithKey(Func<T, object> key) => This with { Key = o => key.Invoke((T)o) };
-
-    public TTypeSource WithCollectionName(string collectionName) =>
-        This with
-        {
-            CollectionName = collectionName
-        };
+    public TTypeSource WithKey<TKey>(Func<T, TKey> key)
+    {
+        var ret = new KeyFunction(o => key.Invoke((T)o), typeof(TKey));
+        typeRegistry.WithKeyFunctionProvider(type =>ret);
+        return This with { Key = ret };
+    }
 
     public TTypeSource WithQuery(Func<string, T> query) => This with { QueryFunction = query };
 

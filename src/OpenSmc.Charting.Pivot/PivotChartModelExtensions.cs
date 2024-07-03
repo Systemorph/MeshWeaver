@@ -89,11 +89,11 @@ public static class PivotChartModelExtensions
         return model;
     }
 
-    public static bool IsTotalForSlice(this PivotElementDescriptor descriptor, string grouperName)
+    public static bool IsTotalForSlice(this PivotElementDescriptor descriptor, object grouperName)
     {
         return descriptor.Coordinates.Any(c =>
             c.GrouperName.Equals(grouperName)
-            && c.Id == IPivotGrouper<object, ColumnGroup>.TotalGroup.SystemName
+            && c.Id == IPivotGrouper<object, ColumnGroup>.TotalGroup.Id
         );
     }
 

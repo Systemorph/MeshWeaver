@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using OpenSmc.Domain;
 
 namespace OpenSmc.Northwind.Domain;
 
@@ -12,5 +13,8 @@ public record Product(
     short UnitsInStock,
     short UnitsOnOrder,
     short ReorderLevel,
-    int Discontinued
-);
+    string Discontinued
+) : INamed
+{
+    string INamed.DisplayName => ProductName;
+}

@@ -5,7 +5,7 @@
         {
           ColId: C.Value,
           HeaderName: Amount,
-          ValueGetter: data.data && data.data['c'] && data.data['c']['value'],
+          ValueGetter: data.data && data.data['C'] && data.data['C']['Value'],
           CellStyle: {
             backgroundColor: #eaf3f9,
             fontWeight: medium
@@ -21,7 +21,7 @@
         {
           ColId: H.Value,
           HeaderName: Amount,
-          ValueGetter: data.data && data.data['h'] && data.data['h']['value'],
+          ValueGetter: data.data && data.data['H'] && data.data['H']['Value'],
           CellStyle: {
             backgroundColor: #eaf3f9,
             fontWeight: medium
@@ -37,7 +37,7 @@
         {
           ColId: L.Value,
           HeaderName: Amount,
-          ValueGetter: data.data && data.data['l'] && data.data['l']['value'],
+          ValueGetter: data.data && data.data['L'] && data.data['L']['Value'],
           CellStyle: {
             backgroundColor: #eaf3f9,
             fontWeight: medium
@@ -53,7 +53,7 @@
         {
           ColId: P.Value,
           HeaderName: Amount,
-          ValueGetter: data.data && data.data['p'] && data.data['p']['value'],
+          ValueGetter: data.data && data.data['P'] && data.data['P']['Value'],
           CellStyle: {
             backgroundColor: #eaf3f9,
             fontWeight: medium
@@ -71,7 +71,7 @@
         Coordinates: [
           E
         ],
-        SystemName: E,
+        Id: E,
         DisplayName: Expenses,
         GrouperName: AmountType
       },
@@ -95,7 +95,7 @@
         Coordinates: [
           P
         ],
-        SystemName: P,
+        Id: P,
         DisplayName: Total Premium,
         GrouperName: AmountType
       },
@@ -123,7 +123,7 @@
         Coordinates: [
           C
         ],
-        SystemName: C,
+        Id: C,
         DisplayName: Cost,
         GrouperName: AmountType
       },
@@ -147,7 +147,7 @@
         Coordinates: [
           B
         ],
-        SystemName: B,
+        Id: B,
         DisplayName: Benefit,
         GrouperName: AmountType
       },

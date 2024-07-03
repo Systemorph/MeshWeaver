@@ -1,5 +1,4 @@
-﻿using System.Collections.Immutable;
-using OpenSmc.Domain;
+﻿using OpenSmc.Domain;
 using OpenSmc.Pivot.Models.Interfaces;
 
 namespace OpenSmc.Pivot.Grouping
@@ -8,7 +7,7 @@ namespace OpenSmc.Pivot.Grouping
         where TGroup : class, IGroup, new()
         where T : INamed
     {
-        public NamedPivotGrouper(string name, Func<T, string> keySelector)
+        public NamedPivotGrouper(string name, Func<object, object> keySelector)
             : base(
                 x =>
                     x.GroupBy(o =>
@@ -16,10 +15,10 @@ namespace OpenSmc.Pivot.Grouping
                         var id = keySelector(o);
                         return new TGroup
                         {
-                            SystemName = id,
+                            Id = id.ToString(),
                             DisplayName = o.DisplayName,
                             GrouperName = name,
-                            Coordinates = [id]
+                            Coordinates = [id.ToString()]
                         };
                     }),
                 name

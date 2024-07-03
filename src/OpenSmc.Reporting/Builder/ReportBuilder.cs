@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Linq.Expressions;
+using OpenSmc.Data;
 using OpenSmc.GridModel;
 using OpenSmc.Pivot.Aggregations;
 using OpenSmc.Pivot.Builder;
@@ -13,19 +14,20 @@ namespace OpenSmc.Reporting.Builder
         : IPivotBuilder<T, TIntermediate, TAggregate, ReportBuilder<T, TIntermediate, TAggregate>>,
             IReportBuilder<ReportBuilder<T, TIntermediate, TAggregate>>
     {
+        private readonly WorkspaceState state;
+
         private ImmutableList<Func<GridOptions, GridOptions>> PostProcessors { get; init; } =
             ImmutableList<Func<GridOptions, GridOptions>>.Empty;
         private PivotBuilder<T, TIntermediate, TAggregate> PivotBuilder { get; init; }
 
         public ReportBuilder(PivotBuilder<T, TIntermediate, TAggregate> pivotBuilder)
         {
+            state = pivotBuilder.State;
             PivotBuilder = pivotBuilder;
         }
 
-        private ReportBuilder(IEnumerable<T> objects)
-        {
-            PivotBuilder = new PivotBuilder<T, TIntermediate, TAggregate>(objects);
-        }
+        private ReportBuilder(WorkspaceState state, IEnumerable<T> objects)
+        : this(new PivotBuilder<T, TIntermediate, TAggregate>(state, objects)){}
 
         public ReportBuilder<T, TNewIntermediate, TNewAggregate> WithAggregation<
             TNewIntermediate,
@@ -38,6 +40,7 @@ namespace OpenSmc.Reporting.Builder
         )
         {
             var builder = new ReportBuilder<T, TNewIntermediate, TNewAggregate>(
+                state,
                 PivotBuilder.Objects
             );
             return builder with
@@ -58,7 +61,7 @@ namespace OpenSmc.Reporting.Builder
             > aggregationsFunc
         )
         {
-            var builder = new ReportBuilder<T, TNewAggregate, TNewAggregate>(PivotBuilder.Objects);
+            var builder = new ReportBuilder<T, TNewAggregate, TNewAggregate>(state, PivotBuilder.Objects);
             return builder with
             {
                 PivotBuilder = builder.PivotBuilder with

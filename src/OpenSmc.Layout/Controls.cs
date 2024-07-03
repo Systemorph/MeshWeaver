@@ -3,14 +3,15 @@ using OpenSmc.Application.Styles;
 using OpenSmc.Data;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.DataBinding;
-using OpenSmc.Layout.Views;
 
 namespace OpenSmc.Layout;
 
 public static class Controls
 {
     public static NavMenuControl NavMenu() => new();
+
     public static NavGroupControl NavGroup(string title) => new(title);
+
     public static NavLinkControl NavLink(string title, string href) => new(title, href);
 
     public static LayoutStackControl Stack() => new();
@@ -33,8 +34,7 @@ public static class Controls
 
     public static MenuItemControl Menu(object title, object icon) => new(title, icon);
 
-    public static ButtonControl Button(object title) =>
-        new(title) { Style = "button" };
+    public static ButtonControl Button(object title) => new(title) { Style = "button" };
 
     public static ExceptionControl Exception(Exception ex) => new(ex.Message, ex.GetType().Name);
 
@@ -55,13 +55,17 @@ public static class Controls
 
     public static SliderControl Slider(int min, int max, int step) => new(min, max, step);
 
-    public static LayoutGridItemControl ToLayoutGridItem(this IUiControl control,
-        Func<LayoutGridItemControl, LayoutGridItemControl> builder) => builder.Invoke(new LayoutGridItemControl(control));
+    public static LayoutGridItemControl ToLayoutGridItem(
+        this IUiControl control,
+        Func<LayoutGridItemControl, LayoutGridItemControl> builder
+    ) => builder.Invoke(new LayoutGridItemControl(control));
 
     public static LayoutGridItemControl ToLayoutGridItem(this IUiControl control) => new(control);
 
-    public static SplitterPaneControl ToSplitterPane(this IUiControl control,
-               Func<SplitterPaneControl, SplitterPaneControl> builder) => builder.Invoke(new SplitterPaneControl(control));
+    public static SplitterPaneControl ToSplitterPane(
+        this IUiControl control,
+        Func<SplitterPaneControl, SplitterPaneControl> builder
+    ) => builder.Invoke(new SplitterPaneControl(control));
 
     public static SplitterPaneControl ToSplitterPane(this IUiControl control) => new(control);
 
@@ -80,14 +84,18 @@ public static class Controls
     public static RedirectControl Redirect(LayoutAreaReference message, object address) =>
         new(message, address, message.Area);
 
-
     #region DataBinding
 
 
     /// <summary>
     /// Takes expression tree of data template and replaces all property getters by binding instances and sets data context property
     /// </summary>
-    public static UiControl Bind<T, TView>(this LayoutAreaHost area, T data, string id, Expression<Func<T, TView>> dataTemplate)
+    public static UiControl Bind<T, TView>(
+        this LayoutAreaHost area,
+        T data,
+        string id,
+        Expression<Func<T, TView>> dataTemplate
+    )
         where TView : UiControl => BindObject(area, data, id, dataTemplate);
 
     internal static UiControl BindObject<T, TView>(
@@ -113,7 +121,7 @@ public static class Controls
         area.UpdateData(id, data);
         return LayoutAreaReference.GetDataPointer(id);
     }
-
+    
     public static ItemTemplateControl Bind<T, TView>(
         this LayoutAreaHost area,
         IEnumerable<T> data,
@@ -130,13 +138,11 @@ public static class Controls
     )
         where TView : UiControl
     {
-        var topLevel = UpdateData(area, data, id);
-
-        var view = dataTemplate.Build(topLevel, out var _);
+        var view = dataTemplate.Build("/", out var _);
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
 
-        return new ItemTemplateControl(view, new JsonPointerReference(topLevel));
+        return new ItemTemplateControl(view, UpdateData(area, data, id));
     }
 
     #endregion

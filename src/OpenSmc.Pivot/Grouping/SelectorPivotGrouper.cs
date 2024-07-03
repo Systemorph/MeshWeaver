@@ -29,7 +29,7 @@ namespace OpenSmc.Pivot.Grouping
 
             var nullGroupPrivate = new TGroup
             {
-                SystemName = nullGroup.SystemName,
+                Id = nullGroup.Id,
                 DisplayName = nullGroup.DisplayName,
                 Coordinates = nullGroup.Coordinates,
                 GrouperName = Id
@@ -61,13 +61,13 @@ namespace OpenSmc.Pivot.Grouping
 
         protected virtual TGroup CreateGroupDefinition(TSelected value)
         {
-            var systemName = value.ToString();
+            var id = value;
             return new TGroup
             {
-                DisplayName = systemName,
-                SystemName = systemName,
+                DisplayName = id.ToString(),
+                Id = id,
                 GrouperName = Id,
-                Coordinates = ImmutableList<string>.Empty.Add(systemName)
+                Coordinates = ImmutableList<object>.Empty.Add(id)
             };
         }
     }

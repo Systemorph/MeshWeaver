@@ -1,108 +1,8 @@
-﻿using System.Collections;
-using System.Collections.Immutable;
-using System.ComponentModel.DataAnnotations;
-using System.Linq.Expressions;
-using System.Reflection;
-using AngleSharp.Common;
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Serialization;
-using OpenSmc.Domain;
-using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
-using OpenSmc.Reflection;
 
 namespace OpenSmc.Data;
-
-public static class KeyFunctionBuilder
-{
-    private static readonly Func<Type, Func<object, object>>[] factories =
-    [
-        type =>
-            GetFromProperty(
-                type,
-                type.GetProperties().SingleOrDefault(p => p.HasAttribute<KeyAttribute>())
-            ),
-        type =>
-            GetFromProperty(
-                type,
-                type.GetProperties()
-                    .SingleOrDefault(x =>
-                        x.Name.Equals("id", StringComparison.InvariantCultureIgnoreCase)
-                    )
-            ),
-        type =>
-            GetFromProperty(
-                type,
-                type.GetProperties()
-                    .SingleOrDefault(x =>
-                        x.Name.Equals("systemname", StringComparison.InvariantCultureIgnoreCase)
-                    )
-            ),
-        type =>
-            GetFromProperties(
-                type,
-                type.GetProperties().Where(x => x.HasAttribute<DimensionAttribute>()).ToArray()
-            ),
-    ];
-
-    private static Func<object, object> GetFromProperties(
-        Type type,
-        IReadOnlyCollection<PropertyInfo> properties
-    )
-    {
-        if (properties.Count == 0)
-            return null;
-
-        var propertyTypes = properties.Select(x => x.PropertyType).ToArray();
-        var tupleType = properties.Count switch
-        {
-            1 => typeof(Tuple<>).MakeGenericType(propertyTypes),
-            2 => typeof(Tuple<,>).MakeGenericType(propertyTypes),
-            3 => typeof(Tuple<,,>).MakeGenericType(propertyTypes),
-            4 => typeof(Tuple<,,,>).MakeGenericType(propertyTypes),
-            5 => typeof(Tuple<,,,,>).MakeGenericType(propertyTypes),
-            6 => typeof(Tuple<,,,,,>).MakeGenericType(propertyTypes),
-            7 => typeof(Tuple<,,,,,,>).MakeGenericType(propertyTypes),
-            8 => typeof(Tuple<,,,,,,,>).MakeGenericType(propertyTypes),
-            _ => throw new NotSupportedException("Too many properties")
-        };
-
-        var prm = Expression.Parameter(typeof(object));
-        return Expression
-            .Lambda<Func<object, object>>(
-                Expression.Convert(
-                    Expression.New(
-                        tupleType.GetConstructors().Single(),
-                        properties.Select(
-                            (x, i) => Expression.Property(Expression.Convert(prm, type), x)
-                        )
-                    ),
-                    typeof(object)
-                ),
-                prm
-            )
-            .Compile();
-    }
-
-    private static Func<object, object> GetFromProperty(Type type, PropertyInfo property)
-    {
-        if (property == null)
-            return null;
-        var prm = Expression.Parameter(typeof(object));
-        return Expression
-            .Lambda<Func<object, object>>(
-                Expression.Convert(
-                    Expression.Property(Expression.Convert(prm, type), property),
-                    typeof(object)
-                ),
-                prm
-            )
-            .Compile();
-    }
-
-    public static Func<object, object> GetKeyFunction(Type elementType) =>
-        factories.Select(f => f(elementType)).FirstOrDefault(f => f != null);
-}
 
 public abstract record TypeSource<TTypeSource> : ITypeSource
     where TTypeSource : TypeSource<TTypeSource>
@@ -118,14 +18,18 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
         CollectionName = typeRegistry.TryGetTypeName(ElementType, out var typeName)
             ? typeName
             : ElementType.FullName;
-        Key = KeyFunctionBuilder.GetKeyFunction(ElementType);
+
+        typeRegistry.WithType(ElementType);
+        Key = typeRegistry.GetKeyFunction(CollectionName);
     }
 
-    ITypeSource ITypeSource.WithKey(Func<object, object> key) => This with { Key = key };
 
-    public virtual object GetKey(object instance) => Key(instance);
+    public virtual object GetKey(object instance) =>
+        Key.Function?.Invoke(instance)
+        ?? throw new DataSourceConfigurationException(
+            "No key mapping is defined. Please specify in the configuration of the data sources source.");
 
-    protected Func<object, object> Key { get; init; }
+    protected KeyFunction Key { get; init; }
 
     protected TTypeSource This => (TTypeSource)this;
     protected IWorkspace Workspace { get; }

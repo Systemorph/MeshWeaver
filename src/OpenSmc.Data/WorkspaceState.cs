@@ -9,7 +9,7 @@ public record WorkspaceState(
     ReduceManager<WorkspaceState> ReduceManager
 )
 {
-    IReadOnlyDictionary<string, ITypeSource> TypeSources { get; } =
+    public IReadOnlyDictionary<string, ITypeSource> TypeSources { get; } =
         DataSources
             .Values.SelectMany(x => x.TypeSources.Values)
             .ToImmutableDictionary(x => x.CollectionName);
@@ -104,6 +104,9 @@ public record WorkspaceState(
                             ))
                             .ToImmutableDictionary()
                     )
+                    {
+                        GetCollectionName = GetCollectionName
+                    }
                 )
             )
             .Select(e => new KeyValuePair<StreamReference, EntityStore>(
@@ -183,13 +186,14 @@ public record WorkspaceState(
     {
         var collection = reference.Collection;
         var store = GetStore(GetDataSource(collection));
-        return store.Collections.GetValueOrDefault(collection)?.GetData(reference.Id);
+        return store?.Collections.GetValueOrDefault(collection)?.GetData(reference.Id);
     }
 
     private EntityStore GetStore(IDataSource dataSource) =>
         dataSource.Streams.Select(s => 
             StoresByStream.GetValueOrDefault(s.StreamReference))
             .Where(x => x != null)
+            .DefaultIfEmpty()
             .Aggregate((x,y) => x.Merge(y)
             );
 

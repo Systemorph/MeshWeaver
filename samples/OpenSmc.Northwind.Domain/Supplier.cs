@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using OpenSmc.Domain;
 
 namespace OpenSmc.Northwind.Domain;
 
@@ -15,4 +16,7 @@ public record Supplier(
     string Phone,
     string Fax,
     string HomePage
-);
+) : INamed
+{
+    string INamed.DisplayName => CompanyName;
+}

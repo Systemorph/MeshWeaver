@@ -3,9 +3,7 @@ using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
 using System.Reflection;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using OpenSmc.Activities;
 using OpenSmc.Data;
 using OpenSmc.DataSetReader;
 using OpenSmc.DataSetReader.Csv;
@@ -14,7 +12,7 @@ using OpenSmc.Domain;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 
-namespace OpenSmc.Import;
+namespace OpenSmc.Import.Configuration;
 
 public record ImportConfiguration
 {
@@ -37,7 +35,7 @@ public record ImportConfiguration
         if (mappedTypes.Any())
             ImportFormatBuilders = ImportFormatBuilders.Add(
                 ImportFormat.Default,
-                f => f.WithAutoMappingsForTypes(mappedTypes)
+                [f => f.WithMappings(m => m.WithAutoMappingsForTypes(mappedTypes))]
             );
         Logger = logger;
     }
@@ -50,26 +48,39 @@ public record ImportConfiguration
     public ImportConfiguration WithFormat(
         string format,
         Func<ImportFormat, ImportFormat> configuration
-    ) => this with { ImportFormatBuilders = ImportFormatBuilders.SetItem(format, configuration) };
+    ) =>
+        this with
+        {
+            ImportFormatBuilders = ImportFormatBuilders.SetItem(
+                format,
+                (
+                    ImportFormatBuilders.GetValueOrDefault(format)
+                    ?? ImmutableList<Func<ImportFormat, ImportFormat>>.Empty
+                ).Add(configuration)
+            )
+        };
 
     private ImmutableDictionary<
         string,
-        Func<ImportFormat, ImportFormat>
+        ImmutableList<Func<ImportFormat, ImportFormat>>
     > ImportFormatBuilders { get; init; } =
-        ImmutableDictionary<string, Func<ImportFormat, ImportFormat>>.Empty;
+        ImmutableDictionary<string, ImmutableList<Func<ImportFormat, ImportFormat>>>.Empty;
 
     public ImportFormat GetFormat(string format)
     {
         if (ImportFormats.TryGetValue(format, out var ret))
             return ret;
 
-        var builder = ImportFormatBuilders.GetValueOrDefault(format);
-        if (builder == null)
+        var builders = ImportFormatBuilders.GetValueOrDefault(format);
+        if (builders == null)
             return null;
 
         return ImportFormats.GetOrAdd(
             format,
-            builder.Invoke(new ImportFormat(format, Hub, MappedTypes, Validations))
+            builders.Aggregate(
+                new ImportFormat(format, Hub, MappedTypes, Validations),
+                (a, b) => b.Invoke(a)
+            )
         );
     }
 
