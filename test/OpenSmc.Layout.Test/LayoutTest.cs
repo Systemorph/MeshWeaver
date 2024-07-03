@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using FluentAssertions;
 using Json.Patch;
+using Json.Path;
 using Json.Pointer;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
@@ -287,6 +288,64 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     new DataGridColumn<string> { Property = nameof(DataRecord.DisplayName).ToCamelCase(), Title = nameof(DataRecord.DisplayName).Wordify()}
                 ]
             );
+    }
+
+    public static UiControl DataBoundCheckboxes(LayoutAreaHost area)
+    {
+        var data = new Dictionary<string, bool> {{"Label1", true}, {"Label2", false}, {"Label3", false}};
+        return area.Bind(data, nameof(DataBoundCheckboxes), x => Controls.CheckBox(x.Key, x.Value));
+
+    }
+
+    [HubFact]
+    public async Task TestDataBoundCheckboxes()
+    {
+        var reference = new LayoutAreaReference(nameof(DataBoundCheckboxes));
+
+        var hub = GetClient();
+        var workspace = hub.GetWorkspace();
+        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(new HostAddress(), reference);
+        var controlArea = $"{reference.Area}";
+        var content = await stream.GetControlStream(controlArea).FirstAsync(x => x != null);
+        var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
+        var dataReference = itemTemplate.Data.Should().BeOfType<JsonPointerReference>().Which;
+        dataReference.Pointer.Should().Be($"/data/\"{nameof(DataBoundCheckboxes)}\"");
+        var data = await stream.GetDataStream<Dictionary<string, bool>>(dataReference).FirstAsync();
+
+        data
+            .Should()
+            .HaveCount(3);
+
+        data.First().Value.Should().Be(true);
+
+        var firstValuePointer = itemTemplate.DataContext + "/0/value";
+
+        stream.Update(ci =>
+        {
+            var patch = new JsonPatch(PatchOperation.Replace(JsonPointer.Parse(firstValuePointer), false));
+            return new Data.Serialization.ChangeItem<JsonElement>(
+                stream.Owner,
+                stream.Reference,
+                patch.Apply(ci),
+                hub.Address,
+                patch,
+                hub.Version
+            );
+        });
+
+        var updatedControls = await stream
+            .GetDataStream(new JsonPointerReference(firstValuePointer))
+            .TakeUntil(o => o is ItemTemplateControl html && !html.Data.ToString()!.Contains("2024"))
+            .ToArray();
+
+        updatedControls
+            .Last()
+            .Should()
+            .BeOfType<HtmlControl>()
+            .Which.Data.ToString()
+            .Should()
+            .Contain("2025");
+
     }
 }
 
