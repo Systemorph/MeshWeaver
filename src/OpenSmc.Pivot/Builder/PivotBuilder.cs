@@ -1,4 +1,5 @@
 ﻿using System.Linq.Expressions;
+using OpenSmc.Data;
 using OpenSmc.Pivot.Aggregations;
 using OpenSmc.Pivot.Builder.Interfaces;
 using OpenSmc.Pivot.Grouping;
@@ -11,16 +12,16 @@ public record PivotBuilder<T, TIntermediate, TAggregate>
     : PivotBuilderBase<T, T, TIntermediate, TAggregate, PivotBuilder<T, TIntermediate, TAggregate>>,
         IPivotBuilder<T, TIntermediate, TAggregate, PivotBuilder<T, TIntermediate, TAggregate>>
 {
-    public PivotBuilder(IEnumerable<T> objects)
-        : base(objects) { }
+    public PivotBuilder(WorkspaceState state, IEnumerable<T> objects)
+        : base(state, objects)
+    {
+        this.State = state;
+        ColumnGroupConfig = DefaultColumnGrouping = new PivotColumnsGroupingConfiguration<T>(state);
+        RowGroupConfig = new PivotRowsGroupingConfiguration<T>(state);
+    }
 
-    private static readonly PivotColumnsGroupingConfiguration<T> DefaultColumnGrouping = new();
-    private static readonly PivotRowsGroupingConfiguration<T> DefaultRowsGrouping = new();
-
-    public PivotGroupingConfiguration<T, ColumnGroup> ColumnGroupConfig { get; init; } =
-        DefaultColumnGrouping;
-    public PivotGroupingConfiguration<T, RowGroup> RowGroupConfig { get; init; } =
-        DefaultRowsGrouping;
+    public PivotGroupingConfiguration<T, ColumnGroup> ColumnGroupConfig { get; init; }
+    public PivotGroupingConfiguration<T, RowGroup> RowGroupConfig { get; init; }
 
     public PivotBuilder<T, TIntermediate, TAggregate> GroupRowsBy<TSelected>(
         Expression<Func<T, TSelected>> selector
@@ -58,6 +59,8 @@ public record PivotBuilder<T, TIntermediate, TAggregate>
         };
     }
 
+    public PivotGroupingConfiguration<T, ColumnGroup> DefaultColumnGrouping { get; set; }
+
     public override PivotBuilder<T, TIntermediate, TAggregate> Transpose<TValue>()
     {
         var builder = base.Transpose<TValue>();
@@ -88,7 +91,7 @@ public record PivotBuilder<T, TIntermediate, TAggregate>
             Aggregations<T, TNewIntermediate, TNewAggregate>
         > aggregationsFunc
     ) =>
-        new(Objects)
+        new(State, Objects)
         {
             Aggregations = aggregationsFunc(new Aggregations<T, TIntermediate, TAggregate>()),
         };
@@ -99,9 +102,8 @@ public record PivotBuilder<T, TIntermediate, TAggregate>
             Aggregations<T, TNewAggregate>
         > aggregationsFunc
     ) =>
-        new(Objects)
+        new(State, Objects)
         {
-            State = State,
             Aggregations = aggregationsFunc(new Aggregations<T, TIntermediate, TAggregate>()),
         };
 

@@ -27,16 +27,14 @@ namespace OpenSmc.Pivot.Grouping
             if (groups.Count == 0)
                 return new List<ColumnGroup>();
 
-            if (
-                !groups.TryGetValue(IPivotGrouper<T, TGroup>.TopGroup.SystemName, out var topGroups)
-            )
+            if (!groups.TryGetValue(IPivotGrouper<T, TGroup>.TopGroup.Id, out var topGroups))
                 throw new Exception("Only for top column group manager");
 
             var orderedGroups = Grouper.Order(topGroups);
 
             // TODO V10: if we want a summary group on top, we need one more top column group (2022/01/13, Ekaterina Mishina)
             var columnGroups = orderedGroups
-                .Where(x => x.SystemName != IPivotGrouper<T, TGroup>.TopGroup.SystemName)
+                .Where(x => x.Id != IPivotGrouper<T, TGroup>.TopGroup.Id)
                 .Select(x => new ColumnGroup(x))
                 .ToList();
 
@@ -59,7 +57,7 @@ namespace OpenSmc.Pivot.Grouping
 
                     if (
                         subGroupsByParent != null
-                        && subGroupsByParent.TryGetValue(group.SystemName, out var children)
+                        && subGroupsByParent.TryGetValue(group.Id, out var children)
                     )
                     {
                         var orderedChildren = SubGroup.Grouper.Order(children);
@@ -70,21 +68,21 @@ namespace OpenSmc.Pivot.Grouping
                         if (childrenWithChildren.Count > 1)
                         {
                             var totalGroupCoordinates = groupCoordinates
-                                .Append(IPivotGrouper<T, TGroup>.TotalGroup.SystemName)
+                                .Append(IPivotGrouper<T, TGroup>.TotalGroup.Id)
                                 .ToList();
                             var totalGroup = new ColumnGroup
                             {
-                                SystemName = Join(".", totalGroupCoordinates),
+                                Id = Join(".", totalGroupCoordinates),
                                 DisplayName = " ",
                                 GrouperName = group.GrouperName,
                                 Coordinates = totalGroupCoordinates.ToImmutableList(),
                             };
                             var totalValues = valueColumns.Select(c =>
                             {
-                                var cc = totalGroupCoordinates.Append(c.SystemName).ToList();
+                                var cc = totalGroupCoordinates.Append(c.Id).ToList();
                                 return c with
                                 {
-                                    SystemName = Join(".", cc),
+                                    Id = Join(".", cc),
                                     Coordinates = cc.ToImmutableList(),
                                 };
                             });
@@ -97,10 +95,10 @@ namespace OpenSmc.Pivot.Grouping
 
                     var leafColumns = valueColumns.Select(c =>
                     {
-                        var coordinates = groupCoordinates.Append(c.SystemName).ToList();
+                        var coordinates = groupCoordinates.Append(c.Id).ToList();
                         return c with
                         {
-                            SystemName = Join(".", coordinates),
+                            Id = Join(".", coordinates),
                             Coordinates = coordinates.ToImmutableList(),
                         };
                     });
@@ -111,7 +109,7 @@ namespace OpenSmc.Pivot.Grouping
 
         public IEnumerable<PivotGrouping<TGroup, IReadOnlyCollection<T>>> CreateRowGroupings(
             IReadOnlyCollection<T> objects,
-            IReadOnlyCollection<string> parentCoordinates
+            IReadOnlyCollection<object> parentCoordinates
         )
         {
             if (objects.Count == 0)
@@ -128,24 +126,24 @@ namespace OpenSmc.Pivot.Grouping
         /// This needs to be abstract as in C# 9 there is no generic constraint for record types available ==> cannot use with operator.
         /// </summary>
         /// <param name="original"></param>
-        /// <param name="fullCoordinatesBySystemName"></param>
+        /// <param name="fullCoordinatesById"></param>
         /// <returns></returns>
         protected virtual TGroup GetModifiedGroup(
             TGroup original,
-            IDictionary<string, string[]> fullCoordinatesBySystemName
+            IDictionary<object, object[]> fullCoordinatesById
         )
         {
-            if (original.SystemName == IPivotGrouper<T, TGroup>.TopGroup.SystemName)
+            if (original.Id == IPivotGrouper<T, TGroup>.TopGroup.Id)
                 return original;
 
-            var fullCoordinates = fullCoordinatesBySystemName[original.SystemName];
+            var fullCoordinates = fullCoordinatesById[original.Id];
 
             if (original is RowGroup rg)
                 return (TGroup)
                     (object)(
                         rg with
                         {
-                            SystemName = Join(".", fullCoordinates),
+                            Id = Join(".", fullCoordinates),
                             Coordinates = fullCoordinates.ToImmutableList()
                         }
                     );
@@ -155,7 +153,7 @@ namespace OpenSmc.Pivot.Grouping
                     (object)(
                         cg with
                         {
-                            SystemName = Join(".", fullCoordinates),
+                            Id = Join(".", fullCoordinates),
                             Coordinates = fullCoordinates.ToImmutableList()
                         }
                     );
@@ -167,7 +165,7 @@ namespace OpenSmc.Pivot.Grouping
             PivotGrouping<TGroup, IReadOnlyCollection<T>>
         > MixRowGroupsWithSubGroups(
             IReadOnlyCollection<PivotGrouping<TGroup, IReadOnlyCollection<T>>> groupings,
-            IReadOnlyCollection<string> parentCoordinates
+            IReadOnlyCollection<object> parentCoordinates
         )
         {
             Dictionary<
@@ -187,7 +185,7 @@ namespace OpenSmc.Pivot.Grouping
                 subGroupsByParent[
                     fullGroupCoordinates.Any()
                         ? Join(".", fullGroupCoordinates)
-                        : IPivotGrouper<T, TGroup>.TopGroup.SystemName
+                        : IPivotGrouper<T, TGroup>.TopGroup.Id
                 ] = subGroups;
             }
 
@@ -205,10 +203,10 @@ namespace OpenSmc.Pivot.Grouping
             PivotGrouping<TGroup, IReadOnlyCollection<T>>
         > GetFinalizedReportGroupings(
             IReadOnlyCollection<PivotGrouping<TGroup, IReadOnlyCollection<T>>> groupings,
-            IReadOnlyCollection<string> parentCoordinates
+            IReadOnlyCollection<object> parentCoordinates
         )
         {
-            IDictionary<string, string[]> fullCoordinatesBySystemName = GetFullGroupingsCoordinates(
+            IDictionary<object, object[]> fullCoordinatesBySystemName = GetFullGroupingsCoordinates(
                 groupings,
                 parentCoordinates
             );
@@ -224,7 +222,7 @@ namespace OpenSmc.Pivot.Grouping
             {
                 var key = parentCoordinates.Any()
                     ? Join(".", parentCoordinates)
-                    : IPivotGrouper<T, TGroup>.TopGroup.SystemName;
+                    : IPivotGrouper<T, TGroup>.TopGroup.Id;
                 if (!groups.TryGetValue(key, out var list))
                 {
                     list = new HashSet<IdentityWithOrderKey<TGroup>>();
@@ -237,19 +235,19 @@ namespace OpenSmc.Pivot.Grouping
             return ret;
         }
 
-        private IDictionary<string, string[]> GetFullGroupingsCoordinates(
+        private IDictionary<object, object[]> GetFullGroupingsCoordinates(
             IReadOnlyCollection<PivotGrouping<TGroup, IReadOnlyCollection<T>>> groupings,
-            IReadOnlyCollection<string> parentCoordinates
+            IReadOnlyCollection<object> parentCoordinates
         )
         {
             if (parentCoordinates == null)
                 return groupings
-                    .Select(x => x.Identity?.SystemName)
+                    .Select(x => x.Identity?.Id)
                     .Where(x => x != null)
                     .ToDictionary(x => x, x => new[] { x });
 
             return groupings
-                .Select(x => x.Identity?.SystemName)
+                .Select(x => x.Identity?.Id)
                 .Where(x => x != null)
                 .ToDictionary(x => x, x => parentCoordinates.Concat(x.RepeatOnce()).ToArray());
         }
@@ -270,7 +268,7 @@ namespace OpenSmc.Pivot.Grouping
 
         public HierarchicalRowGroupAggregator<TIntermediate, TAggregate, TGroup> GetAggregates(
             IReadOnlyCollection<T> objects,
-            IReadOnlyCollection<string> parentCoordinates
+            IReadOnlyCollection<object> parentCoordinates
         )
         {
             // if lowest level, get aggregates from object
@@ -317,7 +315,7 @@ namespace OpenSmc.Pivot.Grouping
                 .Join(
                     subAggregates,
                     x => x.Identity?.Coordinates.Last(),
-                    x => x.Identity?.SystemName,
+                    x => x.Identity?.Id,
                     (m, sa) =>
                         new PivotGrouping<TGroup, TIntermediate>(m.Identity, sa.Totals, m.OrderKey)
                 )

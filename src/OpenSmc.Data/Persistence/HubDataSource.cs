@@ -35,7 +35,7 @@ public record HubDataSource : HubDataSourceBase<HubDataSource>
         var reference = new CollectionsReference(
             TypeSources.Values.Select(ts => ts.CollectionName).ToArray()
         );
-        Streams = Streams.Add(Workspace.GetStream(Id, reference));
+        Streams = Streams.Add(Workspace.GetRemoteStream(Id, reference));
         base.Initialize(state);
     }
 }

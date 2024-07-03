@@ -32,23 +32,30 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
         new(BasicTypes.Select(t => new KeyValuePair<string, Type>(t.Name, t)));
     private readonly ConcurrentDictionary<Type, string> nameByType =
         new(BasicTypes.Select(t => new KeyValuePair<Type, string>(t, t.Name)));
-    private readonly ConcurrentDictionary<string, Func<object, object>> keysByType = new();
+    private readonly ConcurrentDictionary<string, KeyFunction> keysByType = new();
+
+    private readonly KeyFunctionBuilder keyFunctionBuilder = new();
 
     public ITypeRegistry WithType(Type type) => WithType(type, FormatType(type));
 
-    public ITypeRegistry WithType(Type type, string typeName) => WithType(type, typeName, null);
-
-    public ITypeRegistry WithType(Type type, string typeName, Func<object, object> key)
+    public ITypeRegistry WithType(Type type, string typeName)
     {
         typeByName[typeName] = type;
         nameByType[type] = typeName;
-        if (key != null)
-            keysByType[typeName] = key;
+        keysByType[typeName] = keyFunctionBuilder.GetKeyFunction(type);
         return this;
     }
 
-    public Func<object, object> GetKeyFunction(string collection) =>
+    public KeyFunction GetKeyFunction(string collection) =>
         keysByType.GetValueOrDefault(collection);
+
+    public KeyFunction GetKeyFunction(Type type)
+    {
+        return (TryGetTypeName(type, out var typeName)
+                   ? GetKeyFunction(typeName)
+                   : null)
+               ?? keyFunctionBuilder.GetKeyFunction(type); 
+    }
 
     public bool TryGetType(string name, out Type type)
     {
@@ -69,7 +76,7 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
                 .Split(',');
             var genericTypeArgs = new Type[genericArgs.Length];
 
-            for (int i = 0; i < genericArgs.Length; i++)
+            for (var i = 0; i < genericArgs.Length; i++)
             {
                 if (TryGetType(genericArgs[i].Trim(), out var genericTypeArg))
                 {
@@ -97,7 +104,7 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
             var genericTypeDefinition = type.GetGenericTypeDefinition();
             var genericArguments = type.GetGenericArguments();
             var genericTypeArguments = new string[genericArguments.Length];
-            for (int i = 0; i < genericArguments.Length; i++)
+            for (var i = 0; i < genericArguments.Length; i++)
             {
                 if (!TryGetTypeName(genericArguments[i], out var genericTypeArgument))
                 {
@@ -123,6 +130,18 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
         typeName = FormatType(type);
         typeByName[typeName] = type;
         return nameByType[type] = typeName;
+    }
+
+
+    public ITypeRegistry WithKeyFunctionProvider(Func<Type, KeyFunction> key)
+    {
+        keyFunctionBuilder.WithKeyFunction(key);
+        return this;
+    }
+    public ITypeRegistry WithKeyFunction(string collection, KeyFunction keyFunction)
+    {
+        keysByType[collection] = keyFunction;
+        return this;
     }
 
     public ITypeRegistry WithTypesFromAssembly(Type type, Func<Type, bool> filter) =>

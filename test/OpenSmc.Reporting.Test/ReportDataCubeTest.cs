@@ -63,9 +63,8 @@ public class ReportDataCubeTest : HubTestBase
         > toReportBuilder
     )
     {
-        var initialPivotBuilder = PivotFactory
-            .ForDataCubes(data)
-            .WithState(await GetWorkspaceStateAsync());
+        var initialPivotBuilder = (await GetWorkspaceStateAsync())
+            .ForDataCubes(data);
 
         var reportBuilder = toReportBuilder(initialPivotBuilder);
 

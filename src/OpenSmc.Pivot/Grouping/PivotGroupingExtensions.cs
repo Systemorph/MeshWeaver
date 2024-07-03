@@ -100,12 +100,12 @@ namespace OpenSmc.Pivot.Grouping
         )
         {
             if (typeof(INamed).IsAssignableFrom(descriptor.Type))
-                return GetPivotGrouper<DataSlice<TElement>, string>(
+                return GetPivotGrouper<DataSlice<TElement>, object>(
                     state,
                     hierarchicalDimensionCache,
                     hierarchicalDimensionOptions,
                     descriptor,
-                    x => x.Tuple.GetValue(descriptor.SystemName)?.ToString()
+                    x => x.Tuple.GetValue(descriptor.SystemName)
                 );
 
             var convertedLambda = GetValueMethod
@@ -157,10 +157,7 @@ namespace OpenSmc.Pivot.Grouping
                     (Func<TTransformed, PropertyInfo>)(object)selector
                 );
 
-            if (
-                typeof(INamed).IsAssignableFrom(descriptor.Type)
-                && typeof(TSelected) == typeof(string)
-            )
+            if (typeof(INamed).IsAssignableFrom(descriptor.Type))
                 return (IPivotGrouper<TTransformed, TGroup>)
                     GetDimensionReportGroupConfigMethod
                         .MakeGenericMethod(typeof(TTransformed), descriptor.Type)
@@ -191,7 +188,7 @@ namespace OpenSmc.Pivot.Grouping
             WorkspaceState state,
             IHierarchicalDimensionCache hierarchicalDimensionCache,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions,
-            Func<TTransformed, string> selector,
+            Func<TTransformed, object> selector,
             DimensionDescriptor descriptor
         )
             where TDimension : class, INamed
@@ -236,7 +233,7 @@ namespace OpenSmc.Pivot.Grouping
             WorkspaceState state,
             IHierarchicalDimensionCache hierarchicalDimensionCache,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions,
-            Func<TTransformed, string> selector,
+            Func<TTransformed, object> selector,
             DimensionDescriptor descriptor
         )
             where TDimension : class, IHierarchicalDimension

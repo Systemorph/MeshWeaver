@@ -10,6 +10,7 @@ using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
+using OpenSmc.Reflection;
 using OpenSmc.Utils;
 using Xunit.Abstractions;
 
@@ -46,7 +47,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     .WithView(nameof(UpdatingView), UpdatingView())
                     .WithView(
                         nameof(ItemTemplate),
-                        (area,_) =>
+                        (area, _) =>
                             layout
                                 .Hub.GetWorkspace()
                                 .Stream.Select(x => x.Value.GetData<DataRecord>())
@@ -55,7 +56,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     )
                     .WithView(
                         nameof(Counter),
-                        (_,_) => layout.Hub.GetWorkspace().Stream.Select(_ => Counter())
+                        (_, _) => layout.Hub.GetWorkspace().Stream.Select(_ => Counter())
                     )
                     .WithView("int", 3)
                     .WithView(nameof(DataGrid), DataGrid)
@@ -98,7 +99,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var reference = new LayoutAreaReference(StaticView);
 
         var workspace = GetClient().GetWorkspace();
-        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(new HostAddress(), reference);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            reference
+        );
 
         var control = await stream.GetControl(reference.Area);
         var areas = control
@@ -138,7 +142,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var reference = new LayoutAreaReference(nameof(ViewWithProgress));
 
         var workspace = GetClient().GetWorkspace();
-        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(new HostAddress(), reference);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            reference
+        );
         var controls = await stream
             .GetControlStream(reference.Area)
             .TakeUntil(o => o is HtmlControl)
@@ -174,7 +181,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(new HostAddress(), reference);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            reference
+        );
         var reportArea = $"{reference.Area}/Content";
         var content = await stream.GetControlStream(reportArea).FirstAsync(x => x != null);
         content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
@@ -182,14 +192,27 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         // Get toolbar and change value.
         var toolbarArea = $"{reference.Area}/Toolbar";
         var yearTextBox = (TextBoxControl)await stream.GetControlStream(toolbarArea).FirstAsync();
-        var jsonPath = yearTextBox.Data.Should().BeOfType<JsonPointerReference>().Which;
-        jsonPath.Pointer.Should().Be("/data/\"toolbar\"/year");
-        var year = await stream.GetDataStream<int>(jsonPath).FirstAsync();
-        year.Should().Be(2024);
+        yearTextBox
+            .DataContext.Should()
+            .Be("/data/\"toolbar\"");
+
+        var dataPointer = yearTextBox.Data.Should().BeOfType<JsonPointerReference>().Which;
+        dataPointer.Pointer.Should().Be("/year");
+        var pointer = JsonPointer.Parse(dataPointer.Pointer);
+        var year = await stream
+            .GetDataStream<JsonElement>(new JsonPointerReference(yearTextBox.DataContext))
+            .Select(s => pointer.Evaluate(s))
+            .FirstAsync();
+        year.Value.GetInt32().Should().Be(2024);
 
         stream.Update(ci =>
         {
-            var patch = new JsonPatch(PatchOperation.Replace(JsonPointer.Parse(jsonPath.Pointer), 2025));
+            var patch = new JsonPatch(
+                PatchOperation.Replace(
+                    JsonPointer.Parse(yearTextBox.DataContext + dataPointer.Pointer),
+                    2025
+                )
+            );
             return new Data.Serialization.ChangeItem<JsonElement>(
                 stream.Owner,
                 stream.Reference,
@@ -220,19 +243,33 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(new HostAddress(), reference);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            reference
+        );
         var controlArea = $"{reference.Area}";
         var content = await stream.GetControlStream(controlArea).FirstAsync(x => x != null);
         var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
         var dataReference = itemTemplate.Data.Should().BeOfType<JsonPointerReference>().Which;
         dataReference.Pointer.Should().Be($"/data/\"{nameof(ItemTemplate)}\"");
-        var data = await stream.GetDataStream<IEnumerable<DataRecord>>(dataReference).FirstAsync();
+        var data = await stream.GetDataStream<IEnumerable<JsonElement>>(dataReference).FirstAsync();
 
-        data
+        // data.Should()
+        //     .HaveCount(2)
+        //     .And.Contain(r => r.SystemName == "Hello")
+        //     .And.Contain(r => r.SystemName == "World");
+
+        var view = itemTemplate.View;
+        var pointer = view.Should()
+            .BeOfType<TextBoxControl>()
+            .Which.Data.Should()
+            .BeOfType<JsonPointerReference>()
+            .Subject;
+        pointer.Pointer.Should().Be("/displayName");
+        var parsedPointer = JsonPointer.Parse(pointer.Pointer);
+        data.Select(d => parsedPointer.Evaluate(d).Value.ToString())
             .Should()
-            .HaveCount(2)
-            .And.Contain(r => r.SystemName == "Hello")
-            .And.Contain(r => r.SystemName == "World");
+            .BeEquivalentTo("Hello", "World");
     }
 
     [HubFact]
@@ -242,7 +279,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(new HostAddress(), reference);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            reference
+        );
         var buttonArea = $"{reference.Area}/Button";
         var content = await stream.GetControlStream(buttonArea).FirstAsync();
         content
@@ -275,7 +315,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(new HostAddress(), reference);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            reference
+        );
         var content = await stream.GetControlStream(reference.Area).FirstAsync();
         content
             .Should()
@@ -284,8 +327,16 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .HaveCount(2)
             .And.BeEquivalentTo(
                 [
-                    new DataGridColumn<string> { Property = nameof(DataRecord.SystemName).ToCamelCase(), Title = nameof(DataRecord.SystemName).Wordify() },
-                    new DataGridColumn<string> { Property = nameof(DataRecord.DisplayName).ToCamelCase(), Title = nameof(DataRecord.DisplayName).Wordify()}
+                    new DataGridColumn<string>
+                    {
+                        Property = nameof(DataRecord.SystemName).ToCamelCase(),
+                        Title = nameof(DataRecord.SystemName).Wordify()
+                    },
+                    new DataGridColumn<string>
+                    {
+                        Property = nameof(DataRecord.DisplayName).ToCamelCase(),
+                        Title = nameof(DataRecord.DisplayName).Wordify()
+                    }
                 ]
             );
     }

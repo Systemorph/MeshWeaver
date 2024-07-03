@@ -1,6 +1,8 @@
 ﻿using System.Collections.Immutable;
 using OpenSmc.GridModel;
 using OpenSmc.Pivot;
+using OpenSmc.Pivot.Builder;
+using OpenSmc.Pivot.Builder.Interfaces;
 using OpenSmc.Pivot.Grouping;
 using OpenSmc.Pivot.Models;
 using OpenSmc.Pivot.Models.Interfaces;
@@ -9,7 +11,10 @@ namespace OpenSmc.Reporting.Models
 {
     public static class GridOptionsMapper
     {
-        public static GridControl ToGridControl(this PivotModel pivotModel) => 
+        public static GridControl ToGrid(this IPivotBuilder pivotBuilder) =>
+            pivotBuilder.Execute().ToGrid();
+
+        public static GridControl ToGrid(this PivotModel pivotModel) =>
             new(MapToGridOptions(pivotModel));
 
         public static GridOptions MapToGridOptions(PivotModel pivotModel)
@@ -60,7 +65,7 @@ namespace OpenSmc.Reporting.Models
         {
             return new()
             {
-                ColId = item.SystemName,
+                ColId = item.Id,
                 HeaderName = item.DisplayName,
                 ValueGetter = ValueGetter(item)
             };
@@ -87,14 +92,14 @@ namespace OpenSmc.Reporting.Models
                 .ToImmutableList();
 
             var show =
-                item.Coordinates.Last() == IPivotGrouper<object, ColumnGroup>.TotalGroup.SystemName
+                item.Coordinates.Last() == IPivotGrouper<object, ColumnGroup>.TotalGroup.Id
                     ? "closed"
                     : "open";
 
             var colGroupDef = new ColGroupDef
             {
                 ColumnGroupShow = show,
-                GroupId = item.SystemName,
+                GroupId = item.Id,
                 HeaderName = item.DisplayName,
                 Children = children
             };

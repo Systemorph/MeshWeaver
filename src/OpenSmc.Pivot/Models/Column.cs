@@ -13,9 +13,9 @@ namespace OpenSmc.Pivot.Models
         public Column(string id, string displayName)
             : this()
         {
-            SystemName = id;
+            Id = id;
             DisplayName = displayName;
-            Coordinates = ImmutableList<string>.Empty.Add(id);
+            Coordinates = ImmutableList<object>.Empty.Add(id);
         }
     }
 }

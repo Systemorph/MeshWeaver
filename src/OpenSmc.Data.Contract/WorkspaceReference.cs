@@ -35,6 +35,8 @@ public record CollectionReference(string Name) : WorkspaceReference<InstanceColl
 public record CollectionsReference(IReadOnlyCollection<string> Collections)
     : WorkspaceReference<EntityStore>
 {
+    public CollectionsReference(params string[] Collections) : this((IReadOnlyCollection<string>)Collections)
+    { }
 
     public override string ToString() => string.Join(',',Collections);
 

@@ -8,6 +8,8 @@ public static class WorkspaceExtensions
 {
     public static IReadOnlyDictionary<object, object> GetDataById<T>(this WorkspaceState state) =>
         state?.Reduce(new CollectionReference(state.GetCollectionName(typeof(T))))?.Instances;
+    public static bool Has(this WorkspaceState state, Type type) =>
+        state?.Reduce(new CollectionReference(state.GetCollectionName(type)))?.Instances.Count > 0;
 
     public static IReadOnlyCollection<T> GetData<T>(this WorkspaceState state)
     {

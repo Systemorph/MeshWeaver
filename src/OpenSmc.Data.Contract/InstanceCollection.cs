@@ -43,7 +43,7 @@ public record InstanceCollection
         throw new ArgumentOutOfRangeException(nameof(request), request, null);
     }
 
-    public IReadOnlyCollection<T> Get<T>() => Instances.Values.OfType<T>().ToArray();
+    public IEnumerable<T> Get<T>() => Instances.Values.OfType<T>();
 
     public T Get<T>(object id) => (T)Instances.GetValueOrDefault(id);
 
@@ -95,4 +95,16 @@ public record InstanceCollection
     {
         return this with { Instances = Instances.RemoveRange(ids) };
     }
+
+    public virtual bool Equals(InstanceCollection other)
+    {
+        return other != null &&
+               (
+                   Instances == other.Instances ||
+                   Instances.SequenceEqual(other.Instances)
+               );
+    }
+
+    public override int GetHashCode() => 
+        Instances.Values.Select(x => x.GetHashCode()).Aggregate((x,y) => x ^ y);
 }

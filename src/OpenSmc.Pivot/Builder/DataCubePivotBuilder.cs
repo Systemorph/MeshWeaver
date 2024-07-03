@@ -38,10 +38,22 @@ namespace OpenSmc.Pivot.Builder
             Array.Empty<DimensionDescriptor>();
         private string[] ManualSliceRowsDimensionDescriptors { get; init; } = Array.Empty<string>();
 
-        public DataCubePivotBuilder(IEnumerable<TCube> cubes)
-            : base(cubes)
+        public DataCubePivotBuilder(WorkspaceState state, IEnumerable<TCube> cubes)
+            : base(state, cubes)
         {
             AggregateByDimensionDescriptors = GetAggregationPropertiesDescriptors().ToArray();
+            SliceColumns = new SlicePivotGroupingConfigItem<TElement, ColumnGroup>(
+                [],
+                State,
+                HierarchicalDimensionCache,
+                HierarchicalDimensionOptions
+            );
+            SliceRows = new SlicePivotGroupingConfigItem<TElement, RowGroup>(
+                GetAggregateBySliceRowsDimensionDescriptors(this),
+                State,
+                HierarchicalDimensionCache,
+                HierarchicalDimensionOptions
+            );
         }
 
         public DataCubePivotBuilder<TCube, TElement, TIntermediate, TAggregate> SliceRowsBy(
@@ -228,6 +240,7 @@ namespace OpenSmc.Pivot.Builder
             );
 
             return new DataCubePivotBuilder<TCube, TElement, TNewIntermediate, TNewAggregate>(
+                State,
                 Objects
             )
             {
@@ -265,12 +278,14 @@ namespace OpenSmc.Pivot.Builder
                 new Aggregations<TElement, TIntermediate, TAggregate>()
             );
 
-            return new DataCubePivotBuilder<TCube, TElement, TNewAggregate, TNewAggregate>(Objects)
+            return new DataCubePivotBuilder<TCube, TElement, TNewAggregate, TNewAggregate>(
+                State,
+                Objects
+            )
             {
                 SliceColumns = SliceColumns,
                 SliceRows = SliceRows,
                 PropertiesToHide = PropertiesToHide,
-                State = State,
                 Aggregations = new Aggregations<DataSlice<TElement>, TNewAggregate, TNewAggregate>
                 {
                     Aggregation = slices => aggregations.Aggregation(slices.Select(s => s.Data)),

@@ -1,8 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Linq.Expressions;
 using System.Reflection;
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using OpenSmc.Utils;
 
 namespace OpenSmc.Layout;
@@ -49,6 +47,7 @@ public record PropertyColumnBuilder<TGridItem, TProperty>
         {
             Column = Column with { Format = format }
         };
+
     public PropertyColumnBuilder<TGridItem, TProperty> WithTitle(string title) =>
         this with
         {
@@ -64,7 +63,7 @@ public static class DataGridControlBuilder
     public static DataGridControl ToDataGrid<T>(
         this IReadOnlyCollection<T> elements,
         Func<DataGridControlBuilder<T>, DataGridControlBuilder<T>> configuration
-    ) => configuration.Invoke(new(elements) ).Build();
+    ) => configuration.Invoke(new(elements)).Build();
 }
 
 public record DataGridControlBuilder<T>(IReadOnlyCollection<T> elements)
@@ -86,7 +85,9 @@ public record DataGridControlBuilder<T>(IReadOnlyCollection<T> elements)
             Columns = Columns.Add(
                 config
                     .Invoke(
-                        new PropertyColumnBuilder<T, TProp>().WithProperty(propertyName.ToCamelCase()).WithTitle(propertyName.Wordify())
+                        new PropertyColumnBuilder<T, TProp>()
+                            .WithProperty(propertyName.ToCamelCase())
+                            .WithTitle(propertyName.Wordify())
                     )
                     .Column
             )

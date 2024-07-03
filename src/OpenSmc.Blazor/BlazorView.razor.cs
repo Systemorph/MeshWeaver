@@ -90,7 +90,7 @@ namespace OpenSmc.Blazor
 
         private JsonPatch GetPatch<T>(T value, JsonPointerReference reference, JsonElement current)
         {
-            var pointer = JsonPointer.Parse(reference.Pointer);
+            var pointer = JsonPointer.Parse(ViewModel.DataContext + reference.Pointer);
 
             var existing = pointer.Evaluate(current);
             if (value == null) 
@@ -121,7 +121,8 @@ namespace OpenSmc.Blazor
             if (value is IObservable<T> observable)
                 return observable;
             if (value is JsonPointerReference reference)
-                return Stream.Where(x => !Hub.Address.Equals(x.ChangedBy)).Select(x => Extract<T>(x, reference));
+                return Stream.Where(x => !Hub.Address.Equals(x.ChangedBy))
+                    .Select(x => Extract<T>(x, reference));
             if (value is T t)
                 return Observable.Return(t);
             // TODO V10: Should we add more ways to convert? Converting to primitives? (11.06.2024, Roland Bürgi)
@@ -132,7 +133,7 @@ namespace OpenSmc.Blazor
         {
             if (reference == null)
                 return default;
-            var pointer = JsonPointer.Parse(reference.Pointer);
+            var pointer = JsonPointer.Parse(ViewModel.DataContext + reference.Pointer);
             var ret = pointer.Evaluate(changeItem.Value);
             return ret == null ? default : ret.Value.Deserialize<TResult>(Stream.Hub.JsonSerializerOptions);
         }

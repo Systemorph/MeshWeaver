@@ -12,7 +12,8 @@ public partial class LayoutArea
 {
     [Inject]
     private IMessageHub Hub { get; set; }
-    [Inject] 
+
+    [Inject]
     private ILogger<LayoutArea> Logger { get; set; }
 
     private IWorkspace Workspace => Hub.GetWorkspace();
@@ -33,14 +34,13 @@ public partial class LayoutArea
             throw new ArgumentNullException(nameof(Address), "Address cannot be null.");
         if (Reference == null)
             throw new ArgumentNullException(nameof(Reference), "Reference cannot be null.");
-
     }
 
     private void Render(ChangeItem<JsonElement> item)
     {
         var newControl = GetControl(item, Reference.Area);
-        if(newControl==null)
-            if(RootControl == null)
+        if (newControl == null)
+            if (RootControl == null)
                 return;
             else
             {
@@ -49,13 +49,17 @@ public partial class LayoutArea
                 return;
             }
 
-        if(newControl.Equals(RootControl))
+        if (newControl.Equals(RootControl))
             return;
-        Logger.LogDebug("Changing area {Reference} of {Address} to {Instance}", Reference, Address, newControl);
+        Logger.LogDebug(
+            "Changing area {Reference} of {Address} to {Instance}",
+            Reference,
+            Address,
+            newControl
+        );
         RootControl = newControl;
         StateHasChanged();
     }
-
 
     protected override void OnParametersSet()
     {
@@ -65,8 +69,8 @@ public partial class LayoutArea
         Stream?.Dispose();
 
         Stream = Address.Equals(Hub.Address)
-            ? Workspace.GetStream<JsonElement, LayoutAreaReference>(Reference)
-            : Workspace.GetStream<JsonElement, LayoutAreaReference>(Address, Reference);
+            ? Workspace.Stream.Reduce<JsonElement, LayoutAreaReference>(Reference, Address)
+            : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address, Reference);
         Disposables.Add(Stream);
         Stream.Subscribe(item => InvokeAsync(() => Render(item)));
     }

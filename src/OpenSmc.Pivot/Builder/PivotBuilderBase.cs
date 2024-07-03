@@ -13,7 +13,7 @@ namespace OpenSmc.Pivot.Builder
         TIntermediate,
         TAggregate,
         TPivotBuilder
-    > : IPivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
+    > : IPivotBuilder, IPivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
         where TPivotBuilder : PivotBuilderBase<
                 T,
                 TTransformed,
@@ -31,11 +31,13 @@ namespace OpenSmc.Pivot.Builder
         public Func<IEnumerable<T>, IEnumerable<TTransformed>> Transformation { get; init; }
         protected Type TransposedValue { get; init; }
 
-        protected PivotBuilderBase(IEnumerable<T> objects)
+        protected PivotBuilderBase(WorkspaceState state, IEnumerable<T> objects)
         {
             Objects = objects as IList<T> ?? objects.ToArray();
             Aggregations = new Aggregations<TTransformed, TIntermediate, TAggregate>();
             HierarchicalDimensionOptions = new HierarchicalDimensionOptions();
+            State = state;
+            HierarchicalDimensionCache = new HierarchicalDimensionCache(state);
         }
 
         public TPivotBuilder WithHierarchicalDimensionOptions(
@@ -45,15 +47,6 @@ namespace OpenSmc.Pivot.Builder
             return (TPivotBuilder)this with
             {
                 HierarchicalDimensionOptions = optionsFunc(HierarchicalDimensionOptions)
-            };
-        }
-
-        public TPivotBuilder WithState(WorkspaceState state)
-        {
-            return (TPivotBuilder)this with
-            {
-                State = state,
-                HierarchicalDimensionCache = new HierarchicalDimensionCache(state)
             };
         }
 
@@ -76,6 +69,5 @@ namespace OpenSmc.Pivot.Builder
             TAggregate,
             TPivotBuilder
         > GetReportProcessor();
-
     }
 }

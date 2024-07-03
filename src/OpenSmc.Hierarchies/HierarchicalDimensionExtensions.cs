@@ -37,6 +37,8 @@ public static class HierarchicalDimensionExtensions
         where T : class, IHierarchicalDimension
     {
         var ret = cache.Get<T>(id);
+        if (ret == null)
+            return id;
         if (ret.Level < level)
             return null;
         while (ret.Level > level)

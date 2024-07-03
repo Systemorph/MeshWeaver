@@ -1,15 +1,28 @@
 ﻿using System.Collections.Immutable;
+using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Domain;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
+using OpenSmc.Reflection;
 
 namespace OpenSmc.Data;
 
 public sealed record DataContext : IAsyncDisposable
 {
-    public DataContext(IMessageHub hub, IWorkspace workspace)
+    public ITypeRegistry TypeRegistry { get; }
+    public DataContext(IWorkspace workspace)
     {
-        Hub = hub;
+        Hub = workspace.Hub;
         Workspace = workspace;
         ReduceManager = StandardWorkspaceReferenceImplementations.CreateReduceManager(Hub);
+
+        TypeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
+        TypeRegistry.WithKeyFunctionProvider(type =>
+            KeyFunctionBuilder.GetFromProperties(
+                type,
+                type.GetProperties().Where(x => x.HasAttribute<DimensionAttribute>()).ToArray()
+            )
+        );
     }
 
     internal ImmutableDictionary<object, IDataSource> DataSources { get; private set; } =

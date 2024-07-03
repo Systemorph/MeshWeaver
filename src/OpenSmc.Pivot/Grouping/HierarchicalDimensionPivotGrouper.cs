@@ -60,7 +60,7 @@ namespace OpenSmc.Pivot.Grouping
 
             var nullGroupPrivate = new TGroup
             {
-                SystemName = nullGroup.SystemName,
+                Id = nullGroup.Id,
                 DisplayName = nullGroup.DisplayName,
                 Coordinates = nullGroup.Coordinates,
                 GrouperName = Id
@@ -106,7 +106,10 @@ namespace OpenSmc.Pivot.Grouping
         )
         {
             HierarchicalDimensionCache = hierarchicalDimensionCache;
-            if (HierarchicalDimensionCache == null)
+            if (
+                HierarchicalDimensionCache == null
+                || !hierarchicalDimensionCache.Has(typeof(TDimension))
+            )
             {
                 flat = true;
                 return;
@@ -141,10 +144,10 @@ namespace OpenSmc.Pivot.Grouping
             if (flat)
                 return;
             var dimSystemName = Selector(element, 0);
-            maxLevelData = Math.Max(
-                maxLevelData,
-                Math.Min(maxLevel, HierarchicalDimensionCache.Get<TDimension>(dimSystemName).Level)
-            );
+            var hierarchyNode = HierarchicalDimensionCache.Get<TDimension>(dimSystemName);
+            if (hierarchyNode == null)
+                return;
+            maxLevelData = Math.Max(maxLevelData, Math.Min(maxLevel, hierarchyNode.Level));
         }
 
         private PivotGroupManager<T, TIntermediate, TAggregate, TGroup> AddChildren<

@@ -48,7 +48,6 @@ public abstract record UiControl(object Data) : IUiControl
 
     public abstract bool IsUpToDate(object other);
 
-
     // ReSharper disable once IdentifierTypo
     public bool IsClickable => ClickAction != null;
 
@@ -56,6 +55,8 @@ public abstract record UiControl(object Data) : IUiControl
 
     internal Task ClickAsync(UiActionContext context) =>
         ClickAction?.Invoke(context) ?? Task.CompletedTask;
+
+    public string DataContext { get; init; }
 }
 
 public abstract record UiControl<TControl>(string ModuleName, string ApiVersion, object Data)
@@ -80,12 +81,10 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion,
             Style = styleBuilder(new StyleBuilder()).Build()
         };
 
-
     public TControl WithClickAction(Func<UiActionContext, Task> onClick)
     {
         return This with { ClickAction = onClick, };
     }
-
 
     public TControl WithDisposeAction(Action<TControl> action)
     {
@@ -136,11 +135,9 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion,
         return WithBuildAction((c, sp) => (TControl)buildFunction(c, sp));
     }
 
-    public TControl WithSkin(object skin)
-        => This with { Skin = skin };
+    public TControl WithSkin(object skin) => This with { Skin = skin };
 
-    public TControl WithClass(object @class)
-        => This with { Class = @class };
+    public TControl WithClass(object @class) => This with { Class = @class };
 }
 
 public interface IExpandableUiControl<out TControl> : IUiControl<TControl>
@@ -152,4 +149,3 @@ public interface IExpandableUiControl<out TControl> : IUiControl<TControl>
         Func<object, Task<object>> expandFunction
     );
 }
-

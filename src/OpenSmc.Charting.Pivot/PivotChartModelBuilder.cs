@@ -56,10 +56,10 @@ namespace OpenSmc.Charting.Pivot
 
         private void BuildColumnCoordinateMapInner()
         {
-            var headerDimensions = new Dictionary<string, IList<Tuple<string, string, string>>>();
-            var valueDimensions = new Dictionary<string, string>();
+            var headerDimensions = new Dictionary<object, IList<Tuple<object, string, object>>>();
+            var valueDimensions = new Dictionary<object, string>();
 
-            var displayNameToDimensions = new List<Tuple<string, string, string>>();
+            var displayNameToDimensions = new List<Tuple<object, string, object>>();
 
             BuildColumnCoordinateMap(
                 PivotModel.Columns,
@@ -81,11 +81,11 @@ namespace OpenSmc.Charting.Pivot
             PivotChartModel.ColumnDescriptors = descriptors.ToList();
         }
 
-        private IList<Tuple<string, string, string>> BuildColumnCoordinateMap(
+        private IList<Tuple<object, string, object>> BuildColumnCoordinateMap(
             IReadOnlyCollection<Column> pivotColumns,
-            IDictionary<string, IList<Tuple<string, string, string>>> headerDimensions,
-            IDictionary<string, string> valueDimensions,
-            IList<Tuple<string, string, string>> displayNameToDimensions
+            IDictionary<object, IList<Tuple<object, string, object>>> headerDimensions,
+            IDictionary<object, string> valueDimensions,
+            IList<Tuple<object, string, object>> displayNameToDimensions
         )
         {
             for (var i = 0; i < pivotColumns.Count; i++)
@@ -100,10 +100,10 @@ namespace OpenSmc.Charting.Pivot
                     if (
                         !WithTotals
                         && colGroup.Coordinates.Last()
-                            == IPivotGrouper<object, ColumnGroup>.TotalGroup.SystemName
+                            == IPivotGrouper<object, ColumnGroup>.TotalGroup.Id
                     )
                         continue; // we do not want to export aggregated values
-                    var item = new Tuple<string, string, string>(
+                    var item = new Tuple<object, string, object>(
                         colGroup.Coordinates.Last(),
                         colGroup.DisplayName,
                         colGroup.GrouperName
@@ -130,14 +130,14 @@ namespace OpenSmc.Charting.Pivot
                         coordinate.Append($".{currentElement.Coordinates[j + 1]}");
 
                     var valueDisplayName = pivotColumns.ElementAt(i).DisplayName;
-                    var item = new Tuple<string, string, string>(
+                    var item = new Tuple<object, string, object>(
                         pivotColumns.ElementAt(i).Coordinates.Last(),
                         pivotColumns.ElementAt(i).DisplayName,
                         PivotChartConst.Column
                     );
                     displayNameToDimensions.Add(item);
-                    valueDimensions.Add(coordinate.ToString(), valueDisplayName);
-                    headerDimensions.Add(coordinate.ToString(), displayNameToDimensions);
+                    valueDimensions.Add(coordinate, valueDisplayName);
+                    headerDimensions.Add(coordinate, displayNameToDimensions);
                     if (
                         displayNameToDimensions.Any()
                         && Equals(displayNameToDimensions.Last(), item)
@@ -159,7 +159,7 @@ namespace OpenSmc.Charting.Pivot
                     DataSetType = defaultChartType,
                     Descriptor = new PivotElementDescriptor
                     {
-                        Id = rowGroup.SystemName,
+                        Id = rowGroup.Id,
                         Coordinates = rowGroup
                             .Coordinates.Select(
                                 (_, j) =>
@@ -171,11 +171,7 @@ namespace OpenSmc.Charting.Pivot
                                     );
                                     return cRow != null
                                         ? cRow.Descriptor.Coordinates.Last()
-                                        : (
-                                            rowGroup.SystemName,
-                                            rowGroup.DisplayName,
-                                            rowGroup.GrouperName
-                                        );
+                                        : (rowGroup.Id, rowGroup.DisplayName, rowGroup.GrouperName);
                                 }
                             )
                             .ToList()
@@ -192,11 +188,11 @@ namespace OpenSmc.Charting.Pivot
                     }
                 };
                 PivotChartModel.Rows.Add(row);
-                AddDataToRow((IReadOnlyDictionary<string, object>)pivotRow.Data, row);
+                AddDataToRow((IReadOnlyDictionary<object, object>)pivotRow.Data, row);
             }
         }
 
-        private void AddDataToRow(IReadOnlyDictionary<string, object> data, PivotChartRow chartRow)
+        private void AddDataToRow(IReadOnlyDictionary<object, object> data, PivotChartRow chartRow)
         {
             foreach (var columnDescriptor in PivotChartModel.ColumnDescriptors)
             {
@@ -207,16 +203,16 @@ namespace OpenSmc.Charting.Pivot
         }
 
         private double? GetValue(
-            IReadOnlyDictionary<string, object> data,
-            IReadOnlyCollection<(string Id, string DisplayName, string GrouperName)> coordinates
+            IReadOnlyDictionary<object, object> data,
+            IReadOnlyCollection<(object Id, string DisplayName, object GrouperName)> coordinates
         )
         {
             if (!coordinates.Any() || data is null)
                 return null;
 
-            if (data.TryGetValue(coordinates.First().Id.ToString(), out var subData))
+            if (data.TryGetValue(coordinates.First().Id, out var subData))
             {
-                if (subData is IReadOnlyDictionary<string, object> subDataDict)
+                if (subData is IReadOnlyDictionary<object, object> subDataDict)
                     return GetValue(subDataDict, coordinates.Skip(1).ToList());
                 if (subData is int intSubData)
                     return (double?)intSubData;

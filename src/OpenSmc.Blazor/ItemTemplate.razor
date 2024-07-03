@@ -4,24 +4,26 @@
 <FluentStack
     Class="@Class"
     Style="@Style">
-    @foreach (var item in data)
+    @for (int i=0;i<Data.Count;++i)
     {
-        <DispatchView ViewModel="@view" Stream="@Stream" Area="@ViewArea" />
+        <DispatchView ViewModel="@GetViewWithPath(i)" Stream="@Stream" Area="@ViewArea" />
     }
 </FluentStack>
 
 @code
 {
-    private IEnumerable<object> data;
+    private IReadOnlyCollection<object> Data { get; set; } = Array.Empty<object>();
 
     private UiControl view;
 
     private string ViewArea => $"{Area}/{ItemTemplateControl.ViewArea}";
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnParametersSetAsync()
     {
-        await base.OnInitializedAsync();
-        DataBind<IEnumerable<object>>(ViewModel.Data, d => data = d);
+        await base.OnParametersSetAsync();
+        DataBind<IReadOnlyCollection<object>>(new JsonPointerReference(""), d => Data = d);
         view = GetControl(await Stream.FirstAsync(), ViewArea);
     }
+
+    private UiControl GetViewWithPath(int i) => ViewModel.View with { DataContext = $"{ViewModel.DataContext}/{i}" };
 }
