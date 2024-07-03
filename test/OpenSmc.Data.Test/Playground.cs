@@ -5,6 +5,7 @@ using System.Text.Json;
 using FluentAssertions;
 using Json.Patch;
 using Json.Pointer;
+using OpenSmc.Data.Serialization;
 using Xunit;
 
 namespace OpenSmc.Data.Test;
@@ -63,5 +64,23 @@ public class Playground
         pointer = JsonPointer.Parse("/parent/child");
         var child = pointer.Evaluate(grandParent.Value);
         child.Value.GetProperty("name").GetString().Should().Be("John");
+    }
+
+    [Fact]
+    public void ExtractEnumerableTest()
+    {
+        var data = new []{ new {Label = "Label1", Value = true } };
+        var dict = new Dictionary<string, object> {{"DataContext", data}};
+
+        var element = JsonSerializer.SerializeToElement(dict);
+
+        var res = Extract<IEnumerable<object>>(element, "/DataContext");
+    }
+
+    private TResult Extract<TResult>(JsonElement element, string path)
+    {
+        var pointer = JsonPointer.Parse(path);
+        var ret = pointer.Evaluate(element);
+        return ret == null ? default : ret.Value.Deserialize<TResult>();
     }
 }
