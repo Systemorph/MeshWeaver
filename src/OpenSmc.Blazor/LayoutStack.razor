@@ -2,12 +2,14 @@
 
 <FluentStack
     Class="@Class"
-    Orientation="@Orientation"
+    Orientation="@ViewModel.Orientation.ToFluentOrientation()"
     HorizontalAlignment="@Horizontal"
     VerticalAlignment="@Vertical"
     VerticalGap="@ViewModel.VerticalGap"
     HorizontalGap="@ViewModel.HorizontalGap"
-    Style="@Style">
+    Style="@Style"
+    Wrap="@ViewModel.Wrap"
+    >
     @foreach (var (area, viewModel) in Areas)
     {
         <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area"/>
@@ -33,13 +35,5 @@
         Layout.HorizontalAlignment.Start => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Start,
         Layout.HorizontalAlignment.End => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.End,
             _ => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Left
-        };
-
-    protected Microsoft.FluentUI.AspNetCore.Components.Orientation Orientation => ViewModel.Orientation
-        switch
-        {
-            OpenSmc.Layout.Orientation.Horizontal => Microsoft.FluentUI.AspNetCore.Components.Orientation.Horizontal,
-            OpenSmc.Layout.Orientation.Vertical => Microsoft.FluentUI.AspNetCore.Components.Orientation.Vertical,
-            _ => Microsoft.FluentUI.AspNetCore.Components.Orientation.Vertical
         };
 }

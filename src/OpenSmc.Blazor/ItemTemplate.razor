@@ -3,7 +3,10 @@
 
 <FluentStack
     Class="@Class"
-    Style="@Style">
+    Style="@Style"
+    Orientation="@ViewModel.Orientation.ToFluentOrientation()"
+    Wrap="@ViewModel.Wrap"
+    >
     @for (int i=0;i<Data.Count;++i)
     {
         <DispatchView ViewModel="@GetViewWithPath(i)" Stream="@Stream" Area="@ViewArea" />

@@ -2,7 +2,7 @@
 
 <FluentToolbar
     Class="@Class"
-    Orientation="@Orientation"
+    Orientation="@ViewModel.Orientation.ToFluentOrientation()"
     Style="@Style"
 >
     @foreach(var (area,viewModel) in Areas){
