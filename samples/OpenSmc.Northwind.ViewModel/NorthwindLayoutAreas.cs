@@ -1,11 +1,14 @@
 ﻿using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Castle.Core.Resource;
 using OpenSmc.Application.Styles;
 using OpenSmc.Data;
 using OpenSmc.DataCubes;
+using OpenSmc.Domain;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
+using OpenSmc.Messaging.Serialization;
 using OpenSmc.Northwind.Domain;
 using OpenSmc.Pivot.Builder;
 using OpenSmc.Reporting.Models;
@@ -13,6 +16,8 @@ using OpenSmc.Utils;
 using static OpenSmc.Layout.Controls;
 
 namespace OpenSmc.Northwind.ViewModel;
+
+public record FilterItem(string Id, string Label, bool Selected);
 
 public static class NorthwindLayoutAreas
 {
@@ -29,7 +34,7 @@ public static class NorthwindLayoutAreas
                 .WithView(nameof(SupplierSummary), SupplierSummary)
                 .WithView(nameof(NavigationMenu), NavigationMenu)
                 .WithView(nameof(SupplierSummaryGrid), SupplierSummaryGrid)
-        );
+        ).WithTypes(typeof(FilterItem));
     }
 
     private static readonly KeyValuePair<string, Icon>[] DashboardWidgets = new[]
@@ -40,6 +45,8 @@ public static class NorthwindLayoutAreas
         new(nameof(CustomerSummary), FluentIcons.Person),
         new(nameof(SupplierSummary), FluentIcons.Person)
     };
+
+    private const string CustomerFilter = nameof(CustomerFilter);
 
     private static object NavigationMenu(LayoutAreaHost layoutArea, RenderingContext ctx)
     {
@@ -148,25 +155,43 @@ public static class NorthwindLayoutAreas
         return Stack()
             .WithClass("context-panel")
             .WithOrientation(Orientation.Vertical)
-            .WithView(Html("<h3>Context panel</h3>"))
             .WithView(
                 Stack()
                     .WithOrientation(Orientation.Horizontal)
-                    .WithView(
-                        (area, _) =>
-                            area.Bind(
-                                new[] { "Product", "Customer", "Supplier" },
-                                "dimensions",
-                                (string item) => Menu(item)
-                            )
-                    )
-                    .WithView("Values")
-            )
+                    .WithVerticalAlignment(VerticalAlignment.Top)
+                    .WithView(Html("<h3>Analyze</h3>"))
+                )
+            .WithView(Filter)
             .ToSplitterPane(x =>
-                x.WithSize("350px")
-                    .WithCollapsible(true)
+                x.WithMin("200px")
                     .WithCollapsed(collapsed)
             );
+    }
+
+    private static object Filter(LayoutAreaHost area, RenderingContext context)
+    {
+        return Stack()
+            .WithOrientation(Orientation.Vertical)
+            .WithView("Filter")
+            .WithView(
+                (area, ctx) =>
+                    Stack()
+                        .WithOrientation(Orientation.Horizontal)
+                        .WithView(DimensionValues)
+            );
+    }
+
+    private static IObservable<ItemTemplateControl> DimensionValues(LayoutAreaHost area, RenderingContext context)
+    {
+        return area.Workspace.GetObservable<Customer>()
+                .Select(x => 
+                    x.OrderBy(c => c.CompanyName).Select(customer => new FilterItem(customer.CustomerId, customer.CompanyName, true))
+                        .ToArray())
+                .Select(filterItems =>
+                    area.Bind(filterItems, CustomerFilter,
+                        item => CheckBox(item.Label, item.Selected))
+                        .WithOrientation(Orientation.Vertical)
+                    );
     }
 
     public static LayoutStackControl SupplierSummary(
@@ -222,8 +247,9 @@ public static class NorthwindLayoutAreas
                 (a, _) =>
                     a.GetDataStream<Toolbar>(nameof(Toolbar))
                         .Select(tb => $"Year selected: {tb.Year}")
-    ).WithView((a,c) => 
-                a.Workspace.GetObservable<Customer>().Select(customers => a.Bind(customers.Take(5), "itemtemplate", customer => Controls.Html(customer.CompanyName))));
+            );
+
+
 
     public static LayoutStackControl ProductSummary(
         this LayoutAreaHost layoutArea,
@@ -264,18 +290,20 @@ public static class NorthwindLayoutAreas
             .WithView(Html("<h2>Order Summary</h2>"))
             .WithView(
                 (area, _) =>
-                    area.GetDataStream<Toolbar>(nameof(Toolbar))
+                    area.Workspace.GetObservable<Order>()
                         .CombineLatest(
-                            area.Workspace.GetObservable<Order>(),
-                            (tb, orders) =>
+                            area.GetDataStream<Toolbar>(nameof(Toolbar)),
+                            area.GetDataStream<IEnumerable<object>>(CustomerFilter),
+                            (orders, tb, customerFilter) =>
                                 orders
-                                    .Where(x => x.OrderDate.Year == tb.Year)
+                                    .Where(x => x.OrderDate.Year == tb.Year 
+                                                && !customerFilter.Cast<FilterItem>().Where(c => c.Selected && c.Id == x.CustomerId).IsEmpty())
                                     .OrderByDescending(y => y.OrderDate)
                                     .Take(5)
                                     .Select(order => new OrderSummaryItem(
                                         area.Workspace.GetData<Customer>(
                                             order.CustomerId
-                                        )?.ContactName,
+                                        )?.CompanyName,
                                         area.Workspace.GetData<OrderDetails>()
                                             .Count(d => d.OrderId == order.OrderId),
                                         order.OrderDate
@@ -289,6 +317,6 @@ public static class NorthwindLayoutAreas
                                                 column => column.WithFormat("yyyy-MM-dd")
                                             )
                                     )
-                        )
+                            )
             );
 }

@@ -1,31 +1,37 @@
 ﻿using Microsoft.FluentUI.AspNetCore.Components;
 using OpenSmc.Application.Styles;
-using JustifyContent = OpenSmc.Layout.JustifyContent;
-using FluentJustifyContent = Microsoft.FluentUI.AspNetCore.Components.JustifyContent;
-using Icon = Microsoft.FluentUI.AspNetCore.Components.Icon;
 using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons;
 
 namespace OpenSmc.Blazor;
 
 public static class ViewModelExtensions
 {
-    public static FluentJustifyContent ToFluentJustifyContent(this JustifyContent justify) =>
+    public static JustifyContent ToFluentJustifyContent(this Layout.JustifyContent justify) =>
         justify switch
         {
-            JustifyContent.FlexStart => FluentJustifyContent.FlexStart,
-            JustifyContent.Center => FluentJustifyContent.Center,
-            JustifyContent.FlexEnd => FluentJustifyContent.FlexEnd,
-            JustifyContent.SpaceBetween => FluentJustifyContent.SpaceBetween,
-            JustifyContent.SpaceAround => FluentJustifyContent.SpaceAround,
-            JustifyContent.SpaceEvenly => FluentJustifyContent.SpaceEvenly,
-            _ => FluentJustifyContent.FlexStart
+            Layout.JustifyContent.FlexStart => JustifyContent.FlexStart,
+            Layout.JustifyContent.Center => JustifyContent.Center,
+            Layout.JustifyContent.FlexEnd => JustifyContent.FlexEnd,
+            Layout.JustifyContent.SpaceBetween => JustifyContent.SpaceBetween,
+            Layout.JustifyContent.SpaceAround => JustifyContent.SpaceAround,
+            Layout.JustifyContent.SpaceEvenly => JustifyContent.SpaceEvenly,
+            _ => JustifyContent.FlexStart
         };
 
-    public static Icon ToFluentIcon(this Application.Styles.Icon icon) =>
+    public static Microsoft.FluentUI.AspNetCore.Components.Icon ToFluentIcon(this Application.Styles.Icon icon) =>
         icon.Provider switch
         {
             FluentIcons.Provider =>
                 Icons.GetInstance(new IconInfo { Name = icon.Id, Size = IconSize.Size24 }),
             _ => null
         };
+
+    public static Orientation ToFluentOrientation(this Layout.Orientation orientation) => 
+        orientation switch
+        {
+            Layout.Orientation.Horizontal => Orientation.Horizontal,
+            Layout.Orientation.Vertical => Orientation.Vertical,
+            _ => Orientation.Horizontal
+        };
+
 }
