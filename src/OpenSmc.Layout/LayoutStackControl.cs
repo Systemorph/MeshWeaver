@@ -61,7 +61,7 @@ public record LayoutStackControl()
     public VerticalAlignment VerticalAlignment { get; init; }
     public int? HorizontalGap { get; init; }
     public int? VerticalGap { get; init; }
-    public Orientation Orientation { get; init; }
+    public Orientation? Orientation { get; init; }
     public bool Wrap { get; init; }
     public string Width { get; init; }
 

@@ -13,7 +13,8 @@ public record ItemTemplateControl : UiControl<ItemTemplateControl>
         DataContext = dataContext;
     }
 
-    public Orientation Orientation { get; init; }
+    public Orientation? Orientation { get; init; }
+
     public bool Wrap { get; init; }
     
     public ItemTemplateControl WithOrientation(Orientation orientation) => this with { Orientation = orientation };

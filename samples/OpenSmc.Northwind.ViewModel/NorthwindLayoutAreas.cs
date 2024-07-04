@@ -90,10 +90,8 @@ public static class NorthwindLayoutAreas
 
         return Stack()
             .WithSkin(Skins.Splitter)
-            .WithOrientation(Orientation.Horizontal)
             .WithView(
                 Stack()
-                    .WithOrientation(Orientation.Vertical)
                     .WithView(
                         Toolbar()
                             .WithView(
@@ -154,10 +152,8 @@ public static class NorthwindLayoutAreas
     {
         return Stack()
             .WithClass("context-panel")
-            .WithOrientation(Orientation.Vertical)
             .WithView(
                 Stack()
-                    .WithOrientation(Orientation.Horizontal)
                     .WithVerticalAlignment(VerticalAlignment.Top)
                     .WithView(Html("<h3>Analyze</h3>"))
                 )
@@ -171,13 +167,10 @@ public static class NorthwindLayoutAreas
     private static object Filter(LayoutAreaHost area, RenderingContext context)
     {
         return Stack()
-            .WithOrientation(Orientation.Vertical)
             .WithView("Filter")
-            .WithView(
-                (area, ctx) =>
-                    Stack()
-                        .WithOrientation(Orientation.Horizontal)
-                        .WithView(DimensionValues)
+            .WithView(Stack()
+                .WithOrientation(Orientation.Horizontal)
+                .WithView(DimensionValues)
             );
     }
 
@@ -190,7 +183,6 @@ public static class NorthwindLayoutAreas
                 .Select(filterItems =>
                     area.Bind(filterItems, CustomerFilter,
                         item => CheckBox(item.Label, item.Selected))
-                        .WithOrientation(Orientation.Vertical)
                     );
     }
 
@@ -199,7 +191,6 @@ public static class NorthwindLayoutAreas
         RenderingContext ctx
     ) =>
         Stack()
-            .WithOrientation(Orientation.Vertical)
             .WithView(Html("<h2>Supplier Summary</h2>"))
             .WithView(SupplierSummaryGrid);
 
@@ -241,7 +232,6 @@ public static class NorthwindLayoutAreas
         RenderingContext ctx
     ) =>
         Stack()
-            .WithOrientation(Orientation.Vertical)
             .WithView(Html("<h2>Customer Summary</h2>"))
             .WithView(
                 (a, _) =>
@@ -256,7 +246,6 @@ public static class NorthwindLayoutAreas
         RenderingContext ctx
     ) =>
         Stack()
-            .WithOrientation(Orientation.Vertical)
             .WithView(Html("<h2>Product Summary</h2>"))
             .WithView(Counter);
 
@@ -286,7 +275,6 @@ public static class NorthwindLayoutAreas
         RenderingContext ctx
     ) =>
         Stack()
-            .WithOrientation(Orientation.Vertical)
             .WithView(Html("<h2>Order Summary</h2>"))
             .WithView(
                 (area, _) =>
