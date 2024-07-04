@@ -18,7 +18,9 @@ public static class Controls
 
     public static LayoutStackControl Toolbar() => new LayoutStackControl().WithSkin(Skins.Toolbar);
 
-    public static SelectControl Select(object item) => new SelectControl(item);
+    public static SelectControl Select(object item) => new (item);
+    public static ListboxControl Listbox(object item) => new (item);
+    public static ComboboxControl Combobox(object item) => new (item);
 
     public static SpinnerControl Spinner() => new();
 
