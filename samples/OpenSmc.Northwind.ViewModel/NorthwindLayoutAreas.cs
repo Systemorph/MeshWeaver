@@ -17,6 +17,8 @@ using static OpenSmc.Layout.Controls;
 
 namespace OpenSmc.Northwind.ViewModel;
 
+public record Filter(string Dimension);
+
 public record FilterItem(string Id, string Label, bool Selected);
 
 public static class NorthwindLayoutAreas
@@ -155,7 +157,7 @@ public static class NorthwindLayoutAreas
             .WithView(
                 Stack()
                     .WithVerticalAlignment(VerticalAlignment.Top)
-                    .WithView(Html("<h3>Analyze</h3>"))
+                    .WithView(Html("<h2>Analyze</h2>"))
                 )
             .WithView(Filter)
             .ToSplitterPane(x =>
@@ -166,12 +168,31 @@ public static class NorthwindLayoutAreas
 
     private static object Filter(LayoutAreaHost area, RenderingContext context)
     {
-        return Stack()
-            .WithView("Filter")
-            .WithView(Stack()
-                .WithOrientation(Orientation.Horizontal)
-                .WithView(DimensionValues)
-            );
+        var dimensions = new[] { typeof(Customer), typeof(Product), typeof(Supplier) };
+
+        return area.Bind(
+            new Filter(dimensions.First().FullName),
+            nameof(Filter),
+            filter =>
+                Stack()
+                    .WithView(Html("<h3>Filter</h3>"))
+                    .WithView(
+                        Stack()
+                            .WithClass("filter")
+                            .WithOrientation(Orientation.Horizontal)
+                            .WithHorizontalGap(16)
+                            .WithView((area, ctx) =>
+                                Listbox(filter.Dimension)
+                                    .WithOptions(
+                                        dimensions
+                                            .Select(d => new Option<string>(d.FullName, d.Name))
+                                            .ToArray()
+                                    )
+                                    
+                            )
+                            .WithView(DimensionValues)
+                    )
+        );
     }
 
     private static IObservable<ItemTemplateControl> DimensionValues(LayoutAreaHost area, RenderingContext context)
