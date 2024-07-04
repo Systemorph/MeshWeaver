@@ -8,6 +8,7 @@ using Json.Pointer;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout.Composition;
+using OpenSmc.Layout.DataGrid;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
@@ -192,9 +193,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         // Get toolbar and change value.
         var toolbarArea = $"{reference.Area}/Toolbar";
         var yearTextBox = (TextBoxControl)await stream.GetControlStream(toolbarArea).FirstAsync();
-        yearTextBox
-            .DataContext.Should()
-            .Be("/data/\"toolbar\"");
+        yearTextBox.DataContext.Should().Be("/data/\"toolbar\"");
 
         var dataPointer = yearTextBox.Data.Should().BeOfType<JsonPointerReference>().Which;
         dataPointer.Pointer.Should().Be("/year");
@@ -343,9 +342,13 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
     public static UiControl DataBoundCheckboxes(LayoutAreaHost area)
     {
-        var data = new Dictionary<string, bool> {{"Label1", true}, {"Label2", false}, {"Label3", false}};
+        var data = new Dictionary<string, bool>
+        {
+            { "Label1", true },
+            { "Label2", false },
+            { "Label3", false }
+        };
         return area.Bind(data, nameof(DataBoundCheckboxes), x => Controls.CheckBox(x.Key, x.Value));
-
     }
 
     [HubFact]
@@ -355,7 +358,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetStream<JsonElement, LayoutAreaReference>(new HostAddress(), reference);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            reference
+        );
         var controlArea = $"{reference.Area}";
         var content = await stream.GetControlStream(controlArea).FirstAsync(x => x != null);
         var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
@@ -363,9 +369,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         dataReference.Pointer.Should().Be($"/data/\"{nameof(DataBoundCheckboxes)}\"");
         var data = await stream.GetDataStream<Dictionary<string, bool>>(dataReference).FirstAsync();
 
-        data
-            .Should()
-            .HaveCount(3);
+        data.Should().HaveCount(3);
 
         data.First().Value.Should().Be(true);
 
@@ -373,7 +377,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         stream.Update(ci =>
         {
-            var patch = new JsonPatch(PatchOperation.Replace(JsonPointer.Parse(firstValuePointer), false));
+            var patch = new JsonPatch(
+                PatchOperation.Replace(JsonPointer.Parse(firstValuePointer), false)
+            );
             return new Data.Serialization.ChangeItem<JsonElement>(
                 stream.Owner,
                 stream.Reference,
@@ -386,7 +392,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var updatedControls = await stream
             .GetDataStream(new JsonPointerReference(firstValuePointer))
-            .TakeUntil(o => o is ItemTemplateControl html && !html.Data.ToString()!.Contains("2024"))
+            .TakeUntil(o =>
+                o is ItemTemplateControl html && !html.Data.ToString()!.Contains("2024")
+            )
             .ToArray();
 
         updatedControls
@@ -396,7 +404,6 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Which.Data.ToString()
             .Should()
             .Contain("2025");
-
     }
 }
 

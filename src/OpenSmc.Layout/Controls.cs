@@ -1,8 +1,10 @@
 ﻿using System.Linq.Expressions;
+using System.Reflection;
 using OpenSmc.Application.Styles;
 using OpenSmc.Data;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.DataBinding;
+using OpenSmc.Reflection;
 
 namespace OpenSmc.Layout;
 
@@ -90,6 +92,7 @@ public static class Controls
     /// <summary>
     /// Takes expression tree of data template and replaces all property getters by binding instances and sets data context property
     /// </summary>
+    [ReplaceBindMethod]
     public static UiControl Bind<T, TView>(
         this LayoutAreaHost area,
         T data,
@@ -97,6 +100,25 @@ public static class Controls
         Expression<Func<T, TView>> dataTemplate
     )
         where TView : UiControl => BindObject(area, data, id, dataTemplate);
+
+    private class ReplaceBindMethodAttribute : ReplaceMethodInTemplateAttribute
+    {
+        public override MethodInfo Replace(MethodInfo method) => RelaceBindObjects(method);
+    }
+
+    private static MethodInfo RelaceBindObjects(MethodInfo method) =>
+        (
+            method.GetGenericMethodDefinition() switch
+            {
+                { } m when m == BindObjectMethod => BindObjectMethod,
+                { } m when m == BindEnumerableMethod => BindEnumerableMethod,
+                _ => throw new ArgumentException("Method is not supported.")
+            }
+        ).MakeGenericMethod(method.GetGenericArguments());
+
+    private static readonly MethodInfo BindObjectMethod = ReflectionHelper.GetStaticMethodGeneric(
+        () => BindObject<object, UiControl>(null, default, null, default)
+    );
 
     internal static UiControl BindObject<T, TView>(
         this LayoutAreaHost area,
@@ -121,7 +143,8 @@ public static class Controls
         area.UpdateData(id, data);
         return LayoutAreaReference.GetDataPointer(id);
     }
-    
+
+    [ReplaceBindMethod]
     public static ItemTemplateControl Bind<T, TView>(
         this LayoutAreaHost area,
         IEnumerable<T> data,
@@ -129,6 +152,11 @@ public static class Controls
         Expression<Func<T, TView>> dataTemplate
     )
         where TView : UiControl => BindEnumerable(area, data, id, dataTemplate);
+
+    private static readonly MethodInfo BindEnumerableMethod =
+        ReflectionHelper.GetStaticMethodGeneric(
+            () => BindEnumerable<object, UiControl>(null, default, null, default)
+        );
 
     internal static ItemTemplateControl BindEnumerable<T, TView>(
         this LayoutAreaHost area,
