@@ -1,20 +1,16 @@
-@inherits BlazorView<SelectControl>
+﻿using OpenSmc.Data;
+using OpenSmc.Layout;
 
-<FluentSelect Label="@Label"
-              Items="@Options"
-              TOption="Option"
-              OptionText="@(x => x.Text)"
-              OptionValue="@(x => x.ItemString)"
-              @bind-SelectedOption="Selected"
-/>
+namespace OpenSmc.Blazor;
 
-@code
+public abstract class ListBase<TViewModel> : BlazorView<TViewModel>
+    where TViewModel : UiControl, IListControl
 {
-    private record Option(object Item, string Text, string ItemString);
-    private IReadOnlyCollection<Option> Options { get; set; }
+    protected record Option(object Item, string Text, string ItemString);
 
+    protected IReadOnlyCollection<Option> Options { get; set; }
 
-    private Option Selected
+    protected Option Selected
     {
         get => selected;
         set
@@ -49,9 +45,9 @@
             .ToArray();
     }
 
-    private static string MapToString(object instance) => 
-        instance == null || IsDefault((dynamic)instance) 
-            ? null 
+    private static string MapToString(object instance) =>
+        instance == null || IsDefault((dynamic)instance)
+            ? null
             : instance.ToString();
     private static bool IsDefault<T>(T instance) => instance.Equals(default(T));
 
@@ -59,12 +55,4 @@
 
     private string current;
     private Option selected;
-
-    private void ValueChanged(string value)
-    {
-        if (Pointer == null || Equals(value, current))
-            return;
-
-    }
-
 }

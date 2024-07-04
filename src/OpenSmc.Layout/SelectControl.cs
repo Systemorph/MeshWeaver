@@ -1,25 +1,8 @@
-﻿using System.Linq.Expressions;
-using Json.Pointer;
+﻿namespace OpenSmc.Layout;
 
-namespace OpenSmc.Layout;
-
-public abstract record Option(string Text)
+public record SelectControl(object Data) : ListControlBase<SelectControl>(Data), IListControl
 {
-    public abstract object GetItem();
-    public abstract Type GetItemType();
-}
+    public SelectPosition? Position { get; init; }
 
-public record Option<T>(T Item, string Text) : Option(Text)
-{
-    public override object GetItem() => Item;
-    public override Type GetItemType() => typeof(T);
+    SelectControl WithPosition(SelectPosition position) => this with { Position = position };
 }
-
-public record SelectControl(object Data)
-    : UiControl<SelectControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data)
-{
-    public IReadOnlyCollection<Option> Options { get; init; }
-    public SelectControl WithOptions<T>(IReadOnlyCollection<Option<T>> options) => this with { Options = options };
-    public SelectControl WithOptions<T>(IEnumerable<T> options) => WithOptions(options.Select(o => new Option<T>(o, o.ToString())).ToArray());
-}
-

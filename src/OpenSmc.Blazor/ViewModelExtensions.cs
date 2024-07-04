@@ -34,4 +34,12 @@ public static class ViewModelExtensions
             _ => Orientation.Horizontal
         };
 
+    public static SelectPosition ToFluentPosition(this Layout.SelectPosition position) =>
+        position switch
+        {
+            Layout.SelectPosition.Above => SelectPosition.Above,
+            Layout.SelectPosition.Below => SelectPosition.Below,
+            _ => SelectPosition.Above
+        };
+
 }
