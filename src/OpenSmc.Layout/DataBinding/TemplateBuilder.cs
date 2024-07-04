@@ -6,6 +6,12 @@ using OpenSmc.Utils;
 
 namespace OpenSmc.Layout.DataBinding;
 
+[AttributeUsage(AttributeTargets.Method)]
+public abstract class ReplaceMethodInTemplateAttribute : Attribute
+{
+    public abstract MethodInfo Replace(MethodInfo expression);
+}
+
 public static class TemplateBuilder
 {
     public static TView Build<T, TView>(
@@ -74,28 +80,6 @@ public static class TemplateBuilder
 
         private readonly Dictionary<Expression, string> bindings = new();
 
-        private static readonly Dictionary<MethodInfo, MethodInfo> ReplacementMethods =
-            new()
-            {
-                {
-                    ReflectionHelper.GetStaticMethodGeneric(
-                        () => Controls.Bind<object, UiControl>(null, (object)null, null, default)
-                    ),
-                    ReflectionHelper.GetStaticMethodGeneric(
-                        () => Controls.BindObject<object, UiControl>(null, default, null, default)
-                    )
-                },
-                {
-                    ReflectionHelper.GetStaticMethodGeneric(
-                        () => Controls.Bind<object, UiControl>(null, null, null, default)
-                    ),
-                    ReflectionHelper.GetStaticMethodGeneric(
-                        () =>
-                            Controls.BindEnumerable<object, UiControl>(null, default, null, default)
-                    )
-                },
-            };
-
         protected override Expression VisitMethodCall(MethodCallExpression node)
         {
             var obj = Visit(node.Object);
@@ -110,13 +94,12 @@ public static class TemplateBuilder
                 return GetBinding($"{path}/{args.First()}", node.Method.ReturnType);
             }
 
+            var replaceMethodAttribute =
+                node.Method.GetCustomAttribute<ReplaceMethodInTemplateAttribute>();
+
             var method =
-                node.Method.IsGenericMethod
-                && ReplacementMethods.TryGetValue(
-                    node.Method.GetGenericMethodDefinition(),
-                    out var repl
-                )
-                    ? repl.MakeGenericMethod(node.Method.GetGenericArguments())
+                replaceMethodAttribute != null
+                    ? replaceMethodAttribute.Replace(node.Method)
                     : node.Method;
             if (
                 args.Zip(method.GetParameters(), (a, p) => p.ParameterType.IsAssignableFrom(a.Type))

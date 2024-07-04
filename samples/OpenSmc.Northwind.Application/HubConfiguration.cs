@@ -16,16 +16,19 @@ public static class HubConfiguration
     {
         // TODO V10: add pre-compiled statement to remove all northwind related config (05.06.2024, Alexander Kravets)
         return configuration
-                .AddBlazor(x => x.AddChartJs().AddAgGrid())
-                .WithHostedHub(new ApplicationAddress("Northwind", "dev"),
-                    application => application
+            .AddBlazor(x => x.AddChartJs().AddAgGrid())
+            .WithHostedHub(
+                new ApplicationAddress("Northwind", "dev"),
+                application =>
+                    application
                         .AddNorthwindViewModels()
                         .AddNorthwindEmployees()
                         .AddNorthwindOrders()
                         .AddNorthwindSuppliers()
                         .AddNorthwindProducts()
-                        .AddNorthwindCustomers())
-            ;
+                        .AddNorthwindCustomers()
+                        .AddNorthwindReferenceData()
+            );
         // .WithRoutes(forward =>
         //     forward
         //         .RouteAddressToHostedHub<ReferenceDataAddress>(c =>

@@ -13,6 +13,7 @@ using OpenSmc.Data.Persistence;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Layout.Client;
 using OpenSmc.Layout.Composition;
+using OpenSmc.Layout.DataGrid;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
 

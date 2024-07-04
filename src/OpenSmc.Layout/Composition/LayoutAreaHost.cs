@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Reactive.Linq;
+using Json.Pointer;
 using Microsoft.DotNet.Interactive.Formatting;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
@@ -90,7 +91,7 @@ public record LayoutAreaHost : IDisposable
 
     private readonly IMessageHub executionHub;
 
-    public void UpdateData(string id, object data)
+    public JsonPointerReference UpdateData(string id, object data)
     {
         Stream.Update(ws =>
             new(
@@ -102,6 +103,7 @@ public record LayoutAreaHost : IDisposable
                 Stream.Hub.Version
             )
         );
+        return new JsonPointerReference(LayoutAreaReference.GetDataPointer(id));
     }
 
     private readonly ConcurrentDictionary<string, List<IDisposable>> disposablesByArea = new();
