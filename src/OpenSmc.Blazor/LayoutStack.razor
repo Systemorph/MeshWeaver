@@ -1,8 +1,9 @@
+@using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @inherits ContainerView<LayoutStackControl>
 
 <FluentStack
     Class="@Class"
-    Orientation="@ViewModel.Orientation.ToFluentOrientation()"
+    Orientation="@Orientation"
     HorizontalAlignment="@Horizontal"
     VerticalAlignment="@Vertical"
     VerticalGap="@ViewModel.VerticalGap"
@@ -36,4 +37,6 @@
         Layout.HorizontalAlignment.End => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.End,
             _ => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Left
         };
+
+    private Orientation Orientation => @ViewModel.Orientation?.ToFluentOrientation() ?? Orientation.Vertical;
 }
