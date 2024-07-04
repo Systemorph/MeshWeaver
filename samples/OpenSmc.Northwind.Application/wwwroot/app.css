@@ -49,6 +49,10 @@ fluent-toolbar {
     overflow-y: auto;
 }
 
+.filter>div:first-child {
+    min-width: 200px;
+}
+
 .manage {
     width: 100dvw;
 }
