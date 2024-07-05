@@ -2,7 +2,10 @@
 
 public delegate Task<object> ViewDefinition(LayoutAreaHost area, RenderingContext context);
 
-public record RenderingContext(string Area);
+public record RenderingContext(string Area)
+{
+    public string DataContext { get; init; }
+};
 
 public delegate IObservable<object> ViewStream(LayoutAreaHost area, RenderingContext context);
 
