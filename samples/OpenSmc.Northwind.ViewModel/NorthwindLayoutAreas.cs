@@ -283,17 +283,6 @@ public static class NorthwindLayoutAreas
             );
 
 
-                    a
-                        .Workspace.GetObservable<Customer>()
-                        .Select(customers =>
-                            a.Bind(
-                                customers.Take(5),
-                                "itemtemplate",
-                                customer => Controls.Html(customer.CompanyName)
-                            )
-                        )
-            );
-
     public static LayoutStackControl ProductSummary(
         this LayoutAreaHost layoutArea,
         RenderingContext ctx

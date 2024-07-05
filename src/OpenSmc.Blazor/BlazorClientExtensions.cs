@@ -5,7 +5,6 @@ using OpenSmc.Data.Serialization;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Client;
 using OpenSmc.Layout.DataGrid;
-using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
 using static OpenSmc.Layout.Client.LayoutClientConfiguration;
 
@@ -57,7 +56,6 @@ public static class BlazorClientExtensions
             ButtonControl button => StandardView<ButtonControl, Button>(button, stream, area),
             CheckBoxControl checkbox => StandardView<CheckBoxControl, Checkbox>(checkbox, stream, area),
             LayoutGridItemControl gridItem
-             => StandardView<LayoutGridItemControl, LayoutGridItem>(gridItem, stream, area),
                 => StandardView<LayoutGridItemControl, LayoutGridItem>(gridItem, stream, area),
             ItemTemplateControl itemTemplate
                 => StandardView<ItemTemplateControl, ItemTemplate>(itemTemplate, stream, area),
