@@ -133,7 +133,7 @@ namespace OpenSmc.Blazor
         {
             if (reference == null)
                 return default;
-            var pointer = JsonPointer.Parse(ViewModel.DataContext + reference.Pointer);
+            var pointer = JsonPointer.Parse(ViewModel.DataContext + reference.Pointer.TrimEnd('/'));
             var ret = pointer.Evaluate(changeItem.Value);
             return ret == null ? default : ret.Value.Deserialize<TResult>(Stream.Hub.JsonSerializerOptions);
         }
