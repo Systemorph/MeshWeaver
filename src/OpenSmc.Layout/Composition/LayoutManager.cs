@@ -26,12 +26,25 @@ public static class LayoutManager
             return;
 
         var area = context.Area;
-        if (viewModel is IContainerControl control)
-        {
-            foreach (var ve in control.ChildControls)
-                layoutArea.RenderArea(context with{Area = $"{area}/{ve.Area}" }, ve);
 
-            viewModel = control.SetAreas(control.ChildControls.Select(ve => $"{area}/{ve.Area}").ToArray());
+        if (viewModel is UiControl control)
+        {
+            var dataContext = control.DataContext ?? context.DataContext;
+            
+            viewModel = control with
+            {
+                DataContext = dataContext
+            };
+
+            if (viewModel is IContainerControl container)
+            {
+                foreach (var ve in container.ChildControls)
+                {
+                    layoutArea.RenderArea(context with { Area = $"{area}/{ve.Area}", DataContext = dataContext}, ve);
+                }
+
+                viewModel = container.SetAreas(container.ChildControls.Select(ve => $"{area}/{ve.Area}").ToArray());
+            }
         }
 
         layoutArea.UpdateLayout(area, viewModel);
