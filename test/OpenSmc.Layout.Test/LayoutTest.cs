@@ -1,10 +1,13 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
+using System.Reflection.Emit;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using FluentAssertions;
 using Json.Patch;
 using Json.Path;
 using Json.Pointer;
+using Newtonsoft.Json.Linq;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout.Composition;
@@ -62,6 +65,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     )
                     .WithView("int", 3)
                     .WithView(nameof(DataGrid), DataGrid)
+                    .WithView(nameof(DataBoundCheckboxes), DataBoundCheckboxes)
             );
     }
 
@@ -347,15 +351,15 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             );
     }
 
-    public static UiControl DataBoundCheckboxes(LayoutAreaHost area)
+    public static UiControl DataBoundCheckboxes(LayoutAreaHost area, RenderingContext context)
     {
-        var data = new Dictionary<string, bool>
+        var data = new []
         {
-            { "Label1", true },
-            { "Label2", false },
-            { "Label3", false }
+            new {Label = "Label1", Value = true}, 
+            new { Label = "Label1", Value = true }, 
+            new { Label = "Label1", Value = true }
         };
-        return area.Bind(data, nameof(DataBoundCheckboxes), x => Controls.CheckBox(x.Key, x.Value));
+        return area.Bind(data, nameof(DataBoundCheckboxes), x => Controls.CheckBox(x.Label, x.Value));
     }
 
     [HubFact]
@@ -375,13 +379,14 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => x != null);
         var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
-        var dataReference = itemTemplate.Data.Should().BeOfType<JsonPointerReference>().Which;
-        dataReference.Pointer.Should().Be($"/data/\"{nameof(DataBoundCheckboxes)}\"");
-        var data = await stream.GetDataStream<Dictionary<string, bool>>(dataReference).FirstAsync();
+        itemTemplate.DataContext.Should().Be($"/data/\"{nameof(DataBoundCheckboxes)}\"");
+        var data = await stream.GetDataStream<IReadOnlyCollection<object>>(new JsonPointerReference(itemTemplate.DataContext)).FirstAsync();
 
         data.Should().HaveCount(3);
 
-        data.First().Value.Should().Be(true);
+        var first = (JsonObject) data.First();
+
+        first["value"].Deserialize<bool>().Should().BeTrue();
 
         var firstValuePointer = itemTemplate.DataContext + "/0/value";
 
@@ -400,22 +405,18 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             );
         });
 
-        var updatedControls = await stream
-            .GetDataStream(new JsonPointerReference(firstValuePointer))
-            .TakeUntil(o =>
-                o is ItemTemplateControl html && !html.Data.ToString()!.Contains("2024")
-            )
-            .ToArray();
+        var hostWorkspace = GetHost().GetWorkspace();
 
-        updatedControls
-            .Last()
-            .Should()
-            .BeOfType<HtmlControl>()
-            .Which.Data.ToString()
-            .Should()
-            .Contain("2025");
-    }
+        var hostStream = hostWorkspace.GetStreamFor(
+            null,
+            reference
+        );
 
+        await hostStream.Reduce(new JsonPointerReference(firstValuePointer), null)
+            .TakeUntil(e => !e.Value?.GetBoolean() ??   false)
+            .Timeout(TimeSpan.FromSeconds(3))
+            .FirstAsync();
+            }
     private IObservable<object> CatalogView(LayoutAreaHost host, RenderingContext context)
     {
         return host

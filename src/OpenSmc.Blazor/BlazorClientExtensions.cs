@@ -49,11 +49,15 @@ public static class BlazorClientExtensions
             LayoutAreaControl layoutArea
                 => StandardView<LayoutAreaControl, LayoutArea>(layoutArea, stream, area),
             DataGridControl gc => StandardView<DataGridControl, DataGrid>(gc, stream, area),
-            SelectControl select => StandardView<SelectControl, SelectView>(select, stream, area),
+            ComboboxControl combobox => StandardView<ComboboxControl, Combobox>(combobox, stream, area),
             SplitterPaneControl splitter
                 => StandardView<SplitterPaneControl, SplitterPane>(splitter, stream, area),
+            ListboxControl listbox => StandardView<ListboxControl, Listbox>(listbox, stream, area),
+            SelectControl select => StandardView<SelectControl, Select>(select, stream, area),
             ButtonControl button => StandardView<ButtonControl, Button>(button, stream, area),
+            CheckBoxControl checkbox => StandardView<CheckBoxControl, Checkbox>(checkbox, stream, area),
             LayoutGridItemControl gridItem
+             => StandardView<LayoutGridItemControl, LayoutGridItem>(gridItem, stream, area),
                 => StandardView<LayoutGridItemControl, LayoutGridItem>(gridItem, stream, area),
             ItemTemplateControl itemTemplate
                 => StandardView<ItemTemplateControl, ItemTemplate>(itemTemplate, stream, area),
