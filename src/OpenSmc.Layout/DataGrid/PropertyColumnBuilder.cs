@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.Reflection;
+using OpenSmc.Utils;
 
 namespace OpenSmc.Layout.DataGrid;
 
@@ -11,18 +12,19 @@ public record PropertyColumnBuilder(Type PropertyType, string Name)
                 Activator.CreateInstance(typeof(DataGridColumn<>).MakeGenericType(PropertyType))
         ) with
         {
-            Property = Name
+            Property = Name,
+            Title = Name.Wordify(),
         };
 
     public PropertyColumnBuilder(PropertyInfo property)
-        : this(property.PropertyType, property.Name)
+        : this(property.PropertyType, property.Name.ToCamelCase())
     {
         var displayAttribute = property.GetCustomAttribute<DisplayAttribute>();
         var displayFormat = property.GetCustomAttribute<DisplayFormatAttribute>();
         Column = Column with
         {
-            Title = displayAttribute?.Name ?? property.Name,
-            Format = displayFormat?.DataFormatString,
+            Title = displayAttribute?.Name ?? property.Name.Wordify(),
+            Format = displayFormat?.DataFormatString ?? Column.Format,
         };
     }
 

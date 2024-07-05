@@ -55,6 +55,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                                 .DistinctUntilChanged()
                                 .Select(data => ItemTemplate(area, data))
                     )
+                    .WithView(nameof(CatalogView), CatalogView)
                     .WithView(
                         nameof(Counter),
                         (_, _) => layout.Hub.GetWorkspace().Stream.Select(_ => Counter())
@@ -63,13 +64,6 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     .WithView(nameof(DataGrid), DataGrid)
             );
     }
-
-    private object ItemTemplate(LayoutAreaHost area, IReadOnlyCollection<DataRecord> data) =>
-        area.Bind(
-            data,
-            nameof(ItemTemplate),
-            record => Controls.TextBox(record.DisplayName).WithId(record.SystemName)
-        );
 
     private object Counter()
     {
@@ -235,6 +229,13 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Contain("2025");
     }
 
+    private object ItemTemplate(LayoutAreaHost area, IReadOnlyCollection<DataRecord> data) =>
+        area.Bind(
+            data,
+            nameof(ItemTemplate),
+            record => Controls.TextBox(record.DisplayName).WithId(record.SystemName)
+        );
+
     [HubFact]
     public async Task TestItemTemplate()
     {
@@ -249,9 +250,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var controlArea = $"{reference.Area}";
         var content = await stream.GetControlStream(controlArea).FirstAsync(x => x != null);
         var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
-        var dataReference = itemTemplate.Data.Should().BeOfType<JsonPointerReference>().Which;
-        dataReference.Pointer.Should().Be($"/data/\"{nameof(ItemTemplate)}\"");
-        var data = await stream.GetDataStream<IEnumerable<JsonElement>>(dataReference).FirstAsync();
+        itemTemplate.DataContext.Should().Be($"/data/\"{nameof(ItemTemplate)}\"");
+        var data = await stream
+            .GetDataStream<IEnumerable<JsonElement>>(
+                new JsonPointerReference(itemTemplate.DataContext)
+            )
+            .FirstAsync();
 
         // data.Should()
         //     .HaveCount(2)
@@ -318,7 +322,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             new HostAddress(),
             reference
         );
-        var content = await stream.GetControlStream(reference.Area).FirstAsync();
+        var content = await stream
+            .GetControlStream(reference.Area)
+            .Timeout(TimeSpan.FromSeconds(3))
+            .FirstAsync();
         content
             .Should()
             .BeOfType<DataGridControl>()
@@ -363,7 +370,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         var controlArea = $"{reference.Area}";
-        var content = await stream.GetControlStream(controlArea).FirstAsync(x => x != null);
+        var content = await stream
+            .GetControlStream(controlArea)
+            .Timeout(TimeSpan.FromSeconds(3))
+            .FirstAsync(x => x != null);
         var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
         var dataReference = itemTemplate.Data.Should().BeOfType<JsonPointerReference>().Which;
         dataReference.Pointer.Should().Be($"/data/\"{nameof(DataBoundCheckboxes)}\"");
@@ -404,6 +414,48 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Which.Data.ToString()
             .Should()
             .Contain("2025");
+    }
+
+    private IObservable<object> CatalogView(LayoutAreaHost host, RenderingContext context)
+    {
+        return host
+            .Hub.GetWorkspace()
+            .Stream.Select(x => x.Value.GetData<DataRecord>())
+            .DistinctUntilChanged()
+            .Select(data => host.Bind(data, nameof(CatalogView), x => x.ToDataGrid()));
+    }
+
+    [HubFact]
+    public async Task TestCatalogView()
+    {
+        var reference = new LayoutAreaReference(nameof(CatalogView));
+
+        var hub = GetClient();
+        var workspace = hub.GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            reference
+        );
+        var content = await stream.GetControlStream(reference.Area).FirstAsync();
+        content
+            .Should()
+            .BeOfType<DataGridControl>()
+            .Which.Columns.Should()
+            .HaveCount(2)
+            .And.BeEquivalentTo(
+                [
+                    new DataGridColumn<string>
+                    {
+                        Property = nameof(DataRecord.SystemName).ToCamelCase(),
+                        Title = nameof(DataRecord.SystemName).Wordify()
+                    },
+                    new DataGridColumn<string>
+                    {
+                        Property = nameof(DataRecord.DisplayName).ToCamelCase(),
+                        Title = nameof(DataRecord.DisplayName).Wordify()
+                    }
+                ]
+            );
     }
 }
 

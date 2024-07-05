@@ -10,12 +10,6 @@ namespace OpenSmc.Layout.DataGrid;
 
 public static class DataGridControlBuilder
 {
-    private class ReplaceToDataGridAttribute : ReplaceMethodInTemplateAttribute
-    {
-        public override MethodInfo Replace(MethodInfo method) =>
-            ToDataGridMethod.MakeGenericMethod(method.GetGenericArguments());
-    }
-
     [ReplaceToDataGrid]
     public static DataGridControl ToDataGrid<T>(
         this IReadOnlyCollection<T> elements,
@@ -26,14 +20,33 @@ public static class DataGridControlBuilder
         () => ToDataGrid<object>((object)null, default)
     );
 
+    [ReplaceToDataGrid]
+    public static DataGridControl ToDataGrid<T>(this IReadOnlyCollection<T> elements) =>
+        ToDataGrid(elements, x => x.AutomapColumns());
+
+    #region ReplaceMethodInTemplateAttribute
+    private class ReplaceToDataGridAttribute : ReplaceMethodInTemplateAttribute
+    {
+        public override MethodInfo Replace(MethodInfo method) =>
+            method.GetParameters().Length switch
+            {
+                1 => ToDataGridMethodOne.MakeGenericMethod(method.GetGenericArguments()),
+                2 => ToDataGridMethod.MakeGenericMethod(method.GetGenericArguments()),
+                _ => throw new NotSupportedException()
+            };
+    }
+
     public static DataGridControl ToDataGrid<T>(
         this object elements,
         Func<DataGridControlBuilder<T>, DataGridControlBuilder<T>> configuration
     ) => configuration.Invoke(new DataGridControlBuilder<T>(elements)).Build();
 
-    [ReplaceToDataGrid]
-    public static DataGridControl ToDataGrid<T>(this IReadOnlyCollection<T> elements) =>
-        ToDataGrid(elements, x => x.AutomapColumns());
+    private static readonly MethodInfo ToDataGridMethodOne =
+        ReflectionHelper.GetStaticMethodGeneric(() => ToDataGrid<object>((object)null));
+
+    public static DataGridControl ToDataGrid<T>(this object elements) =>
+        ToDataGrid<T>(elements, x => x.AutomapColumns());
+    #endregion
 }
 
 public record DataGridControlBuilder<T>
