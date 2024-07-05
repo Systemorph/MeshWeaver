@@ -1,6 +1,9 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reflection;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging.Serialization;
+using OpenSmc.Utils;
 
 namespace OpenSmc.Data;
 
@@ -21,6 +24,7 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
 
         typeRegistry.WithType(ElementType);
         Key = typeRegistry.GetKeyFunction(CollectionName);
+        DisplayName = ElementType.GetCustomAttribute<DisplayAttribute>()?.Name ?? ElementType.Name.Wordify();
     }
 
 
@@ -69,6 +73,7 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
     > InitializationFunction { get; init; } = (_, _) => Task.FromResult(Enumerable.Empty<object>());
 
     public Type ElementType { get; init; }
+    public string DisplayName { get; init; }
     public object DataSource { get; init; }
     public string CollectionName { get; init; }
 

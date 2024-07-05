@@ -6,6 +6,7 @@ namespace OpenSmc.Data;
 public interface ITypeSource : IDisposable
 {
     Type ElementType { get; }
+    string DisplayName { get; }
     string CollectionName { get; }
     object GetKey(object instance);
     ITypeSource WithInitialData(
