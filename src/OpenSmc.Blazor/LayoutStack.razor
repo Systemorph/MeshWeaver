@@ -1,3 +1,4 @@
+@using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @inherits ContainerView<LayoutStackControl>
 
 <FluentStack
@@ -7,7 +8,9 @@
     VerticalAlignment="@Vertical"
     VerticalGap="@ViewModel.VerticalGap"
     HorizontalGap="@ViewModel.HorizontalGap"
-    Style="@Style">
+    Style="@Style"
+    Wrap="@ViewModel.Wrap"
+    >
     @foreach (var (area, viewModel) in Areas)
     {
         <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area"/>
@@ -35,11 +38,5 @@
             _ => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Left
         };
 
-    protected Microsoft.FluentUI.AspNetCore.Components.Orientation Orientation => ViewModel.Orientation
-        switch
-        {
-            OpenSmc.Layout.Orientation.Horizontal => Microsoft.FluentUI.AspNetCore.Components.Orientation.Horizontal,
-            OpenSmc.Layout.Orientation.Vertical => Microsoft.FluentUI.AspNetCore.Components.Orientation.Vertical,
-            _ => Microsoft.FluentUI.AspNetCore.Components.Orientation.Vertical
-        };
+    private Orientation Orientation => @ViewModel.Orientation?.ToFluentOrientation() ?? Orientation.Vertical;
 }

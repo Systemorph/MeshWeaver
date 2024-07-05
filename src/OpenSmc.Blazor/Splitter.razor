@@ -1,3 +1,4 @@
+@using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @inherits LayoutStack
 @{
     #pragma warning disable FluentMultiSplitter
@@ -19,4 +20,5 @@
 @code
 {
     private SplitterSkin SplitterSkin => ViewModel.Skin as SplitterSkin;
+    private Orientation Orientation => @ViewModel.Orientation?.ToFluentOrientation() ?? Orientation.Horizontal;
 }

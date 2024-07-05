@@ -1,3 +1,4 @@
+@using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @inherits LayoutStack
 
 <FluentToolbar
@@ -5,7 +6,12 @@
     Orientation="@Orientation"
     Style="@Style"
 >
-    @foreach(var (area,viewModel) in Areas){
+    @foreach(var (area,viewModel) in Areas) {
         <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area"/>
     }
 </FluentToolbar>
+
+@code
+{
+    private Orientation Orientation => @ViewModel.Orientation?.ToFluentOrientation() ?? Orientation.Horizontal;
+}

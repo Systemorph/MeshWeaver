@@ -1,0 +1,16 @@
+@using SelectPosition = Microsoft.FluentUI.AspNetCore.Components.SelectPosition
+@inherits ListBase<SelectControl>
+
+<FluentSelect Label="@Label"
+              Items="@Options"
+              TOption="Option"
+              OptionText="@(x => x.Text)"
+              OptionValue="@(x => x.ItemString)"
+              Position="@Position"
+              @bind-SelectedOption="Selected"
+/>
+
+@code
+{
+    private SelectPosition? Position => ViewModel.Position?.ToFluentPosition();
+}
