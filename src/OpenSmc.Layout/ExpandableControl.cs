@@ -2,9 +2,6 @@
 
 namespace OpenSmc.Layout;
 
-public record TextBoxControl(object Data)
-    : UiControl<TextBoxControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);
-
 public record NumberControl(object Data)
     : UiControl<NumberControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data); // TODO V10: Add formatter somehow (2023.09.07, Armen Sirotenko)
 
