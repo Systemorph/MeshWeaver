@@ -17,9 +17,12 @@ using static OpenSmc.Layout.Controls;
 
 namespace OpenSmc.Northwind.ViewModel;
 
-public record Filter(string Dimension);
+public record Filter(string Dimension)
+{
+    public string Search { get; init; }
+}
 
-public record FilterItem(string Id, string Label, bool Selected);
+public record FilterItem(object id, string Label, bool Selected);
 
 public static class NorthwindLayoutAreas
 {
@@ -67,7 +70,7 @@ public static class NorthwindLayoutAreas
         new(nameof(SupplierSummary), FluentIcons.Person)
     };
 
-    private const string CustomerFilter = nameof(CustomerFilter);
+    private const string FilterItems = nameof(FilterItems);
 
     private static object NavigationMenu(LayoutAreaHost layoutArea, RenderingContext ctx)
     {
@@ -188,29 +191,29 @@ public static class NorthwindLayoutAreas
             );
     }
 
+    private static IReadOnlyDictionary<string, Type> FilterDimensions =>
+        new[] { typeof(Customer), typeof(Product), typeof(Supplier) }.ToDictionary(t => t.FullName);
+
     private static object Filter(LayoutAreaHost area, RenderingContext context)
     {
-        var dimensions = new[] { typeof(Customer), typeof(Product), typeof(Supplier) };
-
         return area.Bind(
-            new Filter(dimensions.First().FullName),
+            new Filter(FilterDimensions.First().Key),
             nameof(Filter),
             filter =>
                 Stack()
                     .WithView(Html("<h3>Filter</h3>"))
                     .WithView(
-                        Stack()
-                            .WithClass("filter")
+                        Stack() 
+                            .WithClass("dimension-filter")
                             .WithOrientation(Orientation.Horizontal)
                             .WithHorizontalGap(16)
                             .WithView((area, ctx) =>
                                 Listbox(filter.Dimension)
                                     .WithOptions(
-                                        dimensions
-                                            .Select(d => new Option<string>(d.FullName, d.Name))
+                                        FilterDimensions
+                                            .Select(d => new Option<string>(d.Value.FullName, d.Value.Name))
                                             .ToArray()
                                     )
-                                    
                             )
                             .WithView(DimensionValues)
                     )
@@ -219,14 +222,22 @@ public static class NorthwindLayoutAreas
 
     private static IObservable<ItemTemplateControl> DimensionValues(LayoutAreaHost area, RenderingContext context)
     {
-        return area.Workspace.GetObservable<Customer>()
-                .Select(x => 
-                    x.OrderBy(c => c.CompanyName).Select(customer => new FilterItem(customer.CustomerId, customer.CompanyName, true))
-                        .ToArray())
+        return area.GetDataStream<Filter>(nameof(Filter))
+            .Select(filter => FilterDimensions[filter.Dimension])
+            .Select(type => area.Workspace.ReduceToTypes(type)
+                    .DistinctUntilChanged()
+                    .Select(x => x.Value.Reduce(new CollectionReference(x.Value.GetCollectionName(type))))
+                    .Select(x => 
+                        x.Instances.Select(item => 
+                            new FilterItem(item.Key, item.Value is INamed named ? named.DisplayName : item.Value.ToString(), true))
+                            .OrderBy(i => i.Label)
+                            .ToArray())
                 .Select(filterItems =>
-                    area.Bind(filterItems, CustomerFilter,
+                    area.Bind(filterItems, FilterItems,
                         item => CheckBox(item.Label, item.Selected))
-                    );
+                        .WithClass("dimension-values")
+                    ))
+            .Switch();
     }
 
     public static LayoutStackControl SupplierSummary(
@@ -323,11 +334,12 @@ public static class NorthwindLayoutAreas
                     area.Workspace.GetObservable<Order>()
                         .CombineLatest(
                             area.GetDataStream<Toolbar>(nameof(Toolbar)),
-                            area.GetDataStream<IEnumerable<object>>(CustomerFilter),
-                            (orders, tb, customerFilter) =>
+                            area.GetDataStream<IEnumerable<object>>(FilterItems),
+                            (orders, tb, filterItems) =>
                                 orders
                                     .Where(x => x.OrderDate.Year == tb.Year 
-                                                && !customerFilter.Cast<FilterItem>().Where(c => c.Selected && c.Id == x.CustomerId).IsEmpty())
+                                                // && !filterItems.Cast<FilterItem>().Where(c => c.Selected && c.Id == x.CustomerId).IsEmpty()
+                                                )
                                     .OrderByDescending(y => y.OrderDate)
                                     .Take(5)
                                     .Select(order => new OrderSummaryItem(
