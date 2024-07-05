@@ -49,13 +49,29 @@ fluent-toolbar {
     overflow-y: auto;
 }
 
-.filter>div:first-child {
-    min-width: 200px;
+.dimension-filter {
+    /* height: 400px; */
+    display: grid !important;
+    grid-template-columns: 200px 1fr;
 }
 
-.manage {
-    width: 100dvw;
+.dimension-filter > :first-child {
+    height: 100%;
+    overflow-y: auto;
 }
+
+.dimension-values {
+    height: 100%;
+    overflow-y: auto;
+}
+
+.dimension-values fluent-checkbox {
+    white-space: nowrap;
+}
+
+    .manage {
+        width: 100dvw;
+    }
 
 footer {
     background: var(--neutral-layer-4);
