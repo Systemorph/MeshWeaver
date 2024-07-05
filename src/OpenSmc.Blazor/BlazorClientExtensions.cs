@@ -48,6 +48,7 @@ public static class BlazorClientExtensions
             LayoutAreaControl layoutArea
                 => StandardView<LayoutAreaControl, LayoutArea>(layoutArea, stream, area),
             DataGridControl gc => StandardView<DataGridControl, DataGrid>(gc, stream, area),
+            TextBoxControl textbox => StandardView<TextBoxControl, Textbox>(textbox, stream, area),
             ComboboxControl combobox => StandardView<ComboboxControl, Combobox>(combobox, stream, area),
             SplitterPaneControl splitter
                 => StandardView<SplitterPaneControl, SplitterPane>(splitter, stream, area),

@@ -207,15 +207,27 @@ public static class NorthwindLayoutAreas
                             .WithClass("dimension-filter")
                             .WithOrientation(Orientation.Horizontal)
                             .WithHorizontalGap(16)
-                            .WithView((area, ctx) =>
-                                Listbox(filter.Dimension)
-                                    .WithOptions(
-                                        FilterDimensions
-                                            .Select(d => new Option<string>(d.Value.FullName, d.Value.Name))
-                                            .ToArray()
-                                    )
+                            .WithView(Listbox(filter.Dimension)
+                                .WithOptions(
+                                    FilterDimensions
+                                        .Select(d => new Option<string>(d.Value.FullName, d.Value.Name))
+                                        .ToArray()
+                                )
                             )
-                            .WithView(DimensionValues)
+                            .WithView(Stack()
+                                .WithClass("dimension-values")
+                                .WithView(
+                                    TextBox(filter.Search)
+                                        .WithIconEnd(FluentIcons.Search)
+                                        .WithPlaceholder("Search...")
+                                        .WithAutocomplete("off")
+                                        // TODO V10: immediate=true crashes FluentTextfield, try using FluentSearch instead (05.07.2024, Alexander Kravets)
+                                        // .WithImmediate(true)
+                                        // .WithImmediateDelay(200)
+                                    )
+                                .WithView(DimensionValues)
+                                .WithVerticalGap(16)
+                            )
                     )
         );
     }
@@ -223,19 +235,18 @@ public static class NorthwindLayoutAreas
     private static IObservable<ItemTemplateControl> DimensionValues(LayoutAreaHost area, RenderingContext context)
     {
         return area.GetDataStream<Filter>(nameof(Filter))
-            .Select(filter => FilterDimensions[filter.Dimension])
-            .Select(type => area.Workspace.ReduceToTypes(type)
+            .Select(filter => area.Workspace.ReduceToTypes(FilterDimensions[filter.Dimension])
                     .DistinctUntilChanged()
-                    .Select(x => x.Value.Reduce(new CollectionReference(x.Value.GetCollectionName(type))))
+                    .Select(x => x.Value.Reduce(new CollectionReference(x.Value.GetCollectionName(FilterDimensions[filter.Dimension]))))
                     .Select(x => 
                         x.Instances.Select(item => 
                             new FilterItem(item.Key, item.Value is INamed named ? named.DisplayName : item.Value.ToString(), true))
+                            .Where(i => filter.Search is null || i.Label.IndexOf(filter.Search, StringComparison.OrdinalIgnoreCase) != -1)
                             .OrderBy(i => i.Label)
                             .ToArray())
                 .Select(filterItems =>
                     area.Bind(filterItems, FilterItems,
                         item => CheckBox(item.Label, item.Selected))
-                        .WithClass("dimension-values")
                     ))
             .Switch();
     }
