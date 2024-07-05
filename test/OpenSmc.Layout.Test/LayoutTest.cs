@@ -1,20 +1,16 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
-using System.Reflection.Emit;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using FluentAssertions;
 using Json.Patch;
-using Json.Path;
 using Json.Pointer;
-using Newtonsoft.Json.Linq;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.DataGrid;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
-using OpenSmc.Reflection;
 using OpenSmc.Utils;
 using Xunit.Abstractions;
 
@@ -438,10 +434,13 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         var content = await stream.GetControlStream(reference.Area).FirstAsync();
-        content
+        var grid = content
             .Should()
             .BeOfType<DataGridControl>()
-            .Which.Columns.Should()
+            .Which;
+
+        grid.DataContext.Should().Be(LayoutAreaReference.GetDataPointer(nameof(CatalogView)));
+        grid.Columns.Should()
             .HaveCount(2)
             .And.BeEquivalentTo(
                 [
@@ -457,6 +456,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     }
                 ]
             );
+
     }
 }
 
