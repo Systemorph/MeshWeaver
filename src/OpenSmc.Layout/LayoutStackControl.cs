@@ -168,7 +168,7 @@ public record LayoutGridItemControl(object ChildControl)
 
     public IReadOnlyCollection<string> Areas { get; init; }
 
-    IEnumerable<ViewElement> IContainerControl.ChildControls => new[] { new ViewElementWithView(nameof(ChildControl), ChildControl) };
+    IEnumerable<ViewElement> IContainerControl.ChildControls => [ new ViewElementWithView(nameof(ChildControl), ChildControl) ];
 
     IContainerControl IContainerControl.SetAreas(IReadOnlyCollection<string> areas) => this with { Areas = areas };
 }

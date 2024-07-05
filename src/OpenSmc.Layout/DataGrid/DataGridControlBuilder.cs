@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -22,9 +22,9 @@ public static class DataGridControlBuilder
 
     [ReplaceToDataGrid]
     public static DataGridControl ToDataGrid<T>(this IReadOnlyCollection<T> elements) =>
-        ToDataGrid(elements, x => x.AutomapColumns());
+        ToDataGrid(elements, x => x.AutoMapColumns());
 
-    #region ReplaceMethodInTemplateAttribute
+    #region ReplaceToDataGridAttribute
     private class ReplaceToDataGridAttribute : ReplaceMethodInTemplateAttribute
     {
         public override MethodInfo Replace(MethodInfo method) =>
@@ -45,26 +45,20 @@ public static class DataGridControlBuilder
         ReflectionHelper.GetStaticMethodGeneric(() => ToDataGrid<object>((object)null));
 
     public static DataGridControl ToDataGrid<T>(this object elements) =>
-        ToDataGrid<T>(elements, x => x.AutomapColumns());
+        ToDataGrid<T>(elements, x => x.AutoMapColumns());
     #endregion
 }
 
-public record DataGridControlBuilder<T>
+public record DataGridControlBuilder<T>(object Elements)
 {
-    public DataGridControlBuilder(object elements)
-    {
-        Elements = elements;
-    }
-
-    public DataGridControlBuilder<T> AutomapColumns() =>
+    public DataGridControlBuilder<T> AutoMapColumns() =>
         this with
         {
             Columns = typeof(T)
                 .GetProperties()
                 .Where(x =>
                     !x.HasAttribute<NotVisibleAttribute>()
-                    && x.GetCustomAttribute<BrowsableAttribute>()
-                        is not BrowsableAttribute { Browsable: false }
+                    && x.GetCustomAttribute<BrowsableAttribute>() is not { Browsable: false }
                 )
                 .Select(x => new PropertyColumnBuilder(x).Column)
                 .ToImmutableList()
@@ -72,7 +66,6 @@ public record DataGridControlBuilder<T>
 
     public ImmutableList<DataGridColumn> Columns { get; init; } =
         ImmutableList<DataGridColumn>.Empty;
-    public object Elements { get; }
 
     public DataGridControlBuilder<T> WithColumnForProperty(
         PropertyInfo property,

@@ -2,8 +2,9 @@
 
 namespace OpenSmc.Blazor;
 
+
 public abstract class NavItem<TViewModel> : BlazorView<TViewModel>
-    where TViewModel : UiControl, INavItemControl
+    where TViewModel : NavItemControl<TViewModel> 
 {
     protected string Href { get; set; }
     protected string Title { get; set; }

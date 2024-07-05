@@ -38,6 +38,7 @@ public sealed record DataContext : IAsyncDisposable
             DataSourceBuilders = DataSourceBuilders.Add(id, dataSourceBuilder),
         };
 
+    public IEnumerable<ITypeSource> TypeSources => DataSources.Values.SelectMany(ds => ds.TypeSources.Values);
     public ITypeSource GetTypeSource(Type type) =>
         DataSources
             .Values.Select(ds => ds.TypeSources.GetValueOrDefault(type))
