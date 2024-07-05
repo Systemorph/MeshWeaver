@@ -11,6 +11,7 @@ using Newtonsoft.Json.Linq;
 using OpenSmc.Data;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout.Composition;
+using OpenSmc.Layout.DataGrid;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
@@ -57,6 +58,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                                 .DistinctUntilChanged()
                                 .Select(data => ItemTemplate(area, data))
                     )
+                    .WithView(nameof(CatalogView), CatalogView)
                     .WithView(
                         nameof(Counter),
                         (_, _) => layout.Hub.GetWorkspace().Stream.Select(_ => Counter())
@@ -66,13 +68,6 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     .WithView(nameof(DataBoundCheckboxes), DataBoundCheckboxes)
             );
     }
-
-    private object ItemTemplate(LayoutAreaHost area, IReadOnlyCollection<DataRecord> data) =>
-        area.Bind(
-            data,
-            nameof(ItemTemplate),
-            record => Controls.TextBox(record.DisplayName).WithId(record.SystemName)
-        );
 
     private object Counter()
     {
@@ -196,9 +191,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         // Get toolbar and change value.
         var toolbarArea = $"{reference.Area}/Toolbar";
         var yearTextBox = (TextBoxControl)await stream.GetControlStream(toolbarArea).FirstAsync();
-        yearTextBox
-            .DataContext.Should()
-            .Be("/data/\"toolbar\"");
+        yearTextBox.DataContext.Should().Be("/data/\"toolbar\"");
 
         var dataPointer = yearTextBox.Data.Should().BeOfType<JsonPointerReference>().Which;
         dataPointer.Pointer.Should().Be("/year");
@@ -240,6 +233,13 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Contain("2025");
     }
 
+    private object ItemTemplate(LayoutAreaHost area, IReadOnlyCollection<DataRecord> data) =>
+        area.Bind(
+            data,
+            nameof(ItemTemplate),
+            record => Controls.TextBox(record.DisplayName).WithId(record.SystemName)
+        );
+
     [HubFact]
     public async Task TestItemTemplate()
     {
@@ -255,7 +255,11 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var content = await stream.GetControlStream(controlArea).FirstAsync(x => x != null);
         var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
         itemTemplate.DataContext.Should().Be($"/data/\"{nameof(ItemTemplate)}\"");
-        var data = await stream.GetDataStream<IEnumerable<JsonElement>>(new JsonPointerReference(itemTemplate.DataContext)).FirstAsync();
+        var data = await stream
+            .GetDataStream<IEnumerable<JsonElement>>(
+                new JsonPointerReference(itemTemplate.DataContext)
+            )
+            .FirstAsync();
 
         // data.Should()
         //     .HaveCount(2)
@@ -322,7 +326,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             new HostAddress(),
             reference
         );
-        var content = await stream.GetControlStream(reference.Area).FirstAsync();
+        var content = await stream
+            .GetControlStream(reference.Area)
+            .Timeout(TimeSpan.FromSeconds(3))
+            .FirstAsync();
         content
             .Should()
             .BeOfType<DataGridControl>()
@@ -352,7 +359,6 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             new { Label = "Label1", Value = true }, 
             new { Label = "Label1", Value = true }
         };
-
         return area.Bind(data, nameof(DataBoundCheckboxes), x => Controls.CheckBox(x.Label, x.Value));
     }
 
@@ -363,16 +369,20 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(new HostAddress(), reference);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            reference
+        );
         var controlArea = $"{reference.Area}";
-        var content = await stream.GetControlStream(controlArea).FirstAsync(x => x != null);
+        var content = await stream
+            .GetControlStream(controlArea)
+            .Timeout(TimeSpan.FromSeconds(3))
+            .FirstAsync(x => x != null);
         var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
         itemTemplate.DataContext.Should().Be($"/data/\"{nameof(DataBoundCheckboxes)}\"");
         var data = await stream.GetDataStream<IReadOnlyCollection<object>>(new JsonPointerReference(itemTemplate.DataContext)).FirstAsync();
 
-        data
-            .Should()
-            .HaveCount(3);
+        data.Should().HaveCount(3);
 
         var first = (JsonObject) data.First();
 
@@ -382,7 +392,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         stream.Update(ci =>
         {
-            var patch = new JsonPatch(PatchOperation.Replace(JsonPointer.Parse(firstValuePointer), false));
+            var patch = new JsonPatch(
+                PatchOperation.Replace(JsonPointer.Parse(firstValuePointer), false)
+            );
             return new Data.Serialization.ChangeItem<JsonElement>(
                 stream.Owner,
                 stream.Reference,
@@ -401,10 +413,50 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
         await hostStream.Reduce(new JsonPointerReference(firstValuePointer), null)
-            .TakeUntil(e => !e.Value?.GetBoolean() ?? false)
+            .TakeUntil(e => !e.Value?.GetBoolean() ??   false)
             .Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync();
+            }
+    private IObservable<object> CatalogView(LayoutAreaHost host, RenderingContext context)
+    {
+        return host
+            .Hub.GetWorkspace()
+            .Stream.Select(x => x.Value.GetData<DataRecord>())
+            .DistinctUntilChanged()
+            .Select(data => host.Bind(data, nameof(CatalogView), x => x.ToDataGrid()));
+    }
 
+    [HubFact]
+    public async Task TestCatalogView()
+    {
+        var reference = new LayoutAreaReference(nameof(CatalogView));
+
+        var hub = GetClient();
+        var workspace = hub.GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            reference
+        );
+        var content = await stream.GetControlStream(reference.Area).FirstAsync();
+        content
+            .Should()
+            .BeOfType<DataGridControl>()
+            .Which.Columns.Should()
+            .HaveCount(2)
+            .And.BeEquivalentTo(
+                [
+                    new DataGridColumn<string>
+                    {
+                        Property = nameof(DataRecord.SystemName).ToCamelCase(),
+                        Title = nameof(DataRecord.SystemName).Wordify()
+                    },
+                    new DataGridColumn<string>
+                    {
+                        Property = nameof(DataRecord.DisplayName).ToCamelCase(),
+                        Title = nameof(DataRecord.DisplayName).Wordify()
+                    }
+                ]
+            );
     }
 }
 

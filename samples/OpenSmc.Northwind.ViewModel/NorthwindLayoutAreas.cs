@@ -1,12 +1,12 @@
 ﻿using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using Castle.Core.Resource;
 using OpenSmc.Application.Styles;
 using OpenSmc.Data;
 using OpenSmc.DataCubes;
 using OpenSmc.Domain;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
+using OpenSmc.Layout.DataGrid;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
 using OpenSmc.Northwind.Domain;
@@ -36,8 +36,27 @@ public static class NorthwindLayoutAreas
                 .WithView(nameof(SupplierSummary), SupplierSummary)
                 .WithView(nameof(NavigationMenu), NavigationMenu)
                 .WithView(nameof(SupplierSummaryGrid), SupplierSummaryGrid)
+                .WithView(nameof(CategoryCatalog), CategoryCatalog)
         ).WithTypes(typeof(FilterItem));
     }
+
+    private static IObservable<object> CategoryCatalog(
+        LayoutAreaHost area,
+        RenderingContext context
+    ) =>
+        area
+            .Workspace.GetObservable<Category>()
+            .Select(categories =>
+                area.Bind(
+                    categories,
+                    "category",
+                    c =>
+                        Stack()
+                            .WithOrientation(Orientation.Vertical)
+                            .WithView(Html("<h2>Categories</h2>"))
+                            .WithView(c.ToDataGrid())
+                )
+            );
 
     private static readonly KeyValuePair<string, Icon>[] DashboardWidgets = new[]
     {
@@ -83,7 +102,7 @@ public static class NorthwindLayoutAreas
                     .Distinct()
                     .OrderByDescending(year => year)
                     .Select(year => new Option<int>(year, year.ToString()))
-                    .Prepend(new Option<int>(0, "All"))
+                    .Prepend(new Option<int>(0, "All Time"))
                     .ToArray()
             )
             .DistinctUntilChanged(x => string.Join(',', x.Select(y => y.Item)));
@@ -106,20 +125,23 @@ public static class NorthwindLayoutAreas
                                         )
                                     )
                             )
-                            .WithView((_, _) =>
-                                Button("Analyze")
-                                    .WithIcon(FluentIcons.CalendarDataBar)
-                                    .WithClickAction(ctx =>
-                                    {
-                                        contextPanelCollapsed = !contextPanelCollapsed;
-                                        ctx.Layout.RenderArea(
-                                            context with { Area = $"{context.Area}/{nameof(ContextPanel)}" },
-                                            ContextPanel(contextPanelCollapsed)
-                                        );
-                                    })
+                            .WithView(
+                                (_, _) =>
+                                    Button("Analyze")
+                                        .WithIcon(FluentIcons.CalendarDataBar)
+                                        .WithClickAction(ctx =>
+                                        {
+                                            contextPanelCollapsed = !contextPanelCollapsed;
+                                            ctx.Layout.RenderArea(
+                                                context with
+                                                {
+                                                    Area = $"{context.Area}/{nameof(ContextPanel)}"
+                                                },
+                                                ContextPanel(contextPanelCollapsed)
+                                            );
+                                        })
                             )
                     )
-
                     .WithView(
                         Stack()
                             .WithSkin(Skins.LayoutGrid.WithSpacing(1))
@@ -259,7 +281,6 @@ public static class NorthwindLayoutAreas
                     a.GetDataStream<Toolbar>(nameof(Toolbar))
                         .Select(tb => $"Year selected: {tb.Year}")
             );
-
 
 
     public static LayoutStackControl ProductSummary(
