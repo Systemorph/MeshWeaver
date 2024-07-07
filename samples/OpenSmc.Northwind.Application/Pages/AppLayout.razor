@@ -1,5 +1,5 @@
-@page "/app/{Application}/{Environment}/{Area}"
-@inject NavigationManager navigationManager
+@page "/app/{Application}/{Environment}/{Area}/{Id?}"
+@inject NavigationManager NavigationManager
 @using OpenSmc.Application;
 @using OpenSmc.Layout;
 @using Microsoft.AspNetCore.WebUtilities
@@ -17,16 +17,19 @@
     public string Environment { get; set; }
     [Parameter]
     public string Area { get; set; }
+    [Parameter]
+    public string Id { get; set; }
 
     private string PageTitle => $"{Area.Wordify()} - {Application}";
 
     public Dictionary<string, StringValues> Options => 
-        QueryHelpers.ParseQuery(navigationManager.ToAbsoluteUri(navigationManager.Uri).Query);
+        QueryHelpers.ParseQuery(NavigationManager.ToAbsoluteUri(NavigationManager.Uri).Query);
 
     private object Address => new ApplicationAddress(Application, Environment);
 
     private LayoutAreaReference Reference => new(Area)
     {
-        Options = Options
+        Options = Options,
+        Id = Id
     };
 }
