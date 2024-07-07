@@ -73,9 +73,7 @@ public class Workspace : IWorkspace
 
     public IObservable<IEnumerable<TCollection>> GetStream<TCollection>()
     {
-        var collection = DataContext
-            .DataSources.Select(ds => ds.Value.TypeSources.GetValueOrDefault(typeof(TCollection)))
-            .FirstOrDefault(x => x != null);
+        var collection = DataContext.GetTypeSource(typeof(TCollection));
         if (collection == null)
             return null;
         return GetRemoteStream(Hub.Address, new CollectionReference(collection.CollectionName))

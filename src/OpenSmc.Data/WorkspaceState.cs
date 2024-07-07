@@ -5,22 +5,13 @@ namespace OpenSmc.Data;
 
 public record WorkspaceState(
     IMessageHub Hub,
-    IReadOnlyDictionary<Type, IDataSource> DataSources,
+    DataContext DataContext,
     ReduceManager<WorkspaceState> ReduceManager
 )
 {
-    public IReadOnlyDictionary<string, ITypeSource> TypeSources { get; } =
-        DataSources
-            .Values.SelectMany(x => x.TypeSources.Values)
-            .ToImmutableDictionary(x => x.CollectionName);
+    public IReadOnlyDictionary<string, ITypeSource> TypeSources => DataContext.TypeSources;
 
-    private ImmutableDictionary<Type, string> CollectionsByType { get; } =
-        DataSources
-            .Values.SelectMany(x => x.TypeSources.Values)
-            .Where(x => x.ElementType != null)
-            .ToImmutableDictionary(x => x.ElementType, x => x.CollectionName);
-
-    public string GetCollectionName(Type type) => CollectionsByType.GetValueOrDefault(type);
+    public string GetCollectionName(Type type) => DataContext.GetCollectionName(type);
 
     public ImmutableDictionary<
         StreamReference,
@@ -126,7 +117,7 @@ public record WorkspaceState(
     )> MapToIdAndAddress(IEnumerable<object> e, Type type)
     {
         if (
-            !DataSources.TryGetValue(type, out var dataSource)
+            !DataContext.DataSourcesByType.TryGetValue(type, out var dataSource)
             || !dataSource.TypeSources.TryGetValue(type, out var ts)
         )
             throw new InvalidOperationException(
@@ -172,7 +163,7 @@ public record WorkspaceState(
             .Where(e => e.Value != null);
     }
 
-    public IEnumerable<Type> MappedTypes => CollectionsByType.Keys;
+    public IEnumerable<Type> MappedTypes => DataContext.DataSourcesByType.Keys;
 
     public void Rollback()
     {
@@ -203,7 +194,7 @@ public record WorkspaceState(
         var typeSource = TypeSources.GetValueOrDefault(collection);
         if (typeSource == null)
             throw new DataSourceConfigurationException($"Collection {collection} not found");
-        var dataSource = DataSources.GetValueOrDefault(typeSource.ElementType);
+        var dataSource = DataContext.GetDataSourceByType(typeSource.ElementType);
         if (dataSource == null)
             throw new DataSourceConfigurationException($"Type {typeSource.ElementType} not found");
         return dataSource;

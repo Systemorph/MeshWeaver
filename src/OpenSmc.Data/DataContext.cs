@@ -25,12 +25,15 @@ public sealed record DataContext : IAsyncDisposable
         );
     }
 
-    internal ImmutableDictionary<object, IDataSource> DataSources { get; private set; } =
+    private Dictionary<Type, ITypeSource> TypeSourcesByType { get; set; }
+
+    private ImmutableDictionary<object, IDataSource> DataSourcesById { get; set; } =
         ImmutableDictionary<object, IDataSource>.Empty;
 
-    public IDataSource GetDataSource(object id) => DataSources.GetValueOrDefault(id);
+    public IDataSource GetDataSourceById(object id) => DataSourcesById.GetValueOrDefault(id);
+    public IDataSource GetDataSourceByType(Type type) => DataSourcesByType.GetValueOrDefault(type);
 
-    public IEnumerable<Type> MappedTypes => DataSources.Values.SelectMany(ds => ds.MappedTypes);
+    public IReadOnlyDictionary<Type, IDataSource> DataSourcesByType { get; private set; }
 
     public DataContext WithDataSourceBuilder(object id, DataSourceBuilder dataSourceBuilder) =>
         this with
@@ -38,26 +41,31 @@ public sealed record DataContext : IAsyncDisposable
             DataSourceBuilders = DataSourceBuilders.Add(id, dataSourceBuilder),
         };
 
-    public IEnumerable<ITypeSource> TypeSources => DataSources.Values.SelectMany(ds => ds.TypeSources.Values);
-    public ITypeSource GetTypeSource(Type type) =>
-        DataSources
-            .Values.Select(ds => ds.TypeSources.GetValueOrDefault(type))
-            .FirstOrDefault(ts => ts is not null);
+    public IReadOnlyDictionary<string, ITypeSource> TypeSources { get; private set; }
 
+    public ITypeSource GetTypeSource(string collection) =>
+        TypeSources.GetValueOrDefault(collection);
+    public ITypeSource GetTypeSource(Type type) =>
+        TypeSourcesByType.GetValueOrDefault(type);
     public Task<WorkspaceState> Initialized { get; private set; }
 
     private async Task<WorkspaceState> CreateInitializationTask()
     {
-        var state = await DataSources
+        TypeSources = 
+            DataSourcesById
+            .Values
+            .SelectMany(ds => ds.TypeSources.Values)
+            .ToDictionary(x => x.CollectionName);
+        TypeSourcesByType = DataSourcesById.Values.SelectMany(ds => ds.TypeSources).ToDictionary();
+        DataSourcesByType = DataSourcesById.Values
+            .SelectMany(ds => ds.MappedTypes.Select(type => new KeyValuePair<Type, IDataSource>(type, ds)))
+            .ToDictionary();
+        var state = await DataSourcesById
             .Values.ToAsyncEnumerable()
             .SelectAwait(async ds => await ds.Initialized)
             .AggregateAsync(new WorkspaceState(
                 Hub,
-                DataSources
-                    .Values.SelectMany(ds =>
-                        ds.TypeSources.Select(ts => new { DataSource = ds, TypeSource = ts })
-                    )
-                    .ToDictionary(x => x.TypeSource.Key, x => x.DataSource),
+                this,
                 ReduceManager
             ), (x, y) => x.Merge(y));
         return state;
@@ -84,31 +92,30 @@ public sealed record DataContext : IAsyncDisposable
 
     public void Initialize()
     {
-        DataSources = DataSourceBuilders.ToImmutableDictionary(
+        DataSourcesById = DataSourceBuilders.ToImmutableDictionary(
             kvp => kvp.Key,
             kvp => kvp.Value.Invoke(Hub)
         );
 
         var state = new WorkspaceState(
             Hub,
-            DataSources
-                .Values.SelectMany(ds =>
-                    ds.TypeSources.Values.Select(ts => new { DataSource = ds, TypeSource = ts })
-                )
-                .ToDictionary(x => x.TypeSource.ElementType, x => x.DataSource),
+            this,
             ReduceManager
         );
 
-        foreach (var dataSource in DataSources.Values)
+        foreach (var dataSource in DataSourcesById.Values)
             dataSource.Initialize(state);
 
         Initialized = CreateInitializationTask();
     }
     public async ValueTask DisposeAsync()
     {
-        foreach (var dataSource in DataSources.Values)
+        foreach (var dataSource in DataSourcesById.Values)
         {
             await dataSource.DisposeAsync();
         }
     }
+
+    public string GetCollectionName(Type type)
+        => TypeSourcesByType.GetValueOrDefault(type)?.CollectionName;
 }
