@@ -1,7 +1,9 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Application.Styles;
 using OpenSmc.Data.Serialization;
+using OpenSmc.Domain;
 using OpenSmc.Messaging.Serialization;
 using OpenSmc.Utils;
 
@@ -24,8 +26,19 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
 
         typeRegistry.WithType(ElementType);
         Key = typeRegistry.GetKeyFunction(CollectionName);
-        DisplayName = ElementType.GetCustomAttribute<DisplayAttribute>()?.Name ?? ElementType.Name.Wordify();
+        var displayAttribute = ElementType.GetCustomAttribute<DisplayAttribute>();
+        DisplayName = displayAttribute?.GetName() ?? ElementType.Name.Wordify();
+        Description = displayAttribute?.GetDescription();
+        GroupName = displayAttribute?.GetGroupName();
+        Order = displayAttribute?.GetOrder();
+        var iconAttribute = ElementType.GetCustomAttribute<IconAttribute>();
+        if (iconAttribute != null)
+            Icon = new Icon(iconAttribute.Provider, iconAttribute.Id);
     }
+
+    public string Description { get; init; }
+    public string GroupName { get; init; }
+    public int? Order { get; init; }
 
 
     public virtual object GetKey(object instance) =>
@@ -76,6 +89,7 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
     public string DisplayName { get; init; }
     public object DataSource { get; init; }
     public string CollectionName { get; init; }
+    public object Icon { get; init; }
 
     Task<InstanceCollection> ITypeSource.InitializeAsync(
         WorkspaceReference<InstanceCollection> reference,

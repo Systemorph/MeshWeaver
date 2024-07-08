@@ -40,6 +40,7 @@ public static class NorthwindLayoutAreas
                 .WithView(nameof(NavigationMenu), NavigationMenu)
                 .WithView(nameof(SupplierSummaryGrid), SupplierSummaryGrid)
                 .WithView(nameof(CategoryCatalog), CategoryCatalog)
+                .AddDomainViews("Northwind")
         ).WithTypes(typeof(FilterItem));
     }
 
@@ -75,7 +76,7 @@ public static class NorthwindLayoutAreas
     private static object NavigationMenu(LayoutAreaHost layoutArea, RenderingContext ctx)
     {
         return DashboardWidgets.Aggregate(
-            NavMenu().WithCollapsible(true).WithWidth(250),
+            NavMenu(),
             (x, a) =>
                 x.WithNavLink(
                     a.Key.Wordify(),

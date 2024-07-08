@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using OpenSmc.Layout.Composition;
 
 namespace OpenSmc.Layout;
 
@@ -9,9 +10,9 @@ public record NavMenuControl()
 
     public NavMenuControl WithItem(object item) => this with { Items = Items.Add(item) };
 
-    public bool Collapsible { get; init; }
+    public bool Collapsible { get; init; } = true;
 
-    public int? Width { get; init; }
+    public int? Width { get; init; } = 250;
 
 
     public NavMenuControl WithGroup(object title) =>
@@ -39,9 +40,12 @@ where TNavItemControl : NavItemControl<TNavItemControl>
 {
     public object Icon { get; init; }
     public object Href { get; init; }
+    public object Title { get; init; }
+    public TNavItemControl WithTitle(object title) => This with { Title = title };
     public TNavItemControl WithHref(object href) => This with { Href = href };
 
     public TNavItemControl WithIcon(object icon) => This with { Icon = icon };
+
 }
 
 public record NavLinkControl : NavItemControl<NavLinkControl>
@@ -54,4 +58,19 @@ public record NavLinkControl : NavItemControl<NavLinkControl>
 }
 
 public record NavGroupControl(object Data)
-    : NavItemControl<NavGroupControl>(Data);
+    : NavItemControl<NavGroupControl>(Data), IContainerControl
+{
+    internal ImmutableList<object> Items { get; private init; } = ImmutableList<object>.Empty;
+
+    IEnumerable<ViewElement> IContainerControl.ChildControls =>
+        Items.Select((x, i) => new ViewElementWithView(i.ToString(), x));
+
+    public NavGroupControl WithLink(string displayName, string link, Func<NavLinkControl, NavLinkControl> options) =>
+        this with { Items = Items.Add(options.Invoke(new(displayName, link))) };
+    public NavGroupControl WithGroup(NavGroupControl @group) => this with { Items = Items.Add(group) };
+
+    public IReadOnlyCollection<string> Areas { get; init; } = [];
+    IContainerControl IContainerControl.SetAreas(IReadOnlyCollection<string> areas)
+        => this with{Areas = areas};
+
+}

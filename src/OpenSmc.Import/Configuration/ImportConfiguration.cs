@@ -16,18 +16,16 @@ namespace OpenSmc.Import.Configuration;
 
 public record ImportConfiguration
 {
-    public IMessageHub Hub { get; }
-    public WorkspaceState State { get; }
+    public IWorkspace Workspace { get; }
     public IReadOnlyCollection<Type> MappedTypes { get; init; }
 
     public ImportConfiguration(
-        IMessageHub hub,
+        IWorkspace workspace,
         IReadOnlyCollection<Type> mappedTypes,
         ILogger logger
     )
     {
-        this.Hub = hub;
-        this.State = State;
+        this.Workspace = workspace;
         MappedTypes = mappedTypes;
         Validations = ImmutableList<ValidationFunction>
             .Empty.Add(StandardValidations)
@@ -40,8 +38,6 @@ public record ImportConfiguration
         Logger = logger;
     }
 
-    public ImportConfiguration(IMessageHub Hub, ILogger logger)
-        : this(Hub, Array.Empty<Type>(), logger) { }
 
     private readonly ConcurrentDictionary<string, ImportFormat> ImportFormats = new();
 
@@ -78,7 +74,7 @@ public record ImportConfiguration
         return ImportFormats.GetOrAdd(
             format,
             builders.Aggregate(
-                new ImportFormat(format, Hub, MappedTypes, Validations),
+                new ImportFormat(format, Workspace, MappedTypes, Validations),
                 (a, b) => b.Invoke(a)
             )
         );
@@ -177,13 +173,13 @@ public record ImportConfiguration
                     .Where(x => x.PropertyType == typeof(string))
                     .Select(x => new
                     {
-                        Attr = x.GetCustomAttribute(typeof(CategoryAttribute<>)),
+                        Attr = x.GetCustomAttribute<DimensionAttribute>(),
                         x.Name
                     })
                     .Where(x => x.Attr != null)
                     .Select(x =>
                         (
-                            x.Attr.GetType().GetGenericArguments().First(),
+                            x.Attr.Type,
                             x.Name,
                             CreateGetter(type, x.Name)
                         )
@@ -192,11 +188,11 @@ public record ImportConfiguration
         );
 
         var ret = true;
-        foreach (var (categoryType, propertyName, propGetter) in dimensions)
+        foreach (var (dimensionType, propertyName, propGetter) in dimensions)
         {
-            if (!State.MappedTypes.Contains(categoryType))
+            if (!Workspace.DataContext.DataSourcesByType.ContainsKey(dimensionType))
             {
-                Logger.LogError(string.Format(MissingCategoryErrorMessage, categoryType));
+                Logger.LogError(string.Format(MissingCategoryErrorMessage, dimensionType));
                 ret = false;
                 continue;
             }
@@ -206,8 +202,8 @@ public record ImportConfiguration
                 !string.IsNullOrEmpty(value)
                 && !(bool)
                     ExistsElementMethod
-                        .MakeGenericMethod(categoryType)
-                        .InvokeAsFunction(this, State, value)
+                        .MakeGenericMethod(dimensionType)
+                        .InvokeAsFunction(this, Workspace, value)
             )
             {
                 Logger.LogError(
@@ -232,9 +228,11 @@ public record ImportConfiguration
             x.ExistsElement<object>(null, null)
         );
 
-    private bool ExistsElement<T>(WorkspaceState state, string value)
+    private bool ExistsElement<T>(IWorkspace workspace, string value)
         where T : class
     {
-        return state.GetDataById<T>().ContainsKey(value);
+        // TODO V10: Understand how to route state here. Factor out validations from configuration. (08.07.2024, Roland Bürgi)
+        return true;
+        //return state.GetDataById<T>().ContainsKey(value);
     }
 }

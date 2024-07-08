@@ -142,7 +142,7 @@ public static class TestHubSetup
     private static IEnumerable<object> ImportFunction(
         ImportRequest request,
         IDataSet dataSet,
-        IMessageHub hub,
+        IWorkspace workspace,
         WorkspaceState state
     )
     {

@@ -1,3 +1,37 @@
-@inherits NavItem<NavGroupControl>
+@inherits ContainerView<NavGroupControl>
 
-<FluentNavGroup Href="@Href" Icon="@Icon?.ToFluentIcon()">@Title</FluentNavGroup>
+<FluentNavGroup Href="@Href" Icon="@Icon?.ToFluentIcon()" Title="@Title">
+    
+    @foreach (var (area, viewModel) in Areas)
+    {
+        <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area" />
+    }
+
+</FluentNavGroup>
+
+@code{
+    private int index = 0; 
+
+    private IEnumerable<object> SubMenu { get; set; } = [];
+
+    private string GetAreaName(int i)
+    {
+        return $"{Area}/{i}";
+    }
+    protected string Title { get; set; }
+    protected string Href { get; set; }
+    protected Application.Styles.Icon Icon { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        base.OnParametersSet();
+
+        if (ViewModel != null)
+        {
+            DataBind<string>(ViewModel.Data, x => Title = x);
+            DataBind<string>(ViewModel.Href, x => Href = x);
+            DataBind<Application.Styles.Icon>(ViewModel.Icon, x => Icon = x);
+        }
+    }
+
+}

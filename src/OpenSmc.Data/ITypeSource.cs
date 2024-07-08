@@ -8,7 +8,12 @@ public interface ITypeSource : IDisposable
     Type ElementType { get; }
     string DisplayName { get; }
     string CollectionName { get; }
+    object Icon { get; }
     object GetKey(object instance);
+    int? Order { get; }
+    string Description { get; }
+    string GroupName { get; }
+
     ITypeSource WithInitialData(
         Func<
             WorkspaceReference<InstanceCollection>,
