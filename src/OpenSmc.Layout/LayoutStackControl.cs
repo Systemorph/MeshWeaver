@@ -136,7 +136,7 @@ public record LayoutGridSkin : Skin
 {
     public bool AdaptiveRendering { get; init; }
     public JustifyContent Justify { get; init; }
-    public int Spacing { get; init; }
+    public int? Spacing { get; init; }
 
     public LayoutGridSkin WithAdaptiveRendering(bool adaptiveRendering) => this with { AdaptiveRendering = adaptiveRendering };
     public LayoutGridSkin WithJustify(JustifyContent justify) => this with { Justify = justify };

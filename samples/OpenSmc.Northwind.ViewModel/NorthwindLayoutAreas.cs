@@ -132,7 +132,7 @@ public static class NorthwindLayoutAreas
                             .WithView(
                                 (_, _) =>
                                     Button("Analyze")
-                                        .WithIcon(FluentIcons.CalendarDataBar)
+                                        .WithIconStart(FluentIcons.CalendarDataBar)
                                         .WithClickAction(ctx =>
                                         {
                                             contextPanelCollapsed = !contextPanelCollapsed;
@@ -148,7 +148,7 @@ public static class NorthwindLayoutAreas
                     )
                     .WithView(
                         Stack()
-                            .WithSkin(Skins.LayoutGrid.WithSpacing(1))
+                            .WithSkin(Skins.LayoutGrid)
                             .WithClass("main-content")
                             .WithView(
                                 (area, ctx) =>
@@ -183,7 +183,7 @@ public static class NorthwindLayoutAreas
             .WithView(
                 Stack()
                     .WithVerticalAlignment(VerticalAlignment.Top)
-                    .WithView(Html("<h2>Analyze</h2>"))
+                    .WithView(PaneHeader("Analyze").WithWeight(FontWeight.Bold))
                 )
             .WithView(Filter)
             .ToSplitterPane(x =>
@@ -202,21 +202,32 @@ public static class NorthwindLayoutAreas
             nameof(Filter),
             filter =>
                 Stack()
-                    .WithView(Html("<h3>Filter</h3>"))
+                    .WithView(Header("Filter"))
                     .WithView(
                         Stack() 
                             .WithClass("dimension-filter")
                             .WithOrientation(Orientation.Horizontal)
                             .WithHorizontalGap(16)
-                            .WithView((area, ctx) =>
-                                Listbox(filter.Dimension)
-                                    .WithOptions(
-                                        FilterDimensions
-                                            .Select(d => new Option<string>(d.Value.FullName, d.Value.Name))
-                                            .ToArray()
-                                    )
+                            .WithView(Listbox(filter.Dimension)
+                                .WithOptions(
+                                    FilterDimensions
+                                        .Select(d => new Option<string>(d.Value.FullName, d.Value.Name))
+                                        .ToArray()
+                                )
                             )
-                            .WithView(DimensionValues)
+                            .WithView(Stack()
+                                .WithClass("dimension-values")
+                                .WithView(
+                                    TextBox(filter.Search)
+                                        .WithSkin(TextBoxSkin.Search)
+                                        .WithPlaceholder("Search...")
+                                        // TODO V10: this throws an "access violation" exception, figure out why (08.07.2024, Alexander Kravets)
+                                        // .WithImmediate(true)
+                                        // .WithImmediateDelay(200)
+                                    )
+                                .WithView(DimensionValues)
+                                .WithVerticalGap(16)
+                            )
                     )
         );
     }
@@ -224,19 +235,18 @@ public static class NorthwindLayoutAreas
     private static IObservable<ItemTemplateControl> DimensionValues(LayoutAreaHost area, RenderingContext context)
     {
         return area.GetDataStream<Filter>(nameof(Filter))
-            .Select(filter => FilterDimensions[filter.Dimension])
-            .Select(type => area.Workspace.ReduceToTypes(type)
+            .Select(filter => area.Workspace.ReduceToTypes(FilterDimensions[filter.Dimension])
                     .DistinctUntilChanged()
-                    .Select(x => x.Value.Reduce(new CollectionReference(x.Value.GetCollectionName(type))))
+                    .Select(x => x.Value.Reduce(new CollectionReference(x.Value.GetCollectionName(FilterDimensions[filter.Dimension]))))
                     .Select(x => 
                         x.Instances.Select(item => 
                             new FilterItem(item.Key, item.Value is INamed named ? named.DisplayName : item.Value.ToString(), true))
+                            .Where(i => filter.Search is null || i.Label.IndexOf(filter.Search, StringComparison.OrdinalIgnoreCase) != -1)
                             .OrderBy(i => i.Label)
                             .ToArray())
                 .Select(filterItems =>
                     area.Bind(filterItems, FilterItems,
                         item => CheckBox(item.Label, item.Selected))
-                        .WithClass("dimension-values")
                     ))
             .Switch();
     }
@@ -246,7 +256,7 @@ public static class NorthwindLayoutAreas
         RenderingContext ctx
     ) =>
         Stack()
-            .WithView(Html("<h2>Supplier Summary</h2>"))
+            .WithView(PaneHeader("Supplier Summary"))
             .WithView(SupplierSummaryGrid);
 
     public static IObservable<object> SupplierSummaryGrid(
@@ -287,7 +297,7 @@ public static class NorthwindLayoutAreas
         RenderingContext ctx
     ) =>
         Stack()
-            .WithView(Html("<h2>Customer Summary</h2>"))
+            .WithView(PaneHeader("Customer Summary"))
             .WithView(
                 (a, _) =>
                     a.GetDataStream<Toolbar>(nameof(Toolbar))
@@ -300,7 +310,7 @@ public static class NorthwindLayoutAreas
         RenderingContext ctx
     ) =>
         Stack()
-            .WithView(Html("<h2>Product Summary</h2>"))
+            .WithView(PaneHeader("Product Summary"))
             .WithView(Counter);
 
     private static object Counter(this LayoutAreaHost area, RenderingContext context)
@@ -329,7 +339,7 @@ public static class NorthwindLayoutAreas
         RenderingContext ctx
     ) =>
         Stack()
-            .WithView(Html("<h2>Order Summary</h2>"))
+            .WithView(PaneHeader("Order Summary"))
             .WithView(
                 (area, _) =>
                     area.Workspace.GetObservable<Order>()
@@ -338,7 +348,7 @@ public static class NorthwindLayoutAreas
                             area.GetDataStream<IEnumerable<object>>(FilterItems),
                             (orders, tb, filterItems) =>
                                 orders
-                                    .Where(x => x.OrderDate.Year == tb.Year 
+                                    .Where(x => tb.Year == 0 || x.OrderDate.Year == tb.Year 
                                                 // && !filterItems.Cast<FilterItem>().Where(c => c.Selected && c.Id == x.CustomerId).IsEmpty()
                                                 )
                                     .OrderByDescending(y => y.OrderDate)
