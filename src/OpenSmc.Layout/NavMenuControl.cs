@@ -4,7 +4,7 @@ using OpenSmc.Layout.Composition;
 namespace OpenSmc.Layout;
 
 public record NavMenuControl()
-    : UiControl<NavMenuControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
+    : UiControl<NavMenuControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null), IContainerControl
 {
     public ImmutableList<object> Items { get; init; } = ImmutableList<object>.Empty;
 
@@ -32,6 +32,11 @@ public record NavMenuControl()
     public NavMenuControl WithCollapsible(bool collapsible) => this with { Collapsible = collapsible };
 
     public NavMenuControl WithWidth(int width) => this with { Width = width };
+    public IEnumerable<ViewElement> ChildControls => Items.Select((x, i) => new ViewElementWithView(i.ToString(), x));
+    public IReadOnlyCollection<string> Areas { get; init; }
+
+    public IContainerControl SetAreas(IReadOnlyCollection<string> areas)
+        => this with { Areas = areas };
 }
 
 
