@@ -30,6 +30,7 @@ public static class BlazorClientExtensions
         return instance switch
         {
             HtmlControl html => StandardView<HtmlControl, HtmlView>(html, stream, area),
+            LabelControl label => StandardView<LabelControl, Label>(label, stream, area),
             LayoutStackControl stack
                 => stack.Skin switch
                 {

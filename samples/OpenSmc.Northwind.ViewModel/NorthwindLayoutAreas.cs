@@ -182,7 +182,7 @@ public static class NorthwindLayoutAreas
             .WithView(
                 Stack()
                     .WithVerticalAlignment(VerticalAlignment.Top)
-                    .WithView(Html("<h2>Analyze</h2>"))
+                    .WithView(PaneHeader("Analyze"))
                 )
             .WithView(Filter)
             .ToSplitterPane(x =>
@@ -201,7 +201,7 @@ public static class NorthwindLayoutAreas
             nameof(Filter),
             filter =>
                 Stack()
-                    .WithView(Html("<h3>Filter</h3>"))
+                    .WithView(Header("Filter"))
                     .WithView(
                         Stack() 
                             .WithClass("dimension-filter")
@@ -255,7 +255,7 @@ public static class NorthwindLayoutAreas
         RenderingContext ctx
     ) =>
         Stack()
-            .WithView(Html("<h2>Supplier Summary</h2>"))
+            .WithView(PaneHeader("Supplier Summary"))
             .WithView(SupplierSummaryGrid);
 
     public static IObservable<object> SupplierSummaryGrid(
@@ -296,7 +296,7 @@ public static class NorthwindLayoutAreas
         RenderingContext ctx
     ) =>
         Stack()
-            .WithView(Html("<h2>Customer Summary</h2>"))
+            .WithView(PaneHeader("Customer Summary"))
             .WithView(
                 (a, _) =>
                     a.GetDataStream<Toolbar>(nameof(Toolbar))
@@ -309,7 +309,7 @@ public static class NorthwindLayoutAreas
         RenderingContext ctx
     ) =>
         Stack()
-            .WithView(Html("<h2>Product Summary</h2>"))
+            .WithView(PaneHeader("Product Summary"))
             .WithView(Counter);
 
     private static object Counter(this LayoutAreaHost area, RenderingContext context)
@@ -338,7 +338,7 @@ public static class NorthwindLayoutAreas
         RenderingContext ctx
     ) =>
         Stack()
-            .WithView(Html("<h2>Order Summary</h2>"))
+            .WithView(PaneHeader("Order Summary"))
             .WithView(
                 (area, _) =>
                     area.Workspace.GetObservable<Order>()
