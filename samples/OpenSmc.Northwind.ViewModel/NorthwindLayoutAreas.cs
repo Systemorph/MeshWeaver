@@ -147,7 +147,7 @@ public static class NorthwindLayoutAreas
                     )
                     .WithView(
                         Stack()
-                            .WithSkin(Skins.LayoutGrid.WithSpacing(1))
+                            .WithSkin(Skins.LayoutGrid)
                             .WithClass("main-content")
                             .WithView(
                                 (area, ctx) =>
