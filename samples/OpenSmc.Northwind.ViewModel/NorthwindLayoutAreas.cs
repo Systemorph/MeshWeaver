@@ -131,7 +131,7 @@ public static class NorthwindLayoutAreas
                             .WithView(
                                 (_, _) =>
                                     Button("Analyze")
-                                        .WithIcon(FluentIcons.CalendarDataBar)
+                                        .WithIconStart(FluentIcons.CalendarDataBar)
                                         .WithClickAction(ctx =>
                                         {
                                             contextPanelCollapsed = !contextPanelCollapsed;
@@ -218,7 +218,7 @@ public static class NorthwindLayoutAreas
                                 .WithClass("dimension-values")
                                 .WithView(
                                     TextBox(filter.Search)
-                                        .WithSkin(TextBoxSkins.Search)
+                                        .WithSkin(TextBoxSkin.Search)
                                         .WithPlaceholder("Search...")
                                         // TODO V10: this throws an "access violation" exception, figure out why (08.07.2024, Alexander Kravets)
                                         // .WithImmediate(true)

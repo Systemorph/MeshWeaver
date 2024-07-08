@@ -51,7 +51,7 @@ public static class BlazorClientExtensions
             DataGridControl gc => StandardView<DataGridControl, DataGrid>(gc, stream, area),
             TextBoxControl textbox => textbox.Skin switch
             {
-                TextBoxSkins.Search => StandardView<TextBoxControl, Search>(textbox, stream, area),
+                TextBoxSkin.Search => StandardView<TextBoxControl, Search>(textbox, stream, area),
                 _ => StandardView<TextBoxControl, Textbox>(textbox, stream, area)
             },
             ComboboxControl combobox => StandardView<ComboboxControl, Combobox>(combobox, stream, area),
