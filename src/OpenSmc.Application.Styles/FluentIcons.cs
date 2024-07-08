@@ -9,5 +9,6 @@ public static class FluentIcons
     public static Icon Box => new (Provider, "Box");
     public static Icon Person => new (Provider, "Person");
     public static Icon CalendarDataBar => new (Provider, "CalendarDataBar");
+    public static Icon Search => new (Provider, "Search");
 
 }

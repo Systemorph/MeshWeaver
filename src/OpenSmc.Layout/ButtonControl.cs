@@ -3,7 +3,10 @@
 public record ButtonControl(object Data)
     : UiControl<ButtonControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data)
 {
-    public object Icon { get; init; }
+    public object IconStart { get; init; }
+    public object IconEnd { get; init; }
 
-    public ButtonControl WithIcon(object icon) => this with {Icon = icon};
+    public ButtonControl WithIconStart(object icon) => this with { IconStart = icon };
+
+    public ButtonControl WithIconEnd(object icon) => this with { IconEnd = icon };
 }

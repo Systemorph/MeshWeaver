@@ -1,12 +1,21 @@
 @using Icon = OpenSmc.Application.Styles.Icon
+@using Appearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
 @inherits BlazorView<ButtonControl>
 
-<FluentButton OnClick="@OnClick" IconStart="@Icon?.ToFluentIcon()">@Title</FluentButton>
+<FluentButton
+    Appearance="@Appearance"
+    OnClick="@OnClick"
+    IconStart="@IconStart?.ToFluentIcon()"
+    IconEnd="@IconEnd?.ToFluentIcon()"
+    >
+    @Title
+</FluentButton>
     
 @code
 {
     private string Title { get; set; }
-    private Icon Icon { get; set; }
+    private Icon IconStart { get; set; }
+    private Icon IconEnd { get; set; }
 
     protected override void OnParametersSet()
     {
@@ -14,7 +23,20 @@
         if (ViewModel != null)
         {
             DataBind<string>(ViewModel.Data, x => Title = x);
-            DataBind<Icon>(ViewModel.Icon, x => Icon = x);
+            DataBind<Icon>(ViewModel.IconStart, x => IconStart = x);
+            DataBind<Icon>(ViewModel.IconEnd, x => IconEnd = x);
         }
     }
+
+    private Appearance Appearance => ViewModel.Skin 
+        switch
+        {
+            Layout.Appearance.Neutral => Appearance.Neutral,
+            Layout.Appearance.Accent => Appearance.Accent,
+            Layout.Appearance.Lightweight => Appearance.Lightweight,
+            Layout.Appearance.Outline => Appearance.Outline,
+            Layout.Appearance.Stealth => Appearance.Stealth,
+            Layout.Appearance.Filled => Appearance.Filled,
+            _ => Appearance.Neutral
+        };
 }

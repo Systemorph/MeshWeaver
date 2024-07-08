@@ -27,16 +27,7 @@
         _ => Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment.Top
     };
 
-    private Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment Horizontal => ViewModel.HorizontalAlignment
-        switch
-        {
-        Layout.HorizontalAlignment.Center => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Center,
-        Layout.HorizontalAlignment.Left => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Left,
-        Layout.HorizontalAlignment.Right => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Right,
-        Layout.HorizontalAlignment.Start => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Start,
-        Layout.HorizontalAlignment.End => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.End,
-            _ => Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Left
-        };
+    private Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment Horizontal => ViewModel.HorizontalAlignment.ToFluentHorizontalAlignment();
 
-    private Orientation Orientation => @ViewModel.Orientation?.ToFluentOrientation() ?? Orientation.Vertical;
+    private Orientation Orientation => ViewModel.Orientation?.ToFluentOrientation() ?? Orientation.Vertical;
 }

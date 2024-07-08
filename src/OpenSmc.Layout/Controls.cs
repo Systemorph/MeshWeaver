@@ -49,6 +49,23 @@ public static class Controls
     public static HtmlControl Title(object text, int headerSize) =>
         Html($"<h{headerSize}>{text}</h{headerSize}>");
 
+    public static LabelControl Label(object text) => new(text);
+
+    public static LabelControl Body(object data) => Label(data).WithTypo(Typography.Body);
+    public static LabelControl Subject(object data) => Label(data).WithTypo(Typography.Subject);
+    public static LabelControl Header(object data) => Label(data).WithTypo(Typography.Header);
+    public static LabelControl EmailHeader(object data) => Label(data).WithTypo(Typography.EmailHeader);
+    public static LabelControl PaneHeader(object data) => Label(data).WithTypo(Typography.PaneHeader);
+
+    public static LabelControl PageTitle(object data) => Label(data).WithTypo(Typography.PageTitle);
+    public static LabelControl HeroTitle(object data) => Label(data).WithTypo(Typography.HeroTitle);
+    public static LabelControl H1(object data) => Label(data).WithTypo(Typography.H1);
+    public static LabelControl H2(object data) => Label(data).WithTypo(Typography.H2);
+    public static LabelControl H3(object data) => Label(data).WithTypo(Typography.H3);
+    public static LabelControl H4(object data) => Label(data).WithTypo(Typography.H4);
+    public static LabelControl H5(object data) => Label(data).WithTypo(Typography.H5);
+    public static LabelControl H6(object data) => Label(data).WithTypo(Typography.H6);
+
     public static BadgeControl Badge(object title, object subTitle = null, object color = null) =>
         new(title, subTitle, color);
 
