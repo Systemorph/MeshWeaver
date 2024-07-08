@@ -1,30 +1,22 @@
-﻿namespace OpenSmc.Layout
+﻿namespace OpenSmc.Layout;
+
+public record TextBoxControl(object Data)
+    : InputBaseControl<TextBoxControl>(Data), IInputControl
 {
-    public record TextBoxControl(object Data)
-        : UiControl<TextBoxControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data)
-    {
-        public object Placeholder { get; init; }
+    public object IconStart { get; init; }
 
-        public object IconStart { get; init; }
+    public object IconEnd { get; init; }
 
-        public object IconEnd { get; init; }
+    public object Autocomplete { get; init; }
 
-        public object Autocomplete { get; init; }
+    public TextBoxControl WithIconStart(object icon) => this with { IconStart = icon };
 
-        public object Immediate { get; init; }
+    public TextBoxControl WithIconEnd(object icon) => this with { IconEnd = icon };
 
-        public object ImmediateDelay {get; init; }
+    public TextBoxControl WithAutocomplete(object autocomplete) => this with { Autocomplete = autocomplete };
+}
 
-        public TextBoxControl WithPlaceholder(object placeholder) => this with { Placeholder = placeholder };
-
-        public TextBoxControl WithIconStart(object icon) => this with { IconStart = icon };
-
-        public TextBoxControl WithIconEnd(object icon) => this with { IconEnd = icon };
-
-        public TextBoxControl WithAutocomplete(object autocomplete) => this with { Autocomplete = autocomplete };
-
-        public TextBoxControl WithImmediate(object immediate) => this with { Immediate = immediate };
-    
-        public TextBoxControl WithImmediateDelay(object immediateDelay) => this with { ImmediateDelay = immediateDelay };
-    }
+public static class TextBoxSkins
+{
+    public const string Search = nameof(Search);
 }

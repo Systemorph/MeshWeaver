@@ -218,10 +218,9 @@ public static class NorthwindLayoutAreas
                                 .WithClass("dimension-values")
                                 .WithView(
                                     TextBox(filter.Search)
-                                        .WithIconEnd(FluentIcons.Search)
+                                        .WithSkin(TextBoxSkins.Search)
                                         .WithPlaceholder("Search...")
-                                        .WithAutocomplete("off")
-                                        // TODO V10: immediate=true crashes FluentTextfield, try using FluentSearch instead (05.07.2024, Alexander Kravets)
+                                        // TODO V10: this throws an "access violation" exception, figure out why (08.07.2024, Alexander Kravets)
                                         // .WithImmediate(true)
                                         // .WithImmediateDelay(200)
                                     )

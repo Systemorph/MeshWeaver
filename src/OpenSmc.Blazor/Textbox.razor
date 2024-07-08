@@ -1,10 +1,12 @@
 @using Icon = OpenSmc.Application.Styles.Icon
-@inherits BlazorView<TextBoxControl>
+@inherits InputBase<TextBoxControl, string>
 
 <FluentTextField 
     @bind-Value="Data"
     Placeholder="@Placeholder"
     Label="@Label"
+    Autofocus="@AutoFocus"
+    Disabled="@Disabled"
     AutoComplete="@Autocomplete"
     Immediate="@Immediate"
     ImmediateDelay="@ImmediateDelay"
@@ -21,41 +23,19 @@
     
 @code
 {
-    private string Data
-    {
-        get => data;
-        set
-        {
-            var needsUpdate = data != value;
-            data = value;
-            if (needsUpdate)
-                UpdatePointer(data, DataPointer);
-        }
-    }
-
-    private string Placeholder { get; set; }
     private string Autocomplete { get; set; }
-    private bool Immediate { get; set; }
-    private int ImmediateDelay { get; set; }
     private Icon IconStart { get; set; }
     private Icon IconEnd { get; set; }
-    private JsonPointerReference DataPointer { get; set; }
-    private string data;
 
     protected override void OnParametersSet()
     {
         base.OnParametersSet();
+
         if (ViewModel != null)
         {
-            DataBind<string>(ViewModel.Data, x => Data = x);
-            DataBind<string>(ViewModel.Placeholder, x => Placeholder = x);
             DataBind<string>(ViewModel.Autocomplete, x => Autocomplete = x);
-            DataBind<bool>(ViewModel.Immediate, x => Immediate = x);
-            DataBind<int>(ViewModel.ImmediateDelay, x => ImmediateDelay = x);
             DataBind<Icon>(ViewModel.IconStart, x => IconStart = x);
             DataBind<Icon>(ViewModel.IconEnd, x => IconEnd = x);
-
-            DataPointer = ViewModel.Data as JsonPointerReference;
         }
     }
 }
