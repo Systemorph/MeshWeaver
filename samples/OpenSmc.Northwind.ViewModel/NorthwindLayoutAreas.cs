@@ -182,7 +182,7 @@ public static class NorthwindLayoutAreas
             .WithView(
                 Stack()
                     .WithVerticalAlignment(VerticalAlignment.Top)
-                    .WithView(PaneHeader("Analyze"))
+                    .WithView(PaneHeader("Analyze").WithWeight(FontWeight.Bold))
                 )
             .WithView(Filter)
             .ToSplitterPane(x =>
