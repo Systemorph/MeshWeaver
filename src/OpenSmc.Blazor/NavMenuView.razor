@@ -1,11 +1,10 @@
-@inherits BlazorView<NavMenuControl>
+@inherits ContainerView<NavMenuControl>
 
 @* todo: un-hardcode Id *@
 <FluentNavMenu Id="main-menu" Collapsible="@ViewModel.Collapsible" Width="@ViewModel.Width" @bind-Expanded="@expanded">
-    @foreach (UiControl item in ViewModel.Items)
+    @foreach (var (area, viewModel) in Areas)
     {
-        // TODO V10: should probably create subareas? (09.06.2024, Roland Bürgi)
-        <DispatchView ViewModel="@item" Stream="@Stream" Area ="@Area" />
+        <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area" />
     }
 </FluentNavMenu>
 
