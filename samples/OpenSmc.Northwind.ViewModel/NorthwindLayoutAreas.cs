@@ -347,7 +347,7 @@ public static class NorthwindLayoutAreas
                             area.GetDataStream<IEnumerable<object>>(FilterItems),
                             (orders, tb, filterItems) =>
                                 orders
-                                    .Where(x => x.OrderDate.Year == tb.Year 
+                                    .Where(x => tb.Year == 0 || x.OrderDate.Year == tb.Year 
                                                 // && !filterItems.Cast<FilterItem>().Where(c => c.Selected && c.Id == x.CustomerId).IsEmpty()
                                                 )
                                     .OrderByDescending(y => y.OrderDate)
