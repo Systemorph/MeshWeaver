@@ -1,5 +1,4 @@
 ﻿using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using OpenSmc.Application.Styles;
 using OpenSmc.Data;
 using OpenSmc.DataCubes;
@@ -7,6 +6,7 @@ using OpenSmc.Domain;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.DataGrid;
+using OpenSmc.Layout.Domain;
 using OpenSmc.Messaging;
 using OpenSmc.Messaging.Serialization;
 using OpenSmc.Northwind.Domain;
@@ -37,12 +37,29 @@ public static class NorthwindLayoutAreas
                 .WithView(nameof(ProductSummary), ProductSummary)
                 .WithView(nameof(CustomerSummary), CustomerSummary)
                 .WithView(nameof(SupplierSummary), SupplierSummary)
-                .WithView(nameof(NavigationMenu), NavigationMenu)
                 .WithView(nameof(SupplierSummaryGrid), SupplierSummaryGrid)
                 .WithView(nameof(CategoryCatalog), CategoryCatalog)
-                .AddDomainViews("Northwind")
+                .AddDomainViews(views => views
+                    .WithMenu(menu => menu
+                        .NorthwindViewsMenu()
+                        .WithTypesCatalog()
+                    ).WithCatalogView())
         ).WithTypes(typeof(FilterItem));
     }
+
+    private static DomainMenuBuilder NorthwindViewsMenu(this DomainMenuBuilder menu)
+    {
+        return DashboardWidgets.Aggregate(
+            menu,
+            (x, a) =>
+                x.WithNavLink(
+                    a.Key.Wordify(),
+                    $"app/Northwind/dev/{a.Key}",
+                    o => o.WithIcon(a.Value)
+                )
+        );
+    }
+
 
     private static IObservable<object> CategoryCatalog(
         LayoutAreaHost area,
@@ -73,18 +90,6 @@ public static class NorthwindLayoutAreas
 
     private const string FilterItems = nameof(FilterItems);
 
-    private static object NavigationMenu(LayoutAreaHost layoutArea, RenderingContext ctx)
-    {
-        return DashboardWidgets.Aggregate(
-            NavMenu(),
-            (x, a) =>
-                x.WithNavLink(
-                    a.Key.Wordify(),
-                    $"app/Northwind/dev/{a.Key}",
-                    o => o.WithIcon(a.Value)
-                )
-        );
-    }
 
     private record Toolbar
     {
