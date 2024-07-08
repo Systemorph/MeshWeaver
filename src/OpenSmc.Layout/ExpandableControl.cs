@@ -21,9 +21,6 @@ public record CodeSampleControl(object Data)
 public record HtmlControl(object Data)
     : UiControl<HtmlControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);
 
-public record TitleControl(object Data)
-    : UiControl<TitleControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);
-
 public record CheckBoxControl(object Data)
     : UiControl<CheckBoxControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);
 

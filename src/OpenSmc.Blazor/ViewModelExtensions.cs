@@ -42,4 +42,42 @@ public static class ViewModelExtensions
             _ => SelectPosition.Above
         };
 
+    public static HorizontalAlignment ToFluentHorizontalAlignment(this Layout.HorizontalAlignment alignment) =>
+        alignment switch
+        {
+            Layout.HorizontalAlignment.Left => HorizontalAlignment.Left,
+            Layout.HorizontalAlignment.Center => HorizontalAlignment.Center,
+            Layout.HorizontalAlignment.Right => HorizontalAlignment.Right,
+            Layout.HorizontalAlignment.Start => HorizontalAlignment.Start,
+            Layout.HorizontalAlignment.End => HorizontalAlignment.End,
+            _ => HorizontalAlignment.Left
+        };
+
+    public static Typography ToFluentTypography(this Layout.Typography typography) =>
+        typography switch
+        {
+            Layout.Typography.Body => Typography.Body,
+            Layout.Typography.Subject => Typography.Subject,
+            Layout.Typography.Header => Typography.Header,
+            Layout.Typography.PaneHeader => Typography.PaneHeader,
+            Layout.Typography.EmailHeader => Typography.EmailHeader,
+            Layout.Typography.PageTitle => Typography.PageTitle,
+            Layout.Typography.HeroTitle => Typography.HeroTitle,
+            Layout.Typography.H1 => Typography.H1,
+            Layout.Typography.H2 => Typography.H2,
+            Layout.Typography.H3 => Typography.H3,
+            Layout.Typography.H4 => Typography.H4,
+            Layout.Typography.H5 => Typography.H5,
+            Layout.Typography.H6 => Typography.H6,
+            _ => Typography.Body
+        };
+
+    public static FontWeight ToFluentFontWeight(this Layout.FontWeight fontWeight) =>
+        fontWeight switch
+        {
+            Layout.FontWeight.Normal => FontWeight.Normal,
+            Layout.FontWeight.Bold => FontWeight.Bold,
+            Layout.FontWeight.Bolder => FontWeight.Bolder,
+            _ => FontWeight.Normal
+        };
 }

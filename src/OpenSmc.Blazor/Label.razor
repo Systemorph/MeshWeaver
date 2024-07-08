@@ -1,0 +1,31 @@
+@using HorizontalAlignment = Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment
+@using Typography = Microsoft.FluentUI.AspNetCore.Components.Typography
+@using FontWeight = Microsoft.FluentUI.AspNetCore.Components.FontWeight
+@inherits BlazorView<LabelControl>
+
+<FluentLabel
+    Alignment="@alignment"
+    Disabled="@disabled"
+    Typo="@typo"
+    Weight="@weight">
+    @data
+</FluentLabel>
+
+@code
+{
+    private string data;
+    private HorizontalAlignment alignment;
+    private bool disabled;
+    private Typography typo;
+    private FontWeight weight;
+
+    protected override void OnParametersSet()
+    {
+        base.OnParametersSet();
+        DataBind<string>(ViewModel.Data, x => data = x);
+        DataBind<Layout.HorizontalAlignment>(ViewModel.Alignment, x => alignment = x.ToFluentHorizontalAlignment());
+        DataBind<bool>(ViewModel.Disabled, x => disabled = x);
+        DataBind<Layout.Typography>(ViewModel.Typo, x => typo = x.ToFluentTypography());
+        DataBind<Layout.FontWeight>(ViewModel.Weight, x => weight = x.ToFluentFontWeight());
+    }
+}
