@@ -1,14 +1,11 @@
 ﻿namespace OpenSmc.Domain;
 
 [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
-public class DimensionAttribute : Attribute
+public class DimensionAttribute(Type type, string name = null) : Attribute
 {
-    public string Name { get; }
-    public Type Type { get; }
-
-    public DimensionAttribute(Type type, string name = null)
-    {
-        Type = type;
-        Name = name ?? type.Name;
-    }
+    public string Name { get; } = name ?? type.Name;
+    public Type Type { get; } = type;
 }
+
+
+public class DimensionAttribute<T>(string name=null) : DimensionAttribute(typeof(T), name);

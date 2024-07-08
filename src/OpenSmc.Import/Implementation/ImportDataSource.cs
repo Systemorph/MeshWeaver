@@ -28,7 +28,7 @@ public record ImportDataSource(Source Source, IWorkspace Workspace)
     {
         var ret = base.SetupDataSourceStream(state);
         var config = new ImportConfiguration(
-            Hub,
+            Workspace,
             MappedTypes,
             Hub.ServiceProvider.GetRequiredService<ILogger<ImportDataSource>>()
         );

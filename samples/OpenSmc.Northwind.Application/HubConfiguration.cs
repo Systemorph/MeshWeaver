@@ -16,7 +16,10 @@ public static class HubConfiguration
     {
         // TODO V10: add pre-compiled statement to remove all northwind related config (05.06.2024, Alexander Kravets)
         return configuration
-            .AddBlazor(x => x.AddChartJs().AddAgGrid())
+            .AddBlazor(x => 
+                x.AddChartJs()
+                    .AddAgGrid()
+            )
             .WithHostedHub(
                 new ApplicationAddress("Northwind", "dev"),
                 application =>

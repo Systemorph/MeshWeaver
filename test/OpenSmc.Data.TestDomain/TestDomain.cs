@@ -40,7 +40,7 @@ public static class TestDomain
         [Required]
         public string Street { get; set; }
 
-        [Category<Country>]
+        [Dimension<Country>]
         public string Country { get; set; }
     }
 

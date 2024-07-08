@@ -1,6 +1,4 @@
 ﻿using System.Reactive.Linq;
-using System.Runtime.CompilerServices;
-using System.Runtime.Serialization;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -64,7 +62,7 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
                                                     )
                                                     {
                                                         import
-                                                            .Hub.ServiceProvider.GetRequiredService<IActivityService>()
+                                                            .Workspace.Hub.ServiceProvider.GetRequiredService<IActivityService>()
                                                             .LogError(StreetCanNotBeRed);
                                                         ret = false;
                                                     }

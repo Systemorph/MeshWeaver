@@ -1,5 +1,10 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-  <ItemGroup>
+    <PropertyGroup>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <DocumentationFile>bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml</DocumentationFile>
+    </PropertyGroup>
+    <ItemGroup>
+    <ProjectReference Include="..\..\src\OpenSmc.Application.Styles\OpenSmc.Application.Styles.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Domain\OpenSmc.Domain.csproj" />
   </ItemGroup>
 </Project>

@@ -45,7 +45,7 @@ public class ImportPlugin : MessageHubPlugin, IMessageHandlerAsync<ImportRequest
     {
         await workspace.Initialized;
         importManager = new ImportManager(
-            importConfiguration.Invoke(new(Hub, workspace.MappedTypes, activityService))
+            importConfiguration.Invoke(new(workspace, workspace.MappedTypes, activityService))
         );
     }
 

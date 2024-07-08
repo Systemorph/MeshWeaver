@@ -2,13 +2,12 @@
 using System.ComponentModel.DataAnnotations;
 using OpenSmc.Data;
 using OpenSmc.DataStructures;
-using OpenSmc.Messaging;
 
 namespace OpenSmc.Import.Configuration;
 
 public record ImportFormat(
     string Format,
-    IMessageHub Hub,
+    IWorkspace Workspace,
     IReadOnlyCollection<Type> MappedTypes,
     ImmutableList<ValidationFunction> Validations
 )
@@ -35,7 +34,7 @@ public record ImportFormat(
 
         foreach (var importFunction in ImportFunctions)
         {
-            var importedInstances = importFunction(importRequest, dataSet, Hub, state).ToArray();
+            var importedInstances = importFunction(importRequest, dataSet, Workspace, state).ToArray();
             foreach (var item in importedInstances)
             {
                 if (item == null)
@@ -44,7 +43,7 @@ public record ImportFormat(
                     hasError =
                         !validation(
                             item,
-                            new ValidationContext(item, Hub.ServiceProvider, validationCache)
+                            new ValidationContext(item, Workspace.Hub.ServiceProvider, validationCache)
                         ) || hasError;
             }
             state = state.Update(importedInstances, updateOptions);
@@ -55,7 +54,7 @@ public record ImportFormat(
     public delegate IEnumerable<object> ImportFunction(
         ImportRequest importRequest,
         IDataSet dataSet,
-        IMessageHub hub,
+        IWorkspace workspace,
         WorkspaceState state
     );
 
