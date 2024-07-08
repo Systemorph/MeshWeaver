@@ -4,7 +4,7 @@
     Class="@Class"
     AdaptiveRendering="@GridSkin.AdaptiveRendering"
     Justify="@GridSkin.Justify.ToFluentJustifyContent()"
-    Spacing="@GridSkin.Spacing"
+    Spacing="@Spacing"
     >
     @foreach(var (area,viewModel) in Areas){
         <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area" />
@@ -13,4 +13,5 @@
 
 @code{
     private LayoutGridSkin GridSkin => ViewModel.Skin as LayoutGridSkin;
+    private int Spacing => GridSkin.Spacing ?? 3;
 }
