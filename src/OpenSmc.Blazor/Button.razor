@@ -3,6 +3,7 @@
 @inherits BlazorView<ButtonControl>
 
 <FluentButton
+    Appearance="@Appearance"
     OnClick="@OnClick"
     IconStart="@IconStart?.ToFluentIcon()"
     IconEnd="@IconEnd?.ToFluentIcon()"
@@ -26,4 +27,16 @@
             DataBind<Icon>(ViewModel.IconEnd, x => IconEnd = x);
         }
     }
+
+    private Appearance Appearance => ViewModel.Skin 
+        switch
+        {
+            Layout.Appearance.Neutral => Appearance.Neutral,
+            Layout.Appearance.Accent => Appearance.Accent,
+            Layout.Appearance.Lightweight => Appearance.Lightweight,
+            Layout.Appearance.Outline => Appearance.Outline,
+            Layout.Appearance.Stealth => Appearance.Stealth,
+            Layout.Appearance.Filled => Appearance.Filled,
+            _ => Appearance.Neutral
+        };
 }
