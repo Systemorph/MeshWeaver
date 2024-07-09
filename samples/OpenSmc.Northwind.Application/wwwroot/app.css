@@ -1,5 +1,36 @@
 @import '/_content/Microsoft.FluentUI.AspNetCore.Components/css/reboot.css';
 
+::-webkit-scrollbar {
+       width: 8px;
+       height: 8px;
+   }
+
+::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    -webkit-border-radius: 12px;
+    background-color: #c6c6c6;
+}
+
+    ::-webkit-scrollbar-thumb:hover {
+        background-color: #706f6f;
+    }
+
+::-webkit-scrollbar-button {
+    width: 0;
+    height: 0;
+    display: none;
+}
+
+::-webkit-scrollbar-corner {
+    background-color: transparent;
+}
+
+* {
+       scrollbar-width: thin;
+       scrollbar-color: #c6c6c6 white;
+}
+
 body {
     --body-font: "Segoe UI Variable", "Segoe UI", sans-serif;
     font-family: var(--body-font);
@@ -13,7 +44,7 @@ body {
 }
 
 .main {
-    min-height: calc(100dvh - 86px);
+    height: calc(100dvh - 86px);
     color: var(--neutral-foreground-rest);
     align-items: stretch !important;
     column-gap: 0 !important;
@@ -37,6 +68,10 @@ fluent-toolbar {
     width: 100%;
     padding: 12px;
     border-bottom: 1px solid #eee;
+}
+
+.main-content-pane {
+    overflow-y: auto !important;
 }
 
 .main-content {
