@@ -1,4 +1,4 @@
-@page "/app/{Application}/{Environment}/{Area}/{Id?}"
+@page "/app/{Application}/{Environment}/{Area}"
 @inject NavigationManager NavigationManager
 @using OpenSmc.Application;
 @using OpenSmc.Layout;
@@ -17,8 +17,6 @@
     public string Environment { get; set; }
     [Parameter]
     public string Area { get; set; }
-    [Parameter]
-    public string Id { get; set; }
 
     private string PageTitle => $"{Area.Wordify()} - {Application}";
 
@@ -30,6 +28,5 @@
     private LayoutAreaReference Reference => new(Area)
     {
         Options = Options,
-        Id = Id
     };
 }

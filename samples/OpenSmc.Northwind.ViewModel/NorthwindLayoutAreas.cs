@@ -76,7 +76,7 @@ public static class NorthwindLayoutAreas
                         Stack()
                             .WithOrientation(Orientation.Vertical)
                             .WithView(Html("<h2>Categories</h2>"))
-                            .WithView(c.ToDataGrid())
+                            .WithView(area.ToDataGrid(c))
                 )
             );
 
@@ -359,7 +359,7 @@ public static class NorthwindLayoutAreas
                             area.GetDataStream<Toolbar>(nameof(Toolbar)),
                             area.GetDataStream<IEnumerable<object>>(FilterItems),
                             (orders, tb, filterItems) =>
-                                orders
+                                area.ToDataGrid(orders
                                     .Where(x => tb.Year == 0 || x.OrderDate.Year == tb.Year 
                                                 // && !filterItems.Cast<FilterItem>().Where(c => c.Selected && c.Id == x.CustomerId).IsEmpty()
                                                 )
@@ -373,8 +373,8 @@ public static class NorthwindLayoutAreas
                                             .Count(d => d.OrderId == order.OrderId),
                                         order.OrderDate
                                     ))
-                                    .ToArray()
-                                    .ToDataGrid(conf =>
+                                    .ToArray(),
+                                    conf =>
                                         conf.WithColumn(o => o.Customer)
                                             .WithColumn(o => o.Products)
                                             .WithColumn(

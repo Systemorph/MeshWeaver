@@ -49,10 +49,8 @@ public class CodeCommentsGenerator : IIncrementalGenerator
         sb.AppendLine("namespace OpenSmc.Northwind.Domain;");
         sb.AppendLine("public static partial class CodeComments");
         sb.AppendLine("{");
-        sb.AppendLine("\tpublic static string GetSummary(string name)");
-        sb.AppendLine("\t{");
         sb.AppendLine(
-            "\t\tDictionary<string, string> summarydata = new Dictionary<string, string>() {"
+            "\t\tprivate static readonly Dictionary<string, string> SummaryData = new Dictionary<string, string>() {"
         );
         foreach (var m in members)
         {
@@ -66,11 +64,12 @@ public class CodeCommentsGenerator : IIncrementalGenerator
         sb.Remove(lastComma, 1);
         sb.AppendLine("\t\t};");
         sb.Append("\t\t");
+        sb.AppendLine("\tpublic static string GetSummary(string name)");
+        sb.AppendLine("\t{");
         sb.AppendLine(
-            "KeyValuePair<string, string> foundPair = summarydata.FirstOrDefault(x => x.Key.Equals(name));"
+            "return SummaryData.TryGetValue(name, out var ret) ? ret : null;"
         );
 
-        sb.AppendLine("\t\treturn foundPair.Value;");
         sb.AppendLine("\t\t}");
         sb.AppendLine("}");
 
