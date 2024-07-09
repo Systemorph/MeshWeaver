@@ -7,11 +7,11 @@ namespace OpenSmc.Northwind.Domain;
 /// <summary>
 /// Category of products.
 /// </summary>
-/// <param name="CategoryId"></param>
+/// <param name="CategoryId">Primary key.</param>
 /// <param name="CategoryName"></param>
 /// <param name="Description"></param>
 /// <param name="Picture"></param>
-[Icon(OpenSmcIcons.Provider, "sm-archive")]
+[Icon(FluentIcons.Provider, "Album")]
 public record Category(
     [property: Key] int CategoryId,
     string CategoryName,

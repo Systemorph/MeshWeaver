@@ -19,7 +19,7 @@ namespace OpenSmc.Northwind.Domain;
 /// <param name="Phone"></param>
 /// <param name="Fax"></param>
 /// <param name="HomePage"></param>
-[Icon(OpenSmcIcons.Provider, "sm-archive")]
+[Icon(FluentIcons.Provider, "Album")]
 public record Supplier(
     [property: Key] int SupplierId,
     string CompanyName,

@@ -61,6 +61,7 @@ public static class NorthwindLayoutAreas
     }
 
 
+
     private static IObservable<object> CategoryCatalog(
         LayoutAreaHost area,
         RenderingContext context
@@ -101,6 +102,12 @@ public static class NorthwindLayoutAreas
         public int Year { get; init; }
     }
 
+    /// <summary>
+    /// This is the main dashboard view. It shows....
+    /// </summary>
+    /// <param name="layoutArea"></param>
+    /// <param name="context"></param>
+    /// <returns></returns>
     public static object Dashboard(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         var years = layoutArea
