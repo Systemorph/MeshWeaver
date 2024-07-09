@@ -11,7 +11,7 @@ namespace OpenSmc.Northwind.Domain;
 /// <param name="UnitPrice">Price per unit</param>
 /// <param name="Quantity">Quantity</param>
 /// <param name="Discount">Discount</param>
-[Icon(OpenSmcIcons.Provider, "sm-archive")]
+[Icon(FluentIcons.Provider, "Album")]
 public record OrderDetails(
     int OrderId,
     [property: Dimension(typeof(Product))] int ProductId,
