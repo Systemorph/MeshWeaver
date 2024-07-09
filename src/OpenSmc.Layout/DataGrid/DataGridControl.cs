@@ -6,6 +6,9 @@ public record DataGridControl(object Data)
     : UiControl<DataGridControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data)
 {
     public IReadOnlyCollection<object> Columns { get; init; }
+    public bool Virtualize { get; init; } = false;
+    public float ItemSize { get; init; } = 50;
+    public bool ResizableColumns { get; init; } = true;
 }
 
 public abstract record DataGridColumn
