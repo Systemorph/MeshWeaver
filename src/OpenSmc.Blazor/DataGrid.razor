@@ -17,7 +17,11 @@
             if (!string.IsNullOrEmpty(column.Format))
                 builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Format), column.Format);
             if (column.Sortable)
-                builder.AddAttribute(++index, "Sortable", column.Sortable);
+                    builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Sortable), column.Sortable);
+            if(column.Tooltip)
+                    builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Tooltip), column.Tooltip);
+            if (column.TooltipText != null)
+                builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.TooltipText), (Func<JsonObject,string>)(x => column.TooltipText));
 
             builder.CloseComponent();
         }))

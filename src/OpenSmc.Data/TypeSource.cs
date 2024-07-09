@@ -28,13 +28,49 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
         Key = typeRegistry.GetKeyFunction(CollectionName);
         var displayAttribute = ElementType.GetCustomAttribute<DisplayAttribute>();
         DisplayName = displayAttribute?.GetName() ?? ElementType.Name.Wordify();
-        Description = displayAttribute?.GetDescription();
+        var xmlCommentsMethod = ElementType.Assembly.GetType($"{ElementType.Assembly.GetName().Name}.CodeComments")
+            ?.GetMethod("GetSummary", BindingFlags.Public | BindingFlags.Static);
+
+        var getFromXmlComment = xmlCommentsMethod == null ? null : (Func<string, string>) (x => xmlCommentsMethod.Invoke(null, new object[] { x })?.ToString());
+        Description = GetDescription(ElementType, displayAttribute, getFromXmlComment);
+        MemberDescriptions = ElementType.GetMembers()
+            .Select(x => new KeyValuePair<string,string>(x.Name, GetFromXmlComments(x, getFromXmlComment)))
+            .DistinctBy(x => x.Key)
+            .ToDictionary();
         GroupName = displayAttribute?.GetGroupName();
         Order = displayAttribute?.GetOrder();
         var iconAttribute = ElementType.GetCustomAttribute<IconAttribute>();
         if (iconAttribute != null)
             Icon = new Icon(iconAttribute.Provider, iconAttribute.Id);
     }
+
+    private Dictionary<string, string> MemberDescriptions { get;  }
+    public string GetDescription(string memberName) => MemberDescriptions.GetValueOrDefault(memberName, "Add description in the xml comments or in the display attribute");
+    private string GetDescription(Type elementType, DisplayAttribute displayAttribute,
+        Func<string, string> fromXmlComment)
+    {
+        return displayAttribute?.GetDescription()
+               ?? fromXmlComment?.Invoke($"T:{elementType.FullName}")
+               ?? "Add description in the xml comments or in the display attribute";
+    }
+
+    private string GetFromXmlComments(MemberInfo member, Func<string, string> getMemberComment)
+    {
+        if (getMemberComment == null)
+            return null;
+        return member switch
+        {
+            Type type => getMemberComment($"T:{type.FullName}"),
+            PropertyInfo => getMemberComment($"P:{member.ReflectedType?.FullName}.{member.Name}"),
+            MethodInfo => getMemberComment($"M:{member.ReflectedType?.FullName}.{member.Name}"),
+            FieldInfo => getMemberComment($"F:{member.ReflectedType?.FullName}.{member.Name}"),
+            _ => null
+        };
+    }
+
+
+
+
 
     public string Description { get; init; }
     public string GroupName { get; init; }
