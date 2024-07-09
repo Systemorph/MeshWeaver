@@ -6,5 +6,20 @@
     <ItemGroup>
     <ProjectReference Include="..\..\src\OpenSmc.Application.Styles\OpenSmc.Application.Styles.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Domain\OpenSmc.Domain.csproj" />
+   <ProjectReference Include="..\OpenSmc.Docs.CommentsGenerator\OpenSmc.Docs.CommentsGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false"/>
   </ItemGroup>
+
+  	<!-- <ItemGroup>
+		<PackageReference Include="Microsoft.VisualStudio.Threading.Analyzers">
+			<PrivateAssets>all</PrivateAssets>
+			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+		</PackageReference>
+	</ItemGroup> -->
+	<ItemGroup>
+		<AdditionalFiles Include="bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml" />
+	</ItemGroup>
+    <PropertyGroup>
+        <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+        <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)\Generated</CompilerGeneratedFilesOutputPath>
+    </PropertyGroup>
 </Project>
