@@ -1,8 +1,9 @@
 ﻿using System.Reactive.Linq;
 using System.Text.Json;
+using System.Xml.Serialization;
 using FluentAssertions;
 using OpenSmc.Data;
-using OpenSmc.DataStructures;
+using OpenSmc.Documentation;
 using OpenSmc.GridModel;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout;
@@ -177,5 +178,29 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             .BeOfType<GridRow>()
             .Which.RowGroup.DisplayName.Should()
             .MatchRegex(@"[^0-9]+"); // should contain at least one non-numeric character, i.e. dimsnsion is matched.
+    }
+
+    [Fact]
+    public async Task DocumentationTest()
+    {
+        var assembly = typeof(Customer).Assembly;
+        var resourceName = $"{assembly.GetName().Name}.xml";
+        using (var stream = assembly.GetManifestResourceStream(resourceName))
+        {
+            if (stream != null)
+            {
+                // Read the resource stream and process it as needed
+                // For example, you can use StreamReader to read the content
+                using (var reader = new StreamReader(stream))
+                {
+                    XmlSerializer serializer = new XmlSerializer(typeof(Doc));
+                    Doc doc = serializer.Deserialize(reader) as Doc;
+                }
+            }
+            else
+            {
+                // Resource not found
+            }
+        }
     }
 }
