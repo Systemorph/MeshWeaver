@@ -1,6 +1,9 @@
-﻿using System.Reactive.Linq;
+﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using OpenSmc.Application.Styles;
+using OpenSmc.Collections;
 using OpenSmc.Data;
+using OpenSmc.Data.Serialization;
 using OpenSmc.DataCubes;
 using OpenSmc.Domain;
 using OpenSmc.Layout;
@@ -17,15 +20,14 @@ using static OpenSmc.Layout.Controls;
 
 namespace OpenSmc.Northwind.ViewModel;
 
-public record Filter(string Dimension)
-{
-    public string Search { get; init; }
-}
+public record Toolbar(int Year);
 
-public record FilterItem(object id, string Label, bool Selected);
+public record FilterItem(object Id, string Label, bool Selected);
 
 public static class NorthwindLayoutAreas
 {
+    public const string ContextPanelArea = "ContextPanel";
+
     public static MessageHubConfiguration AddNorthwindViewModels(
         this MessageHubConfiguration configuration
     )
@@ -60,7 +62,6 @@ public static class NorthwindLayoutAreas
         );
     }
 
-
     private static IObservable<object> CategoryCatalog(
         LayoutAreaHost area,
         RenderingContext context
@@ -88,36 +89,8 @@ public static class NorthwindLayoutAreas
         new(nameof(SupplierSummary), FluentIcons.Person)
     };
 
-    private const string FilterItems = nameof(FilterItems);
-
-
-    private record Toolbar
-    {
-        public Toolbar(int Year)
-        {
-            this.Year = Year;
-        }
-
-        public int Year { get; init; }
-    }
-
     public static object Dashboard(this LayoutAreaHost layoutArea, RenderingContext context)
     {
-        var years = layoutArea
-            .Workspace.GetObservable<Order>()
-            .DistinctUntilChanged()
-            .Select(x =>
-                x.Select(y => y.OrderDate.Year)
-                    .Distinct()
-                    .OrderByDescending(year => year)
-                    .Select(year => new Option<int>(year, year.ToString()))
-                    .Prepend(new Option<int>(0, "All Time"))
-                    .ToArray()
-            )
-            .DistinctUntilChanged(x => string.Join(',', x.Select(y => y.Item)));
-
-        var contextPanelCollapsed = true;
-
         return Stack()
             .WithSkin(Skins.Splitter)
             .WithView(
@@ -125,30 +98,15 @@ public static class NorthwindLayoutAreas
                     .WithView(
                         Toolbar()
                             .WithView(
-                                (area, _) =>
-                                    years.Select(y =>
-                                        area.Bind(
-                                            new Toolbar(y.Max(x => x.Item)),
-                                            nameof(Toolbar),
-                                            tb => Select(tb.Year).WithOptions(y)
-                                        )
-                                    )
-                            )
-                            .WithView(
-                                (_, _) =>
-                                    Button("Analyze")
-                                        .WithIconStart(FluentIcons.CalendarDataBar)
-                                        .WithClickAction(ctx =>
-                                        {
-                                            contextPanelCollapsed = !contextPanelCollapsed;
-                                            ctx.Layout.RenderArea(
-                                                context with
-                                                {
-                                                    Area = $"{context.Area}/{nameof(ContextPanel)}"
-                                                },
-                                                ContextPanel(contextPanelCollapsed)
-                                            );
-                                        })
+                                Button("Analyze")
+                                    .WithIconStart(FluentIcons.CalendarDataBar)
+                                    .WithClickAction(ctx =>
+                                    {
+                                        ctx.Layout.RenderArea(
+                                            context with { Area = $"{context.Area}/{ContextPanelArea}" },
+                                            new ViewElementWithViewStream(ContextPanelArea, OpenDataCubeContextPanel)
+                                        );
+                                    })
                             )
                     )
                     .WithView(
@@ -177,11 +135,32 @@ public static class NorthwindLayoutAreas
                             )
                     )
                     .ToSplitterPane()
+                    .WithClass("main-content-pane")
             )
-            .WithView(nameof(ContextPanel), ContextPanel(contextPanelCollapsed));
+            // todo see how to avoid rendering dummy context panel at first
+            .WithView(ContextPanelArea, (a, c) => Stack().ToContextPanel().WithCollapsed(true));
     }
 
-    private static SplitterPaneControl ContextPanel(bool collapsed)
+    public static LayoutStackControl SupplierSummary(
+        this LayoutAreaHost layoutArea,
+        RenderingContext context
+    )
+    {
+        return Stack()
+            .WithView(PaneHeader("Supplier Summary"))
+            .WithView(SupplierSummaryGrid);
+    }
+
+    public static IObservable<UiControl> OpenDataCubeContextPanel(LayoutAreaHost area, RenderingContext context)
+    {
+        return GetDataCube(area)
+            .Select(cube => 
+                cube.ToDataCubeFilter(area, context)
+                    .ToContextPanel()
+            );
+    }
+
+    public static SplitterPaneControl ToContextPanel(this UiControl content)
     {
         return Stack()
             .WithClass("context-panel")
@@ -189,80 +168,10 @@ public static class NorthwindLayoutAreas
                 Stack()
                     .WithVerticalAlignment(VerticalAlignment.Top)
                     .WithView(PaneHeader("Analyze").WithWeight(FontWeight.Bold))
-                )
-            .WithView(Filter)
-            .ToSplitterPane(x =>
-                x.WithMin("200px")
-                    .WithCollapsed(collapsed)
-            );
+            )
+            .WithView(content)
+            .ToSplitterPane(x => x.WithMin("200px"));
     }
-
-    private static IReadOnlyDictionary<string, Type> FilterDimensions =>
-        new[] { typeof(Customer), typeof(Product), typeof(Supplier) }.ToDictionary(t => t.FullName);
-
-    private static object Filter(LayoutAreaHost area, RenderingContext context)
-    {
-        return area.Bind(
-            new Filter(FilterDimensions.First().Key),
-            nameof(Filter),
-            filter =>
-                Stack()
-                    .WithView(Header("Filter"))
-                    .WithView(
-                        Stack() 
-                            .WithClass("dimension-filter")
-                            .WithOrientation(Orientation.Horizontal)
-                            .WithHorizontalGap(16)
-                            .WithView(Listbox(filter.Dimension)
-                                .WithOptions(
-                                    FilterDimensions
-                                        .Select(d => new Option<string>(d.Value.FullName, d.Value.Name))
-                                        .ToArray()
-                                )
-                            )
-                            .WithView(Stack()
-                                .WithClass("dimension-values")
-                                .WithView(
-                                    TextBox(filter.Search)
-                                        .WithSkin(TextBoxSkin.Search)
-                                        .WithPlaceholder("Search...")
-                                        // TODO V10: this throws an "access violation" exception, figure out why (08.07.2024, Alexander Kravets)
-                                        // .WithImmediate(true)
-                                        // .WithImmediateDelay(200)
-                                    )
-                                .WithView(DimensionValues)
-                                .WithVerticalGap(16)
-                            )
-                    )
-        );
-    }
-
-    private static IObservable<ItemTemplateControl> DimensionValues(LayoutAreaHost area, RenderingContext context)
-    {
-        return area.GetDataStream<Filter>(nameof(Filter))
-            .Select(filter => area.Workspace.ReduceToTypes(FilterDimensions[filter.Dimension])
-                    .DistinctUntilChanged()
-                    .Select(x => x.Value.Reduce(new CollectionReference(x.Value.GetCollectionName(FilterDimensions[filter.Dimension]))))
-                    .Select(x => 
-                        x.Instances.Select(item => 
-                            new FilterItem(item.Key, item.Value is INamed named ? named.DisplayName : item.Value.ToString(), true))
-                            .Where(i => filter.Search is null || i.Label.IndexOf(filter.Search, StringComparison.OrdinalIgnoreCase) != -1)
-                            .OrderBy(i => i.Label)
-                            .ToArray())
-                .Select(filterItems =>
-                    area.Bind(filterItems, FilterItems,
-                        item => CheckBox(item.Label, item.Selected))
-                    ))
-            .Switch();
-    }
-
-    public static LayoutStackControl SupplierSummary(
-        this LayoutAreaHost layoutArea,
-        RenderingContext ctx
-    ) =>
-        Stack()
-            .WithView(PaneHeader("Supplier Summary"))
-            .WithView(SupplierSummaryGrid);
 
     public static IObservable<object> SupplierSummaryGrid(
         this LayoutAreaHost area,
@@ -342,39 +251,67 @@ public static class NorthwindLayoutAreas
     public static LayoutStackControl OrderSummary(
         LayoutAreaHost layoutArea,
         RenderingContext ctx
-    ) =>
-        Stack()
+    )
+    {
+        var years = layoutArea
+            .Workspace.GetObservable<Order>()
+            .DistinctUntilChanged()
+            .Select(x =>
+                x.Select(y => y.OrderDate.Year)
+                    .Distinct()
+                    .OrderByDescending(year => year)
+                    .Select(year => new Option<int>(year, year.ToString()))
+                    .Prepend(new Option<int>(0, "All Time"))
+                    .ToArray()
+            )
+            .DistinctUntilChanged(x => string.Join(',', x.Select(y => y.Item)));
+
+        return Stack()
             .WithView(PaneHeader("Order Summary"))
+            .WithClass("order-summary")
+            .WithView(
+                Toolbar()
+                    .WithView(
+                        (area, _) =>
+                            years.Select(y =>
+                                area.Bind(
+                                    new Toolbar(y.Max(x => x.Item)),
+                                    nameof(Toolbar),
+                                    tb => Select(tb.Year).WithOptions(y)
+                                )
+                            )
+                    )
+                )
             .WithView(
                 (area, _) =>
-                    area.Workspace.GetObservable<Order>()
+                    area.Workspace.ReduceToTypes(typeof(Order))
                         .CombineLatest(
                             area.GetDataStream<Toolbar>(nameof(Toolbar)),
-                            area.GetDataStream<IEnumerable<object>>(FilterItems),
-                            (orders, tb, filterItems) =>
-                                orders
-                                    .Where(x => tb.Year == 0 || x.OrderDate.Year == tb.Year 
-                                                // && !filterItems.Cast<FilterItem>().Where(c => c.Selected && c.Id == x.CustomerId).IsEmpty()
-                                                )
-                                    .OrderByDescending(y => y.OrderDate)
-                                    .Take(5)
-                                    .Select(order => new OrderSummaryItem(
-                                        area.Workspace.GetData<Customer>(
-                                            order.CustomerId
-                                        )?.CompanyName,
-                                        area.Workspace.GetData<OrderDetails>()
-                                            .Count(d => d.OrderId == order.OrderId),
-                                        order.OrderDate
-                                    ))
-                                    .ToArray()
-                                    .ToDataGrid(conf =>
-                                        conf.WithColumn(o => o.Customer)
-                                            .WithColumn(o => o.Products)
-                                            .WithColumn(
-                                                o => o.Purchased,
-                                                column => column.WithFormat("yyyy-MM-dd")
-                                            )
-                                    )
-                            )
+                            (changeItem, tb) => (changeItem, tb))
+                        .DistinctUntilChanged()
+                        .Select(tuple =>
+                            tuple.changeItem.Value.GetData<Order>()
+                                .Where(x => tuple.tb.Year == 0 || x.OrderDate.Year == tuple.tb.Year)
+                                .OrderByDescending(y => y.OrderDate)
+                                .Take(5)
+                                .Select(order => new OrderSummaryItem(
+                                    area.Workspace.GetData<Customer>(
+                                        order.CustomerId
+                                    )?.CompanyName,
+                                    area.Workspace.GetData<OrderDetails>()
+                                        .Count(d => d.OrderId == order.OrderId),
+                                    order.OrderDate
+                                ))
+                                .ToArray()
+                                .ToDataGrid(conf =>
+                                    conf.WithColumn(o => o.Customer)
+                                        .WithColumn(o => o.Products)
+                                        .WithColumn(
+                                            o => o.Purchased,
+                                            column => column.WithFormat("yyyy-MM-dd")
+                                        )
+                                )
+                        )
             );
+    }
 }

@@ -12,6 +12,11 @@ namespace OpenSmc.DataCubes
         
         public abstract IDataCube<T> Filter(Func<T, bool> filter);
 
+        public virtual IEnumerable<DimensionDescriptor> GetDimensionDescriptors()
+        {
+            return TuplesUtils<T>.GetDimensionDescriptors();
+        }
+
         public virtual IEnumerable<DimensionDescriptor> GetDimensionDescriptors(bool isByRow, params string[] dimensions)
         {
             return TuplesUtils<T>.GetDimensionDescriptors(dimensions);

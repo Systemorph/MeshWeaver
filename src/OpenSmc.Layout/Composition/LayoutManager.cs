@@ -20,7 +20,7 @@ public static class LayoutManager
         return layoutArea.Stream;
     }
 
-    public static void RenderArea(this LayoutAreaHost layoutArea, RenderingContext context, object viewModel)
+    private static void RenderArea(this LayoutAreaHost layoutArea, RenderingContext context, object viewModel)
     {
         if (viewModel == null)
             return;
@@ -66,7 +66,7 @@ public static class LayoutManager
         ));
     }
 
-    private static void RenderArea(this LayoutAreaHost layoutArea, RenderingContext context, ViewElement viewElement)
+    public static void RenderArea(this LayoutAreaHost layoutArea, RenderingContext context, ViewElement viewElement)
     {
         switch (viewElement)
         {

@@ -1,7 +1,7 @@
 ﻿namespace OpenSmc.Layout;
 
-public record TextBoxControl(object Data)
-    : InputBaseControl<TextBoxControl>(Data), IInputControl
+public record TextBoxControl()
+    : InputBaseControl<TextBoxControl>(), IInputControl
 {
     public object IconStart { get; init; }
 
