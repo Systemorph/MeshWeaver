@@ -14,6 +14,10 @@ public record LayoutAreaHost : IDisposable
     public ISynchronizationStream<EntityStore, LayoutAreaReference> Stream { get; }
     public IMessageHub Hub => Stream.Hub;
     public IWorkspace Workspace => Hub.GetWorkspace();
+    private readonly Dictionary<object, object> variables = new ();
+
+    public T GetVariable<T>(object key) => (T)variables[key];
+    public void SetVariable(object key, object value) => variables[key] = value;
 
     public LayoutAreaHost(
         ISynchronizationStream<WorkspaceState> workspaceStream,

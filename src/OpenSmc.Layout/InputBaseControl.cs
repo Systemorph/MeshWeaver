@@ -10,8 +10,8 @@ public interface IInputControl : IUiControl
     object ImmediateDelay { get; init; }
 }
 
-public abstract record InputBaseControl<TControl>(object Data)
-    : UiControl<TControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data)
+public abstract record InputBaseControl<TControl>()
+    : UiControl<TControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
     where TControl : InputBaseControl<TControl>, IInputControl
 {
     public object AutoFocus { get; init; }

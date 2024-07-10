@@ -26,7 +26,7 @@ public static class Controls
 
     public static SpinnerControl Spinner() => new();
 
-    public static TextBoxControl TextBox(object data) => new(data);
+    public static TextBoxControl TextBox() => new();
 
     public static NumberControl Number(object data) => new(data);
 
