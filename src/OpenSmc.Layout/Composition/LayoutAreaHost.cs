@@ -6,6 +6,7 @@ using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
+using System.Collections.Immutable;
 
 namespace OpenSmc.Layout.Composition;
 
@@ -144,4 +145,33 @@ public record LayoutAreaHost : IDisposable
             action();
             return Task.CompletedTask;
         });
+
+    public void DisposeExistingAreas(RenderingContext context)
+    {
+        foreach (var area in disposablesByArea.Where(x => x.Key.StartsWith(context.Area)).ToArray())
+        {
+            if (disposablesByArea.TryRemove(area.Key, out var disposables))
+            {
+                disposables.ForEach(d => d.Dispose());
+            }
+        }
+
+        Stream.Update(ws =>
+            new(
+                Stream.Owner,
+                Stream.Reference,
+                (ws ?? new()).Update(LayoutAreaReference.Areas,
+                    i => i
+                        with
+                        {
+                            Instances = i.Instances
+                                .Where(x => !((string)x.Key).StartsWith(context.Area))
+                                .ToImmutableDictionary()
+                        }),
+                Stream.Owner,
+                null,
+                Stream.Hub.Version
+            )
+        );
+    }
 }
