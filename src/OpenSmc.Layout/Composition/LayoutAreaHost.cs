@@ -18,7 +18,17 @@ public record LayoutAreaHost : IDisposable
     private readonly Dictionary<object, object> variables = new ();
 
     public T GetVariable<T>(object key) => (T)variables[key];
+    public bool ContainsVariable(object key) => variables.ContainsKey(key);
     public void SetVariable(object key, object value) => variables[key] = value;
+    public T GetOrAddVariable<T>(object key, Func<T> factory)
+    {
+        if (!ContainsVariable(key))
+        {
+            SetVariable(key, factory.Invoke());
+        }
+
+        return GetVariable<T>(key);
+    }
 
     public LayoutAreaHost(
         ISynchronizationStream<WorkspaceState> workspaceStream,
