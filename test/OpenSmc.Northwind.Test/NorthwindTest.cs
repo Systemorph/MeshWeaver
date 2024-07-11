@@ -3,7 +3,7 @@ using System.Text.Json;
 using System.Xml.Serialization;
 using FluentAssertions;
 using OpenSmc.Data;
-using OpenSmc.Documentation;
+using OpenSmc.Documentation.Model;
 using OpenSmc.GridModel;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout;
