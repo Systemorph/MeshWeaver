@@ -6,6 +6,7 @@ using FluentAssertions;
 using Json.Patch;
 using Json.Pointer;
 using OpenSmc.Data;
+using OpenSmc.Disposables;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.DataGrid;
@@ -62,6 +63,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     .WithView("int", 3)
                     .WithView(nameof(DataGrid), DataGrid)
                     .WithView(nameof(DataBoundCheckboxes), DataBoundCheckboxes)
+                    .WithView(nameof(DisposalView), DisposalView)
             );
     }
 
@@ -458,6 +460,39 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             );
 
     }
+
+    private static bool isDisposed;
+
+    private static object DisposalView =>
+        Controls.Stack().WithView("subview", (a, c) =>
+    {
+        a.AddDisposable(c.Area, new AnonymousDisposable(() => isDisposed = true));
+        return "Ok";
+    });
+
+    [HubFact]
+    public async Task TestDisposalView()
+    {
+        var reference = new LayoutAreaReference(nameof(DisposalView));
+
+        var hub = GetClient();
+        var workspace = hub.GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            reference
+        );
+        var content = await stream.GetControlStream(reference.Area).FirstAsync(x => x != null);
+        var subAreaName = content.Should().BeOfType<LayoutStackControl>().Which.Areas.Should().HaveCount(1).And.Subject.First();
+        var subArea = await stream.GetControlStream(subAreaName).FirstAsync();
+        subArea.Should().BeOfType<HtmlControl>();
+        isDisposed.Should().BeFalse();
+
+        // todo
+        // garbage-collect view, check isDisposed=true
+        // how do I get LayoutAreaHost?
+    }
+
+    // todo write data-disposal test
 }
 
 public static class TestAreas
