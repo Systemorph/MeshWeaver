@@ -1,10 +1,11 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Text.Json;
+using Json.Pointer;
 using OpenSmc.DataCubes;
 using OpenSmc.Domain;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
-using OpenSmc.Northwind.Domain;
 using static OpenSmc.Layout.Controls;
 
 namespace OpenSmc.Northwind.ViewModel;
@@ -13,42 +14,65 @@ public record DataCubeFilter
 {
     public string SelectedDimension { get; init; }
     public ImmutableDictionary<string, ImmutableList<FilterItem>> FilterItems { get; init; } = ImmutableDictionary<string, ImmutableList<FilterItem>>.Empty;
+    public string Search { get; init; }
 }
 
 public static class DataCubeLayoutExtensions
 {
-    public const string FilterId = "Filter";
+    /*
+     * 1. context panel not rendered until the button is clicked
+     * 2. user clicks filter button
+     * 3. list of dimensions is rendered from dataCube slices (put an observable of data-cube to layoutAreaHost variables)
+     * 4. preselect first dimension
+     * 5. call getSlices on selected dimensions, put it to data under current dimension name
+     * 6. data-bind list of checkboxes
+     *
+     * building filtered data cube
+     * 1. get unfiltered data cube (observable)
+     * 2. for each dimension try get observable from data
+     *
+     */
 
-    public static UiControl ToDataCubeFilter(this IDataCube dataCube, LayoutAreaHost area, RenderingContext context)
+    public static UiControl ToDataCubeFilter(this IDataCube dataCube, LayoutAreaHost area, RenderingContext context, string filterId)
     {
-        var filter = area.Stream.GetData<DataCubeFilter>(FilterId) ?? new();
+        var filter = area.Stream.GetData<DataCubeFilter>(filterId) ?? new();
         var availableDimensions = dataCube.GetAvailableDimensions();
-        filter = filter with { SelectedDimension = filter.SelectedDimension ?? availableDimensions.First().SystemName };
+
+        filter = filter with
+        {
+            SelectedDimension = filter.SelectedDimension ?? availableDimensions.First().SystemName
+        };
         
         // TODO V10: add overload that accepts lambda (09.07.2024, Alexander Kravets)
-        // area.UpdateData(FilterId, filter);
+        var pointer = area.UpdateData(filterId, filter);
 
         area.AddDisposable(context.Area, 
-            area.GetDataStream<DataCubeFilter>(FilterId)
+            area.GetDataStream<DataCubeFilter>(filterId)
                 .DistinctUntilChanged()
-                .Subscribe(f =>
+                .Subscribe(currentFilter =>
                 {
-                    if (!f.FilterItems.ContainsKey(f.SelectedDimension))
+                    if (!currentFilter.FilterItems.ContainsKey(currentFilter.SelectedDimension))
                     {
-                        f = f with
+                        currentFilter = currentFilter with
                         {
-                            FilterItems = f.FilterItems.Add(
-                                f.SelectedDimension,
-                                dataCube.GetFilterItems(f.SelectedDimension)
+                            FilterItems = currentFilter.FilterItems.Add(
+                                currentFilter.SelectedDimension,
+                                dataCube.GetSlices(currentFilter.SelectedDimension)
+                                    .SelectMany(s => s.Tuple.Select(
+                                        // todo get dimension pairs of type and ids from dataSlices
+                                        // go to the workspace and take observable of this type
+                                        x => new FilterItem(x.Value, x.Value.ToString(), true))
+                                    )
+                                    .ToImmutableList()
                             )
                         };
                     }
         
-                    area.UpdateData(FilterId, f);
+                    area.UpdateData(filterId, currentFilter);
                 })
             );
 
-        return area.Bind(filter, FilterId, f =>
+        return area.Bind<DataCubeFilter, UiControl>(pointer.Pointer, f =>
             Stack()
                 .WithView(Header("Filter"))
                 .WithView(
@@ -56,28 +80,26 @@ public static class DataCubeLayoutExtensions
                         .WithClass("dimension-filter")
                         .WithOrientation(Orientation.Horizontal)
                         .WithHorizontalGap(16)
-                        .WithView(
-                            Listbox(f.SelectedDimension)
+                        .WithView(Listbox(f.SelectedDimension)
                                 .WithOptions(
                                     availableDimensions
                                         .Select(d => new Option<string>(d.SystemName, d.DisplayName))
                                         .ToArray()
-                                )
-                        )
+                                ))
                         .WithView(Stack()
                             .WithClass("dimension-values")
                             .WithView(
-                                TextBox()
+                                TextBox(f.Search)
                                     .WithSkin(TextBoxSkin.Search)
                                     .WithPlaceholder("Search...")
                                 // TODO V10: this throws an "access violation" exception, figure out why (08.07.2024, Alexander Kravets)
                                 // .WithImmediate(true)
                                 // .WithImmediateDelay(200)
                             )
-                            .WithView(dataCube.ToDimensionValues)
+                            .WithView((a, c) => ToDimensionValues(a, filterId))
                             .WithVerticalGap(16)
                         )
-                    )
+            )
         );
     }
 
@@ -88,79 +110,15 @@ public static class DataCubeLayoutExtensions
             .ToImmutableList();
     }
 
-    private static IObservable<ItemTemplateControl> ToDimensionValues(this IDataCube dataCube, LayoutAreaHost area, RenderingContext context)
+    private static IObservable<ItemTemplateControl> ToDimensionValues(LayoutAreaHost area, string filterId)
     {
-        return area.GetDataStream<DataCubeFilter>(FilterId)
+        return area.GetDataStream<DataCubeFilter>(filterId)
+            .Select(f => f.SelectedDimension)
             .DistinctUntilChanged()
-            .Select(filter => area.BindEnumerable<FilterItem, CheckBoxControl>(
-                LayoutAreaReference.GetDataPointer(FilterId + $"/{filter.SelectedDimension}"),
+        .Select(selectedDimension => 
+                area.BindEnumerable<FilterItem, CheckBoxControl>(LayoutAreaReference.GetDataPointer(filterId) + $"/FilterItems/{selectedDimension}",
                 f => CheckBox(f.Label, f.Selected)
             ));
     }
-
-    // TODO V10: get data cube, get slices of selected dimension (09.07.2024, Alexander Kravets)
-    private static ImmutableList<FilterItem> GetFilterItems(this IDataCube dataCube, string selectedDimension)
-    {
-        return ImmutableList<FilterItem>.Empty;
-        // return dataCube.GetSlices(selectedDimension)
-        //     .SelectMany(s => 
-        //         s.Tuple.Select(x => new FilterItem(x.Dimension, x.Value))
-        //         )
-    }
-
-    // list of dimensions => from dataCube.GetDimensionDescriptors
-    // area.Workspace => dataContext
-    private static IReadOnlyDictionary<string, Type> FilterDimensions =>
-        new[] { typeof(Customer), typeof(Product), typeof(Supplier) }.ToDictionary(t => t.FullName);
-
-    // private static object Filter(LayoutAreaHost area, RenderingContext context)
-    // {
-    //     /*
-    //      * 1. context panel not rendered until the button is clicked
-    //      * 2. user clicks filter button
-    //      * 3. list of dimensions is rendered from dataCube slices (put an observable of data-cube to layoutAreaHost variables)
-    //      * 4. preselect first dimension
-    //      * 5. call getSlices on selected dimensions, put it to data under current dimension name
-    //      * 6. data-bind list of checkboxes
-    //      *
-    //      * building filtered data cube
-    //      * 1. get unfiltered data cube (observable)
-    //      * 2. for each dimension try get observable from data
-    //      *
-    //      */
-    //     return area.Bind(
-    //         new DataCubeFilter(FilterDimensions.First().Key),
-    //         nameof(Filter),
-    //         filter =>
-    //             Stack()
-    //                 .WithView(Header("Filter"))
-    //                 .WithView(
-    //                     Stack()
-    //                         .WithClass("dimension-filter")
-    //                         .WithOrientation(Orientation.Horizontal)
-    //                         .WithHorizontalGap(16)
-    //                         .WithView(Listbox(filter.Dimension)
-    //                             .WithOptions(
-    //                                 FilterDimensions
-    //                                     .Select(d => new Option<string>(d.Value.FullName, d.Value.Name))
-    //                                     .ToArray()
-    //                             )
-    //                         )
-    //                         .WithView(Stack()
-    //                             .WithClass("dimension-values")
-    //                             .WithView(
-    //                                 TextBox(filter.Search)
-    //                                     .WithSkin(TextBoxSkin.Search)
-    //                                     .WithPlaceholder("Search...")
-    //                                 // TODO V10: this throws an "access violation" exception, figure out why (08.07.2024, Alexander Kravets)
-    //                                 // .WithImmediate(true)
-    //                                 // .WithImmediateDelay(200)
-    //                                 )
-    //                             // .WithView(DimensionValues)
-    //                             .WithVerticalGap(16)
-    //                         )
-    //                 )
-    //     );
-    // }
 }
 

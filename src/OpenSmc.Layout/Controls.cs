@@ -26,7 +26,7 @@ public static class Controls
 
     public static SpinnerControl Spinner() => new();
 
-    public static TextBoxControl TextBox() => new();
+    public static TextBoxControl TextBox(object data) => new(data);
 
     public static NumberControl Number(object data) => new(data);
 
@@ -172,7 +172,7 @@ public static class Controls
     )
         where TView : UiControl => BindEnumerable(area, data, id, dataTemplate);
 
-    public static object Bind<T, TView>(
+    public static TView Bind<T, TView>(
         this LayoutAreaHost area,
         string pointer,
         Expression<Func<T, TView>> dataTemplate

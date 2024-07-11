@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using OpenSmc.Application.Styles;
 using OpenSmc.Collections;
 using OpenSmc.Data;
@@ -26,6 +27,8 @@ public record FilterItem(object Id, string Label, bool Selected);
 
 public static class NorthwindLayoutAreas
 {
+    public const string DataCubeFilterId = "DataCubeFilter";
+
     public const string ContextPanelArea = "ContextPanel";
 
     public static MessageHubConfiguration AddNorthwindViewModels(
@@ -155,7 +158,7 @@ public static class NorthwindLayoutAreas
     {
         return GetDataCube(area)
             .Select(cube => 
-                cube.ToDataCubeFilter(area, context)
+                cube.ToDataCubeFilter(area, context, DataCubeFilterId)
                     .ToContextPanel()
             );
     }
@@ -184,8 +187,8 @@ public static class NorthwindLayoutAreas
 
     private static IObservable<IDataCube<NorthwindDataCube>> GetDataCube(
         this LayoutAreaHost area
-    ) =>
-        area
+    ) => area.GetOrAddVariable("dataCube", 
+        () => area
             .Workspace.ReduceToTypes(typeof(Order), typeof(OrderDetails), typeof(Product))
             .DistinctUntilChanged()
             .Select(x =>
@@ -204,6 +207,7 @@ public static class NorthwindLayoutAreas
                     )
                     .Select(data => new NorthwindDataCube(data.order, data.detail, data.product))
                     .ToDataCube()
+                )
             );
 
     public static LayoutStackControl CustomerSummary(
@@ -217,7 +221,6 @@ public static class NorthwindLayoutAreas
                     a.GetDataStream<Toolbar>(nameof(Toolbar))
                         .Select(tb => $"Year selected: {tb.Year}")
             );
-
 
     public static LayoutStackControl ProductSummary(
         this LayoutAreaHost layoutArea,
