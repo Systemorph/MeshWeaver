@@ -40,7 +40,7 @@ namespace OpenSmc.Layout.Domain
         {
             return types.Aggregate(x,
                 (g, t) => g.WithLink(t.DisplayName,
-                    $"/{Layout.Hub.Address}/Catalog/{t.CollectionName}", 
+                    $"/{Layout.Hub.Address}/Catalog?Type={t.CollectionName}", 
                     opt => opt.WithIcon(t.Icon)));
         }
 

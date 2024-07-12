@@ -308,7 +308,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     private object DataGrid(LayoutAreaHost area, RenderingContext ctx)
     {
         var data = new DataRecord[] { new("1", "1"), new("2", "2") };
-        return data.ToDataGrid(grid =>
+        return area.ToDataGrid(data,grid =>
             grid.WithColumn(x => x.SystemName).WithColumn(x => x.DisplayName)
         );
     }
@@ -415,13 +415,13 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync();
             }
-    private IObservable<object> CatalogView(LayoutAreaHost host, RenderingContext context)
+    private IObservable<object> CatalogView(LayoutAreaHost area, RenderingContext context)
     {
-        return host
+        return area
             .Hub.GetWorkspace()
             .Stream.Select(x => x.Value.GetData<DataRecord>())
             .DistinctUntilChanged()
-            .Select(data => host.Bind(data, nameof(CatalogView), x => x.ToDataGrid()));
+            .Select(data => area.Bind(data, nameof(CatalogView), x => area.ToDataGrid(x)));
     }
 
     [HubFact]

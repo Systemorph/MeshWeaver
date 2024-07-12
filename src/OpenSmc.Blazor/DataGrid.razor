@@ -4,7 +4,12 @@
 @using OpenSmc.Layout.DataGrid
 @inherits BlazorView<DataGridControl>
 
-<FluentDataGrid Items="@QueryableData">
+<FluentDataGrid Items="@QueryableData" 
+                Virtualize="@ViewModel.Virtualize" 
+                ItemSize="@ViewModel.ItemSize" 
+                GenerateHeader="GenerateHeaderOption.Sticky"
+                ResizableColumns="@ViewModel.ResizableColumns"
+                Pagination="@Pagination">
     @foreach (DataGridColumn column in ViewModel.Columns)
     {
 
@@ -17,15 +22,24 @@
             if (!string.IsNullOrEmpty(column.Format))
                 builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Format), column.Format);
             if (column.Sortable)
-                builder.AddAttribute(++index, "Sortable", column.Sortable);
+                builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Sortable), column.Sortable);
+            if(column.Tooltip)
+                builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Tooltip), column.Tooltip);
+            if (column.TooltipText != null)
+                builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.TooltipText), (Func<JsonObject,string>)(x => column.TooltipText));
 
             builder.CloseComponent();
         }))
 
     }
 </FluentDataGrid>
+<FluentPaginator State="@Pagination" />
 
 @code{
+    private PaginationState Pagination => new()
+    {
+        ItemsPerPage = 10
+    };
     private IQueryable<JsonObject> QueryableData {get;set;}
 
     private Expression<Func<JsonObject, T>> GetPropertyExpression<T>(DataGridColumn<T> column)

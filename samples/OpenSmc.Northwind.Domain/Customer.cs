@@ -18,7 +18,8 @@ namespace OpenSmc.Northwind.Domain;
 /// <param name="Country"></param>
 /// <param name="Phone"></param>
 /// <param name="Fax">Yes, this still existed in the 90ies.</param>
-[Icon(OpenSmcIcons.Provider, "sm-archive")]
+[Icon(FluentIcons.Provider, "Album")]
+[Display()]
 
 public record Customer(
     [property: Key] string CustomerId,

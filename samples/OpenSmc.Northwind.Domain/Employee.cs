@@ -25,7 +25,7 @@ namespace OpenSmc.Northwind.Domain;
 /// <param name="Notes"></param>
 /// <param name="ReportsTo"></param>
 /// <param name="PhotoPath"></param>
-[Icon(OpenSmcIcons.Provider, "sm-archive")]
+[Icon(FluentIcons.Provider, "Album")]
 
 public record Employee(
     [property: Key] int EmployeeId,

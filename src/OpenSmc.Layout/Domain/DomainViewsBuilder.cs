@@ -7,6 +7,8 @@ namespace OpenSmc.Layout.Domain
 {
     public record DomainViewsBuilder(LayoutDefinition Layout)
     {
+        public const string Type = nameof(Type);
+
         public DomainViewsBuilder All()
             => WithMenu(menu =>
                 menu
@@ -20,19 +22,34 @@ namespace OpenSmc.Layout.Domain
         // ReSharper disable once WithExpressionModifiesAllMembers
         public DomainViewsBuilder WithCatalogView(string area = nameof(Catalog)) => this with { Layout = Layout.WithView(area, Catalog) };
 
-        public IObservable<object> Catalog(LayoutAreaHost area, RenderingContext ctx)
+        public object Catalog(LayoutAreaHost area, RenderingContext ctx)
         {
-            var collection = area.Stream.Reference.Id;
-            if (collection == null)
+            if (!area.Stream.Reference.Options.TryGetValue(Type, out var collection))
                 throw new InvalidOperationException("No type specified for catalog.");
             var typeSource = area.Workspace.DataContext.GetTypeSource(collection);
             if (typeSource == null)
                 throw new DataSourceConfigurationException(
                     $"Collection {collection} is not mapped in Address {Layout.Hub.Address}.");
-            return area.Workspace
-                .Stream
-                .Reduce(new CollectionReference(collection), area.Stream.Subscriber)
-                .Select(instances => DataGridControlExtensions.ToDataGrid(instances, typeSource.ElementType, x => x.AutoMapColumns()));
+            return
+                Controls.Stack()
+                    .WithView(Controls.Title(typeSource.DisplayName, 1))
+                    .WithView(Controls.Html(typeSource.Description))
+                    .WithView((a, _) => a
+                            .Workspace
+                            .Stream
+                            .Reduce(new CollectionReference(collection), area.Stream.Subscriber)
+                            .Select(changeItem =>
+                                area.ToDataGrid(
+                                    changeItem
+                                        .Value
+                                        .Instances
+                                        .Values,
+                                    typeSource.ElementType,
+                                    x => x.AutoMapColumns()
+                                )
+                            )
+                    )
+                ;
         }
 
         public LayoutDefinition Build() => Layout;

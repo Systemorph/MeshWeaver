@@ -20,7 +20,7 @@ namespace OpenSmc.Northwind.Domain;
 /// <param name="ShipRegion"></param>
 /// <param name="ShipPostalCode"></param>
 /// <param name="ShipCountry"></param>
-[Icon(OpenSmcIcons.Provider, "sm-archive")]
+[Icon(FluentIcons.Provider, "Album")]
 public record Order(
     [property: Key] int OrderId,
     [property: Dimension(typeof(Customer))] string CustomerId,

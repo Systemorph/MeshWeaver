@@ -2,7 +2,9 @@
 using System.ComponentModel;
 using System.Linq.Expressions;
 using System.Reflection;
+using OpenSmc.Data;
 using OpenSmc.Domain;
+using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.DataBinding;
 using OpenSmc.Reflection;
 
@@ -12,20 +14,23 @@ public static class DataGridControlExtensions
 {
     [ReplaceToDataGrid]
     public static DataGridControl ToDataGrid<T>(
-        this IReadOnlyCollection<T> elements,
+        this LayoutAreaHost area, 
+            IReadOnlyCollection<T> elements,
         Func<GenericDataGridControlBuilder<T>, GenericDataGridControlBuilder<T>> configuration
-    ) => configuration.Invoke(new(elements)).Build();
+    ) => configuration.Invoke(new(area.GetTypeSource(typeof(T)), elements)).Build();
+
+    private static ITypeSource GetTypeSource(this LayoutAreaHost area, Type type) => area.Workspace.DataContext.GetTypeSource(type);
 
     private static readonly MethodInfo ToDataGridMethod = ReflectionHelper.GetStaticMethodGeneric(
-        () => ToDataGrid<object>((object)null, default)
+        () => ToDataGrid<object>(null, (object)null, default)
     );
 
     [ReplaceToDataGrid]
-    public static DataGridControl ToDataGrid<T>(this IReadOnlyCollection<T> elements) =>
-        ToDataGrid(elements, x => x.AutoMapColumns());
+    public static DataGridControl ToDataGrid<T>(this LayoutAreaHost area, IReadOnlyCollection<T> elements) =>
+        ToDataGrid(area, elements, x => x.AutoMapColumns());
 
-    public static DataGridControl ToDataGrid(this object elements, Type elementType, Func<DataGridControlBuilder, DataGridControlBuilder> config) =>
-        config.Invoke(new(elementType, elements)).Build();
+    public static DataGridControl ToDataGrid(this LayoutAreaHost area, object elements, Type elementType, Func<DataGridControlBuilder, DataGridControlBuilder> config) =>
+        config.Invoke(new(area.GetTypeSource(elementType), elementType, elements)).Build();
 
 
 
@@ -35,27 +40,28 @@ public static class DataGridControlExtensions
         public override MethodInfo Replace(MethodInfo method) =>
             method.GetParameters().Length switch
             {
-                1 => ToDataGridMethodOne.MakeGenericMethod(method.GetGenericArguments()),
-                2 => ToDataGridMethod.MakeGenericMethod(method.GetGenericArguments()),
+                2 => ToDataGridMethodOne.MakeGenericMethod(method.GetGenericArguments()),
+                3 => ToDataGridMethod.MakeGenericMethod(method.GetGenericArguments()),
                 _ => throw new NotSupportedException()
             };
     }
 
     public static DataGridControl ToDataGrid<T>(
-        this object elements,
+        this LayoutAreaHost area, 
+            object elements,
         Func<GenericDataGridControlBuilder<T>, GenericDataGridControlBuilder<T>> configuration
-    ) => configuration.Invoke(new GenericDataGridControlBuilder<T>(elements)).Build();
+    ) => configuration.Invoke(new GenericDataGridControlBuilder<T>(area.GetTypeSource(typeof(T)), elements)).Build();
 
     private static readonly MethodInfo ToDataGridMethodOne =
-        ReflectionHelper.GetStaticMethodGeneric(() => ToDataGrid<object>((object)null));
+        ReflectionHelper.GetStaticMethodGeneric(() => ToDataGrid<object>(null, (object)null));
 
-    public static DataGridControl ToDataGrid<T>(this object elements) =>
-        ToDataGrid<T>(elements, x => x.AutoMapColumns());
+    public static DataGridControl ToDataGrid<T>(this LayoutAreaHost area, object elements) =>
+        area.ToDataGrid<T>(elements, x => x.AutoMapColumns());
     #endregion
 }
 
 
-public record DataGridControlBuilder<TBuilder>(Type ElementType, object Elements)
+public record DataGridControlBuilder<TBuilder>(ITypeSource TypeSource, Type ElementType, object Elements)
 where TBuilder : DataGridControlBuilder<TBuilder>
 {
     public TBuilder This => (TBuilder)this;
@@ -68,7 +74,7 @@ where TBuilder : DataGridControlBuilder<TBuilder>
                     !x.HasAttribute<NotVisibleAttribute>()
                     && x.GetCustomAttribute<BrowsableAttribute>() is not { Browsable: false }
                 )
-                .Select(x => new PropertyColumnBuilder(x).Column)
+                .Select(x => new PropertyColumnBuilder(TypeSource, x).Column)
                 .ToImmutableList()
         };
 
@@ -81,17 +87,17 @@ where TBuilder : DataGridControlBuilder<TBuilder>
     ) =>
         This with
         {
-            Columns = Columns.Add(config.Invoke(new PropertyColumnBuilder(property)).Column)
+            Columns = Columns.Add(config.Invoke(new PropertyColumnBuilder(TypeSource, property)).Column)
         };
 
     public DataGridControl Build() => new(Elements) { Columns = Columns };
 
 }
 
-public record DataGridControlBuilder(Type ElementType, object Elements) : DataGridControlBuilder<DataGridControlBuilder>(ElementType, Elements);
+public record DataGridControlBuilder(ITypeSource TypeSource, Type ElementType, object Elements) : DataGridControlBuilder<DataGridControlBuilder>(TypeSource, ElementType, Elements);
 
-public record GenericDataGridControlBuilder<T>(object Elements) : 
-    DataGridControlBuilder<GenericDataGridControlBuilder<T>>(typeof(T), Elements)
+public record GenericDataGridControlBuilder<T>(ITypeSource TypeSource, object Elements) : 
+    DataGridControlBuilder<GenericDataGridControlBuilder<T>>(TypeSource, typeof(T), Elements)
 {
 
 

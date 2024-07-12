@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using OpenSmc.Application.Styles;
 using OpenSmc.Domain;
 
 namespace OpenSmc.Northwind.Domain;
@@ -16,6 +17,7 @@ namespace OpenSmc.Northwind.Domain;
 /// <param name="UnitsOnOrder"></param>
 /// <param name="ReorderLevel"></param>
 /// <param name="Discontinued"></param>
+[Icon(FluentIcons.Provider, "Album")]
 public record Product(
     [property: Key] int ProductId,
     string ProductName,
