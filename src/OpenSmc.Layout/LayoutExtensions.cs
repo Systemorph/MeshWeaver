@@ -116,6 +116,34 @@ public static class LayoutExtensions
         string area
     ) => await synchronizationItems.GetControlStream(area).FirstAsync(x => x != null);
 
+    public static async Task<object> GetData(
+        this ISynchronizationStream<EntityStore> synchronizationItems,
+        string id
+    ) => await synchronizationItems.GetDataStream(id).FirstAsync(x => x != null);
+
+    public static IObservable<object> GetDataStream(
+        this ISynchronizationStream<EntityStore> stream,
+        JsonPointerReference reference
+    ) =>
+        stream
+            .Reduce(reference, stream.Hub.Address)
+            .Select(x => x.Value?.Deserialize<object>(stream.Hub.JsonSerializerOptions));
+
+    public static IObservable<object> GetDataStream(
+        this ISynchronizationStream<EntityStore> stream,
+        string id
+    ) => stream.Reduce(new EntityReference(LayoutAreaReference.Data, id), stream.Subscriber);
+
+    public static IObservable<T> GetDataStream<T>(
+        this ISynchronizationStream<EntityStore> stream,
+        string id
+    ) => stream.Reduce(new EntityReference(LayoutAreaReference.Data, id), stream.Subscriber).Cast<T>();
+
+    public static T GetData<T>(
+        this ISynchronizationStream<EntityStore> stream,
+        string id
+    ) => (T)stream.Current.Value.Reduce(new EntityReference(LayoutAreaReference.Data, id));
+
     public static IObservable<object> GetDataStream(
         this ISynchronizationStream<JsonElement> stream,
         JsonPointerReference reference

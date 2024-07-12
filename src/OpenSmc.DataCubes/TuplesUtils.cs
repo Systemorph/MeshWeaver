@@ -138,5 +138,7 @@ namespace OpenSmc.DataCubes
                     yield return desc.Descriptor;
             }
         }
+        public static IEnumerable<DimensionDescriptor> GetDimensionDescriptors() => 
+            PropertiesByDimension.Values.Select(d => d.Descriptor);
     }
 }
