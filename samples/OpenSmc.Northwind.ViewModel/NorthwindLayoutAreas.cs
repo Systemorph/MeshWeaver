@@ -213,6 +213,15 @@ public static class NorthwindLayoutAreas
                 )
             );
 
+    // high level idea of how to do filtered data-cube (12.07.2024, Alexander Kravets)
+    private static IObservable<IDataCube> FilteredDataCube(
+        this LayoutAreaHost area
+    ) => GetDataCube(area)
+        .CombineLatest(
+            area.GetDataStream<DataCubeFilter>(DataCubeFilterId),
+            (dataCube, filter) => dataCube.Filter() // todo apply DataCubeFilter from stream
+            );
+
     public static LayoutStackControl CustomerSummary(
         this LayoutAreaHost layoutArea,
         RenderingContext ctx
