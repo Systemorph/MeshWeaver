@@ -7,9 +7,12 @@
     Min="@ViewModel.Min"
     Size="@ViewModel.Size"
     Resizable="@ViewModel.Resizable"
-    Class="@Class"
-    >
-    <DispatchView ViewModel="@ChildControlArea.ViewModel" Stream="@Stream" Area="@ChildControlArea.Area" />
+    Class="@Class">
+    @* todo needed for async subviews, see how to get rid of it *@
+    @if (!Areas.IsEmpty())
+    {
+        <DispatchView ViewModel="@ChildControlArea.ViewModel" Stream="@Stream" Area="@ChildControlArea.Area"/>
+    }
 </FluentMultiSplitterPane>
 
 @code

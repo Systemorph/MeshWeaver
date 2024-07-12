@@ -74,6 +74,7 @@ public static class DataCubeLayoutExtensions
                 })
             );
 
+
         return area.Bind<DataCubeFilter, UiControl>(pointer.Pointer, f =>
             Stack()
                 .WithView(Header("Filter"))
@@ -83,11 +84,11 @@ public static class DataCubeLayoutExtensions
                         .WithOrientation(Orientation.Horizontal)
                         .WithHorizontalGap(16)
                         .WithView(Listbox(f.SelectedDimension)
-                                .WithOptions(
-                                    availableDimensions
-                                        .Select(d => new Option<string>(d.SystemName, d.DisplayName))
-                                        .ToArray()
-                                ))
+                            .WithOptions(
+                                availableDimensions
+                                    .Select(d => new Option<string>(d.SystemName, d.DisplayName))
+                                    .ToArray()
+                            ))
                         .WithView(Stack()
                             .WithClass("dimension-values")
                             .WithView(
@@ -101,7 +102,7 @@ public static class DataCubeLayoutExtensions
                             // .WithView((a, c) => ToDimensionValues(a, filterId))
                             .WithVerticalGap(16)
                         )
-            )
+                )
         );
     }
 
