@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using OpenSmc.Application.Styles;
 using OpenSmc.Data;
 using OpenSmc.DataCubes;
@@ -101,13 +102,7 @@ public static class NorthwindLayoutAreas
                             .WithView(
                                 Button("Analyze")
                                     .WithIconStart(FluentIcons.CalendarDataBar)
-                                    .WithClickAction(ctx =>
-                                    {
-                                        ctx.Layout.RenderArea(
-                                            context with { Area = $"{context.Area}/{ContextPanelArea}" },
-                                            OpenDataCubeContextPanel(layoutArea)
-                                        );
-                                    })
+                                    .WithClickAction(_ => layoutArea.OpenContextPanel(context))
                             )
                     )
                     .WithView(
@@ -138,12 +133,8 @@ public static class NorthwindLayoutAreas
                     .ToSplitterPane()
                     .WithClass("main-content-pane")
             )
-            // todo see how to avoid rendering dummy context panel at first
-            .WithView(ContextPanelArea, 
-                (a, c) => 
-                    Stack().ToContextPanel()
-                        .WithCollapsed(true)
-                        );
+            // todo see how to avoid using empty string
+            .WithView(ContextPanelArea, "");
     }
 
     public static LayoutStackControl SupplierSummary(
@@ -156,27 +147,23 @@ public static class NorthwindLayoutAreas
             .WithView(SupplierSummaryGrid);
     }
 
-    public static UiControl OpenDataCubeContextPanel(LayoutAreaHost area)
+    public static void OpenContextPanel(this LayoutAreaHost layout, RenderingContext context)
     {
-        return GetDataCube(area)
+        context = context with { Area = $"{context.Area}/{ContextPanelArea}" };
+        
+        var viewDefinition = GetDataCube(layout)
             .Select<IDataCube, ViewDefinition>(cube =>
                 (a, c) =>
-                    Task.FromResult<object>(cube.ToDataCubeFilter(a, c, DataCubeFilterId))
-            ).ToContextPanel();
-    }
+                    Task.FromResult<object>(cube
+                        .ToDataCubeFilter(a, c, DataCubeFilterId)
+                        .ToContextPanel()
+                    )
+            );
 
-    // todo avoid code-duplication with overload below
-    public static SplitterPaneControl ToContextPanel(this IObservable<ViewDefinition> viewDefinition)
-    {
-        return Stack()
-            .WithClass("context-panel")
-            .WithView(
-                Stack()
-                    .WithVerticalAlignment(VerticalAlignment.Top)
-                    .WithView(PaneHeader("Analyze").WithWeight(FontWeight.Bold))
-            )
-            .WithView(viewDefinition)
-            .ToSplitterPane(x => x.WithMin("200px"));
+        layout.RenderArea(
+            context,
+            new ViewElementWithViewDefinition(ContextPanelArea, viewDefinition)
+        );
     }
 
     public static SplitterPaneControl ToContextPanel(this UiControl content)
