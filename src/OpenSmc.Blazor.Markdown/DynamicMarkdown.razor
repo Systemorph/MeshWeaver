@@ -1,0 +1,31 @@
+@inherits BlazorView<DynamicMarkdownControl>
+
+@using System.Text.RegularExpressions;
+
+@inject MarkdownComponentParser Parser;
+
+@foreach (var contentItem in MarkdownContent)
+{
+    @if (contentItem is string html)
+    {
+        @((MarkupString)html);
+    }
+    else if (contentItem is LayoutAreaComponentInfo layoutArea)
+    {
+        <LayoutArea Address="@layoutArea.Address" Reference="@layoutArea.Reference" />
+    }
+}
+
+@code 
+{
+    private List<object> MarkdownContent { get; set; }
+    protected override void OnParametersSet()
+    {
+        base.OnParametersSet();
+        DataBind<string>(ViewModel.Data, x => MarkdownContent = Parser.ParseMarkdown(x));
+    }
+
+    private void ParseMarkdown(string markdown)
+    {
+    }
+}

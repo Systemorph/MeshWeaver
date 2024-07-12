@@ -1,0 +1,20 @@
+namespace OpenSmc.Documentation;
+
+public interface IDocumentationService
+{
+    string GetDocumentation(MemberInfo memberInfo);
+    string GetDocumentation(string memberPath);
+}
+
+public class DocumentationServcie : IDocumentationService
+{
+    public string GetDocumentation(MemberInfo memberInfo)
+    {
+        return GetDocumentation(memberInfo.GetDocumentationPath());
+    }
+
+    public string GetDocumentation(string memberPath)
+    {
+        return File.ReadAllText(memberPath);
+    }
+}

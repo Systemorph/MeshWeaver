@@ -19,7 +19,7 @@ public partial class LayoutArea
     private IWorkspace Workspace => Hub.GetWorkspace();
 
     [Parameter(CaptureUnmatchedValues = true)]
-    public Dictionary<string, object> AdditionalParameters { get; set; }
+    public Dictionary<string, object> Options { get; set; }
 
     public override async Task SetParametersAsync(ParameterView parameters)
     {
