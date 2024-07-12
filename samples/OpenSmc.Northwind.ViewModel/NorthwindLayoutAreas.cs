@@ -105,7 +105,7 @@ public static class NorthwindLayoutAreas
                                     {
                                         ctx.Layout.RenderArea(
                                             context with { Area = $"{context.Area}/{ContextPanelArea}" },
-                                            new ViewElementWithViewStream(ContextPanelArea, OpenDataCubeContextPanel)
+                                            OpenDataCubeContextPanel(layoutArea)
                                         );
                                     })
                             )
@@ -139,7 +139,11 @@ public static class NorthwindLayoutAreas
                     .WithClass("main-content-pane")
             )
             // todo see how to avoid rendering dummy context panel at first
-            .WithView(ContextPanelArea, (a, c) => Stack().ToContextPanel().WithCollapsed(true));
+            .WithView(ContextPanelArea, 
+                (a, c) => 
+                    Stack().ToContextPanel()
+                        .WithCollapsed(true)
+                        );
     }
 
     public static LayoutStackControl SupplierSummary(
@@ -152,13 +156,27 @@ public static class NorthwindLayoutAreas
             .WithView(SupplierSummaryGrid);
     }
 
-    public static IObservable<UiControl> OpenDataCubeContextPanel(LayoutAreaHost area, RenderingContext context)
+    public static UiControl OpenDataCubeContextPanel(LayoutAreaHost area)
     {
         return GetDataCube(area)
-            .Select(cube =>
-                cube.ToDataCubeFilter(area, context, DataCubeFilterId)
-                    .ToContextPanel()
-            );
+            .Select<IDataCube, ViewDefinition>(cube =>
+                (a, c) =>
+                    Task.FromResult<object>(cube.ToDataCubeFilter(a, c, DataCubeFilterId))
+            ).ToContextPanel();
+    }
+
+    // todo avoid code-duplication with overload below
+    public static SplitterPaneControl ToContextPanel(this IObservable<ViewDefinition> viewDefinition)
+    {
+        return Stack()
+            .WithClass("context-panel")
+            .WithView(
+                Stack()
+                    .WithVerticalAlignment(VerticalAlignment.Top)
+                    .WithView(PaneHeader("Analyze").WithWeight(FontWeight.Bold))
+            )
+            .WithView(viewDefinition)
+            .ToSplitterPane(x => x.WithMin("200px"));
     }
 
     public static SplitterPaneControl ToContextPanel(this UiControl content)
