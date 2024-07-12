@@ -4,38 +4,50 @@
 @using OpenSmc.Layout.DataGrid
 @inherits BlazorView<DataGridControl>
 
-<FluentDataGrid Items="@QueryableData" 
-                Virtualize="@ViewModel.Virtualize" 
-                ItemSize="@ViewModel.ItemSize" 
-                GenerateHeader="GenerateHeaderOption.Sticky"
-                ResizableColumns="@ViewModel.ResizableColumns"
-                Pagination="@Pagination">
-    @foreach (DataGridColumn column in ViewModel.Columns)
+<div style="display: table; table-layout: fixed; width: 100%;">
+    <div style="overflow-x: auto;">
+        <FluentDataGrid Items="@QueryableData" 
+                        Virtualize="@ViewModel.Virtualize" 
+                        ItemSize="@ViewModel.ItemSize" 
+                        GenerateHeader="GenerateHeaderOption.Sticky"
+                        ResizableColumns="@ViewModel.ResizableColumns"
+                        Pagination="@Pagination"
+                        Style="@Style">
+            @foreach (DataGridColumn column in ViewModel.Columns)
+            {
+
+                @((RenderFragment) (builder =>
+                {
+                    builder.OpenComponent(0, typeof(PropertyColumn<,>).MakeGenericType(typeof(JsonObject), column.GetPropertyType()));
+                    var index = 0;
+                    builder.AddComponentParameter(++index, nameof(PropertyColumn<object,object>.Property), GetPropertyExpression((dynamic)column));
+                    builder.AddAttribute(++index, "Title", column.Title);
+                    if (!string.IsNullOrEmpty(column.Format))
+                        builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Format), column.Format);
+                    if (column.Sortable)
+                        builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Sortable), column.Sortable);
+                    if(column.Tooltip)
+                        builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Tooltip), column.Tooltip);
+                    if (column.TooltipText != null)
+                        builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.TooltipText), (Func<JsonObject,string>)(x => column.TooltipText));
+
+                    builder.CloseComponent();
+                }))
+
+            }
+        </FluentDataGrid>
+    </div>
+</div>
+
+<div class="paginator">
+    @if (Pagination.TotalItemCount.HasValue && Pagination.TotalItemCount > Pagination.ItemsPerPage)
     {
-
-        @((RenderFragment) (builder =>
-        {
-            builder.OpenComponent(0, typeof(PropertyColumn<,>).MakeGenericType(typeof(JsonObject), column.GetPropertyType()));
-            var index = 0;
-            builder.AddComponentParameter(++index, nameof(PropertyColumn<object,object>.Property), GetPropertyExpression((dynamic)column));
-            builder.AddAttribute(++index, "Title", column.Title);
-            if (!string.IsNullOrEmpty(column.Format))
-                builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Format), column.Format);
-            if (column.Sortable)
-                builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Sortable), column.Sortable);
-            if(column.Tooltip)
-                builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Tooltip), column.Tooltip);
-            if (column.TooltipText != null)
-                builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.TooltipText), (Func<JsonObject,string>)(x => column.TooltipText));
-
-            builder.CloseComponent();
-        }))
-
+        <FluentPaginator State="@Pagination"/>
     }
-</FluentDataGrid>
-<FluentPaginator State="@Pagination" />
+</div>
 
 @code{
+    private string Style => $"min-width: {ViewModel.Columns.Count * 120}px";
     private PaginationState Pagination = new()
     {
         ItemsPerPage = 10
@@ -50,5 +62,10 @@
     {
         base.OnParametersSet();
         DataBind<object>(ViewModel.Data, x => QueryableData = ((System.Collections.IEnumerable)x)?.Cast<JsonObject>().AsQueryable());
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Pagination.TotalItemCountChanged += (sender, eventArgs) => StateHasChanged();
     }
 }
