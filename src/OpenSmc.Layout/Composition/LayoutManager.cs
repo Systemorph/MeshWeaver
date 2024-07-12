@@ -66,8 +66,10 @@ public static class LayoutManager
         ));
     }
 
-    private static void RenderArea(this LayoutAreaHost layoutArea, RenderingContext context, ViewElement viewElement)
+    public static void RenderArea(this LayoutAreaHost layoutArea, RenderingContext context, ViewElement viewElement)
     {
+        layoutArea.DisposeExistingAreas(context);
+
         switch (viewElement)
         {
             case ViewElementWithView view:
@@ -77,7 +79,8 @@ public static class LayoutManager
                 layoutArea.RenderArea(context, viewDefinition);
                 break;
             case ViewElementWithViewStream s:
-                layoutArea.Stream.AddDisposable(s.Stream.Invoke(layoutArea, context).Subscribe(c => layoutArea.RenderArea(context, c)));
+                layoutArea.AddDisposable(context.Area, s.Stream.Invoke(layoutArea, context)
+                    .Subscribe(c => layoutArea.RenderArea(context, c)));
                 break;
             default:
                 throw new NotSupportedException($"Unknown type: {viewElement.GetType().FullName}");

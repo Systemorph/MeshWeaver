@@ -172,6 +172,33 @@ public static class Controls
     )
         where TView : UiControl => BindEnumerable(area, data, id, dataTemplate);
 
+    public static TView Bind<T, TView>(
+        this LayoutAreaHost area,
+        string pointer,
+        Expression<Func<T, TView>> dataTemplate
+    )
+        where TView : UiControl 
+    {
+        var view = dataTemplate.Build(pointer, out var _);
+        if (view == null)
+            throw new ArgumentException("Data template was not specified.");
+        return view;
+    }
+
+    public static ItemTemplateControl BindEnumerable<T, TView>(
+        this LayoutAreaHost area,
+        string pointer,
+        Expression<Func<T, TView>> dataTemplate
+    )
+        where TView : UiControl
+    {
+        var view = dataTemplate.Build("/", out var _);
+        if (view == null)
+            throw new ArgumentException("Data template was not specified.");
+
+        return new ItemTemplateControl(view, pointer);
+    }
+
     private static readonly MethodInfo BindEnumerableMethod =
         ReflectionHelper.GetStaticMethodGeneric(
             () => BindEnumerable<object, UiControl>(null, default, null, default)

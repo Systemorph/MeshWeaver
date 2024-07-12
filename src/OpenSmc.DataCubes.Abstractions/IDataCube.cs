@@ -9,6 +9,8 @@ namespace OpenSmc.DataCubes
         
         new IDataCube Filter(params (string filter, object value)[] tuple);
 
+        IEnumerable<DimensionDescriptor> GetDimensionDescriptors();
+
         IEnumerable<DimensionDescriptor> GetDimensionDescriptors(bool isByRow, params string[] dimensions);
     }
 

@@ -6,6 +6,7 @@ using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
+using System.Collections.Immutable;
 
 namespace OpenSmc.Layout.Composition;
 
@@ -14,6 +15,20 @@ public record LayoutAreaHost : IDisposable
     public ISynchronizationStream<EntityStore, LayoutAreaReference> Stream { get; }
     public IMessageHub Hub => Stream.Hub;
     public IWorkspace Workspace => Hub.GetWorkspace();
+    private readonly Dictionary<object, object> variables = new ();
+
+    public T GetVariable<T>(object key) => (T)variables[key];
+    public bool ContainsVariable(object key) => variables.ContainsKey(key);
+    public void SetVariable(object key, object value) => variables[key] = value;
+    public T GetOrAddVariable<T>(object key, Func<T> factory)
+    {
+        if (!ContainsVariable(key))
+        {
+            SetVariable(key, factory.Invoke());
+        }
+
+        return GetVariable<T>(key);
+    }
 
     public LayoutAreaHost(
         ISynchronizationStream<WorkspaceState> workspaceStream,
@@ -140,4 +155,33 @@ public record LayoutAreaHost : IDisposable
             action();
             return Task.CompletedTask;
         });
+
+    public void DisposeExistingAreas(RenderingContext context)
+    {
+        foreach (var area in disposablesByArea.Where(x => x.Key.StartsWith(context.Area)).ToArray())
+        {
+            if (disposablesByArea.TryRemove(area.Key, out var disposables))
+            {
+                disposables.ForEach(d => d.Dispose());
+            }
+        }
+
+        Stream.Update(ws =>
+            new(
+                Stream.Owner,
+                Stream.Reference,
+                (ws ?? new()).Update(LayoutAreaReference.Areas,
+                    i => i
+                        with
+                        {
+                            Instances = i.Instances
+                                .Where(x => !((string)x.Key).StartsWith(context.Area))
+                                .ToImmutableDictionary()
+                        }),
+                Stream.Owner,
+                null,
+                Stream.Hub.Version
+            )
+        );
+    }
 }
