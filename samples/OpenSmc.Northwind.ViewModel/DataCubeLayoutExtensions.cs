@@ -98,7 +98,7 @@ public static class DataCubeLayoutExtensions
                                 // .WithImmediate(true)
                                 // .WithImmediateDelay(200)
                             )
-                            .WithView((a, c) => ToDimensionValues(a, filterId))
+                            // .WithView((a, c) => ToDimensionValues(a, filterId))
                             .WithVerticalGap(16)
                         )
             )
