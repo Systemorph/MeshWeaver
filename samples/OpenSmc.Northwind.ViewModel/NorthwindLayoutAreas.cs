@@ -1,12 +1,7 @@
-﻿using System.Collections.Immutable;
-using System.Reactive.Linq;
-using System.Reactive.Subjects;
+﻿using System.Reactive.Linq;
 using OpenSmc.Application.Styles;
-using OpenSmc.Collections;
 using OpenSmc.Data;
-using OpenSmc.Data.Serialization;
 using OpenSmc.DataCubes;
-using OpenSmc.Domain;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.DataGrid;
@@ -65,8 +60,6 @@ public static class NorthwindLayoutAreas
         );
     }
 
-
-
     private static IObservable<object> CategoryCatalog(
         LayoutAreaHost area,
         RenderingContext context
@@ -93,19 +86,6 @@ public static class NorthwindLayoutAreas
         new(nameof(CustomerSummary), FluentIcons.Person),
         new(nameof(SupplierSummary), FluentIcons.Person)
     };
-
-    private const string FilterItems = nameof(FilterItems);
-
-
-    private record Toolbar
-    {
-        public Toolbar(int Year)
-        {
-            this.Year = Year;
-        }
-
-        public int Year { get; init; }
-    }
 
     /// <summary>
     /// This is the main dashboard view. It shows....
@@ -311,35 +291,10 @@ public static class NorthwindLayoutAreas
                     area.Workspace.ReduceToTypes(typeof(Order))
                         .CombineLatest(
                             area.GetDataStream<Toolbar>(nameof(Toolbar)),
-                            area.GetDataStream<IEnumerable<object>>(FilterItems),
-                            (orders, tb, filterItems) =>
-                                area.ToDataGrid(orders
-                                    .Where(x => tb.Year == 0 || x.OrderDate.Year == tb.Year
-                                                // && !filterItems.Cast<FilterItem>().Where(c => c.Selected && c.Id == x.CustomerId).IsEmpty()
-                                                )
-                                    .OrderByDescending(y => y.OrderDate)
-                                    .Take(5)
-                                    .Select(order => new OrderSummaryItem(
-                                        area.Workspace.GetData<Customer>(
-                                            order.CustomerId
-                                        )?.CompanyName,
-                                        area.Workspace.GetData<OrderDetails>()
-                                            .Count(d => d.OrderId == order.OrderId),
-                                        order.OrderDate
-                                    ))
-                                    .ToArray(),
-                                    conf =>
-                                        conf.WithColumn(o => o.Customer)
-                                            .WithColumn(o => o.Products)
-                                            .WithColumn(
-                                                o => o.Purchased,
-                                                column => column.WithFormat("yyyy-MM-dd")
-                                            )
-                                    )
-                            )
                             (changeItem, tb) => (changeItem, tb))
                         .DistinctUntilChanged()
                         .Select(tuple =>
+                            area.ToDataGrid(
                             tuple.changeItem.Value.GetData<Order>()
                                 .Where(x => tuple.tb.Year == 0 || x.OrderDate.Year == tuple.tb.Year)
                                 .OrderByDescending(y => y.OrderDate)
@@ -352,8 +307,8 @@ public static class NorthwindLayoutAreas
                                         .Count(d => d.OrderId == order.OrderId),
                                     order.OrderDate
                                 ))
-                                .ToArray()
-                                .ToDataGrid(conf =>
+                                .ToArray(),
+                                conf =>
                                     conf.WithColumn(o => o.Customer)
                                         .WithColumn(o => o.Products)
                                         .WithColumn(
