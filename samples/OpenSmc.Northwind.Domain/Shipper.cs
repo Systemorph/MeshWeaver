@@ -10,7 +10,7 @@ namespace OpenSmc.Northwind.Domain;
 /// <param name="ShipperId"></param>
 /// <param name="CompanyName"></param>
 /// <param name="Phone"></param>
-[Icon(OpenSmcIcons.Provider, "sm-archive")]
+[Icon(FluentIcons.Provider, "Album")]
 public record Shipper([property: Key] int ShipperId, string CompanyName, string Phone) : INamed
 {
     string INamed.DisplayName => CompanyName;

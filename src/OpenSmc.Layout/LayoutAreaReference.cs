@@ -8,7 +8,6 @@ namespace OpenSmc.Layout;
 
 public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
 {
-    public string Id { get; set; }
     public Dictionary<string, StringValues> Options { get; init; }
     public const string Data = "data";
     public const string Areas = "areas";

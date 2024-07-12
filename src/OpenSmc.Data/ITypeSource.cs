@@ -14,6 +14,7 @@ public interface ITypeSource : IDisposable
     string Description { get; }
     string GroupName { get; }
 
+    string GetDescription(string memberName);
     ITypeSource WithInitialData(
         Func<
             WorkspaceReference<InstanceCollection>,

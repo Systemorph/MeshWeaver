@@ -65,6 +65,8 @@ public static class NorthwindLayoutAreas
         );
     }
 
+
+
     private static IObservable<object> CategoryCatalog(
         LayoutAreaHost area,
         RenderingContext context
@@ -79,7 +81,7 @@ public static class NorthwindLayoutAreas
                         Stack()
                             .WithOrientation(Orientation.Vertical)
                             .WithView(Html("<h2>Categories</h2>"))
-                            .WithView(c.ToDataGrid())
+                            .WithView(area.ToDataGrid(c))
                 )
             );
 
@@ -92,6 +94,25 @@ public static class NorthwindLayoutAreas
         new(nameof(SupplierSummary), FluentIcons.Person)
     };
 
+    private const string FilterItems = nameof(FilterItems);
+
+
+    private record Toolbar
+    {
+        public Toolbar(int Year)
+        {
+            this.Year = Year;
+        }
+
+        public int Year { get; init; }
+    }
+
+    /// <summary>
+    /// This is the main dashboard view. It shows....
+    /// </summary>
+    /// <param name="layoutArea"></param>
+    /// <param name="context"></param>
+    /// <returns></returns>
     public static object Dashboard(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         return Stack()
@@ -157,7 +178,7 @@ public static class NorthwindLayoutAreas
     public static IObservable<UiControl> OpenDataCubeContextPanel(LayoutAreaHost area, RenderingContext context)
     {
         return GetDataCube(area)
-            .Select(cube => 
+            .Select(cube =>
                 cube.ToDataCubeFilter(area, context, DataCubeFilterId)
                     .ToContextPanel()
             );
@@ -187,7 +208,7 @@ public static class NorthwindLayoutAreas
 
     private static IObservable<IDataCube<NorthwindDataCube>> GetDataCube(
         this LayoutAreaHost area
-    ) => area.GetOrAddVariable("dataCube", 
+    ) => area.GetOrAddVariable("dataCube",
         () => area
             .Workspace.ReduceToTypes(typeof(Order), typeof(OrderDetails), typeof(Product))
             .DistinctUntilChanged()
@@ -290,6 +311,32 @@ public static class NorthwindLayoutAreas
                     area.Workspace.ReduceToTypes(typeof(Order))
                         .CombineLatest(
                             area.GetDataStream<Toolbar>(nameof(Toolbar)),
+                            area.GetDataStream<IEnumerable<object>>(FilterItems),
+                            (orders, tb, filterItems) =>
+                                area.ToDataGrid(orders
+                                    .Where(x => tb.Year == 0 || x.OrderDate.Year == tb.Year
+                                                // && !filterItems.Cast<FilterItem>().Where(c => c.Selected && c.Id == x.CustomerId).IsEmpty()
+                                                )
+                                    .OrderByDescending(y => y.OrderDate)
+                                    .Take(5)
+                                    .Select(order => new OrderSummaryItem(
+                                        area.Workspace.GetData<Customer>(
+                                            order.CustomerId
+                                        )?.CompanyName,
+                                        area.Workspace.GetData<OrderDetails>()
+                                            .Count(d => d.OrderId == order.OrderId),
+                                        order.OrderDate
+                                    ))
+                                    .ToArray(),
+                                    conf =>
+                                        conf.WithColumn(o => o.Customer)
+                                            .WithColumn(o => o.Products)
+                                            .WithColumn(
+                                                o => o.Purchased,
+                                                column => column.WithFormat("yyyy-MM-dd")
+                                            )
+                                    )
+                            )
                             (changeItem, tb) => (changeItem, tb))
                         .DistinctUntilChanged()
                         .Select(tuple =>
