@@ -18,6 +18,7 @@
     <PackageVersion Include="JetBrains.Annotations" Version="2023.3.0" />
     <PackageVersion Include="JsonPatch.Net" Version="3.0.0" />
     <PackageVersion Include="JsonPath.Net" Version="0.8.1" />
+    <PackageVersion Include="Markdig" Version="0.37.0" />
     <PackageVersion Include="Microsoft.Bcl.AsyncInterfaces" Version="8.0.0" />
     <PackageVersion Include="System.Collections.Immutable" Version="8.0.0" />
     <PackageVersion Include="System.Text.Encodings.Web" Version="8.0.0" />

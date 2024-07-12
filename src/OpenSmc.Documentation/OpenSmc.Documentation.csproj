@@ -3,4 +3,7 @@
     <PackageReference Include="System.Collections.Immutable" />
     <PackageReference Include="System.Xml.XmlSerializer" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\OpenSmc.Layout\OpenSmc.Layout.csproj" />
+  </ItemGroup>
 </Project>
