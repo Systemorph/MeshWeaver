@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using System.Diagnostics;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -64,6 +65,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     .WithView(nameof(DataGrid), DataGrid)
                     .WithView(nameof(DataBoundCheckboxes), DataBoundCheckboxes)
                     .WithView(nameof(DisposalView), DisposalView)
+                    .WithView(nameof(AsyncView), AsyncView)
             );
     }
 
@@ -493,6 +495,40 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     // todo write data-disposal test
+
+    private static object AsyncView =>
+        Controls.Stack()
+            .WithView("subarea", Observable.Return<ViewDefinition>(async (area, context) =>
+            {
+                await Task.Delay(3000);
+                return "Ok";
+            }));
+
+    
+    [HubFact]
+    public async Task TestAsyncView()
+    {
+        var reference = new LayoutAreaReference(nameof(AsyncView));
+
+        var hub = GetClient();
+        var workspace = hub.GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            reference
+        );
+
+        var stopwatch = Stopwatch.StartNew();
+
+        var content = await stream.GetControlStream(reference.Area).FirstAsync(x => x != null);
+
+        var subAreaName = content.Should().BeOfType<LayoutStackControl>().Which.Areas.Should().HaveCount(1).And.Subject.First();
+        var subArea = await stream.GetControlStream(subAreaName).FirstAsync();
+
+        stopwatch.Stop();
+
+        subArea.Should().BeOfType<SpinnerControl>();
+        stopwatch.ElapsedMilliseconds.Should().BeLessThan(3000);
+    }
 }
 
 public static class TestAreas
