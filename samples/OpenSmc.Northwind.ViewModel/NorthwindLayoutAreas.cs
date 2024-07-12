@@ -7,7 +7,6 @@ using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.DataGrid;
 using OpenSmc.Layout.Domain;
 using OpenSmc.Messaging;
-using OpenSmc.Messaging.Serialization;
 using OpenSmc.Northwind.Domain;
 using OpenSmc.Pivot.Builder;
 using OpenSmc.Reporting.Models;
@@ -17,8 +16,6 @@ using static OpenSmc.Layout.Controls;
 namespace OpenSmc.Northwind.ViewModel;
 
 public record Toolbar(int Year);
-
-public record FilterItem(object Id, string Label, bool Selected);
 
 public static class NorthwindLayoutAreas
 {
@@ -44,7 +41,7 @@ public static class NorthwindLayoutAreas
                         .NorthwindViewsMenu()
                         .WithTypesCatalog()
                     ).WithCatalogView())
-        ).WithTypes(typeof(FilterItem));
+        );
     }
 
     private static DomainMenuBuilder NorthwindViewsMenu(this DomainMenuBuilder menu)

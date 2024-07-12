@@ -10,6 +10,8 @@ using static OpenSmc.Layout.Controls;
 
 namespace OpenSmc.Northwind.ViewModel;
 
+public record FilterItem(object Id, string Label, bool Selected);
+
 public record DataCubeFilter
 {
     public string SelectedDimension { get; init; }
