@@ -6,10 +6,13 @@ using OpenSmc.Layout;
 
 namespace OpenSmc.Documentation.Markdown;
 
-public class LayoutAreaComponentInfo(string Area, BlockParser blockParser)
+public class LayoutAreaComponentInfo(string area, BlockParser blockParser)
     : ContainerBlock(blockParser)
 {
     public ImmutableDictionary<string, StringValues> Options { get; set; }
+
+    public string Area => area;
+    public string DivId { get; } = Guid.NewGuid().ToString();
 
     public string SourceReference { get; set; }
     public object Address { get; set; }

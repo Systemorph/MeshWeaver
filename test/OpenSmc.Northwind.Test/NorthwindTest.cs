@@ -181,7 +181,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public async Task DocumentationTest()
+    public void DocumentationTest()
     {
         var assembly = typeof(Customer).Assembly;
         var resourceName = $"{assembly.GetName().Name}.xml";

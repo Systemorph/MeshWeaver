@@ -2,14 +2,16 @@ using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
 using Markdig.Parsers;
+using Markdig.Syntax;
 using Microsoft.Extensions.Primitives;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Documentation.Markdown;
 
-public partial class LayoutAreaParser : BlockParser
+public class LayoutAreaParser : BlockParser
 {
     private readonly Dictionary<string, Action<LayoutAreaComponentInfo, string>> FieldMappings;
+    public readonly List<LayoutAreaComponentInfo> Areas = new();
 
     public LayoutAreaParser(IMessageHub hub)
     {
@@ -56,7 +58,7 @@ public partial class LayoutAreaParser : BlockParser
 
         // Match fenced char
         var line = processor.Line;
-        if (line.NextChar() != '(' && line.NextChar() != '"')
+        if (line.NextChar() != '(' || line.NextChar() != '"')
             return BlockState.None;
 
         string area = string.Empty;
@@ -75,6 +77,7 @@ public partial class LayoutAreaParser : BlockParser
             return BlockState.None;
 
         var layoutAreaComponentInfo = new LayoutAreaComponentInfo(area, this);
+        Areas.Add(layoutAreaComponentInfo);
 
         c = line.PeekChar();
         if (c != '{')
@@ -158,5 +161,11 @@ public partial class LayoutAreaParser : BlockParser
 
         processor.NewBlocks.Push(layoutAreaComponentInfo);
         return BlockState.ContinueDiscard;
+    }
+
+    public override BlockState TryContinue(BlockProcessor processor, Block block)
+    {
+        //TODO Roland Bürgi 2024-07-14: We need to see if layout area goes across multiple lines.
+        return BlockState.Continue;
     }
 }
