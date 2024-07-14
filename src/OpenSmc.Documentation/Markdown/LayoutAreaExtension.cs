@@ -4,9 +4,7 @@ using OpenSmc.Messaging;
 
 namespace OpenSmc.Documentation.Markdown;
 
-public partial class LayoutAreaParser
-{
-    public class LayoutAreaExtension : IMarkdownExtension
+public class LayoutAreaExtension : IMarkdownExtension
 {
     private readonly IMessageHub hub;
 
@@ -26,4 +24,3 @@ public partial class LayoutAreaParser
         // Optional: Setup renderer if needed
     }
 }
-
