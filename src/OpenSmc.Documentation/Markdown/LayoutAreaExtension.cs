@@ -1,4 +1,5 @@
 using Markdig;
+using Markdig.Parsers;
 using Markdig.Renderers;
 using OpenSmc.Messaging;
 
@@ -6,21 +7,21 @@ namespace OpenSmc.Documentation.Markdown;
 
 public class LayoutAreaExtension : IMarkdownExtension
 {
-    private readonly IMessageHub hub;
+    public LayoutAreaParser Parser { get; }
 
     public LayoutAreaExtension(IMessageHub hub)
     {
-        this.hub = hub;
+        Parser = new LayoutAreaParser(hub);
     }
 
     public void Setup(MarkdownPipelineBuilder pipeline)
     {
         if (!pipeline.BlockParsers.Contains<LayoutAreaParser>())
-            pipeline.BlockParsers.Add(new LayoutAreaParser(hub));
+            pipeline.BlockParsers.Add(Parser);
     }
 
     public void Setup(MarkdownPipeline pipeline, IMarkdownRenderer renderer)
     {
-        // Optional: Setup renderer if needed
+        renderer.ObjectRenderers.AddIfNotAlready(new LayoutAreaRenderer());
     }
 }
