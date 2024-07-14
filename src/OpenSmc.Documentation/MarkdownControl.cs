@@ -7,5 +7,5 @@ public static class ModuleSetup
     public const string ModuleName = "OpenSmc.Documentation";
 }
 
-public record DynamicMarkdownControl(object Data)
-    : UiControl<DynamicMarkdownControl>(ModuleSetup.ModuleName, ModuleSetup.Version, Data);
+public record MarkdownControl(object Data)
+    : UiControl<MarkdownControl>(ModuleSetup.ModuleName, ModuleSetup.Version, Data);

@@ -1,32 +1,34 @@
 ﻿using FluentAssertions;
+using Markdig;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Documentation.Markdown;
 using OpenSmc.Hub.Fixture;
+using OpenSmc.Layout;
+using OpenSmc.Messaging;
 using Xunit.Abstractions;
 
 namespace OpenSmc.Documentation.Test;
 
 public class DynamicMarkdownTest(ITestOutputHelper output) : HubTestBase(output)
 {
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureHost(configuration).AddDocumentation();
+    }
 
     [HubFact]
     public void TestMarkdownParser()
     {
         // Define a sample markdown string
-        var markdown =
-            @"
-[LayoutArea Area=""Main"", Options=""{ 'key': 'value' }""]
-[LayoutArea Area=""Sidebar"", SourceReference=""SomeReference""]";
+        var markdown = "@(\"MyArea\")";
 
         // Assuming ParseMarkdown is a method of a class that parses the markdown
-        var parser = new MarkdownComponentParser(GetHost());
-        var components = parser.ParseMarkdown(markdown);
+        var pipeline = new MarkdownPipelineBuilder()
+            .UseAdvancedExtensions()
+            .Use<LayoutAreaExtension>(new LayoutAreaExtension(GetHost()))
+            .Build();
 
         // Verify the results
-        components.Should().NotBeNull();
-        components.Should().HaveCount(2);
-        components[0].Should().BeOfType<LayoutAreaComponentInfo>();
-        ((LayoutAreaComponentInfo)components[0]).Area.Should().Be("Main");
-        ((LayoutAreaComponentInfo)components[0]).Options.Should().ContainKey("key");
-
+        Markdig.Markdown.ToHtml(markdown, pipeline).Should().Be("<div>MyArea</div>");
     }
 }
