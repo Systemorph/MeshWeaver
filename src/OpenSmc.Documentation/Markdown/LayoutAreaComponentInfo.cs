@@ -1,21 +1,25 @@
 ﻿using System.Collections.Immutable;
+using Markdig.Parsers;
+using Markdig.Syntax;
 using Microsoft.Extensions.Primitives;
 using OpenSmc.Layout;
 
 namespace OpenSmc.Documentation.Markdown;
 
-public record LayoutAreaComponentInfo(string Area)
+public class LayoutAreaComponentInfo(string Area, BlockParser blockParser)
+    : ContainerBlock(blockParser)
 {
-    public ImmutableDictionary<string,StringValues> Options { get; init; }
+    public ImmutableDictionary<string, StringValues> Options { get; set; }
 
-    public string SourceReference { get; init; }
-    public object Address { get; init; }
-    public object Id { get; init; }
+    public string SourceReference { get; set; }
+    public object Address { get; set; }
+    public object Id { get; set; }
 
-    public SourceInfo Source { get; init; }
+    public SourceInfo Source { get; set; }
 
-    public DisplayMode DisplayMode { get; init; }
-    public LayoutAreaReference Reference => new LayoutAreaReference(Area) { Id = Id, Options = Options };
+    public DisplayMode DisplayMode { get; set; }
+    public LayoutAreaReference Reference =>
+        new LayoutAreaReference(Area) { Id = Id, Options = Options };
 }
 
 public record SourceInfo(string Type, string Reference, string Address);

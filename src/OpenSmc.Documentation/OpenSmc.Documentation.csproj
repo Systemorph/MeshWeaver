@@ -1,5 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <PackageReference Include="Markdig" />
     <PackageReference Include="System.Collections.Immutable" />
     <PackageReference Include="System.Xml.XmlSerializer" />
   </ItemGroup>
