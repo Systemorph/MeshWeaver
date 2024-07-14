@@ -10,7 +10,8 @@ namespace OpenSmc.Layout;
 public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
 {
     public object Id { get; init; }
-    public IReadOnlyDictionary<string, StringValues> Options { get; init; }
+    public IReadOnlyDictionary<string, StringValues> Options { get; init; } =
+        ImmutableDictionary<string, StringValues>.Empty;
     public const string Data = "data";
     public const string Areas = "areas";
 
@@ -24,7 +25,7 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
     {
         if (other is null)
             return false;
-        return Id.Equals(other.Id) && Options.SequenceEqual(other.Options);
+        return Equals(Id, other.Id) && Options.SequenceEqual(other.Options);
     }
 
     public override int GetHashCode()
