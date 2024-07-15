@@ -99,7 +99,7 @@ public static class DataCubeLayoutExtensions
                                 // .WithImmediate(true)
                                 // .WithImmediateDelay(200)
                             )
-                            // .WithView((a, c) => ToDimensionValues(a, filterId))
+                            .WithView((a, c) => ToDimensionValues(a, filterId))
                             .WithVerticalGap(16)
                         )
                 )
@@ -119,7 +119,7 @@ public static class DataCubeLayoutExtensions
             .Select(f => f.SelectedDimension)
             .DistinctUntilChanged()
         .Select(selectedDimension => 
-                area.BindEnumerable<FilterItem, CheckBoxControl>(LayoutAreaReference.GetDataPointer(filterId) + $"/FilterItems/{selectedDimension}",
+                area.BindEnumerable<FilterItem, CheckBoxControl>(LayoutAreaReference.GetDataPointer(filterId) + $"/filterItems/{selectedDimension}",
                 f => CheckBox(f.Label, f.Selected)
             ));
     }
