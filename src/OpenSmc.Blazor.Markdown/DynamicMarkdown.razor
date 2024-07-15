@@ -1,34 +1,35 @@
-@using System.Text.RegularExpressions
-
 @inherits BlazorView<MarkdownControl>
 
-@foreach (var contentItem in MarkdownContent)
+@if(Html != null)
 {
-    @if (contentItem is string html)
-    {
-        @((MarkupString)html);
-    }
-    else if (contentItem is LayoutAreaComponentInfo layoutArea)
-    {
-        <LayoutArea Address="@layoutArea.Address" Reference="@layoutArea.Reference" />
-    }
+    @((MarkupString)Html) 
+}
+
+
+@foreach (var component in LayoutAreaComponents)
+{
+        <LayoutArea Address="@Stream.Owner" Reference="@component.Reference" />
 }
 
 @code 
 {
-    private List<object> MarkdownContent { get; set; }
+    private IReadOnlyList<LayoutAreaComponentInfo> LayoutAreaComponents { get; set; } = [];
+    private string Html { get; set; }
     protected override void OnParametersSet()
     {
         base.OnParametersSet();
-        DataBind<string>(ViewModel.Data, x => MarkdownContent = ParseListOfModels(x));
+        DataBind<string>(ViewModel.Data, RenderMarkdown);
     }
 
-    private List<object> ParseListOfModels(string markdown)
+    private void RenderMarkdown(string markdown)
     {
-         var pipeline = new MarkdownPipelineBuilder()
+        var layoutAreaExtension = new LayoutAreaExtension(Stream.Hub);
+        var pipeline = new MarkdownPipelineBuilder()
             .UseAdvancedExtensions()
-            .Use<LayoutAreaExtension>(new LayoutAreaExtension(Stream.Hub))
+            .Use(layoutAreaExtension)
             .Build();
-return null;
+        Html = Markdown.ToHtml(markdown, pipeline);
+        LayoutAreaComponents = layoutAreaExtension.Parser.Areas;
     }
+
 }

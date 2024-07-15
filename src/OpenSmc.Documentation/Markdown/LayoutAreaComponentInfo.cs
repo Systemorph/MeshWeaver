@@ -22,7 +22,7 @@ public class LayoutAreaComponentInfo(string area, BlockParser blockParser)
 
     public DisplayMode DisplayMode { get; set; }
     public LayoutAreaReference Reference =>
-        new LayoutAreaReference(Area) { Id = Id, Options = Options };
+        new (Area) { Id = Id, Options = Options };
 }
 
 public record SourceInfo(string Type, string Reference, string Address);
