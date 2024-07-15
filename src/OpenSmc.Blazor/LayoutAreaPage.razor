@@ -1,9 +1,7 @@
 @page "/app/{Application}/{Environment}/{Area}/{Id?}"
-@inject NavigationManager NavigationManager
-@using OpenSmc.Application;
-@using OpenSmc.Layout;
-@using Microsoft.AspNetCore.WebUtilities
+@using System.Collections.Immutable
 @using Microsoft.Extensions.Primitives
+@using OpenSmc.Application
 @using OpenSmc.Utils
 
 <PageTitle>@PageTitle</PageTitle>
@@ -21,14 +19,12 @@
     public string Id { get; set; }
 
     private string PageTitle => $"{Area.Wordify()} - {Application}";
-
-    public Dictionary<string, StringValues> Options => 
-        QueryHelpers.ParseQuery(NavigationManager.ToAbsoluteUri(NavigationManager.Uri).Query);
-
+    [Parameter(CaptureUnmatchedValues = true)] public IReadOnlyDictionary<string, object> Options { get; set; }
     private object Address => new ApplicationAddress(Application, Environment);
 
     private LayoutAreaReference Reference => new(Area)
     {
-        Options = Options,
+        Options = Options?.ToImmutableDictionary() 
+                  ?? ImmutableDictionary<string, object>.Empty,
     };
 }

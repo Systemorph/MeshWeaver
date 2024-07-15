@@ -1,5 +1,4 @@
-﻿using System.Reactive.Linq;
-using System.Text.Json;
+﻿using System.Text.Json;
 using Json.Patch;
 using Json.Pointer;
 using Microsoft.AspNetCore.Components;
@@ -44,7 +43,7 @@ namespace OpenSmc.Blazor
         private readonly List<IDisposable> bindings = new();
         protected virtual void DataBind<T>(object value, Action<T> bindingAction)
         {
-            bindings.Add(GetObservable<T>(value).Subscribe(bindingAction));
+            bindings.Add(Stream.GetObservable<T>(ViewModel.DataContext, value).Subscribe(bindingAction));
         }
         protected void UpdatePointer<T>(T value, JsonPointerReference reference)
         {
@@ -94,32 +93,11 @@ namespace OpenSmc.Blazor
                 DataBind<object>(ViewModel.Skin, x => Skin = x);
                 DataBind<string>(ViewModel.Label, x => Label = x);
                 DataBind<string>(ViewModel.Class, x => Class = x);
+                DataBind<string>(ViewModel.Style, x => Style = x);
             }
         }
 
-        protected virtual IObservable<T> GetObservable<T>(object value)
-        {
-            if (value is null)
-                return Observable.Empty<T>();
-            if (value is IObservable<T> observable)
-                return observable;
-            if (value is JsonPointerReference reference)
-                return Stream.Where(x => !Hub.Address.Equals(x.ChangedBy))
-                    .Select(x => Extract<T>(x, reference));
-            if (value is T t)
-                return Observable.Return(t);
-            // TODO V10: Should we add more ways to convert? Converting to primitives? (11.06.2024, Roland Bürgi)
-            throw new InvalidOperationException($"Cannot bind to {value.GetType().Name}");
-        }
 
-        private TResult Extract<TResult>(ChangeItem<JsonElement> changeItem, JsonPointerReference reference)
-        {
-            if (reference == null)
-                return default;
-            var pointer = JsonPointer.Parse(ViewModel.DataContext + reference.Pointer.TrimEnd('/'));
-            var ret = pointer.Evaluate(changeItem.Value);
-            return ret == null ? default : ret.Value.Deserialize<TResult>(Stream.Hub.JsonSerializerOptions);
-        }
 
         protected void OnClick()
         {

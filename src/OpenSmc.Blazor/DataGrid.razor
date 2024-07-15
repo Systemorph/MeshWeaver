@@ -47,7 +47,17 @@
 </div>
 
 @code{
-    private string Style => $"min-width: {ViewModel.Columns.Count * 120}px";
+    protected override void OnParametersSet()
+    {
+        base.OnParametersSet();
+    }
+
+    protected override void DataBind<T>(object value, Action<T> bindingAction)
+    {
+        base.DataBind(value, bindingAction);
+        Style ??= $"min-width: {ViewModel.Columns.Count * 120}px";
+    }
+
     private PaginationState Pagination = new()
     {
         ItemsPerPage = 10

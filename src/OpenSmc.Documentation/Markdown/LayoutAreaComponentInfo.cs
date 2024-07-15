@@ -1,7 +1,6 @@
 ﻿using System.Collections.Immutable;
 using Markdig.Parsers;
 using Markdig.Syntax;
-using Microsoft.Extensions.Primitives;
 using OpenSmc.Layout;
 
 namespace OpenSmc.Documentation.Markdown;
@@ -9,7 +8,7 @@ namespace OpenSmc.Documentation.Markdown;
 public class LayoutAreaComponentInfo(string area, BlockParser blockParser)
     : ContainerBlock(blockParser)
 {
-    public ImmutableDictionary<string, StringValues> Options { get; set; }
+    public ImmutableDictionary<string, object> Options { get; set; }
 
     public string Area => area;
     public string DivId { get; } = Guid.NewGuid().ToString();
