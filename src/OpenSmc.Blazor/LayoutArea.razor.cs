@@ -27,7 +27,7 @@ public partial class LayoutArea : IDisposable
     protected override void OnParametersSet()
     {
         base.OnParametersSet();
-        if(Equals(Stream?.Owner, Address) && Equals(Stream?.Reference, Reference))
+        if(Stream != null && Equals(Stream?.Owner, Address) && Equals(Stream?.Reference, Reference))
             return;
 
         if (Address == null)
@@ -65,5 +65,7 @@ public partial class LayoutArea : IDisposable
     {
         subscription?.Dispose();
         Stream?.Dispose();
+        Stream = null;
+        subscription = null;
     }
 }
