@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Reactive.Linq;
+using System.Text.Json;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Data;
@@ -8,7 +9,7 @@ using OpenSmc.Messaging;
 
 namespace OpenSmc.Blazor;
 
-public partial class LayoutArea
+public partial class LayoutArea : IDisposable
 {
     [Inject]
     private IMessageHub Hub { get; set; }
@@ -21,49 +22,18 @@ public partial class LayoutArea
     [Parameter(CaptureUnmatchedValues = true)]
     public Dictionary<string, object> Options { get; set; }
 
-    public override async Task SetParametersAsync(ParameterView parameters)
+    private IDisposable subscription;
+
+    protected override void OnParametersSet()
     {
-        await base.SetParametersAsync(parameters);
-        if (ViewModel != null)
-        {
-            Address ??= ViewModel.Address;
-            Reference ??= ViewModel.Reference;
-        }
+        base.OnParametersSet();
+        if(Equals(Stream?.Owner, Address) && Equals(Stream?.Reference, Reference))
+            return;
 
         if (Address == null)
             throw new ArgumentNullException(nameof(Address), "Address cannot be null.");
         if (Reference == null)
             throw new ArgumentNullException(nameof(Reference), "Reference cannot be null.");
-    }
-
-    private void Render(ChangeItem<JsonElement> item)
-    {
-        var newControl = GetControl(item, Reference.Area);
-        if (newControl == null)
-            if (RootControl == null)
-                return;
-            else
-            {
-                RootControl = null;
-                StateHasChanged();
-                return;
-            }
-
-        if (newControl.Equals(RootControl))
-            return;
-        Logger.LogDebug(
-            "Changing area {Reference} of {Address} to {Instance}",
-            Reference,
-            Address,
-            newControl
-        );
-        RootControl = newControl;
-        StateHasChanged();
-    }
-
-    protected override void OnParametersSet()
-    {
-        base.OnParametersSet();
 
         RootControl = null;
         Stream?.Dispose();
@@ -71,7 +41,29 @@ public partial class LayoutArea
         Stream = Address.Equals(Hub.Address)
             ? Workspace.Stream.Reduce<JsonElement, LayoutAreaReference>(Reference, Address)
             : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address, Reference);
-        Disposables.Add(Stream);
-        Stream.Subscribe(item => InvokeAsync(() => Render(item)));
+
+        subscription = Stream.GetControlStream(Reference.Area)
+            .DistinctUntilChanged()
+            .Subscribe(item => InvokeAsync(() => Render(item as UiControl)));
+    }
+
+
+    private void Render(UiControl control)
+    {
+        Logger.LogDebug(
+            "Changing area {Reference} of {Address} to {Instance}",
+            Reference,
+            Address,
+            control
+        );
+        RootControl = control;
+        StateHasChanged();
+    }
+
+
+    public void Dispose()
+    {
+        subscription?.Dispose();
+        Stream?.Dispose();
     }
 }

@@ -19,9 +19,9 @@
     private Typography typo;
     private FontWeight weight;
 
-    protected override void OnParametersSet()
+    protected override void BindData()
     {
-        base.OnParametersSet();
+        base.BindData();
         DataBind<string>(ViewModel.Data, x => data = x);
         DataBind<Layout.HorizontalAlignment>(ViewModel.Alignment, x => alignment = x.ToFluentHorizontalAlignment());
         DataBind<bool>(ViewModel.Disabled, x => disabled = x);

@@ -19,7 +19,7 @@ public abstract class ContainerView<TViewModel> : BlazorView<TViewModel>
 
     private void Render(ChangeItem<JsonElement> item)
     {
-        var newAreas = ViewModel.Areas.Select(area => new RenderedArea(area,GetControl(item, area)))
+        var newAreas = ViewModel.Areas.Select(area => new RenderedArea(area,Stream.GetControl(item, area)))
             .Where(x => x.ViewModel != null).ToArray();
         if (Areas.Count == newAreas.Length && Areas.Zip(newAreas, (x, y) => x.Equals(y)).All(x => x))
             return;

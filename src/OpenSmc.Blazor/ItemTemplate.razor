@@ -26,7 +26,7 @@
     {
         await base.OnParametersSetAsync();
         DataBind<IReadOnlyCollection<object>>(new JsonPointerReference(""), d => Data = d);
-        view = GetControl(await Stream.FirstAsync(), ViewArea);
+        view = Stream.GetControl(await Stream.FirstAsync(), ViewArea);
     }
 
     private UiControl GetViewWithPath(int i) => ViewModel.View with { DataContext = $"{ViewModel.DataContext}/{i}" };

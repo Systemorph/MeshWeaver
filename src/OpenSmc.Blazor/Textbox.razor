@@ -27,9 +27,9 @@
     private Icon IconStart { get; set; }
     private Icon IconEnd { get; set; }
 
-    protected override void OnParametersSet()
+    protected override void BindData()
     {
-        base.OnParametersSet();
+        base.BindData();
 
         if (ViewModel != null)
         {

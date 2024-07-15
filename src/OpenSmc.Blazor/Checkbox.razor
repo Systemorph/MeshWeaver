@@ -19,9 +19,9 @@
 
     private JsonPointerReference Pointer { get; set; }
 
-    protected override void OnParametersSet()
+    protected override void BindData()
     {
-        base.OnParametersSet();
+        base.BindData();
         if (ViewModel != null)
         {
             DataBind<bool>(ViewModel.Data, x => IsChecked = x);

@@ -1,7 +1,15 @@
-﻿using Microsoft.FluentUI.AspNetCore.Components;
+﻿using System.Text.Json;
+using Microsoft.FluentUI.AspNetCore.Components;
 using OpenSmc.Application.Styles;
+using OpenSmc.Data.Serialization;
+using OpenSmc.Layout;
 using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons;
-
+using JustifyContent=Microsoft.FluentUI.AspNetCore.Components.JustifyContent;
+using Orientation=Microsoft.FluentUI.AspNetCore.Components.Orientation;
+using SelectPosition=Microsoft.FluentUI.AspNetCore.Components.SelectPosition;
+using HorizontalAlignment=Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment;
+using Typography=Microsoft.FluentUI.AspNetCore.Components.Typography;
+using FontWeight=Microsoft.FluentUI.AspNetCore.Components.FontWeight;
 namespace OpenSmc.Blazor;
 
 public static class ViewModelExtensions
@@ -80,4 +88,13 @@ public static class ViewModelExtensions
             Layout.FontWeight.Bolder => FontWeight.Bolder,
             _ => FontWeight.Normal
         };
+
+    public static  UiControl GetControl(this ISynchronizationStream<JsonElement> stream, ChangeItem<JsonElement> item, string area)
+    {
+        return item.Value.TryGetProperty(LayoutAreaReference.Areas, out var controls)
+               && controls.TryGetProperty(JsonSerializer.Serialize(area), out var node)
+            ? node.Deserialize<UiControl>(stream.Hub.JsonSerializerOptions)
+            : null;
+    }
+
 }

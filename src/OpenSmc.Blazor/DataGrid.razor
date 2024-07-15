@@ -58,9 +58,9 @@
     {
         return e => e.ContainsKey(column.Property) ? e[column.Property].Deserialize<T>(Stream.Hub.JsonSerializerOptions) : default;
     }
-    protected override void OnParametersSet()
+    protected override void BindData()
     {
-        base.OnParametersSet();
+        base.BindData();
         DataBind<object>(ViewModel.Data, x => QueryableData = ((System.Collections.IEnumerable)x)?.Cast<JsonObject>().AsQueryable());
     }
 

@@ -45,11 +45,6 @@ if (!app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 app.UseStaticFiles();
 var docSitePath = Path.Combine(builder.Environment.ContentRootPath, "..\\OpenSmc.Northwind.Docs\\_site");
-app.UseStaticFiles(new StaticFileOptions
-{
-    RequestPath = "/docs",
-    FileProvider = new PhysicalFileProvider(docSitePath),
-});
 
 app.UseRouting();
 

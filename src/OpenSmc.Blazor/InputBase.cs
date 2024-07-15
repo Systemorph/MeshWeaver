@@ -28,9 +28,9 @@ public abstract class InputBase<TViewModel, TData> : BlazorView<TViewModel>
     private JsonPointerReference DataPointer { get; set; }
 
 
-    protected override void OnParametersSet()
+    protected override void BindData()
     {
-        base.OnParametersSet();
+        base.BindData();
         if (ViewModel != null)
         {
             DataBind<TData>(ViewModel.Data, x => data = x);
