@@ -15,7 +15,7 @@ namespace OpenSmc.Layout.Domain
                     .WithTypesCatalog()
             ).WithCatalogView();
 
-        public DomainViewsBuilder WithMenu(Func<DomainMenuBuilder, DomainMenuBuilder> menuConfig, string areaName = nameof(DomainViews.DomainMenu))
+        public DomainViewsBuilder WithMenu(Func<DomainMenuBuilder, DomainMenuBuilder> menuConfig, string areaName = nameof(DomainViews.NavMenu))
             // ReSharper disable once WithExpressionModifiesAllMembers
             => this with { Layout = menuConfig.Invoke(new(areaName, Layout)).Build() };
 
@@ -24,7 +24,7 @@ namespace OpenSmc.Layout.Domain
 
         public object Catalog(LayoutAreaHost area, RenderingContext ctx)
         {
-            if (!area.Stream.Reference.Options.TryGetValue(Type, out var collection))
+            if (area.Stream.Reference.Id is not string collection)
                 throw new InvalidOperationException("No type specified for catalog.");
             var typeSource = area.Workspace.DataContext.GetTypeSource(collection);
             if (typeSource == null)

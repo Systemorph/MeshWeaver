@@ -1,5 +1,4 @@
-﻿using System.Collections.Immutable;
-
+﻿
 namespace OpenSmc.Layout.DataGrid;
 
 public record DataGridControl(object Data)
@@ -9,6 +8,7 @@ public record DataGridControl(object Data)
     public bool Virtualize { get; init; } = false;
     public float ItemSize { get; init; } = 50;
     public bool ResizableColumns { get; init; } = true;
+
 }
 
 public abstract record DataGridColumn

@@ -10,6 +10,9 @@ using SelectPosition=Microsoft.FluentUI.AspNetCore.Components.SelectPosition;
 using HorizontalAlignment=Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment;
 using Typography=Microsoft.FluentUI.AspNetCore.Components.Typography;
 using FontWeight=Microsoft.FluentUI.AspNetCore.Components.FontWeight;
+using OpenSmc.Data;
+using System.Reactive.Linq;
+using Json.Pointer;
 namespace OpenSmc.Blazor;
 
 public static class ViewModelExtensions
@@ -95,6 +98,30 @@ public static class ViewModelExtensions
                && controls.TryGetProperty(JsonSerializer.Serialize(area), out var node)
             ? node.Deserialize<UiControl>(stream.Hub.JsonSerializerOptions)
             : null;
+    }
+
+    public static IObservable<T> GetObservable<T>(this ISynchronizationStream<JsonElement> stream, string dataContext, object value)
+    {
+        if (value is null)
+            return Observable.Empty<T>();
+        if (value is IObservable<T> observable)
+            return observable;
+        if (value is JsonPointerReference reference)
+            return stream.Where(x => !stream.Hub.Address.Equals(x.ChangedBy))
+                .Select(x => stream.Extract<T>(dataContext + reference.Pointer.TrimEnd('/'), x, reference));
+        if (value is T t)
+            return Observable.Return(t);
+        // TODO V10: Should we add more ways to convert? Converting to primitives? (11.06.2024, Roland Bürgi)
+        throw new InvalidOperationException($"Cannot bind to {value.GetType().Name}");
+    }
+
+    private static TResult Extract<TResult>(this ISynchronizationStream<JsonElement> stream, string basePath, ChangeItem<JsonElement> changeItem, JsonPointerReference reference)
+    {
+        if (reference == null)
+            return default;
+        var pointer = JsonPointer.Parse(basePath);
+        var ret = pointer.Evaluate(changeItem.Value);
+        return ret == null ? default : ret.Value.Deserialize<TResult>(stream.Hub.JsonSerializerOptions);
     }
 
 }

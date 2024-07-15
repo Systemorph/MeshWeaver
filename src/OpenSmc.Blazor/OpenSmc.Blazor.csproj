@@ -10,6 +10,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\OpenSmc.Application.Contract\OpenSmc.Application.Contract.csproj" />
     <ProjectReference Include="..\OpenSmc.Layout\OpenSmc.Layout.csproj" />
   </ItemGroup>
 

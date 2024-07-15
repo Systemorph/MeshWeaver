@@ -1,8 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Json.Pointer;
-using Microsoft.Extensions.Primitives;
 using OpenSmc.Data;
 
 namespace OpenSmc.Layout;
@@ -10,8 +8,7 @@ namespace OpenSmc.Layout;
 public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
 {
     public object Id { get; init; }
-    public IReadOnlyDictionary<string, StringValues> Options { get; init; } =
-        ImmutableDictionary<string, StringValues>.Empty;
+    public IReadOnlyDictionary<string, object> Options { get; init; } = ImmutableDictionary<string, object>.Empty;
     public const string Data = "data";
     public const string Areas = "areas";
 

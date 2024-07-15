@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
 using Markdig.Parsers;
@@ -24,7 +24,7 @@ public class LayoutAreaParser : BlockParser
                 "Options",
                 (area, foundValue) =>
                     area.Options = JsonSerializer.Deserialize<
-                        ImmutableDictionary<string, StringValues>
+                        ImmutableDictionary<string, object>
                     >(foundValue, hub.JsonSerializerOptions)
             },
             { "SourceReference", (a, foundValue) => a.SourceReference = foundValue },
