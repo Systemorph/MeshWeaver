@@ -1,8 +1,12 @@
 @page "/app/{Application}/{Environment}/{Area}/{Id?}"
 @using System.Collections.Immutable
-@using Microsoft.Extensions.Primitives
+@using System.Reactive.Subjects
+@using Microsoft.Extensions.DependencyInjection
 @using OpenSmc.Application
+@using OpenSmc.Messaging
 @using OpenSmc.Utils
+
+@inject IMessageHub Hub
 
 <PageTitle>@PageTitle</PageTitle>
 
@@ -27,4 +31,12 @@
         Options = Options?.ToImmutableDictionary() 
                   ?? ImmutableDictionary<string, object>.Empty,
     };
+
+    protected override void OnParametersSet()
+    {
+        base.OnParametersSet();
+        var state = Hub.ServiceProvider.GetRequiredService<ReplaySubject<LayoutAreaPageState>>();
+        state.OnNext(new(Address, Reference));
+    }
+
 }

@@ -1,6 +1,8 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using Microsoft.DotNet.Interactive.Formatting;
+using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Client;
@@ -18,8 +20,11 @@ public static class BlazorClientExtensions
     public static MessageHubConfiguration AddBlazor(
         this MessageHubConfiguration config,
         Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration
-    ) => config.AddLayoutClient(c => configuration.Invoke(c.WithView(DefaultFormatting)));
-
+    ) => config
+        .AddLayoutClient(c => configuration.Invoke(c.WithView(DefaultFormatting)))
+        .WithServices(services => 
+            services.AddScoped<ReplaySubject<LayoutAreaPageState>>(_ => new(1)))
+    ;
     #region Standard Formatting
     private static ViewDescriptor DefaultFormatting(
         object instance,

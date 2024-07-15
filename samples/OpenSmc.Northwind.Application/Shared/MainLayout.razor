@@ -1,5 +1,7 @@
-﻿@using OpenSmc.Application
+﻿@using System.Reactive.Subjects
+@using OpenSmc.Messaging
 @inherits LayoutComponentBase
+@inject IMessageHub Hub
 <CascadingValue Value="Address">
     <FluentLayout>
         <FluentHeader>
@@ -29,5 +31,17 @@
 </CascadingValue>
 
 @code {
-    private ApplicationAddress Address { get; set; }
+    private object Address { get; set; }
+    private bool isSubscribed;
+    protected override void OnParametersSet()
+    {
+        base.OnParametersSet();
+        if (!isSubscribed)
+        {
+            isSubscribed = true;
+            var state = Hub.ServiceProvider.GetRequiredService<ReplaySubject<LayoutAreaPageState>>();
+            state.Subscribe(x => Address = x.Address);
+        }
+    }
+
 }
