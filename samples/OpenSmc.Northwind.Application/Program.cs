@@ -1,4 +1,5 @@
-﻿using Microsoft.FluentUI.AspNetCore.Components;
+﻿using Microsoft.Extensions.FileProviders;
+using Microsoft.FluentUI.AspNetCore.Components;
 using OpenSmc.Hosting;
 using OpenSmc.Northwind.Application;
 using OpenSmc.Northwind.Application.Data;
@@ -43,6 +44,12 @@ if (!app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseStaticFiles();
+var docSitePath = Path.Combine(builder.Environment.ContentRootPath, "..\\OpenSmc.Northwind.Docs\\_site");
+app.UseStaticFiles(new StaticFileOptions
+{
+    RequestPath = "/docs",
+    FileProvider = new PhysicalFileProvider(docSitePath),
+});
 
 app.UseRouting();
 
