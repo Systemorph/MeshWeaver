@@ -3,9 +3,9 @@
 @code
 {
     private string Title { get; set; }
-    protected override void OnParametersSet()
+    protected override void BindData()
     {
-        base.OnParametersSet();
+        base.BindData();
         if (ViewModel != null)
         {
             DataBind<string>(ViewModel.Title, x => Title = x);

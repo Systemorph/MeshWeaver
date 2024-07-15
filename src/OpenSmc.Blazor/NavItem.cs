@@ -10,9 +10,9 @@ public abstract class NavItem<TViewModel> : BlazorView<TViewModel>
     protected string Title { get; set; }
     protected Application.Styles.Icon Icon { get; set; }
 
-    protected override void OnParametersSet()
+    protected override void BindData()
     {
-        base.OnParametersSet();
+        base.BindData();
 
         if (ViewModel != null)
         {
@@ -21,4 +21,5 @@ public abstract class NavItem<TViewModel> : BlazorView<TViewModel>
             DataBind<Application.Styles.Icon>(ViewModel.Icon, x => Icon = x);
         }
     }
+
 }

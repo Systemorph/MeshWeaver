@@ -1,7 +1,5 @@
+@using System.Text.Json
 @using OpenSmc.Data.Serialization
-@inherits BlazorView<LayoutAreaControl>
-
-
 @if (RootControl == null)
 {
     <div style="width: 600px; display: grid; grid-gap: 3px; grid-auto-flow: row;">
@@ -24,5 +22,8 @@ else
     public LayoutAreaReference Reference { get; set; }
 
     private UiControl RootControl { get; set; } = null;
+
+    [Parameter]
+    public ISynchronizationStream<JsonElement, LayoutAreaReference> Stream { get; set; }
 
 }

@@ -12,6 +12,6 @@
 </div>
 
 @code {
-    private object Address => new ApplicationAddress("Northwind", "dev");
-    private LayoutAreaReference Reference => new("DomainMenu");
+    private object Address { get; } = new ApplicationAddress("Northwind", "dev");
+    private LayoutAreaReference Reference { get; } = new("DomainMenu");
 }

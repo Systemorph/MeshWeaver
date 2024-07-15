@@ -8,6 +8,7 @@ using OpenSmc.Data.Serialization;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
+using OpenSmc.Reflection;
 
 namespace OpenSmc.Blazor
 {
@@ -17,14 +18,9 @@ namespace OpenSmc.Blazor
         [Inject] private IMessageHub Hub { get; set; }
         protected override void OnParametersSet()
         {
-            ResetBindings();
             base.OnParametersSet();
-            if (ViewModel != null)
-            {
-                DataBind<object>(ViewModel.Skin, x => Skin = x);
-                DataBind<string>(ViewModel.Label, x => Label = x);
-                DataBind<string>(ViewModel.Class, x => Class = x);
-            }
+            if(!IsUpToDate())
+                BindData();
         }
 
         protected object Skin { get; set; }
@@ -32,19 +28,6 @@ namespace OpenSmc.Blazor
         protected string Label { get; set; }
 
         protected string Class { get; set; }
-
-        protected object BindProperty(object instance, string propertyName)
-        {
-            if(instance == null)
-                return null;
-
-            var type = instance.GetType();
-            var property = type.GetProperty(propertyName);
-            if(property == null)
-                return null;
-            return property.GetValue(instance, null);
-        }
-
 
 
         protected List<IDisposable> Disposables { get; } = new();
@@ -57,13 +40,6 @@ namespace OpenSmc.Blazor
             }
         }
 
-        protected UiControl GetControl(ChangeItem<JsonElement> item, string area)
-        {
-            return item.Value.TryGetProperty(LayoutAreaReference.Areas, out var controls) 
-                   && controls.TryGetProperty(JsonSerializer.Serialize(area), out var node)
-                ? node.Deserialize<UiControl>(Stream.Hub.JsonSerializerOptions)
-                : null;
-        }
 
         private readonly List<IDisposable> bindings = new();
         protected virtual void DataBind<T>(object value, Action<T> bindingAction)
@@ -106,12 +82,19 @@ namespace OpenSmc.Blazor
             ;
         }
 
-        public void ResetBindings()
+        protected virtual void BindData()
         {
             foreach (var d in bindings)
                 d.Dispose();
 
             bindings.Clear();
+
+            if (ViewModel != null)
+            {
+                DataBind<object>(ViewModel.Skin, x => Skin = x);
+                DataBind<string>(ViewModel.Label, x => Label = x);
+                DataBind<string>(ViewModel.Class, x => Class = x);
+            }
         }
 
         protected virtual IObservable<T> GetObservable<T>(object value)
@@ -138,21 +121,27 @@ namespace OpenSmc.Blazor
             return ret == null ? default : ret.Value.Deserialize<TResult>(Stream.Hub.JsonSerializerOptions);
         }
 
-        private T ConvertTo<T>(IChangeItem changeItem)
-        {
-            var value = changeItem.Value;
-            if (value == null)
-                return default;
-            if (value is JsonElement node)
-                return node.Deserialize<T>(Stream.Hub.JsonSerializerOptions);
-            if (value is T t)
-                return t;
-            throw new InvalidOperationException($"Cannot convert to {typeof(T).Name}");
-        }
         protected void OnClick()
         {
             Stream.Hub.Post(new ClickedEvent(Area) { Reference = Stream.Reference, Owner = Stream.Owner }, o => o.WithTarget(Stream.Owner));
         }
 
+
+        private IReadOnlyCollection<object> CurrentState { get; set; }
+        protected virtual bool IsUpToDate()
+        {
+            var oldState = CurrentState ?? Array.Empty<object>();
+            var current = GetState();
+            if (oldState.Count == 0 && current.Count == 0)
+                return true;
+            return current.SequenceEqual(oldState );
+        }
+
+        protected virtual IReadOnlyCollection<object> GetState()
+            => CurrentState = GetType()
+                .GetProperties()
+                .Where(p => p.HasAttribute<ParameterAttribute>())
+                .Select(p => p.GetValue(this))
+                .ToArray();
     }
 }

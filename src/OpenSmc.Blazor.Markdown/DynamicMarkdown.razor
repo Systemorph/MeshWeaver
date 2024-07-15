@@ -15,9 +15,9 @@
 {
     private IReadOnlyList<LayoutAreaComponentInfo> LayoutAreaComponents { get; set; } = [];
     private string Html { get; set; }
-    protected override void OnParametersSet()
+    protected override void BindData()
     {
-        base.OnParametersSet();
+        base.BindData();
         DataBind<string>(ViewModel.Data, RenderMarkdown);
     }
 

@@ -22,9 +22,9 @@ public abstract class ListBase<TViewModel> : BlazorView<TViewModel>
         }
     }
 
-    protected override void OnParametersSet()
+    protected override void BindData()
     {
-        base.OnParametersSet();
+        base.BindData();
         DataBind<IEnumerable<Layout.Option>>(ViewModel.Options, BindOptions);
         DataBind<object>(ViewModel.Data, UpdateSelection);
         Pointer = ViewModel.Data as JsonPointerReference;

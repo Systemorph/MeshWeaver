@@ -7,9 +7,9 @@
 {
     MarkupString Html { get; set; }
 
-    protected override void OnParametersSet()
+    protected override void BindData()
     {
-        base.OnParametersSet();
+        base.BindData();
         DataBind<string>(ViewModel.Data, h => Html = (MarkupString)h);
     }
 }
