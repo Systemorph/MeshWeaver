@@ -69,7 +69,7 @@ public static class BlazorClientExtensions
                 => StandardView<ItemTemplateControl, ItemTemplate>(itemTemplate, stream, area),
             BodyContentControl bodyContent
                 => StandardView<BodyContentControl, BodyContentView>(bodyContent, stream, area),
-            
+            MarkdownControl markdown => StandardView<MarkdownControl, MarkdownView>(markdown, stream, area),
             _ => DelegateToDotnetInteractive(instance, stream, area),
         };
     }

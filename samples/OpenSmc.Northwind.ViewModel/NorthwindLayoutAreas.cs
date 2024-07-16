@@ -40,7 +40,9 @@ public static class NorthwindLayoutAreas
                     .WithMenu(menu => menu
                         .NorthwindViewsMenu()
                         .WithTypesCatalog()
-                    ).WithCatalogView())
+                    )
+                    .DefaultViews()
+                )
         );
     }
 
@@ -50,11 +52,23 @@ public static class NorthwindLayoutAreas
             menu,
             (x, a) =>
                 x.WithNavLink(
-                    a.Key.Wordify(),
-                    $"app/Northwind/dev/{a.Key}",
+                    a.Key.Area.Wordify(),
+                    x.GenerateHref(a.Key),
                     o => o.WithIcon(a.Value)
                 )
         );
+    }
+
+    private static string GenerateHref(this DomainMenuBuilder builder, LayoutAreaReference reference)
+    {
+        var ret = $"{builder.Layout.Hub.Address}/{Uri.EscapeDataString(reference.Area)}";
+        if(reference.Id?.ToString() is { } s)
+            ret = $"{ret}/{Uri.EscapeDataString(s)}";
+        if (reference.Options.Any())
+            ret = $"ret?{string.Join('&', 
+                reference.Options
+                    .Select(x => $"{x.Key}={Uri.EscapeDataString(x.Value?.ToString() ?? "")}"))}";
+        return ret;
     }
 
     private static IObservable<object> CategoryCatalog(
@@ -75,13 +89,14 @@ public static class NorthwindLayoutAreas
                 )
             );
 
-    private static readonly KeyValuePair<string, Icon>[] DashboardWidgets = new[]
+    private static readonly KeyValuePair<LayoutAreaReference, Icon>[] DashboardWidgets = new[]
     {
-        new KeyValuePair<string, Icon>(nameof(Dashboard), FluentIcons.Grid),
-        new(nameof(OrderSummary), FluentIcons.Box),
-        new(nameof(ProductSummary), FluentIcons.Box),
-        new(nameof(CustomerSummary), FluentIcons.Person),
-        new(nameof(SupplierSummary), FluentIcons.Person)
+        new KeyValuePair<LayoutAreaReference, Icon>(new(DomainViews.Markdown){Id="Markdown/Northwind.md"}, FluentIcons.Grid),
+        new(new(nameof(Dashboard)), FluentIcons.Grid),
+        new(new(nameof(OrderSummary)), FluentIcons.Box),
+        new(new(nameof(ProductSummary)), FluentIcons.Box),
+        new(new(nameof(CustomerSummary)), FluentIcons.Person),
+        new(new(nameof(SupplierSummary)), FluentIcons.Person)
     };
 
     /// <summary>
