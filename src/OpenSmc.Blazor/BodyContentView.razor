@@ -1,0 +1,12 @@
+@inherits ContainerView<BodyContentControl>
+
+<FluentBodyContent>
+    <DispatchView ViewModel="@ChildControlArea.ViewModel" Stream="@Stream" Area="@ChildControlArea.Area" />
+</FluentBodyContent>
+
+
+@code
+{
+    private RenderedArea ChildControlArea => Areas.First();
+}
+

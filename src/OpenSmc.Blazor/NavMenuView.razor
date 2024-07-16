@@ -1,14 +1,9 @@
-@using System.Reactive.Linq
-@using System.Text.Json
-@using OpenSmc.Data.Serialization
-@using OpenSmc.Messaging
-@* todo: un-hardcode Id *@
-@implements IDisposable
-@inject IMessageHub Hub
+@inherits ContainerView<NavMenuControl>
 
-
+<h1>Nav Menu</h1>
 @if (ViewModel != null)
 {
+    <h2>Here it is, @ViewModel.Areas.Count Areas being rendered: @Areas.Count</h2>
     <div class="navmenu">
         <nav class="sitenav" aria-labelledby="main-menu" onclick="document.getElementById('navmenu-toggle').click();">
             <input type="checkbox" title="Menu expand/collapse toggle" id="navmenu-toggle" class="navmenu-icon"/>
@@ -27,6 +22,7 @@
 }
 else
 {
+    <h2>Nothing</h2>
     <div class="navmenu">
         <nav class="sitenav" aria-labelledby="main-menu" onclick="document.getElementById('navmenu-toggle').click();">
             <input type="checkbox" title="Menu expand/collapse toggle" id="navmenu-toggle" class="navmenu-icon"/>
@@ -39,45 +35,4 @@ else
 
 @code {
     private bool expanded = true;
-
-    [CascadingParameter]
-    public object Address { get; set; }
-    [Parameter]
-    public LayoutAreaReference Reference { get; set; } = new LayoutAreaReference("NavMenu");
-
-    private NavMenuControl ViewModel { get; set; }
-    private ISynchronizationStream<JsonElement, LayoutAreaReference> Stream { get; set; }
-
-    IReadOnlyCollection<(string area, UiControl viewModel)> Areas { get; set; }
-
-    protected override void OnParametersSet()
-    {
-        base.OnParametersSet();
-        if (Reference == null || Address == null)
-        {
-            ViewModel = null;
-            return;
-        }
-        Stream = Hub.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(Address, Reference);
-        Stream.AddDisposable(Stream.GetControlStream(Reference.Area).Subscribe(Render));
-    }
-
-
-    private IDisposable areaSubscription;
-    private void Render(object control)
-    {
-        areaSubscription?.Dispose();
-        ViewModel = control as NavMenuControl;
-        if(ViewModel != null)
-            areaSubscription = 
-                Stream
-                .Select(ci => ViewModel.Areas.Select(a => (a,Stream.GetControl(ci, a))).ToArray())
-                .Subscribe(areas => Areas = areas);
-        InvokeAsync(StateHasChanged);
-    }
-
-    public void Dispose()
-    {
-        Stream?.Dispose();
-    }
 }

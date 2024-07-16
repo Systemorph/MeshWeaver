@@ -16,7 +16,7 @@ public static class LayoutManager
         if (viewElement == null)
             return layoutArea.Stream;
 
-        layoutArea.RenderArea(new(reference.Area), viewElement);
+        layoutArea.RenderArea(new(reference.Area){IsTopLevel = true}, viewElement);
         return layoutArea.Stream;
     }
 
@@ -40,7 +40,7 @@ public static class LayoutManager
             {
                 foreach (var ve in container.ChildControls)
                 {
-                    layoutArea.RenderArea(context with { Area = $"{area}/{ve.Area}", DataContext = dataContext}, ve);
+                    layoutArea.RenderArea(context with { Area = $"{area}/{ve.Area}", DataContext = dataContext, IsTopLevel = false}, ve);
                 }
 
                 viewModel = container.SetAreas(container.ChildControls.Select(ve => $"{area}/{ve.Area}").ToArray());

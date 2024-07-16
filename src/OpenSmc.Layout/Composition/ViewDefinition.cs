@@ -5,6 +5,7 @@ public delegate Task<object> ViewDefinition(LayoutAreaHost area, RenderingContex
 public record RenderingContext(string Area)
 {
     public string DataContext { get; init; }
+    public bool IsTopLevel { get; init; }
 };
 
 public delegate IObservable<object> ViewStream(LayoutAreaHost area, RenderingContext context);

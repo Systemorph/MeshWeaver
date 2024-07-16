@@ -1,4 +1,4 @@
-using Markdig;
+﻿using Markdig;
 using Markdig.Parsers;
 using Markdig.Renderers;
 using OpenSmc.Messaging;
@@ -22,6 +22,6 @@ public class LayoutAreaExtension : IMarkdownExtension
 
     public void Setup(MarkdownPipeline pipeline, IMarkdownRenderer renderer)
     {
-        renderer.ObjectRenderers.AddIfNotAlready(new LayoutAreaRenderer());
+        renderer.ObjectRenderers.AddIfNotAlready(new LayoutAreaMarkdownRenderer());
     }
 }

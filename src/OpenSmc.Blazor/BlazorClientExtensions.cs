@@ -71,6 +71,9 @@ public static class BlazorClientExtensions
                 => StandardView<LayoutGridItemControl, LayoutGridItem>(gridItem, stream, area),
             ItemTemplateControl itemTemplate
                 => StandardView<ItemTemplateControl, ItemTemplate>(itemTemplate, stream, area),
+            BodyContentControl bodyContent
+                => StandardView<BodyContentControl, BodyContentView>(bodyContent, stream, area),
+            
             _ => DelegateToDotnetInteractive(instance, stream, area),
         };
     }
