@@ -45,6 +45,6 @@ namespace OpenSmc.Layout.Domain
         }
 
 
-        public LayoutDefinition Build() => Layout.WithView(Area, Menu);
+        public NavMenuControl Build() => Menu;
     }
 }

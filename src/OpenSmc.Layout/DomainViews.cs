@@ -13,8 +13,4 @@ public static class DomainViews
     ) =>
         configuration.Invoke(new(layout)).Build();
 
-    public static LayoutDefinition AddDomainViews(
-        this LayoutDefinition layout
-    ) =>
-        layout.AddDomainViews(views => views.All());
 }
