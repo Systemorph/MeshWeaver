@@ -24,6 +24,7 @@
 
     private LayoutAreaReference Reference => new(Area)
     {
+        Id = Id,
         Options = Options?.ToImmutableDictionary() 
                   ?? ImmutableDictionary<string, object>.Empty,
     };
