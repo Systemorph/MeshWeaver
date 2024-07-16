@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Layout.Client;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Blazor;

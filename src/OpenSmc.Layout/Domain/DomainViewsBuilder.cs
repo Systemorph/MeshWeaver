@@ -65,6 +65,16 @@ namespace OpenSmc.Layout.Domain
                     )
                 ;
         }
+        public DomainViewsBuilder WithMarkdown(string area = nameof(Markdown)) => this with { Layout = Layout.WithView(area, Markdown) };
+
+        public object Markdown(LayoutAreaHost area, RenderingContext ctx)
+        {
+            if (area.Stream.Reference.Id is not string fileName)
+                throw new InvalidOperationException("No file name specified.");
+
+            var markdown = "";
+            return new MarkdownControl(markdown);
+        }
 
         public LayoutDefinition Build() => Layout with
         {

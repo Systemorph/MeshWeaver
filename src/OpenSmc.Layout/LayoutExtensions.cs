@@ -7,7 +7,6 @@ using Json.Path;
 using Json.Pointer;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Application.Styles;
-using OpenSmc.Blazor;
 using OpenSmc.Data;
 using OpenSmc.Data.Persistence;
 using OpenSmc.Data.Serialization;
