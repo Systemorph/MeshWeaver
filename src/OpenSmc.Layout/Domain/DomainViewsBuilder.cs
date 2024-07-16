@@ -10,25 +10,26 @@ namespace OpenSmc.Layout.Domain
         public DomainViewsBuilder(LayoutDefinition Layout)
         {
             this.Layout = Layout;
-            MainLayout = DefaultLayout
+            MainLayout = DefaultLayoutViewElement
 ;
 
         }
 
+        private ViewElement DefaultLayoutViewElement(ViewElement view, NavMenuControl navMenu)
+            => new ViewElementWithView(view.Area, DefaultLayoutControl(view, navMenu));
+
         public const string Type = nameof(Type);
 
 
-        private ViewElement DefaultLayout(ViewElement view) => new ViewElementWithView("_Layout", DefaultLayout(view, NavMenu));
 
-        private object DefaultLayout(ViewElement view, NavMenuControl navMenu)
+        private object DefaultLayoutControl(ViewElement view, NavMenuControl navMenu)
         {
             if (navMenu == null)
                 return Controls.Body(view);
             return Controls.Stack()
-                .WithClass("main")
                 .WithOrientation(Orientation.Horizontal)
                 .WithWidth("100%")
-                .WithView(NavMenu)
+                .WithView(navMenu)
                 .WithView(Controls.Body(view));
         }
 
@@ -67,16 +68,17 @@ namespace OpenSmc.Layout.Domain
 
         public LayoutDefinition Build() => Layout with
         {
-            MainLayout = MainLayout
+            MainLayout = MainLayout,
+            NavMenu = MenuConfig == null ? null : reference => MenuConfig.Invoke(new(MenuArea, Layout, reference)).Build()
         };
 
-        public DomainViewsBuilder WithMainLayout(Func<ViewElement, ViewElement> configuration)
+        public DomainViewsBuilder WithMainLayout(Func<ViewElement, NavMenuControl, ViewElement> configuration)
             =>  this with
             {
                 MainLayout = configuration
             };
 
-        private Func<ViewElement, ViewElement> MainLayout { get; init; }
+        private Func<ViewElement, NavMenuControl, ViewElement> MainLayout { get; init; }
 
 
         public DomainViewsBuilder WithMenu(Func<DomainMenuBuilder, DomainMenuBuilder> menuConfig, string areaName = nameof(DomainViews.NavMenu))
@@ -87,7 +89,6 @@ namespace OpenSmc.Layout.Domain
 
         private string MenuArea { get; init; }
 
-        public NavMenuControl NavMenu => MenuConfig?.Invoke(new(MenuArea, Layout)).Build();
         public LayoutDefinition Layout { get; init; }
 
     }

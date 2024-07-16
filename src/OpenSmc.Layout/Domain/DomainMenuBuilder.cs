@@ -3,7 +3,7 @@ using OpenSmc.Layout.Composition;
 
 namespace OpenSmc.Layout.Domain
 {
-    public record DomainMenuBuilder(string Area, LayoutDefinition Layout)
+    public record DomainMenuBuilder(string Area, LayoutDefinition Layout, LayoutAreaReference Reference)
     {
         internal NavMenuControl Menu { get; init; } = new();
 

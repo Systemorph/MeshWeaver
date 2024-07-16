@@ -17,7 +17,7 @@ public static class LayoutManager
             return layoutArea.Stream;
 
         if(layoutDefinition.MainLayout != null)
-            viewElement = layoutDefinition.MainLayout(viewElement);
+            viewElement = layoutDefinition.MainLayout(viewElement, layoutDefinition.NavMenu?.Invoke(reference));
         layoutArea.RenderArea(new(reference.Area){IsTopLevel = true}, viewElement);
         return layoutArea.Stream;
     }

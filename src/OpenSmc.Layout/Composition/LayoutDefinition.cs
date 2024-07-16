@@ -91,11 +91,12 @@ public record LayoutDefinition(IMessageHub Hub)
         return null;
     }
 
-    internal Func<ViewElement, ViewElement> MainLayout { get; init; } 
+    internal Func<ViewElement, NavMenuControl, ViewElement> MainLayout { get; init; } 
 
-    public LayoutDefinition WithLayout(Func<ViewElement, ViewElement> layout)
+    public LayoutDefinition WithLayout(Func<ViewElement, NavMenuControl, ViewElement> layout)
         => this with { MainLayout = layout };
 
+    internal Func<LayoutAreaReference,NavMenuControl> NavMenu { get; init; }
 }
 
 internal record ViewGenerator(Func<LayoutAreaReference, bool> Filter, ViewElement ViewElement);
