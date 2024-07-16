@@ -80,6 +80,13 @@ public static class Controls
         this IUiControl control,
         Func<LayoutGridItemControl, LayoutGridItemControl> builder
     ) => builder.Invoke(new LayoutGridItemControl(control));
+    public static BodyContentControl ToBodyContent(
+        this IUiControl control,
+        Func<BodyContentControl, BodyContentControl> builder
+    ) => builder.Invoke(new BodyContentControl(control));
+    public static BodyContentControl ToBodyContent(
+        this IUiControl control
+    ) => new BodyContentControl(control);
 
     public static LayoutGridItemControl ToLayoutGridItem(this IUiControl control) => new(control);
 

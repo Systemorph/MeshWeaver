@@ -1,9 +1,9 @@
-using Markdig.Renderers;
+﻿using Markdig.Renderers;
 using Markdig.Renderers.Html;
 
 namespace OpenSmc.Documentation.Markdown
 {
-    public class LayoutAreaRenderer : HtmlObjectRenderer<LayoutAreaComponentInfo>
+    public class LayoutAreaMarkdownRenderer : HtmlObjectRenderer<LayoutAreaComponentInfo>
     {
         protected override void Write(HtmlRenderer renderer, LayoutAreaComponentInfo obj)
         {

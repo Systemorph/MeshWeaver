@@ -1,6 +1,5 @@
 ﻿using System.Collections.Concurrent;
 using System.Reactive.Linq;
-using Json.Pointer;
 using Microsoft.DotNet.Interactive.Formatting;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
