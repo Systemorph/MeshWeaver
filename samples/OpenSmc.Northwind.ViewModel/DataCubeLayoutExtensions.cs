@@ -65,6 +65,7 @@ public static class DataCubeLayoutExtensions
                                         // go to the workspace and take observable of this type
                                         x => new FilterItem(x.Value, x.Value.ToString(), true))
                                     )
+                                    .DistinctBy(x => x.Id) // TODO V10: this is to be reviewed to find better place to reduce duplication of codes (2024/07/16, Dmitry Kalabin)
                                     .ToImmutableList()
                             )
                         };
