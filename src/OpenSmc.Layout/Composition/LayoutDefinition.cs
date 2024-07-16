@@ -91,16 +91,10 @@ public record LayoutDefinition(IMessageHub Hub)
         return null;
     }
 
-    internal Func<UiControl, RenderingContext, UiControl> Layout { get; init; } = (view, _) => view;
-        //Controls.Stack()
-        //    .WithClass("main")
-        //    .WithOrientation(Orientation.Horizontal)
-        //    .WithWidth("100%")
-        //    .WithView(Controls.NavMenu())
-        //    .WithView(view.ToBodyContent());
+    internal Func<ViewElement, ViewElement> MainLayout { get; init; } 
 
-    public LayoutDefinition WithLayout(Func<UiControl, RenderingContext, UiControl> layout)
-        => this with { Layout = layout };
+    public LayoutDefinition WithLayout(Func<ViewElement, ViewElement> layout)
+        => this with { MainLayout = layout };
 
 }
 

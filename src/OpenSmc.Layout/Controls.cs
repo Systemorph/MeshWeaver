@@ -51,7 +51,6 @@ public static class Controls
 
     public static LabelControl Label(object text) => new(text);
 
-    public static LabelControl Body(object data) => Label(data).WithTypo(Typography.Body);
     public static LabelControl Subject(object data) => Label(data).WithTypo(Typography.Subject);
     public static LabelControl Header(object data) => Label(data).WithTypo(Typography.Header);
     public static LabelControl EmailHeader(object data) => Label(data).WithTypo(Typography.EmailHeader);
@@ -81,12 +80,12 @@ public static class Controls
         Func<LayoutGridItemControl, LayoutGridItemControl> builder
     ) => builder.Invoke(new LayoutGridItemControl(control));
     public static BodyContentControl ToBodyContent(
-        this IUiControl control,
+        this IUiControl view,
         Func<BodyContentControl, BodyContentControl> builder
-    ) => builder.Invoke(new BodyContentControl(control));
-    public static BodyContentControl ToBodyContent(
-        this IUiControl control
-    ) => new BodyContentControl(control);
+    ) => builder.Invoke(view.ToBodyContent());
+    public static BodyContentControl ToBodyContent(this IUiControl view) => Body(view);
+
+    public static BodyContentControl Body(object view) => new () { View = view };
 
     public static LayoutGridItemControl ToLayoutGridItem(this IUiControl control) => new(control);
 

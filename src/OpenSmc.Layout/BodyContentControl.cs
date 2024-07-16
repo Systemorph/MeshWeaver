@@ -2,15 +2,16 @@
 
 namespace OpenSmc.Layout;
 
-public record BodyContentControl(object Data)
-    : UiControl<BodyContentControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data), IContainerControl
+public record BodyContentControl()
+    : UiControl<BodyContentControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null), IContainerControl
 {
     public bool Collapsible { get; init; } = true;
 
     public int? Width { get; init; } = 250;
-    public IEnumerable<ViewElement> ChildControls => [new ViewElementWithView("Body", Data)];
+    IEnumerable<ViewElement> IContainerControl.ChildControls => [View as ViewElement ?? new ViewElementWithView("Body", View)];
     public IReadOnlyCollection<string> Areas { get; init; }
+    internal object View { get; init; }
 
-    public IContainerControl SetAreas(IReadOnlyCollection<string> areas)
+    IContainerControl IContainerControl.SetAreas(IReadOnlyCollection<string> areas)
         => this with { Areas = areas };
 }

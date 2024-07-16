@@ -16,6 +16,8 @@ public static class LayoutManager
         if (viewElement == null)
             return layoutArea.Stream;
 
+        if(layoutDefinition.MainLayout != null)
+            viewElement = layoutDefinition.MainLayout(viewElement);
         layoutArea.RenderArea(new(reference.Area){IsTopLevel = true}, viewElement);
         return layoutArea.Stream;
     }
