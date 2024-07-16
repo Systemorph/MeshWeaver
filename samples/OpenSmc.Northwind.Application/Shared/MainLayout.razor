@@ -1,39 +1,23 @@
 ﻿@using System.Reactive.Subjects
 @using OpenSmc.Messaging
 @inherits LayoutComponentBase
-@inject IMessageHub Hub
-<CascadingValue Value="Address">
-    <FluentLayout>
-        <FluentHeader>
-            <FluentNavLink href="/">Mesh Weaver</FluentNavLink>
-        </FluentHeader>
+<FluentLayout>
+    <FluentHeader>
+        <FluentNavLink href="/">Mesh Weaver</FluentNavLink>
+    </FluentHeader>
+    <div class="main">
         @Body
-        <FluentFooter>
-            <a href="https://www.fluentui-blazor.net" target="_blank">Documentation and demos</a>
-            <FluentSpacer/>
-            <a href="https://learn.microsoft.com/en-us/aspnet/core/blazor" target="_blank">About Blazor</a>
-        </FluentFooter>
-    </FluentLayout>
-
-    <div id="blazor-error-ui">
-        An unhandled error has occurred.
-        <a href="" class="reload">Reload</a>
-        <a class="dismiss">🗙</a>
     </div>
-</CascadingValue>
+    <FluentFooter>
+        <a href="https://www.fluentui-blazor.net" target="_blank">Documentation and demos</a>
+        <FluentSpacer/>
+        <a href="https://learn.microsoft.com/en-us/aspnet/core/blazor" target="_blank">About Blazor</a>
+    </FluentFooter>
+</FluentLayout>
 
-@code {
-    private object Address { get; set; }
-    private bool isSubscribed;
-    protected override void OnParametersSet()
-    {
-        base.OnParametersSet();
-        if (!isSubscribed)
-        {
-            isSubscribed = true;
-            var state = Hub.ServiceProvider.GetRequiredService<ReplaySubject<LayoutAreaPageState>>();
-            state.Subscribe(x => Address = x.Address);
-        }
-    }
+<div id="blazor-error-ui">
+    An unhandled error has occurred.
+    <a href="" class="reload">Reload</a>
+    <a class="dismiss">🗙</a>
+</div>
 
-}

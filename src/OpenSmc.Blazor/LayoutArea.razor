@@ -1,12 +1,14 @@
 @using System.Text.Json
 @using OpenSmc.Data.Serialization
+@using HorizontalAlignment = Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment
+@using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
+@using VerticalAlignment = Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment
 @if (RootControl == null)
 {
-    <div style="width: 600px; display: grid; grid-gap: 3px; grid-auto-flow: row;">
-        <div>Connecting to <b> @Address </b></div>
-        <div>Fetching <b>@Reference.Area</b></div>
-        <FluentProgress></FluentProgress>
-    </div>
+    <FluentStack HorizontalAlignment="HorizontalAlignment.Center" VerticalAlignment="VerticalAlignment.Center" Orientation="Orientation.Vertical">
+        <h3>Loading @Reference.Area</h3>
+        <FluentProgressRing style="width: 102px; height: 102px;"/>
+    </FluentStack>
 }
 else
 {

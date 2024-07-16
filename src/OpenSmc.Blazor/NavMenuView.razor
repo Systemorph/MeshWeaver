@@ -1,9 +1,7 @@
 @inherits ContainerView<NavMenuControl>
 
-<h1>Nav Menu</h1>
 @if (ViewModel != null)
 {
-    <h2>Here it is, @ViewModel.Areas.Count Areas being rendered: @Areas.Count</h2>
     <div class="navmenu">
         <nav class="sitenav" aria-labelledby="main-menu" onclick="document.getElementById('navmenu-toggle').click();">
             <input type="checkbox" title="Menu expand/collapse toggle" id="navmenu-toggle" class="navmenu-icon"/>
@@ -22,7 +20,6 @@
 }
 else
 {
-    <h2>Nothing</h2>
     <div class="navmenu">
         <nav class="sitenav" aria-labelledby="main-menu" onclick="document.getElementById('navmenu-toggle').click();">
             <input type="checkbox" title="Menu expand/collapse toggle" id="navmenu-toggle" class="navmenu-icon"/>

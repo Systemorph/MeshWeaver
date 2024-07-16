@@ -22,7 +22,7 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
     {
         if (other is null)
             return false;
-        return Equals(Id, other.Id) && Options.SequenceEqual(other.Options);
+        return Equals(Area, other.Area) && Equals(Id, other.Id) && Options.SequenceEqual(other.Options);
     }
 
     public override int GetHashCode()
