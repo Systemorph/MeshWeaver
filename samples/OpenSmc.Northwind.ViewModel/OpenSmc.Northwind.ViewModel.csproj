@@ -9,4 +9,9 @@
     <ProjectReference Include="..\..\src\OpenSmc.Reporting\OpenSmc.Reporting.csproj" />
     <ProjectReference Include="..\OpenSmc.Northwind.Domain\OpenSmc.Northwind.Domain.csproj" />
   </ItemGroup>
+  <ItemGroup>
+      <Folder Include="Markdown\" />
+      <!-- Include all Markdown files in the Markdown folder as embedded resources -->
+      <EmbeddedResource Include="Markdown\**\*.md" />
+  </ItemGroup>
 </Project>

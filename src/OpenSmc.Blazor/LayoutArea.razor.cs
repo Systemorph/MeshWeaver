@@ -3,7 +3,6 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Data;
-using OpenSmc.Data.Serialization;
 using OpenSmc.Layout;
 using OpenSmc.Messaging;
 
