@@ -1,7 +1,7 @@
 ﻿using Markdig.Renderers;
 using Markdig.Renderers.Html;
 
-namespace OpenSmc.Documentation.Markdown
+namespace OpenSmc.Layout.Markdown
 {
     public class LayoutAreaMarkdownRenderer : HtmlObjectRenderer<LayoutAreaComponentInfo>
     {

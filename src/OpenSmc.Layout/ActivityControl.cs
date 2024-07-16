@@ -1,6 +1,6 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 
-namespace OpenSmc.Layout.Views;
+namespace OpenSmc.Layout;
 
 /// <summary>
 /// ActivityControl is a control that represents an activity in the system.

@@ -1,5 +1,4 @@
-using Microsoft.Extensions.DependencyInjection;
-using OpenSmc.Documentation.Markdown;
+﻿using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Messaging;
 
@@ -9,5 +8,5 @@ public static class DocumentationRegistryExtensions
 {
     public static MessageHubConfiguration AddDocumentation(
         this MessageHubConfiguration configuration
-    ) => configuration; //.WithServices(services => services.AddSingleton<MarkdownService>());
+    ) => configuration; 
 }

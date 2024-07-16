@@ -1,9 +1,8 @@
 ﻿using Markdig;
-using Markdig.Parsers;
 using Markdig.Renderers;
 using OpenSmc.Messaging;
 
-namespace OpenSmc.Documentation.Markdown;
+namespace OpenSmc.Layout.Markdown;
 
 public class LayoutAreaExtension : IMarkdownExtension
 {

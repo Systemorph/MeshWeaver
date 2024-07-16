@@ -1,7 +1,6 @@
 ﻿using OpenSmc.Data;
-using OpenSmc.Messaging;
 
-namespace OpenSmc.Layout.Views;
+namespace OpenSmc.Layout;
 
 public record ClickedEvent(string Area) : WorkspaceMessage
 {

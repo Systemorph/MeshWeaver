@@ -3,10 +3,9 @@ using System.Text;
 using System.Text.Json;
 using Markdig.Parsers;
 using Markdig.Syntax;
-using Microsoft.Extensions.Primitives;
 using OpenSmc.Messaging;
 
-namespace OpenSmc.Documentation.Markdown;
+namespace OpenSmc.Layout.Markdown;
 
 public class LayoutAreaParser : BlockParser
 {

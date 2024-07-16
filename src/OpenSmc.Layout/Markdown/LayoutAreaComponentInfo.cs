@@ -1,9 +1,8 @@
 ﻿using System.Collections.Immutable;
 using Markdig.Parsers;
 using Markdig.Syntax;
-using OpenSmc.Layout;
 
-namespace OpenSmc.Documentation.Markdown;
+namespace OpenSmc.Layout.Markdown;
 
 public class LayoutAreaComponentInfo(string area, BlockParser blockParser)
     : ContainerBlock(blockParser)

@@ -1,12 +1,8 @@
 ﻿using System.Text.Json;
-using System.Text.Json.Nodes;
-using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
-using OpenSmc.Layout;
-using OpenSmc.Layout.Client;
 using OpenSmc.Messaging;
 
-namespace OpenSmc.Blazor;
+namespace OpenSmc.Layout.Client;
 
 public interface ILayoutClient
 {
