@@ -16,6 +16,9 @@ public record DocumentationContext(IMessageHub Hub)
                 configuration.Invoke(new(assembly.GetName().Name, assembly)))
         };
 
+    public DocumentationContext WithEmbeddedResourcesFrom(Assembly assembly) =>
+        WithEmbeddedResourcesFrom(assembly, x => x);
+
 }
 
 public abstract record DocumentationSource(string Id)
