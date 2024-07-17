@@ -1,7 +1,10 @@
 ﻿using System.Reactive.Linq;
+using System.Security.Cryptography.X509Certificates;
+using Markdig;
 using OpenSmc.Application.Styles;
 using OpenSmc.Data;
 using OpenSmc.DataCubes;
+using OpenSmc.Documentation;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.DataGrid;
@@ -38,12 +41,15 @@ public static class NorthwindLayoutAreas
                 .WithView(nameof(CategoryCatalog), CategoryCatalog)
                 .AddDomainViews(views => views
                     .WithMenu(menu => menu
+                        .WithNavLink("Overview", $"{layout.Hub.Address}/File/"+Uri.EscapeDataString($"{typeof(NorthwindLayoutAreas).Assembly.GetName().Name}.Markdown.Overview.md"))
                         .NorthwindViewsMenu()
                         .WithTypesCatalog()
                     )
                     .DefaultViews()
                 )
-        );
+        ).AddDocumentation(doc => 
+            doc.WithEmbeddedResourcesFrom(typeof(NorthwindLayoutAreas).Assembly, 
+            source => source));
     }
 
     private static DomainMenuBuilder NorthwindViewsMenu(this DomainMenuBuilder menu)
@@ -91,8 +97,7 @@ public static class NorthwindLayoutAreas
 
     private static readonly KeyValuePair<LayoutAreaReference, Icon>[] DashboardWidgets = new[]
     {
-        new KeyValuePair<LayoutAreaReference, Icon>(new(DomainViews.Markdown){Id="Markdown/Overview.md"}, FluentIcons.Grid),
-        new(new(nameof(Dashboard)), FluentIcons.Grid),
+        new KeyValuePair<LayoutAreaReference, Icon>(new(nameof(Dashboard)), FluentIcons.Grid),
         new(new(nameof(OrderSummary)), FluentIcons.Box),
         new(new(nameof(ProductSummary)), FluentIcons.Box),
         new(new(nameof(CustomerSummary)), FluentIcons.Person),

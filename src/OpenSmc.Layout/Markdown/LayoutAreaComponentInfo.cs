@@ -7,7 +7,7 @@ namespace OpenSmc.Layout.Markdown;
 public class LayoutAreaComponentInfo(string area, BlockParser blockParser)
     : ContainerBlock(blockParser)
 {
-    public ImmutableDictionary<string, object> Options { get; set; }
+    public ImmutableDictionary<string, object> Options { get; set; } = ImmutableDictionary<string, object>.Empty;
 
     public string Area => area;
     public string DivId { get; } = Guid.NewGuid().ToString();

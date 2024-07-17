@@ -19,7 +19,9 @@
     public string Id { get; set; }
 
     private string PageTitle => $"{Area.Wordify()} - {Application}";
-    [Parameter(CaptureUnmatchedValues = true)] public IReadOnlyDictionary<string, object> Options { get; set; }
+
+    [Parameter(CaptureUnmatchedValues = true)]
+    public IReadOnlyDictionary<string, object> Options { get; set; } = ImmutableDictionary<string, object>.Empty;
     private object Address => new ApplicationAddress(Application, Environment);
 
     private LayoutAreaReference Reference => new(Area)
