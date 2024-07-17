@@ -3,4 +3,8 @@
     <ProjectReference Include="..\OpenSmc.Hub.Fixture\OpenSmc.Hub.Fixture.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Documentation\OpenSmc.Documentation.csproj" />
   </ItemGroup>
+    <ItemGroup>
+        <!-- Include all files in the Markdown folder as embedded resources -->
+        <EmbeddedResource Include="Markdown\**\*.*" />
+    </ItemGroup>
 </Project>

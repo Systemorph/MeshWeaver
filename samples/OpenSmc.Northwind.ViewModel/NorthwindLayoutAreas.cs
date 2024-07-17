@@ -91,7 +91,7 @@ public static class NorthwindLayoutAreas
 
     private static readonly KeyValuePair<LayoutAreaReference, Icon>[] DashboardWidgets = new[]
     {
-        new KeyValuePair<LayoutAreaReference, Icon>(new(DomainViews.Markdown){Id="Markdown/Northwind.md"}, FluentIcons.Grid),
+        new KeyValuePair<LayoutAreaReference, Icon>(new(DomainViews.Markdown){Id="Markdown/Overview.md"}, FluentIcons.Grid),
         new(new(nameof(Dashboard)), FluentIcons.Grid),
         new(new(nameof(OrderSummary)), FluentIcons.Box),
         new(new(nameof(ProductSummary)), FluentIcons.Box),
