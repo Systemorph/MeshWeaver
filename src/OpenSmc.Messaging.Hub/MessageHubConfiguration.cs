@@ -139,7 +139,7 @@ public record MessageHubConfiguration
 
 
     internal ImmutableDictionary<Type, object> Properties { get; init; } = ImmutableDictionary<Type, object>.Empty;
-    public T Get<T>() => (T)Properties.GetValueOrDefault(typeof(T));
+    public T Get<T>() => (T)(Properties.GetValueOrDefault(typeof(T)) ?? default(T));
     public MessageHubConfiguration Set<T>(T value) => this with { Properties = Properties.SetItem(typeof(T), value) };
 
 }

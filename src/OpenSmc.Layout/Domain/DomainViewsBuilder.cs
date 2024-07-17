@@ -76,6 +76,8 @@ public record DomainViewsBuilder
 
         var type = area.Stream.Reference.Options.GetValueOrDefault(nameof(FileSource)) ?? FileSource.EmbeddedResource;
         // Assuming the embedded resource is in the same assembly as this class
+
+        // TODO V10: this is not the correct assembly. need to parse out all the files. (17.07.2024, Roland Bürgi)
         var assembly = Assembly.GetExecutingAssembly();
         var resourceName = $"{assembly.GetName().Name}.Markdown.{fileName}";
 
