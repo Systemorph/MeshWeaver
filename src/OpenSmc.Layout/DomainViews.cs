@@ -16,7 +16,6 @@ public static class DomainViews
         configuration.Invoke(new(layout)).Build();
 
     public static DomainViewsBuilder DefaultViews(this DomainViewsBuilder layout)
-        => layout.WithCatalog()
-            .WithMarkdown();
+        => layout.WithCatalog();
 
 }

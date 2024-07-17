@@ -1,6 +1,4 @@
 ﻿using System.Reactive.Linq;
-using Markdig;
-using System.Reflection;
 using OpenSmc.Data;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.DataGrid;
@@ -67,38 +65,7 @@ public record DomainViewsBuilder
                 )
             ;
     }
-    public DomainViewsBuilder WithMarkdown(string area = nameof(Markdown)) => this with { Layout = Layout.WithView(area, Markdown) };
 
-    public object Markdown(LayoutAreaHost area, RenderingContext ctx)
-    {
-        if (area.Stream.Reference.Id is not string fileName)
-            throw new InvalidOperationException("No file name specified.");
-
-        var type = area.Stream.Reference.Options.GetValueOrDefault(nameof(FileSource)) ?? FileSource.EmbeddedResource;
-        // Assuming the embedded resource is in the same assembly as this class
-
-        // TODO V10: this is not the correct assembly. need to parse out all the files. (17.07.2024, Roland Bürgi)
-        var assembly = Assembly.GetExecutingAssembly();
-        var resourceName = $"{assembly.GetName().Name}.Markdown.{fileName}";
-
-        var markdown = "";
-        using (var stream = assembly.GetManifestResourceStream(resourceName))
-        {
-            if (stream == null)
-            {
-                // Resource not found, return a warning control/message instead
-                markdown = $":error: **File not found**: {fileName}";
-            }
-
-            else
-            {
-                using var reader = new StreamReader(stream);
-                markdown = reader.ReadToEnd();
-            }
-        }
-
-        return new MarkdownControl(markdown);
-    }
 
     public LayoutDefinition Build() => Layout with
     {

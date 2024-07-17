@@ -1,6 +1,9 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Layout.Composition;
+using OpenSmc.Layout.Domain;
+using OpenSmc.Layout;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Documentation;
@@ -10,9 +13,10 @@ public static class DocumentationRegistryExtensions
     public static MessageHubConfiguration AddDocumentation(
         this MessageHubConfiguration hubConf,
         Func<DocumentationContext, DocumentationContext> configuration) => hubConf
-        .Set(AddLambda(hubConf.Get<ImmutableList<Func<DocumentationContext, DocumentationContext>>>() 
+        .Set(AddLambda(hubConf.Get<ImmutableList<Func<DocumentationContext, DocumentationContext>>>()
                        ?? ImmutableList<Func<DocumentationContext, DocumentationContext>>.Empty, configuration))
-        .WithServices(services => services.AddScoped<IDocumentationService, DocumentationService>());
+        .WithServices(services => services.AddScoped<IDocumentationService, DocumentationService>())
+        .AddLayout(layout => layout.AddFiles());
 
     private static ImmutableList<Func<DocumentationContext, DocumentationContext>> AddLambda(
         ImmutableList<Func<DocumentationContext, DocumentationContext>> existing,
@@ -28,44 +32,32 @@ public static class DocumentationRegistryExtensions
             .Get<ImmutableList<Func<DocumentationContext, DocumentationContext>>>()
             ?.Aggregate(new DocumentationContext(hub), (context, config) => config(context))
         ?? new(hub);
-}
 
-public record DocumentationContext(IMessageHub Hub)
-{
-    public ImmutableDictionary<string, DocumentationSource> Sources { get; init; } = ImmutableDictionary<string, DocumentationSource>.Empty;
+    private static LayoutDefinition AddFiles(this LayoutDefinition builder, string area = nameof(File)) =>
+        builder.WithView(area, File);
 
-    public DocumentationContext WithEmbeddedResourcesFrom(Assembly assembly,
-        Func<EmbeddedResourceDocumentationSource, EmbeddedResourceDocumentationSource> configuration) =>
-        this with
+    private static object File(LayoutAreaHost area, RenderingContext _)
+    {
+        if (area.Stream.Reference.Id is not string fileName)
+            throw new InvalidOperationException("No file name specified.");
+
+
+        var documentationService = area.Hub.GetDocumentationService();
+
+
+        var text = "";
+        using var stream = documentationService.GetStream(fileName);
+        if (stream == null)
+            // Resource not found, return a warning control/message instead
+            text = $":error: **File not found**: {fileName}";
+
+        else
         {
-            Sources = Sources.Add(assembly.GetName().Name,
-                configuration.Invoke(new(assembly.GetName().Name, assembly)))
-        };
+            using var reader = new StreamReader(stream);
+            text = reader.ReadToEnd();
+        }
 
-}
+        return new MarkdownControl(text);
+    }
 
-public abstract record DocumentationSource(string Id)
-{
-    internal ImmutableList<string> XmlComments { get; set; } = ImmutableList<string>.Empty;
-    internal ImmutableList<string> FilePaths { get; set; } = ImmutableList<string>.Empty;
-    public abstract Stream GetStream(string name);
-}
-
-public abstract record DocumentationSource<TSource>(string Id) : DocumentationSource(Id)
-    where TSource:DocumentationSource<TSource>
-{
-    public TSource This => (TSource)this;
-
-    public TSource WithXmlComments(string xmlCommentPath = null)
-        => This with { XmlComments = XmlComments.Add(xmlCommentPath ?? $"{Id}.xml") };
-
-    public TSource WithFilePath(string filePath)
-        => This with { FilePaths = FilePaths.Add(filePath) };
-
-}
-public record EmbeddedResourceDocumentationSource(string Id, Assembly Assembly) : 
-    DocumentationSource<EmbeddedResourceDocumentationSource>(Id)
-{
-    public override Stream GetStream(string name)
-        => Assembly.GetManifestResourceStream(name);
 }
