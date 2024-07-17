@@ -1,4 +1,4 @@
-@page "/app/{Application}/{Environment}/{Area}/{Id?}"
+@page "/app/{Application}/{Environment}/{Area}/{*Id}"
 @using System.Collections.Immutable
 @using OpenSmc.Application
 @using OpenSmc.Utils
@@ -6,7 +6,7 @@
 
 <PageTitle>@PageTitle</PageTitle>
 
-<LayoutArea Address="@Address" Reference="@Reference" Id="@Id"/>
+<LayoutArea Address="@Address" Reference="@Reference" Id="@Id" />
 
 @code{
     [Parameter]
@@ -27,6 +27,7 @@
     private LayoutAreaReference Reference => new(Area)
     {
         Id = Id,
+        RenderLayout = true,
         Options = Options?.ToImmutableDictionary() 
                   ?? ImmutableDictionary<string, object>.Empty,
     };
