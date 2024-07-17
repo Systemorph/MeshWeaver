@@ -1,7 +1,8 @@
 @using Markdig
+@using Microsoft.JSInterop
 @using OpenSmc.Layout.Markdown
 @inherits BlazorView<MarkdownControl>
-
+@inject IJSRuntime JsRuntime;
 <div class="markdown">
 @if(Html != null)
 {
@@ -11,7 +12,9 @@
 
 @foreach (var component in LayoutAreaComponents)
 {
+    <div id="@(ComponentContainerId(component.DivId))" style="display:none;">
         <LayoutArea Address="@Stream.Owner" Reference="@component.Reference" />
+    </div>
 }
 </div>
 @code 
@@ -34,5 +37,16 @@
         Html = Markdown.ToHtml(markdown, pipeline);
         LayoutAreaComponents = layoutAreaExtension.Parser.Areas;
     }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            foreach (var component in LayoutAreaComponents)
+            {
+                await JsRuntime.InvokeVoidAsync("interop.moveComponentToTarget", ComponentContainerId(component.DivId), component.DivId);
+            }
+        }
+    }
 
+    private string ComponentContainerId(string id) => $"component-container-{id}";
 }
