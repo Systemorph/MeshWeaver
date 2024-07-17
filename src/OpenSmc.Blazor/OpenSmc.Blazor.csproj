@@ -1,5 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk.Razor">
-  <ItemGroup>
+
+    <PropertyGroup>
+        <RazorCompileOnBuild>true</RazorCompileOnBuild>
+        <RazorLangVersion>3.0</RazorLangVersion>
+    </PropertyGroup>
+    <ItemGroup>
     <SupportedPlatform Include="browser" />
   </ItemGroup>
 
