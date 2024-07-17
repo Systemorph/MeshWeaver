@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using OpenSmc.Data;
+using OpenSmc.Data.Serialization;
 using OpenSmc.Layout;
 using OpenSmc.Messaging;
 
@@ -22,6 +23,18 @@ public partial class LayoutArea : IDisposable
     public Dictionary<string, object> Options { get; set; }
 
     private IDisposable subscription;
+
+    [Parameter]
+    public object Address { get; set; }
+
+    [Parameter]
+    public LayoutAreaReference Reference { get; set; }
+
+    private UiControl RootControl { get; set; } = null;
+
+    [Parameter]
+    public ISynchronizationStream<JsonElement, LayoutAreaReference> Stream { get; set; }
+
 
     protected override void OnParametersSet()
     {

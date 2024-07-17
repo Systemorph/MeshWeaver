@@ -9,6 +9,8 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
 {
     public object Id { get; init; }
     public IReadOnlyDictionary<string, object> Options { get; init; } = ImmutableDictionary<string, object>.Empty;
+    public bool RenderLayout { get; init; }
+
     public const string Data = "data";
     public const string Areas = "areas";
 

@@ -1,5 +1,3 @@
-@using System.Text.Json
-@using OpenSmc.Data.Serialization
 @using HorizontalAlignment = Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @using VerticalAlignment = Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment
@@ -12,20 +10,8 @@
 }
 else
 {
-    <DispatchView ViewModel="@RootControl" Stream="@Stream" Area="@Reference.Area"/>
+    <div class="layout-area">
+        <DispatchView ViewModel="@RootControl" Stream="@Stream" Area="@Reference.Area"/>
+    </div>
 }
 
-@code{
-
-    [Parameter]
-    public object Address { get; set; }
-
-    [Parameter]
-    public LayoutAreaReference Reference { get; set; }
-
-    private UiControl RootControl { get; set; } = null;
-
-    [Parameter]
-    public ISynchronizationStream<JsonElement, LayoutAreaReference> Stream { get; set; }
-
-}

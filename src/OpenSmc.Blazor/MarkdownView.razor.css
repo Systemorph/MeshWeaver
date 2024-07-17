@@ -1,0 +1,81 @@
+﻿.markdown {
+    display: flex;
+    flex-direction: column;
+}
+
+    /* Ensure images, paragraphs, lists, and blockquotes are displayed as block-level elements */
+    .markdown img,
+    .markdown p,
+    .markdown ul,
+    .markdown ol,
+    .markdown blockquote,
+    .markdown pre,
+    .markdown table,
+    .markdown h1,
+    .markdown h2,
+    .markdown h3,
+    .markdown h4,
+    .markdown h5,
+    .markdown h6 {
+        display: block;
+        width: 100%;
+        margin-top: 0.5em;
+        margin-bottom: 0.5em;
+    }
+
+    /* Style for code blocks */
+    .markdown pre {
+        background-color: #f6f8fa;
+        border: 1px solid #ececec;
+        padding: 10px;
+        overflow-x: auto;
+    }
+
+    /* Style for inline code */
+    .markdown code {
+        background-color: #f6f8fa;
+        padding: 2px 4px;
+        border-radius: 4px;
+        font-family: monospace;
+    }
+
+    /* Style for tables */
+    .markdown table {
+        border-collapse: collapse;
+        width: 100%;
+    }
+
+    .markdown th,
+    .markdown td {
+        border: 1px solid #ddd;
+        padding: 8px;
+        text-align: left;
+    }
+
+    .markdown th {
+        background-color: #f2f2f2;
+    }
+
+    /* Style for blockquotes */
+    .markdown blockquote {
+        border-left: 4px solid #ddd;
+        padding-left: 16px;
+        color: #666;
+        font-style: italic;
+    }
+
+    /* Style for lists */
+    .markdown ul,
+    .markdown ol {
+        padding-left: 20px;
+    }
+
+    /* Style for links */
+    .markdown a {
+        color: #0366d6;
+        text-decoration: none;
+    }
+
+        .markdown a:hover {
+            text-decoration: underline;
+        }

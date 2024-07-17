@@ -2,6 +2,7 @@
 @using OpenSmc.Layout.Markdown
 @inherits BlazorView<MarkdownControl>
 
+<div class="markdown">
 @if(Html != null)
 {
     @((MarkupString)Html) 
@@ -12,7 +13,7 @@
 {
         <LayoutArea Address="@Stream.Owner" Reference="@component.Reference" />
 }
-
+</div>
 @code 
 {
     private IReadOnlyList<LayoutAreaComponentInfo> LayoutAreaComponents { get; set; } = [];
