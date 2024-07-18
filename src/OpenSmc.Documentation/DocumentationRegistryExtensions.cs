@@ -16,7 +16,7 @@ public static class DocumentationRegistryExtensions
         .Set(AddLambda(hubConf.Get<ImmutableList<Func<DocumentationContext, DocumentationContext>>>()
                        ?? ImmutableList<Func<DocumentationContext, DocumentationContext>>.Empty, configuration))
         .WithServices(services => services.AddScoped<IDocumentationService, DocumentationService>())
-        .AddLayout(layout => layout.AddFiles());
+        .AddLayout(layout => layout.AddDocuments());
 
     private static ImmutableList<Func<DocumentationContext, DocumentationContext>> AddLambda(
         ImmutableList<Func<DocumentationContext, DocumentationContext>> existing,
@@ -33,12 +33,12 @@ public static class DocumentationRegistryExtensions
             ?.Aggregate(new DocumentationContext(hub), (context, config) => config(context))
         ?? new(hub);
 
-    private static LayoutDefinition AddFiles(this LayoutDefinition builder, string area = nameof(File)) =>
-        builder.WithView(area, File);
+    private static LayoutDefinition AddDocuments(this LayoutDefinition builder, string area = nameof(Doc)) =>
+        builder.WithView(area, Doc);
 
-    private static object File(LayoutAreaHost area, RenderingContext _)
+    private static object Doc(LayoutAreaHost area, RenderingContext _)
     {
-        if (area.Stream.Reference.Id is not string fileName)
+        if (area.Stream.Reference.Id is not string name)
             throw new InvalidOperationException("No file name specified.");
 
 
@@ -46,10 +46,10 @@ public static class DocumentationRegistryExtensions
 
 
         var text = "";
-        using var stream = documentationService.GetStream(fileName);
+        using var stream = documentationService.GetStream(name);
         if (stream == null)
             // Resource not found, return a warning control/message instead
-            text = $":error: **File not found**: {fileName}";
+            text = $":error: **File not found**: {name}";
 
         else
         {

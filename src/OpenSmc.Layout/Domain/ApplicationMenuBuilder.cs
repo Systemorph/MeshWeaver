@@ -3,20 +3,20 @@ using OpenSmc.Layout.Composition;
 
 namespace OpenSmc.Layout.Domain
 {
-    public record DomainMenuBuilder(string Area, LayoutDefinition Layout, LayoutAreaReference Reference)
+    public record ApplicationMenuBuilder(string Area, LayoutDefinition Layout, LayoutAreaReference Reference)
     {
         internal NavMenuControl Menu { get; init; } = new();
 
-        public DomainMenuBuilder WithNavLink(object title, object href, Func<NavLinkControl, NavLinkControl> config)
+        public ApplicationMenuBuilder WithNavLink(object title, object href, Func<NavLinkControl, NavLinkControl> config)
             => this with { Menu = Menu.WithNavLink(title, href, config) };
-        public DomainMenuBuilder WithNavLink(object title, object href)
+        public ApplicationMenuBuilder WithNavLink(object title, object href)
             => this with { Menu = Menu.WithNavLink(title, href, x => x) };
-        public DomainMenuBuilder WithNavGroup(object title, Func<NavGroupControl, NavGroupControl> config)
+        public ApplicationMenuBuilder WithNavGroup(object title, Func<NavGroupControl, NavGroupControl> config)
             => this with { Menu = Menu.WithNavGroup(title, config) };
-        public DomainMenuBuilder WithNavGroup(object title)
+        public ApplicationMenuBuilder WithNavGroup(object title)
             => this with { Menu = Menu.WithNavGroup(title, x => x) };
 
-        public DomainMenuBuilder WithTypesCatalog()
+        public ApplicationMenuBuilder WithTypesCatalog()
             => this with
             {
                 Layout = Layout.WithView(Area,

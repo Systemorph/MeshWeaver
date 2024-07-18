@@ -82,11 +82,11 @@ public record DomainViewsBuilder
     private Func<ViewElement, NavMenuControl, ViewElement> MainLayout { get; init; }
 
 
-    public DomainViewsBuilder WithMenu(Func<DomainMenuBuilder, DomainMenuBuilder> menuConfig, string areaName = nameof(DomainViews.NavMenu))
+    public DomainViewsBuilder WithMenu(Func<ApplicationMenuBuilder, ApplicationMenuBuilder> menuConfig, string areaName = nameof(DomainViews.NavMenu))
         // ReSharper disable once WithExpressionModifiesAllMembers
         => this with { MenuConfig = menuConfig, MenuArea = areaName};
 
-    private Func<DomainMenuBuilder, DomainMenuBuilder> MenuConfig { get; init; }
+    private Func<ApplicationMenuBuilder, ApplicationMenuBuilder> MenuConfig { get; init; }
 
     private string MenuArea { get; init; }
 

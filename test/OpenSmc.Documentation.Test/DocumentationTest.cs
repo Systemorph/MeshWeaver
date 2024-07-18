@@ -13,7 +13,7 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return base.ConfigureHost(configuration).AddDocumentation(doc => doc
             .WithEmbeddedResourcesFrom(GetType().Assembly, assembly => 
-                assembly.WithXmlComments().WithFilePath("/Markdown")));
+                assembly.WithXmlComments().WithDocument("Markdown","/Markdown")));
     }
 
     [HubFact]
