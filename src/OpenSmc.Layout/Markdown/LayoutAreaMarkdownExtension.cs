@@ -7,16 +7,16 @@ namespace OpenSmc.Layout.Markdown;
 public class LayoutAreaMarkdownExtension(IMessageHub hub) : IMarkdownExtension
 {
     public LayoutAreaMarkdownParser MarkdownParser { get; } = new(hub);
+    private readonly LayoutAreaMarkdownRenderer layoutAreaRenderer = new();
 
     public void Setup(MarkdownPipelineBuilder pipeline)
     {
-        if (!pipeline.BlockParsers.Contains<LayoutAreaMarkdownParser>())
-            pipeline.BlockParsers.Insert(0,MarkdownParser);
+        pipeline.BlockParsers.AddIfNotAlready(MarkdownParser);
     }
 
     public void Setup(MarkdownPipeline pipeline, IMarkdownRenderer renderer)
     {
         if (renderer is HtmlRenderer htmlRenderer)
-            htmlRenderer.ObjectRenderers.Add(new LayoutAreaMarkdownRenderer());
+            htmlRenderer.ObjectRenderers.AddIfNotAlready(layoutAreaRenderer);
     }
 }
