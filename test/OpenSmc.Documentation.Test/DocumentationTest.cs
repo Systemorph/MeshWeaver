@@ -69,4 +69,15 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
         html.Should().Contain(area1.DivId);
         html.Should().Contain(area2.DivId);
     }
+
+    [HubFact]
+    public async Task TryReadSource()
+    {
+        var documentationService = GetHost().GetDocumentationService();
+        documentationService.Should().NotBeNull();
+        var type = GetType();
+        var source = documentationService.GetSources(type.Assembly);
+        source.Should().NotBeNull();
+
+    }
 }

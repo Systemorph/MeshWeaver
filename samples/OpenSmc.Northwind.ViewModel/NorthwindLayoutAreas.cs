@@ -107,6 +107,7 @@ public static class NorthwindLayoutAreas
     /// <summary>
     /// This is the main dashboard view. It shows....
     /// </summary>
+    /// <source name="mysource"></source>
     /// <param name="layoutArea"></param>
     /// <param name="context"></param>
     /// <returns></returns>
