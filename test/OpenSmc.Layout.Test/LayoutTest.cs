@@ -11,7 +11,6 @@ using OpenSmc.Disposables;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.DataGrid;
-using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
 using OpenSmc.Utils;
 using Xunit.Abstractions;
@@ -498,9 +497,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
     private static object AsyncView =>
         Controls.Stack()
-            .WithView("subarea", Observable.Return<ViewDefinition>(async (area, context) =>
+            .WithView("subarea", Observable.Return<ViewDefinition>(async (area, context, ct) =>
             {
-                await Task.Delay(3000);
+                await Task.Delay(3000, ct);
                 return "Ok";
             }));
 

@@ -172,7 +172,7 @@ public static class NorthwindLayoutAreas
         
         var viewDefinition = GetDataCube(layout)
             .Select<IDataCube, ViewDefinition>(cube =>
-                (a, c) =>
+                (a, c, _) =>
                     Task.FromResult<object>(cube
                         .ToDataCubeFilter(a, c, DataCubeFilterId)
                         .ToContextPanel()
