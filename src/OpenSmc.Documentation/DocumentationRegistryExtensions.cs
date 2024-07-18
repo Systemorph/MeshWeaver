@@ -1,8 +1,6 @@
 ﻿using System.Collections.Immutable;
-using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Layout.Composition;
-using OpenSmc.Layout.Domain;
 using OpenSmc.Layout;
 using OpenSmc.Messaging;
 
@@ -36,7 +34,7 @@ public static class DocumentationRegistryExtensions
     private static LayoutDefinition AddDocuments(this LayoutDefinition builder, string area = nameof(Doc)) =>
         builder.WithView(area, Doc);
 
-    private static object Doc(LayoutAreaHost area, RenderingContext _)
+    private static async Task<object> Doc(LayoutAreaHost area, RenderingContext context, CancellationToken cancellationToken)
     {
         if (area.Stream.Reference.Id is not string name)
             throw new InvalidOperationException("No file name specified.");
@@ -54,7 +52,7 @@ public static class DocumentationRegistryExtensions
         else
         {
             using var reader = new StreamReader(stream);
-            text = reader.ReadToEnd();
+            text = await reader.ReadToEndAsync(cancellationToken);
         }
 
         return new MarkdownControl(text);

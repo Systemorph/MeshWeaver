@@ -62,7 +62,7 @@ public static class LayoutManager
             layoutArea.InvokeAsync(async ct =>
             {
                 ct.ThrowIfCancellationRequested();
-                var control = await f.Invoke(layoutArea, context);
+                var control = await f.Invoke(layoutArea, context, ct);
                 layoutArea.RenderArea(context, control);
             })
         ));
