@@ -71,11 +71,17 @@ public static class SupplierSummaryArea
     public static IObservable<object> SupplierSummaryGrid(
         this LayoutAreaHost area,
         RenderingContext ctx
-    ) =>
-        area.GetDataCube()
+    )
+    {
+        // TODO V10: we might think about better place for this, but in principle each control which has a support for filtering based on common filter should take care about initializing stream with empty filter in case not present yet (2024/07/18, Dmitry Kalabin)
+        var filter = area.Stream.GetData<DataCubeFilter>(DataCubeFilterId) ?? new();
+        area.UpdateData(DataCubeFilterId, filter);
+
+        return area.GetDataCube()
             .Select(cube =>
                 GridOptionsMapper.ToGrid((IPivotBuilder)area.Workspace.State.Pivot(cube).SliceRowsBy(nameof(Supplier)))
             );
+    }
 
     private static IObservable<IDataCube<NorthwindDataCube>> GetDataCube(
         this LayoutAreaHost area
