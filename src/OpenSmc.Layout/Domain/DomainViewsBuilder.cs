@@ -16,7 +16,7 @@ public record DomainViewsBuilder
     }
 
     private ViewElement DefaultLayoutViewElement(ViewElement view, NavMenuControl navMenu)
-        => new ViewElementWithView(view.Area, DefaultLayoutControl(view, navMenu));
+        => new ViewElementWithView(view.Area, DefaultLayoutControl(view, navMenu), new());
 
     public const string Type = nameof(Type);
 
@@ -34,7 +34,7 @@ public record DomainViewsBuilder
     }
 
     // ReSharper disable once WithExpressionModifiesAllMembers
-    public DomainViewsBuilder WithCatalog(string area = nameof(Catalog)) => this with { Layout = Layout.WithView(area, Catalog) };
+    public DomainViewsBuilder WithCatalog(string area = nameof(Catalog)) => this with { Layout = Layout.WithView(area, Catalog, options => options.WithMenuOrder(-1)) };
 
     public object Catalog(LayoutAreaHost area, RenderingContext ctx)
     {
@@ -61,7 +61,8 @@ public record DomainViewsBuilder
                             typeSource.ElementType,
                             x => x.AutoMapColumns()
                         )
-                    )
+                    ),
+                    x => x
                 )
             ;
     }

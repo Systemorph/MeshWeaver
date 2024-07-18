@@ -32,7 +32,8 @@ namespace OpenSmc.Layout.Domain
                         .Aggregate(
                             Menu,
                             (menu, types) => menu.WithNavGroup(types.Key ?? "Domain Types",
-                                x => CreateGroup(types, x)))
+                                x => CreateGroup(types, x))),
+                    options => options
                 )
             };
 
