@@ -282,6 +282,14 @@ public static class NorthwindLayoutAreas
 
     public static object Counter(int counter) => Controls.Title(counter.ToString(), 1);
 
+
+    /// <summary>
+    /// 
+    /// </summary>
+    /// <codeFileTag name="TagMe"/>
+    /// <param name="layoutArea"></param>
+    /// <param name="ctx"></param>
+    /// <returns></returns>
     public static LayoutStackControl OrderSummary(
         LayoutAreaHost layoutArea,
         RenderingContext ctx

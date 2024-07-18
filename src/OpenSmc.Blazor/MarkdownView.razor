@@ -29,13 +29,13 @@
 
     private void RenderMarkdown(string markdown)
     {
-        var layoutAreaExtension = new LayoutAreaExtension(Stream.Hub);
+        var layoutAreaExtension = new LayoutAreaMarkdownExtension(Stream.Hub);
         var pipeline = new MarkdownPipelineBuilder()
             .UseAdvancedExtensions()
             .Use(layoutAreaExtension)
             .Build();
         Html = Markdown.ToHtml(markdown, pipeline);
-        LayoutAreaComponents = layoutAreaExtension.Parser.Areas;
+        LayoutAreaComponents = layoutAreaExtension.MarkdownParser.Areas;
     }
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
