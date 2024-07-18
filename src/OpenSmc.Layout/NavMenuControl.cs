@@ -32,7 +32,7 @@ public record NavMenuControl()
     public NavMenuControl WithCollapsible(bool collapsible) => this with { Collapsible = collapsible };
 
     public NavMenuControl WithWidth(int width) => this with { Width = width };
-    public IEnumerable<ViewElement> ChildControls => Items.Select((x, i) => new ViewElementWithView(i.ToString(), x));
+    public IEnumerable<ViewElement> ChildControls => Items.Select((x, i) => new ViewElementWithView(i.ToString(), x, new()));
     public IReadOnlyCollection<string> Areas { get; init; }
 
     public IContainerControl SetAreas(IReadOnlyCollection<string> areas)
@@ -68,7 +68,7 @@ public record NavGroupControl(object Data)
     internal ImmutableList<object> Items { get; private init; } = ImmutableList<object>.Empty;
 
     IEnumerable<ViewElement> IContainerControl.ChildControls =>
-        Items.Select((x, i) => new ViewElementWithView(i.ToString(), x));
+        Items.Select((x, i) => new ViewElementWithView(i.ToString(), x, new()));
 
     public NavGroupControl WithLink(string displayName, string link, Func<NavLinkControl, NavLinkControl> options) =>
         this with { Items = Items.Add(options.Invoke(new(displayName, link))) };

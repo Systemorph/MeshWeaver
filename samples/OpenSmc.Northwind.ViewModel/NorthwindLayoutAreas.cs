@@ -24,7 +24,15 @@ public static class NorthwindLayoutAreas
     public const string DataCubeFilterId = "DataCubeFilter";
 
     public const string ContextPanelArea = "ContextPanel";
-    
+
+    private static readonly KeyValuePair<LayoutAreaReference, Icon>[] DashboardWidgets = new[]
+    {
+        new KeyValuePair<LayoutAreaReference, Icon>(new(nameof(Dashboard)), FluentIcons.Grid),
+        new(new(nameof(OrderSummary)), FluentIcons.Box),
+        new(new(nameof(ProductSummary)), FluentIcons.Box),
+        new(new(nameof(CustomerSummary)), FluentIcons.Person),
+        new(new(nameof(SupplierSummary)), FluentIcons.Person)
+    };
 
     public static MessageHubConfiguration AddNorthwindViewModels(
         this MessageHubConfiguration configuration
@@ -95,14 +103,6 @@ public static class NorthwindLayoutAreas
                 )
             );
 
-    private static readonly KeyValuePair<LayoutAreaReference, Icon>[] DashboardWidgets = new[]
-    {
-        new KeyValuePair<LayoutAreaReference, Icon>(new(nameof(Dashboard)), FluentIcons.Grid),
-        new(new(nameof(OrderSummary)), FluentIcons.Box),
-        new(new(nameof(ProductSummary)), FluentIcons.Box),
-        new(new(nameof(CustomerSummary)), FluentIcons.Person),
-        new(new(nameof(SupplierSummary)), FluentIcons.Person)
-    };
 
     /// <summary>
     /// This is the main dashboard view. It shows....
@@ -182,7 +182,7 @@ public static class NorthwindLayoutAreas
 
         layout.RenderArea(
             context,
-            new ViewElementWithViewDefinition(ContextPanelArea, viewDefinition)
+            new ViewElementWithViewDefinition(ContextPanelArea, viewDefinition, context.Options)
         );
     }
 

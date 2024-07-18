@@ -1,5 +1,8 @@
-﻿using System.Collections.Immutable;
+﻿using System;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
+using Microsoft.Extensions.Options;
+using OpenSmc.Application.Styles;
 using OpenSmc.Data;
 using OpenSmc.Messaging;
 
@@ -18,68 +21,125 @@ public record LayoutDefinition(IMessageHub Hub)
 
     public LayoutDefinition WithView(
         string area,
-        Func<LayoutAreaHost, RenderingContext, IObservable<object>> generator
+        Func<LayoutAreaHost, RenderingContext, IObservable<object>> generator) =>
+        WithView(area, generator, x => x);
+    public LayoutDefinition WithView(
+        string area,
+        Func<LayoutAreaHost, RenderingContext, IObservable<object>> generator, 
+        Func<ViewOptions, ViewOptions> options
     ) =>
         WithViewGenerator(
             r => r.Area == area,
-            new ViewElementWithViewStream(area, (a,ctx) => generator(a, ctx))
+            new ViewElementWithViewStream(area, (a,ctx) => generator(a, ctx),  options.Invoke(new()))
         );
 
     public LayoutDefinition WithViewDefinition(
         string area,
         IObservable<Func<LayoutAreaHost, object>> generator
     ) =>
+    WithViewDefinition(area, generator, x => x);
+    public LayoutDefinition WithViewDefinition(
+        string area,
+        IObservable<Func<LayoutAreaHost, object>> generator,
+        Func<ViewOptions, ViewOptions> options
+    ) =>
         WithViewDefinition(
             area,
             generator.Select(o =>
                 (Func<LayoutAreaHost, Task<object>>)(a => Task.FromResult(o.Invoke(a)))
-            )
+            ),
+            options
         );
 
     public LayoutDefinition WithViewDefinition(
         string area,
         Func<LayoutAreaHost, Task<object>> generator
-    ) => WithViewDefinition(area, Observable.Return(generator));
+    ) => WithViewDefinition(area, Observable.Return(generator), x => x);
+    public LayoutDefinition WithViewDefinition(
+        string area,
+        Func<LayoutAreaHost, Task<object>> generator,
+        Func<ViewOptions, ViewOptions> options
+    ) => WithViewDefinition(area, Observable.Return(generator), options);
 
     public LayoutDefinition WithViewDefinition(
         string area,
-        IObservable<Func<LayoutAreaHost, Task<object>>> generator
+        IObservable<Func<LayoutAreaHost, Task<object>>> generator, Func<ViewOptions, ViewOptions> options
     ) =>
         WithViewGenerator(
             r => r.Area == area,
             new ViewElementWithViewDefinition(
                 area,
-                generator.Cast<ViewDefinition>()
+                generator.Cast<ViewDefinition>(),
+                options.Invoke(new()
             )
-        );
+        ));
 
 
     public LayoutDefinition WithViewDefinition(
         string area,
         Func<LayoutAreaHost, Task<UiControl>> generator
-    ) => WithViewDefinition(area, Observable.Return(generator));
-
-
+    ) => WithViewDefinition(area, generator, x => x);
+    public LayoutDefinition WithViewDefinition(
+        string area,
+        Func<LayoutAreaHost, Task<UiControl>> generator,
+        Func<ViewOptions, ViewOptions> options
+    ) => WithViewDefinition(area, Observable.Return(generator), options);
     public LayoutDefinition WithViewDefinition(string area, ViewDefinition generator) =>
-        WithViewDefinition(area, Observable.Return(generator));
+        WithViewDefinition(
+            area,
+            generator,
+            x => x
+        );
+
+
+    public LayoutDefinition WithViewDefinition(string area, ViewDefinition generator,
+        Func<ViewOptions, ViewOptions> options) =>
+        WithViewDefinition(
+            area,
+            Observable.Return(generator),
+            options
+        );
 
     public LayoutDefinition WithViewDefinition(
         string area,
         IObservable<ViewDefinition> generator
-    ) => WithViewGenerator(r => r.Area == area, new ViewElementWithViewDefinition(area, generator));
+    ) =>
+        WithViewDefinition(area, generator, x => x);
+    public LayoutDefinition WithViewDefinition(
+        string area,
+        IObservable<ViewDefinition> generator, 
+        Func<ViewOptions, ViewOptions> options
+    ) => WithViewGenerator(r => r.Area == area, new ViewElementWithViewDefinition(area, generator, options.Invoke(new())));
 
-    public LayoutDefinition WithView(string area, object view) =>
-        WithViewGenerator(r => r.Area == area, new ViewElementWithView(area, view));
+    public LayoutDefinition WithView(string area, object view) => WithView(area, view, x => x);
+    public LayoutDefinition WithView(string area, object view, Func<ViewOptions, ViewOptions> options) =>
+        WithViewGenerator(r => r.Area == area, new ViewElementWithView(area, view, options.Invoke(new())));
 
-    
-    public LayoutDefinition WithView(string area, Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<object>> view)
+    public LayoutDefinition WithView(
+        string area,
+        Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<object>> view)
+        => WithView(area, view, x => x);
+
+    public LayoutDefinition WithView(
+        string area, 
+        Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<object>> view, 
+        Func<ViewOptions, ViewOptions> options)
     {
         return WithViewGenerator(r => r.Area == area,
-            new ViewElementWithViewDefinition(area, Observable.Return<ViewDefinition>(view.Invoke)));
+            new ViewElementWithViewDefinition(area, 
+                Observable.Return<ViewDefinition>(view.Invoke), 
+                options.Invoke(new())));
     }
 
-    public LayoutDefinition WithView(string area, Func<LayoutAreaHost,RenderingContext, object> view)
-        => WithView(area, (a,ctx) => Observable.Return(view(a, ctx)));
+    public LayoutDefinition WithView(
+        string area,
+        Func<LayoutAreaHost, RenderingContext, object> view)
+        => WithView(area, view, x => x);
+    public LayoutDefinition WithView(
+        string area, 
+        Func<LayoutAreaHost,RenderingContext, object> view, 
+        Func<ViewOptions, ViewOptions> options)
+        => WithView(area, (a,ctx) => Observable.Return(view(a, ctx)), options);
 
 
     internal ViewElement GetViewElement(LayoutAreaReference reference)
@@ -99,6 +159,15 @@ public record LayoutDefinition(IMessageHub Hub)
         => this with { MainLayout = layout };
 
     internal Func<LayoutAreaReference,NavMenuControl> NavMenu { get; init; }
+}
+
+public record ViewOptions
+{
+    internal int MenuOrder { get; init; } 
+    public ViewOptions WithMenuOrder(int order) => this with { MenuOrder = order };
+
+    internal Icon Icon { get; init; }
+    public ViewOptions WithIcon(Icon icon) => this with { Icon = icon };
 }
 
 internal record ViewGenerator(Func<LayoutAreaReference, bool> Filter, ViewElement ViewElement);
