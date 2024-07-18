@@ -6,7 +6,7 @@ namespace OpenSmc.Documentation
     {
         DocumentationContext Context { get; }
         Stream GetStream(string fullPath);
-        Stream GetStream(string dataSource, string fileName);
+        Stream GetStream(string dataSource, string documentName);
     }
 
     public class DocumentationService(IMessageHub hub) : IDocumentationService
@@ -18,10 +18,10 @@ namespace OpenSmc.Documentation
                 .Select(s => s.GetStream(fullPath))
                 .FirstOrDefault(s => s != null);
 
-        public Stream GetStream(string dataSource, string fileName)
+        public Stream GetStream(string dataSource, string documentName)
         {
             if (Context.Sources.TryGetValue(dataSource, out var source))
-                return source.GetStream(fileName);
+                return source.GetStream(documentName);
             return null;
         }
     }

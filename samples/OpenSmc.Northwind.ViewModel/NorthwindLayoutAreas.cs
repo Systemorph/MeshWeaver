@@ -4,7 +4,6 @@ using Markdig;
 using OpenSmc.Application.Styles;
 using OpenSmc.Data;
 using OpenSmc.DataCubes;
-using OpenSmc.Documentation;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.DataGrid;
@@ -25,6 +24,7 @@ public static class NorthwindLayoutAreas
     public const string DataCubeFilterId = "DataCubeFilter";
 
     public const string ContextPanelArea = "ContextPanel";
+    
 
     public static MessageHubConfiguration AddNorthwindViewModels(
         this MessageHubConfiguration configuration
@@ -41,18 +41,18 @@ public static class NorthwindLayoutAreas
                 .WithView(nameof(CategoryCatalog), CategoryCatalog)
                 .AddDomainViews(views => views
                     .WithMenu(menu => menu
-                        .WithNavLink("Overview", $"{layout.Hub.Address}/File/"+Uri.EscapeDataString($"{typeof(NorthwindLayoutAreas).Assembly.GetName().Name}.Markdown.Overview.md"))
+                        .DocumentationMenu()
                         .NorthwindViewsMenu()
                         .WithTypesCatalog()
                     )
                     .DefaultViews()
                 )
-        ).AddDocumentation(doc => 
-            doc.WithEmbeddedResourcesFrom(typeof(NorthwindLayoutAreas).Assembly, 
-            source => source));
+        )
+        .AddNorthwindDocumentation()
+            ;
     }
 
-    private static DomainMenuBuilder NorthwindViewsMenu(this DomainMenuBuilder menu)
+    private static ApplicationMenuBuilder NorthwindViewsMenu(this ApplicationMenuBuilder menu)
     {
         return DashboardWidgets.Aggregate(
             menu,
@@ -65,7 +65,7 @@ public static class NorthwindLayoutAreas
         );
     }
 
-    private static string GenerateHref(this DomainMenuBuilder builder, LayoutAreaReference reference)
+    private static string GenerateHref(this ApplicationMenuBuilder builder, LayoutAreaReference reference)
     {
         var ret = $"{builder.Layout.Hub.Address}/{Uri.EscapeDataString(reference.Area)}";
         if(reference.Id?.ToString() is { } s)
