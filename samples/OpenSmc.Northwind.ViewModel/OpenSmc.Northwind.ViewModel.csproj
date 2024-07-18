@@ -15,4 +15,19 @@
       <!-- Include all Markdown files in the Markdown folder as embedded resources -->
       <EmbeddedResource Include="Markdown\**\*.md" />
   </ItemGroup>
+    <PropertyGroup>
+        <!--generate xml comment files -->
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <DocumentationFile>bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml</DocumentationFile>
+        <!-- Embed source files in the PDB -->
+        <EmbedAllSources>true</EmbedAllSources>
+    </PropertyGroup>
+    <ItemGroup>
+        <EmbeddedResource Include="bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml">
+            <LogicalName>$(AssemblyName).xml</LogicalName>
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Embed>true</Embed>
+        </EmbeddedResource>
+    </ItemGroup>
+
 </Project>
