@@ -1,6 +1,6 @@
 ﻿namespace OpenSmc.Layout.Composition;
 
-public delegate Task<object> ViewDefinition(LayoutAreaHost area, RenderingContext context);
+public delegate Task<object> ViewDefinition(LayoutAreaHost area, RenderingContext context, CancellationToken cancellationToken);
 
 public record RenderingContext(string Area)
 {

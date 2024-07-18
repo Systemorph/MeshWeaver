@@ -70,7 +70,9 @@ public record LayoutDefinition(IMessageHub Hub)
 
     public LayoutDefinition WithView(string area, object view) =>
         WithViewGenerator(r => r.Area == area, new ViewElementWithView(area, view));
-    public LayoutDefinition WithView(string area, Func<LayoutAreaHost,RenderingContext, Task<object>> view)
+
+    
+    public LayoutDefinition WithView(string area, Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<object>> view)
     {
         return WithViewGenerator(r => r.Area == area,
             new ViewElementWithViewDefinition(area, Observable.Return<ViewDefinition>(view.Invoke)));
