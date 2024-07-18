@@ -7,12 +7,12 @@ using OpenSmc.Messaging;
 
 namespace OpenSmc.Layout.Markdown;
 
-public class LayoutAreaParser : BlockParser
+public class LayoutAreaMarkdownParser : BlockParser
 {
     private readonly Dictionary<string, Action<LayoutAreaComponentInfo, string>> FieldMappings;
     public readonly List<LayoutAreaComponentInfo> Areas = new();
 
-    public LayoutAreaParser(IMessageHub hub)
+    public LayoutAreaMarkdownParser(IMessageHub hub)
     {
         OpeningCharacters = ['@'];
 
@@ -162,9 +162,4 @@ public class LayoutAreaParser : BlockParser
         return BlockState.ContinueDiscard;
     }
 
-    public override BlockState TryContinue(BlockProcessor processor, Block block)
-    {
-        //TODO Roland Bürgi 2024-07-14: We need to see if layout area goes across multiple lines.
-        return BlockState.Continue;
-    }
 }
