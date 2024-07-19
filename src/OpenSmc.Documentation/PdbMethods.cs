@@ -85,8 +85,6 @@ public static class PdbMethods
 
             if (name.Equals(methodName, StringComparison.Ordinal))
             {
-                var debugMetadata = peReader.ReadDebugDirectory();
-                var codeView = debugMetadata[0];
                 var pdbPath = Path.ChangeExtension(assemblyPath, "pdb");
 
                 using var pdbStream = File.OpenRead(pdbPath);
