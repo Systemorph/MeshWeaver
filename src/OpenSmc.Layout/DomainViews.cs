@@ -17,5 +17,16 @@ public static class DomainViews
 
     public static DomainViewsBuilder DefaultViews(this DomainViewsBuilder layout)
         => layout.WithCatalog();
+    public static string GenerateHref(this ApplicationMenuBuilder builder, LayoutAreaReference reference)
+    {
+        var ret = $"{builder.Layout.Hub.Address}/{Uri.EscapeDataString(reference.Area)}";
+        if (reference.Id?.ToString() is { } s)
+            ret = $"{ret}/{Uri.EscapeDataString(s)}";
+        if (reference.Options.Any())
+            ret = $"ret?{string.Join('&',
+                reference.Options
+                    .Select(x => $"{x.Key}={Uri.EscapeDataString(x.Value?.ToString() ?? "")}"))}";
+        return ret;
+    }
 
 }

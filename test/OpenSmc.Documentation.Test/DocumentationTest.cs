@@ -7,8 +7,17 @@ using Xunit.Abstractions;
 
 namespace OpenSmc.Documentation.Test;
 
+/// <summary>
+/// The main class for testing documentation
+/// </summary>
+/// <param name="output"></param>
 public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
 {
+    /// <summary>
+    /// Configure the documentation service
+    /// </summary>
+    /// <param name="configuration"></param>
+    /// <returns></returns>
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration).AddDocumentation(doc => doc
@@ -16,6 +25,10 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
                 assembly.WithXmlComments().WithDocument("Markdown","/Markdown")));
     }
 
+    /// <summary>
+    /// This is how to retrieve a file from documentation service
+    /// </summary>
+    /// <returns></returns>
     [HubFact]
     public async Task TestRetrievingFile()
     {
@@ -27,6 +40,9 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
         content.Should().NotBeNullOrEmpty();
     }
 
+    /// <summary>
+    /// This tests the rendering of Layout Area Markdown
+    /// </summary>
     [HubFact]
     public void BasicLayoutArea()
     {
@@ -50,6 +66,9 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
         var html = Markdown.ToHtml(markdown, pipeline);
         return html;
     }
+    /// <summary>
+    /// This tests the rendering of two Layout Area Markdown
+    /// </summary>
 
     [HubFact]
     public void TwoLayoutAreas()
@@ -70,8 +89,13 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
         html.Should().Contain(area2.DivId);
     }
 
+    /// <summary>
+    /// Here we read the source from embedded assemblies
+    /// </summary>
+    /// <returns></returns>
+
     [HubFact]
-    public async Task TryReadSource()
+    public void TryReadSource()
     {
         var documentationService = GetHost().GetDocumentationService();
         documentationService.Should().NotBeNull();
@@ -79,5 +103,17 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
         var source = documentationService.GetSources(type.Assembly);
         source.Should().NotBeNull();
 
+    }
+
+
+    /// <summary>
+    /// This tests reading debug info from the pdb
+    /// </summary>
+    [HubFact]
+    public void TestDebugInfo()
+    {
+        var points = PdbMethods.ReadMethodSourceInfo(typeof(DocumentationTest).Assembly.Location, nameof(TestDebugInfo));
+        points.Should().NotBeNull();
+        points.Should().HaveCountGreaterThan(0);
     }
 }
