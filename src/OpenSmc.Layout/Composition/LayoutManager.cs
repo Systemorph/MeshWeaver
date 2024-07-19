@@ -22,7 +22,7 @@ public static class LayoutManager
         return layoutArea.Stream;
     }
 
-    public static void RenderArea(this LayoutAreaHost layoutArea, RenderingContext context, object viewModel)
+    public static void RenderArea(this LayoutAreaHost layoutArea, RenderingContext context, object viewModel, ViewOptions options)
     {
         if (viewModel == null)
             return;
@@ -35,7 +35,8 @@ public static class LayoutManager
             
             viewModel = control with
             {
-                DataContext = dataContext
+                DataContext = dataContext,
+                Sources = options.Sources
             };
 
             if (viewModel is IContainerControl container)
@@ -47,6 +48,7 @@ public static class LayoutManager
 
                 viewModel = container.SetAreas(container.ChildControls.Select(ve => $"{area}/{ve.Area}").ToArray());
             }
+
         }
 
         layoutArea.UpdateLayout(area, viewModel);
@@ -63,7 +65,7 @@ public static class LayoutManager
             {
                 ct.ThrowIfCancellationRequested();
                 var control = await f.Invoke(layoutArea, context, ct);
-                layoutArea.RenderArea(context, control);
+                layoutArea.RenderArea(context, control, viewDefinition.Options);
             })
         ));
     }
@@ -75,14 +77,14 @@ public static class LayoutManager
         switch (viewElement)
         {
             case ViewElementWithView view:
-                layoutArea.RenderArea(context, view.View);
+                layoutArea.RenderArea(context, view.View, view.Options);
                 break;
             case ViewElementWithViewDefinition viewDefinition:
                 layoutArea.RenderArea(context, viewDefinition);
                 break;
             case ViewElementWithViewStream s:
                 layoutArea.AddDisposable(context.Area, s.Stream.Invoke(layoutArea, context)
-                    .Subscribe(c => layoutArea.RenderArea(context, c)));
+                    .Subscribe(c => layoutArea.RenderArea(context, c, s.Options)));
                 break;
             default:
                 throw new NotSupportedException($"Unknown type: {viewElement.GetType().FullName}");

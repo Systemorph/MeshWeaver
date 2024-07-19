@@ -227,4 +227,6 @@ public static class Controls
     }
 
     #endregion
+
+    public static MarkdownControl Markdown(object data) => new MarkdownControl(data);
 }

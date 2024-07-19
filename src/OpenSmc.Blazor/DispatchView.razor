@@ -1,8 +1,7 @@
-@using OpenSmc.Data.Serialization
 @using OpenSmc.Layout.Client
 @inherits BlazorView<UiControl>
 
-@((RenderFragment) (builder =>
+@((RenderFragment)(builder =>
 {
     builder.OpenComponent(0, ViewDescriptor.Type);
     var index = 0;
@@ -10,6 +9,7 @@
     {
         builder.AddAttribute(++index, parameter.Key, parameter.Value);
     }
+
     builder.CloseComponent();
 }))
 
