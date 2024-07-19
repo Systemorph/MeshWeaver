@@ -16,7 +16,7 @@ namespace OpenSmc.Layout.Domain
         public ApplicationMenuBuilder WithNavGroup(object title)
             => this with { Menu = Menu.WithNavGroup(title, x => x) };
 
-        public ApplicationMenuBuilder WithTypesCatalog()
+        public ApplicationMenuBuilder AddTypesCatalogs()
             => this with
             {
                 Layout = Layout.WithView(Area,
@@ -45,6 +45,17 @@ namespace OpenSmc.Layout.Domain
                     opt => opt.WithIcon(t.Icon)));
         }
 
+        public ApplicationMenuBuilder AddRegisteredViews()
+            => this with
+            {
+                Menu = Layout
+                    .ViewGenerators
+                    .Select(g => new { g.ViewElement.Area, g.ViewElement.Options })
+                    .OrderBy(x => x.Options.MenuOrder)
+                    .SelectMany(x => x.Options.MenuControls)
+                    .Aggregate(Menu,
+                        (menu, navLink) => menu.WithNavLink(navLink))
+            };
 
         public NavMenuControl Build() => Menu;
     }

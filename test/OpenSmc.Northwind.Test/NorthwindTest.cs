@@ -125,7 +125,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = GetClient().GetWorkspace();
         await workspace.Initialized;
 
-        var viewName = nameof(NorthwindLayoutAreas.Dashboard);
+        var viewName = nameof(NorthwindDashboardArea.Dashboard);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new HostAddress(),
             new LayoutAreaReference(viewName)
@@ -161,7 +161,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = GetHost().GetWorkspace();
         await workspace.Initialized;
 
-        var viewName = nameof(NorthwindLayoutAreas.SupplierSummaryGrid);
+        var viewName = nameof(NorthwindDashboardArea.SupplierSummaryGrid);
         var stream = workspace.GetRemoteStream<EntityStore, LayoutAreaReference>(
             new HostAddress(),
             new LayoutAreaReference(viewName)

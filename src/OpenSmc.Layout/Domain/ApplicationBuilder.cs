@@ -5,9 +5,9 @@ using OpenSmc.Layout.DataGrid;
 
 namespace OpenSmc.Layout.Domain;
 
-public record DomainViewsBuilder
+public record ApplicationBuilder
 {
-    public DomainViewsBuilder(LayoutDefinition Layout)
+    public ApplicationBuilder(LayoutDefinition Layout)
     {
         this.Layout = Layout;
         MainLayout = DefaultLayoutViewElement
@@ -34,7 +34,7 @@ public record DomainViewsBuilder
     }
 
     // ReSharper disable once WithExpressionModifiesAllMembers
-    public DomainViewsBuilder WithCatalog(string area = nameof(Catalog)) => this with { Layout = Layout.WithView(area, Catalog, options => options.WithMenuOrder(-1)) };
+    public ApplicationBuilder WithCatalog(string area = nameof(Catalog)) => this with { Layout = Layout.WithView(area, Catalog, options => options.WithMenuOrder(-1)) };
 
     public object Catalog(LayoutAreaHost area, RenderingContext ctx)
     {
@@ -74,7 +74,7 @@ public record DomainViewsBuilder
         NavMenu = MenuConfig == null ? null : reference => MenuConfig.Invoke(new(MenuArea, Layout, reference)).Build()
     };
 
-    public DomainViewsBuilder WithMainLayout(Func<ViewElement, NavMenuControl, ViewElement> configuration)
+    public ApplicationBuilder WithMainLayout(Func<ViewElement, NavMenuControl, ViewElement> configuration)
         =>  this with
         {
             MainLayout = configuration
@@ -83,9 +83,10 @@ public record DomainViewsBuilder
     private Func<ViewElement, NavMenuControl, ViewElement> MainLayout { get; init; }
 
 
-    public DomainViewsBuilder WithMenu(Func<ApplicationMenuBuilder, ApplicationMenuBuilder> menuConfig, string areaName = nameof(DomainViews.NavMenu))
+    public ApplicationBuilder WithMenu(Func<ApplicationMenuBuilder, ApplicationMenuBuilder> menuConfig, string areaName = nameof(ApplicationViews.NavMenu))
         // ReSharper disable once WithExpressionModifiesAllMembers
         => this with { MenuConfig = menuConfig, MenuArea = areaName};
+
 
     private Func<ApplicationMenuBuilder, ApplicationMenuBuilder> MenuConfig { get; init; }
 

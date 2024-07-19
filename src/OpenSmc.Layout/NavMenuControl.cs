@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using OpenSmc.Layout.Composition;
 
 namespace OpenSmc.Layout;
@@ -23,10 +24,14 @@ public record NavMenuControl()
 
     public NavMenuControl WithNavLink(object title, object href) =>
         WithNavLink(title, href, x => x);
+    public NavMenuControl WithNavLink(NavLinkControl control) =>
+        this with { Items = Items.Add(control) };
 
     public NavMenuControl WithNavLink(object title, object href, Func<NavLinkControl, NavLinkControl> options) =>
         this with { Items = Items.Add(options.Invoke(new(title, href))) };
 
+    public NavMenuControl WithNavGroup(NavGroupControl navGroup) =>
+        this with { Items = Items.Add(navGroup) };
     public NavMenuControl WithNavGroup(object title, Func<NavGroupControl, NavGroupControl> config) =>
         this with { Items = Items.Add(config.Invoke(new(title))) };
     public NavMenuControl WithCollapsible(bool collapsible) => this with { Collapsible = collapsible };

@@ -14,7 +14,8 @@ public static class Controls
 
     public static NavGroupControl NavGroup(string title) => new(title);
 
-    public static NavLinkControl NavLink(string title, string href) => new(title, href);
+    public static NavLinkControl NavLink(object title, object href) => new(title, href);
+    public static NavLinkControl NavLink(object title, Icon icon, object href) => new(title, href){Icon = icon};
 
     public static LayoutStackControl Stack() => new();
 
