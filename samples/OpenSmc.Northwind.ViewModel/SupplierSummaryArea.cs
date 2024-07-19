@@ -77,7 +77,7 @@ public static class SupplierSummaryArea
         var filter = area.Stream.GetData<DataCubeFilter>(DataCubeFilterId) ?? new();
         area.UpdateData(DataCubeFilterId, filter);
 
-        return area.GetDataCube()
+        return area.FilteredDataCube()
             .Select(cube =>
                 GridOptionsMapper.ToGrid((IPivotBuilder)area.Workspace.State.Pivot(cube).SliceRowsBy(nameof(Supplier)))
             );
@@ -109,13 +109,19 @@ public static class SupplierSummaryArea
     );
 
     // high level idea of how to do filtered data-cube (12.07.2024, Alexander Kravets)
-    private static IObservable<IDataCube> FilteredDataCube(
+    private static IObservable<IDataCube<NorthwindDataCube>> FilteredDataCube(
         this LayoutAreaHost area
     ) => GetDataCube(area)
         .CombineLatest(
             area.GetDataStream<DataCubeFilter>(DataCubeFilterId),
-            (dataCube, filter) => dataCube.Filter() // todo apply DataCubeFilter from stream
+            (dataCube, filter) => dataCube.Filter(BuildFilterTuples(filter, dataCube)) // todo apply DataCubeFilter from stream
         );
+
+    private static (string filter, object value)[] BuildFilterTuples(DataCubeFilter filter, IDataCube dataCube)
+    {
+        var overallFilter = new List<(string filter, object value)>();
+        return overallFilter.ToArray();
+    }
 
     private static void OpenContextPanel(this LayoutAreaHost layout, RenderingContext context)
     {
