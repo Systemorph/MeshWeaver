@@ -113,6 +113,11 @@ namespace OpenSmc.DataCubes
                             agg || MatchesStringPattern((string)dimensionReflector.GetValue(t), p)
                     );
 
+            if (valueTuple.value is IEnumerable<object> patternsObj)
+                return at =>
+                    patternsObj.Select(cmp => CreateComparer((valueTuple.dimension, cmp)))
+                        .Any(f => f(at));
+
             return t => dimensionReflector.GetValue(t) == valueTuple.value;
         }
 
