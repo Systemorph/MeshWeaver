@@ -125,6 +125,14 @@ public static class SupplierSummaryArea
             var hasAllSelected = filterDimension.Value.All(x => x.Selected);
             if (hasAllSelected)
                 continue;
+
+            var filterValues = filterDimension.Value.Where(f => f.Selected)
+                .Select(fi => fi.Id).ToArray();
+
+            if (filterValues.Length == 0)
+                continue;
+
+            overallFilter.Add((filterDimension.Key, filterValues));
         }
         return overallFilter.ToArray();
     }
