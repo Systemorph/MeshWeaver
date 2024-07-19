@@ -21,13 +21,17 @@ public static class ToolbarArea
     /// <param name="area"></param>
     /// <param name="years"></param>
     /// <returns></returns>
-    public static object AddToolbar(this LayoutAreaHost area, IObservable<Option<int>[]> years)
-        => years.Select(y =>
-            area.Bind(
-                new Toolbar(Enumerable.Max<Option<int>>(y, x => x.Item)),
-                nameof(Toolbar),
-                tb => Controls.Select(tb.Year).WithOptions(y)
-            )
-        );
+    public static object Toolbar(this LayoutAreaHost area, IObservable<Option<int>[]> years)
+        => Controls.Toolbar()
+            .WithView(
+                (a, _) =>
+                    years.Select(y =>
+                        a.Bind(
+                            new Toolbar(y.Max(x => x.Item)),
+                            nameof(ViewModel.Toolbar),
+                            tb => Controls.Select(tb.Year).WithOptions(y)
+                        )
+                    )
+            );
 
 }

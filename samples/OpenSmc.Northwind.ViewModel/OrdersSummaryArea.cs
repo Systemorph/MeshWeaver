@@ -13,7 +13,7 @@ namespace OpenSmc.Northwind.ViewModel;
 /// Orders Summary is a view combining data from various sources.
 /// It manually joins data to a table and renders the result in a data grid.
 /// </summary>
-public static class OrdersSummaryLayoutArea
+public static class OrdersSummaryArea
 {
     /// <summary>
     /// Add the order summary to layout
@@ -53,10 +53,7 @@ public static class OrdersSummaryLayoutArea
         return Controls.Stack()
             .WithView(Controls.PaneHeader("Order Summary"))
             .WithClass("order-summary")
-            .WithView(
-                Controls.Toolbar()
-                    .WithView((area, _) => area.AddToolbar(years))
-            )
+            .WithView(layoutArea.Toolbar(years))
             .WithView(
                 (area, _) =>
                     area.Workspace.ReduceToTypes(typeof(Order))
