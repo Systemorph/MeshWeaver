@@ -9,6 +9,8 @@ public static class ApplicationViews
     public const string File = nameof(File);
     public const string Markdown = nameof(Markdown);
     public const string NavMenu = nameof(NavMenu);
+    public const string Source =nameof(Source);
+
     public static LayoutDefinition ConfigureApplication(
         this LayoutDefinition layout,
         Func<ApplicationBuilder, ApplicationBuilder> configuration

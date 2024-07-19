@@ -11,4 +11,11 @@ public static class FluentIcons
     public static Icon CalendarDataBar => new (Provider, "CalendarDataBar");
     public static Icon Search => new (Provider, "Search");
 
+    public static Icon Add => new (Provider, "Add");
+    public static Icon Edit => new (Provider, "Edit");
+    public static Icon Delete => new (Provider, "Delete");
+    public static Icon Save => new (Provider, "Save");
+    public static Icon Cancel => new(Provider, "Cancel");
+    public static Icon Code => new(Provider, "Code");
+
 }

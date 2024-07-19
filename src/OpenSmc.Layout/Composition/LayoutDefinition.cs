@@ -1,6 +1,5 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
-using OpenSmc.Application.Styles;
 using OpenSmc.Data;
 using OpenSmc.Messaging;
 
@@ -173,6 +172,11 @@ public record ViewOptions
     public ViewOptions WithMenu(params NavLinkControl[] items)
         => this with { MenuControls = MenuControls.AddRange(items) };
 
+    internal ImmutableList<SourceItem> Sources { get; init; } = ImmutableList<SourceItem>.Empty;
+
+    public ViewOptions WithSources(params SourceItem[] sources) => this with { Sources = Sources.AddRange(sources) };
+    public ViewOptions WithSources(params Type[] types) => this with { Sources = Sources.AddRange(types.Select(t => new SourceItem(t.Assembly.Location, t.Name)).ToArray()) };
 }
 
 internal record ViewGenerator(Func<LayoutAreaReference, bool> Filter, ViewElement ViewElement);
+public record SourceItem(string Assembly, string Type);

@@ -14,7 +14,7 @@ public static class DocumentationRegistryExtensions
         .Set(AddLambda(hubConf.Get<ImmutableList<Func<DocumentationContext, DocumentationContext>>>()
                        ?? ImmutableList<Func<DocumentationContext, DocumentationContext>>.Empty, configuration))
         .WithServices(services => services.AddScoped<IDocumentationService, DocumentationService>())
-        .AddLayout(layout => layout.AddDocuments());
+        .AddLayout(layout => layout.AddDocuments().AddSources());
 
     private static ImmutableList<Func<DocumentationContext, DocumentationContext>> AddLambda(
         ImmutableList<Func<DocumentationContext, DocumentationContext>> existing,
@@ -33,6 +33,8 @@ public static class DocumentationRegistryExtensions
 
     private static LayoutDefinition AddDocuments(this LayoutDefinition builder, string area = nameof(Doc)) =>
         builder.WithView(area, Doc);
+    private static LayoutDefinition AddSources(this LayoutDefinition builder, string area = nameof(Source)) =>
+        builder.WithView(area, Source);
 
     private static async Task<object> Doc(LayoutAreaHost area, RenderingContext context, CancellationToken cancellationToken)
     {
@@ -56,6 +58,19 @@ public static class DocumentationRegistryExtensions
         }
 
         return new MarkdownControl(text);
+    }
+
+    public static object Source(LayoutAreaHost area, RenderingContext context)
+    {
+        var id = area.Stream.Reference.Id as SourceItem;
+        if (id == null)
+            return Controls.Markdown($":warning: {area.Stream.Reference.Id} is not a valid SourceItem.");
+
+        var sources = area.Hub.GetDocumentationService().GetSources(id.Assembly)?.GetValueOrDefault(id.Type);
+        if(sources == null)
+            return Controls.Markdown($":warning: {id.Type} does not have any sources.");
+
+        return Controls.Markdown($"```C#\n{sources}\n```");
     }
 
 }

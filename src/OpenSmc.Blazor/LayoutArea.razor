@@ -1,3 +1,4 @@
+@using OpenSmc.Layout.Composition
 @using HorizontalAlignment = Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @using VerticalAlignment = Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment
@@ -10,8 +11,52 @@
 }
 else
 {
-    <div class="layout-area">
-        <DispatchView ViewModel="@RootControl" Stream="@Stream" Area="@Reference.Area"/>
-    </div>
+    @if (CodeReference == null)
+    {
+        <div class="layout-area">
+            <DispatchView ViewModel="@RootControl" Stream="@Stream" Area="@Reference.Area"/>
+        </div>
+        @if (RootControl.Sources.Any())
+        {
+            <div class="source-downloads">
+                <FluentSpacer />
+                <div style="display: flex; align-items: center;">
+                    @foreach (var source in RootControl.Sources)
+                    {
+                        <FluentMenuItem Style="min-width: 85px; text-overflow: ellipsis" OnClick="@(e => @Select(source))" Appearance="Appearance.Neutral">
+                            @source
+                        </FluentMenuItem>
+                    }
+                </div>
+            </div>
+        }
+    }
+    else
+    {
+        <div class="layout-area">
+            <LayoutArea Address="@Address" @Reference="@CodeReference"/>
+        </div>
+        <div class="source-downloads">
+            <FluentSpacer />
+            <FluentMenuItem OnClick="@(_ => Unselect())" Appearance="Appearance.Neutral">
+                Back
+            </FluentMenuItem>
+        </div>
+    }
 }
 
+@code{
+
+    private LayoutAreaReference CodeReference { get; set; }
+    private void Select(SourceItem source)
+    {
+        CodeReference = new(ApplicationViews.Source) { Id = source };
+    }
+
+
+    private void Unselect()
+    {
+        CodeReference = null;
+    }
+
+}
