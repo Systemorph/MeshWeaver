@@ -120,6 +120,12 @@ public static class SupplierSummaryArea
     private static (string filter, object value)[] BuildFilterTuples(DataCubeFilter filter, IDataCube dataCube)
     {
         var overallFilter = new List<(string filter, object value)>();
+        foreach (var filterDimension in filter.FilterItems)
+        {
+            var hasAllSelected = filterDimension.Value.All(x => x.Selected);
+            if (hasAllSelected)
+                continue;
+        }
         return overallFilter.ToArray();
     }
 
