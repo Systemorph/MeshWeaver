@@ -68,7 +68,7 @@ public static class SupplierSummaryArea
     /// <param name="area">The layout area host.</param>
     /// <param name="ctx">The rendering context.</param>
     /// <returns>An observable object representing the supplier summary grid.</returns>
-    private static IObservable<object> SupplierSummaryGrid(
+    public static IObservable<object> SupplierSummaryGrid(
         this LayoutAreaHost area,
         RenderingContext ctx
     ) =>

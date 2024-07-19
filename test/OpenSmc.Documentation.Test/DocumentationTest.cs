@@ -116,4 +116,5 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
         points.Should().NotBeNull();
         points.Should().HaveCountGreaterThan(0);
     }
+
 }
