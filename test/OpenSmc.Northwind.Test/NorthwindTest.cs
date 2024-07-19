@@ -161,7 +161,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = GetHost().GetWorkspace();
         await workspace.Initialized;
 
-        var viewName = nameof(NorthwindDashboardArea.SupplierSummaryGrid);
+        var viewName = nameof(SupplierSummaryArea.SupplierSummaryGrid);
         var stream = workspace.GetRemoteStream<EntityStore, LayoutAreaReference>(
             new HostAddress(),
             new LayoutAreaReference(viewName)

@@ -1,4 +1,5 @@
 ﻿using System.IO.Compression;
+using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Text;
@@ -16,9 +17,9 @@ public static class PdbMethods
     public static string GetEmbeddedSource(this MetadataReader reader, DocumentHandle document)
     {
         byte[] bytes = (from handle in reader.GetCustomDebugInformation(document)
-            let cdi = reader.GetCustomDebugInformation(handle)
-            where reader.GetGuid(cdi.Kind) == EmbeddedSource
-            select reader.GetBlobBytes(cdi.Value)).SingleOrDefault();
+                        let cdi = reader.GetCustomDebugInformation(handle)
+                        where reader.GetGuid(cdi.Kind) == EmbeddedSource
+                        select reader.GetBlobBytes(cdi.Value)).SingleOrDefault();
 
         if (bytes == null)
         {
@@ -68,6 +69,10 @@ public static class PdbMethods
         }
     }
 
+    public static IReadOnlyDictionary<string, string> GetSourcesByType(this Assembly assembly)
+        => GetSourcesByType(assembly.Location);
+
+
     public static SequencePointCollection ReadMethodSourceInfo(string assemblyPath, string methodName)
     {
         using var assemblyStream = File.OpenRead(assemblyPath);
@@ -105,4 +110,51 @@ public static class PdbMethods
         return default;
     }
 
+
+    public static IReadOnlyDictionary<string, string> GetSourcesByType(string assemblyPath)
+    {
+        var ret = new Dictionary<string, string>();
+
+        using var assemblyStream = File.OpenRead(assemblyPath);
+        using var peReader = new PEReader(assemblyStream);
+        if (!peReader.HasMetadata)
+            throw new InvalidOperationException("Assembly has no metadata.");
+
+        var metadataReader = peReader.GetMetadataReader();
+        var typeHandles = metadataReader.TypeDefinitions;
+
+        foreach (var handle in typeHandles)
+        {
+            var typeDefinition = metadataReader.GetTypeDefinition(handle);
+            var name = metadataReader.GetString(typeDefinition.Name);
+
+            var pdbPath = Path.ChangeExtension(assemblyPath, "pdb");
+
+            using var pdbStream = File.OpenRead(pdbPath);
+            var provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
+            var pdbReader = provider.GetMetadataReader();
+
+            // Iterate through the methods of the type to find a method with debug information
+            foreach (var methodHandle in typeDefinition.GetMethods())
+            {
+                var methodDebugInformation = pdbReader.GetMethodDebugInformation(methodHandle);
+                if (!methodDebugInformation.SequencePointsBlob.IsNil)
+                {
+                    var sequencePoints = methodDebugInformation.GetSequencePoints();
+                    var documentHandle = sequencePoints.FirstOrDefault().Document;
+                    if (!documentHandle.IsNil)
+                    {
+                        var document = metadataReader.GetDocument(documentHandle);
+                        ret[name] = pdbReader.GetEmbeddedSource(documentHandle); // Return the file path of the first method found with debug information
+                    }
+                }
+            }
+        }
+
+        return ret;
+
+    }
+
 }
+
+
