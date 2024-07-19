@@ -2,6 +2,7 @@
 using OpenSmc.Blazor;
 using OpenSmc.Blazor.AgGrid;
 using OpenSmc.Blazor.ChartJs;
+using OpenSmc.Layout;
 using OpenSmc.Messaging;
 using OpenSmc.Northwind.Model;
 using OpenSmc.Northwind.ViewModel;
@@ -32,17 +33,7 @@ public static class HubConfiguration
                         .AddNorthwindCustomers()
                         .AddNorthwindReferenceData()
             );
-        // .WithRoutes(forward =>
-        //     forward
-        //         .RouteAddressToHostedHub<ReferenceDataAddress>(c =>
-        //             c.AddNorthwindReferenceData()
-        //         )
-        //         .RouteAddressToHostedHub<EmployeeAddress>(c => c.AddNorthwindEmployees())
-        //         .RouteAddressToHostedHub<OrderAddress>(c =>    c.AddNorthwindOrders())
-        //         .RouteAddressToHostedHub<SupplierAddress>(c => c.AddNorthwindSuppliers())
-        //         .RouteAddressToHostedHub<ProductAddress>(c =>  c.AddNorthwindProducts())
-        //         .RouteAddressToHostedHub<CustomerAddress>(c => c.AddNorthwindCustomers())
-        // );
-        ;
+
+
     }
 }

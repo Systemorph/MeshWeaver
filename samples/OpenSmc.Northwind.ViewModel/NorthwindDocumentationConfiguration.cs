@@ -8,7 +8,7 @@ namespace OpenSmc.Northwind.ViewModel
     {
         private const string Overview = nameof(Overview);
         
-        public static ApplicationMenuBuilder DocumentationMenu(this ApplicationMenuBuilder builder)
+        public static ApplicationMenuBuilder AddDocumentationMenu(this ApplicationMenuBuilder builder)
             => builder
                 .WithNavLink(Overview, $"{builder.Layout.Hub.Address}/Doc/{Overview}");
 
@@ -16,10 +16,10 @@ namespace OpenSmc.Northwind.ViewModel
             this MessageHubConfiguration configuration
         ) => configuration
             .AddDocumentation(doc =>
-                doc.WithEmbeddedResourcesFrom(typeof(NorthwindLayoutAreas).Assembly,
+                doc.WithEmbeddedResourcesFrom(typeof(NorthwindDashboardArea).Assembly,
                     source => source
                         .WithDocument(Overview,
-                            $"{typeof(NorthwindLayoutAreas).Assembly.GetName().Name}.Markdown.Overview.md")
+                            $"{typeof(NorthwindDashboardArea).Assembly.GetName().Name}.Markdown.Overview.md")
                 )
                 );
     }

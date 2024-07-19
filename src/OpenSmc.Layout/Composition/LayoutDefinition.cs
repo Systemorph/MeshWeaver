@@ -1,7 +1,5 @@
-﻿using System;
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
-using Microsoft.Extensions.Options;
 using OpenSmc.Application.Styles;
 using OpenSmc.Data;
 using OpenSmc.Messaging;
@@ -159,15 +157,22 @@ public record LayoutDefinition(IMessageHub Hub)
         => this with { MainLayout = layout };
 
     internal Func<LayoutAreaReference,NavMenuControl> NavMenu { get; init; }
+
+    public string ToHref(LayoutAreaReference reference)
+        => reference.ToHref(Hub.Address);
 }
 
 public record ViewOptions
 {
+    internal ImmutableList<NavLinkControl> MenuControls { get; init; } = ImmutableList<NavLinkControl>.Empty;
+    
     internal int MenuOrder { get; init; } 
     public ViewOptions WithMenuOrder(int order) => this with { MenuOrder = order };
 
-    internal Icon Icon { get; init; }
-    public ViewOptions WithIcon(Icon icon) => this with { Icon = icon };
+
+    public ViewOptions WithMenu(params NavLinkControl[] items)
+        => this with { MenuControls = MenuControls.AddRange(items) };
+
 }
 
 internal record ViewGenerator(Func<LayoutAreaReference, bool> Filter, ViewElement ViewElement);

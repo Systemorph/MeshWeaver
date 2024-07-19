@@ -3,23 +3,23 @@ using OpenSmc.Layout.Domain;
 
 namespace OpenSmc.Layout;
 
-public static class DomainViews
+public static class ApplicationViews
 {
     public const string Catalog = nameof(Catalog);
     public const string File = nameof(File);
     public const string Markdown = nameof(Markdown);
     public const string NavMenu = nameof(NavMenu);
-    public static LayoutDefinition AddDomainViews(
+    public static LayoutDefinition ConfigureApplication(
         this LayoutDefinition layout,
-        Func<DomainViewsBuilder, DomainViewsBuilder> configuration
+        Func<ApplicationBuilder, ApplicationBuilder> configuration
     ) =>
         configuration.Invoke(new(layout)).Build();
 
-    public static DomainViewsBuilder DefaultViews(this DomainViewsBuilder layout)
+    public static ApplicationBuilder DefaultViews(this ApplicationBuilder layout)
         => layout.WithCatalog();
-    public static string GenerateHref(this ApplicationMenuBuilder builder, LayoutAreaReference reference)
+    public static string ToHref(this LayoutAreaReference reference, object address)
     {
-        var ret = $"{builder.Layout.Hub.Address}/{Uri.EscapeDataString(reference.Area)}";
+        var ret = $"{address}/{Uri.EscapeDataString(reference.Area)}";
         if (reference.Id?.ToString() is { } s)
             ret = $"{ret}/{Uri.EscapeDataString(s)}";
         if (reference.Options.Any())
@@ -28,5 +28,4 @@ public static class DomainViews
                     .Select(x => $"{x.Key}={Uri.EscapeDataString(x.Value?.ToString() ?? "")}"))}";
         return ret;
     }
-
 }
