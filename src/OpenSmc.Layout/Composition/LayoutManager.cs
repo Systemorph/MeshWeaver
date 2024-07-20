@@ -16,13 +16,16 @@ public static class LayoutManager
         if (viewElement == null)
             return layoutArea.Stream;
 
+        var options = viewElement.Options;
         if(reference.RenderLayout && layoutDefinition.MainLayout != null)
             viewElement = layoutDefinition.MainLayout(viewElement, layoutDefinition.NavMenu?.Invoke(reference));
-        layoutArea.RenderArea(new(reference.Area, viewElement.Options){IsTopLevel = true}, viewElement);
+
+
+        layoutArea.RenderArea(new(reference.Area, viewElement.Options), viewElement);
         return layoutArea.Stream;
     }
 
-    public static void RenderArea(this LayoutAreaHost layoutArea, RenderingContext context, object viewModel, ViewOptions options)
+    public static void RenderArea(this LayoutAreaHost layoutArea, RenderingContext context, object viewModel)
     {
         if (viewModel == null)
             return;
@@ -36,14 +39,13 @@ public static class LayoutManager
             viewModel = control with
             {
                 DataContext = dataContext,
-                Sources = options.Sources
             };
 
             if (viewModel is IContainerControl container)
             {
                 foreach (var ve in container.ChildControls)
                 {
-                    layoutArea.RenderArea(context with { Area = $"{area}/{ve.Area}", DataContext = dataContext, IsTopLevel = false}, ve);
+                    layoutArea.RenderArea(context with { Area = $"{area}/{ve.Area}", DataContext = dataContext}, ve);
                 }
 
                 viewModel = container.SetAreas(container.ChildControls.Select(ve => $"{area}/{ve.Area}").ToArray());
@@ -65,7 +67,7 @@ public static class LayoutManager
             {
                 ct.ThrowIfCancellationRequested();
                 var control = await f.Invoke(layoutArea, context, ct);
-                layoutArea.RenderArea(context, control, viewDefinition.Options);
+                layoutArea.RenderArea(context, control);
             })
         ));
     }
@@ -77,14 +79,14 @@ public static class LayoutManager
         switch (viewElement)
         {
             case ViewElementWithView view:
-                layoutArea.RenderArea(context, view.View, view.Options);
+                layoutArea.RenderArea(context, view.View);
                 break;
             case ViewElementWithViewDefinition viewDefinition:
                 layoutArea.RenderArea(context, viewDefinition);
                 break;
             case ViewElementWithViewStream s:
                 layoutArea.AddDisposable(context.Area, s.Stream.Invoke(layoutArea, context)
-                    .Subscribe(c => layoutArea.RenderArea(context, c, s.Options)));
+                    .Subscribe(c => layoutArea.RenderArea(context, c)));
                 break;
             default:
                 throw new NotSupportedException($"Unknown type: {viewElement.GetType().FullName}");
