@@ -31,8 +31,6 @@ public static class SupplierSummaryArea
                 .WithMenu(Controls.NavLink(nameof(SupplierSummary).Wordify(), FluentIcons.Search,
                     layout.ToHref(new(nameof(SupplierSummary)))))
             )
-            // todo see how to avoid using empty string
-            .WithView(ContextPanelArea, "")
         ;
 
     /// <summary>
@@ -47,20 +45,30 @@ public static class SupplierSummaryArea
     )
     =>
         Controls.Stack()
+            .WithSkin(Skins.Splitter)
             .WithView(
-                Controls.Toolbar()
-                    .WithView(
-                        Controls.Button("Analyze")
-                            .WithIconStart(FluentIcons.CalendarDataBar)
-                            .WithClickAction(_ => layoutArea.OpenContextPanel(context))
-                    )
-            )
-            .WithView(
-
                 Controls.Stack()
-                    .WithView(Controls.PaneHeader("Supplier Summary"))
-                    .WithView(SupplierSummaryGrid));
-    
+                    .WithView(
+                        Controls.Toolbar()
+                            .WithView(
+                                Controls.Button("Analyze")
+                                    .WithIconStart(FluentIcons.CalendarDataBar)
+                                    .WithClickAction(_ => layoutArea.OpenContextPanel(context))
+                            )
+                    )
+                    .WithView(
+
+                        Controls.Stack()
+                            .WithView(Controls.PaneHeader("Supplier Summary"))
+                            .WithView(SupplierSummaryGrid)
+                    )
+                    .ToSplitterPane()
+                    .WithClass("main-content-pane")
+            )
+            // todo see how to avoid using empty string
+            .WithView(ContextPanelArea, "")
+        ;
+
 
     /// <summary>
     /// Generates the grid view for the supplier summary.
