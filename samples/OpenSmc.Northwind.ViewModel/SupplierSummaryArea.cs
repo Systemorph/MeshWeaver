@@ -6,6 +6,7 @@ using OpenSmc.Layout.Composition;
 using OpenSmc.Northwind.Domain;
 using OpenSmc.Pivot.Builder;
 using OpenSmc.Pivot.Builder.Interfaces;
+using OpenSmc.Reporting.DataCubes;
 using OpenSmc.Reporting.Models;
 using OpenSmc.Utils;
 
@@ -87,7 +88,11 @@ public static class SupplierSummaryArea
 
         return area.FilteredDataCube()
             .Select(cube =>
-                GridOptionsMapper.ToGrid((IPivotBuilder)area.Workspace.State.Pivot(cube).SliceRowsBy(nameof(Supplier)))
+                area.Workspace
+                    .State
+                    .Pivot(cube)
+                    .SliceRowsBy(nameof(Supplier))
+                    .ToGrid()
             );
     }
 
