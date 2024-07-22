@@ -6,7 +6,7 @@ using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
 using static OpenSmc.Layout.Controls;
 
-namespace OpenSmc.Northwind.ViewModel;
+namespace OpenSmc.Reporting.DataCubes;
 
 public record FilterItem(object Id, string Label, bool Selected);
 
@@ -15,6 +15,37 @@ public record DataCubeFilter
     public string SelectedDimension { get; init; }
     public ImmutableDictionary<string, ImmutableList<FilterItem>> FilterItems { get; init; } = ImmutableDictionary<string, ImmutableList<FilterItem>>.Empty;
     public string Search { get; init; }
+    public virtual bool Equals(DataCubeFilter other)
+    {
+        if (other == null)
+            return false;
+        return Equals(SelectedDimension, other.SelectedDimension)
+            && Equals(Search, other.Search)
+            && FilterItems.Count == other.FilterItems.Count
+            && FilterItems.All(i =>
+                other.FilterItems.TryGetValue(i.Key, out var otherItem) 
+                && Equals(i.Value, otherItem));
+    }
+
+    public override int GetHashCode()
+    {
+        unchecked // Overflow is fine, just wrap
+        {
+            var hash = 17;
+            // Hash code for reference types (strings) can be obtained directly
+            hash = hash * 23 + (SelectedDimension?.GetHashCode() ?? 0);
+            hash = hash * 23 + (Search?.GetHashCode() ?? 0);
+
+            // For the dictionary, combine the hash codes of keys and values
+            foreach (var item in FilterItems)
+            {
+                hash = hash * 23 + item.Key.GetHashCode(); // Hash code for the key (string)
+                hash = hash * 23 + item.Value.Aggregate(0, (current, val) => current + val.GetHashCode()); // Aggregate hash codes of values (FilterItem list)
+            }
+
+            return hash;
+        }
+    }
 }
 
 public static class DataCubeLayoutExtensions
