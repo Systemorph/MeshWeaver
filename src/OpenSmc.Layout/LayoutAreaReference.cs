@@ -13,12 +13,15 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
 
     public const string Data = "data";
     public const string Areas = "areas";
+    public const string Properties = "properties";
 
     public static string GetDataPointer(string id) =>
         JsonPointer.Create(Data, JsonSerializer.Serialize(id)).ToString();
 
     public static string GetControlPointer(string area) =>
         JsonPointer.Create(Areas, JsonSerializer.Serialize(area)).ToString();
+    public static string GetPropertiesPointer(string id) =>
+        JsonPointer.Create(Properties, id).ToString();
 
     public virtual bool Equals(LayoutAreaReference other)
     {

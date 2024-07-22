@@ -23,6 +23,7 @@ public partial class LayoutArea : IDisposable
     public Dictionary<string, object> Options { get; set; }
 
     private IDisposable subscription;
+    private IDisposable propertiesSubscription;
 
     [Parameter]
     public object Address { get; set; }
@@ -35,6 +36,7 @@ public partial class LayoutArea : IDisposable
     [Parameter]
     public ISynchronizationStream<JsonElement, LayoutAreaReference> Stream { get; set; }
 
+    private LayoutAreaProperties Properties { get; set; } 
 
     protected override void OnParametersSet()
     {
@@ -57,6 +59,12 @@ public partial class LayoutArea : IDisposable
         subscription = Stream.GetControlStream(Reference.Area)
             .DistinctUntilChanged()
             .Subscribe(item => InvokeAsync(() => Render(item as UiControl)));
+
+        propertiesSubscription =
+
+            Stream.GetObservable<LayoutAreaProperties>($"/{LayoutAreaReference.Properties}", new JsonPointerReference($"/\"{LayoutAreaProperties.Properties}\""))
+            .DistinctUntilChanged()
+            .Subscribe(item => InvokeAsync(() => Properties = item));
     }
 
 
@@ -76,8 +84,10 @@ public partial class LayoutArea : IDisposable
     public void Dispose()
     {
         subscription?.Dispose();
+        propertiesSubscription?.Dispose();
         Stream?.Dispose();
         Stream = null;
         subscription = null;
+        propertiesSubscription = null;
     }
 }

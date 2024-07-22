@@ -23,11 +23,11 @@ public record LayoutStackControl()
     public IReadOnlyCollection<string> Areas { get; init; }
 
     public LayoutStackControl WithView(object value) => WithView(GetAutoName(), value, x => x);
-    public LayoutStackControl WithView(object value, Func<ViewOptions, ViewOptions> options) => WithView(GetAutoName(), value, options);
+    public LayoutStackControl WithView(object value, Func<LayoutAreaProperties, LayoutAreaProperties> options) => WithView(GetAutoName(), value, options);
 
     public LayoutStackControl WithView(string area, object value) =>
     WithView(area, value, x => x);
-    public LayoutStackControl WithView(string area, object value, Func<ViewOptions, ViewOptions> options) =>
+    public LayoutStackControl WithView(string area, object value, Func<LayoutAreaProperties, LayoutAreaProperties> options) =>
         this with
         {
             ViewElements = ViewElements.Add(new ViewElementWithView(area, value, options.Invoke(new())))
@@ -40,12 +40,12 @@ public record LayoutStackControl()
 
     public LayoutStackControl WithView(ViewDefinition viewDefinition) =>
         WithView(viewDefinition, x => x);
-    public LayoutStackControl WithView(ViewDefinition viewDefinition, Func<ViewOptions, ViewOptions> options) =>
+    public LayoutStackControl WithView(ViewDefinition viewDefinition, Func<LayoutAreaProperties, LayoutAreaProperties> options) =>
         WithView(GetAutoName(), Observable.Return(viewDefinition), options);
 
     public LayoutStackControl WithView(string area, IObservable<ViewDefinition> viewDefinition) =>
         WithView(area, viewDefinition, x => x);
-    public LayoutStackControl WithView(string area, IObservable<ViewDefinition> viewDefinition, Func<ViewOptions, ViewOptions> options) =>
+    public LayoutStackControl WithView(string area, IObservable<ViewDefinition> viewDefinition, Func<LayoutAreaProperties, LayoutAreaProperties> options) =>
         this with
         {
             ViewElements = ViewElements.Add(new ViewElementWithViewDefinition(area, viewDefinition, options.Invoke(new())))
@@ -53,26 +53,26 @@ public record LayoutStackControl()
 
     public LayoutStackControl WithView(IObservable<ViewDefinition> viewDefinition)
         => WithView(GetAutoName(), viewDefinition, x=>x);
-    public LayoutStackControl WithView(IObservable<ViewDefinition> viewDefinition, Func<ViewOptions, ViewOptions> options)
+    public LayoutStackControl WithView(IObservable<ViewDefinition> viewDefinition, Func<LayoutAreaProperties, LayoutAreaProperties> options)
         => WithView(GetAutoName(), viewDefinition, options);
 
     public LayoutStackControl WithView(Func<LayoutAreaHost, RenderingContext, IObservable<object>> viewDefinition)
         => WithView(viewDefinition, x => x);
-    public LayoutStackControl WithView(Func<LayoutAreaHost, RenderingContext, IObservable<object>> viewDefinition, Func<ViewOptions, ViewOptions> options)
+    public LayoutStackControl WithView(Func<LayoutAreaHost, RenderingContext, IObservable<object>> viewDefinition, Func<LayoutAreaProperties, LayoutAreaProperties> options)
         => WithView(GetAutoName(), viewDefinition, options);
     public LayoutStackControl WithView(string area, Func<LayoutAreaHost, RenderingContext, IObservable<object>> viewDefinition)
     => WithView(area, viewDefinition, x => x);
-    public LayoutStackControl WithView(string area, Func<LayoutAreaHost, RenderingContext, IObservable<object>> viewDefinition, Func<ViewOptions, ViewOptions> options)
+    public LayoutStackControl WithView(string area, Func<LayoutAreaHost, RenderingContext, IObservable<object>> viewDefinition, Func<LayoutAreaProperties, LayoutAreaProperties> options)
         => this with { ViewElements = ViewElements.Add(new ViewElementWithViewStream(area, viewDefinition.Invoke, options.Invoke(new()))) };
 
     public LayoutStackControl WithView(string area, Func<LayoutAreaHost, RenderingContext, object> viewDefinition)
         => WithView(area, viewDefinition, x => x);
     
-    public LayoutStackControl WithView(string area, Func<LayoutAreaHost, RenderingContext, object> viewDefinition, Func<ViewOptions, ViewOptions> options)
+    public LayoutStackControl WithView(string area, Func<LayoutAreaHost, RenderingContext, object> viewDefinition, Func<LayoutAreaProperties, LayoutAreaProperties> options)
         => WithView(area, (la, ctx) => Observable.Return(viewDefinition.Invoke(la, ctx)), options);
     public LayoutStackControl WithView(Func<LayoutAreaHost, RenderingContext, object> viewDefinition)
     => WithView(viewDefinition, x => x);
-    public LayoutStackControl WithView(Func<LayoutAreaHost, RenderingContext, object> viewDefinition, Func<ViewOptions, ViewOptions> options)
+    public LayoutStackControl WithView(Func<LayoutAreaHost, RenderingContext, object> viewDefinition, Func<LayoutAreaProperties, LayoutAreaProperties> options)
         => WithView(GetAutoName(), viewDefinition, options);
 
 

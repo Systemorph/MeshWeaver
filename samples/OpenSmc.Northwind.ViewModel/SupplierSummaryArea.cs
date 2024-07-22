@@ -126,7 +126,7 @@ public static class SupplierSummaryArea
 
         layout.RenderArea(
             context,
-            new ViewElementWithViewDefinition(ContextPanelArea, viewDefinition, context.Options)
+            new ViewElementWithViewDefinition(ContextPanelArea, viewDefinition, context.Properties)
         );
     }
 
