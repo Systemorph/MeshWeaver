@@ -16,7 +16,7 @@ public record ApplicationBuilder
     }
 
     private ViewElement DefaultLayoutViewElement(ViewElement view, NavMenuControl navMenu)
-        => new ViewElementWithView(view.Area, DefaultLayoutControl(view, navMenu), view.Options);
+        => new ViewElementWithView(view.Area, DefaultLayoutControl(view, navMenu), view.Properties);
 
     public const string Type = nameof(Type);
 

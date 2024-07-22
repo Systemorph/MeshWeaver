@@ -43,7 +43,7 @@ public static class BlazorClientExtensions
                         => StandardView<LayoutStackControl, Splitter>(stack, stream, area),
                     _ => StandardView<LayoutStackControl, LayoutStack>(stack, stream, area)
                 },
-            MenuItemControl menu => StandardView<MenuItemControl, MenuItem>(menu, stream, area),
+            MenuItemControl menu => StandardView<MenuItemControl, MenuItemView>(menu, stream, area),
             NavLinkControl link => StandardView<NavLinkControl, NavLink>(link, stream, area),
             NavMenuControl navMenu
                 => StandardView<NavMenuControl, NavMenuView>(navMenu, stream, area),

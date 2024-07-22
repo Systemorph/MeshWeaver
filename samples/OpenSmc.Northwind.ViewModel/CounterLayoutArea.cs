@@ -16,6 +16,7 @@ namespace OpenSmc.Northwind.ViewModel
         /// <returns></returns>
         public static object Counter(this LayoutAreaHost area, RenderingContext context)
         {
+            // this is actually the only place we keep the state
             var counter = 0;
             return Controls
                 .Stack()

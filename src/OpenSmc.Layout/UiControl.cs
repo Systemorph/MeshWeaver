@@ -46,9 +46,6 @@ public abstract record UiControl(object Data) : IUiControl
     public object Label { get; init; }
     public object Skin { get; init; }
     public object Class { get; init; }
-
-    public IReadOnlyCollection<SourceItem> Sources { get; init; } = [];
-
     public abstract bool IsUpToDate(object other);
 
     // ReSharper disable once IdentifierTypo
