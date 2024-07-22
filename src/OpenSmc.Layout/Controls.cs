@@ -127,6 +127,45 @@ public static class Controls
     )
         where TView : UiControl => BindObject(area, data, id, dataTemplate);
 
+    private static readonly MethodInfo ItemTemplateMethod = ReflectionHelper.GetStaticMethodGeneric(
+        () => ItemTemplate<object, UiControl>(default(IEnumerable<object>), null)
+    );
+    /// <summary>
+    /// Takes expression tree of data template and replaces all property getters by binding instances and sets data context property
+    /// </summary>
+    [ReplaceBindMethod]
+    public static UiControl ItemTemplate<T, TView>(
+        IEnumerable<T> data,
+        Expression<Func<T, TView>> dataTemplate
+    )
+        where TView : UiControl
+    {
+        var view = dataTemplate.Build("/", out var _);
+        if (view == null)
+            throw new ArgumentException("Data template was not specified.");
+
+        return new ItemTemplateControl(view, data);
+    }
+    private static readonly MethodInfo ItemTemplateMethodNonGeneric = ReflectionHelper.GetStaticMethodGeneric(
+        () => ItemTemplateNonGeneric<object, UiControl>(default(IEnumerable<object>), null)
+    );
+    /// <summary>
+    /// Takes expression tree of data template and replaces all property getters by binding instances and sets data context property
+    /// </summary>
+    [ReplaceBindMethod]
+    public static UiControl ItemTemplateNonGeneric<T, TView>(
+        object data,
+        Expression<Func<T, TView>> dataTemplate
+    )
+        where TView : UiControl
+    {
+        var view = dataTemplate.Build("/", out var _);
+        if (view == null)
+            throw new ArgumentException("Data template was not specified.");
+
+        return new ItemTemplateControl(view, data);
+    }
+
     private class ReplaceBindMethodAttribute : ReplaceMethodInTemplateAttribute
     {
         public override MethodInfo Replace(MethodInfo method) => RelaceBindObjects(method);
@@ -138,6 +177,7 @@ public static class Controls
             {
                 { } m when m == BindObjectMethod => BindObjectMethod,
                 { } m when m == BindEnumerableMethod => BindEnumerableMethod,
+                {} m when m == ItemTemplateMethod => ItemTemplateMethodNonGeneric,
                 _ => throw new ArgumentException("Method is not supported.")
             }
         ).MakeGenericMethod(method.GetGenericArguments());
@@ -180,7 +220,6 @@ public static class Controls
         where TView : UiControl => BindEnumerable(area, data, id, dataTemplate);
 
     public static TView Bind<T, TView>(
-        this LayoutAreaHost area,
         string pointer,
         Expression<Func<T, TView>> dataTemplate
     )
@@ -193,8 +232,7 @@ public static class Controls
     }
 
     public static ItemTemplateControl BindEnumerable<T, TView>(
-        this LayoutAreaHost area,
-        string pointer,
+        JsonPointerReference pointer,
         Expression<Func<T, TView>> dataTemplate
     )
         where TView : UiControl

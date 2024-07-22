@@ -25,7 +25,7 @@
     protected override async Task OnParametersSetAsync()
     {
         await base.OnParametersSetAsync();
-        DataBind<IReadOnlyCollection<object>>(new JsonPointerReference(""), d => Data = d);
+        DataBind<IReadOnlyCollection<object>>(ViewModel.Data, d => Data = d);
         view = Stream.GetControl(await Stream.FirstAsync(), ViewArea);
     }
 
