@@ -352,14 +352,22 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
     public static UiControl DataBoundCheckboxes(LayoutAreaHost area, RenderingContext context)
     {
-        var data = new []
-        {
-            new {Label = "Label1", Value = true}, 
-            new { Label = "Label1", Value = true }, 
-            new { Label = "Label1", Value = true }
-        };
-        return area.Bind(data, nameof(DataBoundCheckboxes), x => Controls.CheckBox(x.Label, x.Value));
+        var data = new FilterEntity([
+            new LabelAndBool("Label1", true),
+            new LabelAndBool("Label2", true),
+            new LabelAndBool("Label2", true)
+        ]);
+
+        return Controls.Stack()
+            .WithView(Filter, area.Bind(data, nameof(DataBoundCheckboxes), x => Controls.ItemTemplate(x.Data,y => Controls.CheckBox(y.Label, y.Value))))
+            .WithView(Results, (a, ctx) => a.GetDataStream<FilterEntity>(nameof(DataBoundCheckboxes))
+                .Select(d => d.Data.All(y => y.Value)
+                )
+            ) ;
     }
+
+    private const string Filter = nameof(Filter);
+    private const string Results = nameof(Results);
 
     [HubFact]
     public async Task TestDataBoundCheckboxes()
@@ -372,22 +380,43 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             new HostAddress(),
             reference
         );
-        var controlArea = $"{reference.Area}";
+        var controlArea = $"{reference.Area}/{Filter}";
+        var tmp = await stream.Select(
+            s =>
+            {
+                var pointer = JsonPointer.Parse(LayoutAreaReference.GetControlPointer(controlArea));
+                var result = pointer.Evaluate(s.Value);
+                return result?.Deserialize<object>(hub.JsonSerializerOptions);
+            }).FirstAsync(x => x != null);
         var content = await stream
             .GetControlStream(controlArea)
             .Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => x != null);
         var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
+        var enumReference = itemTemplate.Data.Should().BeOfType<JsonPointerReference>().Which.Pointer.Should().Be($"/data").And.Subject;
         itemTemplate.DataContext.Should().Be($"/data/\"{nameof(DataBoundCheckboxes)}\"");
-        var data = await stream.GetDataStream<IReadOnlyCollection<object>>(new JsonPointerReference(itemTemplate.DataContext)).FirstAsync();
+        var enumerableReference = new JsonPointerReference($"{itemTemplate.DataContext}{enumReference}");
+        var filter = await stream.GetDataStream<IReadOnlyCollection<LabelAndBool>>(enumerableReference).FirstAsync();
 
-        data.Should().HaveCount(3);
+        filter.Should().HaveCount(3);
+        var pointer = itemTemplate.Data.Should().BeOfType<JsonPointerReference>().Subject;
+        pointer.Pointer.Should().Be("/data");
+        var first = filter.First();
+        first.Value.Should().BeTrue();
 
-        var first = (JsonObject) data.First();
+        var resultsArea = $"{reference.Area}/{Results}";
+        var resultsControl = await stream
+            .GetControlStream(resultsArea)
+            .Timeout(TimeSpan.FromSeconds(3))
+            .FirstAsync(x => x != null);
+        var resultItemTemplate = resultsControl.Should().BeOfType<HtmlControl>().Which;
+        resultItemTemplate.DataContext.Should().BeEmpty();
 
-        first["value"].Deserialize<bool>().Should().BeTrue();
+        resultItemTemplate
+            .Data.Should().BeOfType<string>()
+            .Which.Should().Contain("<pre>True</pre>");
 
-        var firstValuePointer = itemTemplate.DataContext + "/0/value";
+        var firstValuePointer = enumerableReference.Pointer + "/0/value";
 
         stream.Update(ci =>
         {
@@ -404,26 +433,37 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             );
         });
 
-        var hostWorkspace = GetHost().GetWorkspace();
-
-        var hostStream = hostWorkspace.GetStreamFor(
-            null,
-            reference
-        );
-
-        await hostStream.Reduce(new JsonPointerReference(firstValuePointer), null)
-            .TakeUntil(e => !e.Value?.GetBoolean() ??   false)
+        resultsControl = await stream
+            .GetControlStream(resultsArea)
+            .Select(x =>((string)((HtmlControl)x).Data).Contains("<pre>False</pre>"))
             .Timeout(TimeSpan.FromSeconds(3))
-            .FirstAsync();
-            }
+            .FirstAsync(x => !x);
+    }
+    [HubFact]
+    public void TestSerialization()
+    {
+        var data = new FilterEntity([
+            new LabelAndBool("Label1", true),
+            new LabelAndBool("Label2", true),
+            new LabelAndBool("Label2", true)
+        ]);
+        var host = GetHost();
+        var serialized = JsonSerializer.Serialize(data, host.JsonSerializerOptions);
+        var client = GetClient();
+        var deserialized = JsonSerializer.Deserialize<FilterEntity>(serialized, client.JsonSerializerOptions);
+        deserialized.Should().BeEquivalentTo(data);
+    }
+
     private IObservable<object> CatalogView(LayoutAreaHost area, RenderingContext context)
     {
         return area
             .Hub.GetWorkspace()
             .Stream.Select(x => x.Value.GetData<DataRecord>())
             .DistinctUntilChanged()
-            .Select(data => area.Bind(data, nameof(CatalogView), x => area.ToDataGrid(x)));
+            .Select(data => 
+                area.Bind(data, nameof(CatalogView), x => area.ToDataGrid(x)));
     }
+
 
     [HubFact]
     public async Task TestCatalogView()
@@ -536,3 +576,5 @@ public static class TestAreas
     public const string ModelStack = nameof(ModelStack);
     public const string NewArea = nameof(NewArea);
 }
+public record FilterEntity(List<LabelAndBool> Data);
+public record LabelAndBool(string Label, bool Value);

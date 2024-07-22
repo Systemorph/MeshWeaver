@@ -1,7 +1,5 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Text.Json;
-using Json.Pointer;
 using OpenSmc.DataCubes;
 using OpenSmc.Domain;
 using OpenSmc.Layout;
@@ -76,7 +74,7 @@ public static class DataCubeLayoutExtensions
             );
 
 
-        return area.Bind<DataCubeFilter, UiControl>(pointer.Pointer, f =>
+        return Bind<DataCubeFilter, UiControl>(pointer, f =>
             Stack()
                 .WithView(Header("Filter"))
                 .WithView(
@@ -120,7 +118,8 @@ public static class DataCubeLayoutExtensions
             .Select(f => f.SelectedDimension)
             .DistinctUntilChanged()
         .Select(selectedDimension => 
-                area.BindEnumerable<FilterItem, CheckBoxControl>(LayoutAreaReference.GetDataPointer(filterId) + $"/filterItems/{selectedDimension}",
+                BindEnumerable<FilterItem, CheckBoxControl>(
+                    new(LayoutAreaReference.GetDataPointer($"FilterItems/{selectedDimension}/{filterId}")),
                 f => CheckBox(f.Label, f.Selected)
             ));
     }

@@ -56,14 +56,14 @@ public record LayoutStackControl()
     public LayoutStackControl WithView(IObservable<ViewDefinition> viewDefinition, Func<LayoutAreaProperties, LayoutAreaProperties> options)
         => WithView(GetAutoName(), viewDefinition, options);
 
-    public LayoutStackControl WithView(Func<LayoutAreaHost, RenderingContext, IObservable<object>> viewDefinition)
+    public LayoutStackControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition)
         => WithView(viewDefinition, x => x);
-    public LayoutStackControl WithView(Func<LayoutAreaHost, RenderingContext, IObservable<object>> viewDefinition, Func<LayoutAreaProperties, LayoutAreaProperties> options)
+    public LayoutStackControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition, Func<LayoutAreaProperties, LayoutAreaProperties> options)
         => WithView(GetAutoName(), viewDefinition, options);
-    public LayoutStackControl WithView(string area, Func<LayoutAreaHost, RenderingContext, IObservable<object>> viewDefinition)
+    public LayoutStackControl WithView<T>(string area, Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition)
     => WithView(area, viewDefinition, x => x);
-    public LayoutStackControl WithView(string area, Func<LayoutAreaHost, RenderingContext, IObservable<object>> viewDefinition, Func<LayoutAreaProperties, LayoutAreaProperties> options)
-        => this with { ViewElements = ViewElements.Add(new ViewElementWithViewStream(area, viewDefinition.Invoke, options.Invoke(new()))) };
+    public LayoutStackControl WithView<T>(string area, Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition, Func<LayoutAreaProperties, LayoutAreaProperties> options)
+        => this with { ViewElements = ViewElements.Add(new ViewElementWithViewStream(area, (a,c) => (viewDefinition.Invoke(a,c)?.Select(x => (object)x)), options.Invoke(new()))) };
 
     public LayoutStackControl WithView(string area, Func<LayoutAreaHost, RenderingContext, object> viewDefinition)
         => WithView(area, viewDefinition, x => x);

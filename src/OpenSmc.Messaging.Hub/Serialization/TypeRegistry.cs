@@ -91,7 +91,8 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
             type = baseType.MakeGenericType(genericTypeArgs);
             return true;
         }
-        return parent?.TryGetType(name, out type) ?? false;
+        return parent?.TryGetType(name, out type) 
+               ?? (type = Type.GetType(name)) != null;
     }
 
     public bool TryGetTypeName(Type type, out string typeName)

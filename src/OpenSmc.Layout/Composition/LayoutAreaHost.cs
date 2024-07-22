@@ -1,9 +1,9 @@
-﻿using System.Collections.Concurrent;
+﻿using System.Collections;
+using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using Microsoft.DotNet.Interactive.Formatting;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
-using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
 using System.Collections.Immutable;
 
@@ -105,11 +105,11 @@ public record LayoutAreaHost : IDisposable
 
     private readonly IMessageHub executionHub;
 
-    public JsonPointerReference UpdateData(string id, object data)
+    public string UpdateData(string id, object data)
         => Update(LayoutAreaReference.Data, id, data);
-    public JsonPointerReference UpdateProperties(string id, object data)
+    public string UpdateProperties(string id, object data)
         => Update(LayoutAreaReference.Properties, id, data);
-    public JsonPointerReference Update(string collection, string id, object data)
+    public string Update(string collection, string id, object data)
     {
         Stream.Update(ws =>
             new(
@@ -121,7 +121,7 @@ public record LayoutAreaHost : IDisposable
                 Stream.Hub.Version
             )
         );
-        return new JsonPointerReference(LayoutAreaReference.GetDataPointer(id));
+        return LayoutAreaReference.GetDataPointer(id);
     }
 
     private readonly ConcurrentDictionary<string, List<IDisposable>> disposablesByArea = new();
@@ -142,9 +142,55 @@ public record LayoutAreaHost : IDisposable
     {
         var reference = new EntityReference(collection, id);
         return Stream
-            .Select(ci => (T)ci.Value.Reduce(reference))
+            .Select(ci => Convert<T>(ci, reference))
             .Where(x => x != null)
             .DistinctUntilChanged();
+    }
+
+    private static T Convert<T>(ChangeItem<EntityStore> ci, EntityReference reference) where T : class
+    {
+        var result = ci.Value.Reduce(reference);
+        if (result is null)
+            return null;
+
+
+        if (result is T t)
+            return t;
+        // Check if T is an array
+        if (typeof(T).IsArray)
+        {
+            var elementType = typeof(T).GetElementType()!;
+            if (result is Array array)
+            {
+                var ret = Array.CreateInstance(elementType, array.Length);
+                for (var i = 0; i < ret.Length; i++)
+                    ret.SetValue(array.GetValue(i), i);
+                return (T)(object)ret;
+            }
+        }
+        // Handle other IEnumerable<T> types
+        else
+        {
+            var elementType = typeof(T).GetInterfaces()
+                .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEnumerable<>))
+                ?.GetGenericArguments().First();
+
+            if (elementType != null)
+            {
+                if (result is IEnumerable enumerable)
+                {
+                    var genericListType = typeof(List<>).MakeGenericType(elementType);
+                    var list = (IList)Activator.CreateInstance(genericListType)!;
+
+                    foreach (var item in enumerable)
+                        list.Add(item);
+                    return list as T;
+                }
+            }
+        }
+
+        throw new NotSupportedException(
+            $"Cannot convert instance of type {result.GetType().Name} to Type {typeof(T).FullName}");
     }
 
     public void Dispose()
