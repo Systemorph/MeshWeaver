@@ -60,7 +60,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         base.ConfigureClient(configuration)
             .AddData(data =>
                 data.FromHub(new HostAddress(), dataSource => dataSource.AddNorthwindDomain())
-            );
+            ).AddLayoutClient(x => x);
 
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(6);
 
