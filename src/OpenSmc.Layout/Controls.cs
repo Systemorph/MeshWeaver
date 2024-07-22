@@ -261,7 +261,10 @@ public static class Controls
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
 
-        return new ItemTemplateControl(view, UpdateData(area, data, id));
+        return new ItemTemplateControl(view, new JsonPointerReference("/"))
+        {
+            DataContext = UpdateData(area, data, id)
+        };
     }
 
     #endregion
