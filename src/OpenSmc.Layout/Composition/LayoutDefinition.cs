@@ -23,7 +23,7 @@ public record LayoutDefinition(IMessageHub Hub)
     public LayoutDefinition WithView(
         string area,
         Func<LayoutAreaHost, RenderingContext, IObservable<object>> generator, 
-        Func<ViewOptions, ViewOptions> options
+        Func<LayoutAreaProperties, LayoutAreaProperties> options
     ) =>
         WithViewGenerator(
             r => r.Area == area,
@@ -38,7 +38,7 @@ public record LayoutDefinition(IMessageHub Hub)
     public LayoutDefinition WithViewDefinition(
         string area,
         IObservable<Func<LayoutAreaHost, object>> generator,
-        Func<ViewOptions, ViewOptions> options
+        Func<LayoutAreaProperties, LayoutAreaProperties> options
     ) =>
         WithViewDefinition(
             area,
@@ -55,12 +55,12 @@ public record LayoutDefinition(IMessageHub Hub)
     public LayoutDefinition WithViewDefinition(
         string area,
         Func<LayoutAreaHost, Task<object>> generator,
-        Func<ViewOptions, ViewOptions> options
+        Func<LayoutAreaProperties, LayoutAreaProperties> options
     ) => WithViewDefinition(area, Observable.Return(generator), options);
 
     public LayoutDefinition WithViewDefinition(
         string area,
-        IObservable<Func<LayoutAreaHost, Task<object>>> generator, Func<ViewOptions, ViewOptions> options
+        IObservable<Func<LayoutAreaHost, Task<object>>> generator, Func<LayoutAreaProperties, LayoutAreaProperties> options
     ) =>
         WithViewGenerator(
             r => r.Area == area,
@@ -79,7 +79,7 @@ public record LayoutDefinition(IMessageHub Hub)
     public LayoutDefinition WithViewDefinition(
         string area,
         Func<LayoutAreaHost, Task<UiControl>> generator,
-        Func<ViewOptions, ViewOptions> options
+        Func<LayoutAreaProperties, LayoutAreaProperties> options
     ) => WithViewDefinition(area, Observable.Return(generator), options);
     public LayoutDefinition WithViewDefinition(string area, ViewDefinition generator) =>
         WithViewDefinition(
@@ -90,7 +90,7 @@ public record LayoutDefinition(IMessageHub Hub)
 
 
     public LayoutDefinition WithViewDefinition(string area, ViewDefinition generator,
-        Func<ViewOptions, ViewOptions> options) =>
+        Func<LayoutAreaProperties, LayoutAreaProperties> options) =>
         WithViewDefinition(
             area,
             Observable.Return(generator),
@@ -105,11 +105,11 @@ public record LayoutDefinition(IMessageHub Hub)
     public LayoutDefinition WithViewDefinition(
         string area,
         IObservable<ViewDefinition> generator, 
-        Func<ViewOptions, ViewOptions> options
+        Func<LayoutAreaProperties, LayoutAreaProperties> options
     ) => WithViewGenerator(r => r.Area == area, new ViewElementWithViewDefinition(area, generator, options.Invoke(new())));
 
     public LayoutDefinition WithView(string area, object view) => WithView(area, view, x => x);
-    public LayoutDefinition WithView(string area, object view, Func<ViewOptions, ViewOptions> options) =>
+    public LayoutDefinition WithView(string area, object view, Func<LayoutAreaProperties, LayoutAreaProperties> options) =>
         WithViewGenerator(r => r.Area == area, new ViewElementWithView(area, view, options.Invoke(new())));
 
     public LayoutDefinition WithView(
@@ -120,7 +120,7 @@ public record LayoutDefinition(IMessageHub Hub)
     public LayoutDefinition WithView(
         string area, 
         Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<object>> view, 
-        Func<ViewOptions, ViewOptions> options)
+        Func<LayoutAreaProperties, LayoutAreaProperties> options)
     {
         return WithViewGenerator(r => r.Area == area,
             new ViewElementWithViewDefinition(area, 
@@ -135,7 +135,7 @@ public record LayoutDefinition(IMessageHub Hub)
     public LayoutDefinition WithView(
         string area, 
         Func<LayoutAreaHost,RenderingContext, object> view, 
-        Func<ViewOptions, ViewOptions> options)
+        Func<LayoutAreaProperties, LayoutAreaProperties> options)
         => WithView(area, (a,ctx) => Observable.Return(view(a, ctx)), options);
 
 
@@ -161,22 +161,6 @@ public record LayoutDefinition(IMessageHub Hub)
         => reference.ToHref(Hub.Address);
 }
 
-public record ViewOptions
-{
-    internal ImmutableList<NavLinkControl> MenuControls { get; init; } = ImmutableList<NavLinkControl>.Empty;
-    
-    internal int MenuOrder { get; init; } 
-    public ViewOptions WithMenuOrder(int order) => this with { MenuOrder = order };
-
-
-    public ViewOptions WithMenu(params NavLinkControl[] items)
-        => this with { MenuControls = MenuControls.AddRange(items) };
-
-    internal ImmutableList<SourceItem> Sources { get; init; } = ImmutableList<SourceItem>.Empty;
-
-    public ViewOptions WithSources(params SourceItem[] sources) => this with { Sources = Sources.AddRange(sources) };
-    public ViewOptions WithSources(params Type[] types) => this with { Sources = Sources.AddRange(types.Select(t => new SourceItem(t.Assembly.Location, t.Name)).ToArray()) };
-}
 
 internal record ViewGenerator(Func<LayoutAreaReference, bool> Filter, ViewElement ViewElement);
 public record SourceItem(string Assembly, string Type);

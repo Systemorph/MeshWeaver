@@ -18,7 +18,7 @@ namespace OpenSmc.Northwind.ViewModel
         public static LayoutDefinition AddProductsSummary(this LayoutDefinition layout)
             => layout.WithView(nameof(ProductSummary), ProductSummary,
                 options => options
-                    .WithSources(typeof(ProductSummaryArea))
+                    .WithSourcesForTypes(typeof(ProductSummaryArea))
                     .WithMenu(Controls.NavLink("Product Summary", FluentIcons.Box,
                         layout.ToHref(new(nameof(ProductSummary)))))
             );
@@ -36,7 +36,7 @@ namespace OpenSmc.Northwind.ViewModel
         ) =>
             Controls.Stack()
                 .WithView(Controls.PaneHeader("Product Summary"))
-                .WithView(CounterLayoutArea.Counter, o => o.WithSources(typeof(CounterLayoutArea)));
+                .WithView(CounterLayoutArea.Counter, o => o.WithSourcesForTypes(typeof(CounterLayoutArea)));
 
     }
 }

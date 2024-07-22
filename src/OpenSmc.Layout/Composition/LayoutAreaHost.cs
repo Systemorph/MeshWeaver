@@ -106,12 +106,16 @@ public record LayoutAreaHost : IDisposable
     private readonly IMessageHub executionHub;
 
     public JsonPointerReference UpdateData(string id, object data)
+        => Update(LayoutAreaReference.Data, id, data);
+    public JsonPointerReference UpdateProperties(string id, object data)
+        => Update(LayoutAreaReference.Properties, id, data);
+    public JsonPointerReference Update(string collection, string id, object data)
     {
         Stream.Update(ws =>
             new(
                 Stream.Owner,
                 Stream.Reference,
-                (ws ?? new()).Update(LayoutAreaReference.Data, i => i.Update(id, data)),
+                (ws ?? new()).Update(collection, i => i.Update(id, data)),
                 Stream.Owner,
                 null, // todo we can fill this in here and use.
                 Stream.Hub.Version
@@ -129,8 +133,14 @@ public record LayoutAreaHost : IDisposable
 
     public IObservable<T> GetDataStream<T>(string id)
         where T : class
+        => GetStream<T>(LayoutAreaReference.Data, id);
+    public IObservable<T> GetPropertiesStream<T>(string id)
+        where T : class
+        => GetStream<T>(LayoutAreaReference.Properties, id);
+    public IObservable<T> GetStream<T>(string collection, string id)
+        where T : class
     {
-        var reference = new EntityReference(LayoutAreaReference.Data, id);
+        var reference = new EntityReference(collection, id);
         return Stream
             .Select(ci => (T)ci.Value.Reduce(reference))
             .Where(x => x != null)
@@ -183,4 +193,5 @@ public record LayoutAreaHost : IDisposable
             )
         );
     }
+
 }

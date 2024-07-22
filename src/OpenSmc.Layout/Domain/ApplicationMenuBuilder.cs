@@ -50,9 +50,9 @@ namespace OpenSmc.Layout.Domain
             {
                 Menu = Layout
                     .ViewGenerators
-                    .Select(g => new { g.ViewElement.Area, g.ViewElement.Options })
-                    .OrderBy(x => x.Options.MenuOrder)
-                    .SelectMany(x => x.Options.MenuControls)
+                    .Select(g => new { g.ViewElement.Area, g.ViewElement.Properties })
+                    .OrderBy(x => x.Properties.MenuOrder)
+                    .SelectMany(x => x.Properties.MenuControls)
                     .Aggregate(Menu,
                         (menu, navLink) => menu.WithNavLink(navLink))
             };

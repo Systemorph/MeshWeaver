@@ -1,10 +1,13 @@
-﻿using System.Reflection;
+﻿using System.Collections.Immutable;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using OpenSmc.Layout.Composition;
 using OpenSmc.Reflection;
 
 namespace OpenSmc.Layout;
 
 public record MenuItemControl(object Title, object Icon)
-    : UiControl<MenuItemControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
+    : UiControl<MenuItemControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null), IContainerControl
 {
     public string Description { get; init; }
 
@@ -17,10 +20,7 @@ public record MenuItemControl(object Title, object Icon)
     public MenuItemControl WithIcon(object icon) => this with { Icon = icon };
 
     public MenuItemControl WithDescription(string description) =>
-        this with
-        {
-            Description = description
-        };
+        this with { Description = description };
 
 
     /*public MenuItem WithSubMenu(object payload, Func<object, IAsyncEnumerable<MenuItem>> subMenu)
@@ -29,49 +29,17 @@ public record MenuItemControl(object Title, object Icon)
     }*/
 
 
-#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
-    private static readonly MethodInfo ExpandSubMenuMethod =
-        ReflectionHelper.GetMethodGeneric<MenuItemControl>(x =>
-            x.ExpandSubMenu<object>(null, null)
-        );
-#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
-    private async Task<UiControl> ExpandSubMenu<TPayload>(
-        TPayload payload,
-        Func<TPayload, IAsyncEnumerable<MenuItemControl>> subMenu
-    )
+    public MenuItemControl WithSubMenu(params MenuItemControl[] subMenu)
     {
-        return ParseToUiControl(await subMenu(payload).ToArrayAsync());
+        return this with{SubMenu = SubMenu.AddRange(subMenu)};
     }
 
-    private async Task<UiControl> ExpandSubMenu(object payload, object subMenu)
-    {
-        if (subMenu is Func<IAsyncEnumerable<MenuItemControl>> simple)
-            return ParseToUiControl(await simple().ToArrayAsync());
-        var subMenuType = subMenu.GetType();
-        if (subMenuType.IsGenericType && subMenuType.GetGenericTypeDefinition() == typeof(Func<,>))
-        {
-            var task =
-                (Task<UiControl>)
-                    ExpandSubMenuMethod
-                        .MakeGenericMethod(subMenuType.GetGenericArguments().First())
-                        .Invoke(this, new[] { payload, subMenu });
-            if (task == null)
-                return null;
-            return await task;
-        }
+    public ImmutableList<MenuItemControl> SubMenu { get; init; } = ImmutableList<MenuItemControl>.Empty;
 
-        throw new NotSupportedException();
-    }
+    public IEnumerable<ViewElement> ChildControls => SubMenu.Select((x,i) => new ViewElementWithView(i.ToString(), x, new()));
+    public IReadOnlyCollection<string> Areas { get; init; } = [];
 
+    public IContainerControl SetAreas(IReadOnlyCollection<string> areas)
+        => this with { Areas = areas };
 
-    public UiControl ParseToUiControl(IReadOnlyCollection<MenuItemControl> children)
-    {
-        if (children.Count == 1)
-            return children.First();
-
-        var ret = new LayoutStackControl();
-        foreach (var menuItem in children)
-            ret = ret.WithView(menuItem);
-        return ret;
-    }
 }

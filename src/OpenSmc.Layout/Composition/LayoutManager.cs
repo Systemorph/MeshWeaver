@@ -16,13 +16,18 @@ public static class LayoutManager
         if (viewElement == null)
             return layoutArea.Stream;
 
-        var options = viewElement.Options;
+        var options = viewElement.Properties;
         if(reference.RenderLayout && layoutDefinition.MainLayout != null)
             viewElement = layoutDefinition.MainLayout(viewElement, layoutDefinition.NavMenu?.Invoke(reference));
 
+        layoutArea.AddDocumentationOptions(options);
 
-        layoutArea.RenderArea(new(reference.Area, viewElement.Options), viewElement);
+        layoutArea.RenderArea(new(reference.Area, options), viewElement);
         return layoutArea.Stream;
+    }
+    private static void AddDocumentationOptions(this LayoutAreaHost area, LayoutAreaProperties options)
+    {
+        area.UpdateProperties(LayoutAreaProperties.Properties, new LayoutAreaProperties{HeadingMenu = options.HeadingMenu});
     }
 
     public static void RenderArea(this LayoutAreaHost layoutArea, RenderingContext context, object viewModel)
