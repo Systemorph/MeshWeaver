@@ -12,6 +12,7 @@
     <ProjectReference Include="..\..\src\OpenSmc.ServiceProvider\OpenSmc.ServiceProvider.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Hosting\OpenSmc.Hosting.csproj" />
     <ProjectReference Include="..\OpenSmc.Northwind.ViewModel\OpenSmc.Northwind.ViewModel.csproj" />
+    <ProjectReference Include="..\OpenSmc.Northwind.Views\OpenSmc.Northwind.Views.csproj" />
   </ItemGroup>
 
   <ItemGroup>
