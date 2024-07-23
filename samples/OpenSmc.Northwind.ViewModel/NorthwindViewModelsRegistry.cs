@@ -4,15 +4,18 @@ using OpenSmc.Messaging;
 namespace OpenSmc.Northwind.ViewModel
 {
     /// <summary>
-    /// Aggregate layer to register all Northwind views in one go.
+    /// Provides a centralized registration mechanism for all Northwind application views and configurations. This static class facilitates the addition of various Northwind-specific views and documentation to the application's MessageHub configuration.
     /// </summary>
     public static class NorthwindViewModelsRegistry
     {
         /// <summary>
-        /// Adds all the northwind views.
+        /// Registers all Northwind views and configurations to the provided MessageHub configuration.
         /// </summary>
-        /// <param name="configuration"></param>
-        /// <returns></returns>
+        /// <param name="configuration">The MessageHub configuration to be enhanced with Northwind views and settings.</param>
+        /// <returns>The updated MessageHub configuration with Northwind views and documentation added.</returns>
+        /// <remarks>
+        /// This method sequentially adds dashboard, product summary, orders summary, customer summary, and supplier summary views to the application layout. It also configures the application menu and default views, and includes Northwind-specific documentation.
+        /// </remarks>
         public static MessageHubConfiguration AddNorthwindViewModels(
             this MessageHubConfiguration configuration
         )

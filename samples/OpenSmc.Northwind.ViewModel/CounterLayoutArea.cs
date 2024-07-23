@@ -9,11 +9,12 @@ namespace OpenSmc.Northwind.ViewModel
     public static class CounterLayoutArea
     {
         /// <summary>
-        /// The api for adding it as a view.
+        /// Adds a counter view to the specified layout area.
         /// </summary>
-        /// <param name="area"></param>
-        /// <param name="context"></param>
-        /// <returns></returns>
+        /// <param name="area">The layout area host to which the counter view will be added.</param>
+        /// <param name="context">The rendering context for the view.</param>
+        /// <returns>An object representing the configured view within the layout.</returns>
+        
         public static object Counter(this LayoutAreaHost area, RenderingContext context)
         {
             // this is actually the only place we keep the state
@@ -35,10 +36,13 @@ namespace OpenSmc.Northwind.ViewModel
         }
 
         /// <summary>
-        /// How to render the counter
+        /// Renders the counter value as a title within the view.
         /// </summary>
-        /// <param name="counter"></param>
-        /// <returns></returns>
+        /// <param name="counter">The current value of the counter to be displayed.</param>
+        /// <returns>A view component representing the counter value as a title.</returns>
+        /// <remarks>
+        /// This method is utilized to dynamically update the displayed counter value within the UI. It converts the integer counter value to a string and displays it as a title of level 1.
+        /// </remarks>
         private static object Counter(int counter) => Controls.Title(counter.ToString(), 1);
 
     }

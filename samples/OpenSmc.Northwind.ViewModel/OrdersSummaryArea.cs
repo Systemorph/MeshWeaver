@@ -10,16 +10,18 @@ using OpenSmc.Utils;
 namespace OpenSmc.Northwind.ViewModel;
 
 /// <summary>
-/// Orders Summary is a view combining data from various sources.
-/// It manually joins data to a table and renders the result in a data grid.
+/// Defines a static class within the OpenSmc.Northwind.ViewModel namespace for creating and managing an Orders Summary view. This view aggregates and displays data from various sources in a data grid format, providing a comprehensive overview of orders.
 /// </summary>
 public static class OrdersSummaryArea
 {
     /// <summary>
-    /// Add the order summary to layout
+    /// Registers the Orders Summary view to the specified layout definition.
     /// </summary>
-    /// <param name="layout"></param>
-    /// <returns></returns>
+    /// <param name="layout">The layout definition to which the Orders Summary view will be added.</param>
+    /// <returns>The updated layout definition including the Orders Summary view.</returns>
+    /// <remarks>
+    /// This method enhances the provided layout definition by adding a navigation link to the Orders Summary view, using the FluentIcons.Box icon for the menu. It configures the Orders Summary view's appearance and behavior within the application's navigation structure.
+    /// </remarks>
     public static LayoutDefinition AddOrdersSummary(this LayoutDefinition layout)
         => layout.WithView(nameof(OrderSummary), OrderSummary, options => options
             .WithMenu(Controls.NavLink(nameof(OrderSummary).Wordify(), FluentIcons.Box,
@@ -27,11 +29,14 @@ public static class OrdersSummaryArea
         );
 
     /// <summary>
-    /// The definition of the order summary view.
+    /// Generates the Orders Summary view for a given layout area and rendering context.
     /// </summary>
-    /// <param name="layoutArea"></param>
-    /// <param name="ctx"></param>
-    /// <returns></returns>
+    /// <param name="layoutArea">The layout area host where the Orders Summary view will be displayed.</param>
+    /// <param name="ctx">The rendering context for generating the view.</param>
+    /// <returns>A LayoutStackControl object representing the Orders Summary view.</returns>
+    /// <remarks>
+    /// This method constructs the Orders Summary view, incorporating a data grid to display aggregated order data. The specific contents and layout of the view are determined at runtime based on the rendering context.
+    /// </remarks>
     public static LayoutStackControl OrderSummary(
         this LayoutAreaHost layoutArea,
         RenderingContext ctx
