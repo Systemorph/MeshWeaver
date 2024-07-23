@@ -48,12 +48,12 @@ public static class LayoutManager
 
             if (viewModel is IContainerControl container)
             {
-                foreach (var ve in container.ChildControls)
+                foreach (var ve in container.SubAreas)
                 {
                     layoutArea.RenderArea(context with { Area = $"{area}/{ve.Area}", DataContext = dataContext}, ve);
                 }
 
-                viewModel = container.SetAreas(container.ChildControls.Select(ve => $"{area}/{ve.Area}").ToArray());
+                viewModel = container.SetAreas(container.SubAreas.Select(ve => $"{area}/{ve.Area}").ToArray());
             }
 
         }

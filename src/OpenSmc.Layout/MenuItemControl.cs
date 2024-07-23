@@ -1,8 +1,5 @@
 ﻿using System.Collections.Immutable;
-using System.Reflection;
-using System.Runtime.CompilerServices;
 using OpenSmc.Layout.Composition;
-using OpenSmc.Reflection;
 
 namespace OpenSmc.Layout;
 
@@ -36,7 +33,7 @@ public record MenuItemControl(object Title, object Icon)
 
     public ImmutableList<MenuItemControl> SubMenu { get; init; } = ImmutableList<MenuItemControl>.Empty;
 
-    public IEnumerable<ViewElement> ChildControls => SubMenu.Select((x,i) => new ViewElementWithView(i.ToString(), x, new()));
+    IEnumerable<ViewElement> IContainerControl.SubAreas => SubMenu.Select((x,i) => new ViewElementWithView(i.ToString(), x, new()));
     public IReadOnlyCollection<string> Areas { get; init; } = [];
 
     public IContainerControl SetAreas(IReadOnlyCollection<string> areas)

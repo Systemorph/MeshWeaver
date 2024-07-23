@@ -58,7 +58,7 @@ public static class OrdersSummaryArea
         return Controls.Stack()
             .WithView(Controls.PaneHeader("Order Summary"))
             .WithClass("order-summary")
-            .WithView(layoutArea.Toolbar(years))
+            .WithView(ToolbarArea.Toolbar(years))
             .WithView(
                 (area, _) =>
                     area.Workspace.ReduceToTypes(typeof(Order))
