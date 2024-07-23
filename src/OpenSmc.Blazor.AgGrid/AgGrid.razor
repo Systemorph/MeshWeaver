@@ -26,11 +26,11 @@
                 Environment.GetEnvironmentVariable("AG_GRID_LICENSE_KEY"));
             
             DataBind<object>(ViewModel.Data, o => Options = o);
-        }
 
-        if (jsModule is not null)
-        {
-            await jsModule.InvokeVoidAsync("renderGrid", id, element, Options);
+            if (jsModule is not null)
+            {
+                await jsModule.InvokeVoidAsync("renderGrid", id, element, Options);
+            }
         }
     }
 
