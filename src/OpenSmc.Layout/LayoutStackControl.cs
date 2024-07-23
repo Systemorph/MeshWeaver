@@ -6,7 +6,7 @@ namespace OpenSmc.Layout;
 
 public interface IContainerControl : IUiControl
 {
-    IEnumerable<ViewElement> ChildControls { get; }
+    IEnumerable<ViewElement> SubAreas { get; }
     IReadOnlyCollection<string> Areas { get; }
     IContainerControl SetAreas(IReadOnlyCollection<string> areas);
 }
@@ -100,7 +100,7 @@ public record LayoutStackControl()
     public LayoutStackControl WithWidth(string width)
     => this with { Width = width };
 
-    IEnumerable<ViewElement> IContainerControl.ChildControls => ViewElements;
+    IEnumerable<ViewElement> IContainerControl.SubAreas => ViewElements;
     IContainerControl IContainerControl.SetAreas(IReadOnlyCollection<string> areas) => this with { Areas = areas };
 }
 
@@ -147,7 +147,7 @@ public record SplitterPaneControl(object ChildControl)
 
     public IReadOnlyCollection<string> Areas { get; init; }
 
-    IEnumerable<ViewElement> IContainerControl.ChildControls => new[] { new ViewElementWithView(nameof(ChildControl), ChildControl, new()) };
+    IEnumerable<ViewElement> IContainerControl.SubAreas => new[] { new ViewElementWithView(nameof(ChildControl), ChildControl, new()) };
 
     IContainerControl IContainerControl.SetAreas(IReadOnlyCollection<string> areas) => this with { Areas = areas };
 }
@@ -188,7 +188,7 @@ public record LayoutGridItemControl(object ChildControl)
 
     public IReadOnlyCollection<string> Areas { get; init; }
 
-    IEnumerable<ViewElement> IContainerControl.ChildControls => [ new ViewElementWithView(nameof(ChildControl), ChildControl, new()) ];
+    IEnumerable<ViewElement> IContainerControl.SubAreas => [ new ViewElementWithView(nameof(ChildControl), ChildControl, new()) ];
 
     IContainerControl IContainerControl.SetAreas(IReadOnlyCollection<string> areas) => this with { Areas = areas };
 }
