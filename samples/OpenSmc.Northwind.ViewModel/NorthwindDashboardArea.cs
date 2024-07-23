@@ -5,16 +5,18 @@ using OpenSmc.Layout.Composition;
 namespace OpenSmc.Northwind.ViewModel;
 
 /// <summary>
-/// This is an example of a dashboard which can be assembled from different subviews.
+/// Defines a static class for creating and managing the Northwind Dashboard within the OpenSmc.Northwind.ViewModel namespace. This class provides methods to add the dashboard to a layout and to generate the main dashboard view.
 /// </summary>
 public static class NorthwindDashboardArea
 {
 
     /// <summary>
-    /// Adds the Northwind Dashboard to the views.
+    /// Adds the Northwind Dashboard view to the specified layout.
     /// </summary>
-    /// <param name="layout"></param>
-    /// <returns></returns>
+    /// <param name="layout">The layout definition to which the dashboard view will be added.</param>
+    /// <returns>The updated layout definition including the Northwind Dashboard view.</returns>
+    /// <remarks>This method enhances the provided layout definition by adding a navigation link to the Northwind Dashboard view, using the FluentIcons.Grid icon for the menu. It configures the dashboard view's appearance and behavior within the application's navigation structure.
+    /// </remarks>
     public static LayoutDefinition AddDashboard(this LayoutDefinition layout)
         => layout.WithView(nameof(Dashboard), Dashboard, 
             options => options
@@ -27,12 +29,15 @@ public static class NorthwindDashboardArea
 
 
     /// <summary>
-    /// This is the main dashboard view. It shows....
+    /// Generates the main dashboard view for a given layout area and rendering context.
     /// </summary>
-    /// <source name="mysource"></source>
-    /// <param name="layoutArea"></param>
-    /// <param name="context"></param>
-    /// <returns></returns>
+    /// <param name="layoutArea">The layout area host where the dashboard view will be displayed.</param>
+    /// <param name="context">The rendering context for generating the view.</param>
+    /// <returns>A dynamically generated view object representing the Northwind Dashboard.</returns>
+    /// <remarks>
+    /// This method constructs the main view of the Northwind Dashboard, incorporating various subviews and components to provide a comprehensive overview of the application's data and functionality. The specific contents and layout of the dashboard are determined at runtime based on the rendering context.
+    /// </remarks>
+    
     public static object Dashboard(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         return Controls.Stack()

@@ -13,7 +13,7 @@ using OpenSmc.Utils;
 namespace OpenSmc.Northwind.ViewModel;
 
 /// <summary>
-/// Provides a static view for supplier summaries within the Northwind application.
+/// Defines a static class within the OpenSmc.Northwind.ViewModel namespace for creating and managing a Supplier Summary view. This view provides a comprehensive overview of suppliers, including details such as name, contact information, and products supplied.
 /// </summary>
 public static class SupplierSummaryArea
 {
@@ -23,10 +23,13 @@ public static class SupplierSummaryArea
 
 
     /// <summary>
-    /// Registers supplier summary
+    /// Registers the Supplier Summary view to the specified layout definition.
     /// </summary>
-    /// <param name="layout"></param>
-    /// <returns></returns>
+    /// <param name="layout">The layout definition to which the Supplier Summary view will be added.</param>
+    /// <returns>The updated layout definition including the Supplier Summary view.</returns>
+    /// <remarks>This method enhances the provided layout definition by adding a navigation link to the Supplier Summary view, using the FluentIcons.Search icon for the menu. 
+    /// It configures the Supplier Summary view's appearance and behavior within the application's navigation structure.
+    /// </remarks>
     public static LayoutDefinition AddSupplierSummary(this LayoutDefinition layout)
         => layout.WithView(nameof(SupplierSummary), SupplierSummary, o => o
                 .WithMenu(Controls.NavLink(nameof(SupplierSummary).Wordify(), FluentIcons.Search,
