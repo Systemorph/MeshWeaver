@@ -29,7 +29,7 @@ public class InstancesInCollectionConverter(ITypeRegistry typeRegistry)
     )
     {
         using var doc = JsonDocument.ParseValue(ref reader);
-        var obj = (JsonObject)doc.RootElement.AsNode();
+        var obj = doc.RootElement.AsNode() as JsonObject;
         if (obj == null)
             return null;
         var collection = obj[CollectionProperty]?.ToString();
