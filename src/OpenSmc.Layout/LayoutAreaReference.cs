@@ -15,8 +15,14 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
     public const string Areas = "areas";
     public const string Properties = "properties";
 
-    public static string GetDataPointer(string id) =>
-        JsonPointer.Create(Data, JsonSerializer.Serialize(id)).ToString();
+    public static string GetDataPointer(string id, params string[] extraSegments) =>
+        JsonPointer.Create(
+            new[] { Data, JsonSerializer.Serialize(id) }
+            .Concat(extraSegments)
+            .Select(PointerSegment.Create)
+            .ToArray()
+        )
+        .ToString();
 
     public static string GetControlPointer(string area) =>
         JsonPointer.Create(Areas, JsonSerializer.Serialize(area)).ToString();
