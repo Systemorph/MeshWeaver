@@ -5,6 +5,7 @@ public record ButtonControl(object Data)
 {
     public object IconStart { get; init; }
     public object IconEnd { get; init; }
+    public object Appearance { get; set; }
 
     public ButtonControl WithIconStart(object icon) => this with { IconStart = icon };
 

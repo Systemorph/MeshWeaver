@@ -1,21 +1,16 @@
-@inherits ContainerView<NavGroupControl>
+@inherits BlazorView<NavGroupControl>
 
 <FluentNavGroup Href="@Href" Icon="@Icon?.ToFluentIcon()" Title="@Title">
     
-    @foreach (var (area, viewModel) in Areas)
+    @foreach (var area in ViewModel.Areas)
     {
-        <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area" />
+        <DispatchView Stream="@Stream" Area="@area" />
     }
 
 </FluentNavGroup>
 
 @code{
-    private IEnumerable<object> SubMenu { get; set; } = [];
 
-    private string GetAreaName(int i)
-    {
-        return $"{Area}/{i}";
-    }
     protected string Title { get; set; }
     protected string Href { get; set; }
     protected Application.Styles.Icon Icon { get; set; }

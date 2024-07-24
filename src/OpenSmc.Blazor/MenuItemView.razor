@@ -1,5 +1,7 @@
 ﻿@inherits BlazorView<MenuItemControl>
-<FluentMenuButton @onclick="@OnClick">@Title</FluentMenuButton>
+<div class="menu-item">
+    <FluentMenuItem OnClick="OnClick">@Title</FluentMenuItem>
+</div>
 @code
 {
     private string Title { get; set; }

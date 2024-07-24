@@ -1,25 +1,22 @@
-@inherits ContainerView<LayoutGridItemControl>
+@inherits SkinnedView<LayoutGridItemSkin>
 
 <FluentGridItem
-    AdaptiveRendering="@ViewModel.AdaptiveRendering"
-    Gap="@ViewModel.Gap"
+    AdaptiveRendering="@Skin.AdaptiveRendering"
+                Gap="@Skin.Gap"
     HiddenWhen="@HiddenWhen"
-    Justify="@ViewModel.Justify?.ToFluentJustifyContent()"
-    lg="@ViewModel.Lg"
-    md="@ViewModel.Md"
-    sm="@ViewModel.Sm"
-    xl="@ViewModel.Xl"
-    xs="@ViewModel.Xs"
-    xxl="@ViewModel.Xxl"
-    >
-    <DispatchView ViewModel="@ChildControlArea.ViewModel" Stream="@Stream" Area="@ChildControlArea.Area" />
+                Justify="@Skin.Justify?.ToFluentJustifyContent()"
+                lg="@Skin.Lg"
+                md="@Skin.Md"
+                sm="@Skin.Sm"
+                xl="@Skin.Xl"
+                xs="@Skin.Xs"
+                xxl="@Skin.Xxl">
+    <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
 </FluentGridItem>
 
 @code
 {
-    private RenderedArea ChildControlArea => Areas.First();
-
-    private GridItemHidden HiddenWhen => ViewModel.HiddenWhen switch
+    private GridItemHidden HiddenWhen => Skin.HiddenWhen switch
     {
         LayoutGridItemHidden.Lg => GridItemHidden.Lg,
         LayoutGridItemHidden.LgAndDown => GridItemHidden.LgAndDown,

@@ -1,21 +1,48 @@
+@using Microsoft.Extensions.DependencyInjection
 @using OpenSmc.Layout.Client
+@using OpenSmc.Messaging
+@using OpenSmc.Utils
 @inherits BlazorView<UiControl>
+@inject IMessageHub Hub
 
-@((RenderFragment)(builder =>
+@if(ViewDescriptor == null)
 {
-    builder.OpenComponent(0, ViewDescriptor.Type);
-    var index = 0;
-    foreach (var parameter in ViewDescriptor.Parameters)
+    <h3>Loading @Area.Split("/").LastOrDefault()?.Wordify()</h3>
+    <FluentProgressRing style="width: 60px; height: 60px;"/>
+}
+else
+{
+    @((RenderFragment)(builder =>
     {
-        builder.AddAttribute(++index, parameter.Key, parameter.Value);
-    }
+        builder.OpenComponent(0, ViewDescriptor.Type);
+        var index = 0;
+        foreach (var parameter in ViewDescriptor.Parameters)
+        {
+            builder.AddAttribute(++index, parameter.Key, parameter.Value);
+        }
 
-    builder.CloseComponent();
-}))
+        builder.CloseComponent();
+    }))
+}
 
 @code
 {
     private ViewDescriptor ViewDescriptor { get; set; }
+    private IDisposable subscription;
+    public override async Task SetParametersAsync(ParameterView parameters)
+    {
+        await base.SetParametersAsync(parameters);
+        var client = Hub.ServiceProvider.GetRequiredService<ILayoutClient>();
+        if (ViewModel == null)
+            Disposables.Add(Stream.GetControlStream(Area).Subscribe(c =>
+            {
+                ViewModel = c as UiControl;
+                ViewDescriptor = client.GetViewDescriptor(ViewModel, Stream, Area);
+                InvokeAsync(StateHasChanged);
+            }));
+        else
+        {
+            ViewDescriptor = client.GetViewDescriptor(ViewModel, Stream, Area);
+        }
+    }
 }
-
-

@@ -25,12 +25,19 @@ public record ApplicationBuilder
     private object DefaultLayoutControl(ViewElement view, NavMenuControl navMenu)
     {
         if (navMenu == null)
-            return Controls.Body(view);
-        return Controls.Stack()
+            return WrapInBodyContent(view);
+        return 
+            Controls.Stack()
             .WithOrientation(Orientation.Horizontal)
             .WithWidth("100%")
             .WithView(navMenu)
-            .WithView(Controls.Body(view));
+            .WithView(WrapInBodyContent(view))
+            .WithSkin(Skins.FluentLayout);
+    }
+
+    private static LayoutStackControl WrapInBodyContent(ViewElement view)
+    {
+        return Controls.Stack().WithSkin(Skins.BodyContent) with { ViewElements = [view] };
     }
 
     // ReSharper disable once WithExpressionModifiesAllMembers
