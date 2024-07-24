@@ -1,12 +1,6 @@
-@inherits ContainerView<BodyContentControl>
+@inherits SkinnedView<BodyContentSkin>
 
-<FluentBodyContent>
-    <DispatchView ViewModel="@ChildControlArea.ViewModel" Stream="@Stream" Area="@ChildControlArea.Area" />
+<FluentBodyContent Class="@Skin.Class">
+    <DispatchView ViewModel="@ViewModel.PopSkin()" Stream="@Stream" Area="@Area" />
 </FluentBodyContent>
-
-
-@code
-{
-    private RenderedArea ChildControlArea => Areas.First();
-}
 

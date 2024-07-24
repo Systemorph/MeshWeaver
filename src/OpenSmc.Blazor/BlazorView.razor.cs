@@ -5,7 +5,6 @@ using Microsoft.AspNetCore.Components;
 using OpenSmc.Data;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Layout;
-using OpenSmc.Layout.Views;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 
@@ -22,7 +21,6 @@ namespace OpenSmc.Blazor
                 BindData();
         }
 
-        protected object Skin { get; set; }
 
         protected string Label { get; set; }
 
@@ -90,7 +88,6 @@ namespace OpenSmc.Blazor
 
             if (ViewModel != null)
             {
-                DataBind<object>(ViewModel.Skin, x => Skin = x);
                 DataBind<string>(ViewModel.Label, x => Label = x);
                 DataBind<string>(ViewModel.Class, x => Class = x);
                 DataBind<string>(ViewModel.Style, x => Style = x);

@@ -1,4 +1,4 @@
-@inherits ContainerView<NavMenuControl>
+@inherits BlazorView<NavMenuControl>
 
 @if (ViewModel != null)
 {
@@ -10,9 +10,9 @@
             </label>
 
             <FluentNavMenu Id="main-menu" Collapsible="@ViewModel.Collapsible" Width="@ViewModel.Width" @bind-Expanded="@expanded">
-                @foreach (var (area, viewModel) in Areas)
+                @foreach (var area in ViewModel.Areas)
                 {
-                    <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area"/>
+                    <DispatchView Stream="@Stream" Area="@area"/>
                 }
             </FluentNavMenu>
         </nav>

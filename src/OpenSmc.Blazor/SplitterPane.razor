@@ -1,21 +1,13 @@
-@inherits ContainerView<SplitterPaneControl>
+@inherits SkinnedView<SplitterPaneSkin>
 
 <FluentMultiSplitterPane
-    Collapsible="@ViewModel.Collapsible"
-    Collapsed="@ViewModel.Collapsed"
-    Max="@ViewModel.Max"
-    Min="@ViewModel.Min"
-    Size="@ViewModel.Size"
-    Resizable="@ViewModel.Resizable"
+    Collapsible="@Skin.Collapsible"
+                         Collapsed="@Skin.Collapsed"
+                         Max="@Skin.Max"
+                         Min="@Skin.Min"
+                         Size="@Skin.Size"
+                         Resizable="@Skin.Resizable"
     Class="@Class">
-    @* todo needed for async subviews, see how to get rid of it *@
-    @if (!Areas.IsEmpty())
-    {
-        <DispatchView ViewModel="@ChildControlArea.ViewModel" Stream="@Stream" Area="@ChildControlArea.Area"/>
-    }
+    <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"/>
 </FluentMultiSplitterPane>
 
-@code
-{
-    private RenderedArea ChildControlArea => Areas.First();
-}

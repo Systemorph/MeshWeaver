@@ -1,6 +1,5 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json.Serialization;
-using OpenSmc.Layout.Composition;
 
 namespace OpenSmc.Layout;
 
@@ -44,7 +43,7 @@ public abstract record UiControl(object Data) : IUiControl
     public bool IsReadonly { get; init; } //TODO add concept of registering conventions for properties to distinguish if it is editable!!! have some defaults, no setter=> iseditable to false, or some attribute to mark as not editable, or checking if it has setter, so on... or BProcess open
 
     public object Label { get; init; }
-    public object Skin { get; init; }
+    public ImmutableList<object> Skins { get; init; } = ImmutableList<object>.Empty;
     public object Class { get; init; }
     public abstract bool IsUpToDate(object other);
 
@@ -58,6 +57,12 @@ public abstract record UiControl(object Data) : IUiControl
 
     // TODO V10: Consider generalizing to WorkspaceReference. (22.07.2024, Roland Bürgi)
     public string DataContext { get; init; } = string.Empty;
+
+    public UiControl PopSkin() =>
+        this with { Skins = Skins.Count == 0 ? Skins : Skins.RemoveAt(0) };
+    
+    public UiControl WithSkin(object skin)
+    => this with { Skins = Skins.Add(skin) };
 }
 
 public abstract record UiControl<TControl>(string ModuleName, string ApiVersion, object Data)
@@ -136,7 +141,7 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion,
         return WithBuildAction((c, sp) => (TControl)buildFunction(c, sp));
     }
 
-    public TControl WithSkin(object skin) => This with { Skin = skin };
+    public new TControl WithSkin(object skin) => This with { Skins = Skins.Add(skin) };
 
     public TControl WithClass(object @class) => This with { Class = @class };
 }

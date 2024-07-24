@@ -1,8 +1,8 @@
-@using OpenSmc.Layout.Composition
-@using Appearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
 @using HorizontalAlignment = Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @using VerticalAlignment = Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment
+
+
 @if (RootControl == null)
 {
     <FluentStack HorizontalAlignment="HorizontalAlignment.Center" VerticalAlignment="VerticalAlignment.Center" Orientation="Orientation.Vertical">
@@ -12,52 +12,8 @@
 }
 else
 {
-    <FluentLayout>
-@*         @if (Properties != null)
-        {
-            <FluentHeader>
-                <FluentSpacer/>
-                @foreach(var menu in Properties.HeadingMenu)
-                <MenuItem Stream="@Stream" ></MenuItem>
-            </FluentHeader>
-        }
- *@        @if (CodeReference == null)
-        {
-            <div class="layout-area">
-                <DispatchView ViewModel="@RootControl" Stream="@Stream" Area="@Reference.Area"/>
-            </div>
-        }
-        else
-        {
-            <div class="layout-area">
-                <LayoutArea Address="@Address" @Reference="@CodeReference"/>
-            </div>
-            <div class="source-downloads">
-                <FluentSpacer/>
-                <FluentMenuItem OnClick="@(_ => Unselect())" Appearance="Appearance.Neutral">
-                    Back
-                </FluentMenuItem>
-            </div>
-        }
-    </FluentLayout>
+    <div class="layout-area">
+        <DispatchView ViewModel="@RootControl" Stream="@Stream" Area="@Reference.Area"/>
+    </div>
 }
 
-@code{
-    private bool open;
-    private LayoutAreaReference CodeReference { get; set; }
-    private void Select(SourceItem source)
-    {
-        CodeReference = new(ApplicationViews.Source) { Id = source };
-    }
-
-
-    private void Unselect()
-    {
-        CodeReference = null;
-    }
-
-    private void OnDocumentationMenuChange(MenuChangeEventArgs args)
-    {
-    }
-
-}

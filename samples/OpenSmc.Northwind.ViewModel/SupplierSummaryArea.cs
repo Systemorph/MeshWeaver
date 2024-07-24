@@ -65,8 +65,8 @@ public static class SupplierSummaryArea
                             .WithView(Controls.PaneHeader("Supplier Summary"))
                             .WithView(SupplierSummaryGrid)
                     )
-                    .ToSplitterPane()
-                    .WithClass("main-content-pane")
+                    .WithSkin(Skins.SplitterPane.WithClass("main-content-pane"))
+                    
             )
             // todo see how to avoid using empty string
             .WithView(ContextPanelArea, "")
@@ -190,7 +190,7 @@ public static class SupplierSummaryArea
         );
     }
 
-    private static SplitterPaneControl ToContextPanel(this UiControl content)
+    private static object ToContextPanel(this UiControl content)
     {
         return Controls.Stack()
             .WithClass("context-panel")
@@ -200,7 +200,7 @@ public static class SupplierSummaryArea
                     .WithView(Controls.PaneHeader("Analyze").WithWeight(FontWeight.Bold))
             )
             .WithView(content)
-            .ToSplitterPane(x => x.WithMin("200px"));
+            .WithSkin(Skins.SplitterPane.WithMin("200px"));
     }
 
 

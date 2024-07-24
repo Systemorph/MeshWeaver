@@ -76,27 +76,6 @@ public static class Controls
 
     public static SliderControl Slider(int min, int max, int step) => new(min, max, step);
 
-    public static LayoutGridItemControl ToLayoutGridItem(
-        this IUiControl control,
-        Func<LayoutGridItemControl, LayoutGridItemControl> builder
-    ) => builder.Invoke(new LayoutGridItemControl(control));
-    public static BodyContentControl ToBodyContent(
-        this IUiControl view,
-        Func<BodyContentControl, BodyContentControl> builder
-    ) => builder.Invoke(view.ToBodyContent());
-    public static BodyContentControl ToBodyContent(this IUiControl view) => Body(view);
-
-    public static BodyContentControl Body(object view) => new () { View = view };
-
-    public static LayoutGridItemControl ToLayoutGridItem(this IUiControl control) => new(control);
-
-    public static SplitterPaneControl ToSplitterPane(
-        this IUiControl control,
-        Func<SplitterPaneControl, SplitterPaneControl> builder
-    ) => builder.Invoke(new SplitterPaneControl(control));
-
-    public static SplitterPaneControl ToSplitterPane(this IUiControl control) => new(control);
-
     /// <summary>
     /// Control representing a progress bar
     /// </summary>

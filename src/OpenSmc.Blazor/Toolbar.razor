@@ -1,17 +1,15 @@
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
-@inherits LayoutStack
+@inherits SkinnedView<ToolbarSkin>
 
 <FluentToolbar
     Class="@Class"
     Orientation="@Orientation"
     Style="@Style"
 >
-    @foreach(var (area,viewModel) in Areas) {
-        <DispatchView ViewModel="@viewModel" Stream="@Stream" Area="@area"/>
-    }
+    <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"/>
 </FluentToolbar>
 
 @code
 {
-    private Orientation Orientation => @ViewModel.Orientation?.ToFluentOrientation() ?? Orientation.Horizontal;
+    private Orientation Orientation => @Skin.Orientation?.ToFluentOrientation() ?? Orientation.Horizontal;
 }

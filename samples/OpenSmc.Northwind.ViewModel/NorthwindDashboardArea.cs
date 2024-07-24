@@ -44,31 +44,30 @@ public static class NorthwindDashboardArea
             .WithSkin(Skins.Splitter)
             .WithView(
                 Controls.Stack()
-                    .WithSkin(Skins.LayoutGrid)
-                    .WithClass("main-content")
+                    .WithSkin(Skins.LayoutGrid.WithClass("main-content"))
                     .WithView(
                         (area, ctx) =>
                             area.OrderSummary(ctx)
-                                .ToLayoutGridItem(item => item.WithXs(12).WithSm(6))
+                                .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
                     )
                     .WithView(
                         (area, ctx) =>
                             area.ProductSummary(ctx)
-                                .ToLayoutGridItem(item => item.WithXs(12).WithSm(6))
+                                .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
                     )
                     .WithView(
                         (area, ctx) =>
                             area.CustomerSummary(ctx)
-                                .ToLayoutGridItem(item => item.WithXs(12).WithSm(6))
+                                .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
                     )
                     .WithView(
                         (area, ctx) =>
                             area.SupplierSummary(ctx)
-                                .ToLayoutGridItem(item => item.WithXs(12))
+                                .WithSkin(Skins.LayoutGridItem.WithXs(12))
                     )
 
-                    .ToSplitterPane()
-                    .WithClass("main-content-pane")
+                    .WithSkin(Skins.SplitterPane.WithClass("main-content-pane"))
+
             );
     }
 

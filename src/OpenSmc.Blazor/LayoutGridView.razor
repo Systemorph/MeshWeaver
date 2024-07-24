@@ -1,0 +1,14 @@
+@inherits SkinnedView<LayoutGridSkin>
+
+<FluentGrid 
+    Class="@Skin.Class"
+    AdaptiveRendering="@Skin.AdaptiveRendering"
+            Justify="@Skin.Justify.ToFluentJustifyContent()"
+    Spacing="@Spacing"
+    >
+        <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
+</FluentGrid>
+
+@code{
+    private int Spacing => Skin.Spacing ?? 3;
+}
