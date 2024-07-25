@@ -8,6 +8,7 @@
     <ProjectReference Include="..\..\src\OpenSmc.Layout\OpenSmc.Layout.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Pivot\OpenSmc.Pivot.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Reporting\OpenSmc.Reporting.csproj" />
+    <ProjectReference Include="..\OpenSmc.Demo.ViewModel\OpenSmc.Demo.ViewModel.csproj" />
     <ProjectReference Include="..\OpenSmc.Northwind.Domain\OpenSmc.Northwind.Domain.csproj" />
   </ItemGroup>
   <ItemGroup>
