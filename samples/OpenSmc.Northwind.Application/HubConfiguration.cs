@@ -2,8 +2,8 @@
 using OpenSmc.Blazor;
 using OpenSmc.Blazor.AgGrid;
 using OpenSmc.Blazor.ChartJs;
-using OpenSmc.Layout;
 using OpenSmc.Messaging;
+using OpenSmc.Demo.ViewModel;
 using OpenSmc.Northwind.Model;
 using OpenSmc.Northwind.ViewModel;
 
@@ -45,6 +45,12 @@ public static class HubConfiguration
                         .AddNorthwindProducts()
                         .AddNorthwindCustomers()
                         .AddNorthwindReferenceData()
+            )
+            .WithHostedHub(
+                new ApplicationAddress("Demo", "dev"),
+                application =>
+                    application
+                        .AddDemoViewModels()
             );
     }
 }
