@@ -22,6 +22,11 @@ public static class DemoViewModelsRegistry
         => configuration
             .AddLayout(layout => layout
                 .AddViewModelStateDemo()
+                .ConfigureApplication(views => views
+                    .WithMenu(menu => menu
+                        .AddRegisteredViews()
+                    )
+                )
             )
             ;
 }
