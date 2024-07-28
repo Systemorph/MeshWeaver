@@ -68,24 +68,6 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             );
     }
 
-    private object Counter()
-    {
-        int counter = 0;
-        return Controls
-            .Stack
-            .WithView(
-                "Button",
-                Controls
-                    .Menu("Increase Counter")
-                    .WithClickAction(context =>
-                        context.Host.RenderArea(
-                            new($"{nameof(Counter)}/{nameof(Counter)}"),
-                            Controls.Html((++counter))
-                        )
-                    )
-            )
-            .WithView(nameof(Counter), Controls.Html(counter.ToString()));
-    }
 
     protected override MessageHubConfiguration ConfigureClient(
         MessageHubConfiguration configuration
@@ -276,6 +258,25 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         data.Select(d => parsedPointer.Evaluate(d).Value.ToString())
             .Should()
             .BeEquivalentTo("Hello", "World");
+    }
+
+    private object Counter()
+    {
+        var counter = 0;
+        return Controls
+            .Stack
+            .WithView(
+                "Button",
+                Controls
+                    .Menu("Increase Counter")
+                    .WithClickAction(context =>
+                        context.Host.RenderArea(
+                            new($"{nameof(Counter)}/{nameof(Counter)}"),
+                            Controls.Html((++counter))
+                        )
+                    )
+            )
+            .WithView(nameof(Counter), Controls.Html(counter.ToString()));
     }
 
     [HubFact]
