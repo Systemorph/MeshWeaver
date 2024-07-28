@@ -101,7 +101,7 @@ public record LayoutStackControl(): UiControl<LayoutStackControl>(ModuleSetup.Mo
         => 
             Renderers.SelectMany(r => r.Invoke(host, context, null));
 
-    IContainerControl IContainerControl.SetAreas(IReadOnlyCollection<string> areas)
-        => this with { Areas = areas.ToImmutableList() };
+    IContainerControl IContainerControl.SetParentArea(string parentArea)
+        => this with { Areas = Areas.Select(a => $"{parentArea}/{a}").ToImmutableList() };
 
 }

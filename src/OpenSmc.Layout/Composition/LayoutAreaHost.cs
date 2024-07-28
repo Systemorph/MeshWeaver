@@ -104,7 +104,7 @@ public record LayoutAreaHost : IDisposable
             return [(context.Area, control)];
             
         var subareas = container.RenderSubAreas(this,context).ToArray();
-        container = container.SetAreas(subareas.Select(sa => sa.Area).ToArray());
+        container = container.SetParentArea(context.Area);
 
         return subareas.Concat([(context.Area, (UiControl)container)]);
 
@@ -270,7 +270,7 @@ public record LayoutAreaHost : IDisposable
             generator.Invoke(this, context)
                 .Subscribe(c => UpdateArea(context,c))
         );
-        return [];
+        return [(context.Area, new SpinnerControl())];
     }
 
     internal IEnumerable<(string Area, UiControl Control)> RenderArea(RenderingContext context, ViewDefinition generator)
@@ -281,7 +281,7 @@ public record LayoutAreaHost : IDisposable
 
             UpdateArea(context, view);
         });
-        return [];
+        return [(context.Area, new SpinnerControl())];
     }
     internal IEnumerable<(string Area, UiControl Control)> RenderArea(RenderingContext context, 
         IObservable<ViewDefinition> generator)
@@ -294,7 +294,7 @@ public record LayoutAreaHost : IDisposable
             )
         );
 
-        return [];
+        return [(context.Area, new SpinnerControl())];
     }
     internal IEnumerable<(string Area, UiControl Control)> RenderArea(RenderingContext context, IObservable<object> generator)
     {
@@ -305,7 +305,7 @@ public record LayoutAreaHost : IDisposable
             )
         );
 
-        return [];
+        return [(context.Area, new SpinnerControl())];
     }
 
     internal ISynchronizationStream<EntityStore, LayoutAreaReference> RenderLayoutArea()

@@ -1,13 +1,10 @@
-﻿using System.Collections.Immutable;
-using OpenSmc.Layout.Composition;
+﻿using OpenSmc.Layout.Composition;
 
 namespace OpenSmc.Layout;
 
 public record NavMenuControl() : 
-    UiControl<NavMenuControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null), 
-    IContainerControl
+    ContainerControl<NavMenuControl, UiControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
 {
-    public ImmutableList<UiControl> Items { get; init; } = ImmutableList<UiControl>.Empty;
 
     public NavMenuControl WithItem(UiControl item) => this with { Items = Items.Add(item) };
 
@@ -40,17 +37,11 @@ public record NavMenuControl() :
 
     public NavMenuControl WithWidth(int width) => this with { Width = width };
 
-    IEnumerable<(string Area, UiControl Control)> IContainerControl.RenderSubAreas(LayoutAreaHost host, RenderingContext context) => 
-        Items.Select((item, i) => ($"{context.Area}/{i}", item));
-    IContainerControl IContainerControl.SetAreas(IReadOnlyCollection<string> areas)
-        => this with { Areas = areas };
-
-    public IReadOnlyCollection<string> Areas { get; init; }
 }
 
 
 
-public abstract record NavItemControl<TNavItemControl>(object Data) : UiControl<TNavItemControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data), IContainerControl
+public abstract record NavItemControl<TNavItemControl>(object Data) : ContainerControl<TNavItemControl, UiControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data), IContainerControl
 where TNavItemControl : NavItemControl<TNavItemControl>
 {
     public object Icon { get; init; }
@@ -64,12 +55,6 @@ where TNavItemControl : NavItemControl<TNavItemControl>
 
     IEnumerable<(string Area, UiControl Control)> IContainerControl.RenderSubAreas(LayoutAreaHost host, RenderingContext context)
         => Items.Select((item, i) => ($"{context.Area}/{i}", item));
-    IContainerControl IContainerControl.SetAreas(IReadOnlyCollection<string> areas)
-        => this with { Areas = areas };
-
-    public IReadOnlyCollection<string> Areas { get; init; }
-
-    public ImmutableList<UiControl> Items { get; init; } = ImmutableList<UiControl>.Empty;
 }
 
 public record NavLinkControl : NavItemControl<NavLinkControl>
