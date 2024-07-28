@@ -6,10 +6,29 @@ using OpenSmc.Northwind.Domain;
 
 namespace OpenSmc.Northwind.Model;
 
+/// <summary>
+/// Provides extension methods for configuring the Northwind application's data layer, specifically for importing reference data and orders.
+/// </summary>
+/// <remarks>
+/// This static class enhances the <c>MessageHubConfiguration</c> with methods to add Northwind-specific data configurations, including importing categories, regions, territories, and orders from embedded CSV files.
+/// </remarks>
 public static class NorthwindDataConfiguration
 {
+    /// <summary>
+    /// Holds a reference to the assembly where the <c>NorthwindDataConfiguration</c> class is defined.
+    /// </summary>
     public static readonly Assembly MyAssembly = typeof(NorthwindDataConfiguration).Assembly;
 
+    /// <summary>
+    /// Configures the message hub to include Northwind reference data by importing categories, regions, and territories from embedded CSV files.
+    /// </summary>
+    /// <param name="configuration">The message hub configuration to be enhanced with Northwind reference data import capabilities.</param>
+    /// <returns>
+    /// The <c>MessageHubConfiguration</c> instance, allowing for fluent configuration.
+    /// </returns>
+    /// <remarks>
+    /// This method adds support for importing reference data into the Northwind application. It leverages embedded resources for categories, regions, and territories, configuring the data import process for each type.
+    /// </remarks>
     public static MessageHubConfiguration AddNorthwindReferenceData(
         this MessageHubConfiguration configuration
     )
@@ -32,6 +51,16 @@ public static class NorthwindDataConfiguration
             );
     }
 
+    /// <summary>
+    /// Placeholder for a method intended to configure the message hub to include Northwind orders data.
+    /// </summary>
+    /// <param name="configuration">The message hub configuration to be enhanced with Northwind orders data import capabilities.</param>
+    /// <returns>
+    /// The <c>MessageHubConfiguration</c> instance, allowing for fluent configuration.
+    /// </returns>
+    /// <remarks>
+    /// This method is expected to add support for importing orders data into the Northwind application. The actual implementation details are not provided in the excerpt.
+    /// </remarks>
     public static MessageHubConfiguration AddNorthwindOrders(
         this MessageHubConfiguration configuration
     )
