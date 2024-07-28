@@ -58,7 +58,7 @@ public record LayoutStackControl(): UiControl<LayoutStackControl>(ModuleSetup.Mo
         => this with
         {
             Areas = Areas.Add(area),
-            Renderers = Renderers.Add((host, context, _) => host.RenderArea(context,viewDefinition.Invoke))
+            Renderers = Renderers.Add((host, context, _) => host.RenderArea(GetContextForArea(context, area),viewDefinition.Invoke))
         };
 
 
