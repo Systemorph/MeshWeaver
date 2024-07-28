@@ -4,6 +4,7 @@ using OpenSmc.Data;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.DataGrid;
+using OpenSmc.Layout.Domain;
 using OpenSmc.Northwind.Domain;
 using OpenSmc.Utils;
 
@@ -23,9 +24,9 @@ public static class OrdersSummaryArea
     /// This method enhances the provided layout definition by adding a navigation link to the Orders Summary view, using the FluentIcons.Box icon for the menu. It configures the Orders Summary view's appearance and behavior within the application's navigation structure.
     /// </remarks>
     public static LayoutDefinition AddOrdersSummary(this LayoutDefinition layout)
-        => layout.WithView(nameof(OrderSummary), OrderSummary, options => options
-            .WithMenu(Controls.NavLink(nameof(OrderSummary).Wordify(), FluentIcons.Box,
-                layout.ToHref(new(nameof(OrderSummary)))))
+        => layout.WithView(nameof(OrderSummary), OrderSummary)
+            .WithNavMenu((menu,_)=>menu.WithNavLink(nameof(OrderSummary).Wordify(), FluentIcons.Box,
+                new LayoutAreaReference(nameof(OrderSummary)).ToHref(layout.Hub))
         );
 
     /// <summary>
@@ -55,7 +56,7 @@ public static class OrdersSummaryArea
             )
             .DistinctUntilChanged(x => string.Join(',', x.Select(y => y.Item)));
 
-        return Controls.Stack()
+        return Controls.Stack
             .WithView(Controls.PaneHeader("Order Summary"))
             .WithClass("order-summary")
             .WithView(ToolbarArea.Toolbar(years))

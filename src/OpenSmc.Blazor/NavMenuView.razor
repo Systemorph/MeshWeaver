@@ -1,34 +1,20 @@
 @inherits BlazorView<NavMenuControl>
 
-@if (ViewModel != null)
-{
-    <div class="navmenu">
-        <nav class="sitenav" aria-labelledby="main-menu" onclick="document.getElementById('navmenu-toggle').click();">
-            <input type="checkbox" title="Menu expand/collapse toggle" id="navmenu-toggle" class="navmenu-icon"/>
-            <label for="navmenu-toggle" class="navmenu-icon">
-                <FluentIcon Value="@(new Icons.Regular.Size20.Navigation())" Color="Color.Fill"/>
-            </label>
+<div class="navmenu">
+    <nav class="sitenav" aria-labelledby="main-menu" onclick="document.getElementById('navmenu-toggle').click();">
+        <input type="checkbox" title="Menu expand/collapse toggle" id="navmenu-toggle" class="navmenu-icon"/>
+        <label for="navmenu-toggle" class="navmenu-icon">
+            <FluentIcon Value="@(new Icons.Regular.Size20.Navigation())" Color="Color.Fill"/>
+        </label>
 
-            <FluentNavMenu Id="main-menu" Collapsible="@ViewModel.Collapsible" Width="@ViewModel.Width" @bind-Expanded="@expanded">
-                @foreach (var area in ViewModel.Areas)
-                {
-                    <DispatchView Stream="@Stream" Area="@area"/>
-                }
-            </FluentNavMenu>
-        </nav>
-    </div>
-}
-else
-{
-    <div class="navmenu">
-        <nav class="sitenav" aria-labelledby="main-menu" onclick="document.getElementById('navmenu-toggle').click();">
-            <input type="checkbox" title="Menu expand/collapse toggle" id="navmenu-toggle" class="navmenu-icon"/>
-            <label for="navmenu-toggle" class="navmenu-icon">
-                <FluentIcon Value="@(new Icons.Regular.Size20.Navigation())" Color="Color.Fill"/>
-            </label>
-        </nav>
-    </div>
-}
+        <FluentNavMenu Id="main-menu" Collapsible="@ViewModel.Collapsible" Width="@ViewModel.Width" @bind-Expanded="@expanded">
+            @foreach (var area in @ViewModel.Areas)
+            {
+                <DispatchView Stream="@Stream" Area="@area" />
+            }
+        </FluentNavMenu>
+    </nav>
+</div>
 
 @code {
     private bool expanded = true;

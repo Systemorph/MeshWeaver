@@ -9,7 +9,7 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
 {
     public object Id { get; init; }
     public IReadOnlyDictionary<string, object> Options { get; init; } = ImmutableDictionary<string, object>.Empty;
-    public bool RenderLayout { get; init; }
+    public string Layout { get; init; }
 
     public const string Data = "data";
     public const string Areas = "areas";
@@ -34,4 +34,17 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
     {
         return HashCode.Combine(Area, Id, Options);
     }
+
+    public string ToHref(object address)
+    {
+        var ret = $"{address}/{Uri.EscapeDataString(Area)}";
+        if (Id?.ToString() is { } s)
+            ret = $"{ret}/{Uri.EscapeDataString(s)}";
+        if (Options.Any())
+            ret = $"ret?{string.Join('&',
+                Options
+                    .Select(x => $"{x.Key}={Uri.EscapeDataString(x.Value?.ToString() ?? "")}"))}";
+        return ret;
+    }
+
 }

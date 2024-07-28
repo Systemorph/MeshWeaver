@@ -1,6 +1,7 @@
 @page "/app/{Application}/{Environment}/{Area}/{*Id}"
 @using System.Collections.Immutable
 @using OpenSmc.Application
+@using OpenSmc.Layout.Domain
 @using OpenSmc.Utils
 
 
@@ -27,7 +28,7 @@
     private LayoutAreaReference Reference => new(Area)
     {
         Id = Id,
-        RenderLayout = true,
+        Layout = StandardPageLayout.Page,
         Options = Options?.ToImmutableDictionary() 
                   ?? ImmutableDictionary<string, object>.Empty,
     };

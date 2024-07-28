@@ -1,6 +1,7 @@
 ﻿using OpenSmc.Application.Styles;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
+using OpenSmc.Layout.Domain;
 
 namespace OpenSmc.Northwind.ViewModel;
 
@@ -18,11 +19,11 @@ public static class NorthwindDashboardArea
     /// <remarks>This method enhances the provided layout definition by adding a navigation link to the Northwind Dashboard view, using the FluentIcons.Grid icon for the menu. It configures the dashboard view's appearance and behavior within the application's navigation structure.
     /// </remarks>
     public static LayoutDefinition AddDashboard(this LayoutDefinition layout)
-        => layout.WithView(nameof(Dashboard), Dashboard, 
-            options => options
-                .WithMenu(Controls.NavLink(nameof(Dashboard), FluentIcons.Grid,
-                    layout.ToHref(new(nameof(Dashboard)))))
-
+        => layout.WithView(nameof(Dashboard), Dashboard)
+            .WithNavMenu((menu,_) =>
+                menu.WithNavLink(
+                    nameof(Dashboard), FluentIcons.Grid,
+                    new LayoutAreaReference(nameof(Dashboard)).ToHref(layout.Hub))
             );
 
 
@@ -40,10 +41,9 @@ public static class NorthwindDashboardArea
     
     public static object Dashboard(this LayoutAreaHost layoutArea, RenderingContext context)
     {
-        return Controls.Stack()
-            .WithSkin(Skins.Splitter)
+        return Controls.Splitter
             .WithView(
-                Controls.Stack()
+                Controls.Stack
                     .WithSkin(Skins.LayoutGrid.WithClass("main-content"))
                     .WithView(
                         (area, ctx) =>

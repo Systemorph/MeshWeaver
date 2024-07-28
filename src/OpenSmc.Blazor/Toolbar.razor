@@ -1,5 +1,5 @@
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
-@inherits SkinnedView<ToolbarSkin>
+@inherits BlazorView<ToolbarControl>
 
 <FluentToolbar
     Class="@Class"
@@ -11,5 +11,5 @@
 
 @code
 {
-    private Orientation Orientation => @Skin.Orientation?.ToFluentOrientation() ?? Orientation.Horizontal;
+    private Orientation Orientation => @ViewModel.Orientation?.ToFluentOrientation() ?? Orientation.Horizontal;
 }

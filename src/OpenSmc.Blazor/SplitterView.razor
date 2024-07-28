@@ -1,21 +1,21 @@
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
-@inherits SkinnedView<SplitterSkin>
+@inherits BlazorView<SplitterControl>
 @{
     #pragma warning disable FluentMultiSplitter
 }
 
 <FluentMultiSplitter 
-    Class="@Skin.Class"
-                     Orientation="Orientation"
-    BarSize="@Skin.BarSize"
-                     Width="@Skin.Width"
-                     Height="@Skin.Height"
+    Class="@Class"
+    Orientation="@Orientation"
+                     BarSize="@ViewModel.BarSize"
+                     Width="@ViewModel.Width"
+                     Height="@ViewModel.Height"
     Style="@Style"
 >
-        <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
+    <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
 </FluentMultiSplitter>
 
 @code
 {
-    private Orientation Orientation => @Skin.Orientation?.ToFluentOrientation() ?? Orientation.Horizontal;
+    private Orientation Orientation => @ViewModel.Orientation?.ToFluentOrientation() ?? Orientation.Horizontal;
 }

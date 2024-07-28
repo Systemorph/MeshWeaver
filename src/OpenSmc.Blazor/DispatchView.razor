@@ -5,12 +5,7 @@
 @inherits BlazorView<UiControl>
 @inject IMessageHub Hub
 
-@if(ViewDescriptor == null)
-{
-    <h3>Loading @Area.Split("/").LastOrDefault()?.Wordify()</h3>
-    <FluentProgressRing style="width: 60px; height: 60px;"/>
-}
-else
+@if(ViewDescriptor != null)
 {
     @((RenderFragment)(builder =>
     {

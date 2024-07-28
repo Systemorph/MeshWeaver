@@ -2,7 +2,6 @@
 using System.Diagnostics;
 using System.Reactive.Linq;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using FluentAssertions;
 using Json.Patch;
 using Json.Pointer;
@@ -14,6 +13,7 @@ using OpenSmc.Layout.DataGrid;
 using OpenSmc.Messaging;
 using OpenSmc.Utils;
 using Xunit.Abstractions;
+
 
 namespace OpenSmc.Layout.Test;
 
@@ -42,7 +42,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 layout
                     .WithView(
                         StaticView,
-                        Controls.Stack().WithView("Hello", "Hello").WithView("World", "World")
+                        Controls.Stack.WithView("Hello", "Hello").WithView("World", "World")
                     )
                     .WithView(nameof(ViewWithProgress), ViewWithProgress)
                     .WithView(nameof(UpdatingView), UpdatingView())
@@ -72,14 +72,14 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     {
         int counter = 0;
         return Controls
-            .Stack()
+            .Stack
             .WithView(
                 "Button",
                 Controls
                     .Menu("Increase Counter")
                     .WithClickAction(context =>
-                        context.Layout.UpdateLayout(
-                            $"{nameof(Counter)}/{nameof(Counter)}",
+                        context.Host.RenderArea(
+                            new($"{nameof(Counter)}/{nameof(Counter)}"),
                             Controls.Html((++counter))
                         )
                     )
@@ -125,8 +125,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         for (var i = 0; i < 10; i++)
         {
             await Task.Delay(30);
-            area.UpdateLayout(
-                nameof(ViewWithProgress),
+            area.UpdateArea(
+                new(nameof(ViewWithProgress)),
                 progress = progress with { Progress = percentage += 10 }
             );
         }
@@ -158,7 +158,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var toolbar = new Toolbar(2024);
 
         return Controls
-            .Stack()
+            .Stack
             .WithView(
                 "Toolbar",
                 (layoutArea, _) =>
@@ -358,8 +358,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             new LabelAndBool("Label2", true)
         ]);
 
-        return Controls.Stack()
-            .WithView(Filter, area.Bind(data, nameof(DataBoundCheckboxes), x => Controls.ItemTemplate(x.Data,y => Controls.CheckBox(y.Label, y.Value))))
+        return Controls.Stack
+            .WithView(Filter, area.Bind(data, nameof(DataBoundCheckboxes), x => Template.ItemTemplate(x.Data,y => Controls.CheckBox(y.Label, y.Value))))
             .WithView(Results, (a, ctx) => a.GetDataStream<FilterEntity>(nameof(DataBoundCheckboxes))
                 .Select(d => d.Data.All(y => y.Value)
                 )
@@ -505,7 +505,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     private static bool isDisposed;
 
     private static object DisposalView =>
-        Controls.Stack().WithView("subview", (a, c) =>
+        Controls.Stack.WithView("subview", (a, c) =>
     {
         a.AddDisposable(c.Area, new AnonymousDisposable(() => isDisposed = true));
         return "Ok";
@@ -536,7 +536,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     // todo write data-disposal test
 
     private static object AsyncView =>
-        Controls.Stack()
+        Controls.Stack
             .WithView("subarea", Observable.Return<ViewDefinition>(async (area, context, ct) =>
             {
                 await Task.Delay(3000, ct);
