@@ -8,7 +8,7 @@ public record LayoutStackControl(): UiControl<LayoutStackControl>(ModuleSetup.Mo
 {
     internal const string Root = "";
     private ImmutableList<Renderer> Renderers { get; init; } = ImmutableList<Renderer>.Empty;
-    private string GetAutoName() => $"Area{Renderers.Count + 1}";
+    private string GetAutoName() => $"{Renderers.Count + 1}";
     public LayoutStackControl WithView(object value) => WithView(GetAutoName(), value);
 
     public LayoutStackControl WithView(string area, object view) =>

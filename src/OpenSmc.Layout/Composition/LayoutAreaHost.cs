@@ -104,7 +104,7 @@ public record LayoutAreaHost : IDisposable
             return [(context.Area, control)];
             
         var subareas = container.RenderSubAreas(this,context).ToArray();
-        container = container.SetAreas(subareas.Select(sa => $"{context.Area}/{sa.Area}").ToArray());
+        container = container.SetAreas(subareas.Select(sa => sa.Area).ToArray());
 
         return subareas.Concat([(context.Area, (UiControl)container)]);
 
