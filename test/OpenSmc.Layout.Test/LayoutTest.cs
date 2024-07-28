@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Reactive.Linq;
 using System.Text.Json;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 using Json.Patch;
 using Json.Pointer;
 using OpenSmc.Data;
@@ -166,7 +167,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         var reportArea = $"{reference.Area}/Content";
-        var content = await stream.GetControlStream(reportArea).FirstAsync(x => x != null);
+        var content = await stream.GetControlStream(reportArea)
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x != null);
         content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
 
         // Get toolbar and change value.
@@ -204,6 +207,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var updatedControls = await stream
             .GetControlStream(reportArea)
             .TakeUntil(o => o is HtmlControl html && !html.Data.ToString()!.Contains("2024"))
+            .Timeout(3.Seconds())
             .ToArray();
         updatedControls
             .Last()
@@ -233,7 +237,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         var controlArea = $"{reference.Area}";
-        var content = await stream.GetControlStream(controlArea).FirstAsync(x => x != null);
+        var content = await stream.GetControlStream(controlArea)
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x != null);
         var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
         itemTemplate.DataContext.Should().Be($"/data/\"{nameof(ItemTemplate)}\"");
         var data = await stream
@@ -291,7 +297,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         var buttonArea = $"{reference.Area}/Button";
-        var content = await stream.GetControlStream(buttonArea).FirstAsync();
+        var content = await stream.GetControlStream(buttonArea)
+            .Timeout(3.Seconds())
+            .FirstAsync();
         content
             .Should()
             .BeOfType<MenuItemControl>()
@@ -388,7 +396,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 var pointer = JsonPointer.Parse(LayoutAreaReference.GetControlPointer(controlArea));
                 var result = pointer.Evaluate(s.Value);
                 return result?.Deserialize<object>(hub.JsonSerializerOptions);
-            }).FirstAsync(x => x != null);
+            })
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x != null);
         var content = await stream
             .GetControlStream(controlArea)
             .Timeout(TimeSpan.FromSeconds(3))
@@ -477,7 +487,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             new HostAddress(),
             reference
         );
-        var content = await stream.GetControlStream(reference.Area).FirstAsync();
+        var content = await stream.GetControlStream(reference.Area)
+            .Timeout(3.Seconds())
+            .FirstAsync();
         var grid = content
             .Should()
             .BeOfType<DataGridControl>()
@@ -523,9 +535,13 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             new HostAddress(),
             reference
         );
-        var content = await stream.GetControlStream(reference.Area).FirstAsync(x => x != null);
+        var content = await stream.GetControlStream(reference.Area)
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x != null);
         var subAreaName = content.Should().BeOfType<LayoutStackControl>().Which.Areas.Should().HaveCount(1).And.Subject.First();
-        var subArea = await stream.GetControlStream(subAreaName).FirstAsync();
+        var subArea = await stream.GetControlStream(subAreaName)
+            .Timeout(3.Seconds())
+            .FirstAsync();
         subArea.Should().BeOfType<HtmlControl>();
         isDisposed.Should().BeFalse();
 
@@ -559,7 +575,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var stopwatch = Stopwatch.StartNew();
 
-        var content = await stream.GetControlStream(reference.Area).FirstAsync(x => x != null);
+        var content = await stream.GetControlStream(reference.Area)
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x != null);
 
         var subAreaName = content.Should().BeOfType<LayoutStackControl>().Which.Areas.Should().HaveCount(1).And.Subject.First();
         var subArea = await stream.GetControlStream(subAreaName).FirstAsync();
