@@ -46,7 +46,6 @@ public interface ISynchronizationStream<TStream>
     InitializationMode InitializationMode { get; }
     ReduceManager<TStream> ReduceManager { get; }
     DataChangeResponse RequestChange(Func<TStream, ChangeItem<TStream>> update);
-    void NotifyChange(Func<TStream, ChangeItem<TStream>> update);
 }
 
 public interface ISynchronizationStream<TStream, out TReference> : ISynchronizationStream<TStream>
