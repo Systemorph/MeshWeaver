@@ -33,7 +33,10 @@ public class InstancesInCollectionConverter(ITypeRegistry typeRegistry)
         if (obj == null)
             return null;
         var collection = obj[CollectionProperty]?.ToString();
-        var type = typeRegistry.GetKeyFunction(collection)?.KeyType ?? typeof(object);
+        var type = collection == null 
+            ? typeof(object)
+            : typeRegistry.GetKeyFunction(collection)?.KeyType 
+              ?? typeof(object);
         return new InstanceCollection
         {
             Instances = obj.Where(i => i.Key != CollectionProperty)

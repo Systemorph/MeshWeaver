@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reflection;
 using OpenSmc.Messaging;
@@ -6,33 +7,26 @@ using OpenSmc.Reflection;
 
 namespace OpenSmc.Data.Serialization;
 
-public record SynchronizationStream<TStream, TReference>(
-    object Owner,
-    object Subscriber,
-    IMessageHub Hub,
-    TReference Reference,
-    ReduceManager<TStream> ReduceManager,
-    InitializationMode InitializationMode
-) : ISynchronizationStream<TStream, TReference>
+public record SynchronizationStream<TStream, TReference> : ISynchronizationStream<TStream, TReference>
     where TReference : WorkspaceReference
 {
-    public StreamReference StreamReference { get; } = new(Owner, Reference);
+    public StreamReference StreamReference { get; }
 
     /// <summary>
     /// Owner of the stream, e.g. the Hub Address or Id of datasource.
     /// </summary>
-    public object Owner { get; init; } = Owner;
+    public object Owner { get; init; }
 
     /// <summary>
     /// The subscriber of the stream, e.g. the Hub Address or Id of the subscriber.
     /// </summary>
-    public object Subscriber { get; init; } = Subscriber;
+    public object Subscriber { get; init; }
 
     /// <summary>
     /// The projected reference of the stream, e.g. a collection (CollectionReference),
     /// a layout area (LayoutAreaReference), etc.
     /// </summary>
-    public TReference Reference { get; init; } = Reference;
+    public TReference Reference { get; init; }
 
     /// <summary>
     /// My current state deserialized as snapshot
@@ -64,7 +58,7 @@ public record SynchronizationStream<TStream, TReference>(
 
     public Task<TStream> Initialized => initialized.Task;
 
-    public InitializationMode InitializationMode { get; } = InitializationMode;
+    public InitializationMode InitializationMode { get; }
 
     Task ISynchronizationStream.Initialized => initialized.Task;
 
@@ -119,13 +113,27 @@ public record SynchronizationStream<TStream, TReference>(
         get => current;
     }
 
+    public IMessageHub Hub { get; init; }
+    public ReduceManager<TStream> ReduceManager { get; init; }
+
     private void SetCurrent(ChangeItem<TStream> value)
     {
         current = value;
+        if(!IsInitialized)
+            switch (InitializationMode)
+            {
+                case InitializationMode.Automatic:
+                    initialized.SetResult(value.Value);
+                    break;
+                default:
+                    return;
+            }
+
+
         Store.OnNext(value);
-        if (!initialized.Task.IsCompleted)
-            initialized.SetResult(value.Value);
     }
+
+    private bool IsInitialized => initialized.Task.IsCompleted;
 
     public virtual void Initialize(ChangeItem<TStream> initial)
     {
@@ -134,7 +142,9 @@ public record SynchronizationStream<TStream, TReference>(
         if (Current != null)
             throw new InvalidOperationException("Already initialized");
 
-        SetCurrent(initial);
+        current = initial;
+        Store.OnNext(initial);
+        initialized.SetResult(current.Value);
     }
 
     public void OnCompleted()
@@ -160,24 +170,54 @@ public record SynchronizationStream<TStream, TReference>(
                 ?.Invoke(delivery) ?? delivery;
     }
 
-    public void Update(Func<TStream, ChangeItem<TStream>> update) => NotifyChange(update);
+    public void Update(Func<TStream, ChangeItem<TStream>> update) => updateSubject.OnNext(update);
 
     public void OnNext(ChangeItem<TStream> value)
     {
-        NotifyChange(_ => value);
+        incomingInstancesSubject.OnNext(value);
     }
 
     public virtual DataChangeResponse RequestChange(Func<TStream, ChangeItem<TStream>> update)
     {
-        SetCurrent(update.Invoke(Current.Value));
+        updateSubject.OnNext(update);
         return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, null);
     }
 
-    public virtual void NotifyChange(Func<TStream, ChangeItem<TStream>> update)
+
+    public SynchronizationStream(object Owner,
+        object Subscriber,
+        IMessageHub Hub,
+        TReference Reference,
+        ReduceManager<TStream> ReduceManager,
+        InitializationMode InitializationMode)
     {
-        if (Current != null)
-            SetCurrent(update.Invoke(Current.Value));
-        else if (InitializationMode == InitializationMode.Automatic)
-            Initialize(update(default));
+        this.Hub = Hub;
+        this.ReduceManager = ReduceManager;
+        StreamReference = new(Owner, Reference);
+        this.Owner = Owner;
+        this.Subscriber = Subscriber;
+        this.Reference = Reference;
+        this.InitializationMode = InitializationMode;
+        // Merge the updateSubject and incomingInstancesSubject
+        var merged = updateSubject
+            .Select(updateFunc => updateFunc.Invoke(current == null ? default : current.Value))
+            .Merge(incomingInstancesSubject);
+
+        // Subscribe to the merged observable and push the results to the combinedSubject
+        AddDisposable(merged.Subscribe(SetCurrent));
+
     }
+
+    private readonly Subject<ChangeItem<TStream>> incomingInstancesSubject = new();
+
+    public SynchronizationStream()
+    {
+    }
+
+
+
+
+    private readonly Subject<Func<TStream, ChangeItem<TStream>>> updateSubject = new();
+
+
 }

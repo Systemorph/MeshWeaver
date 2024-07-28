@@ -20,7 +20,7 @@ public record LayoutStackControl(): UiControl<LayoutStackControl>(ModuleSetup.Mo
 
     private static RenderingContext GetContextForArea(RenderingContext context, string area)
     {
-        return context with{Area = $"{context.Area}/{area}"};
+        return context with{Area = $"{context.Area}/{area}", Parent=context};
     }
 
     public LayoutStackControl WithView<T>(ViewDefinition<T> viewDefinition) =>
