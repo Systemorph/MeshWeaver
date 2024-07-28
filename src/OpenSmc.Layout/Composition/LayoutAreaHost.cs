@@ -295,7 +295,7 @@ public record LayoutAreaHost : IDisposable
             )
         );
 
-        return [(context.Area, new SpinnerControl())];
+        return [];
     }
 
 
@@ -308,7 +308,7 @@ public record LayoutAreaHost : IDisposable
             )
         );
 
-        return [(context.Area, new SpinnerControl())];
+        return [];
     }
 
     internal ISynchronizationStream<EntityStore, LayoutAreaReference> RenderLayoutArea()
