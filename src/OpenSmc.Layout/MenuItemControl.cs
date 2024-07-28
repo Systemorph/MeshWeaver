@@ -28,15 +28,17 @@ public record MenuItemControl(object Title, object Icon)
 
     public MenuItemControl WithSubMenu(params MenuItemControl[] subMenu)
     {
-        return this with{SubMenu = SubMenu.AddRange(subMenu)};
+        return this with{Items = Items.AddRange(subMenu)};
     }
 
-    public ImmutableList<MenuItemControl> SubMenu { get; init; } = ImmutableList<MenuItemControl>.Empty;
+    internal ImmutableList<MenuItemControl> Items { get; init; } = ImmutableList<MenuItemControl>.Empty;
 
-    IEnumerable<ViewElement> IContainerControl.SubAreas => SubMenu.Select((x,i) => new ViewElementWithView(i.ToString(), x, new()));
-    public IReadOnlyCollection<string> Areas { get; init; } = [];
+    IContainerControl IContainerControl.SetAreas(IReadOnlyCollection<string> areas)
+    => this with { Areas = areas.ToImmutableList() };
 
-    public IContainerControl SetAreas(IReadOnlyCollection<string> areas)
-        => this with { Areas = areas };
+    IEnumerable<(string Area, UiControl Control)> IContainerControl.RenderSubAreas(LayoutAreaHost host, RenderingContext context) 
+        => Items.Select((item, i) => ($"{context.Area}/{i}" , (UiControl)item));
+
+    public IReadOnlyCollection<string> Areas { get; init; }
 
 }

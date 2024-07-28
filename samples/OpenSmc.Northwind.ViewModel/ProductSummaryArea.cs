@@ -1,6 +1,7 @@
 ﻿using OpenSmc.Application.Styles;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
+using OpenSmc.Layout.Domain;
 
 namespace OpenSmc.Northwind.ViewModel
 {
@@ -19,12 +20,10 @@ namespace OpenSmc.Northwind.ViewModel
         /// Box icon for the menu. It configures the Product Summary view's appearance and behavior within the application's navigation structure.
         /// </remarks>
         public static LayoutDefinition AddProductsSummary(this LayoutDefinition layout)
-            => layout.WithView(nameof(ProductSummary), ProductSummary,
-                options => options
-                    .WithSourcesForTypes(typeof(ProductSummaryArea))
-                    .WithMenu(Controls.NavLink("Product Summary", FluentIcons.Box,
-                        layout.ToHref(new(nameof(ProductSummary)))))
-            );
+            => layout.WithView(nameof(ProductSummary), ProductSummary)
+                .WithNavMenu((menu, _) => menu.WithNavLink("Product Summary", FluentIcons.Box,
+                    new LayoutAreaReference(nameof(ProductSummary)).ToHref(layout.Hub.Address))
+                );
 
 
         /// <summary>
@@ -40,9 +39,9 @@ namespace OpenSmc.Northwind.ViewModel
             this LayoutAreaHost layoutArea,
             RenderingContext ctx
         ) =>
-            Controls.Stack()
+            Controls.Stack
                 .WithView(Controls.PaneHeader("Product Summary"))
-                .WithView(CounterLayoutArea.Counter, o => o.WithSourcesForTypes(typeof(CounterLayoutArea)));
+                .WithView(CounterLayoutArea.Counter);
 
     }
 }

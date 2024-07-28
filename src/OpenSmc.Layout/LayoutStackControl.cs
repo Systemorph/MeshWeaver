@@ -4,76 +4,68 @@ using OpenSmc.Layout.Composition;
 
 namespace OpenSmc.Layout;
 
-public interface IContainerControl : IUiControl
-{
-    IEnumerable<ViewElement> SubAreas { get; }
-    IReadOnlyCollection<string> Areas { get; }
-    IContainerControl SetAreas(IReadOnlyCollection<string> areas);
-}
-
-public record LayoutStackControl()
-    : UiControl<LayoutStackControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null),
-        IContainerControl
+public record LayoutStackControl(): UiControl<LayoutStackControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null), IContainerControl
 {
     internal const string Root = "";
+    private ImmutableList<Renderer> Renderers { get; init; } = ImmutableList<Renderer>.Empty;
+    private string GetAutoName() => $"Area{Renderers.Count + 1}";
+    public LayoutStackControl WithView(object value) => WithView(GetAutoName(), value);
 
-    internal ImmutableList<ViewElement> ViewElements { get; init; } =
-        ImmutableList<ViewElement>.Empty;
-
-    public IReadOnlyCollection<string> Areas { get; init; }
-
-    public LayoutStackControl WithView(object value) => WithView(GetAutoName(), value, x => x);
-    public LayoutStackControl WithView(object value, Func<LayoutAreaProperties, LayoutAreaProperties> options) => WithView(GetAutoName(), value, options);
-
-    public LayoutStackControl WithView(string area, object value) =>
-    WithView(area, value, x => x);
-    public LayoutStackControl WithView(string area, object value, Func<LayoutAreaProperties, LayoutAreaProperties> options) =>
+    public LayoutStackControl WithView(string area, object view) =>
         this with
         {
-            ViewElements = ViewElements.Add(new ViewElementWithView(area, value, options.Invoke(new())))
+            Areas = Areas.Add(area),
+            Renderers = Renderers.Add((host,context,_) => host.RenderArea(GetContextForArea(context, area), view))
         };
 
-    private string GetAutoName()
+    private static RenderingContext GetContextForArea(RenderingContext context, string area)
     {
-        return $"Area{ViewElements.Count + 1}";
+        return context with{Area = $"{context.Area}/{area}"};
     }
 
-    public LayoutStackControl WithView(ViewDefinition viewDefinition) =>
-        WithView(viewDefinition, x => x);
-    public LayoutStackControl WithView(ViewDefinition viewDefinition, Func<LayoutAreaProperties, LayoutAreaProperties> options) =>
-        WithView(GetAutoName(), Observable.Return(viewDefinition), options);
+    public LayoutStackControl WithView<T>(ViewDefinition<T> viewDefinition) =>
+        WithView(GetAutoName(), Observable.Return(viewDefinition));
 
-    public LayoutStackControl WithView(string area, IObservable<ViewDefinition> viewDefinition) =>
-        WithView(area, viewDefinition, x => x);
-    public LayoutStackControl WithView(string area, IObservable<ViewDefinition> viewDefinition, Func<LayoutAreaProperties, LayoutAreaProperties> options) =>
+
+    public LayoutStackControl WithView<T>(string area, IObservable<ViewDefinition<T>> viewDefinition) =>
         this with
         {
-            ViewElements = ViewElements.Add(new ViewElementWithViewDefinition(area, viewDefinition, options.Invoke(new())))
+            Areas = Areas.Add(area),
+            Renderers = Renderers.Add((host,context,_) => host.RenderArea(GetContextForArea(context, area), viewDefinition))
+        };
+
+    public LayoutStackControl WithView(string area, IObservable<ViewDefinition> viewDefinition) =>
+        this with
+        {
+            Areas = Areas.Add(area),
+            Renderers = Renderers.Add((host, context, _) => host.RenderArea(GetContextForArea(context, area), viewDefinition))
+        };
+    public LayoutStackControl WithView(IObservable<object> viewDefinition) =>
+        WithView(GetAutoName(), viewDefinition);
+    public LayoutStackControl WithView(string area, IObservable<object> viewDefinition) =>
+        this with
+        {
+            Areas = Areas.Add(area),
+            Renderers = Renderers.Add((host, context, _) => host.RenderArea(GetContextForArea(context, area), viewDefinition))
         };
 
     public LayoutStackControl WithView(IObservable<ViewDefinition> viewDefinition)
-        => WithView(GetAutoName(), viewDefinition, x=>x);
-    public LayoutStackControl WithView(IObservable<ViewDefinition> viewDefinition, Func<LayoutAreaProperties, LayoutAreaProperties> options)
-        => WithView(GetAutoName(), viewDefinition, options);
+        => WithView(GetAutoName(), viewDefinition);
 
-    public LayoutStackControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition)
-        => WithView(viewDefinition, x => x);
-    public LayoutStackControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition, Func<LayoutAreaProperties, LayoutAreaProperties> options)
-        => WithView(GetAutoName(), viewDefinition, options);
-    public LayoutStackControl WithView<T>(string area, Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition)
-    => WithView(area, viewDefinition, x => x);
-    public LayoutStackControl WithView<T>(string area, Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition, Func<LayoutAreaProperties, LayoutAreaProperties> options)
-        => this with { ViewElements = ViewElements.Add(new ViewElementWithViewStream(area, (a,c) => (viewDefinition.Invoke(a,c)?.Select(x => (object)x)), options.Invoke(new()))) };
+    public LayoutStackControl WithView<T>(ViewStream<T> viewDefinition)
+        => WithView(GetAutoName(), viewDefinition);
+    public LayoutStackControl WithView<T>(string area, ViewStream<T> viewDefinition)
+        => this with
+        {
+            Areas = Areas.Add(area),
+            Renderers = Renderers.Add((host, context, _) => host.RenderArea(context,viewDefinition.Invoke))
+        };
+
 
     public LayoutStackControl WithView(string area, Func<LayoutAreaHost, RenderingContext, object> viewDefinition)
-        => WithView(area, viewDefinition, x => x);
-    
-    public LayoutStackControl WithView(string area, Func<LayoutAreaHost, RenderingContext, object> viewDefinition, Func<LayoutAreaProperties, LayoutAreaProperties> options)
-        => WithView(area, (la, ctx) => Observable.Return(viewDefinition.Invoke(la, ctx)), options);
+        => WithView(area, (la, ctx) => Observable.Return(viewDefinition.Invoke(la, ctx)));
     public LayoutStackControl WithView(Func<LayoutAreaHost, RenderingContext, object> viewDefinition)
-    => WithView(viewDefinition, x => x);
-    public LayoutStackControl WithView(Func<LayoutAreaHost, RenderingContext, object> viewDefinition, Func<LayoutAreaProperties, LayoutAreaProperties> options)
-        => WithView(GetAutoName(), viewDefinition, options);
+        => WithView(GetAutoName(), viewDefinition);
 
 
     public HorizontalAlignment HorizontalAlignment { get; init; }
@@ -84,6 +76,8 @@ public record LayoutStackControl()
     public Orientation? Orientation { get; init; }
     public bool Wrap { get; init; }
     public string Width { get; init; }
+    public string Height { get; init; }
+
 
     public LayoutStackControl WithHorizontalAlignment(HorizontalAlignment horizontalAlignment)
         => this with { HorizontalAlignment = horizontalAlignment };
@@ -99,7 +93,15 @@ public record LayoutStackControl()
         => this with { Wrap = wrap };
     public LayoutStackControl WithWidth(string width)
     => this with { Width = width };
+    public LayoutStackControl WithHeight(string height) => this with { Height = height };
 
-    IEnumerable<ViewElement> IContainerControl.SubAreas => ViewElements;
-    IContainerControl IContainerControl.SetAreas(IReadOnlyCollection<string> areas) => this with { Areas = areas };
+    public ImmutableList<string> Areas { get; init; } = ImmutableList<string>.Empty;
+
+    IEnumerable<(string Area, UiControl Control)> IContainerControl.RenderSubAreas(LayoutAreaHost host, RenderingContext context)
+        => 
+            Renderers.SelectMany(r => r.Invoke(host, context, null));
+
+    IContainerControl IContainerControl.SetAreas(IReadOnlyCollection<string> areas)
+        => this with { Areas = areas.ToImmutableList() };
+
 }

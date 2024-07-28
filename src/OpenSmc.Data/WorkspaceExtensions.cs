@@ -1,6 +1,6 @@
-﻿using System;
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using Microsoft.Extensions.DependencyInjection;
+using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Data;
@@ -21,7 +21,7 @@ public static class WorkspaceExtensions
                 nameof(T)
             );
         return state
-            ?.Reduce(new CollectionReference(collection))
+            .Reduce(new CollectionReference(collection))
             ?.Instances.Values.Cast<T>()
             .ToArray();
     }
@@ -55,4 +55,10 @@ public static class WorkspaceExtensions
 
     public static IWorkspace GetWorkspace(this IMessageHub messageHub) =>
         messageHub.ServiceProvider.GetRequiredService<IWorkspace>();
+
+    public static ChangeItem<EntityStore> ToChangeItem(
+        this ISynchronizationStream stream, EntityStore store)
+        => new ChangeItem<EntityStore>(stream.Owner, stream.Reference, store, stream.Hub.Address, null,
+            stream.Hub.Version);
+
 }

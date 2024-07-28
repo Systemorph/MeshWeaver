@@ -3,12 +3,13 @@ using OpenSmc.Layout.Composition;
 
 namespace OpenSmc.Layout;
 
-public record NavMenuControl()
-    : UiControl<NavMenuControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null), IContainerControl
+public record NavMenuControl() : 
+    UiControl<NavMenuControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null), 
+    IContainerControl
 {
-    public ImmutableList<object> Items { get; init; } = ImmutableList<object>.Empty;
+    public ImmutableList<UiControl> Items { get; init; } = ImmutableList<UiControl>.Empty;
 
-    public NavMenuControl WithItem(object item) => this with { Items = Items.Add(item) };
+    public NavMenuControl WithItem(UiControl item) => this with { Items = Items.Add(item) };
 
     public bool Collapsible { get; init; } = true;
 
@@ -28,6 +29,8 @@ public record NavMenuControl()
 
     public NavMenuControl WithNavLink(object title, object href, Func<NavLinkControl, NavLinkControl> options) =>
         this with { Items = Items.Add(options.Invoke(new(title, href))) };
+    public NavMenuControl WithNavLink(object title, object icon, object href) =>
+        this with { Items = Items.Add(new NavLinkControl(title, href){Icon = icon}) };
 
     public NavMenuControl WithNavGroup(NavGroupControl navGroup) =>
         this with { Items = Items.Add(navGroup) };
@@ -36,15 +39,18 @@ public record NavMenuControl()
     public NavMenuControl WithCollapsible(bool collapsible) => this with { Collapsible = collapsible };
 
     public NavMenuControl WithWidth(int width) => this with { Width = width };
-    public IEnumerable<ViewElement> SubAreas => Items.Select((x, i) => new ViewElementWithView(i.ToString(), x, new()));
-    public IReadOnlyCollection<string> Areas { get; init; }
 
-    public IContainerControl SetAreas(IReadOnlyCollection<string> areas)
+    IEnumerable<(string Area, UiControl Control)> IContainerControl.RenderSubAreas(LayoutAreaHost host, RenderingContext context) => 
+        Items.Select((item, i) => ($"{context.Area}/{i}", item));
+    IContainerControl IContainerControl.SetAreas(IReadOnlyCollection<string> areas)
         => this with { Areas = areas };
+
+    public IReadOnlyCollection<string> Areas { get; init; }
 }
 
 
-public abstract record NavItemControl<TNavItemControl>(object Data) : UiControl<TNavItemControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data) 
+
+public abstract record NavItemControl<TNavItemControl>(object Data) : UiControl<TNavItemControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data), IContainerControl
 where TNavItemControl : NavItemControl<TNavItemControl>
 {
     public object Icon { get; init; }
@@ -55,6 +61,15 @@ where TNavItemControl : NavItemControl<TNavItemControl>
 
     public TNavItemControl WithIcon(object icon) => This with { Icon = icon };
 
+
+    IEnumerable<(string Area, UiControl Control)> IContainerControl.RenderSubAreas(LayoutAreaHost host, RenderingContext context)
+        => Items.Select((item, i) => ($"{context.Area}/{i}", item));
+    IContainerControl IContainerControl.SetAreas(IReadOnlyCollection<string> areas)
+        => this with { Areas = areas };
+
+    public IReadOnlyCollection<string> Areas { get; init; }
+
+    public ImmutableList<UiControl> Items { get; init; } = ImmutableList<UiControl>.Empty;
 }
 
 public record NavLinkControl : NavItemControl<NavLinkControl>
@@ -67,19 +82,12 @@ public record NavLinkControl : NavItemControl<NavLinkControl>
 }
 
 public record NavGroupControl(object Data)
-    : NavItemControl<NavGroupControl>(Data), IContainerControl
+    : NavItemControl<NavGroupControl>(Data)
 {
-    internal ImmutableList<object> Items { get; private init; } = ImmutableList<object>.Empty;
-
-    IEnumerable<ViewElement> IContainerControl.SubAreas =>
-        Items.Select((x, i) => new ViewElementWithView(i.ToString(), x, new()));
 
     public NavGroupControl WithLink(string displayName, string link, Func<NavLinkControl, NavLinkControl> options) =>
         this with { Items = Items.Add(options.Invoke(new(displayName, link))) };
     public NavGroupControl WithGroup(NavGroupControl @group) => this with { Items = Items.Add(group) };
 
-    public IReadOnlyCollection<string> Areas { get; init; } = [];
-    IContainerControl IContainerControl.SetAreas(IReadOnlyCollection<string> areas)
-        => this with{Areas = areas};
 
 }

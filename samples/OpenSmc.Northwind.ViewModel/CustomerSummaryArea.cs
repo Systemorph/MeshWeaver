@@ -2,6 +2,7 @@
 using OpenSmc.Application.Styles;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
+using OpenSmc.Layout.Domain;
 using OpenSmc.Utils;
 
 namespace OpenSmc.Northwind.ViewModel;
@@ -19,9 +20,13 @@ public static class CustomerSummaryArea
     /// <remarks> This method enhances the provided layout definition by adding a navigation link to the customer summary view and configuring the view's appearance and behavior.
     /// </remarks>
     public static LayoutDefinition AddCustomerSummary(this LayoutDefinition layout)
-        => layout.WithView(nameof(CustomerSummary), CustomerSummary, x => x
-            .WithMenu(Controls.NavLink(nameof(CustomerSummary).Wordify(), FluentIcons.Person,
-                layout.ToHref(new(nameof(CustomerSummary)))))
+        => layout.WithView(nameof(CustomerSummary), CustomerSummary)
+            .WithNavMenu((menu,_) => 
+                menu.WithNavLink(
+                    nameof(CustomerSummary).Wordify(),
+                    new LayoutAreaReference(nameof(CustomerSummary)).ToHref(layout.Hub.Address),
+                    x => x.WithIcon(FluentIcons.Person)
+                    )
         );
 
     /// <summary>
@@ -36,7 +41,7 @@ public static class CustomerSummaryArea
         this LayoutAreaHost layoutArea,
         RenderingContext ctx
     ) =>
-        Controls.Stack()
+        Controls.Stack
             .WithView(Controls.PaneHeader("Customer Summary"))
             .WithView(
                 (a, _) =>

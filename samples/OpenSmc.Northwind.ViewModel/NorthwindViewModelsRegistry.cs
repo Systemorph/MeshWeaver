@@ -1,4 +1,5 @@
 ﻿using OpenSmc.Layout;
+using OpenSmc.Layout.Domain;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Northwind.ViewModel
@@ -20,22 +21,20 @@ namespace OpenSmc.Northwind.ViewModel
             this MessageHubConfiguration configuration
         )
         {
-            return configuration.AddLayout(layout =>
-                        layout.AddDashboard()
-                            .AddProductsSummary()
-                            .AddOrdersSummary()
-                            .AddCustomerSummary()
-                            .AddSupplierSummary()
-                            .ConfigureApplication(views => views
-                                .WithMenu(menu => menu
-                                    .AddDocumentationMenu()
-                                    .AddRegisteredViews()
-                                    .AddTypesCatalogs()
-                                )
-                                .DefaultViews()
-                            )
-                    )
+            return configuration
                     .AddNorthwindDocumentation()
+                    .AddLayout(layout =>
+                    layout
+                        .AddDashboard()
+                        .AddProductsSummary()
+                        .AddOrdersSummary()
+                        .AddCustomerSummary()
+                        .AddSupplierSummary()
+                        //.WithNavMenu((menu, _) => menu
+                        //    .AddTypesCatalogs()
+                        //)
+
+                )
                 ;
         }
 

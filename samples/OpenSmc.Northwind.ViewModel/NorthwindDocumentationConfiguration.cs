@@ -1,4 +1,6 @@
 ﻿using OpenSmc.Documentation;
+using OpenSmc.Layout;
+using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.Domain;
 using OpenSmc.Messaging;
 
@@ -10,19 +12,18 @@ namespace OpenSmc.Northwind.ViewModel
      public static class NorthwindDocumentationConfiguration
     {
         private const string Overview = nameof(Overview);
-        
+
         /// <summary>
         /// Represents a builder for creating application menus.
         /// </summary>
-        /// <param name="builder">The application menu builder to which the documentation menu item will be added.</param>
+        /// <param name="layout">The layout definition to which the documentation menu item will be added.</param>
         /// <returns>The updated application menu builder with the Northwind documentation menu item added.</returns>
         /// <remarks>
         /// This method adds a documentation menu item for the Northwind overview to the application's main menu.
         /// It creates a navigation link for the Northwind overview documentation, using the application's layout hub address to construct the URL.
         /// </remarks>
-        public static ApplicationMenuBuilder AddDocumentationMenu(this ApplicationMenuBuilder builder)
-            => builder
-                .WithNavLink(Overview, $"{builder.Layout.Hub.Address}/Doc/{Overview}");
+        public static LayoutDefinition AddDocumentationMenu(this LayoutDefinition layout)
+            => layout.WithNavMenu((menu, _) => menu.WithNavLink(Overview, $"{layout.Hub.Address}/Doc/{Overview}"));
 
         /// <summary>
         /// Represents the configuration for the MessageHub.
@@ -43,6 +44,7 @@ namespace OpenSmc.Northwind.ViewModel
                         .WithDocument(Overview,
                             $"{typeof(NorthwindDashboardArea).Assembly.GetName().Name}.Markdown.Overview.md")
                 )
-                );
+                )
+            .AddLayout(layout => layout.AddDocumentationMenu());
     }
 }

@@ -37,24 +37,24 @@ public static class StandardViews
         };
 
         var shortDateString = log.Start.ToString("HH:MM MMM dd, yyyy");
-        var stack = Stack()
+        var stack = Stack
             .WithStyle(style => style.WithRowGap("24px"))
             .WithOrientation(Orientation.Vertical)
             .WithId(ActivityLogViewId)
             .WithView(
-                DialogBodyStack()
+                DialogBodyStack
                     .WithView(icon)
                     .WithView(
-                        Stack()
+                        Stack
                             .WithOrientation(Orientation.Vertical)
                             .WithView(
-                                Stack()
+                                Stack
                                     .WithOrientation(Orientation.Horizontal)
                                     .WithView(Html("<em>by</em>"))
                                     .WithView(Html($"<strong>{log.User?.DisplayName}</strong>"))
                             )
                             .WithView(
-                                Stack()
+                                Stack
                                     .WithOrientation(Orientation.Horizontal)
                                     .WithView(Html("<em>at</em>"))
                                     .WithView(Html($"<strong>{shortDateString}</strong>"))
@@ -66,11 +66,11 @@ public static class StandardViews
         {
             var errorsStack = log.Errors()
                 .Aggregate(
-                    Stack().WithOrientation(Orientation.Vertical).WithView(Title("Errors", 3)),
+                    Stack.WithOrientation(Orientation.Vertical).WithView(Title("Errors", 3)),
                     (seed, message) => seed.WithView(Html($"<p>{message.Message}</p>"))
                 );
             stack = stack.WithView(
-                DialogBodyStack()
+                DialogBodyStack
                     .WithView(Icon(Icons.OpenSmc.XCircle, Colors.Failed) with { Size = "L" })
                     .WithView(errorsStack)
             );
@@ -79,11 +79,11 @@ public static class StandardViews
         {
             var warningsStack = log.Warnings()
                 .Aggregate(
-                    Stack().WithOrientation(Orientation.Vertical).WithView(Title("Warnings", 3)),
+                    Stack.WithOrientation(Orientation.Vertical).WithView(Title("Warnings", 3)),
                     (seed, message) => seed.WithView(Html($"<p>{message.Message}</p>"))
                 );
             stack = stack.WithView(
-                DialogBodyStack()
+                DialogBodyStack
                     .WithView(Icon(Icons.OpenSmc.Alert, Colors.Warning) with { Size = "L" })
                     .WithView(warningsStack)
             );
@@ -92,11 +92,11 @@ public static class StandardViews
         {
             var warningsStack = log.Infos()
                 .Aggregate(
-                    Stack().WithOrientation(Orientation.Vertical).WithView(Title("Infos", 3)),
+                    Stack.WithOrientation(Orientation.Vertical).WithView(Title("Infos", 3)),
                     (seed, message) => seed.WithView(Html($"<p>{message.Message}</p>"))
                 );
             stack = stack.WithView(
-                DialogBodyStack()
+                DialogBodyStack
                     .WithView(Icon(Icons.OpenSmc.Info, Colors.Info) with { Size = "L" })
                     .WithView(warningsStack)
             );
@@ -105,7 +105,7 @@ public static class StandardViews
         return stack;
     }
 
-    public static LayoutStackControl DialogBodyStack() => Stack().WithDialogBodyStyle();
+    public static LayoutStackControl DialogBodyStack => Stack.WithDialogBodyStyle();
 
     public static LayoutStackControl WithDialogBodyStyle(this LayoutStackControl stack) =>
         stack

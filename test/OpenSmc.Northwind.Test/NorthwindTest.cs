@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Xml.Serialization;
@@ -152,7 +153,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
                 .SelectMany(c =>
                     (c.Value as LayoutStackControl)?.Areas ?? Enumerable.Empty<string>()
                 )
-                .ToArray();
+                .ToImmutableList();
         }
     }
 

@@ -8,7 +8,6 @@ using Json.Pointer;
 using Microsoft.Extensions.DependencyInjection;
 using OpenSmc.Application.Styles;
 using OpenSmc.Data;
-using OpenSmc.Data.Persistence;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Layout.Client;
 using OpenSmc.Layout.Composition;
@@ -31,9 +30,8 @@ public static class LayoutExtensions
                     reduction
                         .AddWorkspaceReferenceStream<LayoutAreaReference, EntityStore>(
                             (stream, reference, subscriber) =>
-                                new LayoutAreaHost(stream, reference, subscriber).Render(
-                                    stream.Hub.GetLayoutDefinition()
-                                )
+                                new LayoutAreaHost(stream, reference, stream.Hub.GetLayoutDefinition(), subscriber)
+                                    .RenderLayoutArea()
                         )
                         .AddBackTransformation<EntityStore>(
                             BackTransformLayoutArea,
@@ -82,8 +80,7 @@ public static class LayoutExtensions
                 typeof(LayoutAreaReference),
                 typeof(DataGridColumn<>), // this is not a control
                 typeof(Option<>), // this is not a control
-                typeof(Icon),
-                typeof(SourceItem)
+                typeof(Icon)
             );
 
     public static IObservable<object> GetControlStream(
@@ -144,6 +141,12 @@ public static class LayoutExtensions
         string id
     ) => (T)stream.Current.Value.Reduce(new EntityReference(LayoutAreaReference.Data, id));
 
+    public static TControl GetControl<TControl>(this EntityStore store, string area)
+        where TControl : UiControl =>
+        store.Collections.TryGetValue(LayoutAreaReference.Areas, out var instances) &&
+           instances.Instances.TryGetValue(area, out var ret)
+            ? (TControl)ret
+            : null;
     public static IObservable<object> GetDataStream(
         this ISynchronizationStream<JsonElement> stream,
         JsonPointerReference reference

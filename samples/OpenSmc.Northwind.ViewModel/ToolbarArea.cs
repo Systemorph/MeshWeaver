@@ -24,7 +24,7 @@ namespace OpenSmc.Northwind.ViewModel
         /// </remarks>
         public static object Toolbar(IObservable<Option<int>[]> years)
         {
-            return Controls.Toolbar()
+            return Controls.Toolbar
                 .WithView(
                     (a, _) =>
                         years.Select(y =>

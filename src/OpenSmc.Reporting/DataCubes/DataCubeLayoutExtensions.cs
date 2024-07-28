@@ -4,16 +4,19 @@ using OpenSmc.DataCubes;
 using OpenSmc.Domain;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
+using OpenSmc.Layout.Domain;
+using static OpenSmc.Layout.Template;
 using static OpenSmc.Layout.Controls;
 
 namespace OpenSmc.Reporting.DataCubes;
 
 public record FilterItem(object Id, string Label, bool Selected);
 
-public record DataCubeFilter
+public record DataCubeFilter(IReadOnlyCollection<Dimension> AvailableDimensions)
 {
-    public string SelectedDimension { get; init; }
-    public ImmutableDictionary<string, ImmutableList<FilterItem>> FilterItems { get; init; } = ImmutableDictionary<string, ImmutableList<FilterItem>>.Empty;
+    public string SelectedDimension { get; init; } = AvailableDimensions.FirstOrDefault()?.SystemName;
+    public ImmutableDictionary<string, ImmutableList<FilterItem>> FilterItems { get; init; } 
+        = ImmutableDictionary<string, ImmutableList<FilterItem>>.Empty;
     public string Search { get; init; }
     public virtual bool Equals(DataCubeFilter other)
     {
@@ -64,62 +67,25 @@ public static class DataCubeLayoutExtensions
      *
      */
 
-    public static UiControl ToDataCubeFilter(this IDataCube dataCube, LayoutAreaHost area, RenderingContext context, string filterId)
+    public static UiControl Render(this LayoutAreaHost host, DataCubeFilter filter, string filterId)
     {
-        var filter = area.Stream.GetData<DataCubeFilter>(filterId) ?? new();
-        var availableDimensions = dataCube.GetAvailableDimensions();
-
-        filter = filter with
-        {
-            SelectedDimension = filter.SelectedDimension ?? availableDimensions.First().SystemName
-        };
         
-        // TODO V10: add overload that accepts lambda (09.07.2024, Alexander Kravets)
-        var pointer = area.UpdateData(filterId, filter);
 
-        area.AddDisposable(context.Area, 
-            area.GetDataStream<DataCubeFilter>(filterId)
-                .DistinctUntilChanged()
-                .Subscribe(currentFilter =>
-                {
-                    if (!currentFilter.FilterItems.ContainsKey(currentFilter.SelectedDimension))
-                    {
-                        currentFilter = currentFilter with
-                        {
-                            FilterItems = currentFilter.FilterItems.Add(
-                                currentFilter.SelectedDimension,
-                                dataCube.GetSlices(currentFilter.SelectedDimension)
-                                    .SelectMany(s => s.Tuple.Select(
-                                        // todo get dimension pairs of type and ids from dataSlices
-                                        // go to the workspace and take observable of this type
-                                        x => new FilterItem(x.Value, x.Value.ToString(), true))
-                                    )
-                                    .DistinctBy(x => x.Id) // TODO V10: this is to be reviewed to find better place to reduce duplication of codes (2024/07/16, Dmitry Kalabin)
-                                    .ToImmutableList()
-                            )
-                        };
-                    }
-        
-                    area.UpdateData(filterId, currentFilter);
-                })
-            );
-
-
-        return Bind<DataCubeFilter, UiControl>(pointer, f =>
-            Stack()
+        return host.Bind<DataCubeFilter, UiControl>(filter, filterId, f =>
+            Stack
                 .WithView(Header("Filter"))
                 .WithView(
-                    Stack()
+                    Stack
                         .WithClass("dimension-filter")
                         .WithOrientation(Orientation.Horizontal)
                         .WithHorizontalGap(16)
                         .WithView(Listbox(f.SelectedDimension)
                             .WithOptions(
-                                availableDimensions
+                                f.AvailableDimensions
                                     .Select(d => new Option<string>(d.SystemName, d.DisplayName))
                                     .ToArray()
                             ))
-                        .WithView(Stack()
+                        .WithView(Stack
                             .WithClass("dimension-values")
                             .WithView(
                                 TextBox(f.Search)
@@ -136,6 +102,23 @@ public static class DataCubeLayoutExtensions
         );
     }
 
+    public static DataCubeFilter CreateFilter(this IDataCube cube) => new(cube.GetAvailableDimensions());
+
+    public static DataCubeFilter Update(this DataCubeFilter filter, IDataCube cube)
+        => filter with
+        {
+            FilterItems = filter.FilterItems.SetItem(filter.SelectedDimension,
+                filter.FilterItems.GetValueOrDefault(filter.SelectedDimension) ?? cube
+                    .GetSlices(filter.SelectedDimension)
+                    .SelectMany(s => s.Tuple.Select(
+                        // todo get dimension pairs of type and ids from dataSlices
+                        // go to the workspace and take observable of this type
+                        x => new FilterItem(x.Value, x.Value.ToString(), true))
+                    )
+                    .DistinctBy(x =>
+                        x.Id) // TODO V10: this is to be reviewed to find better place to reduce duplication of codes (2024/07/16, Dmitry Kalabin)
+                    .ToImmutableList())
+        };
     private static ImmutableList<Dimension> GetAvailableDimensions(this IDataCube dataCube)
     {
         return dataCube.GetDimensionDescriptors()
@@ -154,5 +137,36 @@ public static class DataCubeLayoutExtensions
                 f => CheckBox(f.Label, f.Selected)
             ));
     }
+
+    public const string DataCubeFilterId = "$DataCubeFilter";
+
+    private static void OpenContextPanel(this LayoutAreaHost host, IObservable<IDataCube> cubeStream, IObservable<DataCubeFilter> filterStream)
+    {
+
+        var viewDefinition = cubeStream
+            .CombineLatest(host.Stream.GetDataStream<DataCubeFilter>(DataCubeFilterId)
+                    .DefaultIfEmpty(),
+                (cube, filter) => (filter ?? cube.CreateFilter()).Update(cube))
+            .Subscribe(filter =>
+                host.RenderArea(
+                    new(StandardPageLayout.ContextMenu),
+                    host.Render(filter, DataCubeFilterId).ToContextPanel()
+                ));
+    }
+
+    private static object ToContextPanel(this UiControl content)
+    {
+        return Controls.Stack
+            .WithClass("context-panel")
+            .WithView(
+                Controls.Stack
+                    .WithVerticalAlignment(VerticalAlignment.Top)
+                    .WithView(Controls.PaneHeader("Analyze").WithWeight(FontWeight.Bold))
+            )
+            .WithView(content)
+            .WithSkin(Skins.SplitterPane.WithMin("200px"));
+    }
+
+
 }
 
