@@ -169,7 +169,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var reportArea = $"{reference.Area}/Content";
         var content = await stream.GetControlStream(reportArea)
             .Timeout(3.Seconds())
-            .FirstAsync(x => x != null);
+            .FirstAsync(x => x is not null);
         content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
 
         // Get toolbar and change value.
@@ -183,7 +183,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var year = await stream
             .GetDataStream<JsonElement>(new JsonPointerReference(yearTextBox.DataContext))
             .Select(s => pointer.Evaluate(s))
-            .FirstAsync();
+            .FirstAsync(x => x != null);
         year.Value.GetInt32().Should().Be(2024);
 
         stream.Update(ci =>
