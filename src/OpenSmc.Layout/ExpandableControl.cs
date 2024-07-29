@@ -35,7 +35,7 @@ public record BadgeControl(object Title, object SubTitle, object Color)
 /// <param name="Message">String message</param>
 /// <param name="Progress">Between 0 and 100</param>
 public record ProgressControl(object Message, object Progress)
-    : UiControl<BadgeControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null);
+    : UiControl<ProgressControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null);
 
 public record IconControl(Icon Icon, string Color)
     : UiControl<IconControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
