@@ -125,7 +125,7 @@ public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorksp
     {
         var stream = SetupDataSourceStream(state);
         Streams = Streams.Add(stream);
-        Hub.Schedule(cancellationToken => InitializeAsync(stream, cancellationToken));
+        Hub.InvokeAsync(cancellationToken => InitializeAsync(stream, cancellationToken));
         base.Initialize(state);
     }
 

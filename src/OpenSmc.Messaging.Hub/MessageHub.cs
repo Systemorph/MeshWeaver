@@ -30,7 +30,7 @@ public sealed class MessageHub<TAddress>
 {
     public override TAddress Address => (TAddress)MessageService.Address;
 
-    public void Schedule(Func<CancellationToken, Task> action) =>
+    public void InvokeAsync(Func<CancellationToken, Task> action) =>
         Post(new ExecutionRequest(action));
 
     public IServiceProvider ServiceProvider { get; }
@@ -98,7 +98,7 @@ public sealed class MessageHub<TAddress>
                 (d, c) => messageHandler.AsyncDelivery.Invoke(this, d, c)
             );
 
-        Schedule(StartAsync);
+        InvokeAsync(StartAsync);
         logger.LogInformation("Message hub {address} initialized", Address);
     }
 
@@ -426,7 +426,7 @@ public sealed class MessageHub<TAddress>
             }
         );
         WithDisposeAction(_ => plugin.DisposeAsync());
-        Schedule(async c =>
+        InvokeAsync(async c =>
         {
             logger.LogDebug(
                 "Initializing plugin {plugin} in Address {address}",

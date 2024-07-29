@@ -33,7 +33,7 @@ public abstract record DataSourceWithStorage<TDataSource>(
 
     protected override void Synchronize(ChangeItem<EntityStore> item)
     {
-        persistenceHub.Schedule(ct => UpdateAsync(item, ct));
+        persistenceHub.InvokeAsync(ct => UpdateAsync(item, ct));
     }
 
     protected virtual async Task UpdateAsync(

@@ -3,4 +3,3 @@
 namespace OpenSmc.Layout.Composition;
 
 public record LayoutExecutionAddress(object Host) : IHostedAddress;
-

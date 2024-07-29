@@ -10,7 +10,7 @@ namespace OpenSmc.Import.Implementation;
 public record ImportDataSource(Source Source, IWorkspace Workspace)
     : GenericDataSource<ImportDataSource>(Source, Workspace)
 {
-    private ILogger logger = Workspace.Hub.ServiceProvider.GetRequiredService<
+    private readonly ILogger logger = Workspace.Hub.ServiceProvider.GetRequiredService<
         ILogger<ImportDataSource>
     >();
     private ImportRequest ImportRequest { get; init; } = new(Source);
@@ -35,7 +35,7 @@ public record ImportDataSource(Source Source, IWorkspace Workspace)
         config = Configurations.Aggregate(config, (c, f) => f.Invoke(c));
         ImportManager importManager = new(config);
 
-        Hub.Schedule(async cancellationToken =>
+        Hub.InvokeAsync(async cancellationToken =>
         {
             var (s, _) = await importManager.ImportAsync(
                 ImportRequest,

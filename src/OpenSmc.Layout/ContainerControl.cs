@@ -22,6 +22,6 @@ public abstract record ContainerControl<TControl, TItem>(string ModuleName, stri
     IEnumerable<(string Area, UiControl Control)> IContainerControl.RenderSubAreas(LayoutAreaHost host, RenderingContext context)
         => Items.Select((item, i) => ($"{context.Area}/{i}", (UiControl)item));
 
-    public IReadOnlyCollection<string> Areas { get; init; }
+    public IReadOnlyCollection<string> Areas { get; init; } = [];
 
 }

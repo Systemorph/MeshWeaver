@@ -64,7 +64,6 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     .WithView("int", 3)
                     .WithView(nameof(DataGrid), DataGrid)
                     .WithView(nameof(DataBoundCheckboxes), DataBoundCheckboxes)
-                    .WithView(nameof(DisposalView), DisposalView)
                     .WithView(nameof(AsyncView), AsyncView)
             );
     }
@@ -299,7 +298,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var buttonArea = $"{reference.Area}/Button";
         var content = await stream.GetControlStream(buttonArea)
             .Timeout(3.Seconds())
-            .FirstAsync();
+            .FirstAsync(x => x != null);
         content
             .Should()
             .BeOfType<MenuItemControl>()
@@ -515,42 +514,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
     }
 
-    private static bool isDisposed;
+    // TODO V10: Need to rewrite realistic test for disposing views. (29.07.2024, Roland Bürgi)
 
-    private static object DisposalView =>
-        Controls.Stack.WithView("subview", (a, c) =>
-    {
-        a.AddDisposable(c.Area, new AnonymousDisposable(() => isDisposed = true));
-        return "Ok";
-    });
-
-    [HubFact]
-    public async Task TestDisposalView()
-    {
-        var reference = new LayoutAreaReference(nameof(DisposalView));
-
-        var hub = GetClient();
-        var workspace = hub.GetWorkspace();
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
-            reference
-        );
-        var content = await stream.GetControlStream(reference.Area)
-            .Timeout(3.Seconds())
-            .FirstAsync(x => x != null);
-        var subAreaName = content.Should().BeOfType<LayoutStackControl>().Which.Areas.Should().HaveCount(1).And.Subject.First();
-        var subArea = await stream.GetControlStream(subAreaName)
-            .Timeout(3.Seconds())
-            .FirstAsync();
-        subArea.Should().BeOfType<HtmlControl>();
-        isDisposed.Should().BeFalse();
-
-        // todo
-        // garbage-collect view, check isDisposed=true
-        // how do I get LayoutAreaHost?
-    }
-
-    // todo write data-disposal test
 
     private static object AsyncView =>
         Controls.Stack

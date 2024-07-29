@@ -139,7 +139,7 @@ public record LayoutAreaHost : IDisposable
         => Update(LayoutAreaReference.Properties, id, data);
     public void Update(string collection, Func<InstanceCollection, InstanceCollection> update)
     {
-        InvokeAsync(() => Stream.Update(ws =>
+        Stream.Update(ws =>
             new(
                 Stream.Owner,
                 Stream.Reference,
@@ -148,7 +148,7 @@ public record LayoutAreaHost : IDisposable
                 null, // todo we can fill this in here and use.
                 Stream.Hub.Version
             )
-        )); 
+        );
     }
 
     public string Update(string collection, string id, object data)
@@ -235,7 +235,7 @@ public record LayoutAreaHost : IDisposable
 
     public void InvokeAsync(Func<CancellationToken, Task> action)
     {
-        executionHub.Schedule(action);
+        executionHub.InvokeAsync(action);
     }
 
     public void InvokeAsync(Action action) =>
@@ -268,7 +268,7 @@ public record LayoutAreaHost : IDisposable
     {
         AddDisposable(context.Parent?.Area ?? context.Area,
             generator.Invoke(this, context)
-                .Subscribe(c => InvokeAsync(()=>UpdateArea(context,c)))
+                .Subscribe(c => UpdateArea(context,c))
         );
         return [];
     }
@@ -295,7 +295,7 @@ public record LayoutAreaHost : IDisposable
             )
         );
 
-        return [];
+        return [(context.Area, new SpinnerControl())];
     }
 
 
@@ -304,7 +304,7 @@ public record LayoutAreaHost : IDisposable
         AddDisposable(
             context.Area, 
             generator.Subscribe(view => 
-                InvokeAsync(() => UpdateArea(context, view))
+                UpdateArea(context, view)
             )
         );
 
@@ -313,9 +313,9 @@ public record LayoutAreaHost : IDisposable
 
     internal ISynchronizationStream<EntityStore, LayoutAreaReference> RenderLayoutArea()
     {
-        Dispose();
         InvokeAsync(() =>
         {
+            Dispose();
             var reference = Stream.Reference;
             var context = new RenderingContext(reference.Area) { Layout = reference.Layout };
             Stream.Update(store => Stream.ToChangeItem(LayoutDefinition
