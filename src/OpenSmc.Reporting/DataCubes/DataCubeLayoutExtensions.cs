@@ -148,7 +148,7 @@ public static class DataCubeLayoutExtensions
                     .DefaultIfEmpty(),
                 (cube, filter) => (filter ?? cube.CreateFilter()).Update(cube))
             .Subscribe(filter =>
-                host.RenderArea(
+                host.UpdateArea(
                     new(StandardPageLayout.ContextMenu),
                     host.Render(filter, DataCubeFilterId).ToContextPanel()
                 ));
