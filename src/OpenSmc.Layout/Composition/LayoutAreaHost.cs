@@ -273,6 +273,9 @@ public record LayoutAreaHost : IDisposable
         return [];
     }
 
+    public void UpdateProgress(string area, ProgressControl progress)
+        => Stream.Update(x => Stream.ToChangeItem(x.UpdateControl(area, progress)));
+
     internal IEnumerable<(string Area, UiControl Control)> RenderArea(RenderingContext context, ViewDefinition generator)
     {
         InvokeAsync(async ct =>

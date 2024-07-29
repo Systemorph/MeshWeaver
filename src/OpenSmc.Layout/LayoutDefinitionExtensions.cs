@@ -98,7 +98,7 @@ public static class LayoutDefinitionExtensions{
         this LayoutDefinition layout,
         Func<RenderingContext, bool> context,
         Func<LayoutAreaHost, RenderingContext, T> view)
-        => layout.WithView(context, (ViewStream<T>)((a, ctx) => Observable.Return(view(a, ctx))));
+        => layout.WithView(context, (a, ctx) => Observable.Return<object>(view(a, ctx)));
 
     public static LayoutDefinition WithView<T>(
         this LayoutDefinition layout,
