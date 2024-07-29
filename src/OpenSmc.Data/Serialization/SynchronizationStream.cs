@@ -1,5 +1,4 @@
 ﻿using System.Collections.Immutable;
-using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reflection;
 using OpenSmc.Messaging;
@@ -33,6 +32,7 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
     /// </summary>
     private ChangeItem<TStream> current;
 
+
     /// <summary>
     /// My current state deserialized as stream
     /// </summary>
@@ -48,13 +48,6 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
 
     private readonly TaskCompletionSource<TStream> initialized = new();
 
-    public ISynchronizationStream<TReduced> GetClient<TReduced>(
-        WorkspaceReference<TReduced> reference,
-        object host
-    )
-    {
-        throw new NotImplementedException();
-    }
 
     public Task<TStream> Initialized => initialized.Task;
 
@@ -170,16 +163,16 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
                 ?.Invoke(delivery) ?? delivery;
     }
 
-    public void Update(Func<TStream, ChangeItem<TStream>> update) => updateSubject.OnNext(update);
+    public void Update(Func<TStream, ChangeItem<TStream>> update) => 
+        InvokeAsync(() => SetCurrent(update.Invoke(Current is null ? default : Current.Value)));
 
-    public void OnNext(ChangeItem<TStream> value)
-    {
-        incomingInstancesSubject.OnNext(value);
-    }
+    public void OnNext(ChangeItem<TStream> value) =>
+        InvokeAsync(() => SetCurrent(value));
 
     public virtual DataChangeResponse RequestChange(Func<TStream, ChangeItem<TStream>> update)
     {
-        updateSubject.OnNext(update);
+        // TODO V10: Here we need to inject validations (29.07.2024, Roland Bürgi)
+        Update(update);
         return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, null);
     }
 
@@ -198,26 +191,22 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
         this.Subscriber = Subscriber;
         this.Reference = Reference;
         this.InitializationMode = InitializationMode;
-        // Merge the updateSubject and incomingInstancesSubject
-        var merged = updateSubject
-            .Select(updateFunc => updateFunc.Invoke(current == null ? default : current.Value))
-            .Merge(incomingInstancesSubject);
-
-        // Subscribe to the merged observable and push the results to the combinedSubject
-        AddDisposable(merged.Subscribe(SetCurrent));
-
-    }
-
-    private readonly Subject<ChangeItem<TStream>> incomingInstancesSubject = new();
-
-    public SynchronizationStream()
-    {
+        synchronizationStreamHub = Hub.GetHostedHub(new SynchronizationStreamAddress(Hub.Address));
     }
 
 
 
 
-    private readonly Subject<Func<TStream, ChangeItem<TStream>>> updateSubject = new();
 
+
+
+    private record SynchronizationStreamAddress(object Host) : IHostedAddress;
+
+    private readonly IMessageHub synchronizationStreamHub;
+
+    //private void InvokeAsync(Func<CancellationToken, Task> task)
+    //    => synchronizationStreamHub.InvokeAsync(task);
+    private void InvokeAsync(Action action)
+        => synchronizationStreamHub.InvokeAsync(action);
 
 }

@@ -48,7 +48,13 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
 
     // ReSharper disable once UnusedMethodReturnValue.Local
     Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, AsyncDelivery callback, CancellationToken cancellationToken);
-    public void Schedule(Func<CancellationToken, Task> action);
+    public void InvokeAsync(Func<CancellationToken, Task> action);
+
+    public void InvokeAsync(Action action) => InvokeAsync(_ =>
+    {
+        action();
+        return Task.CompletedTask;
+    });
 
 
 
