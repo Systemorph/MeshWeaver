@@ -32,7 +32,7 @@ public record LayoutDefinition(IMessageHub Hub)
                             Instances = i.Instances
                                 .SetItems(
                                     renderer
-                                        .Invoke(host, context, store)
+                                        .Invoke(host, context, s)
                                         .Select(x => new KeyValuePair<object, object>(x.Area, x.Control))
                                 )
                         })

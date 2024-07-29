@@ -31,6 +31,9 @@ public partial class LayoutArea : IDisposable
     [Parameter]
     public LayoutAreaReference Reference { get; set; }
 
+    [Parameter]
+    public string Area { get; set; }
+
     private UiControl RootControl { get; set; } = null;
 
     [Parameter]
@@ -49,6 +52,8 @@ public partial class LayoutArea : IDisposable
         if (Reference == null)
             throw new ArgumentNullException(nameof(Reference), "Reference cannot be null.");
 
+        Area ??= Reference.Area;
+
         RootControl = null;
         Stream?.Dispose();
 
@@ -56,7 +61,7 @@ public partial class LayoutArea : IDisposable
             ? Workspace.Stream.Reduce<JsonElement, LayoutAreaReference>(Reference, Address)
             : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address, Reference);
 
-        subscription = Stream.GetControlStream(Reference.Area)
+        subscription = Stream.GetControlStream(Area)
             .DistinctUntilChanged()
             .Subscribe(item => InvokeAsync(() => Render(item as UiControl)));
 
