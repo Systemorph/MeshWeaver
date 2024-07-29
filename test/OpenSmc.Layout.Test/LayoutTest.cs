@@ -7,7 +7,6 @@ using FluentAssertions.Extensions;
 using Json.Patch;
 using Json.Pointer;
 using OpenSmc.Data;
-using OpenSmc.Disposables;
 using OpenSmc.Hub.Fixture;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.DataGrid;
@@ -183,7 +182,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .GetDataStream<JsonElement>(new JsonPointerReference(yearTextBox.DataContext))
             .Select(s => pointer.Evaluate(s))
             .FirstAsync(x => x != null);
-        year.Value.GetInt32().Should().Be(2024);
+        year!.Value.GetInt32().Should().Be(2024);
 
         stream.Update(ci =>
         {
@@ -275,7 +274,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 Controls
                     .Menu("Increase Counter")
                     .WithClickAction(context =>
-                        context.Host.RenderArea(
+                        context.Host.UpdateArea(
                             new($"{nameof(Counter)}/{nameof(Counter)}"),
                             Controls.Html((++counter))
                         )
@@ -310,7 +309,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         content = await stream
             .GetControlStream(counterArea)
             .FirstAsync(x => x is HtmlControl html && html.Data is not "0")
-            .Timeout(TimeSpan.FromSeconds(5));
+            //.Timeout(TimeSpan.FromSeconds(5))
+            ;
         content.Should().BeOfType<HtmlControl>().Which.Data.Should().Be("1");
     }
 

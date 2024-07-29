@@ -88,7 +88,7 @@ public record LayoutAreaHost : IDisposable
     }
 
 
-    public IEnumerable<(string Area, UiControl Control)> RenderArea(RenderingContext context,  object view)
+    internal IEnumerable<(string Area, UiControl Control)> RenderArea(RenderingContext context,  object view)
     {
         if (view == null)
             return [];
