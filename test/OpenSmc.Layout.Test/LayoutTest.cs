@@ -336,7 +336,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var content = await stream
             .GetControlStream(reference.Area)
             .Timeout(TimeSpan.FromSeconds(3))
-            .FirstAsync();
+            .FirstAsync(x => x != null);
         content
             .Should()
             .BeOfType<DataGridControl>()
@@ -488,7 +488,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         );
         var content = await stream.GetControlStream(reference.Area)
             .Timeout(3.Seconds())
-            .FirstAsync();
+            .FirstAsync(x => x != null);
         var grid = content
             .Should()
             .BeOfType<DataGridControl>()
