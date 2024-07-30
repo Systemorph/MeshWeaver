@@ -21,8 +21,8 @@ namespace OpenSmc.Northwind.ViewModel
         /// </remarks>
         public static LayoutDefinition AddProductsSummary(this LayoutDefinition layout)
             => layout.WithView(nameof(ProductSummary), ProductSummary)
-                .WithNavMenu((menu, _) => menu.WithNavLink("Product Summary", FluentIcons.Box,
-                    new LayoutAreaReference(nameof(ProductSummary)).ToHref(layout.Hub.Address))
+                .WithNavMenu((menu, _) => menu.WithNavLink("Product Summary",
+                    new LayoutAreaReference(nameof(ProductSummary)).ToHref(layout.Hub.Address), FluentIcons.Box)
                 );
 
 

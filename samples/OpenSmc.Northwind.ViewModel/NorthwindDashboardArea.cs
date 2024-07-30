@@ -22,8 +22,8 @@ public static class NorthwindDashboardArea
         => layout.WithView(nameof(Dashboard), Dashboard)
             .WithNavMenu((menu,_) =>
                 menu.WithNavLink(
-                    nameof(Dashboard), FluentIcons.Grid,
-                    new LayoutAreaReference(nameof(Dashboard)).ToHref(layout.Hub))
+                    nameof(Dashboard),
+                    new LayoutAreaReference(nameof(Dashboard)).ToHref(layout.Hub), FluentIcons.Grid)
             );
 
 

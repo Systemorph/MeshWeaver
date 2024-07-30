@@ -28,6 +28,8 @@ public class StandardPageLayoutTest(ITestOutputHelper output) : HubTestBase(outp
                             StaticView,
                             Controls.Stack.WithView("Hello", "Hello").WithView("World", "World")
                         )
+                        .WithNavMenu((menu, _) => menu.WithNavLink("item1", "/item1", "icon1"))
+                        .WithNavMenu((menu, _) => menu.WithNavLink("item2", "/item2", "icon2"))
                 );
         }
 
@@ -70,6 +72,11 @@ public class StandardPageLayoutTest(ITestOutputHelper output) : HubTestBase(outp
             var mainContent = await stream.GetControl(StandardPageLayout.MainContent);
             mainContent.Should().BeOfType<NamedAreaControl>()
                 .Which.Data.Should().Be(reference.Area);
+
+            var navMenu = await stream.GetControl(StandardPageLayout.NavMenu);
+            navMenu.Should().BeOfType<NavMenuControl>()
+                .Which.Areas.Should().HaveCount(2)
+                ;
         }
     }
 }

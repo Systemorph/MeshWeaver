@@ -1,12 +1,11 @@
-﻿using OpenSmc.Layout.Composition;
-
-namespace OpenSmc.Layout;
+﻿namespace OpenSmc.Layout;
 
 public record NavMenuControl() : 
     ContainerControl<NavMenuControl, UiControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
 {
 
-    public NavMenuControl WithItem(UiControl item) => this with { Items = Items.Add(item) };
+    public NavMenuControl WithItem(UiControl item) => 
+        WithItems(item) ;
 
     public bool Collapsible { get; init; } = true;
 
@@ -17,22 +16,23 @@ public record NavMenuControl() :
         WithGroup(title, x => x);
 
     public NavMenuControl WithGroup(object title, Func<NavGroupControl, NavGroupControl> options) =>
-        this with { Items = Items.Add(options.Invoke(new(title))) };
+        WithItems(options.Invoke(new(title)));
 
     public NavMenuControl WithNavLink(object title, object href) =>
         WithNavLink(title, href, x => x);
     public NavMenuControl WithNavLink(NavLinkControl control) =>
-        this with { Items = Items.Add(control) };
+        WithItem(control);
 
     public NavMenuControl WithNavLink(object title, object href, Func<NavLinkControl, NavLinkControl> options) =>
-        this with { Items = Items.Add(options.Invoke(new(title, href))) };
-    public NavMenuControl WithNavLink(object title, object icon, object href) =>
-        this with { Items = Items.Add(new NavLinkControl(title, href){Icon = icon}) };
+        WithNavLink(options.Invoke(new(title, href)));
+    public NavMenuControl WithNavLink(object title, object href, object icon) =>
+        WithNavLink(new NavLinkControl(title, href){Icon = icon})
+        ;
 
     public NavMenuControl WithNavGroup(NavGroupControl navGroup) =>
-        this with { Items = Items.Add(navGroup) };
+        WithItem(navGroup);
     public NavMenuControl WithNavGroup(object title, Func<NavGroupControl, NavGroupControl> config) =>
-        this with { Items = Items.Add(config.Invoke(new(title))) };
+        WithItem(config.Invoke(new(title)));
     public NavMenuControl WithCollapsible(bool collapsible) => this with { Collapsible = collapsible };
 
     public NavMenuControl WithWidth(int width) => this with { Width = width };
@@ -41,7 +41,7 @@ public record NavMenuControl() :
 
 
 
-public abstract record NavItemControl<TNavItemControl>(object Data) : ContainerControl<TNavItemControl, UiControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data), IContainerControl
+public abstract record NavItemControl<TNavItemControl>(object Data) : ContainerControl<TNavItemControl, UiControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data)
 where TNavItemControl : NavItemControl<TNavItemControl>
 {
     public object Icon { get; init; }
@@ -53,8 +53,6 @@ where TNavItemControl : NavItemControl<TNavItemControl>
     public TNavItemControl WithIcon(object icon) => This with { Icon = icon };
 
 
-    IEnumerable<(string Area, UiControl Control)> IContainerControl.RenderSubAreas(LayoutAreaHost host, RenderingContext context)
-        => Items.Select((item, i) => ($"{context.Area}/{i}", item));
 }
 
 public record NavLinkControl : NavItemControl<NavLinkControl>
@@ -71,8 +69,8 @@ public record NavGroupControl(object Data)
 {
 
     public NavGroupControl WithLink(string displayName, string link, Func<NavLinkControl, NavLinkControl> options) =>
-        this with { Items = Items.Add(options.Invoke(new(displayName, link))) };
-    public NavGroupControl WithGroup(NavGroupControl @group) => this with { Items = Items.Add(group) };
+        WithItems(options.Invoke(new(displayName, link)));
+    public NavGroupControl WithGroup(NavGroupControl @group) => WithItems(group);
 
 
 }
