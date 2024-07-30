@@ -1,4 +1,6 @@
-﻿using OpenSmc.Layout;
+﻿using OpenSmc.Demo.ViewModel.DropDown;
+using OpenSmc.Demo.ViewModel.Listbox;
+using OpenSmc.Layout;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Demo.ViewModel;
@@ -22,6 +24,8 @@ public static class DemoViewModelsRegistry
         => configuration
             .AddLayout(layout => layout
                 .AddViewModelStateDemo()
+                .AddSelectControlDemo()
+                .AddListboxDemo()
                 .ConfigureApplication(views => views
                     .WithMenu(menu => menu
                         .AddDocumentationMenu()
