@@ -59,7 +59,7 @@ public abstract record UiControl(object Data) : IUiControl
     public string DataContext { get; init; } = string.Empty;
 
     public UiControl PopSkin() =>
-        this with { Skins = Skins.Count == 0 ? Skins : Skins.RemoveAt(0) };
+        this with { Skins = Skins.Count == 0 ? Skins : Skins.RemoveAt(Skins.Count - 1) };
     
     public UiControl WithSkin(object skin)
     => this with { Skins = Skins.Add(skin) };

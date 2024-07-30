@@ -53,8 +53,8 @@ public static class StandardPageLayout
                             .WithView(Splitter
                                 .WithView(
                                     Stack
-                                        .WithSkin(Skins.SplitterPane)
                                         .WithSkin(Skins.BodyContent)
+                                        .WithSkin(Skins.SplitterPane)
                                         .WithOrientation(Orientation.Vertical)
                                         .WithView(NamedArea(ContentHeading))
                                         .WithView(NamedArea(MainContent))

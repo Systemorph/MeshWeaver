@@ -44,29 +44,20 @@ public static class SupplierSummaryArea
         this LayoutAreaHost layoutArea,
         RenderingContext context
     )
-    =>
-        Controls.Splitter
-            .WithClass("main-content-pane")
+        => Controls.Stack
+            .WithView(
+                Controls.Toolbar
+                    .WithView(
+                        Controls.Button("Analyze")
+                            .WithIconStart(FluentIcons.CalendarDataBar)
+                            .WithClickAction(_ => layoutArea.SetContextMenu(context))
+                    )
+            )
             .WithView(
                 Controls.Stack
-                    .WithView(
-                        Controls.Toolbar
-                            .WithView(
-                                Controls.Button("Analyze")
-                                    .WithIconStart(FluentIcons.CalendarDataBar)
-                                    .WithClickAction(_ => layoutArea.SetContextMenu(context))
-                            )
-                    )
-                    .WithView(
-
-                        Controls.Stack
-                            .WithView(Controls.PaneHeader("Supplier Summary"))
-                            .WithView(SupplierSummaryGrid)
-                    )
-                    .WithSkin(Skins.SplitterPane)
-                    
-            )
-        ;
+                    .WithView(Controls.PaneHeader("Supplier Summary"))
+                    .WithView(SupplierSummaryGrid)
+            );
 
 
     /// <summary>
@@ -80,7 +71,7 @@ public static class SupplierSummaryArea
         RenderingContext ctx
     )
     {
-        return area.FilteredDataCube()
+        return area.GetDataCube()
             .Select(cube =>
                 area.Workspace
                     .State

@@ -32,7 +32,7 @@ public static class BlazorClientExtensions
         if (control == null)
             return null;
 
-        var skin = control.Skins.FirstOrDefault();
+        var skin = control.Skins.LastOrDefault();
         if (skin != null)
             return MapSkinnedView(control.PopSkin(), stream, area, skin);
 
