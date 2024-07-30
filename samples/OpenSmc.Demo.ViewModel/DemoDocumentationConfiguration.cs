@@ -8,10 +8,12 @@ namespace OpenSmc.Demo.ViewModel;
 public static class DemoDocumentationConfiguration
 {
     private const string Overview = nameof(Overview);
+    private const string ViewModelState = nameof(ViewModelState);
 
     public static ApplicationMenuBuilder AddDocumentationMenu(this ApplicationMenuBuilder builder)
         => builder
             .WithNavLink(Overview, $"{builder.Layout.Hub.Address}/Doc/{Overview}", nl => nl with { Icon = FluentIcons.Home, })
+            .WithNavLink("ViewModel State", $"{builder.Layout.Hub.Address}/Doc/{ViewModelState}", nl => nl with { Icon = FluentIcons.Box, })
         ;
 
     public static MessageHubConfiguration AddDemoDocumentation(
@@ -22,6 +24,8 @@ public static class DemoDocumentationConfiguration
                 source => source
                     .WithDocument(Overview,
                         $"{typeof(ViewModelStateDemoArea).Assembly.GetName().Name}.Markdown.Overview.md")
+                    .WithDocument(ViewModelState,
+                        $"{typeof(ViewModelStateDemoArea).Assembly.GetName().Name}.Markdown.Counter.md")
             )
             );
 }
