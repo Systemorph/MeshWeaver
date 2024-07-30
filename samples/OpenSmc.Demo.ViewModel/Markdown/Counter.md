@@ -21,3 +21,5 @@ Here is a detailed example using a simple MVVM pattern in a WPF application (C#)
 ### Bind the View to the ViewModel:
 - Set the DataContext of the View to an instance of the ViewModel.
 
+### Counter Example
+@("Counter")
