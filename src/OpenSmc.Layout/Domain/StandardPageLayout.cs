@@ -125,13 +125,6 @@ public static class StandardPageLayout
     public static void SetContextMenu(this LayoutAreaHost host, object view)
         => host.UpdateArea(new(ContextMenu), view);
 
-    private static object ApplyConfig<TControl>(this LayoutAreaHost host, RenderingContext context, string id, Func<TControl, RenderingContext, TControl> config)
-        where TControl : class, new()
-    {
-        return host.SetVariable(id,
-            config.Invoke(host.GetVariable<TControl>(id) ?? new(), context));
-    }
-
 
 
 }
