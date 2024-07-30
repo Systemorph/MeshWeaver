@@ -5,7 +5,7 @@ using OpenSmc.Layout;
 
 namespace OpenSmc.Blazor;
 
-public partial class NamedAreaView
+public partial class NamedAreaView : IDisposable
 {
     private IDisposable subscription;
     [Inject]
@@ -27,7 +27,7 @@ public partial class NamedAreaView
         Logger.LogDebug(
             "Changing area {Area} to {Instance}",
             Area,
-            control
+            control?.GetType().Name
         );
         RootControl = control;
         StateHasChanged();

@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.FileProviders;
+﻿using System.Diagnostics;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.FluentUI.AspNetCore.Components;
 using OpenSmc.Hosting;
 using OpenSmc.Northwind.Application;
@@ -23,7 +24,13 @@ builder.Services.AddFluentUIComponents();
 // })
 ;
 builder.Services.AddSingleton<WeatherForecastService>();
-builder.Services.AddLogging(config => config.AddConsole().AddDebug());
+builder.Services.AddLogging(config => config.AddSimpleConsole(
+    options =>
+    {
+        options.SingleLine = true;
+        options.TimestampFormat = "hh:mm:ss:fff";
+        options.IncludeScopes = true;
+    }).AddDebug());
 builder.Services.AddFluentUIComponents();
 
 builder.Host.UseOpenSmc(
@@ -31,6 +38,9 @@ builder.Host.UseOpenSmc(
     config => config.ConfigureNorthwindHubs()
 );
 var app = builder.Build();
+
+var logger = app.Services.GetRequiredService<ILogger<Program>>();
+logger.LogInformation("Starting blazor server on PID: {PID}", Process.GetCurrentProcess().Id);
 
 app.MapDefaultEndpoints();
 
