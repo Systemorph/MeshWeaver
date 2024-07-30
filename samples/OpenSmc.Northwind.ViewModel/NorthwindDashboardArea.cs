@@ -65,9 +65,7 @@ public static class NorthwindDashboardArea
                             area.SupplierSummary(ctx)
                                 .WithSkin(Skins.LayoutGridItem.WithXs(12))
                     )
-
                     .WithSkin(Skins.SplitterPane.WithClass("main-content-pane"))
-
             );
     }
 
