@@ -56,8 +56,10 @@ public class StandardPageLayoutTest(ITestOutputHelper output) : HubTestBase(outp
                 ;
 
             var page = await stream.GetControl(StandardPageLayout.Page);
-            page.Should().BeOfType<LayoutStackControl>()
-                .Which.Areas.Should().HaveCountGreaterThan(0);
+            var stack = page.Should().BeOfType<LayoutStackControl>().Which;
+                stack.Areas.Should().HaveCountGreaterThan(0)
+                .And.Subject.Should().BeEquivalentTo(Enumerable.Range(1, stack.Areas.Count).Select(i => $"{StandardPageLayout.Page}/{i}"))
+                ;
 
             var header = await stream.GetControl(StandardPageLayout.Header);
             header.Should().BeOfType<LayoutStackControl>()
