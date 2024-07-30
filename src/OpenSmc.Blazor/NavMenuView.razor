@@ -10,7 +10,7 @@
         <FluentNavMenu Id="main-menu" Collapsible="@ViewModel.Collapsible" Width="@ViewModel.Width" @bind-Expanded="@expanded">
             @foreach (var area in @ViewModel.Areas)
             {
-                <DispatchView Stream="@Stream" Area="@area" />
+                <NamedAreaView Stream="@Stream" Area="@area" />
             }
         </FluentNavMenu>
     </nav>

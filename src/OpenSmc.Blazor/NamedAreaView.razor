@@ -4,20 +4,20 @@
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @using VerticalAlignment = Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment
 
-
-@if (RootControl == null)
+@if (ShowProgress && RootControl == null)
 {
     <FluentStack HorizontalAlignment="HorizontalAlignment.Center" VerticalAlignment="VerticalAlignment.Center" Orientation="Orientation.Vertical">
-        <h3>Loading @Area</h3>
-        <FluentProgressRing style="width: 102px; height: 102px;"/>
+        <h3>Loading @DisplayArea</h3>
+        <FluentProgressRing style="width: 102px; height: 102px;" />
     </FluentStack>
 }
-else
+else if (@RootControl != null)
 {
     <div class="layout-area">
         <DispatchView ViewModel="@RootControl" Stream="@Stream" Area="@Area"/>
     </div>
 }
+
 
 @code
 {
@@ -25,4 +25,8 @@ else
     public ISynchronizationStream<JsonElement, LayoutAreaReference> Stream { get; set; }
     [Parameter]
     public string Area { get; set; }
+    [Parameter]
+    public string DisplayArea { get; set; }
+    [Parameter]
+    public bool ShowProgress { get; set; }
 }

@@ -4,15 +4,18 @@
     #pragma warning disable FluentMultiSplitter
 }
 
-<FluentMultiSplitter 
+<FluentMultiSplitter
     Class="@Class"
     Orientation="@Orientation"
-                     BarSize="@ViewModel.BarSize"
-                     Width="@ViewModel.Width"
-                     Height="@ViewModel.Height"
-    Style="@Style"
->
-    <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
+    BarSize="@ViewModel.BarSize"
+    Width="@ViewModel.Width"
+    Height="@ViewModel.Height"
+    Style="@Style">
+    
+    @foreach(var area in ViewModel.Areas) 
+    {
+        <NamedAreaView Stream="@Stream" Area="@area"/>
+    }
 </FluentMultiSplitter>
 
 @code
