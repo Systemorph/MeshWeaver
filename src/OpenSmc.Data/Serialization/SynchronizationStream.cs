@@ -131,14 +131,18 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
 
     public virtual void Initialize(ChangeItem<TStream> initial)
     {
-        if (initial == null)
-            throw new ArgumentNullException(nameof(initial));
-        if (Current != null)
-            throw new InvalidOperationException("Already initialized");
+        InvokeAsync(() =>
+        {
+            if (initial == null)
+                throw new ArgumentNullException(nameof(initial));
+            if (Current != null)
+                throw new InvalidOperationException("Already initialized");
 
-        current = initial;
-        Store.OnNext(initial);
-        initialized.SetResult(current.Value);
+            current = initial;
+            Store.OnNext(initial);
+            initialized.SetResult(current.Value);
+
+        });
     }
 
     public void OnCompleted()

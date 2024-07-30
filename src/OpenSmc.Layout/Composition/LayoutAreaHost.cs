@@ -114,6 +114,9 @@ public record LayoutAreaHost : IDisposable
     private readonly IMessageHub executionHub;
 
     public void UpdateArea(RenderingContext context, object view)
+        => InvokeAsync(() => UpdateAreaInProcess(context, view));
+
+    private void UpdateAreaInProcess(RenderingContext context, object view)
     {
         Stream.Update(store =>
             {
@@ -128,7 +131,7 @@ public record LayoutAreaHost : IDisposable
                         });
                 return Stream.ToChangeItem(updateStore);
             }
-        );
+        ); 
 
     }
 
@@ -268,7 +271,7 @@ public record LayoutAreaHost : IDisposable
     {
         AddDisposable(context.Parent?.Area ?? context.Area,
             generator.Invoke(this, context)
-                .Subscribe(c => UpdateArea(context,c))
+                .Subscribe(c => InvokeAsync(() => UpdateAreaInProcess(context, c)))
         );
         return [];
     }
@@ -282,7 +285,7 @@ public record LayoutAreaHost : IDisposable
         {
             var view = await generator.Invoke(this, context, ct);
 
-            UpdateArea(context, view);
+            UpdateAreaInProcess(context, view);
         });
         return [(context.Area, new SpinnerControl())];
     }
@@ -293,7 +296,7 @@ public record LayoutAreaHost : IDisposable
                 InvokeAsync(async ct =>
                 {
                     var view = await vd.Invoke(this, context, ct);
-                    UpdateArea(context, view);
+                    UpdateAreaInProcess(context, view);
                 })
             )
         );
@@ -307,7 +310,7 @@ public record LayoutAreaHost : IDisposable
         AddDisposable(
             context.Area, 
             generator.Subscribe(view => 
-                UpdateArea(context, view)
+                InvokeAsync(() => UpdateAreaInProcess(context, view))
             )
         );
 
