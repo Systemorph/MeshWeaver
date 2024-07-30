@@ -1,7 +1,6 @@
 @using Microsoft.Extensions.DependencyInjection
 @using OpenSmc.Layout.Client
 @using OpenSmc.Messaging
-@using OpenSmc.Utils
 @inherits BlazorView<UiControl>
 @inject IMessageHub Hub
 
@@ -28,16 +27,6 @@
     {
         await base.SetParametersAsync(parameters);
         var client = Hub.ServiceProvider.GetRequiredService<ILayoutClient>();
-        if (ViewModel == null)
-            Disposables.Add(Stream.GetControlStream(Area).Subscribe(c =>
-            {
-                ViewModel = c as UiControl;
-                ViewDescriptor = client.GetViewDescriptor(ViewModel, Stream, Area);
-                InvokeAsync(StateHasChanged);
-            }));
-        else
-        {
-            ViewDescriptor = client.GetViewDescriptor(ViewModel, Stream, Area);
-        }
+        ViewDescriptor = client.GetViewDescriptor(ViewModel, Stream, Area);
     }
 }

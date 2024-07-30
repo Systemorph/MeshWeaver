@@ -16,6 +16,7 @@ public partial class NamedAreaView
     protected override void OnParametersSet()
     {
         base.OnParametersSet();
+        DisplayArea ??= Area;
         subscription = Stream.GetControlStream(Area)
             .DistinctUntilChanged()
             .Subscribe(item => InvokeAsync(() => Render(item as UiControl)));

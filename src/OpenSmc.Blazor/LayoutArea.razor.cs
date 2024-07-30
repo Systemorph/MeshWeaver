@@ -30,6 +30,8 @@ public partial class LayoutArea : IDisposable
 
     [Parameter]
     public string Area { get; set; }
+    [Parameter]
+    public string DisplayArea { get; set; }
 
 
     [Parameter]

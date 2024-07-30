@@ -5,8 +5,11 @@
     Class="@Class"
     Orientation="@Orientation"
     Style="@Style"
->
-    <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"/>
+>    
+@foreach (var area in ViewModel.Areas)
+{
+    <NamedAreaView Stream="@Stream" Area="@area"/>
+}
 </FluentToolbar>
 
 @code
