@@ -25,8 +25,8 @@ public static class OrdersSummaryArea
     /// </remarks>
     public static LayoutDefinition AddOrdersSummary(this LayoutDefinition layout)
         => layout.WithView(nameof(OrderSummary), OrderSummary)
-            .WithNavMenu((menu,_)=>menu.WithNavLink(nameof(OrderSummary).Wordify(), FluentIcons.Box,
-                new LayoutAreaReference(nameof(OrderSummary)).ToHref(layout.Hub))
+            .WithNavMenu((menu,_)=>menu.WithNavLink(nameof(OrderSummary).Wordify(),
+                new LayoutAreaReference(nameof(OrderSummary)).ToHref(layout.Hub), FluentIcons.Box)
         );
 
     /// <summary>

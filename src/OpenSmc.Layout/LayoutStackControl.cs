@@ -14,7 +14,7 @@ public record LayoutStackControl(): UiControl<LayoutStackControl>(ModuleSetup.Mo
     public LayoutStackControl WithView(string area, object view) =>
         this with
         {
-            Areas = Areas.Add(area),
+            RawAreas = RawAreas.Add(area),
             Renderers = Renderers.Add((host,context,_) => host.RenderArea(GetContextForArea(context, area), view))
         };
 
@@ -30,14 +30,14 @@ public record LayoutStackControl(): UiControl<LayoutStackControl>(ModuleSetup.Mo
     public LayoutStackControl WithView<T>(string area, IObservable<ViewDefinition<T>> viewDefinition) =>
         this with
         {
-            Areas = Areas.Add(area),
+            RawAreas = RawAreas.Add(area),
             Renderers = Renderers.Add((host,context,_) => host.RenderArea(GetContextForArea(context, area), viewDefinition))
         };
 
     public LayoutStackControl WithView(string area, IObservable<ViewDefinition> viewDefinition) =>
         this with
         {
-            Areas = Areas.Add(area),
+            RawAreas = RawAreas.Add(area),
             Renderers = Renderers.Add((host, context, _) => host.RenderArea(GetContextForArea(context, area), viewDefinition))
         };
     public LayoutStackControl WithView(IObservable<object> viewDefinition) =>
@@ -45,7 +45,7 @@ public record LayoutStackControl(): UiControl<LayoutStackControl>(ModuleSetup.Mo
     public LayoutStackControl WithView(string area, IObservable<object> viewDefinition) =>
         this with
         {
-            Areas = Areas.Add(area),
+            RawAreas = RawAreas.Add(area),
             Renderers = Renderers.Add((host, context, _) => host.RenderArea(GetContextForArea(context, area), viewDefinition))
         };
 
@@ -57,7 +57,7 @@ public record LayoutStackControl(): UiControl<LayoutStackControl>(ModuleSetup.Mo
     public LayoutStackControl WithView<T>(string area, ViewStream<T> viewDefinition)
         => this with
         {
-            Areas = Areas.Add(area),
+            RawAreas = RawAreas.Add(area),
             Renderers = Renderers.Add((host, context, _) => host.RenderArea(GetContextForArea(context, area),viewDefinition.Invoke))
         };
 
@@ -95,13 +95,14 @@ public record LayoutStackControl(): UiControl<LayoutStackControl>(ModuleSetup.Mo
     => this with { Width = width };
     public LayoutStackControl WithHeight(string height) => this with { Height = height };
 
-    public ImmutableList<string> Areas { get; init; } = ImmutableList<string>.Empty;
+    public IReadOnlyCollection<string> Areas { get; init; } = [];
+    private ImmutableList<string> RawAreas { get; init; } = ImmutableList<string>.Empty;
 
     IEnumerable<(string Area, UiControl Control)> IContainerControl.RenderSubAreas(LayoutAreaHost host, RenderingContext context)
         => 
             Renderers.SelectMany(r => r.Invoke(host, context, null));
 
     IContainerControl IContainerControl.SetParentArea(string parentArea)
-        => this with { Areas = Areas.Select(a => $"{parentArea}/{a}").ToImmutableList() };
+        => this with { Areas = RawAreas.Select(a => $"{parentArea}/{a}").ToImmutableList() };
 
 }
