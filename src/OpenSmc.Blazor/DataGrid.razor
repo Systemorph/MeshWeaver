@@ -29,7 +29,7 @@
                     if(column.Tooltip)
                         builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Tooltip), column.Tooltip);
                     if (column.TooltipText != null)
-                        builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.TooltipText), (Func<JsonObject,string>)(x => column.TooltipText));
+                        builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.TooltipText), (Func<JsonObject,string>)(_ => column.TooltipText));
 
                     builder.CloseComponent();
                 }))
@@ -47,10 +47,6 @@
 </div>
 
 @code{
-    protected override void OnParametersSet()
-    {
-        base.OnParametersSet();
-    }
 
     protected override void DataBind<T>(object value, Action<T> bindingAction)
     {
@@ -58,10 +54,11 @@
         Style ??= $"min-width: {ViewModel.Columns.Count * 120}px";
     }
 
-    private PaginationState Pagination = new()
+    private PaginationState Pagination { get;  } = new()
     {
         ItemsPerPage = 10
     };
+
     private IQueryable<JsonObject> QueryableData {get;set;}
 
     private Expression<Func<JsonObject, T>> GetPropertyExpression<T>(DataGridColumn<T> column)
@@ -74,8 +71,8 @@
         DataBind<object>(ViewModel.Data, x => QueryableData = ((System.Collections.IEnumerable)x)?.Cast<JsonObject>().AsQueryable());
     }
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
-        Pagination.TotalItemCountChanged += (sender, eventArgs) => StateHasChanged();
+        Pagination.TotalItemCountChanged += (_, _) => StateHasChanged();
     }
 }

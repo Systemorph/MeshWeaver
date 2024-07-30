@@ -3,6 +3,7 @@ using System.Reactive.Subjects;
 using System.Reflection;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
+using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Data.Serialization;
 
@@ -200,7 +201,10 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
 
 
 
-    private record SynchronizationStreamAddress(object Host) : IHostedAddress;
+    private record SynchronizationStreamAddress(object Host) : IHostedAddress
+    {
+        public Guid Id { get; init; } = Guid.NewGuid();
+    }
 
     private readonly IMessageHub synchronizationStreamHub;
 
