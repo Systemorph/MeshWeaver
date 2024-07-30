@@ -318,18 +318,22 @@ public record LayoutAreaHost : IDisposable
     {
         InvokeAsync(() =>
         {
-            Dispose();
+            DisposeAllAreas();
             var reference = Stream.Reference;
             var context = new RenderingContext(reference.Area) { Layout = reference.Layout };
-            Stream.Update(store => Stream.ToChangeItem(LayoutDefinition
-                .Render(this, context, store)
+            Stream.Update(_ => Stream.ToChangeItem(LayoutDefinition
+                .Render(this, context, new())
             ));
         });
         return Stream;
     }
 
-
-
-
-
+    private void DisposeAllAreas()
+    {
+        disposablesByArea
+            .Values
+            .SelectMany(d => d)
+            .ForEach(d => d.Dispose());
+        disposablesByArea.Clear();
+    }
 }

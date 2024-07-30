@@ -6,7 +6,6 @@ public record DeferralItem : IAsyncDisposable, IDisposable
 {
     private readonly AsyncDelivery asyncDelivery;
     private readonly SyncDelivery failure;
-
     private readonly ActionBlock<(
         IMessageDelivery Delivery,
         CancellationToken CancellationToken
@@ -46,6 +45,7 @@ public record DeferralItem : IAsyncDisposable, IDisposable
 
         try
         {
+            // TODO V10: Add logging here. (30.07.2024, Roland Bürgi)
             var ret = await asyncDelivery.Invoke(delivery, cancellationToken);
             if(ret?.State == MessageDeliveryState.Failed)
                 return failure(ret);
@@ -53,6 +53,7 @@ public record DeferralItem : IAsyncDisposable, IDisposable
         }
         catch (Exception e)
         {
+            // TODO V10: Add logging here. (30.07.2024, Roland Bürgi)
             var ret = delivery.Failed(e.Message);
             failure.Invoke(ret);
             return ret;

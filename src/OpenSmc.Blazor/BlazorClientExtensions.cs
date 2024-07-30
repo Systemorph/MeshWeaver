@@ -63,12 +63,19 @@ public static class BlazorClientExtensions
             ItemTemplateControl itemTemplate
                 => StandardView<ItemTemplateControl, ItemTemplate>(itemTemplate, stream, area),
             MarkdownControl markdown => StandardView<MarkdownControl, MarkdownView>(markdown, stream, area),
-            NamedAreaControl _ => StandardView<NamedAreaControl, DispatchView>(null, stream, area),
+            NamedAreaControl namedView => MapNamedAreaView(namedView, stream),
             SpacerControl spacer => StandardView<SpacerControl, SpacerView>(spacer, stream, area),
             LayoutStackControl stack => StandardView<LayoutStackControl, LayoutStackView>(stack, stream, area),
             _ => DelegateToDotnetInteractive(instance, stream, area),
         };
     }
+
+    private static ViewDescriptor MapNamedAreaView(NamedAreaControl namedView,
+        ISynchronizationStream<JsonElement, LayoutAreaReference> stream) =>
+        new(
+            typeof(NamedAreaView),
+            new Dictionary<string, object> { { nameof(Stream), stream }, { nameof(Area), namedView.Data } }
+        );
 
     private static ViewDescriptor MapSkinnedView(UiControl control, ISynchronizationStream<JsonElement, LayoutAreaReference> stream, string area, object skin)
     {
@@ -76,8 +83,8 @@ public static class BlazorClientExtensions
         {
             LayoutGridSkin layoutGrid => StandardSkinnedView<UiControl, LayoutGridView>(control, stream, area, layoutGrid),
             LayoutSkin fluentLayout => StandardSkinnedView<UiControl, LayoutView>(control, stream, area, fluentLayout),
-            HeaderSkin header => StandardSkinnedView<UiControl, LayoutView>(control, stream, area, header),
-            FooterSkin footer => StandardSkinnedView<UiControl, LayoutView>(control, stream, area, footer),
+            HeaderSkin header => StandardSkinnedView<UiControl, HeaderView>(control, stream, area, header),
+            FooterSkin footer => StandardSkinnedView<UiControl, FooterView>(control, stream, area, footer),
             BodyContentSkin bodyContent => StandardSkinnedView<UiControl, BodyContentView>(control, stream, area,
                 bodyContent),
             SplitterPaneSkin splitter

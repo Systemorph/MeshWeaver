@@ -1,0 +1,28 @@
+@using System.Text.Json
+@using OpenSmc.Data.Serialization
+@using HorizontalAlignment = Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment
+@using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
+@using VerticalAlignment = Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment
+
+
+@if (RootControl == null)
+{
+    <FluentStack HorizontalAlignment="HorizontalAlignment.Center" VerticalAlignment="VerticalAlignment.Center" Orientation="Orientation.Vertical">
+        <h3>Loading @Area</h3>
+        <FluentProgressRing style="width: 102px; height: 102px;"/>
+    </FluentStack>
+}
+else
+{
+    <div class="layout-area">
+        <DispatchView ViewModel="@RootControl" Stream="@Stream" Area="@Area"/>
+    </div>
+}
+
+@code
+{
+    [Parameter]
+    public ISynchronizationStream<JsonElement, LayoutAreaReference> Stream { get; set; }
+    [Parameter]
+    public string Area { get; set; }
+}
