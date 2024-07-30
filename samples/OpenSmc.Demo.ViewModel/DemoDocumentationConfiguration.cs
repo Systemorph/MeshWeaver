@@ -1,4 +1,5 @@
-﻿using OpenSmc.Documentation;
+﻿using OpenSmc.Application.Styles;
+using OpenSmc.Documentation;
 using OpenSmc.Layout.Domain;
 using OpenSmc.Messaging;
 
@@ -10,7 +11,8 @@ public static class DemoDocumentationConfiguration
 
     public static ApplicationMenuBuilder AddDocumentationMenu(this ApplicationMenuBuilder builder)
         => builder
-            .WithNavLink(Overview, $"{builder.Layout.Hub.Address}/Doc/{Overview}");
+            .WithNavLink(Overview, $"{builder.Layout.Hub.Address}/Doc/{Overview}", nl => nl with { Icon = FluentIcons.Home, })
+        ;
 
     public static MessageHubConfiguration AddDemoDocumentation(
         this MessageHubConfiguration configuration
