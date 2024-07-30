@@ -66,7 +66,6 @@ public partial class LayoutArea : IDisposable
             .Subscribe(item => InvokeAsync(() => Render(item as UiControl)));
 
         propertiesSubscription =
-
             Stream.GetObservable<LayoutAreaProperties>($"/{LayoutAreaReference.Properties}", new JsonPointerReference($"/\"{LayoutAreaProperties.Properties}\""))
             .DistinctUntilChanged()
             .Subscribe(item => InvokeAsync(() => Properties = item));

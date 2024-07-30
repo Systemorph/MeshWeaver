@@ -35,9 +35,10 @@ public static class StandardPageLayout
             EntityStore store
         )
         =>
-        [
-            (
-                Page,
+            host.RenderArea(
+                new(Page) { Parent = context },
+
+
                 Stack
                     .WithOrientation(Orientation.Vertical)
                     .WithWidth("100%")
@@ -64,64 +65,59 @@ public static class StandardPageLayout
 
                     )
                     .WithView(NamedArea(Footer).WithSkin(Footer))
-            )
-        ];
+            );
 
-    public static IEnumerable<(string Area, UiControl Control)> 
+    public static IEnumerable<(string Area, UiControl Control)>
         RenderHeader(
-        LayoutAreaHost host,
-        RenderingContext context, 
-        EntityStore store) =>
-    [
-        (
-            Header,
+            LayoutAreaHost host,
+            RenderingContext context,
+            EntityStore store) =>
+        host.RenderArea(
+            new(Header) { Parent = context },
             Stack.WithSkin(Skins.Header)
                 .WithOrientation(Orientation.Horizontal)
                 .WithView(NavLink("Mesh Weaver", null, "/"))
-        )
-    ];
+        );
 
     public static IEnumerable<(string Area, UiControl Control)> RenderFooter(
         LayoutAreaHost host, RenderingContext context, EntityStore store) =>
-        [
-            (
-                Footer,
-                Stack
-                    .WithSkin(Skins.Footer)
-                    .WithOrientation(Orientation.Horizontal)
-                    .WithView(
-                        Stack
-                            .WithOrientation(Orientation.Horizontal)
-                            .WithView(
-                                Html("© 2024 Systemorph")
-                            )
-                            .WithView(
-                                Html("Privacy Policy")
-                            )
-                            .WithView(
-                                Html("Terms of Service")
-                            )
-                    )
-            )
-        ];
+        host.RenderArea(
+            new(Footer),
+            Stack
+                .WithSkin(Skins.Footer)
+                .WithOrientation(Orientation.Horizontal)
+                .WithView(
+                    Stack
+                        .WithOrientation(Orientation.Horizontal)
+                        .WithView(
+                            Html("© 2024 Systemorph")
+                        )
+                        .WithView(
+                            Html("Privacy Policy")
+                        )
+                        .WithView(
+                            Html("Terms of Service")
+                        )
+                )
+        );
     //public static IEnumerable<(string Area, UiControl Control)> RenderNavMenu(LayoutAreaHost host, RenderingContext context, EntityStore store) => NavLink("Put link to documentation", "/");
 
     public static LayoutDefinition WithNavMenu(this LayoutDefinition layout,
         Func<NavMenuControl, RenderingContext, NavMenuControl> config)
         => layout.WithRenderer(IsPage,
-            (_, context, store) =>
-                [(NavMenu, config.Invoke(store.GetControl<NavMenuControl>(NavMenu) ?? new(), context))]);
+            (host, context, store) =>
+                host.RenderArea(new(NavMenu), config.Invoke(store.GetControl<NavMenuControl>(NavMenu) ?? new(), context)));
     public static LayoutDefinition WithToolbar(this LayoutDefinition layout,
         Func<ToolbarControl, RenderingContext, ToolbarControl> config)
         => layout.WithRenderer(IsPage,
-            (_, context, store) =>
-                [(Toolbar, config.Invoke(store.GetControl<ToolbarControl>(Toolbar) ?? new(), context))]);
+            (host, context, store) =>
+                host.RenderArea(new(Toolbar), config.Invoke(store.GetControl<ToolbarControl>(Toolbar) ?? new(), context)));
 
     public static LayoutDefinition WithContentHeading(this LayoutDefinition layout,
         Func<LayoutStackControl, RenderingContext, LayoutStackControl> heading)
     => layout.WithRenderer(IsPage,
-            (_, context, store) =>
-                [(ContentHeading, heading.Invoke(store.GetControl<LayoutStackControl>(ContentHeading) ?? new(), context))]);
+            (host, context, store) =>
+                host.RenderArea(new(ContentHeading), heading.Invoke(store.GetControl<LayoutStackControl>(ContentHeading) ?? new(), context)));
 
 
     public static void SetMainContent(this LayoutAreaHost host, object view)

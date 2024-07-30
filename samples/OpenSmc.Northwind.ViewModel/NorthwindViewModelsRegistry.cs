@@ -25,6 +25,7 @@ namespace OpenSmc.Northwind.ViewModel
                     .AddNorthwindDocumentation()
                     .AddLayout(layout =>
                     layout
+                        .WithStandardPageLayout()
                         .AddDashboard()
                         .AddProductsSummary()
                         .AddOrdersSummary()
