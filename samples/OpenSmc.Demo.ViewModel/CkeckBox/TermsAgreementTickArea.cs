@@ -1,4 +1,5 @@
-﻿using OpenSmc.Application.Styles;
+﻿using System.Reactive.Linq;
+using OpenSmc.Application.Styles;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
 
@@ -19,11 +20,17 @@ public static class TermsAgreementTickArea
                     )
             )
             .WithView(
-                "SubmitAgreement",
-                Controls.Button("Submit")
-                    .WithIconStart(FluentIcons.Edit)
+                nameof(SubmitAgreement),
+                (a, _) => a
+                    .GetDataStream<AgreementTick>(nameof(AgreementTick))
+                    .Select(at => SubmitAgreement(at.Signed))
             )
         ;
+
+    private static object SubmitAgreement(bool signed)
+        => Controls.Button("Submit")
+            .WithIconStart(FluentIcons.Edit)
+            .WithDisabled(!signed);
 }
 
 internal record AgreementTick(bool Signed);
