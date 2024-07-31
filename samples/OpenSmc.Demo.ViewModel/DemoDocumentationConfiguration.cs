@@ -11,6 +11,7 @@ public static class DemoDocumentationConfiguration
     private const string ViewModelState = nameof(ViewModelState);
     private const string DropDownControl = nameof(DropDownControl);
     private const string ListboxControl = nameof(ListboxControl);
+    private const string CheckBoxControl = nameof(CheckBoxControl);
 
     public static ApplicationMenuBuilder AddDocumentationMenu(this ApplicationMenuBuilder builder)
         => builder
@@ -18,6 +19,7 @@ public static class DemoDocumentationConfiguration
             .WithNavLink("ViewModel State", $"{builder.Layout.Hub.Address}/Doc/{ViewModelState}", nl => nl with { Icon = FluentIcons.Box, })
             .WithNavLink("DropDown Control", $"{builder.Layout.Hub.Address}/Doc/{DropDownControl}", nl => nl with { Icon = FluentIcons.CalendarDataBar, })
             .WithNavLink("Listbox Control", $"{builder.Layout.Hub.Address}/Doc/{ListboxControl}", nl => nl with { Icon = FluentIcons.Grid, })
+            .WithNavLink("CheckBox Control", $"{builder.Layout.Hub.Address}/Doc/{CheckBoxControl}", nl => nl with { Icon = FluentIcons.Box, })
         ;
 
     public static MessageHubConfiguration AddDemoDocumentation(
@@ -34,6 +36,8 @@ public static class DemoDocumentationConfiguration
                         $"{typeof(ViewModelStateDemoArea).Assembly.GetName().Name}.Markdown.DropDown.md")
                     .WithDocument(ListboxControl,
                         $"{typeof(ViewModelStateDemoArea).Assembly.GetName().Name}.Markdown.Listbox.md")
+                    .WithDocument(CheckBoxControl,
+                        $"{typeof(ViewModelStateDemoArea).Assembly.GetName().Name}.Markdown.CheckBox.md")
             )
             );
 }
