@@ -3,7 +3,6 @@ using System.Reactive.Subjects;
 using System.Reflection;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
-using OpenSmc.ShortGuid;
 
 namespace OpenSmc.Data.Serialization;
 
@@ -131,8 +130,6 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
 
     public virtual void Initialize(ChangeItem<TStream> initial)
     {
-        InvokeAsync(() =>
-        {
             if (initial == null)
                 throw new ArgumentNullException(nameof(initial));
             if (Current != null)
@@ -141,8 +138,7 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
             current = initial;
             Store.OnNext(initial);
             initialized.SetResult(current.Value);
-
-        });
+            ;
     }
 
     public void OnCompleted()

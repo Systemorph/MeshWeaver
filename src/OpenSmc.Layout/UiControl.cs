@@ -52,8 +52,6 @@ public abstract record UiControl(object Data) : IUiControl
 
     internal Func<UiActionContext, Task> ClickAction { get; init; }
 
-    internal Task ClickAsync(UiActionContext context) =>
-        ClickAction?.Invoke(context) ?? Task.CompletedTask;
 
     // TODO V10: Consider generalizing to WorkspaceReference. (22.07.2024, Roland Bürgi)
     public string DataContext { get; init; } = string.Empty;

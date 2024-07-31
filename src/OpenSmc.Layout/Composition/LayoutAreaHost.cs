@@ -63,9 +63,9 @@ public record LayoutAreaHost : IDisposable
     private IMessageDelivery OnClick(IMessageDelivery<ClickedEvent> request)
     {
         if (GetControl(request.Message.Area) is UiControl { ClickAction: not null } control)
-            control.ClickAction.Invoke(
+            InvokeAsync(()=>control.ClickAction.Invoke(
                 new(request.Message.Area, request.Message.Payload, Hub, this)
-            );
+            ));
         return request.Processed();
     }
 
@@ -113,10 +113,8 @@ public record LayoutAreaHost : IDisposable
 
     private readonly IMessageHub executionHub;
 
-    public void UpdateArea(RenderingContext context, object view)
-        => InvokeAsync(() => UpdateAreaInProcess(context, view));
 
-    private void UpdateAreaInProcess(RenderingContext context, object view)
+    public void UpdateArea(RenderingContext context, object view)
     {
         Stream.Update(store =>
             {
@@ -271,7 +269,7 @@ public record LayoutAreaHost : IDisposable
     {
         AddDisposable(context.Parent?.Area ?? context.Area,
             generator.Invoke(this, context)
-                .Subscribe(c => InvokeAsync(() => UpdateAreaInProcess(context, c)))
+                .Subscribe(c => InvokeAsync(() => UpdateArea(context, c)))
         );
         return [];
     }
@@ -285,7 +283,7 @@ public record LayoutAreaHost : IDisposable
         {
             var view = await generator.Invoke(this, context, ct);
 
-            UpdateAreaInProcess(context, view);
+            UpdateArea(context, view);
         });
         return [(context.Area, new SpinnerControl())];
     }
@@ -296,7 +294,7 @@ public record LayoutAreaHost : IDisposable
                 InvokeAsync(async ct =>
                 {
                     var view = await vd.Invoke(this, context, ct);
-                    UpdateAreaInProcess(context, view);
+                    UpdateArea(context, view);
                 })
             )
         );
@@ -310,7 +308,7 @@ public record LayoutAreaHost : IDisposable
         AddDisposable(
             context.Area, 
             generator.Subscribe(view => 
-                InvokeAsync(() => UpdateAreaInProcess(context, view))
+                InvokeAsync(() => UpdateArea(context, view))
             )
         );
 
