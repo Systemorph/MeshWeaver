@@ -34,10 +34,7 @@ public interface IWorkspace : IAsyncDisposable
         object owner,
         WorkspaceReference<TReduced> reference
     );
-    ISynchronizationStream<TReduced> GetStreamFor<TReduced>(
-        object subscriber,
-        WorkspaceReference<TReduced> reference
-    );
+    ISynchronizationStream<TReduced> GetStreamFor<TReduced>(WorkspaceReference<TReduced> reference, object subscriber);
 
     ISynchronizationStream<TReduced, TReference> GetRemoteStream<TReduced, TReference>(
         object address,

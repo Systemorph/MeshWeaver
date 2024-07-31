@@ -10,12 +10,15 @@ using Xunit.Abstractions;
 
 namespace OpenSmc.Data.Test;
 
+public record MyData(string Id, string Text)
+{
+    public static MyData[] InitialData = [new("1", "A"), new("2", "B")];
+
+}
 public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    public record MyData(string Id, string Text);
 
     private ImmutableDictionary<object, object> storage = ImmutableDictionary<object, object>.Empty;
-    readonly MyData[] initialData = [new("1", "A"), new("2", "B")];
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
@@ -49,7 +52,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = GetWorkspace(GetHost());
         await workspace.Initialized;
         var response = await workspace.GetObservable<MyData>().FirstOrDefaultAsync();
-        response.Should().BeEquivalentTo(initialData);
+        response.Should().BeEquivalentTo(MyData.InitialData);
     }
 
     private IWorkspace GetWorkspace(IMessageHub hub) =>
@@ -115,7 +118,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
 
         var data = await GetHost().GetWorkspace().GetObservable<MyData>().FirstOrDefaultAsync();
-        data.Should().BeEquivalentTo(initialData);
+        data.Should().BeEquivalentTo(MyData.InitialData);
 
         var toBeDeleted = data.Take(1).ToArray();
         var expectedItems = data.Skip(1).ToArray();
@@ -164,13 +167,14 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             //.Timeout(TimeSpan.FromSeconds(5))
             ;
         instance.Should().NotBeNull();
+        await Task.Delay(100);
         storage.Values.Should().Contain(i => (i as MyData).Text == TextChange);
     }
 
     private Task<IEnumerable<MyData>> InitializeMyData(CancellationToken cancellationToken)
     {
-        storage = initialData.ToImmutableDictionary(x => (object)x.Id, x => (object)x);
-        return Task.FromResult<IEnumerable<MyData>>(initialData);
+        storage = MyData.InitialData.ToImmutableDictionary(x => (object)x.Id, x => (object)x);
+        return Task.FromResult<IEnumerable<MyData>>(MyData.InitialData);
     }
 
     private InstanceCollection SaveMyData(InstanceCollection instanceCollection)

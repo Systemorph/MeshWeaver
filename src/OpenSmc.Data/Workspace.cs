@@ -118,6 +118,10 @@ public class Workspace : IWorkspace
             ? throw new ArgumentException("Owner cannot be the same as the subscriber.")
             : GetInternalSynchronizationStream<TReduced, TReference>(reference, subscriber);
 
+
+    private static readonly MethodInfo GetInternalSynchronizationStreamMethod =
+        ReflectionHelper.GetMethodGeneric<Workspace>(ws =>
+            ws.GetInternalSynchronizationStream<object, WorkspaceReference>(null, null));
     private ISynchronizationStream<TReduced, TReference> GetInternalSynchronizationStream<
         TReduced,
         TReference
@@ -125,14 +129,11 @@ public class Workspace : IWorkspace
         where TReference : WorkspaceReference =>
         ReduceManager.ReduceStream<TReduced, TReference>(stream, reference, subscriber);
 
-    public ISynchronizationStream<TReduced> GetStreamFor<TReduced>(
-        object subscriber,
-        WorkspaceReference<TReduced> reference
-    ) =>
-        GetInternalSynchronizationStream<TReduced, WorkspaceReference<TReduced>>(
-            reference,
-            subscriber
-        );
+    public ISynchronizationStream<TReduced> GetStreamFor<TReduced>(WorkspaceReference<TReduced> reference,
+        object subscriber) =>
+        (ISynchronizationStream<TReduced>)GetInternalSynchronizationStreamMethod
+            .MakeGenericMethod(typeof(TReduced), reference.GetType())
+            .Invoke(this, [reference, subscriber]);
 
     private ISynchronizationStream<TReduced, TReference> GetExternalClientSynchronizationStream<
         TReduced,
