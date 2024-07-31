@@ -89,6 +89,8 @@ public static class Controls
         new(message, address, message.Area);
 
     public static SplitterControl Splitter => new();
+    public static LayoutGridControl LayoutGrid => new();
+
     public static SpacerControl Spacer => new();
     public static MarkdownControl Markdown(object data) => new MarkdownControl(data);
 

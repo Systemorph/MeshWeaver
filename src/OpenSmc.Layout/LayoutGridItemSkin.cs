@@ -1,6 +1,6 @@
 ﻿namespace OpenSmc.Layout
 {
-    public record LayoutGridItemSkin
+    public record LayoutGridItemSkin : Skin<LayoutGridItemSkin>
     {
         public bool? AdaptiveRendering { get; init; }
         public JustifyContent? Justify { get; init; }
