@@ -1,14 +1,17 @@
-@inherits SkinnedView<LayoutGridSkin>
+@inherits BlazorView<LayoutGridControl>
 
 <FluentGrid 
-    Class="@Skin.Class"
-    AdaptiveRendering="@Skin.AdaptiveRendering"
-            Justify="@Skin.Justify.ToFluentJustifyContent()"
+    Class="@Class"
+    AdaptiveRendering="@ViewModel.AdaptiveRendering"
+    Justify="@ViewModel.Justify.ToFluentJustifyContent()"
     Spacing="@Spacing"
     >
-        <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
+        @foreach (var area in ViewModel.Areas)
+        {
+            <NamedAreaView Stream="@Stream" Area="@area"/>
+        }
 </FluentGrid>
 
 @code{
-    private int Spacing => Skin.Spacing ?? 3;
+    private int Spacing => ViewModel.Spacing ?? 3;
 }

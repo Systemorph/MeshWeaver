@@ -46,6 +46,7 @@ public static class BlazorClientExtensions
             NavLinkControl link => StandardView<NavLinkControl, NavLink>(link, stream, area),
             NavGroupControl group => StandardView<NavGroupControl, NavGroup>(group, stream, area),
             SplitterControl splitter => StandardView<SplitterControl, SplitterView>(splitter, stream, area),
+            LayoutGridControl layoutGrid => StandardView<LayoutGridControl, LayoutGridView>(layoutGrid, stream, area),
             LayoutAreaControl layoutArea
                 => StandardView<LayoutAreaControl, LayoutArea>(layoutArea, stream, area),
             DataGridControl gc => StandardView<DataGridControl, DataGrid>(gc, stream, area),
@@ -81,7 +82,7 @@ public static class BlazorClientExtensions
     {
         return skin switch
         {
-            LayoutGridSkin layoutGrid => StandardSkinnedView<UiControl, LayoutGridView>(control, stream, area, layoutGrid),
+            LayoutGridItemSkin gridItem => StandardSkinnedView<UiControl, LayoutGridItemView>(control, stream, area, gridItem),
             LayoutSkin fluentLayout => StandardSkinnedView<UiControl, LayoutView>(control, stream, area, fluentLayout),
             HeaderSkin header => StandardSkinnedView<UiControl, HeaderView>(control, stream, area, header),
             FooterSkin footer => StandardSkinnedView<UiControl, FooterView>(control, stream, area, footer),

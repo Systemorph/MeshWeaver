@@ -43,8 +43,9 @@ public static class NorthwindDashboardArea
     {
         return Controls.Splitter
             .WithView(
-                Controls.Stack
-                    .WithSkin(Skins.LayoutGrid.WithClass("main-content"))
+                Controls.LayoutGrid
+                    .WithClass("main-content")
+                    .WithSkin(Skins.SplitterPane.WithClass("main-content-pane"))
                     .WithView(
                         (area, ctx) =>
                             area.OrderSummary(ctx)
@@ -65,7 +66,6 @@ public static class NorthwindDashboardArea
                             area.SupplierSummary(ctx)
                                 .WithSkin(Skins.LayoutGridItem.WithXs(12))
                     )
-                    .WithSkin(Skins.SplitterPane.WithClass("main-content-pane"))
             );
     }
 
