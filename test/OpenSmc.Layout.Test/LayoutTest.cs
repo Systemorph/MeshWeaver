@@ -143,7 +143,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .WithView(
                 "Toolbar",
                 (layoutArea, _) =>
-                    layoutArea.Bind(toolbar, nameof(toolbar), tb => Controls.TextBox(tb.Year))
+                    Template.Bind(toolbar, nameof(toolbar), tb => Controls.TextBox(tb.Year))
             )
             .WithView(
                 "Content",
@@ -217,7 +217,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     private object ItemTemplate(LayoutAreaHost area, IReadOnlyCollection<DataRecord> data) =>
-        area.Bind(
+        Template.Bind(
             data,
             nameof(ItemTemplate),
             record => Controls.TextBox(record.DisplayName).WithId(record.SystemName)
@@ -367,7 +367,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         ]);
 
         return Controls.Stack
-            .WithView(Filter, area.Bind(data, nameof(DataBoundCheckboxes), x => Template.ItemTemplate(x.Data,y => Controls.CheckBox(y.Label, y.Value))))
+            .WithView(Filter, Template.Bind(data, nameof(DataBoundCheckboxes), x => Template.ItemTemplate(x.Data,y => Controls.CheckBox(y.Label, y.Value))))
             .WithView(Results, (a, ctx) => a.GetDataStream<FilterEntity>(nameof(DataBoundCheckboxes))
                 .Select(d => d.Data.All(y => y.Value)
                 )
@@ -471,7 +471,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Stream.Select(x => x.Value.GetData<DataRecord>())
             .DistinctUntilChanged()
             .Select(data => 
-                area.Bind(data, nameof(CatalogView), x => area.ToDataGrid(x)));
+                Template.Bind(data, nameof(CatalogView), x => area.ToDataGrid(x)));
     }
 
 

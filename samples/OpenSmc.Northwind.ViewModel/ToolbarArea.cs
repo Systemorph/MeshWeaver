@@ -28,7 +28,7 @@ namespace OpenSmc.Northwind.ViewModel
                 .WithView(
                     (a, _) =>
                         years.Select(y =>
-                            a.Bind(
+                            Template.Bind(
                                 new Toolbar(y.Max(x => x.Item)),
                                 nameof(ViewModel.Toolbar),
                                 tb => Controls.Select(tb.Year).WithOptions(y)
