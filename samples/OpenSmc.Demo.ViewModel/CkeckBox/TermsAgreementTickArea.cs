@@ -11,9 +11,12 @@ public static class TermsAgreementTickArea
             .Stack()
             .WithVerticalGap(16)
             .WithView(
-                "AgreeWithTerms",
-                Controls.Html("I agree with the Terms and Conditions")
-                //Controls.CheckBox("I agree with the Terms and Conditions", false)
+                (a, _) =>
+                    a.Bind(
+                        new AgreementTick(false),
+                        nameof(AgreementTick),
+                        at => Controls.CheckBox("I agree with the Terms and Conditions", at.Signed)
+                    )
             )
             .WithView(
                 "SubmitAgreement",
@@ -22,3 +25,5 @@ public static class TermsAgreementTickArea
             )
         ;
 }
+
+internal record AgreementTick(bool Signed);
