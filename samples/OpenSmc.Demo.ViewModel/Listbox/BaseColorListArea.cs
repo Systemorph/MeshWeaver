@@ -10,14 +10,14 @@ public static class BaseColorListArea
             .Stack()
             .WithView(
                 "BaseColorSelect",
-                Controls.Listbox("Y")
+                Controls.Listbox("yellow")
                     .WithOptions([
-                        new Option<string>("R", "Red"),
-                        new Option<string>("G", "Green"),
-                        new Option<string>("B", "Blue"),
-                        new Option<string>("Y", "Yellow"),
-                        new Option<string>("M", "Magenta"),
-                        new Option<string>("C", "Cyan"),
+                        new Option<string>("red", "Red"),
+                        new Option<string>("green", "Green"),
+                        new Option<string>("blue", "Blue"),
+                        new Option<string>("yellow", "Yellow"),
+                        new Option<string>("magenta", "Magenta"),
+                        new Option<string>("cyan", "Cyan"),
                     ])
             )
         ;
