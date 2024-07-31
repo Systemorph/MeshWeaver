@@ -1,4 +1,5 @@
-﻿using OpenSmc.Layout.Composition;
+﻿using System.Reactive.Linq;
+using OpenSmc.Layout.Composition;
 using OpenSmc.Layout;
 
 namespace OpenSmc.Demo.ViewModel.Listbox;
@@ -10,23 +11,32 @@ public static class BaseColorListArea
             .Stack()
             .WithVerticalGap(16)
             .WithView(
-                "BaseColorSelect",
-                Controls.Listbox("yellow")
-                    .WithOptions([
-                        new Option<string>("red", "Red"),
-                        new Option<string>("green", "Green"),
-                        new Option<string>("blue", "Blue"),
-                        new Option<string>("yellow", "Yellow"),
-                        new Option<string>("magenta", "Magenta"),
-                        new Option<string>("cyan", "Cyan"),
-                    ])
+                (a, _) =>
+                    a.Bind(
+                        new ChosenColor("yellow"),
+                        nameof(ChosenColor),
+                        cc => Controls.Listbox(cc.Color)
+                            .WithOptions(new[]
+                            {
+                                new Option<string>("red", "Red"),
+                                new Option<string>("green", "Green"),
+                                new Option<string>("blue", "Blue"),
+                                new Option<string>("yellow", "Yellow"),
+                                new Option<string>("magenta", "Magenta"),
+                                new Option<string>("cyan", "Cyan"),
+                            })
+                    )
             )
             .WithView(
                 nameof(ShowSelectedColor),
-                ShowSelectedColor("yellow")
+                (a, _) => a
+                    .GetDataStream<ChosenColor>(nameof(ChosenColor))
+                    .Select(cc => ShowSelectedColor(cc.Color))
             )
         ;
 
     private static object ShowSelectedColor(string color)
         => Controls.Html($"<div style=\"width: 50px; height: 50px; background-color: {color}\"></div>");
 }
+
+internal record ChosenColor(string Color);
