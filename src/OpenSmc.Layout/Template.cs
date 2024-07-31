@@ -100,7 +100,7 @@ public static class Template{
         if (data is JsonPointerReference reference)
             return reference.Pointer;
 
-        area.UpdateData(id, data);
+        //area.UpdateData(id, data);
         return LayoutAreaReference.GetDataPointer(id);
     }
 

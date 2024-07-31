@@ -10,7 +10,7 @@ public static class LayoutDefinitionExtensions{
         Func<RenderingContext, bool> context,
         Func<LayoutAreaHost, RenderingContext, IObservable<object>> generator
     ) =>
-        layout.WithRenderer(context, (a, ctx,_) => a.RenderArea(ctx, generator.Invoke(a,ctx)));
+        layout.WithRenderer(context, (a, ctx) => a.RenderArea(ctx, generator.Invoke(a,ctx)));
 
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         string area,
@@ -70,7 +70,7 @@ public static class LayoutDefinitionExtensions{
         Func<RenderingContext, bool> context,
         IObservable<ViewDefinition<T>> generator
     ) =>
-        layout.WithRenderer(context, (a, c, _) => a.RenderArea(c, generator));
+        layout.WithRenderer(context, (a, c) => a.RenderArea(c, generator));
 
     public static LayoutDefinition WithView<T>(this LayoutDefinition layout,
         string area,
@@ -80,14 +80,14 @@ public static class LayoutDefinitionExtensions{
 
 
     public static LayoutDefinition WithView(this LayoutDefinition layout,Func<RenderingContext, bool> context, object view) =>
-        layout.WithRenderer(context, (a, c, _) => a.RenderArea(c, view));
+        layout.WithRenderer(context, (a, c) => a.RenderArea(c, view));
 
     public static LayoutDefinition WithView(this LayoutDefinition layout, string area, object view) =>
         layout.WithView(c => c.Area == area, view);
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         Func<RenderingContext, bool> context,
         Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<object>> view)
-        => layout.WithRenderer(context, (a, c, _) => a.RenderArea(c, view));
+        => layout.WithRenderer(context, (a, c) => a.RenderArea(c, view));
 
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         string area,
@@ -118,6 +118,6 @@ public static class LayoutDefinitionExtensions{
 
     public static LayoutDefinition WithRenderer(this LayoutDefinition layout,
         Func<RenderingContext, bool> filter,
-        Func<LayoutAreaHost, RenderingContext, EntityStore, IEnumerable<(string Area, UiControl Control)>> renderer)
+        Func<LayoutAreaHost, RenderingContext, IEnumerable<Func<EntityStore,EntityStore>>> renderer)
         => layout.WithRenderer(filter, renderer.Invoke);
 }
