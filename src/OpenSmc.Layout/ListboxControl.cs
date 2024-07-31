@@ -13,23 +13,26 @@ public abstract record ListControlBase<TControl>(object Data)
 {
     public IReadOnlyCollection<Option> Options { get; init; }
 
-    public TControl WithOptions<T>(IReadOnlyCollection<Option<T>> options) => (TControl) this with { Options = options };
+    public TControl WithOptions(IReadOnlyCollection<Option> options) => (TControl) this with { Options = options };
 
     public TControl WithOptions<T>(IEnumerable<T> options) => 
-        WithOptions(options.Select(o => new Option<T>(o, o.ToString())).ToArray());
+        WithOptions(options.Select(o => new Option(o, o.ToString())).ToArray());
+
+    public virtual bool Equals(ListControlBase<TControl> other)
+    {
+        if (ReferenceEquals(null, other)) return false;
+        if (ReferenceEquals(this, other)) return true;
+        return base.Equals(other) && Options.SequenceEqual(other.Options);
+    }
+
+    public override int GetHashCode()
+    {
+        return HashCode.Combine(base.GetHashCode(), Options.Aggregate(17, (x, y) => x ^y.GetHashCode()));
+    }
 }
 
-public abstract record Option(string Text)
-{
-    public abstract object GetItem();
-    public abstract Type GetItemType();
-}
+public record Option(object Item, string Text);
 
-public record Option<T>(T Item, string Text) : Option(Text)
-{
-    public override object GetItem() => Item;
-    public override Type GetItemType() => typeof(T);
-}
 
 public enum SelectPosition
 {

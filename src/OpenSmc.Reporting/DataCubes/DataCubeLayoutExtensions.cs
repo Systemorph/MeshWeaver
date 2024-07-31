@@ -82,7 +82,7 @@ public static class DataCubeLayoutExtensions
                         .WithView(Listbox(f.SelectedDimension)
                             .WithOptions(
                                 f.AvailableDimensions
-                                    .Select(d => new Option<string>(d.SystemName, d.DisplayName))
+                                    .Select(d => new Option(d.SystemName, d.DisplayName))
                                     .ToArray()
                             ))
                         .WithView(Stack
