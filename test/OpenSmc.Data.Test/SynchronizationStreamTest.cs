@@ -3,7 +3,6 @@ using OpenSmc.Hub.Fixture;
 using OpenSmc.Messaging;
 using Xunit;
 using Xunit.Abstractions;
-using static OpenSmc.Data.Test.DataPluginTest;
 
 namespace OpenSmc.Data.Test;
 
@@ -43,4 +42,5 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
             tracker[i].Text.Should().Be((i+1).ToString());
 
     }
+
 }

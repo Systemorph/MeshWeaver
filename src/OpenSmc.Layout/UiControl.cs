@@ -1,4 +1,6 @@
-﻿using System.Collections.Immutable;
+﻿using System.Collections;
+using System.Collections.Immutable;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using OpenSmc.Data;
 using OpenSmc.Layout.Composition;
@@ -87,10 +89,81 @@ public abstract record UiControl(object Data) : IUiControl
     protected virtual Func<EntityStore, EntityStore> RenderSelf(LayoutAreaHost host, RenderingContext context)
         => store => store.UpdateControl(context.Area, this);
 
-    //protected ImmutableList<Func<LayoutAreaHost, RenderingContext, Func<EntityStore, EntityStore>>>
-    //    RenderResults
-    //{ get; init; } = ImmutableList<Func<LayoutAreaHost, RenderingContext, Func<EntityStore, EntityStore>>>.Empty;
+    public virtual bool Equals(UiControl other)
+    {
+        if (other is null)
+            return false;
+        if (ReferenceEquals(this, other))
+            return true;
 
+        return ((Id == null && other.Id == null) || (Id?.Equals(other.Id) == true)) &&
+               DataEquality(other) &&
+               ((Style == null && other.Style == null) || (Style?.Equals(other.Style) == true)) &&
+               Tooltip == other.Tooltip &&
+               IsReadonly == other.IsReadonly &&
+               ((Label == null && other.Label == null) || (Label?.Equals(other.Label) == true)) &&
+               Skins.SequenceEqual(other.Skins) &&
+               ((Class == null && other.Class == null) || (Class?.Equals(other.Class) == true)) &&
+               DataContext == other.DataContext;
+    }
+
+    private bool DataEquality(UiControl other)
+    {
+        if (Data is null)
+            return other.Data is null;
+
+        if(Data is IEnumerable<object> e)
+            return other.Data is IEnumerable<object> e2 && e.SequenceEqual(e2, JsonObjectEqualityComparer.Singleton);
+        return JsonObjectEqualityComparer.Singleton.Equals(Data, other.Data);
+    }
+
+    private class JsonObjectEqualityComparer : IEqualityComparer<object>
+    {
+        internal static readonly JsonObjectEqualityComparer Singleton = new();
+        public bool Equals(object x, object y)
+        {
+            if (x is JsonObject jsonX && y is JsonObject jsonY)
+            {
+                return jsonX.ToString() == jsonY.ToString();
+            }
+            return x?.Equals(y) ?? y == null;
+        }
+
+        public int GetHashCode(object obj)
+        {
+            if (obj is JsonObject jsonObj)
+            {
+                return jsonObj.ToString().GetHashCode();
+            }
+            return obj?.GetHashCode() ?? 0;
+        }
+    }
+
+    public override int GetHashCode()
+    {
+        return HashCode.Combine(
+            HashCode.Combine(
+                Id,
+                GetDataHashCode(Data),
+                Style,
+                Tooltip
+            ),
+            HashCode.Combine(
+                IsReadonly,
+                Label,
+                Skins.Aggregate(0, (acc, skin) => acc ^ skin.GetHashCode()),
+                Class,
+                DataContext
+            )
+        );
+    }
+
+    private int GetDataHashCode(object data)
+    {
+        if (data is IEnumerable<object> e)
+            return e.Aggregate(17, (r, o) => r ^ o.GetHashCode());
+        return data?.GetHashCode() ?? 0;
+    }
 }
 
 public abstract record UiControl<TControl>(string ModuleName, string ApiVersion, object Data)
@@ -172,7 +245,6 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion,
     public new TControl WithSkin(object skin) => This with { Skins = Skins.Add(skin) };
 
     public TControl WithClass(object @class) => This with { Class = @class };
-
 
 
 
