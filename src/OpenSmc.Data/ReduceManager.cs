@@ -1,7 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
-using OpenSmc.Data.Persistence;
 using OpenSmc.Data.Serialization;
 using OpenSmc.Messaging;
 
@@ -205,8 +204,9 @@ public record ReduceManager<TStream>
         var reduced =
             (ISynchronizationStream<TReduced, TReference>)
                 ReduceStreams
+                    .OfType<ReduceStream<TStream, TReference>>()
                     .Select(reduceStream =>
-                        (reduceStream as ReduceStream<TStream, TReference>)?.Invoke(
+                        reduceStream.Invoke(
                             stream,
                             reference,
                             subscriber
