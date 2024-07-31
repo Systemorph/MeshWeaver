@@ -1,5 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json.Serialization;
+using OpenSmc.Data;
+using OpenSmc.Layout.Composition;
 
 namespace OpenSmc.Layout;
 
@@ -61,6 +63,34 @@ public abstract record UiControl(object Data) : IUiControl
     
     public UiControl WithSkin(object skin)
     => this with { Skins = Skins.Add(skin) };
+
+    //public virtual IEnumerable<Func<EntityStore, EntityStore>> Render(LayoutAreaHost host, RenderingContext context)
+    //=> RenderSelf(context);
+
+    protected virtual IEnumerable<Func<EntityStore, EntityStore>> RenderSelf(RenderingContext context)
+    {
+        return RenderResults.Concat([store => store.UpdateControl(context.Area, this)]);
+
+    }
+
+    private ImmutableList<Func<EntityStore, EntityStore>> RenderResults { get; init; } =
+        ImmutableList<Func<EntityStore, EntityStore>>.Empty;
+    public UiControl WithRenderResult(Func<EntityStore, EntityStore> renderResult)
+    {
+        return this with { RenderResults = RenderResults.Add(renderResult) };
+    }
+
+    public virtual IEnumerable<Func<EntityStore, EntityStore>> Render
+        (LayoutAreaHost host, RenderingContext context) =>
+        RenderResults
+            .Concat([RenderSelf(host, context)]);
+    protected virtual Func<EntityStore, EntityStore> RenderSelf(LayoutAreaHost host, RenderingContext context)
+        => store => store.UpdateControl(context.Area, this);
+
+    //protected ImmutableList<Func<LayoutAreaHost, RenderingContext, Func<EntityStore, EntityStore>>>
+    //    RenderResults
+    //{ get; init; } = ImmutableList<Func<LayoutAreaHost, RenderingContext, Func<EntityStore, EntityStore>>>.Empty;
+
 }
 
 public abstract record UiControl<TControl>(string ModuleName, string ApiVersion, object Data)
@@ -142,6 +172,11 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion,
     public new TControl WithSkin(object skin) => This with { Skins = Skins.Add(skin) };
 
     public TControl WithClass(object @class) => This with { Class = @class };
+
+
+
+
+
 }
 
 public interface IExpandableUiControl<out TControl> : IUiControl<TControl>
