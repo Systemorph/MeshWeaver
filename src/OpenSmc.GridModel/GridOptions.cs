@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using OpenSmc.Layout;
 
 namespace OpenSmc.GridModel
 {
@@ -120,5 +121,95 @@ namespace OpenSmc.GridModel
             return gridOptions;
         }
 
+        public virtual bool Equals(GridOptions other)
+        {
+            if (other is null)
+                return false;
+            if (ReferenceEquals(other, this))
+                return true;
+
+            return ColumnDefs.SequenceEqual(other.ColumnDefs) &&
+                   RowData.SequenceEqual(other.RowData, JsonObjectEqualityComparer.Singleton) &&
+                   EqualityComparer<ColDef>.Default.Equals(DefaultColDef, other.DefaultColDef) &&
+                   EqualityComparer<ColGroupDef>.Default.Equals(DefaultColGroupDef, other.DefaultColGroupDef) &&
+                   EqualityComparer<ColDef>.Default.Equals(AutoGroupColumnDef, other.AutoGroupColumnDef) &&
+                   JsonObjectEqualityComparer.Singleton.Equals(SideBar, other.SideBar) &&
+                   PivotMode == other.PivotMode &&
+                   PivotPanelShow == other.PivotPanelShow &&
+                   SuppressAggFuncInHeader == other.SuppressAggFuncInHeader &&
+                   SuppressAggAtRootLevel == other.SuppressAggAtRootLevel &&
+                   SuppressExpandablePivotGroups == other.SuppressExpandablePivotGroups &&
+                   PivotSuppressAutoColumn == other.PivotSuppressAutoColumn &&
+                   PivotRowTotals == other.PivotRowTotals &&
+                   PivotColumnGroupTotals == other.PivotColumnGroupTotals &&
+                   GroupIncludeFooter == other.GroupIncludeFooter &&
+                   GroupIncludeTotalFooter == other.GroupIncludeTotalFooter &&
+                   EnableCharts == other.EnableCharts &&
+                   EnableRangeSelection == other.EnableRangeSelection &&
+                   GroupDisplayType == other.GroupDisplayType &&
+                   GroupDefaultExpanded == other.GroupDefaultExpanded &&
+                   ShowOpenedGroup == other.ShowOpenedGroup &&
+                   GroupRemoveSingleChildren == other.GroupRemoveSingleChildren &&
+                   GroupRemoveLowestSingleChildren == other.GroupRemoveLowestSingleChildren &&
+                   Components.SequenceEqual(other.Components) &&
+                   TreeData == other.TreeData &&
+                   GetDataPath == other.GetDataPath &&
+                   ExcelStyles.SequenceEqual(other.ExcelStyles) &&
+                   GroupHeaderHeight == other.GroupHeaderHeight &&
+                   HeaderHeight == other.HeaderHeight &&
+                   RowHeight == other.RowHeight &&
+                   SuppressRowHoverHighlight == other.SuppressRowHoverHighlight &&
+                   EqualityComparer<CellStyle>.Default.Equals(RowStyle, other.RowStyle) &&
+                   GetRowStyle == other.GetRowStyle &&
+                   OnGridReady == other.OnGridReady &&
+                   ProcessSecondaryColDef == other.ProcessSecondaryColDef &&
+                   OnFirstDataRendered == other.OnFirstDataRendered &&
+                   ColumnHoverHighlight == other.ColumnHoverHighlight &&
+                   DomLayout == other.DomLayout;
+        }
+
+        public override int GetHashCode()
+        {
+            var hash = new HashCode();
+            hash.Add(ColumnDefs);
+            hash.Add(RowData, JsonObjectEqualityComparer.Singleton);
+            hash.Add(DefaultColDef);
+            hash.Add(DefaultColGroupDef);
+            hash.Add(AutoGroupColumnDef);
+            hash.Add(SideBar, JsonObjectEqualityComparer.Singleton);
+            hash.Add(PivotMode);
+            hash.Add(PivotPanelShow);
+            hash.Add(SuppressAggFuncInHeader);
+            hash.Add(SuppressAggAtRootLevel);
+            hash.Add(SuppressExpandablePivotGroups);
+            hash.Add(PivotSuppressAutoColumn);
+            hash.Add(PivotRowTotals);
+            hash.Add(PivotColumnGroupTotals);
+            hash.Add(GroupIncludeFooter);
+            hash.Add(GroupIncludeTotalFooter);
+            hash.Add(EnableCharts);
+            hash.Add(EnableRangeSelection);
+            hash.Add(GroupDisplayType);
+            hash.Add(GroupDefaultExpanded);
+            hash.Add(ShowOpenedGroup);
+            hash.Add(GroupRemoveSingleChildren);
+            hash.Add(GroupRemoveLowestSingleChildren);
+            hash.Add(Components);
+            hash.Add(TreeData);
+            hash.Add(GetDataPath);
+            hash.Add(ExcelStyles);
+            hash.Add(GroupHeaderHeight);
+            hash.Add(HeaderHeight);
+            hash.Add(RowHeight);
+            hash.Add(SuppressRowHoverHighlight);
+            hash.Add(RowStyle);
+            hash.Add(GetRowStyle);
+            hash.Add(OnGridReady);
+            hash.Add(ProcessSecondaryColDef);
+            hash.Add(OnFirstDataRendered);
+            hash.Add(ColumnHoverHighlight);
+            hash.Add(DomLayout);
+            return hash.ToHashCode();
+        }
     }
 }
