@@ -71,7 +71,7 @@ public static class DataCubeLayoutExtensions
     {
         
 
-        return host.Bind<DataCubeFilter, UiControl>(filter, filterId, f =>
+        return Template.Bind<DataCubeFilter, UiControl>(filter, filterId, f =>
             Stack
                 .WithView(Header("Filter"))
                 .WithView(

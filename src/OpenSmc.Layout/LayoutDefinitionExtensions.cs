@@ -110,10 +110,15 @@ public static class LayoutDefinitionExtensions{
 
 
 
-    public static EntityStore UpdateControl(this EntityStore store, string area, UiControl control)
+    public static EntityStore UpdateControl(this EntityStore store, string id, UiControl control)
         => store.Update(
             LayoutAreaReference.Areas,
-            i => i.SetItem(area, control)
+            i => i.SetItem(id, control)
+        );
+    public static EntityStore UpdateData(this EntityStore store, string id, object control)
+        => store.Update(
+            LayoutAreaReference.Data,
+            i => i.SetItem(id, control)
         );
 
     public static LayoutDefinition WithRenderer(this LayoutDefinition layout,

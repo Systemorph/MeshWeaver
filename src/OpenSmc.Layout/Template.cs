@@ -14,12 +14,11 @@ public static class Template{
     /// </summary>
     [ReplaceBindMethod]
     public static UiControl Bind<T, TView>(
-        this LayoutAreaHost area,
         T data,
         string id,
         Expression<Func<T, TView>> dataTemplate
     )
-        where TView : UiControl => BindObject(area, data, id, dataTemplate);
+        where TView : UiControl => BindObject(data, id, dataTemplate);
 
     private static readonly MethodInfo ItemTemplateMethod = ReflectionHelper.GetStaticMethodGeneric(
         () => ItemTemplate<object, UiControl>(default(IEnumerable<object>), null)
@@ -62,10 +61,10 @@ public static class Template{
 
     private class ReplaceBindMethodAttribute : ReplaceMethodInTemplateAttribute
     {
-        public override MethodInfo Replace(MethodInfo method) => RelaceBindObjects(method);
+        public override MethodInfo Replace(MethodInfo method) => ReplaceBindObjects(method);
     }
 
-    private static MethodInfo RelaceBindObjects(MethodInfo method) =>
+    private static MethodInfo ReplaceBindObjects(MethodInfo method) =>
     (
         method.GetGenericMethodDefinition() switch
         {
@@ -77,41 +76,38 @@ public static class Template{
     ).MakeGenericMethod(method.GetGenericArguments());
 
     private static readonly MethodInfo BindObjectMethod = ReflectionHelper.GetStaticMethodGeneric(
-        () => BindObject<object, UiControl>(null, default, null, default)
+        () => BindObject<object, UiControl>(null, default, null)
     );
 
     internal static UiControl BindObject<T, TView>(
-        this LayoutAreaHost area,
         object data,
         string id,
         Expression<Func<T, TView>> dataTemplate
     )
         where TView : UiControl
     {
-        var topLevel = UpdateData(area, data, id);
+        var topLevel = UpdateData(data, id);
         var view = dataTemplate.Build(topLevel, out var _);
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
-        return view;
+        return view.WithRenderResult(store => store.UpdateData(id, data));
     }
 
-    private static string UpdateData(LayoutAreaHost area, object data, string id)
+    private static string UpdateData(object data, string id)
     {
         if (data is JsonPointerReference reference)
             return reference.Pointer;
 
-        //area.UpdateData(id, data);
         return LayoutAreaReference.GetDataPointer(id);
     }
 
     [ReplaceBindMethod]
     public static ItemTemplateControl Bind<T, TView>(
-        this LayoutAreaHost area,
         IEnumerable<T> data,
         string id,
         Expression<Func<T, TView>> dataTemplate
     )
-        where TView : UiControl => BindEnumerable(area, data, id, dataTemplate);
+        where TView : UiControl => BindEnumerable(data, id, dataTemplate);
 
     public static TView Bind<T, TView>(
         string pointer,
@@ -140,11 +136,10 @@ public static class Template{
 
     private static readonly MethodInfo BindEnumerableMethod =
         ReflectionHelper.GetStaticMethodGeneric(
-            () => BindEnumerable<object, UiControl>(null, default, null, default)
+            () => BindEnumerable<object, UiControl>(null, default, null)
         );
 
     internal static ItemTemplateControl BindEnumerable<T, TView>(
-        this LayoutAreaHost area,
         object data,
         string id,
         Expression<Func<T, TView>> dataTemplate
@@ -155,10 +150,13 @@ public static class Template{
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
 
-        return new ItemTemplateControl(view, new JsonPointerReference("/"))
-        {
-            DataContext = UpdateData(area, data, id)
-        };
+        var dataContext = UpdateData(data, id);
+        return (ItemTemplateControl)new ItemTemplateControl(view, data)
+                {
+                    DataContext = dataContext
+                }
+                .WithRenderResult(store => store.UpdateData(id, data))
+            ;
     }
 
 
@@ -179,14 +177,4 @@ public record ItemTemplateControl(UiControl View, object Data) :
 
     public ItemTemplateControl WithWrap(bool wrap) => this with { Wrap = wrap };
 
-    protected override void Dispose()
-    {
-    }
-
-
-    public void Deconstruct(out UiControl View, out object Data)
-    {
-        View = this.View;
-        Data = this.Data;
-    }
 }
