@@ -107,5 +107,44 @@ public record LayoutStackControl(): UiControl<LayoutStackControl>(ModuleSetup.Mo
     public IReadOnlyCollection<string> Areas { get; init; } = [];
     private ImmutableList<string> RawAreas { get; init; } = ImmutableList<string>.Empty;
 
+    public virtual bool Equals(LayoutStackControl other)
+    {
+        if (other is null) return false;
+        if (ReferenceEquals(this, other))
+            return true;
+        return base.Equals(other) &&
+               HorizontalAlignment == other.HorizontalAlignment &&
+               VerticalAlignment == other.VerticalAlignment &&
+               HorizontalGap == other.HorizontalGap &&
+               VerticalGap == other.VerticalGap &&
+               Orientation == other.Orientation &&
+               Wrap == other.Wrap &&
+               Width == other.Width &&
+               Height == other.Height &&
+               Areas.SequenceEqual(other.Areas) &&
+               RawAreas.SequenceEqual(other.RawAreas);
 
+    }
+
+    public override int GetHashCode()
+    {
+        return HashCode.Combine(
+            base.GetHashCode(),
+            HashCode.Combine(
+                Renderers.Aggregate(0, (acc, renderer) => acc ^ renderer.GetHashCode()),
+                HorizontalAlignment.GetHashCode(),
+                VerticalAlignment.GetHashCode(),
+                HorizontalGap?.GetHashCode(),
+                VerticalGap?.GetHashCode(),
+                Orientation?.GetHashCode(),
+                Wrap.GetHashCode()
+            ),
+            HashCode.Combine(
+                Areas.Aggregate(0, (acc, area) => acc ^ area.GetHashCode()),
+                RawAreas.Aggregate(0, (acc, rawArea) => acc ^ rawArea.GetHashCode()),
+                Width?.GetHashCode() ?? 0,
+                Height?.GetHashCode() ?? 0
+            )
+        );
+    }
 }

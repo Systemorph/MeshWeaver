@@ -82,7 +82,7 @@ public record InstanceCollection
 
     public InstanceCollection Merge(InstanceCollection updated)
     {
-        if (updated == null)
+        if (updated is null)
             return this;
         return this with
         {
@@ -98,9 +98,9 @@ public record InstanceCollection
 
     public virtual bool Equals(InstanceCollection other)
     {
-        return other != null &&
+        return other is not  null &&
                (
-                   Instances == other.Instances ||
+                   ReferenceEquals(Instances, other.Instances) ||
                    Instances.SequenceEqual(other.Instances)
                );
     }
