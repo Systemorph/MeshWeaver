@@ -50,8 +50,8 @@ public static class OrdersSummaryArea
                 x.Select(y => y.OrderDate.Year)
                     .Distinct()
                     .OrderByDescending(year => year)
-                    .Select(year => new Option<int>(year, year.ToString()))
-                    .Prepend(new Option<int>(0, "All Time"))
+                    .Select(year => new Option(year, year.ToString()))
+                    .Prepend(new Option(0, "All Time"))
                     .ToArray()
             )
             .DistinctUntilChanged(x => string.Join(',', x.Select(y => y.Item)));

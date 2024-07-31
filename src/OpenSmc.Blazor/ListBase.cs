@@ -40,7 +40,7 @@ public abstract class ListBase<TViewModel> : BlazorView<TViewModel>
     {
         Options = enumerable.Select
             (x =>
-                new Option(x.GetItem(), x.Text, MapToString(x.GetItem()))
+                new Option(x.Item, x.Text, MapToString(x.Item))
             )
             .ToArray();
     }
