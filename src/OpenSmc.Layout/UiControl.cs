@@ -1,6 +1,5 @@
 ﻿using System.Collections;
 using System.Collections.Immutable;
-using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using OpenSmc.Data;
 using OpenSmc.Layout.Composition;
@@ -117,27 +116,6 @@ public abstract record UiControl(object Data) : IUiControl
         return JsonObjectEqualityComparer.Singleton.Equals(Data, other.Data);
     }
 
-    private class JsonObjectEqualityComparer : IEqualityComparer<object>
-    {
-        internal static readonly JsonObjectEqualityComparer Singleton = new();
-        public bool Equals(object x, object y)
-        {
-            if (x is JsonObject jsonX && y is JsonObject jsonY)
-            {
-                return jsonX.ToString() == jsonY.ToString();
-            }
-            return x?.Equals(y) ?? y == null;
-        }
-
-        public int GetHashCode(object obj)
-        {
-            if (obj is JsonObject jsonObj)
-            {
-                return jsonObj.ToString().GetHashCode();
-            }
-            return obj?.GetHashCode() ?? 0;
-        }
-    }
 
     public override int GetHashCode()
     {
