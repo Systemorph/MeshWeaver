@@ -59,6 +59,29 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
         html.Should().Be($"<div id='{area.DivId}' class='layout-area'></div>");
     }
 
+    /// <summary>
+    /// This tests the rendering of Layout Area Markdown
+    /// </summary>
+    [HubFact]
+    public void LayoutAreaWithDocumentation()
+    {
+        const string Doc = nameof(Doc);
+        // Define a sample markdown string
+        var markdown = $"@(\"MyArea\"){{ Layout = \"{Doc}\"}}";
+        var extension = new LayoutAreaMarkdownExtension(GetHost());
+        var html = RenderMarkdown(extension, markdown);
+
+        extension.MarkdownParser.Areas.Should().HaveCount(1);
+        var area = extension.MarkdownParser.Areas[0];
+        area.Area.Should().Be("MyArea");
+        area.Layout.Should().Be(Doc);
+        area.Reference.Layout.Should().Be(Doc);
+
+        // Verify the results
+        html.Trim().Should().Be($"<div id='{area.DivId}' class='layout-area'></div>");
+    }
+
+
     private static string RenderMarkdown(LayoutAreaMarkdownExtension markdownExtension, string markdown)
     {
         var pipeline = new MarkdownPipelineBuilder().Use(markdownExtension).Build();
