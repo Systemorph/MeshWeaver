@@ -4,8 +4,7 @@ using OpenSmc.Messaging;
 
 namespace OpenSmc.Layout.Composition;
 
-public delegate IEnumerable<(string Area, UiControl Control)> Renderer(LayoutAreaHost host,
-    RenderingContext context, EntityStore store);
+public delegate IEnumerable<Func<EntityStore, EntityStore>> Renderer(LayoutAreaHost host, RenderingContext context);
 public record LayoutDefinition(IMessageHub Hub)
 {
     private ImmutableList<(Func<RenderingContext, bool> Filter, Renderer Renderer)> Renderers { get; init; } = ImmutableList<(Func<RenderingContext, bool> Filter, Renderer Renderer)>.Empty;
@@ -25,17 +24,10 @@ public record LayoutDefinition(IMessageHub Hub)
             .Select(x => x.Renderer)
             .Aggregate(store ?? new(),
                 (s,
-                        renderer) =>
-                    s.Update(LayoutAreaReference.Areas,
-                        i => i with
-                        {
-                            Instances = i.Instances
-                                .SetItems(
-                                    renderer
-                                        .Invoke(host, context, s)
-                                        .Select(x => new KeyValuePair<object, object>(x.Area, x.Control))
-                                )
-                        })
+                        renderer) => renderer
+                    .Invoke(host, context)
+                    .Aggregate(s, (ss, update) => update.Invoke(ss))
+
             );
 
 

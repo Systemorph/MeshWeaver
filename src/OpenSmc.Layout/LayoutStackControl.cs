@@ -1,10 +1,11 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using OpenSmc.Data;
 using OpenSmc.Layout.Composition;
 
 namespace OpenSmc.Layout;
 
-public record LayoutStackControl(): UiControl<LayoutStackControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null), IContainerControl
+public record LayoutStackControl(): UiControl<LayoutStackControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
 {
     internal const string Root = "";
     private ImmutableList<Renderer> Renderers { get; init; } = ImmutableList<Renderer>.Empty;
@@ -15,8 +16,16 @@ public record LayoutStackControl(): UiControl<LayoutStackControl>(ModuleSetup.Mo
         this with
         {
             RawAreas = RawAreas.Add(area),
-            Renderers = Renderers.Add((host,context,_) => host.RenderArea(GetContextForArea(context, area), view))
+            Renderers = Renderers.Add((host,context) => host.RenderArea(GetContextForArea(context, area), view))
         };
+
+
+    public override IEnumerable<Func<EntityStore, EntityStore>> Render(LayoutAreaHost host, RenderingContext context) =>
+        base.Render(host, context)
+            .Concat(Renderers.SelectMany(r => (r.Invoke(host, context))));
+    protected override Func<EntityStore, EntityStore> RenderSelf(LayoutAreaHost host, RenderingContext context)
+        => store => store.UpdateControl(context.Area, this with
+            { Areas = RawAreas.Select(i => $"{context.Area}/{i}").ToArray() });
 
     private static RenderingContext GetContextForArea(RenderingContext context, string area)
     {
@@ -31,14 +40,14 @@ public record LayoutStackControl(): UiControl<LayoutStackControl>(ModuleSetup.Mo
         this with
         {
             RawAreas = RawAreas.Add(area),
-            Renderers = Renderers.Add((host,context,_) => host.RenderArea(GetContextForArea(context, area), viewDefinition))
+            Renderers = Renderers.Add((host,context) => host.RenderArea(GetContextForArea(context, area), viewDefinition))
         };
 
     public LayoutStackControl WithView(string area, IObservable<ViewDefinition> viewDefinition) =>
         this with
         {
             RawAreas = RawAreas.Add(area),
-            Renderers = Renderers.Add((host, context, _) => host.RenderArea(GetContextForArea(context, area), viewDefinition))
+            Renderers = Renderers.Add((host, context) => host.RenderArea(GetContextForArea(context, area), viewDefinition))
         };
     public LayoutStackControl WithView(IObservable<object> viewDefinition) =>
         WithView(GetAutoName(), viewDefinition);
@@ -46,7 +55,7 @@ public record LayoutStackControl(): UiControl<LayoutStackControl>(ModuleSetup.Mo
         this with
         {
             RawAreas = RawAreas.Add(area),
-            Renderers = Renderers.Add((host, context, _) => host.RenderArea(GetContextForArea(context, area), viewDefinition))
+            Renderers = Renderers.Add((host, context) => host.RenderArea(GetContextForArea(context, area), viewDefinition))
         };
 
     public LayoutStackControl WithView(IObservable<ViewDefinition> viewDefinition)
@@ -58,7 +67,7 @@ public record LayoutStackControl(): UiControl<LayoutStackControl>(ModuleSetup.Mo
         => this with
         {
             RawAreas = RawAreas.Add(area),
-            Renderers = Renderers.Add((host, context, _) => host.RenderArea(GetContextForArea(context, area),viewDefinition.Invoke))
+            Renderers = Renderers.Add((host, context) => host.RenderArea(GetContextForArea(context, area),viewDefinition.Invoke))
         };
 
 
@@ -98,13 +107,46 @@ public record LayoutStackControl(): UiControl<LayoutStackControl>(ModuleSetup.Mo
     public IReadOnlyCollection<string> Areas { get; init; } = [];
     private ImmutableList<string> RawAreas { get; init; } = ImmutableList<string>.Empty;
 
-    IEnumerable<(string Area, UiControl Control)> IContainerControl.RenderSubAreas(LayoutAreaHost host, RenderingContext context)
-        => 
-            Renderers.SelectMany(r => r.Invoke(host, context, null));
+    public virtual bool Equals(LayoutStackControl other)
+    {
+        if (other is null) return false;
+        if (ReferenceEquals(this, other))
+            return true;
+        return base.Equals(other) &&
+               HorizontalAlignment == other.HorizontalAlignment &&
+               VerticalAlignment == other.VerticalAlignment &&
+               HorizontalGap == other.HorizontalGap &&
+               VerticalGap == other.VerticalGap &&
+               Orientation == other.Orientation &&
+               Wrap == other.Wrap &&
+               Width == other.Width &&
+               Height == other.Height &&
+               Areas.SequenceEqual(other.Areas) &&
+               RawAreas.SequenceEqual(other.RawAreas);
 
-    IContainerControl IContainerControl.SetParentArea(string parentArea)
-        => this with { Areas = RawAreas.Select(a => $"{parentArea}/{a}").ToImmutableList() };
+    }
 
+    public override int GetHashCode()
+    {
+        return HashCode.Combine(
+            base.GetHashCode(),
+            HashCode.Combine(
+                Renderers.Aggregate(0, (acc, renderer) => acc ^ renderer.GetHashCode()),
+                HorizontalAlignment.GetHashCode(),
+                VerticalAlignment.GetHashCode(),
+                HorizontalGap?.GetHashCode(),
+                VerticalGap?.GetHashCode(),
+                Orientation?.GetHashCode(),
+                Wrap.GetHashCode()
+            ),
+            HashCode.Combine(
+                Areas.Aggregate(0, (acc, area) => acc ^ area.GetHashCode()),
+                RawAreas.Aggregate(0, (acc, rawArea) => acc ^ rawArea.GetHashCode()),
+                Width?.GetHashCode() ?? 0,
+                Height?.GetHashCode() ?? 0
+            )
+        );
+    }
 }
 
 public static class StackSkins

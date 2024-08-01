@@ -132,8 +132,12 @@ public record EntityStore
 
     public virtual bool Equals(EntityStore other)
     {
-        if(other == null)
+        if(other is null)
             return false;
+
+        if (ReferenceEquals(other,this))
+            return true;
+
         return other.Collections.Count == Collections.Count
             && other.Collections.All(x => Collections.TryGetValue(x.Key, out var value) 
                                           && value.Equals(x.Value));

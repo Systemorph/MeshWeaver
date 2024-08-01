@@ -1,5 +1,8 @@
-﻿using System.Collections.Immutable;
+﻿using System.Collections;
+using System.Collections.Immutable;
 using System.Text.Json.Serialization;
+using OpenSmc.Data;
+using OpenSmc.Layout.Composition;
 
 namespace OpenSmc.Layout;
 
@@ -61,6 +64,84 @@ public abstract record UiControl(object Data) : IUiControl
     
     public UiControl WithSkin(object skin)
     => this with { Skins = Skins.Add(skin) };
+
+    //public virtual IEnumerable<Func<EntityStore, EntityStore>> Render(LayoutAreaHost host, RenderingContext context)
+    //=> RenderSelf(context);
+
+    protected virtual IEnumerable<Func<EntityStore, EntityStore>> RenderSelf(RenderingContext context)
+    {
+        return RenderResults.Concat([store => store.UpdateControl(context.Area, this)]);
+
+    }
+
+    private ImmutableList<Func<EntityStore, EntityStore>> RenderResults { get; init; } =
+        ImmutableList<Func<EntityStore, EntityStore>>.Empty;
+    public UiControl WithRenderResult(Func<EntityStore, EntityStore> renderResult)
+    {
+        return this with { RenderResults = RenderResults.Add(renderResult) };
+    }
+
+    public virtual IEnumerable<Func<EntityStore, EntityStore>> Render
+        (LayoutAreaHost host, RenderingContext context) =>
+        RenderResults
+            .Concat([RenderSelf(host, context)]);
+    protected virtual Func<EntityStore, EntityStore> RenderSelf(LayoutAreaHost host, RenderingContext context)
+        => store => store.UpdateControl(context.Area, this);
+
+    public virtual bool Equals(UiControl other)
+    {
+        if (other is null)
+            return false;
+        if (ReferenceEquals(this, other))
+            return true;
+
+        return ((Id == null && other.Id == null) || (Id?.Equals(other.Id) == true)) &&
+               DataEquality(other) &&
+               ((Style == null && other.Style == null) || (Style?.Equals(other.Style) == true)) &&
+               Tooltip == other.Tooltip &&
+               IsReadonly == other.IsReadonly &&
+               ((Label == null && other.Label == null) || (Label?.Equals(other.Label) == true)) &&
+               Skins.SequenceEqual(other.Skins) &&
+               ((Class == null && other.Class == null) || (Class?.Equals(other.Class) == true)) &&
+               DataContext == other.DataContext;
+    }
+
+    private bool DataEquality(UiControl other)
+    {
+        if (Data is null)
+            return other.Data is null;
+
+        if(Data is IEnumerable<object> e)
+            return other.Data is IEnumerable<object> e2 && e.SequenceEqual(e2, JsonObjectEqualityComparer.Singleton);
+        return JsonObjectEqualityComparer.Singleton.Equals(Data, other.Data);
+    }
+
+
+    public override int GetHashCode()
+    {
+        return HashCode.Combine(
+            HashCode.Combine(
+                Id,
+                GetDataHashCode(Data),
+                Style,
+                Tooltip
+            ),
+            HashCode.Combine(
+                IsReadonly,
+                Label,
+                Skins.Aggregate(0, (acc, skin) => acc ^ skin.GetHashCode()),
+                Class,
+                DataContext
+            )
+        );
+    }
+
+    private int GetDataHashCode(object data)
+    {
+        if (data is IEnumerable<object> e)
+            return e.Aggregate(17, (r, o) => r ^ o.GetHashCode());
+        return data?.GetHashCode() ?? 0;
+    }
 }
 
 public abstract record UiControl<TControl>(string ModuleName, string ApiVersion, object Data)
@@ -142,6 +223,10 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion,
     public new TControl WithSkin(object skin) => This with { Skins = Skins.Add(skin) };
 
     public TControl WithClass(object @class) => This with { Class = @class };
+
+
+
+
 }
 
 public interface IExpandableUiControl<out TControl> : IUiControl<TControl>

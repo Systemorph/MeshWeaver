@@ -17,7 +17,7 @@ public class Workspace : IWorkspace
     {
         Hub = hub;
         this.activityService = activityService;
-
+        this.logger = logger;
         logger.LogDebug("Creating data context of address {address}", Id);
         DataContext = this.GetDataConfiguration();
 
@@ -39,11 +39,14 @@ public class Workspace : IWorkspace
             stream.Initialize(current);
             initialized.SetResult();
         });
+
     }
+
+    private readonly ILogger<Workspace> logger;
 
     public WorkspaceReference Reference { get; } = new WorkspaceStateReference();
     private ChangeItem<WorkspaceState> current;
-
+    
     private ChangeItem<WorkspaceState> Current
     {
         get { return current; }
@@ -170,6 +173,7 @@ public class Workspace : IWorkspace
             json.Hub.Register<DataChangedEvent>(
                 delivery =>
                 {
+                    logger.LogDebug("{address} receiving change notification from {sender}", delivery.Target, delivery.Sender);
                     var response = json.RequestChangeFromJson(
                         delivery.Message with
                         {
@@ -185,7 +189,11 @@ public class Workspace : IWorkspace
         json.AddDisposable(
             json.ToDataChangedStream(reference)
                 .Where(x => !json.Subscriber.Equals(x.ChangedBy))
-                .Subscribe(e => Hub.Post(e, o => o.WithTarget(json.Subscriber)))
+                .Subscribe(e =>
+                {
+                    logger.LogDebug("Owner {owner} sending change notification to subscriber {subscriber}", json.Owner, json.Subscriber);
+                    Hub.Post(e, o => o.WithTarget(json.Subscriber));
+                })
         );
         json.AddDisposable(
             new AnonymousDisposable(() => subscriptions.Remove(new(subscriber, reference), out _))
@@ -226,6 +234,8 @@ public class Workspace : IWorkspace
             json.Hub.Register<DataChangedEvent>(
                 delivery =>
                 {
+                    logger.LogDebug("{address} receiving change notification from {sender}", delivery.Target, delivery.Sender);
+
                     json.NotifyChange(delivery.Message with { ChangedBy = delivery.Sender });
                     return delivery.Processed();
                 },
@@ -248,6 +258,8 @@ public class Workspace : IWorkspace
                 .Where(x => json.Hub.Address.Equals(x.ChangedBy))
                 .Subscribe(e =>
                 {
+                    logger.LogDebug("Subscriber {subscriber} sending change notification to owner {owner}", json.Subscriber, json.Owner);
+
                     Hub.Post(e, o => o.WithTarget(json.Owner));
                 })
         );
