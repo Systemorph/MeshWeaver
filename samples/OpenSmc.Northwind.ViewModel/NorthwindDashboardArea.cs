@@ -41,32 +41,28 @@ public static class NorthwindDashboardArea
     public static object Dashboard(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         return Controls.Stack
-            .WithSkin(StackSkins.Splitter)
+            .WithSkin(StackSkins.LayoutGrid)
+            .WithClass("main-content")
+            .WithSkin(Skins.SplitterPane.WithClass("main-content-pane"))
             .WithView(
-                Controls.Stack
-                    .WithSkin(StackSkins.LayoutGrid)
-                    .WithClass("main-content")
-                    .WithSkin(Skins.SplitterPane.WithClass("main-content-pane"))
-                    .WithView(
-                        (area, ctx) =>
-                            area.OrderSummary(ctx)
-                                .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
-                    )
-                    .WithView(
-                        (area, ctx) =>
-                            area.ProductSummary(ctx)
-                                .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
-                    )
-                    .WithView(
-                        (area, ctx) =>
-                            area.CustomerSummary(ctx)
-                                .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
-                    )
-                    .WithView(
-                        (area, ctx) =>
-                            area.SupplierSummary(ctx)
-                                .WithSkin(Skins.LayoutGridItem.WithXs(12))
-                    )
+                (area, ctx) =>
+                    area.OrderSummary(ctx)
+                        .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
+            )
+            .WithView(
+                (area, ctx) =>
+                    area.ProductSummary(ctx)
+                        .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
+            )
+            .WithView(
+                (area, ctx) =>
+                    area.CustomerSummary(ctx)
+                        .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
+            )
+            .WithView(
+                (area, ctx) =>
+                    area.SupplierSummary(ctx)
+                        .WithSkin(Skins.LayoutGridItem.WithXs(12))
             );
     }
 
