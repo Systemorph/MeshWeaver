@@ -1,5 +1,5 @@
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
-@inherits BlazorView<SplitterControl>
+@inherits SkinnedView<LayoutStackControl, SplitterSkin>
 @{
     #pragma warning disable FluentMultiSplitter
 }
@@ -7,7 +7,7 @@
 <FluentMultiSplitter
     Class="@Class"
     Orientation="@Orientation"
-    BarSize="@ViewModel.BarSize"
+    BarSize="@Skin.BarSize"
     Width="@ViewModel.Width"
     Height="@ViewModel.Height"
     Style="@Style">

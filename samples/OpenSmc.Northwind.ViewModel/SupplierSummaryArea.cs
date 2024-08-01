@@ -50,7 +50,7 @@ public static class SupplierSummaryArea
                     .WithView(
                         Controls.Button("Analyze")
                             .WithIconStart(FluentIcons.CalendarDataBar)
-                            .WithClickAction(_ => layoutArea.SetContextMenu(context))
+                            .WithClickAction(_ => layoutArea.SetContextMenu(Controls.H3("Analyze")))
                     )
             )
             .WithView(
