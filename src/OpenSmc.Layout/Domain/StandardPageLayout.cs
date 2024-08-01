@@ -37,10 +37,8 @@ public static class StandardPageLayout
         =>
             host.RenderArea(
                 new(Page) { Parent = context },
-
-
                 Stack
-                    .WithOrientation(Orientation.Vertical)
+                    .WithSkin(Skins.Layout)
                     .WithWidth("100%")
                     .WithView(NamedArea(Header).WithSkin(Skins.Header))
                     .WithView(NamedArea(Toolbar))
@@ -50,17 +48,16 @@ public static class StandardPageLayout
                             .WithOrientation(Orientation.Horizontal)
                             .WithWidth("100%")
                             .WithView(NamedArea(NavMenu))
-                            .WithView(Splitter
+                            .WithView(Stack
+                                .WithSkin(StackSkins.Splitter)
                                 .WithView(
                                     Stack
                                         .WithSkin(Skins.BodyContent)
                                         .WithSkin(Skins.SplitterPane)
-                                        .WithOrientation(Orientation.Vertical)
                                         .WithView(NamedArea(ContentHeading))
                                         .WithView(NamedArea(MainContent))
                                 )
-                                .WithView(NamedArea(ContextMenu)
-                                    .WithSkin(Skins.SplitterPane))
+                                .WithView(NamedArea(ContextMenu))
                             )
 
                     )
@@ -122,8 +119,8 @@ public static class StandardPageLayout
 
     public static void SetMainContent(this LayoutAreaHost host, object view)
         => host.UpdateArea(new(MainContent),view);
-    public static void SetContextMenu(this LayoutAreaHost host, object view)
-        => host.UpdateArea(new(ContextMenu), view);
+    public static void SetContextMenu(this LayoutAreaHost host, UiControl view)
+        => host.UpdateArea(new(ContextMenu), view.WithSkin(Skins.SplitterPane));
 
 
 

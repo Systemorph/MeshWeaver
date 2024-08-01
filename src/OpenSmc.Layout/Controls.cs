@@ -88,9 +88,6 @@ public static class Controls
     public static RedirectControl Redirect(LayoutAreaReference message, object address) =>
         new(message, address, message.Area);
 
-    public static SplitterControl Splitter => new();
-    public static LayoutGridControl LayoutGrid => new();
-
     public static SpacerControl Spacer => new();
     public static MarkdownControl Markdown(object data) => new MarkdownControl(data);
 

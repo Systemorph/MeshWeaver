@@ -10,7 +10,6 @@ namespace OpenSmc.Northwind.ViewModel;
 /// </summary>
 public static class NorthwindDashboardArea
 {
-
     /// <summary>
     /// Adds the Northwind Dashboard view to the specified layout.
     /// </summary>
@@ -41,9 +40,11 @@ public static class NorthwindDashboardArea
     
     public static object Dashboard(this LayoutAreaHost layoutArea, RenderingContext context)
     {
-        return Controls.Splitter
+        return Controls.Stack
+            .WithSkin(StackSkins.Splitter)
             .WithView(
-                Controls.LayoutGrid
+                Controls.Stack
+                    .WithSkin(StackSkins.LayoutGrid)
                     .WithClass("main-content")
                     .WithSkin(Skins.SplitterPane.WithClass("main-content-pane"))
                     .WithView(

@@ -33,10 +33,13 @@ public static class BlazorClientExtensions
             return null;
 
         var skin = control.Skins.LastOrDefault();
-        if (skin != null)
-            return MapSkinnedView(control.PopSkin(), stream, area, skin);
+        control = control.PopSkin();
+        var skinnedView = MapSkinnedView(control, stream, area, skin);
 
-        return instance switch
+        if (skinnedView != null)
+            return skinnedView;
+
+        return control switch
         {
             HtmlControl html => StandardView<HtmlControl, HtmlView>(html, stream, area),
             SpinnerControl spinner => StandardView<SpinnerControl, Spinner>(spinner, stream, area),
@@ -45,14 +48,12 @@ public static class BlazorClientExtensions
             MenuItemControl menu => StandardView<MenuItemControl, MenuItemView>(menu, stream, area),
             NavLinkControl link => StandardView<NavLinkControl, NavLink>(link, stream, area),
             NavGroupControl group => StandardView<NavGroupControl, NavGroup>(group, stream, area),
-            SplitterControl splitter => StandardView<SplitterControl, SplitterView>(splitter, stream, area),
-            LayoutGridControl layoutGrid => StandardView<LayoutGridControl, LayoutGridView>(layoutGrid, stream, area),
             LayoutAreaControl layoutArea
                 => StandardView<LayoutAreaControl, LayoutArea>(layoutArea, stream, area),
             DataGridControl gc => StandardView<DataGridControl, DataGrid>(gc, stream, area),
-            TextBoxControl textbox => textbox.Skins.FirstOrDefault() switch
+            TextBoxControl textbox => skin switch
             {
-                TextBoxSkin.Search => StandardView<TextBoxControl, Search>(textbox, stream, area),
+                TextBoxSkin.Search => StandardSkinnedView<TextBoxControl, SearchView>(textbox, stream, area, skin),
                 _ => StandardView<TextBoxControl, Textbox>(textbox, stream, area)
             },
             ComboboxControl combobox => StandardView<ComboboxControl, Combobox>(combobox, stream, area),
@@ -66,7 +67,13 @@ public static class BlazorClientExtensions
             MarkdownControl markdown => StandardView<MarkdownControl, MarkdownView>(markdown, stream, area),
             NamedAreaControl namedView => MapNamedAreaView(namedView, stream),
             SpacerControl spacer => StandardView<SpacerControl, SpacerView>(spacer, stream, area),
-            LayoutStackControl stack => StandardView<LayoutStackControl, LayoutStackView>(stack, stream, area),
+            LayoutStackControl stack => skin switch
+            {
+                LayoutSkin => StandardSkinnedView<LayoutStackControl, LayoutView>(stack, stream, area, skin),
+                LayoutGridSkin => StandardSkinnedView<LayoutStackControl, LayoutGridView>(stack, stream, area, skin),
+                SplitterSkin => StandardSkinnedView<LayoutStackControl, SplitterView>(stack, stream, area, skin),
+                _ => StandardView<LayoutStackControl, LayoutStackView>(stack, stream, area),
+            },
             _ => DelegateToDotnetInteractive(instance, stream, area),
         };
     }
@@ -83,15 +90,13 @@ public static class BlazorClientExtensions
         return skin switch
         {
             LayoutGridItemSkin gridItem => StandardSkinnedView<UiControl, LayoutGridItemView>(control, stream, area, gridItem),
-            LayoutSkin fluentLayout => StandardSkinnedView<UiControl, LayoutView>(control, stream, area, fluentLayout),
             HeaderSkin header => StandardSkinnedView<UiControl, HeaderView>(control, stream, area, header),
             FooterSkin footer => StandardSkinnedView<UiControl, FooterView>(control, stream, area, footer),
             BodyContentSkin bodyContent => StandardSkinnedView<UiControl, BodyContentView>(control, stream, area,
                 bodyContent),
             SplitterPaneSkin splitter
                 => StandardSkinnedView<UiControl, SplitterPane>(control, stream, area, splitter),
-
-            _ => DefaultFormatting(control, stream, area)
+            _ => null
         };
     }
 

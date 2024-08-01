@@ -1,9 +1,9 @@
-@inherits BlazorView<LayoutGridControl>
+@inherits SkinnedView<LayoutStackControl, LayoutGridSkin>
 
 <FluentGrid 
     Class="@Class"
-    AdaptiveRendering="@ViewModel.AdaptiveRendering"
-    Justify="@ViewModel.Justify.ToFluentJustifyContent()"
+    AdaptiveRendering="@Skin.AdaptiveRendering"
+    Justify="@Skin.Justify.ToFluentJustifyContent()"
     Spacing="@Spacing"
     >
         @foreach (var area in ViewModel.Areas)
@@ -13,5 +13,5 @@
 </FluentGrid>
 
 @code{
-    private int Spacing => ViewModel.Spacing ?? 3;
+    private int Spacing => Skin.Spacing ?? 3;
 }

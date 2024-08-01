@@ -106,3 +106,10 @@ public record LayoutStackControl(): UiControl<LayoutStackControl>(ModuleSetup.Mo
         => this with { Areas = RawAreas.Select(a => $"{parentArea}/{a}").ToImmutableList() };
 
 }
+
+public static class StackSkins
+{
+    public static LayoutSkin Layout => new();
+    public static LayoutGridSkin LayoutGrid => new();
+    public static SplitterSkin Splitter => new();
+}
