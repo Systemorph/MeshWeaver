@@ -4,7 +4,8 @@
     #pragma warning disable FluentMultiSplitter
 }
 
-<FluentMultiSplitter
+<FluentMultiSplitter 
+    @ref="splitter"
     Class="@Class"
     Orientation="@Orientation"
     BarSize="@Skin.BarSize"
@@ -20,5 +21,8 @@
 
 @code
 {
+    // todo splitter.Refresh() should be called when panel is added/removed to add/remove splitter bar
+    private FluentMultiSplitter splitter;
+
     private Orientation Orientation => @ViewModel.Orientation?.ToFluentOrientation() ?? Orientation.Horizontal;
 }
