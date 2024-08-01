@@ -1,8 +1,8 @@
 ﻿using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
+using Markdig.Helpers;
 using Markdig.Parsers;
-using Markdig.Syntax;
 using OpenSmc.Messaging;
 
 namespace OpenSmc.Layout.Markdown;
@@ -18,32 +18,19 @@ public class LayoutAreaMarkdownParser : BlockParser
 
         FieldMappings = new()
         {
-            { "Id", (a, foundValue) => a.Id = foundValue },
+            { nameof(LayoutAreaComponentInfo.Id), (a, foundValue) => a.Id = foundValue },
             {
-                "Options",
-                (area, foundValue) =>
+                nameof(LayoutAreaComponentInfo.Options), (area, foundValue) =>
                     area.Options = JsonSerializer.Deserialize<
                         ImmutableDictionary<string, object>
                     >(foundValue, hub.JsonSerializerOptions)
             },
-            { "SourceReference", (a, foundValue) => a.SourceReference = foundValue },
-            { "Address", (a, foundValue) => a.Address = foundValue },
+            { nameof(LayoutAreaComponentInfo.Layout), (a, foundValue) => a.Layout = foundValue },
+            { nameof(LayoutAreaComponentInfo.DivId), (a, foundValue) => a.DivId = foundValue },
             {
-                "Source",
-                (a, foundValue) =>
-                    a.Source = JsonSerializer.Deserialize<SourceInfo>(
-                        foundValue,
-                        hub.JsonSerializerOptions
-                    )
+                nameof(LayoutAreaComponentInfo.Address), (a, foundValue) =>
+                    a.Address = JsonSerializer.Deserialize<object>(foundValue, hub.JsonSerializerOptions)
             },
-            {
-                "DisplayMode",
-                (a, foundValue) =>
-                    a.DisplayMode = JsonSerializer.Deserialize<DisplayMode>(
-                        foundValue,
-                        hub.JsonSerializerOptions
-                    )
-            }
         };
     }
 
@@ -57,109 +44,126 @@ public class LayoutAreaMarkdownParser : BlockParser
 
         // Match fenced char
         var line = processor.Line;
-        if (line.NextChar() != '(' || line.NextChar() != '"')
+        Prune(ref line);
+        if (line.PeekChar() != '(' )
             return BlockState.None;
-
-        string area = string.Empty;
-        var c = line.NextChar();
-        while (c != '"')
-        {
-            area += c;
-            c = line.NextChar();
-        }
-        // this would be syntax error ==> we just return nothing.
-        if (line.NextChar() != ')')
-            return BlockState.None;
+        line.NextChar();
 
         // no area specified ==> cannot render.
+        var area = ReadToken(ref line);
+        if(string.IsNullOrWhiteSpace(area))
+            return BlockState.None;
+
+        Prune(ref line);
+        // this would be syntax error ==> we just return nothing.
+        if (line.PeekChar() != ')')
+            return BlockState.None;
+
+        line.NextChar();
+
         if (string.IsNullOrWhiteSpace(area))
             return BlockState.None;
 
         var layoutAreaComponentInfo = new LayoutAreaComponentInfo(area, this);
         Areas.Add(layoutAreaComponentInfo);
 
-        c = line.PeekChar();
-        if (c != '{')
+        Prune(ref line);
+
+        if (line.PeekChar() != '{')
         {
             processor.NewBlocks.Push(layoutAreaComponentInfo);
             return BlockState.ContinueDiscard;
         }
 
-        return ParseParameters(processor, layoutAreaComponentInfo);
-    }
-
-    private BlockState ParseParameters(
-        BlockProcessor processor,
-        LayoutAreaComponentInfo layoutAreaComponentInfo
-    )
-    {
-        var line = processor.Line;
-        var parameters = new Dictionary<string, string>();
-        var paramName = new StringBuilder();
-        var paramValue = new StringBuilder();
-        bool isReadingName = true;
-        bool isInsideQuote = false;
-
-        // Skip the initial '{'
         line.NextChar();
 
-        while (true)
-        {
-            var c = line.NextChar();
-            if (c == '\0') // End of line
-                break;
-
-            if (isReadingName)
-            {
-                if (c == '=' && !isInsideQuote)
-                {
-                    isReadingName = false;
-                }
-                else if (c != ' ' || isInsideQuote)
-                {
-                    paramName.Append(c);
-                }
-            }
-            else // Reading value
-            {
-                if (c == '"' && !isInsideQuote)
-                {
-                    isInsideQuote = true;
-                }
-                else if (c == '"' && isInsideQuote)
-                {
-                    isInsideQuote = false;
-                }
-                else if (c == ',' && !isInsideQuote)
-                {
-                    parameters[paramName.ToString().Trim()] = paramValue.ToString().Trim();
-                    paramName.Clear();
-                    paramValue.Clear();
-                    isReadingName = true;
-                }
-                else
-                {
-                    paramValue.Append(c);
-                }
-            }
-        }
-
-        if (paramName.Length > 0 && paramValue.Length > 0)
-        {
-            parameters[paramName.ToString().Trim()] = paramValue.ToString().Trim();
-        }
-
-        // Apply parameters using FieldMappings
-        foreach (var param in parameters)
-        {
-            if (FieldMappings.TryGetValue(param.Key, out var action))
-            {
-                action(layoutAreaComponentInfo, param.Value);
-            }
-        }
+        while (ParseParameters(ref line, layoutAreaComponentInfo))
+        { }
 
         processor.NewBlocks.Push(layoutAreaComponentInfo);
         return BlockState.ContinueDiscard;
+
+    }
+
+    private void Prune(ref StringSlice line)
+    {
+        var c = line.PeekChar();
+        while (IgnoreChars.Contains(c))
+            c = line.NextChar();
+    }
+
+    private bool ParseParameters(ref StringSlice slice, LayoutAreaComponentInfo info)
+    {
+        var name = ReadToken(ref slice);
+        if (name == null || name.IsEmpty())
+            return false;
+        var value = ReadToken(ref slice);
+        if(value == null || value.IsEmpty())
+            return false;
+        ParseToInfo(info, name, value);
+        return true;
+    }
+
+    private static readonly HashSet<char> IgnoreChars = [' ', '\t'];
+    private static readonly HashSet<char> BreakChars = ['\n', '\r', '\0', '}'];
+    private static readonly HashSet<char> EndTokenChars = ['=', ','];
+
+
+
+    private string ReadToken(ref StringSlice slice)
+    {
+        var isInsideQuote = false;
+        var token = new StringBuilder();
+        while (true)
+        {
+            var c = slice.PeekChar();
+            while (IgnoreChars.Contains(c) && !isInsideQuote)
+            {
+                slice.NextChar();
+                c = slice.PeekChar();
+            }
+
+            if (BreakChars.Contains(c)) // End of line
+                break;
+            if (c == '"')
+            {
+                isInsideQuote = !isInsideQuote;
+                slice.NextChar();
+                if (isInsideQuote)
+                    continue;
+                return token.ToString();
+            }
+
+            if (!isInsideQuote && EndTokenChars.Contains(c))
+            {
+                slice.NextChar();
+                return token.ToString();
+            }
+
+            token.Append(c);
+            c = slice.NextChar();
+
+        }
+
+        return null;
+
+    }
+
+    private void ParseToInfo(LayoutAreaComponentInfo info, string paramName, string paramValue)
+    {
+
+        if (paramName.Length > 0 && paramValue.Length > 0)
+        {
+            var name = paramName.ToString().Trim();
+            var value = paramValue.ToString().Trim();
+
+            if (FieldMappings.TryGetValue(name, out var action))
+            {
+                action(info, value);
+            }
+
+
+        }
     }
 
 }
