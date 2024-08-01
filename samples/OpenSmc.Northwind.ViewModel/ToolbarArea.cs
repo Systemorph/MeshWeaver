@@ -22,14 +22,14 @@ namespace OpenSmc.Northwind.ViewModel
         /// <remarks>
         /// This method utilizes reactive extensions to dynamically bind the provided year options to a toolbar control. It ensures that the toolbar updates in response to changes in the observable collection, displaying the maximum year available.
         /// </remarks>
-        public static object Toolbar(IObservable<Option<int>[]> years)
+        public static object Toolbar(IObservable<Option[]> years)
         {
             return Controls.Toolbar
                 .WithView(
-                    (a, _) =>
+                    (_, _) =>
                         years.Select(y =>
-                            a.Bind(
-                                new Toolbar(y.Max(x => x.Item)),
+                            Template.Bind(
+                                new Toolbar(y.Max(x => (int)x.Item)),
                                 nameof(ViewModel.Toolbar),
                                 tb => Controls.Select(tb.Year).WithOptions(y)
                             )

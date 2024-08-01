@@ -1,10 +1,11 @@
 ﻿using System.Collections.Immutable;
+using OpenSmc.Data;
 using OpenSmc.Layout.Composition;
 
 namespace OpenSmc.Layout;
 
 public abstract record ContainerControl<TControl, TItem>(string ModuleName, string ApiVersion, object Data)
-    : UiControl<TControl>(ModuleName, ApiVersion, Data), IContainerControl
+    : UiControl<TControl>(ModuleName, ApiVersion, Data)
     where TControl : ContainerControl<TControl, TItem>
     where TItem : UiControl
 {
@@ -19,13 +20,40 @@ public abstract record ContainerControl<TControl, TItem>(string ModuleName, stri
 
     private ImmutableList<TItem> Items { get; init; } = ImmutableList<TItem>.Empty;
 
-    IContainerControl IContainerControl.SetParentArea(string parentArea)
-        => this with { Areas = RawAreas.Select(a => $"{parentArea}/{a}").ToImmutableList() };
 
-    IEnumerable<(string Area, UiControl Control)> IContainerControl.RenderSubAreas(LayoutAreaHost host, RenderingContext context)
-        => Items.Select((item, i) => ($"{context.Area}/{i}", (UiControl)item));
+    public override IEnumerable<Func<EntityStore, EntityStore>> Render(LayoutAreaHost host,
+        RenderingContext context) =>
+        base.Render(host, context)
+            .Concat(
+                Items.Select((item, i) =>
+                    (Func<EntityStore, EntityStore>)(store =>
+                        store.UpdateControl($"{context.Area}/{i}", item))));
+    protected override Func<EntityStore, EntityStore> RenderSelf(LayoutAreaHost host, RenderingContext context)
+        => store => store.UpdateControl(context.Area, this with 
+            {Areas = Enumerable.Range(0,Items.Count).Select(i => $"{context.Area}/{i}").ToArray() });
 
     public IReadOnlyCollection<string> Areas { get; init; } = [];
     private ImmutableList<string> RawAreas { get; init; } = ImmutableList<string>.Empty;
+    public virtual bool Equals(ContainerControl<TControl, TItem> other)
+    {
+        if (other is null) return false;
+        if (ReferenceEquals(this, other))
+            return true;
 
+        return base.Equals(other) &&
+               Items.SequenceEqual(other.Items) &&
+               Areas.SequenceEqual(other.Areas) &&
+               RawAreas.SequenceEqual(other.RawAreas);
+
+    }
+    public override int GetHashCode()
+    {
+        return HashCode.Combine(
+            base.GetHashCode(),
+            Items.Aggregate(0, (acc, item) => acc ^ item.GetHashCode()),
+            Areas.Aggregate(0, (acc, area) => acc ^ area.GetHashCode()),
+            RawAreas.Aggregate(0, (acc, rawArea) => acc ^ rawArea.GetHashCode())
+        );
+    }
 }
+
