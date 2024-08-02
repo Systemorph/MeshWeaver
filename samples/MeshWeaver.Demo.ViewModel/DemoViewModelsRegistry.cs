@@ -1,5 +1,6 @@
 ﻿using MeshWeaver.Demo.ViewModel.CkeckBox;
 using MeshWeaver.Demo.ViewModel.DropDown;
+using MeshWeaver.Demo.ViewModel.ItemTemplate;
 using MeshWeaver.Demo.ViewModel.Listbox;
 using MeshWeaver.Documentation;
 using MeshWeaver.Layout;
@@ -32,6 +33,7 @@ public static class DemoViewModelsRegistry
                 .AddSelectControlDemo()
                 .AddListboxDemo()
                 .AddCheckboxDemo()
+                .AddCurrenciesItemTemplateDemo()
             )
             ;
 }
