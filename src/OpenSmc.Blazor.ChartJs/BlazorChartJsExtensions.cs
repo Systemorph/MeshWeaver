@@ -6,5 +6,5 @@ namespace OpenSmc.Blazor.ChartJs;
 public static class BlazorChartJsExtensions
 {
     public static LayoutClientConfiguration AddChartJs(this LayoutClientConfiguration config)
-        => config.WithView<ChartControl, Chart>();
+        => config.WithView<ChartControl, ChartView>();
 }
