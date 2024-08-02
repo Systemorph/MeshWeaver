@@ -23,18 +23,12 @@ public static class DemoViewModelsRegistry
         this MessageHubConfiguration configuration
     )
         => configuration
+            .AddDemoDocumentation()
             .AddLayout(layout => layout
                 .AddViewModelStateDemo()
                 .AddSelectControlDemo()
                 .AddListboxDemo()
                 .AddCheckboxDemo()
-                .ConfigureApplication(views => views
-                    .WithMenu(menu => menu
-                        .AddDocumentationMenu()
-                        .AddRegisteredViews()
-                    )
-                )
             )
-            .AddDemoDocumentation()
             ;
 }

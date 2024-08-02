@@ -9,11 +9,11 @@ public static class TermsAgreementTickArea
 {
     public static object TermsTick(LayoutAreaHost area, RenderingContext context)
         => Controls
-            .Stack()
+            .Stack
             .WithVerticalGap(16)
             .WithView(
-                (a, _) =>
-                    a.Bind(
+                (_, _) =>
+                    Template.Bind(
                         new AgreementTick(false),
                         nameof(AgreementTick),
                         at => Controls.CheckBox("I agree with the Terms and Conditions", at.Signed)

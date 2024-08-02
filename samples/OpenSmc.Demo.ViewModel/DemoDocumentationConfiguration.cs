@@ -1,5 +1,7 @@
 ﻿using OpenSmc.Application.Styles;
 using OpenSmc.Documentation;
+using OpenSmc.Layout;
+using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.Domain;
 using OpenSmc.Messaging;
 
@@ -13,13 +15,16 @@ public static class DemoDocumentationConfiguration
     private const string ListboxControl = nameof(ListboxControl);
     private const string CheckBoxControl = nameof(CheckBoxControl);
 
-    public static ApplicationMenuBuilder AddDocumentationMenu(this ApplicationMenuBuilder builder)
-        => builder
-            .WithNavLink(Overview, $"{builder.Layout.Hub.Address}/Doc/{Overview}", nl => nl with { Icon = FluentIcons.Home, })
-            .WithNavLink("ViewModel State", $"{builder.Layout.Hub.Address}/Doc/{ViewModelState}", nl => nl with { Icon = FluentIcons.Box, })
-            .WithNavLink("DropDown Control", $"{builder.Layout.Hub.Address}/Doc/{DropDownControl}", nl => nl with { Icon = FluentIcons.CalendarDataBar, })
-            .WithNavLink("Listbox Control", $"{builder.Layout.Hub.Address}/Doc/{ListboxControl}", nl => nl with { Icon = FluentIcons.Grid, })
-            .WithNavLink("CheckBox Control", $"{builder.Layout.Hub.Address}/Doc/{CheckBoxControl}", nl => nl with { Icon = FluentIcons.Box, })
+    public static LayoutDefinition AddDocumentationMenu(this LayoutDefinition layout)
+        => layout
+            .WithNavMenu((menu, _) =>
+                menu
+                    .WithNavLink(Overview, $"{layout.Hub.Address}/Doc/{Overview}", nl => nl with { Icon = FluentIcons.Home, })
+                    .WithNavLink("ViewModel State", $"{layout.Hub.Address}/Doc/{ViewModelState}", nl => nl with { Icon = FluentIcons.Box, })
+                    .WithNavLink("DropDown Control", $"{layout.Hub.Address}/Doc/{DropDownControl}", nl => nl with { Icon = FluentIcons.CalendarDataBar, })
+                    .WithNavLink("Listbox Control", $"{layout.Hub.Address}/Doc/{ListboxControl}", nl => nl with { Icon = FluentIcons.Grid, })
+                    .WithNavLink("CheckBox Control", $"{layout.Hub.Address}/Doc/{CheckBoxControl}", nl => nl with { Icon = FluentIcons.Box, })
+            )
         ;
 
     public static MessageHubConfiguration AddDemoDocumentation(
@@ -39,5 +44,7 @@ public static class DemoDocumentationConfiguration
                     .WithDocument(CheckBoxControl,
                         $"{typeof(ViewModelStateDemoArea).Assembly.GetName().Name}.Markdown.CheckBox.md")
             )
-            );
+            )
+        .AddLayout(layout => layout.AddDocumentationMenu())
+        ;
 }
