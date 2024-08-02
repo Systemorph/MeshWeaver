@@ -1,11 +1,11 @@
-﻿using Newtonsoft.Json;
+﻿using System.Text.Json.Serialization;
 
 namespace OpenSmc.Charting.Models
 {
     public record Data
     {
         // ReSharper disable once StringLiteralTypo
-        [JsonProperty("datasets")]
+        [JsonPropertyName("datasets")]
         public IEnumerable<DataSet> DataSets { get; init; }
 
         public IEnumerable<string> Labels { get; internal set; }
