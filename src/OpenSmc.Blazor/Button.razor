@@ -7,6 +7,7 @@
     OnClick="@OnClick"
     IconStart="@IconStart?.ToFluentIcon()"
     IconEnd="@IconEnd?.ToFluentIcon()"
+    Disabled="@Disabled"
     >
     @Title
 </FluentButton>
@@ -16,6 +17,7 @@
     private string Title { get; set; }
     private Icon IconStart { get; set; }
     private Icon IconEnd { get; set; }
+    private bool Disabled { get; set; }
 
     protected override void BindData()
     {
@@ -25,6 +27,7 @@
             DataBind<string>(ViewModel.Data, x => Title = x);
             DataBind<Icon>(ViewModel.IconStart, x => IconStart = x);
             DataBind<Icon>(ViewModel.IconEnd, x => IconEnd = x);
+            DataBind<bool?>(ViewModel.Disabled, x => Disabled = x.HasValue && x.Value);
         }
     }
 

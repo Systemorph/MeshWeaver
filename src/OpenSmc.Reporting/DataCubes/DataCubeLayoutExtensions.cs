@@ -133,7 +133,7 @@ public static class DataCubeLayoutExtensions
             .DistinctUntilChanged()
         .Select(selectedDimension => 
                 BindEnumerable<FilterItem, CheckBoxControl>(
-                    new(LayoutAreaReference.GetDataPointer($"FilterItems/{selectedDimension}/{filterId}")),
+                    new(LayoutAreaReference.GetDataPointer(filterId, "filterItems", selectedDimension)),
                 f => CheckBox(f.Label, f.Selected)
             ));
     }

@@ -41,6 +41,8 @@
     {
         if (firstRender)
         {
+            await JsRuntime.Import("basicBlazorInterop.js");
+
             foreach (var component in LayoutAreaComponents)
             {
                 await JsRuntime.InvokeVoidAsync("interop.moveComponentToTarget", ComponentContainerId(component.DivId), component.DivId);

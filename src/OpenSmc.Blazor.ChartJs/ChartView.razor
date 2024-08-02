@@ -15,10 +15,7 @@
 
         if (firstRender)
         {
-            jsModule = await JsRuntime.InvokeAsync<IJSObjectReference>(
-                        "import",
-                        "./_content/OpenSmc.Blazor.ChartJs/index.mjs"
-                    );
+            jsModule = await JsRuntime.Import("index.mjs");
 
             DataBind<object>(ViewModel.Data, o => Options = o);
         }
