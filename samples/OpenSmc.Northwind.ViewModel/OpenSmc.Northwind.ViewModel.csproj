@@ -7,6 +7,7 @@
     <ProjectReference Include="..\..\src\OpenSmc.Import\OpenSmc.Import.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Layout\OpenSmc.Layout.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Pivot\OpenSmc.Pivot.csproj" />
+    <ProjectReference Include="..\..\src\OpenSmc.Charting.Pivot\OpenSmc.Charting.Pivot.csproj" />
     <ProjectReference Include="..\..\src\OpenSmc.Reporting\OpenSmc.Reporting.csproj" />
     <ProjectReference Include="..\OpenSmc.Northwind.Domain\OpenSmc.Northwind.Domain.csproj" />
   </ItemGroup>
