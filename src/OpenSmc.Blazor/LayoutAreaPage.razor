@@ -38,10 +38,4 @@
                   ?? ImmutableDictionary<string, object>.Empty,
     };
 
-    protected override void OnParametersSet()
-    {
-        base.OnParametersSet();
-        InvokeAsync(StateHasChanged);
-    }
-
 }

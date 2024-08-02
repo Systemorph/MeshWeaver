@@ -4,6 +4,10 @@ using static OpenSmc.Layout.Controls;
 
 namespace OpenSmc.Layout.Domain;
 
+public static class StandardDocLayout
+{
+
+}
 public static class StandardPageLayout
 {
     public const string Page = "$" + nameof(Page);

@@ -56,7 +56,7 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
         area.Area.Should().Be("MyArea");
 
         // Verify the results
-        html.Should().Be($"<div id='{area.DivId}' class='layout-area'></div>");
+        html.Trim().Should().Be($"<div id='{area.DivId}' class='layout-area'></div>");
     }
 
     /// <summary>
