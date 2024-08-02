@@ -1,6 +1,7 @@
 ﻿using OpenSmc.Application.Styles;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
+using OpenSmc.Layout.Domain;
 using OpenSmc.Northwind.ViewModel;
 
 namespace OpenSmc.Demo.ViewModel;
@@ -11,9 +12,12 @@ namespace OpenSmc.Demo.ViewModel;
 public static class ViewModelStateDemoArea
 {
     public static LayoutDefinition AddViewModelStateDemo(this LayoutDefinition layout)
-        => layout.WithView(nameof(CounterLayoutArea.Counter), CounterLayoutArea.Counter,
-                options => options
-                    .WithMenu(Controls.NavLink("Raw: ViewModel State", FluentIcons.Box,
-                        layout.ToHref(new(nameof(CounterLayoutArea.Counter)))))
-        );
+        => layout.WithView(nameof(CounterLayoutArea.Counter), CounterLayoutArea.Counter)
+            .WithNavMenu((menu, _) => menu
+                .WithNavLink(
+                    "Raw: ViewModel State",
+                    new LayoutAreaReference(nameof(CounterLayoutArea.Counter)).ToHref(layout.Hub.Address),
+                    FluentIcons.Box
+                )
+            );
 }
