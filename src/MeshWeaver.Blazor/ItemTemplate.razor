@@ -32,7 +32,7 @@
         view = Stream.GetControl(await Stream.FirstAsync(), ViewArea);
     }
 
-    private UiControl GetViewWithPath(int i) => ViewModel.View with { DataContext = $"{ViewModel.DataContext}/{i}" };
+    private UiControl GetViewWithPath(int i) => ViewModel.View with { DataContext = $"{ViewModel.DataContext}{ViewModel.Data}/{i}" };
 
     private Orientation Orientation => @ViewModel.Orientation?.ToFluentOrientation() ?? Orientation.Vertical;
 }
