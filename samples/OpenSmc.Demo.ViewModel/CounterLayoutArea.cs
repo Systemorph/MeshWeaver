@@ -1,7 +1,7 @@
 ﻿using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
 
-namespace OpenSmc.Northwind.ViewModel;
+namespace OpenSmc.Demo.ViewModel;
 
 /// <summary>
 /// This is an example of a view which uses local state.

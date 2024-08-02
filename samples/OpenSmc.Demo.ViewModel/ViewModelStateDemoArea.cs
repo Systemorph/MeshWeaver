@@ -2,7 +2,6 @@
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.Domain;
-using OpenSmc.Northwind.ViewModel;
 
 namespace OpenSmc.Demo.ViewModel;
 

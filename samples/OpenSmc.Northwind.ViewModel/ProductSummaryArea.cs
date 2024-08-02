@@ -1,4 +1,5 @@
 ﻿using OpenSmc.Application.Styles;
+using OpenSmc.Demo.ViewModel;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.Domain;
