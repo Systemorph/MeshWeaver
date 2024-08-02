@@ -43,7 +43,6 @@ public static class NorthwindDashboardArea
         return Controls.Stack
             .WithSkin(StackSkins.LayoutGrid)
             .WithClass("main-content")
-            .WithSkin(Skins.SplitterPane.WithClass("main-content-pane"))
             .WithView(
                 (area, ctx) =>
                     area.OrderSummary(ctx)
