@@ -9,14 +9,14 @@ namespace OpenSmc.Layout.Markdown;
 
 public class LayoutAreaMarkdownParser : BlockParser
 {
-    private readonly Dictionary<string, Action<LayoutAreaComponentInfo, string>> FieldMappings;
+    private readonly Dictionary<string, Action<LayoutAreaComponentInfo, string>> fieldMappings;
     public readonly List<LayoutAreaComponentInfo> Areas = new();
 
     public LayoutAreaMarkdownParser(IMessageHub hub)
     {
         OpeningCharacters = ['@'];
 
-        FieldMappings = new()
+        fieldMappings = new()
         {
             { nameof(LayoutAreaComponentInfo.Id), (a, foundValue) => a.Id = foundValue },
             {
@@ -108,6 +108,10 @@ public class LayoutAreaMarkdownParser : BlockParser
     private static readonly HashSet<char> BreakChars = ['\n', '\r', '\0', '}'];
     private static readonly HashSet<char> EndTokenChars = ['=', ','];
 
+    public LayoutAreaMarkdownParser(Dictionary<string, Action<LayoutAreaComponentInfo, string>> fieldMappings)
+    {
+        this.fieldMappings = fieldMappings;
+    }
 
 
     private string ReadToken(ref StringSlice slice)
@@ -141,7 +145,7 @@ public class LayoutAreaMarkdownParser : BlockParser
             }
 
             token.Append(c);
-            c = slice.NextChar();
+            slice.NextChar();
 
         }
 
@@ -154,10 +158,10 @@ public class LayoutAreaMarkdownParser : BlockParser
 
         if (paramName.Length > 0 && paramValue.Length > 0)
         {
-            var name = paramName.ToString().Trim();
-            var value = paramValue.ToString().Trim();
+            var name = paramName.Trim();
+            var value = paramValue.Trim();
 
-            if (FieldMappings.TryGetValue(name, out var action))
+            if (fieldMappings.TryGetValue(name, out var action))
             {
                 action(info, value);
             }

@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Subjects;
 using System.Reflection;
+using OpenSmc.Disposables;
 using OpenSmc.Messaging;
 using OpenSmc.Reflection;
 
@@ -79,21 +80,32 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
 
     public virtual IDisposable Subscribe(IObserver<ChangeItem<TStream>> observer)
     {
-        return Store.Subscribe(observer);
+        try
+        {
+            return Store.Subscribe(observer);
+        }
+        catch (ObjectDisposedException e)
+        {
+            return new AnonymousDisposable(() => {});
+        }
+        catch
+        {
+            throw;
+        }
     }
 
     public readonly List<IDisposable> Disposables = new();
 
-    private bool isDisposing;
+    private bool isDisposed;
     private readonly object disposeLock = new();
 
     public void Dispose()
     {
         lock (disposeLock)
         {
-            if (isDisposing)
+            if (isDisposed)
                 return;
-            isDisposing = true;
+            isDisposed = true;
         }
         foreach (var disposeAction in Disposables)
             disposeAction.Dispose();
@@ -111,8 +123,10 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
 
     private void SetCurrent(ChangeItem<TStream> value)
     {
+        if (isDisposed)
+            return;
         current = value;
-        if(!IsInitialized)
+        if (!IsInitialized)
             switch (InitializationMode)
             {
                 case InitializationMode.Automatic:
@@ -121,8 +135,8 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
                 default:
                     return;
             }
-
-
+        if(!isDisposed)
+            Store.OnNext(value);
         Store.OnNext(value);
     }
 
@@ -130,15 +144,12 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
 
     public virtual void Initialize(ChangeItem<TStream> initial)
     {
-            if (initial == null)
-                throw new ArgumentNullException(nameof(initial));
-            if (Current != null)
+        if (Current is not  null)
                 throw new InvalidOperationException("Already initialized");
 
-            current = initial;
-            Store.OnNext(initial);
-            initialized.SetResult(current.Value);
-            ;
+        current = initial ?? throw new ArgumentNullException(nameof(initial));
+        Store.OnNext(initial);
+        initialized.SetResult(current.Value);
     }
 
     public void OnCompleted()
@@ -203,6 +214,11 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
 
     private record SynchronizationStreamAddress(object Host) : IHostedAddress
     {
+        /// <summary>
+        /// This id is not meant to be accessed.
+        /// Rather, it brings uniqueness to multiple instances.
+        /// </summary>
+        // ReSharper disable once UnusedMember.Local
         public Guid Id { get; init; } = Guid.NewGuid();
     }
 
