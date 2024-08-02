@@ -16,10 +16,10 @@ Chart.defaults.font.family = "roboto, \"sans-serif\"";
 Chart.defaults.font.size = 14;
 
 export const renderChart = (element: HTMLCanvasElement, config: ChartConfiguration) => {
-    Chart.getChart(element)?.destroy;
+    Chart.getChart(element)?.destroy();
     const ctx = element.getContext("2d");
     const chartConfig = deserialize(config);
-    new Chart(ctx, chartConfig).attached;
+    new Chart(ctx, chartConfig);
 }
 
 function deserialize(data: unknown) {
