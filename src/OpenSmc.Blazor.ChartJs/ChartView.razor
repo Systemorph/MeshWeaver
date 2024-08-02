@@ -1,6 +1,5 @@
 ﻿@using Microsoft.JSInterop
 @inherits BlazorView<OpenSmc.Charting.ChartControl>
-@implements IAsyncDisposable
 
 <canvas @ref="element"></canvas>
 
@@ -31,18 +30,4 @@
     }
 
     private object Options { get; set; }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (jsModule is not null)
-        {
-            try
-            {
-                await jsModule.DisposeAsync();
-            }
-            catch (JSDisconnectedException)
-            {
-            }
-        }
-    }
 }
