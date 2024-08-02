@@ -1,7 +1,12 @@
-﻿using OpenSmc.Application.Styles;
+﻿using System.Reactive.Linq;
+using OpenSmc.Application.Styles;
+using OpenSmc.Charting.Pivot;
+using OpenSmc.DataCubes;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.Domain;
+using OpenSmc.Northwind.Domain;
+using OpenSmc.Pivot.Builder;
 
 namespace OpenSmc.Northwind.ViewModel;
 
@@ -10,6 +15,8 @@ namespace OpenSmc.Northwind.ViewModel;
 /// </summary>
 public static class NorthwindDashboardArea
 {
+    public const string DashboardDataCube = nameof(DashboardDataCube);
+
     /// <summary>
     /// Adds the Northwind Dashboard view to the specified layout.
     /// </summary>
@@ -37,7 +44,6 @@ public static class NorthwindDashboardArea
     /// <remarks>
     /// This method constructs the main view of the Northwind Dashboard, incorporating various subviews and components to provide a comprehensive overview of the application's data and functionality. The specific contents and layout of the dashboard are determined at runtime based on the rendering context.
     /// </remarks>
-    
     public static object Dashboard(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         return Controls.Stack
@@ -49,24 +55,58 @@ public static class NorthwindDashboardArea
                         .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
             )
             .WithView(
-                (area, ctx) =>
-                    area.ProductSummary(ctx)
-                        .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
+                Controls.Stack
+                    .WithView(Controls.PaneHeader("Sales by category"))
+                    .WithView((area, ctx) => area.SalesByCategory(ctx))
+                    .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
             )
+            // .WithView(
+            //     (area, ctx) =>
+            //         area.CustomerSummary(ctx)
+            //             .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
+            // )
             .WithView(
-                (area, ctx) =>
-                    area.CustomerSummary(ctx)
-                        .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
-            )
-            .WithView(
-                (area, ctx) =>
-                    area.SupplierSummary(ctx)
-                        .WithSkin(Skins.LayoutGridItem.WithXs(12))
+                (area, ctx) => area.SupplierSummary(ctx)
+                    .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
             );
     }
 
+    public static IObservable<object> SalesByCategory(this LayoutAreaHost layoutArea, RenderingContext context)
+    {
+        return layoutArea.GetDataCube()
+            .Select(cube =>
+                layoutArea.Workspace
+                    .State
+                    .Pivot(cube)
+                    .SliceRowsBy(nameof(Category))
+                    .ToBarChart()
+                    .ToChartControl()
+            );
+    }
 
-
-
+    private static IObservable<IDataCube<NorthwindDataCube>> GetDataCube(
+        this LayoutAreaHost area
+    ) => area.GetOrAddVariable(DashboardDataCube,
+        () => area
+            .Workspace.ReduceToTypes(typeof(Order), typeof(OrderDetails), typeof(Product))
+            .DistinctUntilChanged()
+            .Select(x =>
+                x.Value.GetData<Order>()
+                    .Join(
+                        x.Value.GetData<OrderDetails>(),
+                        o => o.OrderId,
+                        d => d.OrderId,
+                        (order, detail) => (order, detail)
+                    )
+                    .Join(
+                        x.Value.GetData<Product>(),
+                        od => od.detail.ProductId,
+                        p => p.ProductId,
+                        (od, product) => (od.order, od.detail, product)
+                    )
+                    .Select(data => new NorthwindDataCube(data.order, data.detail, data.product))
+                    .ToDataCube()
+            )
+    );
 
 }

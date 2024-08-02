@@ -45,14 +45,14 @@ public static class SupplierSummaryArea
         RenderingContext context
     )
         => Controls.Stack
-            .WithView(
-                Controls.Toolbar
-                    .WithView(
-                        Controls.Button("Analyze")
-                            .WithIconStart(FluentIcons.CalendarDataBar)
-                            .WithClickAction(_ => layoutArea.SetContextMenu(Controls.H3("Analyze")))
-                    )
-            )
+            // .WithView(
+            //     Controls.Toolbar
+            //         .WithView(
+            //             Controls.Button("Analyze")
+            //                 .WithIconStart(FluentIcons.CalendarDataBar)
+            //                 .WithClickAction(_ => layoutArea.SetContextMenu(Controls.H3("Analyze")))
+            //         )
+            // )
             .WithView(
                 Controls.Stack
                     .WithView(Controls.PaneHeader("Supplier Summary"))
