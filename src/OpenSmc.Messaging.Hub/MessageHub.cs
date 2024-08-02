@@ -108,6 +108,7 @@ public sealed class MessageHub<TAddress>
         {
             o.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
             o.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault;
+            o.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
         });
     }
 
