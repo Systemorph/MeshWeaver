@@ -48,7 +48,7 @@ public static class DocumentationRegistryExtensions
 
 
         var text = "";
-        using var stream = documentationService.GetStream(name);
+        await using var stream = documentationService.GetStream(name);
         if (stream == null)
             // Resource not found, return a warning control/message instead
             text = $":error: **File not found**: {name}";

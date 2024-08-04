@@ -1,9 +1,10 @@
-﻿using System.IO.Compression;
+﻿using System;
+using System.Collections.Concurrent;
+using System.IO.Compression;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Text;
-
 namespace OpenSmc.Documentation;
 
 
@@ -69,7 +70,7 @@ public static class PdbMethods
         }
     }
 
-    public static IReadOnlyDictionary<string, string> GetSourcesByType(this Assembly assembly)
+    public static AssemblySourceLookup GetSourcesByType(this Assembly assembly)
         => GetSourcesByType(assembly.Location);
 
 
@@ -111,7 +112,8 @@ public static class PdbMethods
     }
 
 
-    public static IReadOnlyDictionary<string, string> GetSourcesByType(string assemblyPath)
+
+    public static AssemblySourceLookup GetSourcesByType(string assemblyPath)
     {
         var ret = new Dictionary<string, string>();
 
@@ -119,42 +121,48 @@ public static class PdbMethods
         using var peReader = new PEReader(assemblyStream);
         if (!peReader.HasMetadata)
             throw new InvalidOperationException("Assembly has no metadata.");
-
         var metadataReader = peReader.GetMetadataReader();
-        var typeHandles = metadataReader.TypeDefinitions;
+        var pdbPath = Path.ChangeExtension(assemblyPath, "pdb");
 
-        foreach (var handle in typeHandles)
-        {
-            var typeDefinition = metadataReader.GetTypeDefinition(handle);
-            var name = metadataReader.GetString(typeDefinition.Name);
+        using var pdbStream = File.OpenRead(pdbPath);
+        var provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
+        var pdbReader = provider.GetMetadataReader();
 
-            var pdbPath = Path.ChangeExtension(assemblyPath, "pdb");
-
-            using var pdbStream = File.OpenRead(pdbPath);
-            var provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
-            var pdbReader = provider.GetMetadataReader();
-
-            // Iterate through the methods of the type to find a method with debug information
-            foreach (var methodHandle in typeDefinition.GetMethods())
-            {
-                var methodDebugInformation = pdbReader.GetMethodDebugInformation(methodHandle);
-                if (!methodDebugInformation.SequencePointsBlob.IsNil)
-                {
-                    var sequencePoints = methodDebugInformation.GetSequencePoints();
-                    var documentHandle = sequencePoints.FirstOrDefault().Document;
-                    if (!documentHandle.IsNil)
+        var tuplesByTypeName = metadataReader.TypeDefinitions.Select(metadataReader.GetTypeDefinition)
+            .SelectMany(typeDefinition =>
+                typeDefinition
+                    .GetMethods()
+                    .Select(pdbReader.GetMethodDebugInformation)
+                    .Where(method => !method.SequencePointsBlob.IsNil)
+                    .SelectMany(method => method.GetSequencePoints().Select(x => x.Document))
+            .Distinct()
+                    .Select(docHandle =>
                     {
-                        var document = metadataReader.GetDocument(documentHandle);
-                        ret[name] = pdbReader.GetEmbeddedSource(documentHandle); // Return the file path of the first method found with debug information
-                    }
-                }
-            }
-        }
+                        var document = pdbReader.GetDocument(docHandle);
+                        return (Handle: docHandle, Doc: document,
+                            TypeName: metadataReader.GetString(typeDefinition.Name),
+                            DocName: pdbReader.GetString(document.Name));
+                    }))
+            .DistinctBy(x => x.TypeName)
+            .ToArray();
 
-        return ret;
+        var sources = tuplesByTypeName
+            .DistinctBy(x => x.Doc.Name)
+            .ToDictionary(tuple => tuple.DocName,
+                tuple => pdbReader.GetEmbeddedSource(tuple.Handle)
+            );
 
+        return new AssemblySourceLookup(tuplesByTypeName.ToDictionary(x => x.TypeName, x => x.DocName), sources);
     }
 
+}
+
+public class AssemblySourceLookup(
+    Dictionary<string, string> filesByType,
+    Dictionary<string, string> sources)
+{
+    public string GetSource(string typeName) => 
+        filesByType.TryGetValue(typeName, out var name) ? sources[name] : null;
 }
 
 

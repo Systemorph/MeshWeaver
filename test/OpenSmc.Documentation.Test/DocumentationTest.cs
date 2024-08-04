@@ -125,7 +125,7 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
         var type = GetType();
         var source = documentationService.GetSources(type.Assembly);
         source.Should().NotBeNull();
-
+        source.GetSource(typeof(DocumentationTest).FullName).Should().NotBeNull();
     }
 
 

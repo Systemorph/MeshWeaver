@@ -17,6 +17,7 @@ public static class StandardPageLayout
 
 
     private static Func<RenderingContext, bool> IsPage => ctx => ctx.Layout == Page;
+
     public static LayoutDefinition WithPageLayout(this LayoutDefinition builder)
         => builder
             .WithRenderer(IsPage, RenderPage)
@@ -24,11 +25,12 @@ public static class StandardPageLayout
             .WithRenderer(IsPage, RenderFooter)
             .WithRenderer(IsPage, RenderMainContent);
 
-    private static IEnumerable<Func<EntityStore,EntityStore>> RenderMainContent(LayoutAreaHost host, RenderingContext context)
-    => [s => s.UpdateControl(MainContent,  NamedArea(context.Area))];
+    private static IEnumerable<Func<EntityStore, EntityStore>> RenderMainContent(LayoutAreaHost host,
+        RenderingContext context)
+        => [s => s.UpdateControl(MainContent, NamedArea(context.Area))];
 
 
-    private static IEnumerable<Func<EntityStore,EntityStore>>
+    private static IEnumerable<Func<EntityStore, EntityStore>>
         RenderPage(
             LayoutAreaHost host,
             RenderingContext context
@@ -63,7 +65,7 @@ public static class StandardPageLayout
                     .WithView(NamedArea(Footer).WithSkin(Footer))
             );
 
-    public static IEnumerable<Func<EntityStore,EntityStore>>
+    public static IEnumerable<Func<EntityStore, EntityStore>>
         RenderHeader(
             LayoutAreaHost host,
             RenderingContext context) =>
@@ -74,7 +76,7 @@ public static class StandardPageLayout
                 .WithView(NavLink("Mesh Weaver", null, "/"))
         );
 
-    public static IEnumerable<Func<EntityStore,EntityStore>> RenderFooter(
+    public static IEnumerable<Func<EntityStore, EntityStore>> RenderFooter(
         LayoutAreaHost host, RenderingContext context) =>
         host.RenderArea(
             new(Footer),
@@ -99,60 +101,48 @@ public static class StandardPageLayout
 
     public static LayoutDefinition WithNavMenu(this LayoutDefinition layout,
         Func<NavMenuControl, RenderingContext, NavMenuControl> config)
-        => layout.WithRenderer(IsPage, 
-            (h,c)=>
-                [store => ConfigBasedRenderer(
-                    h,
-                    c, 
-                    store, 
-                    StandardPageLayout.NavMenu, 
-                    () => new(), 
-                    config)]);
-
-    private static EntityStore ConfigBasedRenderer<TControl>(this LayoutAreaHost host, 
-        RenderingContext context, 
-        EntityStore store, 
-        string area,
-        Func<TControl> factory,
-        Func<TControl, RenderingContext, TControl> config) 
-        where TControl : UiControl
-    {
-        var menu = store.GetControl<TControl>(area) ?? factory();
-        menu = config(menu, context);
-        return host.RenderArea(context with{Area = area}, menu).Aggregate(store, (x, y) => y.Invoke(x));
-    }
-
-
-    public static LayoutDefinition WithToolbar(this LayoutDefinition layout,
-        Func<ToolbarControl, RenderingContext, ToolbarControl> config)
         => layout.WithRenderer(IsPage,
             (h, c) =>
-            [store => ConfigBasedRenderer(
-                h,
-                c,
-                store,
-                StandardPageLayout.Toolbar,
-                () => new(),
-                config)]);
+            [
+                store => h.ConfigBasedRenderer(
+                    c,
+                    store,
+                    StandardPageLayout.NavMenu,
+                    () => new(),
+                    config)
+            ]);
     public static LayoutDefinition WithContentHeading(this LayoutDefinition layout,
         Func<LayoutStackControl, RenderingContext, LayoutStackControl> config)
         => layout.WithRenderer(IsPage,
             (h, c) =>
-            [store => ConfigBasedRenderer<LayoutStackControl>(
-                h,
-                c,
-                store,
-                StandardPageLayout.ContentHeading,
-                () => new(),
-                config)]);
+            [
+                store => h.ConfigBasedRenderer<LayoutStackControl>(
+                    c,
+                    store,
+                    StandardPageLayout.ContentHeading,
+                    () => new(),
+                    config)
+            ]);
 
 
 
     public static void SetMainContent(this LayoutAreaHost host, object view)
-        => host.UpdateArea(new(MainContent),view);
+        => host.UpdateArea(new(MainContent), view);
+
     public static void SetContextMenu(this LayoutAreaHost host, UiControl view)
         => host.UpdateArea(new(ContextMenu), view.WithSkin(Skins.SplitterPane));
-
+    public static LayoutDefinition WithToolbar(this LayoutDefinition layout,
+        Func<ToolbarControl, RenderingContext, ToolbarControl> config)
+        => layout.WithRenderer(IsPage,
+            (h, c) =>
+            [
+                store => h.ConfigBasedRenderer(
+                    c,
+                    store,
+                    StandardPageLayout.Toolbar,
+                    () => new(),
+                    config)
+            ]);
 
 
 }
