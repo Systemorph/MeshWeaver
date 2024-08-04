@@ -8,4 +8,5 @@ public static class Skins
     public static LayoutSkin Layout => new();
     public static HeaderSkin Header => new();
     public static FooterSkin Footer => new();
+    public static TabSkin Tab(string label) => new (label);
 }

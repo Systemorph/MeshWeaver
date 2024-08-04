@@ -5,8 +5,9 @@ public record Skin<TSkin> : Skin
 where TSkin: Skin<TSkin>
 {
     protected TSkin This => (TSkin)this;
-    public string Class { get; init; }
-    public TSkin WithClass(string @class) => This with { Class = @class };
+    public object Class { get; init; }
+    public object Style { get; init; }
+    public TSkin WithClass(object @class) => This with { Class = @class };
 
     //public const string Modal = nameof(Modal);
     //public const string ContextMenu = nameof(ContextMenu);

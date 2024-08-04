@@ -1,4 +1,14 @@
-﻿namespace OpenSmc.Layout;
+﻿using static OpenSmc.Layout.TabsControl;
+
+namespace OpenSmc.Layout;
+
+public record TabsControl() :
+    ContainerControl<TabsControl, UiControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
+{
+    public TabsControl WithTab(UiControl item)
+        => WithItems(item);
+
+}
 
 public record NavMenuControl() : 
     ContainerControl<NavMenuControl, UiControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)

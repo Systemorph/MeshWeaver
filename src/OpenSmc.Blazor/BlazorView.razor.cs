@@ -81,10 +81,7 @@ namespace OpenSmc.Blazor
 
         protected virtual void BindData()
         {
-            foreach (var d in bindings)
-                d.Dispose();
-
-            bindings.Clear();
+            DisposeBindings();
 
             if (ViewModel != null)
             {
@@ -94,6 +91,13 @@ namespace OpenSmc.Blazor
             }
         }
 
+        protected virtual void DisposeBindings()
+        {
+            foreach (var d in bindings)
+                d.Dispose();
+
+            bindings.Clear();
+        }
 
 
         protected void OnClick()
