@@ -9,8 +9,8 @@ public interface IDocumentationService
     DocumentationContext Context { get; }
     Stream GetStream(string fullPath);
     Stream GetStream(string dataSource, string documentName);
-    IReadOnlyDictionary<string, string> GetSources(Assembly assembly) => GetSources(assembly.Location);
-    IReadOnlyDictionary<string, string> GetSources(string path);
+    AssemblySourceLookup GetSources(Assembly assembly) => GetSources(assembly.Location);
+    AssemblySourceLookup GetSources(string path);
 }
 
 public class DocumentationService(IMessageHub hub) : IDocumentationService
@@ -29,10 +29,10 @@ public class DocumentationService(IMessageHub hub) : IDocumentationService
         return null;
     }
 
-    private readonly ConcurrentDictionary<string, IReadOnlyDictionary<string, string>> sources = new();
-    public IReadOnlyDictionary<string, string> GetSources(string path)
+    private readonly ConcurrentDictionary<string, AssemblySourceLookup> sources = new();
+    public AssemblySourceLookup GetSources(string path)
     {
-        return sources.GetOrAdd(path, _ => PdbMethods.GetSourcesByType(path));
+        return sources.GetOrAdd(path, PdbMethods.GetSourcesByType);
     }
     
 }

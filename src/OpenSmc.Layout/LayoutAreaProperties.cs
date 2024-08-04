@@ -19,7 +19,6 @@ namespace OpenSmc.Layout
         public LayoutAreaProperties WithMenu(params NavLinkControl[] items)
             => this with { MenuControls = MenuControls.AddRange(items) };
 
-        //public LayoutAreaProperties WithSourcesForTypes(params Type[] types) => this with { HeadingMenu = HeadingMenu.AddRange(types.Select(t => new SourceItem(t.Assembly.Location, t.Name)).ToArray()) };
 
     }
 }

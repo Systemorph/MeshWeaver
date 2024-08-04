@@ -33,6 +33,23 @@ public static class StandardDocsLayout
         ];
 
 
+    public static LayoutDefinition WithSources(this LayoutDefinition layout,
+        Func<RenderingContext, bool> contextFilter, params string[] sources)
+        => layout.WithRenderer(ctx => IsDocs(ctx) && contextFilter(ctx),
+            (h, config) =>
+            [
+                store => h.ConfigBasedRenderer(
+                    config,
+                    store,
+                    Docs,
+                    () => new TabsControl(),
+                    (tabs, ctx) =>
+                        sources.Select(s => new LayoutAreaControl(layout.Hub.Address, new(Docs) { Id = s }))
+                            .Aggregate(tabs, (t,s) =>
+                                t.WithTab(new LayoutAreaControl(layout.Hub.Address, new(Docs) { Id = s }))))
+            ]);
+
+
 
 
 }
