@@ -84,7 +84,7 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
         {
             return Store.Subscribe(observer);
         }
-        catch (ObjectDisposedException e)
+        catch (ObjectDisposedException)
         {
             return new AnonymousDisposable(() => {});
         }

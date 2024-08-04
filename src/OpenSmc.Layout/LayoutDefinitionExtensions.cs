@@ -87,7 +87,7 @@ public static class LayoutDefinitionExtensions{
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         Func<RenderingContext, bool> context,
         Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<object>> view)
-        => layout.WithRenderer(context, (a, c) => a.RenderArea(c, view));
+        => layout.WithRenderer(context, (a, c) => a.RenderArea(c, view.Invoke));
 
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         string area,

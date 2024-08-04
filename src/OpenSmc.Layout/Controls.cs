@@ -1,4 +1,5 @@
-﻿using OpenSmc.Application.Styles;
+﻿using System.Numerics;
+using OpenSmc.Application.Styles;
 
 namespace OpenSmc.Layout;
 
@@ -7,6 +8,7 @@ public static class Controls
 
     public static NavGroupControl NavGroup(string title) => new(title);
     public static TabsControl Tabs => new();
+    public static NavMenuControl NavMenu => new();
 
     public static NavLinkControl NavLink(object title, object href) => new(title, href);
     public static NavLinkControl NavLink(object title, Icon icon, object href) => new(title, href) { Icon = icon };
