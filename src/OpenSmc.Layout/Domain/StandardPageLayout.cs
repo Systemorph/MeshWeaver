@@ -4,10 +4,6 @@ using static OpenSmc.Layout.Controls;
 
 namespace OpenSmc.Layout.Domain;
 
-public static class StandardDocLayout
-{
-
-}
 public static class StandardPageLayout
 {
     public const string Page = "$" + nameof(Page);
@@ -21,7 +17,7 @@ public static class StandardPageLayout
 
 
     private static Func<RenderingContext, bool> IsPage => ctx => ctx.Layout == Page;
-    public static LayoutDefinition WithStandardPageLayout(this LayoutDefinition builder)
+    public static LayoutDefinition WithPageLayout(this LayoutDefinition builder)
         => builder
             .WithRenderer(IsPage, RenderPage)
             .WithRenderer(IsPage, RenderHeader)

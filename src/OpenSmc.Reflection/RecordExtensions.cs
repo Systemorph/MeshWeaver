@@ -3,9 +3,15 @@ using System.Reflection;
 
 namespace OpenSmc.Reflection;
 
-public static class RecordExtensions
+
+/// <summary>
+/// I'm not sure yet this is a good way of doing things. It allows to modify record types
+/// In a generic way. Currently, we're using Json Deserialize for the job, it will always
+/// create new.
+/// </summary>
+internal static class RecordExtensions
 {
-    public static T With<T>(this T obj, params Expression<Func<T, object>>[] propertyExpressions)
+    internal static T With<T>(this T obj, params Expression<Func<T, object>>[] propertyExpressions)
     {
         var parameter = Expression.Parameter(typeof(T), "x");
         var expressions = propertyExpressions.Select(expr =>

@@ -23,7 +23,7 @@ public class StandardPageLayoutTest(ITestOutputHelper output) : HubTestBase(outp
                 )
                 .AddLayout(layout =>
                     layout
-                        .WithStandardPageLayout()
+                        .WithPageLayout()
                         .WithView(
                             StaticView,
                             Controls.Stack.WithView("Hello", "Hello").WithView("World", "World")
