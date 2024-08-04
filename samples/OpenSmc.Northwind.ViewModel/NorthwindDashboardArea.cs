@@ -15,7 +15,7 @@ namespace OpenSmc.Northwind.ViewModel;
 /// </summary>
 public static class NorthwindDashboardArea
 {
-    public const string DashboardDataCube = nameof(DashboardDataCube);
+    internal const string DashboardDataCube = nameof(DashboardDataCube);
 
     /// <summary>
     /// Adds the Northwind Dashboard view to the specified layout.
@@ -71,7 +71,7 @@ public static class NorthwindDashboardArea
             );
     }
 
-    public static IObservable<object> SalesByCategory(this LayoutAreaHost layoutArea, RenderingContext context)
+    private static IObservable<object> SalesByCategory(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         return layoutArea.GetDataCube()
             .Select(cube =>
