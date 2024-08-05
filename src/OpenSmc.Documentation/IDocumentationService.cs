@@ -1,16 +1,13 @@
-﻿using System.Collections.Concurrent;
-using System.Reflection;
-using OpenSmc.Messaging;
+﻿using OpenSmc.Messaging;
 
 namespace OpenSmc.Documentation;
 
 public interface IDocumentationService
 {
     DocumentationContext Context { get; }
-    Stream GetStream(string fullPath);
-    Stream GetStream(string dataSource, string documentName);
-    AssemblySourceLookup GetSources(Assembly assembly) => GetSources(assembly.Location);
-    AssemblySourceLookup GetSources(string path);
+    Stream GetStream(string type, string dataSource, string documentName);
+    DocumentationSource GetSource(string type, string id);
+
 }
 
 public class DocumentationService(IMessageHub hub) : IDocumentationService
@@ -22,17 +19,9 @@ public class DocumentationService(IMessageHub hub) : IDocumentationService
             .Select(s => s.GetStream(fullPath))
             .FirstOrDefault(s => s != null);
 
-    public Stream GetStream(string dataSource, string documentName)
-    {
-        if (Context.Sources.TryGetValue(dataSource, out var source))
-            return source.GetStream(documentName);
-        return null;
-    }
+    public Stream GetStream(string type, string dataSource, string documentName) => Context.GetSource(type, dataSource)?.GetStream(documentName);
 
-    private readonly ConcurrentDictionary<string, AssemblySourceLookup> sources = new();
-    public AssemblySourceLookup GetSources(string path)
-    {
-        return sources.GetOrAdd(path, PdbMethods.GetSourcesByType);
-    }
-    
+
+    public DocumentationSource GetSource(string type, string id) =>
+        Context.GetSource(type, id);
 }

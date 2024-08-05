@@ -30,21 +30,7 @@ public static class DemoDocumentationConfiguration
     public static MessageHubConfiguration AddDemoDocumentation(
         this MessageHubConfiguration configuration
     ) => configuration
-        .AddDocumentation(doc =>
-            doc.WithEmbeddedResourcesFrom(typeof(ViewModelStateDemoArea).Assembly,
-                source => source
-                    .WithDocument(Overview,
-                        $"{typeof(ViewModelStateDemoArea).Assembly.GetName().Name}.Markdown.Overview.md")
-                    .WithDocument(ViewModelState,
-                        $"{typeof(ViewModelStateDemoArea).Assembly.GetName().Name}.Markdown.Counter.md")
-                    .WithDocument(DropDownControl,
-                        $"{typeof(ViewModelStateDemoArea).Assembly.GetName().Name}.Markdown.DropDown.md")
-                    .WithDocument(ListboxControl,
-                        $"{typeof(ViewModelStateDemoArea).Assembly.GetName().Name}.Markdown.Listbox.md")
-                    .WithDocument(CheckBoxControl,
-                        $"{typeof(ViewModelStateDemoArea).Assembly.GetName().Name}.Markdown.CheckBox.md")
-            )
-            )
+        .AddDocumentation()
         .AddLayout(layout => layout.AddDocumentationMenu())
         ;
 }

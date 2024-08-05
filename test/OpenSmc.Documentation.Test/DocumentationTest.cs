@@ -20,21 +20,18 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
     /// <returns></returns>
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
-        return base.ConfigureHost(configuration).AddDocumentation(doc => doc
-            .WithEmbeddedResourcesFrom(GetType().Assembly, assembly => 
-                assembly.WithXmlComments().WithDocument("Markdown","/Markdown")));
+        return base.ConfigureHost(configuration).AddDocumentation();
     }
 
     /// <summary>
     /// This is how to retrieve a file from documentation service
     /// </summary>
-    /// <returns></returns>
     [HubFact]
     public async Task TestRetrievingFile()
     {
         var documentationService = GetHost().GetDocumentationService();
         documentationService.Should().NotBeNull();
-        var stream = documentationService.GetStream("OpenSmc.Documentation.Test.Markdown.Readme.md");
+        var stream = documentationService.GetStream(EmbeddedResourceDocumentationSource.Embedded, "OpenSmc.Documentation.Test", "Readme.md");
         stream.Should().NotBeNull();
         var content = await new StreamReader(stream).ReadToEndAsync();
         content.Should().NotBeNullOrEmpty();
@@ -118,15 +115,19 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
     /// <returns></returns>
 
     [HubFact]
-    public void TryReadSource()
+    public async Task TryReadSource()
     {
         var documentationService = GetHost().GetDocumentationService();
         documentationService.Should().NotBeNull();
         var type = GetType();
-        var sourceByType = documentationService.GetSources(type.Assembly);
+        var sourceByType = (PdbDocumentationSource)documentationService.GetSource(PdbDocumentationSource.Pdb, type.Assembly.GetName().Name);
         sourceByType.Should().NotBeNull();
-        var source = sourceByType.GetSource(typeof(DocumentationTest).FullName);
-        source.Should().NotBeNull();
+        var fileName = sourceByType.FilesByType.GetValueOrDefault(typeof(DocumentationTest).FullName);
+        fileName.Should().Be($"{nameof(DocumentationTest)}.cs");
+        await using var stream = sourceByType.GetStream(fileName);
+        stream.Should().NotBeNull();
+        var content = await new StreamReader(stream).ReadToEndAsync();
+        content.Should().NotBeNullOrWhiteSpace();
     }
 
 
@@ -136,7 +137,7 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
     [HubFact]
     public void TestDebugInfo()
     {
-        var points = PdbMethods.ReadMethodSourceInfo(typeof(DocumentationTest).Assembly.Location, nameof(TestDebugInfo));
+        var points = PdbDocumentationSource.ReadMethodSourceInfo(typeof(DocumentationTest).Assembly.Location, nameof(TestDebugInfo));
         points.Should().NotBeNull();
         points.Should().HaveCountGreaterThan(0);
     }
