@@ -20,7 +20,6 @@ public record DocumentationContext(IMessageHub Hub)
 
 
 
-
     private DocumentationSource TryCreateSource(string type, string id) => 
         Factories
             .Select(x => x.Invoke(type, id))
@@ -31,7 +30,7 @@ public record DocumentationContext(IMessageHub Hub)
         (type, id) =>
             type == PdbDocumentationSource.Pdb ? new PdbDocumentationSource(id): null,
         (type, id) =>
-            type == EmbeddedResourceDocumentationSource.Embedded ? EmbeddedResourceDocumentationSource.Create(id): null,
+            type == EmbeddedDocumentationSource.Embedded ? EmbeddedDocumentationSource.Create(id): null,
     ];
 
     public DocumentationContext WithSourceFactory(Func<string, string, DocumentationSource> factory)
@@ -41,7 +40,7 @@ public record DocumentationContext(IMessageHub Hub)
 public abstract record DocumentationSource(string Id)
 {
     internal ImmutableList<string> XmlComments { get; set; } = [];
-    internal ImmutableDictionary<string, string> DocumentPaths { get; set; } = ImmutableDictionary<string, string>.Empty;
+    public ImmutableDictionary<string, string> DocumentPaths { get; set; } = ImmutableDictionary<string, string>.Empty;
     public abstract Stream GetStream(string name);
 
     public abstract string Type { get; }

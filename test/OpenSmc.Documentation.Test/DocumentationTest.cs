@@ -31,7 +31,7 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var documentationService = GetHost().GetDocumentationService();
         documentationService.Should().NotBeNull();
-        var stream = documentationService.GetStream(EmbeddedResourceDocumentationSource.Embedded, "OpenSmc.Documentation.Test", "Readme.md");
+        var stream = documentationService.GetStream(EmbeddedDocumentationSource.Embedded, "OpenSmc.Documentation.Test", "Readme.md");
         stream.Should().NotBeNull();
         var content = await new StreamReader(stream).ReadToEndAsync();
         content.Should().NotBeNullOrEmpty();

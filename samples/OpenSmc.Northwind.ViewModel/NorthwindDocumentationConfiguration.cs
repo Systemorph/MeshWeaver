@@ -1,4 +1,6 @@
-﻿using OpenSmc.Documentation;
+﻿using System.Reflection;
+using OpenSmc.Documentation;
+using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
 using OpenSmc.Layout.Domain;
 using OpenSmc.Messaging;
@@ -21,10 +23,6 @@ namespace OpenSmc.Northwind.ViewModel
         /// This method adds a documentation menu item for the Northwind overview to the application's main menu.
         /// It creates a navigation link for the Northwind overview documentation, using the application's layout hub address to construct the URL.
         /// </remarks>
-        public static LayoutDefinition AddDocumentationMenu(this LayoutDefinition layout)
-            => layout.WithNavMenu((menu, _) => 
-                menu
-                    .WithNavLink(Overview, $"{layout.Hub.Address}/Doc/{Overview}"));
 
         /// <summary>
         /// Represents the configuration for the MessageHub.
@@ -39,6 +37,8 @@ namespace OpenSmc.Northwind.ViewModel
         public static MessageHubConfiguration AddNorthwindDocumentation(
             this MessageHubConfiguration configuration
         ) => configuration
-            .AddDocumentation();
+            .AddDocumentation()
+            .AddLayout(layout => layout.AddDocumentationMenu(typeof(NorthwindDocumentationConfiguration).Assembly))
+            ;
     }
 }
