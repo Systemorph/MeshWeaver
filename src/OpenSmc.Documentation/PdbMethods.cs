@@ -141,6 +141,7 @@ public static class PdbMethods
                         var document = pdbReader.GetDocument(docHandle);
                         return (Handle: docHandle, Doc: document,
                             TypeName: metadataReader.GetString(typeDefinition.Name),
+                            Namespace: metadataReader.GetString(typeDefinition.Namespace),
                             DocName: pdbReader.GetString(document.Name));
                     }))
             .DistinctBy(x => x.TypeName)
@@ -152,7 +153,7 @@ public static class PdbMethods
                 tuple => pdbReader.GetEmbeddedSource(tuple.Handle)
             );
 
-        return new AssemblySourceLookup(tuplesByTypeName.ToDictionary(x => x.TypeName, x => x.DocName), sources);
+        return new AssemblySourceLookup(tuplesByTypeName.ToDictionary(x => $"{x.Namespace}.{x.TypeName}", x => x.DocName), sources);
     }
 
 }
