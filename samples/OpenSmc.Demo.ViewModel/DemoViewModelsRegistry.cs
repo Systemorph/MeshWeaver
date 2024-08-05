@@ -1,6 +1,7 @@
 ﻿using OpenSmc.Demo.ViewModel.CkeckBox;
 using OpenSmc.Demo.ViewModel.DropDown;
 using OpenSmc.Demo.ViewModel.Listbox;
+using OpenSmc.Documentation;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Domain;
 using OpenSmc.Messaging;
@@ -27,7 +28,7 @@ public static class DemoViewModelsRegistry
             .AddDemoDocumentation()
             .AddLayout(layout => layout
                 .WithPageLayout()
-                .WithDocsLayout()
+                .AddDocumentation()
                 .AddViewModelStateDemo()
                 .AddSelectControlDemo()
                 .AddListboxDemo()

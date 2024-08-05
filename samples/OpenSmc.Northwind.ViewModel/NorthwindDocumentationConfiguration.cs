@@ -39,12 +39,6 @@ namespace OpenSmc.Northwind.ViewModel
         public static MessageHubConfiguration AddNorthwindDocumentation(
             this MessageHubConfiguration configuration
         ) => configuration
-            .AddDocumentation(doc =>
-                doc.WithEmbeddedResourcesFrom(typeof(NorthwindDashboardArea).Assembly,
-                    source => source
-                        .WithDocument(Overview,
-                            $"{typeof(NorthwindDashboardArea).Assembly.GetName().Name}.Markdown.Overview.md")
-                )
-                );
+            .AddDocumentation();
     }
 }
