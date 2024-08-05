@@ -6,8 +6,8 @@ using System.Text;
 
 namespace OpenSmc.Documentation;
 
-public record EmbeddedResourceDocumentationSource(string Id, Assembly Assembly) :
-    DocumentationSource<EmbeddedResourceDocumentationSource>(Id)
+public record EmbeddedDocumentationSource(string Id, Assembly Assembly) :
+    DocumentationSource<EmbeddedDocumentationSource>(Id)
 {
     public override Stream GetStream(string name)
         => Assembly.GetManifestResourceStream(DocumentPaths.GetValueOrDefault(name) ?? name);
@@ -16,7 +16,7 @@ public record EmbeddedResourceDocumentationSource(string Id, Assembly Assembly) 
     public const string Embedded = nameof(Embedded);
     public override string Type => Embedded;
 
-    public static EmbeddedResourceDocumentationSource Create(string id)
+    public static EmbeddedDocumentationSource Create(string id)
     {
         var assembly = Assembly.Load(id);
         return new(assembly.GetName().Name, assembly)

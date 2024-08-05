@@ -53,7 +53,7 @@ public static class DocumentationViewModels
             ]);
 
 
-    private const string Pattern = @"^(?<sourceType>[^@]+)@(?<sourceId>[^@]+)@(?<documentId>[^@]+)$";
+    private const string Pattern = @"^(?<sourceType>[^@]+)/(?<sourceId>[^@]+)/(?<documentId>[^@]+)$";
 
     private static async Task<object> Doc(LayoutAreaHost area, RenderingContext context, CancellationToken cancellationToken)
     {

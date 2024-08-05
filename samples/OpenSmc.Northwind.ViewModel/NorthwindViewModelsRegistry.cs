@@ -1,4 +1,5 @@
-﻿using OpenSmc.Layout;
+﻿using OpenSmc.Documentation;
+using OpenSmc.Layout;
 using OpenSmc.Layout.Domain;
 using OpenSmc.Messaging;
 
@@ -26,7 +27,6 @@ namespace OpenSmc.Northwind.ViewModel
                     .AddLayout(layout =>
                     layout
                         .WithPageLayout()
-                        .AddDocumentationMenu()
                         .AddDashboard()
                         .AddProductsSummary()
                         .AddOrdersSummary()
