@@ -41,15 +41,14 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
-app.UseHttpsRedirection();
-app.UseStaticFiles();
-var docSitePath = Path.Combine(builder.Environment.ContentRootPath, "..\\OpenSmc.Northwind.Docs\\_site");
 
 app.UseRouting();
 
 app.MapBlazorHub();
 app.MapFallbackToPage("/_Host");
 
+app.UseHttpsRedirection();
+//app.UseStaticFiles();
 app.Run();
 public record BlazorServerAddress
 {

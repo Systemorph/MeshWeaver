@@ -15,14 +15,27 @@
     DisplayArea="@Reference.Area"/>
 
 @code{
+    private string area;
+    private string id;
+
     [Parameter]
     public string Application { get; set; }
     [Parameter]
     public string Environment { get; set; }
+
     [Parameter]
-    public string Area { get; set; }
-    [Parameter] 
-    public string Id { get; set; }
+    public string Area
+    {
+        get => area;
+        set => area = (string)LayoutAreaReference.Decode(value);
+    }
+
+    [Parameter]
+    public string Id
+    {
+        get => id;
+        set => id = (string)LayoutAreaReference.Decode(value);
+    }
 
     private string PageTitle => $"{Area.Wordify()} - {Application}";
 
@@ -34,8 +47,14 @@
     {
         Id = Id,
         Layout = StandardPageLayout.Page,
-        Options = Options?.ToImmutableDictionary() 
-                  ?? ImmutableDictionary<string, object>.Empty,
+        Options =
+            Options?
+                .ToImmutableDictionary(
+                    x => x.Key,
+                    x => x.Value is string s 
+                        ? LayoutAreaReference.Decode(s) 
+                        : x.Value)
+            ?? ImmutableDictionary<string, object>.Empty,
     };
 
 }

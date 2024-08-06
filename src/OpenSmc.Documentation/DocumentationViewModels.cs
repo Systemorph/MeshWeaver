@@ -62,8 +62,6 @@ public static class DocumentationViewModels
     {
         if (area.Stream.Reference.Id is not string path)
             throw new InvalidOperationException("No file name specified.");
-        path = Uri.UnescapeDataString(path);
-
 
         var documentationService = area.Hub.GetDocumentationService();
 
