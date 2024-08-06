@@ -37,7 +37,11 @@ public static class DocumentationExtensions
         ?? new(hub);
 
     public static string DocumentationPath(this LayoutDefinition layout, Assembly assembly, string name)
-        => $"{layout.Hub.Address}/Doc/{EmbeddedDocumentationSource.Embedded}/{assembly.GetName().Name}/{name}";
+        => new LayoutAreaReference(nameof(DocumentationViewModels.Doc))
+        {
+            Id = $"{EmbeddedDocumentationSource.Embedded}/{assembly.GetName().Name}/{name}"
+        }.ToHref(layout.Hub.Address);
+
     public static LayoutDefinition AddDocumentationMenu(this LayoutDefinition layout, Assembly assembly)
         => layout.WithNavMenu((menu, _) =>
             layout.Hub.GetDocumentationService().Context.GetSource(EmbeddedDocumentationSource.Embedded, assembly.GetName().Name)

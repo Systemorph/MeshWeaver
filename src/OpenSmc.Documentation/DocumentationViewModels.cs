@@ -1,4 +1,6 @@
-﻿using System.Text.RegularExpressions;
+﻿using System.Collections.Immutable;
+using System.Security.Cryptography.X509Certificates;
+using System.Text.RegularExpressions;
 using OpenSmc.Data;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
@@ -48,23 +50,24 @@ public static class DocumentationViewModels
                     () => new TabsControl(),
                     (tabs, _) =>
                         sources.Select(s => new LayoutAreaControl(layout.Hub.Address, new(Docs) { Id = s }))
-                            .Aggregate(tabs, (t,s) =>
+                            .Aggregate(tabs, (t, s) =>
                                 t.WithTab(new LayoutAreaControl(layout.Hub.Address, new(Docs) { Id = s }))))
             ]);
 
 
-    private const string Pattern = @"^(?<sourceType>[^@]+)/(?<sourceId>[^@]+)/(?<documentId>[^@]+)$";
+    private const string ReadPattern = @"^(?<sourceType>[^@]+)/(?<sourceId>[^@]+)/(?<documentId>[^@]+)$";
 
-    private static async Task<object> Doc(LayoutAreaHost area, RenderingContext context, CancellationToken cancellationToken)
+    public static async Task<object> Doc(LayoutAreaHost area, RenderingContext context,
+        CancellationToken cancellationToken)
     {
         if (area.Stream.Reference.Id is not string path)
             throw new InvalidOperationException("No file name specified.");
-
+        path = Uri.UnescapeDataString(path);
 
 
         var documentationService = area.Hub.GetDocumentationService();
 
-        var match = Regex.Match(path, Pattern);
+        var match = Regex.Match(path, ReadPattern);
 
         if (!match.Success)
             return FileNotFound(path);
@@ -72,18 +75,43 @@ public static class DocumentationViewModels
         var sourceType = match.Groups["sourceType"].Value;
         var sourceId = match.Groups["sourceId"].Value;
         var documentId = match.Groups["documentId"].Value;
-
         await using var stream = documentationService.GetStream(sourceType, sourceId, documentId);
         if (stream != null)
         {
+            var extension = documentId.Split('.').Last();
             using var reader = new StreamReader(stream);
-            return new MarkdownControl(await reader.ReadToEndAsync(cancellationToken));
+            return new MarkdownControl(Format(await reader.ReadToEndAsync(cancellationToken), extension));
         }
-        else
-            // Resource not found, return a warning control/message instead
-            return FileNotFound(path);
+
+        // Resource not found, return a warning control/message instead
+        return FileNotFound(path);
     }
 
+    private static string Format(string content, string extension)
+    {
+        extension = extension.ToLower();
+        // TODO V10: Need to think how to output MD source. (05.08.2024, Roland Bürgi)
+        if (extension == "md")
+            return content;
+        if (SupportedLanguages.TryGetValue(extension, out var lang))
+            return $"```{lang}\n{content}\n```";
+        return content;
+    }
+
+    private static readonly ImmutableDictionary<string, string> SupportedLanguages =
+        ImmutableDictionary<string, string>.Empty
+            .Add("md", "markdown")
+            .Add("cs", "csharp")
+            .Add("js", "javascript")
+            .Add("html", "html")
+            .Add("css", "css")
+            .Add("json", "json")
+            .Add("xml", "xml")
+            .Add("sql", "sql")
+            .Add("py", "python")
+            .Add("java", "java")
+            .Add("cpp", "cpp")
+            .Add("ts", "typescript");
     private static MarkdownControl FileNotFound(string path) => 
         new($":error: **File not found**: {path}");
 }
