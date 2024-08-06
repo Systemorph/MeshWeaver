@@ -32,9 +32,6 @@ public static class NorthwindDashboardArea
                     new LayoutAreaReference(nameof(Dashboard)).ToHref(layout.Hub.Address), FluentIcons.Grid)
             );
 
-
-
-
     /// <summary>
     /// Generates the main dashboard view for a given layout area and rendering context.
     /// </summary>
@@ -68,6 +65,12 @@ public static class NorthwindDashboardArea
             .WithView(
                 (area, ctx) => area.SupplierSummary(ctx)
                     .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
+            )
+            .WithView(
+                Controls.Stack
+                    .WithView(Controls.PaneHeader("Top products"))
+                    .WithView((area, ctx) => area.TopProducts(ctx))
+                    .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
             );
     }
 
@@ -79,7 +82,24 @@ public static class NorthwindDashboardArea
                     .State
                     .Pivot(cube)
                     .SliceColumnsBy(nameof(Category))
-                    .ToBarChart()
+                    .ToBarChart(
+                        builder => builder
+                            .AsHorizontalBar()
+                            .WithDataLabels(o => o with {Display = true})
+                            .WithLegend(legend => legend.WithDisplay(false)))
+                    .ToChartControl()
+            );
+    }
+
+    private static IObservable<object> TopProducts(this LayoutAreaHost layoutArea, RenderingContext context)
+    {
+        return layoutArea.GetDataCube()
+            .Select(cube =>
+                layoutArea.Workspace
+                    .State
+                    .Pivot(cube)
+                    .SliceColumnsBy(nameof(Product))
+                    .ToBarChart(builder => builder.WithLegend(legend => legend.WithDisplay(false)))
                     .ToChartControl()
             );
     }

@@ -1,4 +1,5 @@
-﻿using Newtonsoft.Json;
+﻿using System.Text.Json.Serialization;
+using Newtonsoft.Json;
 using OpenSmc.Charting.Models.Options.Tooltips;
 
 namespace OpenSmc.Charting.Models.Options
@@ -25,10 +26,10 @@ namespace OpenSmc.Charting.Models.Options
         /// </summary>
         public ToolTip Tooltip { get; init; }
 
-        [JsonProperty("colorschemes")]
+        [JsonPropertyName("colorschemes")]
         public ColorSchemes ColorSchemes { get; init; } = new();
 
-        [JsonProperty("datalabels")]
+        [JsonPropertyName("datalabels")]
         public DataLabels DataLabels { get; set; }
     }
 }

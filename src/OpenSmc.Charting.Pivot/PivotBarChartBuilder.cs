@@ -38,6 +38,11 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
         ChartBuilder = new BarChartBuilder();
     }
 
+    public IPivotBarChartBuilder WithChartBuilder(Func<BarChartBuilder, BarChartBuilder> builder)
+    {
+        return this with { ChartBuilder = builder(ChartBuilder) };
+    }
+
     public IPivotBarChartBuilder AsStackedWithScatterTotals()
     {
         StackedWithTotalsAsScatter();

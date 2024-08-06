@@ -27,7 +27,8 @@ namespace OpenSmc.Northwind.ViewModel
             ShipVia = order.ShipVia;
             Freight = order.Freight;
             ShipCountry = order.ShipCountry;
-            Product = product.ProductName;
+            Product = product.ProductId;
+            ProductName = product.ProductName;
             UnitPrice = details.UnitPrice;
             Quantity = details.Quantity;
             Discount = details.Discount;
@@ -115,12 +116,18 @@ namespace OpenSmc.Northwind.ViewModel
         /// </summary>
         [NotVisible]
         public decimal Freight { get; init; }
-    
+
+        /// <summary>
+        /// Gets the identifier of the product.
+        /// </summary>
+        [property: Dimension(typeof(Product))]
+        public int Product { get; init; }
+
         /// <summary>
         /// Gets the name of the product.
         /// </summary>
         [NotVisible]
-        public string Product { get; init; }
+        public string ProductName { get; init; }
     
         /// <summary>
         /// Calculates the total amount for the order detail, considering unit price, quantity, and discount.
