@@ -1,5 +1,4 @@
 ﻿using System.Diagnostics;
-using Microsoft.Extensions.FileProviders;
 using Microsoft.FluentUI.AspNetCore.Components;
 using OpenSmc.Hosting;
 using OpenSmc.Northwind.Application;
@@ -13,16 +12,6 @@ builder.AddServiceDefaults();
 builder.Services.AddRazorPages();
 builder.Services.AddServerSideBlazor();
 builder.Services.AddFluentUIComponents();
-// .AddHubOptions(o =>
-// {
-//     o.MaximumReceiveMessageSize = 10 * 1024 * 1024;
-// })
-// .AddJsonProtocol(options =>
-// {
-//     options.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
-//     options.PayloadSerializerOptions.WriteIndented = true;
-// })
-;
 builder.Services.AddSingleton<WeatherForecastService>();
 builder.Services.AddLogging(config => config.AddSimpleConsole(
     options =>
