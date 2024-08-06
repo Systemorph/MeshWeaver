@@ -43,15 +43,17 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
 
     public string ToHref(object address)
     {
-        var ret = $"{address}/{Uri.EscapeDataString(Area)}";
+        var ret = $"{address}/{Encode(Area)}";
         if (Id?.ToString() is { } s)
-            ret = $"{ret}/{Uri.EscapeDataString(s)}";
+            ret = $"{ret}/{Encode(s)}";
         if (Options.Any())
             ret = $"ret?{string.Join('&',
                 Options
-                    .Select(x => $"{x.Key}={Uri.EscapeDataString(x.Value?.ToString() ?? "")}"))}";
+                    .Select(x => $"{x.Key}={Encode(x.Value?.ToString() ?? "")}"))}";
         return ret;
     }
 
+    public static object Encode(object value) => value is string s ? Uri.EscapeDataString(s).Replace(".", "%9Y") : value;
+    public static object Decode(object value) => value is string s ? Uri.UnescapeDataString(s.Replace("%9Y", ".")) : value;
 
 }
