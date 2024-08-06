@@ -75,5 +75,7 @@ namespace OpenSmc.Charting.Models.Options
         public Legend WithAlign(string alignment) => this with { Align = alignment };
 
         public Legend Reversed() => this with { Reverse = true };
+
+        public Legend WithDisplay(bool display) => this with { Display = display };
     }
 }

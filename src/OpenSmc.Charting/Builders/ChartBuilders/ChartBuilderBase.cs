@@ -105,6 +105,11 @@ public abstract record ChartBuilderBase<TChartBuilder, TDataSet, TOptionsBuilder
 
     public TChartBuilder WithOptions(Func<TOptionsBuilder, TOptionsBuilder> func) => (TChartBuilder)(this with { OptionsBuilder = func(OptionsBuilder) });
 
+    public TChartBuilder WithDataLabels(Func<DataLabels, DataLabels> func) => WithOptions(o => o.WithPlugins(p => p with
+    {
+        DataLabels = func(p.DataLabels ?? new DataLabels())
+    }));
+
     public virtual Chart ToChart()
     {
         var tmp = this with

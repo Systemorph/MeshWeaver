@@ -9,4 +9,9 @@ public record BarChartBuilder(Chart ChartModel = null, BarOptionsBuilder Options
     : BarChartBuilderBase<BarChartBuilder, BarDataSet, BarOptionsBuilder, BarDataSetBuilder>(ChartModel ?? new Chart(ChartType.Bar), OptionsBuilder)
 {
     public BarChartBuilder() : this(new Chart(ChartType.Bar)) { }
+
+    public BarChartBuilder AsHorizontalBar()
+    {
+        return WithOptions(options => options.WithIndexAxis("y"));
+    }
 }

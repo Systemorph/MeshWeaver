@@ -1,4 +1,5 @@
-﻿using OpenSmc.Pivot.Builder;
+﻿using OpenSmc.Charting.Builders.ChartBuilders;
+using OpenSmc.Pivot.Builder;
 
 namespace OpenSmc.Charting.Pivot;
 
@@ -22,6 +23,25 @@ public static class PivotChartingExtensions
         return new PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>(
             pivotBuilder
         );
+    }
+
+    public static IPivotBarChartBuilder ToBarChart<
+        T,
+        TTransformed,
+        TIntermediate,
+        TAggregate,
+        TPivotBuilder
+    >(this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
+        Func<BarChartBuilder, BarChartBuilder> chartBuilder)
+        where TPivotBuilder : PivotBuilderBase<
+            T,
+            TTransformed,
+            TIntermediate,
+            TAggregate,
+            TPivotBuilder
+        >
+    {
+        return pivotBuilder.ToBarChart().WithChartBuilder(chartBuilder);
     }
 
     public static IPivotLineChartBuilder ToLineChart<

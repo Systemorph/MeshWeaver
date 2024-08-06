@@ -49,6 +49,12 @@ public abstract record PivotChartBuilderBase<
     protected TChartBuilder ChartBuilder;
     protected PivotChartModelBuilder PivotChartModelBuilder { get; init; } = new();
 
+    public IPivotChartBuilder WithLegend(Func<Legend, Legend> legendModifier = null)
+    {
+        ChartBuilder = ChartBuilder.WithLegend(legendModifier);
+        return this;
+    }
+
     public IPivotChartBuilder WithTitle(string title, Func<Title, Title> titleModifier)
     {
         ChartBuilder = ChartBuilder.WithTitle(title, titleModifier);

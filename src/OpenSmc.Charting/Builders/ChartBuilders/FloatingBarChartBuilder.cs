@@ -272,11 +272,6 @@ public abstract record WaterfallChartBuilderBase<TChartBuilder, TDataSet, TDataS
         totalIndexes.Add(deltas.Count - 1);
         return (TChartBuilder)this;
     }
-
-    public TChartBuilder WithDataLabels(Func<DataLabels, DataLabels> func) => WithOptions(o => o.WithPlugins(p => p with
-                                                                                                                  {
-                                                                                                                      DataLabels = func(p.DataLabels ?? new DataLabels())
-                                                                                                                  }));
 }
 
 public record WaterfallChartBuilder(Chart ChartModel = null, RangeOptionsBuilder OptionsBuilder = null)
