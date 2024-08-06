@@ -1,4 +1,7 @@
 ﻿using OpenSmc.Application.Styles;
+using OpenSmc.Demo.ViewModel.CkeckBox;
+using OpenSmc.Demo.ViewModel.DropDown;
+using OpenSmc.Demo.ViewModel.Listbox;
 using OpenSmc.Documentation;
 using OpenSmc.Layout;
 using OpenSmc.Layout.Composition;
@@ -10,20 +13,16 @@ namespace OpenSmc.Demo.ViewModel;
 public static class DemoDocumentationConfiguration
 {
     private const string Overview = nameof(Overview);
-    private const string ViewModelState = nameof(ViewModelState);
-    private const string DropDownControl = nameof(DropDownControl);
-    private const string ListboxControl = nameof(ListboxControl);
-    private const string CheckBoxControl = nameof(CheckBoxControl);
 
     public static LayoutDefinition AddDocumentationMenu(this LayoutDefinition layout)
         => layout
             .WithNavMenu((menu, _) =>
                 menu
-                    .WithNavLink(Overview, $"{layout.Hub.Address}/Doc/{Overview}", nl => nl with { Icon = FluentIcons.Home, })
-                    .WithNavLink("ViewModel State", $"{layout.Hub.Address}/Doc/{ViewModelState}", nl => nl with { Icon = FluentIcons.Box, })
-                    .WithNavLink("DropDown Control", $"{layout.Hub.Address}/Doc/{DropDownControl}", nl => nl with { Icon = FluentIcons.CalendarDataBar, })
-                    .WithNavLink("Listbox Control", $"{layout.Hub.Address}/Doc/{ListboxControl}", nl => nl with { Icon = FluentIcons.Grid, })
-                    .WithNavLink("CheckBox Control", $"{layout.Hub.Address}/Doc/{CheckBoxControl}", nl => nl with { Icon = FluentIcons.Box, })
+                    .WithNavLink(Overview, layout.DocumentationPath(typeof(CounterLayoutArea).Assembly, "Overview.md"), nl => nl with { Icon = FluentIcons.Home, })
+                    .WithNavLink("ViewModel State", layout.DocumentationPath(typeof(CounterLayoutArea).Assembly, "Counter.md"), nl => nl with { Icon = FluentIcons.Box, })
+                    .WithNavLink("DropDown Control", layout.DocumentationPath(typeof(YearSelectArea).Assembly, "DropDown.md"), nl => nl with { Icon = FluentIcons.CalendarDataBar, })
+                    .WithNavLink("Listbox Control", layout.DocumentationPath(typeof(BaseColorListArea).Assembly, "Listbox.md"), nl => nl with { Icon = FluentIcons.Grid, })
+                    .WithNavLink("CheckBox Control", layout.DocumentationPath(typeof(TermsAgreementTickArea).Assembly, "CheckBox.md"), nl => nl with { Icon = FluentIcons.Box, })
             )
         ;
 
