@@ -53,7 +53,6 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
         return ret;
     }
 
-    public static object Encode(object value) => value is string s ? Uri.EscapeDataString(s).Replace(".", "%9Y") : value;
-    public static object Decode(object value) => value is string s ? Uri.UnescapeDataString(s.Replace("%9Y", ".")) : value;
-
+    public static object Encode(object value) => value is string s ? s.Replace(".", "%9Y") : value;
+    public static object Decode(object value) => value is string s ? s.Replace("%9Y", ".") : value;
 }
