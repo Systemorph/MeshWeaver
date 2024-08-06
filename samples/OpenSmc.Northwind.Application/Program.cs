@@ -26,6 +26,12 @@ builder.Host.UseOpenSmc(
     new BlazorServerAddress(),
     config => config.ConfigureNorthwindHubs()
 );
+
+if (!builder.Environment.IsDevelopment())
+{
+    builder.WebHost.UseStaticWebAssets();
+}
+
 var app = builder.Build();
 
 var logger = app.Services.GetRequiredService<ILogger<Program>>();
@@ -41,15 +47,15 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
-
 app.UseRouting();
 
 app.MapBlazorHub();
 app.MapFallbackToPage("/_Host");
 
 app.UseHttpsRedirection();
-//app.UseStaticFiles();
+app.UseStaticFiles();
 app.Run();
+
 public record BlazorServerAddress
 {
     public Guid Id { get; init; } = Guid.NewGuid();
