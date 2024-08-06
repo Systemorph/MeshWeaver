@@ -78,7 +78,7 @@ public static class NorthwindDashboardArea
                 layoutArea.Workspace
                     .State
                     .Pivot(cube)
-                    .SliceRowsBy(nameof(Category))
+                    .SliceColumnsBy(nameof(Category))
                     .ToBarChart()
                     .ToChartControl()
             );

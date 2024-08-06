@@ -45,8 +45,8 @@ namespace OpenSmc.Pivot.Grouping
                     .ThenBy(g => GetOrder((string)g.OrderKey))
                     .Select(x => x.Identity);
             return groups
-                .OrderBy(x => (string)x.OrderKey == null)
-                .ThenBy(g => GetDisplayName((string)g.OrderKey))
+                .OrderBy(x => x.OrderKey == null)
+                .ThenBy(g => GetDisplayName(g.OrderKey))
                 .Select(x => x.Identity);
         }
 
