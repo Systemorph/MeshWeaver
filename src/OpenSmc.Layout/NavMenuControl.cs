@@ -8,6 +8,9 @@ public record TabsControl() :
     public TabsControl WithTab(UiControl item)
         => WithItems(item);
 
+    public object ActiveTabId { get; init; }
+    public object Height { get; init; }
+    public object Orientation { get; init; }
 }
 
 public record NavMenuControl() : 

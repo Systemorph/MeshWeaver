@@ -45,6 +45,7 @@ public static class BlazorClientExtensions
             SpinnerControl spinner => StandardView<SpinnerControl, Spinner>(spinner, stream, area),
             LabelControl label => StandardView<LabelControl, Label>(label, stream, area),
             NavMenuControl navMenu => StandardView<NavMenuControl, NavMenuView>(navMenu, stream, area),
+            TabsControl tabs => StandardView<TabsControl, TabsView>(tabs, stream, area),
             MenuItemControl menu => StandardView<MenuItemControl, MenuItemView>(menu, stream, area),
             NavLinkControl link => StandardView<NavLinkControl, NavLink>(link, stream, area),
             NavGroupControl group => StandardView<NavGroupControl, NavGroup>(group, stream, area),
@@ -94,6 +95,7 @@ public static class BlazorClientExtensions
             FooterSkin footer => StandardSkinnedView<UiControl, FooterView>(control, stream, area, footer),
             BodyContentSkin bodyContent => StandardSkinnedView<UiControl, BodyContentView>(control, stream, area,
                 bodyContent),
+            TabSkin tab => StandardSkinnedView<UiControl, TabView>(control, stream, area, tab),
             SplitterPaneSkin splitter
                 => StandardSkinnedView<UiControl, SplitterPane>(control, stream, area, splitter),
             _ => null

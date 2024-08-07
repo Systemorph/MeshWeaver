@@ -48,11 +48,6 @@
 
 @code{
 
-    protected override void DataBind<T>(object value, Action<T> bindingAction)
-    {
-        base.DataBind(value, bindingAction);
-        Style ??= $"min-width: {ViewModel.Columns.Count * 120}px";
-    }
 
     private PaginationState Pagination { get;  } = new()
     {
