@@ -28,9 +28,7 @@ public partial class LayoutArea : IDisposable
     [Parameter]
     public LayoutAreaReference Reference { get; set; }
 
-    [Parameter]
     public string Area { get; set; }
-    [Parameter]
     public string DisplayArea { get; set; }
 
 
@@ -42,7 +40,9 @@ public partial class LayoutArea : IDisposable
     protected override void OnParametersSet()
     {
         base.OnParametersSet();
-        
+        Area = Reference.Layout ?? Reference.Area;
+        DisplayArea = Reference.DisplayArea ?? Reference.Area;
+
         if(Stream != null && Equals(Stream?.Owner, Address) && Equals(Stream?.Reference, Reference))
             return;
 
