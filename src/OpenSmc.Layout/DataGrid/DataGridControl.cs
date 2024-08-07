@@ -1,4 +1,7 @@
 ﻿
+using OpenSmc.Data;
+using OpenSmc.Layout.Composition;
+
 namespace OpenSmc.Layout.DataGrid;
 
 public record DataGridControl(object Data)
@@ -20,6 +23,12 @@ public record DataGridControl(object Data)
                ItemSize == other.ItemSize &&
                ResizableColumns == other.ResizableColumns;
     }
+
+    protected override UiControl PrepareRendering(RenderingContext context)
+    => this with
+    {
+        Style = Style ?? $"min-width: {Columns.Count * 120}px"
+    };
 
     public override int GetHashCode()
     {

@@ -25,7 +25,7 @@ namespace OpenSmc.Blazor
         protected string Label { get; set; }
 
         protected string Class { get; set; }
-
+        protected string Id { get; set; }
 
         protected List<IDisposable> Disposables { get; } = new();
 
@@ -39,7 +39,7 @@ namespace OpenSmc.Blazor
 
 
         private readonly List<IDisposable> bindings = new();
-        protected virtual void DataBind<T>(object value, Action<T> bindingAction)
+        protected void DataBind<T>(object value, Action<T> bindingAction)
         {
             bindings.Add(Stream.GetObservable<T>(ViewModel.DataContext, value).Subscribe(bindingAction));
         }
@@ -85,6 +85,7 @@ namespace OpenSmc.Blazor
 
             if (ViewModel != null)
             {
+                DataBind<string>(ViewModel.Id, x => Id = x);
                 DataBind<string>(ViewModel.Label, x => Label = x);
                 DataBind<string>(ViewModel.Class, x => Class = x);
                 DataBind<string>(ViewModel.Style, x => Style = x);

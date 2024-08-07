@@ -68,12 +68,14 @@ public abstract record UiControl(object Data) : IUiControl
     //public virtual IEnumerable<Func<EntityStore, EntityStore>> Render(LayoutAreaHost host, RenderingContext context)
     //=> RenderSelf(context);
 
-    protected virtual IEnumerable<Func<EntityStore, EntityStore>> RenderSelf(RenderingContext context)
+    protected IEnumerable<Func<EntityStore, EntityStore>> RenderSelf(RenderingContext context)
     {
-        return RenderResults.Concat([store => store.UpdateControl(context.Area, this)]);
+        return RenderResults.Concat([store => store.UpdateControl(context.Area, PrepareRendering(context))]);
 
     }
 
+    protected virtual UiControl PrepareRendering(RenderingContext context)
+        => this;
     private ImmutableList<Func<EntityStore, EntityStore>> RenderResults { get; init; } =
         ImmutableList<Func<EntityStore, EntityStore>>.Empty;
     public UiControl WithRenderResult(Func<EntityStore, EntityStore> renderResult)
