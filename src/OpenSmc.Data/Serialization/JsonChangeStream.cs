@@ -68,7 +68,7 @@ public static class JsonSynchronizationStream
         DataChangedEvent request
     )
     {
-        json.Update(state => json.Parse(state, request));
+        json.Update(state => json.Parse(state.ValueKind != JsonValueKind.Undefined ? state:new(), request));
     }
 
     private static ChangeItem<JsonElement> Parse(

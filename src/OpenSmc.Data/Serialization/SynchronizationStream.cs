@@ -168,11 +168,18 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
         IMessageDelivery<WorkspaceMessage> delivery
     )
     {
-        return messageHandlers
+        try
+        {
+            return messageHandlers
                 .Where(x => x.Applies(delivery))
                 .Select(x => x.Process)
                 .FirstOrDefault()
                 ?.Invoke(delivery) ?? delivery;
+        }
+        catch (Exception e)
+        {
+            return delivery.Failed($"Exception during execution: {e}");
+        }
     }
 
     public void Update(Func<TStream, ChangeItem<TStream>> update) => 
