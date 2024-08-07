@@ -6,7 +6,7 @@ namespace OpenSmc.Charting.Plugins.Zoom
     /// Requires Zoom and Pan plugin.
     /// https://github.com/chartjs/chartjs-plugin-zoom
     /// </summary>
-    public record ZoomPieOptions : Options
+    public record ZoomPieOptions : ChartOptions
     {
         public Pan Pan { get; set; }
 

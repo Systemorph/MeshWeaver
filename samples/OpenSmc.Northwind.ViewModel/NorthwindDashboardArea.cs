@@ -85,9 +85,8 @@ public static class NorthwindDashboardArea
                     .ToBarChart(
                         builder => builder
                             .AsHorizontalBar()
-                            .WithDataLabels(o => o with {Display = true})
-                            .WithLegend(legend => legend.WithDisplay(false)))
-                    .ToChartControl()
+                            .WithDataLabels()
+                    )
             );
     }
 
@@ -99,8 +98,7 @@ public static class NorthwindDashboardArea
                     .State
                     .Pivot(cube)
                     .SliceColumnsBy(nameof(Product))
-                    .ToBarChart(builder => builder.WithLegend(legend => legend.WithDisplay(false)))
-                    .ToChartControl()
+                    .ToBarChart()
             );
     }
 

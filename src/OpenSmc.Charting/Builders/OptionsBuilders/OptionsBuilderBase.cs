@@ -7,8 +7,8 @@ namespace OpenSmc.Charting.Builders.OptionsBuilders;
 public abstract record OptionsBuilderBase<TOptionsBuilder>
     where TOptionsBuilder : OptionsBuilderBase<TOptionsBuilder>
 {
-    internal Options Options = new();
-    public Options Build() => Options;
+    internal ChartOptions Options = new();
+    public ChartOptions Build() => Options;
 
     public TOptionsBuilder WithoutAnimation()
         => (TOptionsBuilder)(this with { Options = Options with { Animation = (Options.Animation ?? new Animation()) with { Duration = 0 } } });

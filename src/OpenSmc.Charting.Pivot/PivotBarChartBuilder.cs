@@ -212,7 +212,7 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
             {
                 case ChartType.Bar: // do we have to make sure this axis goes first?
                     scales.Add(
-                        PivotChartConst.XBarAxis,
+                        ChartBuilder.IsHorizontal ? PivotChartConst.YAxis : PivotChartConst.XBarAxis,
                         new CartesianCategoryScale
                         {
                             Stacked = barStacked,
@@ -244,7 +244,10 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
             }
         }
 
-        scales.Add(PivotChartConst.YAxis, new Scale { Stacked = barStacked });
+        if (!ChartBuilder.IsHorizontal)
+        {
+            scales.Add(PivotChartConst.YAxis, new Scale {Stacked = barStacked});
+        }
 
         ChartBuilder = ChartBuilder.WithOptions(o => o.WithScales(scales).Responsive());
     }

@@ -6,7 +6,8 @@ using OpenSmc.Charting.Models;
 namespace OpenSmc.Charting.Builders.ChartBuilders;
 
 public record BarChartBuilder(Chart ChartModel = null, BarOptionsBuilder OptionsBuilder = null)
-    : BarChartBuilderBase<BarChartBuilder, BarDataSet, BarOptionsBuilder, BarDataSetBuilder>(ChartModel ?? new Chart(ChartType.Bar), OptionsBuilder)
+    : ArrayChartBuilder<BarChartBuilder, BarDataSet, BarOptionsBuilder, BarDataSetBuilder>
+        (ChartModel ?? new Chart(ChartType.Bar), OptionsBuilder)
 {
     public BarChartBuilder() : this(new Chart(ChartType.Bar)) { }
 
@@ -14,4 +15,6 @@ public record BarChartBuilder(Chart ChartModel = null, BarOptionsBuilder Options
     {
         return WithOptions(options => options.WithIndexAxis("y"));
     }
+
+    public bool IsHorizontal => OptionsBuilder.Options.IndexAxis == "y";
 }

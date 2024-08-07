@@ -114,7 +114,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .SliceRowsBy(nameof(Name))
-            .ToBarChart()
+            .ToBarChartPivotBuilder()
             .WithTitle("AggregateByCountry")
             .Execute();
         await charSlicedByName.JsonShouldMatch(
@@ -131,7 +131,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .SliceRowsBy(nameof(Country))
-            .ToBarChart()
+            .ToBarChartPivotBuilder()
             .Execute();
         await charSliceByCountry.JsonShouldMatch(
             Options,
@@ -147,7 +147,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .SliceRowsBy(nameof(Name), nameof(Country))
-            .ToBarChart()
+            .ToBarChartPivotBuilder()
             .AsStackedWithScatterTotals()
             .WithOptions(m => m.WithLabelsFromLevels(0, 1))
             .Execute();
@@ -164,7 +164,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             .Pivot(CubeWithValues)
             
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex), nameof(Country))
-            .ToBarChart()
+            .ToBarChartPivotBuilder()
             .WithOptions(m => m)
             .Execute();
         await doubleColumnSlice.JsonShouldMatch(Options, $"{nameof(BarChartTestWithOption)}.json");
@@ -178,7 +178,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             
             .SliceColumnsBy(nameof(Country), nameof(RecordWithValues.ValueIndex))
             .SliceRowsBy(nameof(Name))
-            .ToBarChart()
+            .ToBarChartPivotBuilder()
             .Execute();
         await doubleColumnSliceTwoRows.JsonShouldMatch(
             Options,
@@ -193,7 +193,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             .Pivot(CubeWithValues)
             
             .SliceRowsBy(nameof(RecordWithValues.ValueIndex))
-            .ToBarChart()
+            .ToBarChartPivotBuilder()
             .Execute();
         await noColumnSlice.JsonShouldMatch(
             Options,
@@ -209,7 +209,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .SliceRowsBy(nameof(Country))
-            .ToBarChart()
+            .ToBarChartPivotBuilder()
             .AsStackedWithScatterTotals()
             .Execute();
         await stackOneOne.JsonShouldMatch(
@@ -226,7 +226,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             
             .SliceColumnsBy(nameof(Name))
             .SliceRowsBy(nameof(Country))
-            .ToBarChart()
+            .ToBarChartPivotBuilder()
             .AsStackedWithScatterTotals()
             .Execute();
         await stackTwoTwo.JsonShouldMatch(
@@ -243,7 +243,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .SliceRowsBy(nameof(Country))
-            .ToBarChart()
+            .ToBarChartPivotBuilder()
             .WithOptions(model =>
                 model
                     .WithLabels("A", "B", "C", "D", "E", "F", "G", "H")
@@ -262,7 +262,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .SliceRowsBy(nameof(Name), nameof(Country))
-            .ToBarChart()
+            .ToBarChartPivotBuilder()
             .WithOptions(model =>
                 (
                     model with
@@ -288,7 +288,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             
             .SliceRowsBy(nameof(Name))
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
-            .ToBarChart()
+            .ToBarChartPivotBuilder()
             .WithRowsAsLine("Paolo")
             .Execute();
         await mixedPlot1.JsonShouldMatch(Options, $"{nameof(MixedChart)}.json");

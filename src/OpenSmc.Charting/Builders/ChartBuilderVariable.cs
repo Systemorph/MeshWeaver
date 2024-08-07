@@ -5,7 +5,6 @@ namespace OpenSmc.Charting.Builders;
 public static class ChartBuilder
 {
     public static BarChartBuilder Bar() => new();
-    public static HorizontalBarChartBuilder HorizontalBar() => new();
     public static DoughnutChartBuilder Doughnut() => new();
     public static LineChartBuilder Line() => new();
     public static PieChartBuilder Pie() => new();

@@ -1,21 +1,23 @@
 ﻿using OpenSmc.Charting.Enums;
+using OpenSmc.Charting.Models.Options;
 
 namespace OpenSmc.Charting.Models
 {
     public record Chart(ChartType Type)
     {
         /// <summary>
-        /// Chart type determines the main type of the chart.
+        /// Chart type e.g. bar, line, etc
         /// </summary>
         public ChartType Type { get; init; } = Type;
 
-        public Data Data { get; init; } = new();
-
-        public Options.Options Options { get; init; } = new();
+        /// <summary>
+        /// Chart data
+        /// </summary>
+        public ChartData Data { get; init; } = new();
 
         /// <summary>
-        /// Inline plugins
+        /// Chart options configuration
         /// </summary>
-        public string Plugins { get; init; }
+        public ChartOptions Options { get; init; } = new();
     }
 }
