@@ -1,5 +1,4 @@
-﻿using System.Collections.Immutable;
-using System.Text.Json;
+﻿using System.Text.Json;
 using Json.Pointer;
 using OpenSmc.Data;
 
@@ -8,7 +7,6 @@ namespace OpenSmc.Layout;
 public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
 {
     public object Id { get; init; }
-    public IReadOnlyDictionary<string, object> Options { get; init; } = ImmutableDictionary<string, object>.Empty;
     public string Layout { get; init; }
 
     public const string Data = "data";
@@ -29,27 +27,13 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
     public static string GetPropertiesPointer(string id) =>
         JsonPointer.Create(Properties, id).ToString();
 
-    public virtual bool Equals(LayoutAreaReference other)
-    {
-        if (other is null)
-            return false;
-        return Equals(Area, other.Area) && Equals(Id, other.Id) && Options.SequenceEqual(other.Options);
-    }
 
-    public override int GetHashCode()
-    {
-        return HashCode.Combine(Area, Id, Options);
-    }
 
     public string ToHref(object address)
     {
         var ret = $"{address}/{Encode(Area)}";
         if (Id?.ToString() is { } s)
             ret = $"{ret}/{Encode(s)}";
-        if (Options.Any())
-            ret = $"ret?{string.Join('&',
-                Options
-                    .Select(x => $"{x.Key}={Encode(x.Value?.ToString() ?? "")}"))}";
         return ret;
     }
 

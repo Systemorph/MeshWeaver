@@ -11,10 +11,10 @@ namespace OpenSmc.Documentation;
 
 public static class DocumentationViewModels
 {
-    public const string Docs = nameof(Docs);
+    public const string Documentation = nameof(Documentation);
     public const string MainContent = "$" + nameof(MainContent);
 
-    private static Func<RenderingContext, bool> IsDocs => ctx => ctx.Layout == Docs;
+    private static Func<RenderingContext, bool> IsDocs => ctx => ctx.Layout == Documentation;
 
     public static LayoutDefinition AddDocumentation(this LayoutDefinition layout)
         => layout
@@ -31,27 +31,27 @@ public static class DocumentationViewModels
         =>
         [
             store => store.UpdateControl(
-                Docs,
-                Tabs.WithTab(NamedArea(context.Area).WithSkin(Skins.Tab(context.DisplayName)))
+                Documentation,
+                Tabs.WithTab(context.DisplayName, NamedArea(context.Area))
             )
 
         ];
 
 
-    public static LayoutDefinition WithSources(this LayoutDefinition layout,
-        Func<RenderingContext, bool> contextFilter, params string[] sources)
+    public static LayoutDefinition WithSourcesForType(this LayoutDefinition layout,
+        Func<RenderingContext, bool> contextFilter, params Type[] sources)
         => layout.WithRenderer(ctx => IsDocs(ctx) && contextFilter(ctx),
-            (h, config) =>
+            (host, context) =>
             [
-                store => h.ConfigBasedRenderer(
-                    config,
+                store => host.ConfigBasedRenderer(
+                    context,
                     store,
-                    Docs,
-                    () => new TabsControl(),
+                    Documentation,
+                    () => new TabsControl().WithTab(context.DisplayName, NamedArea(host.Stream.Reference.Area)),
                     (tabs, _) =>
-                        sources.Select(s => new LayoutAreaControl(layout.Hub.Address, new(Docs) { Id = s }))
+                        sources.Select(type => new LayoutAreaControl(layout.Hub.Address, new(Documentation) { Id = $"" }))
                             .Aggregate(tabs, (t, s) =>
-                                t.WithTab(new LayoutAreaControl(layout.Hub.Address, new(Docs) { Id = s }))))
+                                t.WithTab(context.DisplayName,s)))
             ]);
 
 

@@ -1,5 +1,4 @@
-﻿using System.Collections.Immutable;
-using System.Text;
+﻿using System.Text;
 using System.Text.Json;
 using Markdig.Helpers;
 using Markdig.Parsers;
@@ -19,12 +18,6 @@ public class LayoutAreaMarkdownParser : BlockParser
         fieldMappings = new()
         {
             { nameof(LayoutAreaComponentInfo.Id), (a, foundValue) => a.Id = foundValue },
-            {
-                nameof(LayoutAreaComponentInfo.Options), (area, foundValue) =>
-                    area.Options = JsonSerializer.Deserialize<
-                        ImmutableDictionary<string, object>
-                    >(foundValue, hub.JsonSerializerOptions)
-            },
             { nameof(LayoutAreaComponentInfo.Layout), (a, foundValue) => a.Layout = foundValue },
             { nameof(LayoutAreaComponentInfo.DivId), (a, foundValue) => a.DivId = foundValue },
             {

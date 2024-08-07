@@ -88,10 +88,6 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
         {
             return new AnonymousDisposable(() => {});
         }
-        catch
-        {
-            throw;
-        }
     }
 
     public readonly List<IDisposable> Disposables = new();
@@ -137,7 +133,6 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
             }
         if(!isDisposed)
             Store.OnNext(value);
-        Store.OnNext(value);
     }
 
     private bool IsInitialized => initialized.Task.IsCompleted;
