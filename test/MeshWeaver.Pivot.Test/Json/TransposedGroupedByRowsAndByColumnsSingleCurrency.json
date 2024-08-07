@@ -1,0 +1,248 @@
+{
+  "columns": [
+    {
+      "children": [
+        {
+          "systemName": "C.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "C",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "C",
+      "displayName": "Casualty",
+      "coordinates": [
+        "C"
+      ],
+      "grouperName": "LineOfBusiness",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "systemName": "H.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "H",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "H",
+      "displayName": "Health",
+      "coordinates": [
+        "H"
+      ],
+      "grouperName": "LineOfBusiness",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "systemName": "L.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "L",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "L",
+      "displayName": "Life",
+      "coordinates": [
+        "L"
+      ],
+      "grouperName": "LineOfBusiness",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "systemName": "P.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "P",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "P",
+      "displayName": "Property",
+      "coordinates": [
+        "P"
+      ],
+      "grouperName": "LineOfBusiness",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    }
+  ],
+  "rows": [
+    {
+      "rowGroup": {
+        "coordinates": [
+          "E"
+        ],
+        "systemName": "E",
+        "displayName": "Expenses",
+        "grouperName": "AmountType",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "E",
+          "Value"
+        ],
+        "systemName": "E.Value",
+        "displayName": "Value",
+        "grouperName": "PropertyName",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "C": {
+          "Value": 24
+        },
+        "H": {
+          "Value": 24
+        },
+        "L": {
+          "Value": 24
+        },
+        "P": {
+          "Value": 24
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "P"
+        ],
+        "systemName": "P",
+        "displayName": "Premium",
+        "grouperName": "AmountType",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "P",
+          "Value"
+        ],
+        "systemName": "P.Value",
+        "displayName": "Value",
+        "grouperName": "PropertyName",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "C": {
+          "Value": 24
+        },
+        "H": {
+          "Value": 24
+        },
+        "L": {
+          "Value": 24
+        },
+        "P": {
+          "Value": 24
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "C"
+        ],
+        "systemName": "C",
+        "displayName": "Cost",
+        "grouperName": "AmountType",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "C",
+          "Value"
+        ],
+        "systemName": "C.Value",
+        "displayName": "Value",
+        "grouperName": "PropertyName",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "C": {
+          "Value": 24
+        },
+        "H": {
+          "Value": 24
+        },
+        "L": {
+          "Value": 24
+        },
+        "P": {
+          "Value": 24
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "B"
+        ],
+        "systemName": "B",
+        "displayName": "Benefit",
+        "grouperName": "AmountType",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "B",
+          "Value"
+        ],
+        "systemName": "B.Value",
+        "displayName": "Value",
+        "grouperName": "PropertyName",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "C": {
+          "Value": 24
+        },
+        "H": {
+          "Value": 24
+        },
+        "L": {
+          "Value": 24
+        },
+        "P": {
+          "Value": 24
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    }
+  ],
+  "hasRowGrouping": true,
+  "$type": "MeshWeaver.Pivot.Models.PivotModel"
+}

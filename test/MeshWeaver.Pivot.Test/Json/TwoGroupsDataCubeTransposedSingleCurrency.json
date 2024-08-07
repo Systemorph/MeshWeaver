@@ -1,0 +1,594 @@
+{
+  "columns": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "systemName": "C.B.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "C",
+                "B",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "C.B",
+          "displayName": "B",
+          "coordinates": [
+            "C",
+            "B"
+          ],
+          "grouperName": "AmountType",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "C.C.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "C",
+                "C",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "C.C",
+          "displayName": "C",
+          "coordinates": [
+            "C",
+            "C"
+          ],
+          "grouperName": "AmountType",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "C.E.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "C",
+                "E",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "C.E",
+          "displayName": "E",
+          "coordinates": [
+            "C",
+            "E"
+          ],
+          "grouperName": "AmountType",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "C.P.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "C",
+                "P",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "C.P",
+          "displayName": "P",
+          "coordinates": [
+            "C",
+            "P"
+          ],
+          "grouperName": "AmountType",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "C.TotalGroup.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "C",
+                "TotalGroup",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "C.TotalGroup",
+          "displayName": " ",
+          "coordinates": [
+            "C",
+            "TotalGroup"
+          ],
+          "grouperName": "LineOfBusiness",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        }
+      ],
+      "systemName": "C",
+      "displayName": "C",
+      "coordinates": [
+        "C"
+      ],
+      "grouperName": "LineOfBusiness",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "systemName": "H.B.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "H",
+                "B",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "H.B",
+          "displayName": "B",
+          "coordinates": [
+            "H",
+            "B"
+          ],
+          "grouperName": "AmountType",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "H.C.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "H",
+                "C",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "H.C",
+          "displayName": "C",
+          "coordinates": [
+            "H",
+            "C"
+          ],
+          "grouperName": "AmountType",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "H.E.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "H",
+                "E",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "H.E",
+          "displayName": "E",
+          "coordinates": [
+            "H",
+            "E"
+          ],
+          "grouperName": "AmountType",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "H.P.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "H",
+                "P",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "H.P",
+          "displayName": "P",
+          "coordinates": [
+            "H",
+            "P"
+          ],
+          "grouperName": "AmountType",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "H.TotalGroup.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "H",
+                "TotalGroup",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "H.TotalGroup",
+          "displayName": " ",
+          "coordinates": [
+            "H",
+            "TotalGroup"
+          ],
+          "grouperName": "LineOfBusiness",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        }
+      ],
+      "systemName": "H",
+      "displayName": "H",
+      "coordinates": [
+        "H"
+      ],
+      "grouperName": "LineOfBusiness",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "systemName": "L.B.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "L",
+                "B",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "L.B",
+          "displayName": "B",
+          "coordinates": [
+            "L",
+            "B"
+          ],
+          "grouperName": "AmountType",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "L.C.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "L",
+                "C",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "L.C",
+          "displayName": "C",
+          "coordinates": [
+            "L",
+            "C"
+          ],
+          "grouperName": "AmountType",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "L.E.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "L",
+                "E",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "L.E",
+          "displayName": "E",
+          "coordinates": [
+            "L",
+            "E"
+          ],
+          "grouperName": "AmountType",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "L.P.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "L",
+                "P",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "L.P",
+          "displayName": "P",
+          "coordinates": [
+            "L",
+            "P"
+          ],
+          "grouperName": "AmountType",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "L.TotalGroup.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "L",
+                "TotalGroup",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "L.TotalGroup",
+          "displayName": " ",
+          "coordinates": [
+            "L",
+            "TotalGroup"
+          ],
+          "grouperName": "LineOfBusiness",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        }
+      ],
+      "systemName": "L",
+      "displayName": "L",
+      "coordinates": [
+        "L"
+      ],
+      "grouperName": "LineOfBusiness",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "systemName": "P.B.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "P",
+                "B",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "P.B",
+          "displayName": "B",
+          "coordinates": [
+            "P",
+            "B"
+          ],
+          "grouperName": "AmountType",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "P.C.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "P",
+                "C",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "P.C",
+          "displayName": "C",
+          "coordinates": [
+            "P",
+            "C"
+          ],
+          "grouperName": "AmountType",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "P.E.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "P",
+                "E",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "P.E",
+          "displayName": "E",
+          "coordinates": [
+            "P",
+            "E"
+          ],
+          "grouperName": "AmountType",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "P.P.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "P",
+                "P",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "P.P",
+          "displayName": "P",
+          "coordinates": [
+            "P",
+            "P"
+          ],
+          "grouperName": "AmountType",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "P.TotalGroup.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "P",
+                "TotalGroup",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "P.TotalGroup",
+          "displayName": " ",
+          "coordinates": [
+            "P",
+            "TotalGroup"
+          ],
+          "grouperName": "LineOfBusiness",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        }
+      ],
+      "systemName": "P",
+      "displayName": "P",
+      "coordinates": [
+        "P"
+      ],
+      "grouperName": "LineOfBusiness",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    }
+  ],
+  "rows": [
+    {
+      "rowGroup": {
+        "coordinates": [
+          "Value"
+        ],
+        "systemName": "Value",
+        "displayName": "Value",
+        "grouperName": "PropertyName",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "C": {
+          "B": {
+            "Value": 24
+          },
+          "C": {
+            "Value": 24
+          },
+          "E": {
+            "Value": 24
+          },
+          "P": {
+            "Value": 24
+          },
+          "TotalGroup": {
+            "Value": 96
+          }
+        },
+        "H": {
+          "B": {
+            "Value": 24
+          },
+          "C": {
+            "Value": 24
+          },
+          "E": {
+            "Value": 24
+          },
+          "P": {
+            "Value": 24
+          },
+          "TotalGroup": {
+            "Value": 96
+          }
+        },
+        "L": {
+          "B": {
+            "Value": 24
+          },
+          "C": {
+            "Value": 24
+          },
+          "E": {
+            "Value": 24
+          },
+          "P": {
+            "Value": 24
+          },
+          "TotalGroup": {
+            "Value": 96
+          }
+        },
+        "P": {
+          "B": {
+            "Value": 24
+          },
+          "C": {
+            "Value": 24
+          },
+          "E": {
+            "Value": 24
+          },
+          "P": {
+            "Value": 24
+          },
+          "TotalGroup": {
+            "Value": 96
+          }
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    }
+  ],
+  "hasRowGrouping": true,
+  "$type": "MeshWeaver.Pivot.Models.PivotModel"
+}

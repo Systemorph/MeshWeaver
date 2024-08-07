@@ -1,9 +1,0 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-
-  <ItemGroup>
-    <ProjectReference Include="..\OpenSmc.Arithmetics.Abstractions\OpenSmc.Arithmetics.Abstractions.csproj" />
-    <ProjectReference Include="..\OpenSmc.Equality\OpenSmc.Equality.csproj" />
-    <ProjectReference Include="..\OpenSmc.ServiceProvider\OpenSmc.ServiceProvider.csproj" />
-  </ItemGroup>
-
-</Project>

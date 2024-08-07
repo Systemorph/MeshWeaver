@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <Folder Include="Json\" />
+  </ItemGroup>
+	
+  <ItemGroup>
+    <PackageReference Include="Verify.Xunit" />
+  </ItemGroup>        
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.Charting.Pivot\MeshWeaver.Charting.Pivot.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Hub.Fixture\MeshWeaver.Hub.Fixture.csproj" />
+    <ProjectReference Include="..\MeshWeaver.TestDomain\MeshWeaver.TestDomain.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Json.Assertions\MeshWeaver.Json.Assertions.csproj" />
+  </ItemGroup>
+
+</Project>

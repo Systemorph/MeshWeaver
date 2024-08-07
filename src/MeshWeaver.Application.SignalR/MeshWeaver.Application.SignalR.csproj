@@ -1,0 +1,14 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="JetBrains.Annotations" />
+    <PackageReference Include="Microsoft.Orleans.Streaming" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Application.Contract\MeshWeaver.Application.Contract.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Application.Orleans.Abstractions\MeshWeaver.Application.Orleans.Abstractions.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,8 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>MeshWeaver.Portal</RootNamespace>
+  </PropertyGroup>
+
+</Project>
+ 

@@ -1,7 +1,7 @@
 const paginationStoreExample = {
-    $type: "OpenSmc.Data.EntityStore",
+    $type: "MeshWeaver.Data.EntityStore",
     reference: {
-        $type: "OpenSmc.Layout.LayoutAreaReference",
+        $type: "MeshWeaver.Layout.LayoutAreaReference",
         area: "Main",
         options: {
             orderBy: "DisplayName",

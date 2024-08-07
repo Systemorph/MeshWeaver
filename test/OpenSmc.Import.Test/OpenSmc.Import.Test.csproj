@@ -1,8 +1,0 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-  <ItemGroup>
-    <ProjectReference Include="..\..\src\OpenSmc.Activities\OpenSmc.Activities.csproj" />
-    <ProjectReference Include="..\..\src\OpenSmc.Import\OpenSmc.Import.csproj" />
-    <ProjectReference Include="..\OpenSmc.Data.TestDomain\OpenSmc.Data.TestDomain.csproj" />
-    <ProjectReference Include="..\OpenSmc.Hub.Fixture\OpenSmc.Hub.Fixture.csproj" />
-  </ItemGroup>
-</Project>

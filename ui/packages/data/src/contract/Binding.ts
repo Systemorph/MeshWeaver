@@ -1,6 +1,6 @@
 import { type } from "@open-smc/serialization/src/type";
 
-@type("OpenSmc.Layout.DataBinding.Binding")
+@type("MeshWeaver.Layout.DataBinding.Binding")
 export class Binding {
     /**
      * @param path JsonPath string

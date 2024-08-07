@@ -1,0 +1,269 @@
+{
+  "columns": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "systemName": "A1.A11.A111.Value",
+                  "displayName": "Value",
+                  "coordinates": [
+                    "A1",
+                    "A11",
+                    "A111",
+                    "Value"
+                  ],
+                  "grouperName": "ColumnName",
+                  "$type": "MeshWeaver.Pivot.Models.Column"
+                }
+              ],
+              "systemName": "A1.A11.A111",
+              "displayName": "A 111",
+              "coordinates": [
+                "A1",
+                "A11",
+                "A111"
+              ],
+              "grouperName": "DimA2",
+              "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+            },
+            {
+              "children": [
+                {
+                  "systemName": "A1.A11.A112.Value",
+                  "displayName": "Value",
+                  "coordinates": [
+                    "A1",
+                    "A11",
+                    "A112",
+                    "Value"
+                  ],
+                  "grouperName": "ColumnName",
+                  "$type": "MeshWeaver.Pivot.Models.Column"
+                }
+              ],
+              "systemName": "A1.A11.A112",
+              "displayName": "A 112",
+              "coordinates": [
+                "A1",
+                "A11",
+                "A112"
+              ],
+              "grouperName": "DimA2",
+              "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+            },
+            {
+              "children": [
+                {
+                  "systemName": "A1.A11.TotalGroup.Value",
+                  "displayName": "Value",
+                  "coordinates": [
+                    "A1",
+                    "A11",
+                    "TotalGroup",
+                    "Value"
+                  ],
+                  "grouperName": "ColumnName",
+                  "$type": "MeshWeaver.Pivot.Models.Column"
+                }
+              ],
+              "systemName": "A1.A11.TotalGroup",
+              "displayName": " ",
+              "coordinates": [
+                "A1",
+                "A11",
+                "TotalGroup"
+              ],
+              "grouperName": "DimA1",
+              "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+            }
+          ],
+          "systemName": "A1.A11",
+          "displayName": "A 11",
+          "coordinates": [
+            "A1",
+            "A11"
+          ],
+          "grouperName": "DimA1",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        }
+      ],
+      "systemName": "A1",
+      "displayName": "A 1",
+      "coordinates": [
+        "A1"
+      ],
+      "grouperName": "DimA0",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    }
+  ],
+  "rows": [
+    {
+      "rowGroup": {
+        "coordinates": [
+          "B1"
+        ],
+        "systemName": "B1",
+        "displayName": "B 1",
+        "grouperName": "DimB0",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "A1": {
+          "A11": {
+            "A111": {
+              "Value": 3
+            },
+            "A112": null,
+            "TotalGroup": null
+          },
+          "TotalGroup": null
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "B1",
+          "B11"
+        ],
+        "systemName": "B1.B11",
+        "displayName": "B 11",
+        "grouperName": "DimB1",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "A1": {
+          "A11": {
+            "A112": {
+              "Value": 2
+            },
+            "TotalGroup": {
+              "Value": 2
+            }
+          },
+          "TotalGroup": {
+            "Value": 2
+          }
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "B1",
+          "B12"
+        ],
+        "systemName": "B1.B12",
+        "displayName": "B 12",
+        "grouperName": "DimB1",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "A1": {
+          "A11": {
+            "A111": {
+              "Value": 3
+            },
+            "TotalGroup": {
+              "Value": 3
+            }
+          },
+          "TotalGroup": {
+            "Value": 3
+          }
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "B1",
+          "NullGroup"
+        ],
+        "systemName": "B1.NullGroup",
+        "displayName": " ",
+        "grouperName": "DimB1",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "A1": {
+          "A11": {
+            "A112": {
+              "Value": 4
+            },
+            "TotalGroup": {
+              "Value": 4
+            }
+          },
+          "TotalGroup": {
+            "Value": 4
+          }
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "B2"
+        ],
+        "systemName": "B2",
+        "displayName": "B 2",
+        "grouperName": "DimB0",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "A1": {
+          "A11": {
+            "A111": {
+              "Value": 1
+            },
+            "TotalGroup": {
+              "Value": 1
+            }
+          },
+          "TotalGroup": {
+            "Value": 1
+          }
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "B2",
+          "NullGroup"
+        ],
+        "systemName": "B2.NullGroup",
+        "displayName": " ",
+        "grouperName": "DimB1",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "A1": {
+          "A11": {
+            "A111": {
+              "Value": 1
+            },
+            "TotalGroup": {
+              "Value": 1
+            }
+          },
+          "TotalGroup": {
+            "Value": 1
+          }
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    }
+  ],
+  "hasRowGrouping": true,
+  "$type": "MeshWeaver.Pivot.Models.PivotModel"
+}

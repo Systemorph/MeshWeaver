@@ -1,66 +1,66 @@
 export const itemTemplateExample = {
-    $type: "OpenSmc.Data.EntityStore",
+    $type: "MeshWeaver.Data.EntityStore",
     reference: {
-        $type: "OpenSmc.Data.LayoutAreaReference",
+        $type: "MeshWeaver.Data.LayoutAreaReference",
         area: "LineOfBusiness"
     },
     collections: {
-        "OpenSmc.Layout.UiControl": {
+        "MeshWeaver.Layout.UiControl": {
             "LineOfBusiness": {
-                $type: "OpenSmc.Layout.ItemTemplateControl",
+                $type: "MeshWeaver.Layout.ItemTemplateControl",
                 dataContext: {
-                    $type: "OpenSmc.Data.CollectionReference",
+                    $type: "MeshWeaver.Data.CollectionReference",
                     collection: "LineOfBusiness"
                 },
                 data: {
-                    $type: "OpenSmc.Layout.DataBinding.Binding",
+                    $type: "MeshWeaver.Layout.DataBinding.Binding",
                     path: "$"
                 },
                 view: {
-                    $type: "OpenSmc.Layout.Composition.LayoutStackControl",
+                    $type: "MeshWeaver.Layout.Composition.LayoutStackControl",
                     areas: [
                         {
-                            $type: "OpenSmc.Data.EntityReference",
-                            collection: "OpenSmc.Layout.UiControl",
+                            $type: "MeshWeaver.Data.EntityReference",
+                            collection: "MeshWeaver.Layout.UiControl",
                             id: "LineOfBusiness/DisplayName"
                         },
                         {
-                            $type: "OpenSmc.Data.EntityReference",
-                            collection: "OpenSmc.Layout.UiControl",
+                            $type: "MeshWeaver.Data.EntityReference",
+                            collection: "MeshWeaver.Layout.UiControl",
                             id: "LineOfBusiness/DisplayNameEditor"
                         },
                         {
-                            $type: "OpenSmc.Data.EntityReference",
-                            collection: "OpenSmc.Layout.UiControl",
+                            $type: "MeshWeaver.Data.EntityReference",
+                            collection: "MeshWeaver.Layout.UiControl",
                             id: "LineOfBusiness/Currencies"
                         },
                     ]
                 }
             },
             "LineOfBusiness/DisplayName": {
-                $type: "OpenSmc.Layout.HtmlControl",
+                $type: "MeshWeaver.Layout.HtmlControl",
                 data: {
-                    $type: "OpenSmc.Layout.DataBinding.Binding",
+                    $type: "MeshWeaver.Layout.DataBinding.Binding",
                     path: "$.DisplayName"
                 }
             },
             "LineOfBusiness/DisplayNameEditor": {
-                $type: "OpenSmc.Layout.TextBoxControl",
+                $type: "MeshWeaver.Layout.TextBoxControl",
                 data: {
-                    $type: "OpenSmc.Layout.DataBinding.Binding",
+                    $type: "MeshWeaver.Layout.DataBinding.Binding",
                     path: "$.DisplayName"
                 }
             },
             "LineOfBusiness/Currencies": {
-                $type: "OpenSmc.Layout.ItemTemplateControl",
+                $type: "MeshWeaver.Layout.ItemTemplateControl",
                 data: {
-                    $type: "OpenSmc.Layout.DataBinding.Binding",
+                    $type: "MeshWeaver.Layout.DataBinding.Binding",
                     path: "$.Currencies"
                 },
                 view: {
-                    $type: "OpenSmc.Layout.HtmlControl",
+                    $type: "MeshWeaver.Layout.HtmlControl",
                     data: {
-                        $type: "OpenSmc.Layout.DataBinding.Binding",
+                        $type: "MeshWeaver.Layout.DataBinding.Binding",
                         path: "$"
                     }
                 }

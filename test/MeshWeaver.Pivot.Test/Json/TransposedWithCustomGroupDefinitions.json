@@ -1,0 +1,140 @@
+{
+  "columns": [
+    {
+      "children": [
+        {
+          "systemName": "i1.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "i1",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "i1",
+      "displayName": "Item 1",
+      "coordinates": [
+        "i1"
+      ],
+      "grouperName": "AutomaticNumber",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "systemName": "i2.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "i2",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "i2",
+      "displayName": "Item 2",
+      "coordinates": [
+        "i2"
+      ],
+      "grouperName": "AutomaticNumber",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "systemName": "i3.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "i3",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "i3",
+      "displayName": "Item 3",
+      "coordinates": [
+        "i3"
+      ],
+      "grouperName": "AutomaticNumber",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    }
+  ],
+  "rows": [
+    {
+      "rowGroup": {
+        "coordinates": [
+          "BoP"
+        ],
+        "systemName": "BoP",
+        "displayName": "Beginning of Period",
+        "grouperName": "PropertyName",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "i1": {
+          "Value": 0
+        },
+        "i2": {
+          "Value": 0
+        },
+        "i3": {
+          "Value": 0
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "Delta"
+        ],
+        "systemName": "Delta",
+        "displayName": "Delta",
+        "grouperName": "PropertyName",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "i1": {
+          "Value": 0
+        },
+        "i2": {
+          "Value": 1
+        },
+        "i3": {
+          "Value": 2
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "EoP"
+        ],
+        "systemName": "EoP",
+        "displayName": "End of Period",
+        "grouperName": "PropertyName",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "i1": {
+          "Value": 0
+        },
+        "i2": {
+          "Value": 1
+        },
+        "i3": {
+          "Value": 2
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    }
+  ],
+  "hasRowGrouping": true,
+  "$type": "MeshWeaver.Pivot.Models.PivotModel"
+}

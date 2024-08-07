@@ -1,0 +1,237 @@
+{
+  "columns": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "systemName": "D.D.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "D",
+                "D",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "D.D",
+          "displayName": "Velaro Germany",
+          "coordinates": [
+            "D",
+            "D"
+          ],
+          "grouperName": "Company",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        }
+      ],
+      "systemName": "D",
+      "displayName": "Germany",
+      "coordinates": [
+        "D"
+      ],
+      "grouperName": "ScopeCountry",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "systemName": "PT.PT.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "PT",
+                "PT",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "PT.PT",
+          "displayName": "Velaro Portugal",
+          "coordinates": [
+            "PT",
+            "PT"
+          ],
+          "grouperName": "Company",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        }
+      ],
+      "systemName": "PT",
+      "displayName": "Portugal",
+      "coordinates": [
+        "PT"
+      ],
+      "grouperName": "ScopeCountry",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "systemName": "RU.RU.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "RU",
+                "RU",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "RU.RU",
+          "displayName": "Velaro Russia",
+          "coordinates": [
+            "RU",
+            "RU"
+          ],
+          "grouperName": "Company",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        }
+      ],
+      "systemName": "RU",
+      "displayName": "Russia",
+      "coordinates": [
+        "RU"
+      ],
+      "grouperName": "ScopeCountry",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "systemName": "CH.CH.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "CH",
+                "CH",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "CH.CH",
+          "displayName": "Velaro Switzerland",
+          "coordinates": [
+            "CH",
+            "CH"
+          ],
+          "grouperName": "Company",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        }
+      ],
+      "systemName": "CH",
+      "displayName": "Switzerland",
+      "coordinates": [
+        "CH"
+      ],
+      "grouperName": "ScopeCountry",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    }
+  ],
+  "rows": [
+    {
+      "rowGroup": {
+        "coordinates": [
+          "ElementProperty"
+        ],
+        "systemName": "ElementProperty",
+        "displayName": "Element Property",
+        "grouperName": "PropertyName",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "D": {
+          "D": {
+            "Value": 2
+          },
+          "TotalGroup": {
+            "Value": 2
+          }
+        },
+        "PT": {
+          "PT": {
+            "Value": 2
+          },
+          "TotalGroup": {
+            "Value": 2
+          }
+        },
+        "RU": {
+          "RU": {
+            "Value": 2
+          },
+          "TotalGroup": {
+            "Value": 2
+          }
+        },
+        "CH": {
+          "CH": {
+            "Value": 2
+          },
+          "TotalGroup": {
+            "Value": 2
+          }
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "ElementProperty",
+          "CHF"
+        ],
+        "systemName": "ElementProperty.CHF",
+        "displayName": "Swiss Franc",
+        "grouperName": "Currency",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "D": {
+          "D": {
+            "Value": 2
+          },
+          "TotalGroup": {
+            "Value": 2
+          }
+        },
+        "PT": {
+          "PT": {
+            "Value": 2
+          },
+          "TotalGroup": {
+            "Value": 2
+          }
+        },
+        "RU": {
+          "RU": {
+            "Value": 2
+          },
+          "TotalGroup": {
+            "Value": 2
+          }
+        },
+        "CH": {
+          "CH": {
+            "Value": 2
+          },
+          "TotalGroup": {
+            "Value": 2
+          }
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    }
+  ],
+  "hasRowGrouping": true,
+  "$type": "MeshWeaver.Pivot.Models.PivotModel"
+}

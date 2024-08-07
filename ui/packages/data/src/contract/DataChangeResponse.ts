@@ -1,6 +1,6 @@
 import { type } from "@open-smc/serialization/src/type";
 
-@type("OpenSmc.Data.DataChangeResponse")
+@type("MeshWeaver.Data.DataChangeResponse")
 export class DataChangeResponse {
     constructor(public status: DataChangeStatus) {
     }

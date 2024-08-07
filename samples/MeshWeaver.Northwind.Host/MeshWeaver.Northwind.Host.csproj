@@ -1,0 +1,16 @@
+﻿<!-- todo - change project type to orleans host -->
+  <Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Orleans.Serialization.SystemTextJson" />
+    <PackageReference Include="Microsoft.Orleans.Server" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.Application.Orleans\MeshWeaver.Application.Orleans.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Application.SignalR\MeshWeaver.Application.SignalR.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Northwind.Model\MeshWeaver.Northwind.Model.csproj" />
+  </ItemGroup>
+</Project>

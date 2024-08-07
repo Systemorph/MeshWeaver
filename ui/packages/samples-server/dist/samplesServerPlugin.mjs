@@ -91,7 +91,7 @@ let DataChangedEvent = class {
   }
 };
 DataChangedEvent = __decorateClass$k([
-  type("OpenSmc.Data.DataChangedEvent")
+  type("MeshWeaver.Data.DataChangedEvent")
 ], DataChangedEvent);
 var __defProp$j = Object.defineProperty;
 var __getOwnPropDesc$j = Object.getOwnPropertyDescriptor;
@@ -111,7 +111,7 @@ let SubscribeRequest = class extends Request {
   }
 };
 SubscribeRequest = __decorateClass$j([
-  type("OpenSmc.Data.SubscribeRequest")
+  type("MeshWeaver.Data.SubscribeRequest")
 ], SubscribeRequest);
 const messageOfType = (ctor) => (envelope) => envelope.message instanceof ctor;
 const pack = (envelope = {}) => (message) => ({ ...envelope, message });
@@ -145,7 +145,7 @@ let UnsubscribeDataRequest = class {
   }
 };
 UnsubscribeDataRequest = __decorateClass$i([
-  type("OpenSmc.Data.UnsubscribeDataRequest")
+  type("MeshWeaver.Data.UnsubscribeDataRequest")
 ], UnsubscribeDataRequest);
 var __defProp$h = Object.defineProperty;
 var __getOwnPropDesc$h = Object.getOwnPropertyDescriptor;
@@ -167,7 +167,7 @@ let Binding = class {
   }
 };
 Binding = __decorateClass$h([
-  type("OpenSmc.Layout.DataBinding.Binding")
+  type("MeshWeaver.Layout.DataBinding.Binding")
 ], Binding);
 class WorkspaceReference {
 }
@@ -189,7 +189,7 @@ let CollectionReference = class extends WorkspaceReference {
   }
 };
 CollectionReference = __decorateClass$g([
-  type("OpenSmc.Data.CollectionReference")
+  type("MeshWeaver.Data.CollectionReference")
 ], CollectionReference);
 var runIdentityFunctionCheck = (resultFunc, inputSelectorsResults, outputSelectorResult) => {
   if (inputSelectorsResults.length === 1 && inputSelectorsResults[0] === outputSelectorResult) {
@@ -1244,7 +1244,7 @@ let EntityReference = class extends WorkspaceReference {
   }
 };
 EntityReference = __decorateClass$f([
-  type("OpenSmc.Data.EntityReference")
+  type("MeshWeaver.Data.EntityReference")
 ], EntityReference);
 var __defProp$e = Object.defineProperty;
 var __getOwnPropDesc$e = Object.getOwnPropertyDescriptor;
@@ -1260,7 +1260,7 @@ var __decorateClass$e = (decorators, target, key, kind) => {
 let EntireWorkspace = class extends WorkspaceReference {
 };
 EntireWorkspace = __decorateClass$e([
-  type("OpenSmc.Data.EntireWorkspace")
+  type("MeshWeaver.Data.EntireWorkspace")
 ], EntireWorkspace);
 class PathReference extends WorkspaceReference {
   constructor(path) {
@@ -1304,7 +1304,7 @@ let JsonPathReference = class extends WorkspaceReference {
   }
 };
 JsonPathReference = __decorateClass$d([
-  type("OpenSmc.Data.JsonPathReference")
+  type("MeshWeaver.Data.JsonPathReference")
 ], JsonPathReference);
 function _callSuper(t, o, e) {
   return o = _getPrototypeOf(o), _possibleConstructorReturn(t, _isNativeReflectConstruct() ? Reflect.construct(o, e || [], _getPrototypeOf(t).constructor) : o.apply(t, e));
@@ -2143,7 +2143,7 @@ let LayoutAddress = class {
   }
 };
 LayoutAddress = __decorateClass$c([
-  type("OpenSmc.Portal.LayoutAddress")
+  type("MeshWeaver.Portal.LayoutAddress")
 ], LayoutAddress);
 let ClickedEvent = class {
   constructor(payload) {
@@ -2151,7 +2151,7 @@ let ClickedEvent = class {
   }
 };
 ClickedEvent = __decorateClass$c([
-  type("OpenSmc.Layout.Views.ClickedEvent")
+  type("MeshWeaver.Layout.Views.ClickedEvent")
 ], ClickedEvent);
 let ExpandRequest = class {
   constructor(id, area, payload) {
@@ -2161,12 +2161,12 @@ let ExpandRequest = class {
   }
 };
 ExpandRequest = __decorateClass$c([
-  type("OpenSmc.Layout.Views.ExpandRequest")
+  type("MeshWeaver.Layout.Views.ExpandRequest")
 ], ExpandRequest);
 let CloseModalDialogEvent = class {
 };
 CloseModalDialogEvent = __decorateClass$c([
-  type("OpenSmc.Layout.CloseModalDialogEvent")
+  type("MeshWeaver.Layout.CloseModalDialogEvent")
 ], CloseModalDialogEvent);
 let CategoryItemsRequest = class {
   constructor(categoryName, search, page, pageSize) {
@@ -2177,7 +2177,7 @@ let CategoryItemsRequest = class {
   }
 };
 CategoryItemsRequest = __decorateClass$c([
-  type("OpenSmc.Categories.CategoryItemsRequest")
+  type("MeshWeaver.Categories.CategoryItemsRequest")
 ], CategoryItemsRequest);
 let CategoryItemsResponse = class {
   constructor(result, errorMessage) {
@@ -2186,7 +2186,7 @@ let CategoryItemsResponse = class {
   }
 };
 CategoryItemsResponse = __decorateClass$c([
-  type("OpenSmc.Categories.CategoryItemsResponse")
+  type("MeshWeaver.Categories.CategoryItemsResponse")
 ], CategoryItemsResponse);
 let SetSelectionRequest = class {
   constructor(selection) {
@@ -2194,7 +2194,7 @@ let SetSelectionRequest = class {
   }
 };
 SetSelectionRequest = __decorateClass$c([
-  type("OpenSmc.Categories.SetSelectionRequest")
+  type("MeshWeaver.Categories.SetSelectionRequest")
 ], SetSelectionRequest);
 let ErrorEvent = class {
   constructor(sourceEvent, message) {
@@ -2203,7 +2203,7 @@ let ErrorEvent = class {
   }
 };
 ErrorEvent = __decorateClass$c([
-  type("OpenSmc.ErrorEvent")
+  type("MeshWeaver.ErrorEvent")
 ], ErrorEvent);
 const isSerializable = (value) => isFunction(value == null ? void 0 : value.constructor) && value.constructor.$type !== void 0;
 const serialize = (value) => {
@@ -2244,7 +2244,7 @@ let UiControl = class {
   }
 };
 UiControl = __decorateClass$b([
-  type("OpenSmc.Layout.UiControl")
+  type("MeshWeaver.Layout.UiControl")
 ], UiControl);
 var __defProp$a = Object.defineProperty;
 var __getOwnPropDesc$a = Object.getOwnPropertyDescriptor;
@@ -2260,7 +2260,7 @@ var __decorateClass$a = (decorators, target, key, kind) => {
 let CheckboxControl = class extends UiControl {
 };
 CheckboxControl = __decorateClass$a([
-  type("OpenSmc.Layout.CheckBoxControl")
+  type("MeshWeaver.Layout.CheckBoxControl")
 ], CheckboxControl);
 var __defProp$9 = Object.defineProperty;
 var __getOwnPropDesc$9 = Object.getOwnPropertyDescriptor;
@@ -2276,7 +2276,7 @@ var __decorateClass$9 = (decorators, target, key, kind) => {
 let HtmlControl = class extends UiControl {
 };
 HtmlControl = __decorateClass$9([
-  type("OpenSmc.Layout.HtmlControl")
+  type("MeshWeaver.Layout.HtmlControl")
 ], HtmlControl);
 var __defProp$8 = Object.defineProperty;
 var __getOwnPropDesc$8 = Object.getOwnPropertyDescriptor;
@@ -2292,7 +2292,7 @@ var __decorateClass$8 = (decorators, target, key, kind) => {
 let ItemTemplateControl = class extends UiControl {
 };
 ItemTemplateControl = __decorateClass$8([
-  type("OpenSmc.Layout.ItemTemplateControl")
+  type("MeshWeaver.Layout.ItemTemplateControl")
 ], ItemTemplateControl);
 var __defProp$7 = Object.defineProperty;
 var __getOwnPropDesc$7 = Object.getOwnPropertyDescriptor;
@@ -2308,7 +2308,7 @@ var __decorateClass$7 = (decorators, target, key, kind) => {
 let LayoutStackControl = class extends UiControl {
 };
 LayoutStackControl = __decorateClass$7([
-  type("OpenSmc.Layout.Composition.LayoutStackControl")
+  type("MeshWeaver.Layout.Composition.LayoutStackControl")
 ], LayoutStackControl);
 class ExpandableControl extends UiControl {
 }
@@ -2326,7 +2326,7 @@ var __decorateClass$6 = (decorators, target, key, kind) => {
 let MenuItemControl = class extends ExpandableControl {
 };
 MenuItemControl = __decorateClass$6([
-  type("OpenSmc.Layout.Views.MenuItemControl")
+  type("MeshWeaver.Layout.Views.MenuItemControl")
 ], MenuItemControl);
 const distinctUntilEqual = () => (source) => source.pipe(distinctUntilChanged(isEqual));
 const uiControlType = UiControl.$type;
@@ -2375,7 +2375,7 @@ var __decorateClass$5 = (decorators, target, key, kind) => {
 let TextBoxControl = class extends UiControl {
 };
 TextBoxControl = __decorateClass$5([
-  type("OpenSmc.Layout.TextBoxControl")
+  type("MeshWeaver.Layout.TextBoxControl")
 ], TextBoxControl);
 const smBlue = "#0171ff";
 function getState(reference) {
@@ -3331,7 +3331,7 @@ let DataChangeResponse = class {
   }
 };
 DataChangeResponse = __decorateClass$3([
-  type("OpenSmc.Data.DataChangeResponse")
+  type("MeshWeaver.Data.DataChangeResponse")
 ], DataChangeResponse);
 class DataChangeRequest extends Request {
   constructor() {
@@ -3358,7 +3358,7 @@ let PatchChangeRequest = class extends DataChangeRequest {
   }
 };
 PatchChangeRequest = __decorateClass$2([
-  type("OpenSmc.Data.PatchChangeRequest")
+  type("MeshWeaver.Data.PatchChangeRequest")
 ], PatchChangeRequest);
 class SamplesServer {
   constructor(serverHub) {
@@ -3455,7 +3455,7 @@ var __decorateClass$1 = (decorators, target, key, kind) => {
 let EntityStore = class {
 };
 EntityStore = __decorateClass$1([
-  type("OpenSmc.Data.EntityStore")
+  type("MeshWeaver.Data.EntityStore")
 ], EntityStore);
 var __defProp2 = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -3475,7 +3475,7 @@ let LayoutAreaReference = class extends WorkspaceReference {
   }
 };
 LayoutAreaReference = __decorateClass([
-  type("OpenSmc.Data.LayoutAreaReference")
+  type("MeshWeaver.Data.LayoutAreaReference")
 ], LayoutAreaReference);
 function connectHubs(hub1, hub2) {
   const subscription = hub1.subscribe(hub2);

@@ -1,0 +1,62 @@
+{
+  "columns": [
+    {
+      "systemName": "Value",
+      "displayName": "Value",
+      "coordinates": [
+        "Value"
+      ],
+      "grouperName": "ColumnName",
+      "$type": "MeshWeaver.Pivot.Models.Column"
+    }
+  ],
+  "rows": [
+    {
+      "rowGroup": {
+        "coordinates": [
+          "BoP"
+        ],
+        "systemName": "BoP",
+        "displayName": "Beginning of Period",
+        "grouperName": "PropertyName",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "Value": 0
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "Delta"
+        ],
+        "systemName": "Delta",
+        "displayName": "Delta",
+        "grouperName": "PropertyName",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "Value": 0
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "EoP"
+        ],
+        "systemName": "EoP",
+        "displayName": "End of Period",
+        "grouperName": "PropertyName",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "Value": 0
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    }
+  ],
+  "hasRowGrouping": true,
+  "$type": "MeshWeaver.Pivot.Models.PivotModel"
+}

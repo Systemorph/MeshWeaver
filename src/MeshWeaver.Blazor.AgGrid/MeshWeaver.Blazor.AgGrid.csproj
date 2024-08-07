@@ -1,0 +1,20 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <Import Project="StaticAssets\StaticAssets.targets" />
+
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+    <Content Update="StaticAssets\**" Pack="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
+    <ProjectReference Include="..\MeshWeaver.GridModel\MeshWeaver.GridModel.csproj" />
+  </ItemGroup>
+
+</Project>

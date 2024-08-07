@@ -1,0 +1,196 @@
+{
+  "columns": [
+    {
+      "children": [
+        {
+          "systemName": "E.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "E",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "E",
+      "displayName": "Expenses",
+      "coordinates": [
+        "E"
+      ],
+      "grouperName": "AmountType",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "systemName": "P.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "P",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "P",
+      "displayName": "Premium",
+      "coordinates": [
+        "P"
+      ],
+      "grouperName": "AmountType",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "systemName": "C.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "C",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "C",
+      "displayName": "Cost",
+      "coordinates": [
+        "C"
+      ],
+      "grouperName": "AmountType",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "systemName": "B.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "B",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "B",
+      "displayName": "Benefit",
+      "coordinates": [
+        "B"
+      ],
+      "grouperName": "AmountType",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    }
+  ],
+  "rows": [
+    {
+      "rowGroup": {
+        "coordinates": [
+          "EUR"
+        ],
+        "systemName": "EUR",
+        "displayName": "Euro",
+        "grouperName": "Currency",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 96
+        },
+        "P": {
+          "Value": 96
+        },
+        "C": {
+          "Value": 96
+        },
+        "B": {
+          "Value": 96
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "RUB"
+        ],
+        "systemName": "RUB",
+        "displayName": "Russian rouble",
+        "grouperName": "Currency",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 96
+        },
+        "P": {
+          "Value": 96
+        },
+        "C": {
+          "Value": 96
+        },
+        "B": {
+          "Value": 96
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF"
+        ],
+        "systemName": "CHF",
+        "displayName": "Swiss Franc",
+        "grouperName": "Currency",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 96
+        },
+        "P": {
+          "Value": 96
+        },
+        "C": {
+          "Value": 96
+        },
+        "B": {
+          "Value": 96
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "USD"
+        ],
+        "systemName": "USD",
+        "displayName": "US Dollar",
+        "grouperName": "Currency",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 96
+        },
+        "P": {
+          "Value": 96
+        },
+        "C": {
+          "Value": 96
+        },
+        "B": {
+          "Value": 96
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    }
+  ],
+  "hasRowGrouping": true,
+  "$type": "MeshWeaver.Pivot.Models.PivotModel"
+}

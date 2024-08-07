@@ -3,7 +3,7 @@ import { DataChangeRequest } from "./DataChangeRequest";
 import { WorkspaceReference } from "./WorkspaceReference";
 import { JsonPatch } from "./JsonPatch";
 
-@type("OpenSmc.Data.PatchChangeRequest")
+@type("MeshWeaver.Data.PatchChangeRequest")
 export class PatchChangeRequest extends DataChangeRequest {
     constructor(
         public address: unknown,

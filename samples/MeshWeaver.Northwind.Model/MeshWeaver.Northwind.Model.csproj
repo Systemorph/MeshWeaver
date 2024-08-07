@@ -1,0 +1,37 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <None Remove="Files\categories.csv" />
+    <None Remove="Files\customers.csv" />
+    <None Remove="Files\employees.csv" />
+    <None Remove="Files\employee_territories.csv" />
+    <None Remove="Files\orders.csv" />
+    <None Remove="Files\orders_details.csv" />
+    <None Remove="Files\products.csv" />
+    <None Remove="Files\regions.csv" />
+    <None Remove="Files\shippers.csv" />
+    <None Remove="Files\suppliers.csv" />
+    <None Remove="Files\territories.csv" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Files\categories.csv" />
+    <EmbeddedResource Include="Files\customers.csv" />
+    <EmbeddedResource Include="Files\employees.csv" />
+    <EmbeddedResource Include="Files\employee_territories.csv" />
+    <EmbeddedResource Include="Files\orders.csv" />
+    <EmbeddedResource Include="Files\orders_details.csv" />
+    <EmbeddedResource Include="Files\products.csv" />
+    <EmbeddedResource Include="Files\regions.csv" />
+    <EmbeddedResource Include="Files\shippers.csv" />
+    <EmbeddedResource Include="Files\suppliers.csv" />
+    <EmbeddedResource Include="Files\territories.csv" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.Import\MeshWeaver.Import.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Northwind.Domain\MeshWeaver.Northwind.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

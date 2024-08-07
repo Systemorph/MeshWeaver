@@ -1,33 +1,33 @@
 import { type } from "@open-smc/serialization/src/type";
 
 // TODO: fix namespace (2/21/2024, akravets)
-@type("OpenSmc.Portal.LayoutAddress")
+@type("MeshWeaver.Portal.LayoutAddress")
 export class LayoutAddress {
     constructor(public id: string) {
     }
 }
 
-@type("OpenSmc.Layout.Views.ClickedEvent")
+@type("MeshWeaver.Layout.Views.ClickedEvent")
 export class ClickedEvent {
     constructor(public payload?: unknown) {
     }
 }
 
-@type("OpenSmc.Layout.Views.ExpandRequest")
+@type("MeshWeaver.Layout.Views.ExpandRequest")
 export class ExpandRequest {
     constructor(public id: string, public area: string, public payload?: unknown) {
 
     }
 }
 
-@type("OpenSmc.Layout.CloseModalDialogEvent")
+@type("MeshWeaver.Layout.CloseModalDialogEvent")
 export class CloseModalDialogEvent {
 }
 
 // deprecated ----------------------------------------
 export type SelectionByCategory = Record<string, Named[]>;
 
-@type("OpenSmc.Categories.CategoryItemsRequest")
+@type("MeshWeaver.Categories.CategoryItemsRequest")
 export class CategoryItemsRequest {
     constructor(public readonly categoryName: string,
                 public readonly search: string,
@@ -37,7 +37,7 @@ export class CategoryItemsRequest {
     }
 }
 
-@type("OpenSmc.Categories.CategoryItemsResponse")
+@type("MeshWeaver.Categories.CategoryItemsResponse")
 export class CategoryItemsResponse {
     constructor(public readonly result: Named[],
                 public readonly errorMessage?: string
@@ -46,7 +46,7 @@ export class CategoryItemsResponse {
 }
 
 // sent on category change
-@type("OpenSmc.Categories.SetSelectionRequest")
+@type("MeshWeaver.Categories.SetSelectionRequest")
 export class SetSelectionRequest {
     constructor(public readonly selection: Record<string, string[]>) {
     }
@@ -76,7 +76,7 @@ export class BaseEvent {
     }
 }
 
-@type("OpenSmc.ErrorEvent")
+@type("MeshWeaver.ErrorEvent")
 export class ErrorEvent<T = unknown> {
     constructor(public readonly sourceEvent: T,
                 public readonly message: string) {

@@ -1,0 +1,12 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="AspectCore.Extensions.Reflection" />
+  </ItemGroup>
+  
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Hierarchies\MeshWeaver.Hierarchies.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Utils\MeshWeaver.Utils.csproj" />
+  </ItemGroup>
+
+</Project>

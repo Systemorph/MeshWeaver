@@ -2,7 +2,7 @@ import { type } from "@open-smc/serialization/src/type";
 import { WorkspaceReference } from "./WorkspaceReference";
 import { deserialize } from "@open-smc/serialization/src/deserialize";
 
-@type("OpenSmc.Data.DataChangedEvent")
+@type("MeshWeaver.Data.DataChangedEvent")
 export class DataChangedEvent {
     constructor(
         public reference: WorkspaceReference,

@@ -1,0 +1,674 @@
+{
+  "columns": [
+    {
+      "children": [
+        {
+          "systemName": "E.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "E",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "E",
+      "displayName": "Expenses",
+      "coordinates": [
+        "E"
+      ],
+      "grouperName": "AmountType",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "systemName": "P.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "P",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "P",
+      "displayName": "Premium",
+      "coordinates": [
+        "P"
+      ],
+      "grouperName": "AmountType",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "systemName": "C.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "C",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "C",
+      "displayName": "Cost",
+      "coordinates": [
+        "C"
+      ],
+      "grouperName": "AmountType",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "systemName": "B.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "B",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "B",
+      "displayName": "Benefit",
+      "coordinates": [
+        "B"
+      ],
+      "grouperName": "AmountType",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    }
+  ],
+  "rows": [
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF"
+        ],
+        "systemName": "CHF",
+        "displayName": "Swiss Franc",
+        "grouperName": "Currency",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 1
+        },
+        "P": {
+          "Value": 1
+        },
+        "C": {
+          "Value": 1
+        },
+        "B": {
+          "Value": 1
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF",
+          "D"
+        ],
+        "systemName": "CHF.D",
+        "displayName": "Germany",
+        "grouperName": "Country",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 1
+        },
+        "P": {
+          "Value": 1
+        },
+        "C": {
+          "Value": 1
+        },
+        "B": {
+          "Value": 1
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF",
+          "D",
+          "C"
+        ],
+        "systemName": "CHF.D.C",
+        "displayName": "Casualty",
+        "grouperName": "LineOfBusiness",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 1
+        },
+        "P": {
+          "Value": 1
+        },
+        "C": {
+          "Value": 1
+        },
+        "B": {
+          "Value": 1
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF",
+          "D",
+          "H"
+        ],
+        "systemName": "CHF.D.H",
+        "displayName": "Health",
+        "grouperName": "LineOfBusiness",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 1
+        },
+        "P": {
+          "Value": 1
+        },
+        "C": {
+          "Value": 1
+        },
+        "B": {
+          "Value": 1
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF",
+          "D",
+          "L"
+        ],
+        "systemName": "CHF.D.L",
+        "displayName": "Life",
+        "grouperName": "LineOfBusiness",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 1
+        },
+        "P": {
+          "Value": 1
+        },
+        "C": {
+          "Value": 1
+        },
+        "B": {
+          "Value": 1
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF",
+          "D",
+          "P"
+        ],
+        "systemName": "CHF.D.P",
+        "displayName": "Property",
+        "grouperName": "LineOfBusiness",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 1
+        },
+        "P": {
+          "Value": 1
+        },
+        "C": {
+          "Value": 1
+        },
+        "B": {
+          "Value": 1
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF",
+          "PT"
+        ],
+        "systemName": "CHF.PT",
+        "displayName": "Portugal",
+        "grouperName": "Country",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 1
+        },
+        "P": {
+          "Value": 1
+        },
+        "C": {
+          "Value": 1
+        },
+        "B": {
+          "Value": 1
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF",
+          "PT",
+          "C"
+        ],
+        "systemName": "CHF.PT.C",
+        "displayName": "Casualty",
+        "grouperName": "LineOfBusiness",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 1
+        },
+        "P": {
+          "Value": 1
+        },
+        "C": {
+          "Value": 1
+        },
+        "B": {
+          "Value": 1
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF",
+          "PT",
+          "H"
+        ],
+        "systemName": "CHF.PT.H",
+        "displayName": "Health",
+        "grouperName": "LineOfBusiness",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 1
+        },
+        "P": {
+          "Value": 1
+        },
+        "C": {
+          "Value": 1
+        },
+        "B": {
+          "Value": 1
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF",
+          "PT",
+          "L"
+        ],
+        "systemName": "CHF.PT.L",
+        "displayName": "Life",
+        "grouperName": "LineOfBusiness",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 1
+        },
+        "P": {
+          "Value": 1
+        },
+        "C": {
+          "Value": 1
+        },
+        "B": {
+          "Value": 1
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF",
+          "PT",
+          "P"
+        ],
+        "systemName": "CHF.PT.P",
+        "displayName": "Property",
+        "grouperName": "LineOfBusiness",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 1
+        },
+        "P": {
+          "Value": 1
+        },
+        "C": {
+          "Value": 1
+        },
+        "B": {
+          "Value": 1
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF",
+          "RU"
+        ],
+        "systemName": "CHF.RU",
+        "displayName": "Russia",
+        "grouperName": "Country",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 1
+        },
+        "P": {
+          "Value": 1
+        },
+        "C": {
+          "Value": 1
+        },
+        "B": {
+          "Value": 1
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF",
+          "RU",
+          "C"
+        ],
+        "systemName": "CHF.RU.C",
+        "displayName": "Casualty",
+        "grouperName": "LineOfBusiness",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 1
+        },
+        "P": {
+          "Value": 1
+        },
+        "C": {
+          "Value": 1
+        },
+        "B": {
+          "Value": 1
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF",
+          "RU",
+          "H"
+        ],
+        "systemName": "CHF.RU.H",
+        "displayName": "Health",
+        "grouperName": "LineOfBusiness",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 1
+        },
+        "P": {
+          "Value": 1
+        },
+        "C": {
+          "Value": 1
+        },
+        "B": {
+          "Value": 1
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF",
+          "RU",
+          "L"
+        ],
+        "systemName": "CHF.RU.L",
+        "displayName": "Life",
+        "grouperName": "LineOfBusiness",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 1
+        },
+        "P": {
+          "Value": 1
+        },
+        "C": {
+          "Value": 1
+        },
+        "B": {
+          "Value": 1
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF",
+          "RU",
+          "P"
+        ],
+        "systemName": "CHF.RU.P",
+        "displayName": "Property",
+        "grouperName": "LineOfBusiness",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 1
+        },
+        "P": {
+          "Value": 1
+        },
+        "C": {
+          "Value": 1
+        },
+        "B": {
+          "Value": 1
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF",
+          "CH"
+        ],
+        "systemName": "CHF.CH",
+        "displayName": "Switzerland",
+        "grouperName": "Country",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 1
+        },
+        "P": {
+          "Value": 1
+        },
+        "C": {
+          "Value": 1
+        },
+        "B": {
+          "Value": 1
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF",
+          "CH",
+          "C"
+        ],
+        "systemName": "CHF.CH.C",
+        "displayName": "Casualty",
+        "grouperName": "LineOfBusiness",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 1
+        },
+        "P": {
+          "Value": 1
+        },
+        "C": {
+          "Value": 1
+        },
+        "B": {
+          "Value": 1
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF",
+          "CH",
+          "H"
+        ],
+        "systemName": "CHF.CH.H",
+        "displayName": "Health",
+        "grouperName": "LineOfBusiness",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 1
+        },
+        "P": {
+          "Value": 1
+        },
+        "C": {
+          "Value": 1
+        },
+        "B": {
+          "Value": 1
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF",
+          "CH",
+          "L"
+        ],
+        "systemName": "CHF.CH.L",
+        "displayName": "Life",
+        "grouperName": "LineOfBusiness",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 1
+        },
+        "P": {
+          "Value": 1
+        },
+        "C": {
+          "Value": 1
+        },
+        "B": {
+          "Value": 1
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "CHF",
+          "CH",
+          "P"
+        ],
+        "systemName": "CHF.CH.P",
+        "displayName": "Property",
+        "grouperName": "LineOfBusiness",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 1
+        },
+        "P": {
+          "Value": 1
+        },
+        "C": {
+          "Value": 1
+        },
+        "B": {
+          "Value": 1
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    }
+  ],
+  "hasRowGrouping": true,
+  "$type": "MeshWeaver.Pivot.Models.PivotModel"
+}

@@ -1,0 +1,12 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="AspectCore.Extensions.Reflection" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.DataCubes.Abstractions\MeshWeaver.DataCubes.Abstractions.csproj" />
+    <ProjectReference Include="..\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,8 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>MeshWeaver.DataCubes</RootNamespace>
+  </PropertyGroup>
+	<ItemGroup>
+		<ProjectReference Include="..\MeshWeaver.Arithmetics\MeshWeaver.Arithmetics.csproj" />
+	</ItemGroup>
+</Project>

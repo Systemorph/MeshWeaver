@@ -1,6 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
-  <ItemGroup>
-    <ProjectReference Include="..\OpenSmc.Domain\OpenSmc.Domain.csproj" />
-    <ProjectReference Include="..\OpenSmc.Reflection\OpenSmc.Reflection.csproj" />
-  </ItemGroup>
-</Project>

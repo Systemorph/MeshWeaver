@@ -4,7 +4,7 @@ import { type } from "@open-smc/serialization/src/type";
 import { ValueOrReference } from "@open-smc/data/src/contract/ValueOrReference";
 import {serialize} from "@open-smc/serialization/src/serialize";
 
-@type("OpenSmc.Layout.UiControl")
+@type("MeshWeaver.Layout.UiControl")
 export class UiControl<T = unknown> {
     id?: ValueOrBinding<string>;
     isReadonly?: ValueOrBinding<boolean>;

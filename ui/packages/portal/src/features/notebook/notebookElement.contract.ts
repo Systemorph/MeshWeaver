@@ -8,7 +8,7 @@ export class NotebookElementChangedEvent extends NotebookChangedEvent {
     }
 }
 
-@contractMessage("OpenSmc.Notebook.NotebookElementContentChangedEvent")
+@contractMessage("MeshWeaver.Notebook.NotebookElementContentChangedEvent")
 export class NotebookElementContentChangedEvent extends NotebookElementChangedEvent {
     constructor(public elementId: string,
                 public changes: NotebookElementChangeData[]) {
@@ -24,7 +24,7 @@ export interface NotebookElementChangeData {
     readonly text: string;
 }
 
-@contractMessage("OpenSmc.Notebook.NotebookElementEvaluationStatusEvent")
+@contractMessage("MeshWeaver.Notebook.NotebookElementEvaluationStatusEvent")
 export class NotebookElementEvaluationStatusEvent {
     readonly elementId: string;
     readonly evaluationStatus: EvaluationStatus;

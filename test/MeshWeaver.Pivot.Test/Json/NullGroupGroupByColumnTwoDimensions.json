@@ -1,0 +1,295 @@
+{
+  "columns": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "systemName": "a.A.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "a",
+                "A",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "a.A",
+          "displayName": "A",
+          "coordinates": [
+            "a",
+            "A"
+          ],
+          "grouperName": "Dim2",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "a.B.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "a",
+                "B",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "a.B",
+          "displayName": "B",
+          "coordinates": [
+            "a",
+            "B"
+          ],
+          "grouperName": "Dim2",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "a.TotalGroup.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "a",
+                "TotalGroup",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "a.TotalGroup",
+          "displayName": " ",
+          "coordinates": [
+            "a",
+            "TotalGroup"
+          ],
+          "grouperName": "Dim1",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        }
+      ],
+      "systemName": "a",
+      "displayName": "a",
+      "coordinates": [
+        "a"
+      ],
+      "grouperName": "Dim1",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "systemName": "c.C.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "c",
+                "C",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "c.C",
+          "displayName": "C",
+          "coordinates": [
+            "c",
+            "C"
+          ],
+          "grouperName": "Dim2",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "c.D.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "c",
+                "D",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "c.D",
+          "displayName": "D",
+          "coordinates": [
+            "c",
+            "D"
+          ],
+          "grouperName": "Dim2",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "c.TotalGroup.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "c",
+                "TotalGroup",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "c.TotalGroup",
+          "displayName": " ",
+          "coordinates": [
+            "c",
+            "TotalGroup"
+          ],
+          "grouperName": "Dim1",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        }
+      ],
+      "systemName": "c",
+      "displayName": "c",
+      "coordinates": [
+        "c"
+      ],
+      "grouperName": "Dim1",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "systemName": "NullGroup.A.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "NullGroup",
+                "A",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "NullGroup.A",
+          "displayName": "A",
+          "coordinates": [
+            "NullGroup",
+            "A"
+          ],
+          "grouperName": "Dim2",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "NullGroup.B.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "NullGroup",
+                "B",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "NullGroup.B",
+          "displayName": "B",
+          "coordinates": [
+            "NullGroup",
+            "B"
+          ],
+          "grouperName": "Dim2",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        },
+        {
+          "children": [
+            {
+              "systemName": "NullGroup.TotalGroup.Value",
+              "displayName": "Value",
+              "coordinates": [
+                "NullGroup",
+                "TotalGroup",
+                "Value"
+              ],
+              "grouperName": "ColumnName",
+              "$type": "MeshWeaver.Pivot.Models.Column"
+            }
+          ],
+          "systemName": "NullGroup.TotalGroup",
+          "displayName": " ",
+          "coordinates": [
+            "NullGroup",
+            "TotalGroup"
+          ],
+          "grouperName": "Dim1",
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+        }
+      ],
+      "systemName": "NullGroup",
+      "displayName": " ",
+      "coordinates": [
+        "NullGroup"
+      ],
+      "grouperName": "Dim1",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    }
+  ],
+  "rows": [
+    {
+      "rowGroup": {
+        "coordinates": [
+          "TopGroup"
+        ],
+        "systemName": "TopGroup",
+        "displayName": "Total",
+        "grouperName": "Total",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "a": {
+          "A": {
+            "Value": 3
+          },
+          "B": {
+            "Value": 4
+          },
+          "TotalGroup": {
+            "Value": 7
+          }
+        },
+        "c": {
+          "C": {
+            "Value": 5
+          },
+          "D": {
+            "Value": 6
+          },
+          "TotalGroup": {
+            "Value": 11
+          }
+        },
+        "NullGroup": {
+          "A": {
+            "Value": 1
+          },
+          "B": {
+            "Value": 2
+          },
+          "TotalGroup": {
+            "Value": 3
+          }
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    }
+  ],
+  "hasRowGrouping": true,
+  "$type": "MeshWeaver.Pivot.Models.PivotModel"
+}

@@ -1,57 +1,57 @@
 export const basicStoreExample = {
-    $type: "OpenSmc.Data.EntityStore",
+    $type: "MeshWeaver.Data.EntityStore",
     reference: {
-        $type: "OpenSmc.Data.LayoutAreaReference",
+        $type: "MeshWeaver.Data.LayoutAreaReference",
         area: "MainWindow"
     },
     collections: {
-        "OpenSmc.Layout.UiControl": {
+        "MeshWeaver.Layout.UiControl": {
             MainWindow: {
-                $type: "OpenSmc.Layout.Composition.LayoutStackControl",
+                $type: "MeshWeaver.Layout.Composition.LayoutStackControl",
                 skin: "MainWindow",
                 areas: [
                     {
-                        $type: "OpenSmc.Data.EntityReference",
-                        collection: "OpenSmc.Layout.UiControl",
+                        $type: "MeshWeaver.Data.EntityReference",
+                        collection: "MeshWeaver.Layout.UiControl",
                         id: "Main"
                     },
                     {
-                        $type: "OpenSmc.Data.EntityReference",
-                        collection: "OpenSmc.Layout.UiControl",
+                        $type: "MeshWeaver.Data.EntityReference",
+                        collection: "MeshWeaver.Layout.UiControl",
                         id: "Toolbar"
                     },
                     {
-                        $type: "OpenSmc.Data.EntityReference",
-                        collection: "OpenSmc.Layout.UiControl",
+                        $type: "MeshWeaver.Data.EntityReference",
+                        collection: "MeshWeaver.Layout.UiControl",
                         id: "ContextMenu"
                     }
                 ]
             },
             "Main": {
-                $type: "OpenSmc.Layout.Composition.SpinnerControl",
+                $type: "MeshWeaver.Layout.Composition.SpinnerControl",
                 message: "processing...",
                 progress: 0.5
             },
             "Toolbar": {
-                $type: "OpenSmc.Layout.TextBoxControl",
+                $type: "MeshWeaver.Layout.TextBoxControl",
                 dataContext: {
-                    $type: "OpenSmc.Data.EntityReference",
+                    $type: "MeshWeaver.Data.EntityReference",
                     collection: "LineOfBusiness",
                     id: "1"
                 },
                 data: {
-                    $type: "OpenSmc.Layout.DataBinding.Binding",
+                    $type: "MeshWeaver.Layout.DataBinding.Binding",
                     path: "$.DisplayName"
                 }
             },
             "ContextMenu": {
-                $type: "OpenSmc.Layout.Views.MenuItemControl",
+                $type: "MeshWeaver.Layout.Views.MenuItemControl",
                 dataContext: {
-                    $type: "OpenSmc.Data.JsonPathReference",
+                    $type: "MeshWeaver.Data.JsonPathReference",
                     path: "$.LineOfBusiness.1"
                 },
                 title: {
-                    $type: "OpenSmc.Layout.DataBinding.Binding",
+                    $type: "MeshWeaver.Layout.DataBinding.Binding",
                     path: "$.DisplayName"
                 },
                 icon: "systemorph-fill"

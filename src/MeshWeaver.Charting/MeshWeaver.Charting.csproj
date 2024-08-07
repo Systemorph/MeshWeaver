@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<ItemGroup>
+		<PackageReference Include="Newtonsoft.Json" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<Folder Include="Models\Options\Plugins\" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+	  <ProjectReference Include="..\MeshWeaver.Utils\MeshWeaver.Utils.csproj" />
+	</ItemGroup>
+
+</Project>
