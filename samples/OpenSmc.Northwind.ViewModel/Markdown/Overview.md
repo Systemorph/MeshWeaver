@@ -9,12 +9,12 @@ describe the basic principles of data modeling.
 
 The counter doesn't really fit here, we should move it to a spearate project. 
 
-@("ProductSummary")
+@("ProductSummary"){ Layout = "Docs" }
 
 ## Interactive Reporting
 
 Make your reports interactive by using the [Interactive Reporting](InteractiveReporting.md) feature. Here an example:
 
-@("OrderSummary")
+@("OrderSummary"){ Layout = "Docs" }
 
 
