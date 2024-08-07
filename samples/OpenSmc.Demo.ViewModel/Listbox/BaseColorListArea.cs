@@ -9,7 +9,8 @@ public static class BaseColorListArea
     public static object BaseColorList(LayoutAreaHost area, RenderingContext context)
         => Controls
             .Stack
-            .WithVerticalGap(16)
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(16)
             .WithView(
                 (_, _) =>
                     Template.Bind(
