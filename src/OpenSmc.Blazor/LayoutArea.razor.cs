@@ -41,7 +41,7 @@ public partial class LayoutArea : IDisposable
     {
         base.OnParametersSet();
         Area = Reference.Layout ?? Reference.Area;
-        DisplayArea = Reference.DisplayArea ?? Reference.Area;
+        DisplayArea = Reference.Area;
 
         if(Stream != null && Equals(Stream?.Owner, Address) && Equals(Stream?.Reference, Reference))
             return;

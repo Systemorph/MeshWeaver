@@ -68,7 +68,7 @@ public static class JsonSynchronizationStream
         DataChangedEvent request
     )
     {
-        json.Update(state => json.Parse(state.ValueKind != JsonValueKind.Undefined ? state:new(), request));
+        json.Update(state => json.Parse(state.ValueKind != JsonValueKind.Undefined ? state : new(), request));
     }
 
     private static ChangeItem<JsonElement> Parse(
@@ -83,6 +83,8 @@ public static class JsonSynchronizationStream
     {
         var patch = JsonSerializer.Deserialize<JsonPatch>(request.Change.Content, json.Hub.JsonSerializerOptions);
 
+        if (state.ValueKind == JsonValueKind.Undefined)
+            state = new();
         return new(json.Owner, json.Reference,
             patch.Apply(state), request.ChangedBy, patch,
             json.Hub.Version);

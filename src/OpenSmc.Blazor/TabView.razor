@@ -9,7 +9,7 @@
     protected override void BindData()
     {
         base.BindData();
-        DataBind<string>(Skin.Label, value => Label = Label);
+        DataBind<string>(Skin.Label, value => Label = value);
     }
 
 }

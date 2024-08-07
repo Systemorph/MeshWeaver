@@ -1,4 +1,4 @@
-@page "/app/{Application}/{Environment}/{Area}/{*Id}"
+@page "/app/{Application}/{Environment}/{Area}/{**Id}"
 @using System.Collections.Immutable
 @using OpenSmc.Application
 @using OpenSmc.Layout.Domain
@@ -11,8 +11,7 @@
     Address="@Address" 
     Reference="@Reference" 
     Id="@Id" 
-    Area="@StandardPageLayout.Page"
-    DisplayArea="@Reference.Area"/>
+/>
 
 @code{
     private string area;
@@ -47,14 +46,6 @@
     {
         Id = Id,
         Layout = StandardPageLayout.Page,
-        Options =
-            Options?
-                .ToImmutableDictionary(
-                    x => x.Key,
-                    x => x.Value is string s 
-                        ? LayoutAreaReference.Decode(s) 
-                        : x.Value)
-            ?? ImmutableDictionary<string, object>.Empty,
     };
 
 }
