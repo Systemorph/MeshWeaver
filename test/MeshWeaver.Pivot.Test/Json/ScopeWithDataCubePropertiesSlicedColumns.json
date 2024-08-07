@@ -1,0 +1,470 @@
+{
+  "columns": [
+    {
+      "children": [
+        {
+          "systemName": "E.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "E",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "E",
+      "displayName": "Expenses",
+      "coordinates": [
+        "E"
+      ],
+      "grouperName": "AmountType",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "systemName": "P.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "P",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "P",
+      "displayName": "Premium",
+      "coordinates": [
+        "P"
+      ],
+      "grouperName": "AmountType",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "systemName": "C.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "C",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "C",
+      "displayName": "Cost",
+      "coordinates": [
+        "C"
+      ],
+      "grouperName": "AmountType",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "systemName": "B.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "B",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "B",
+      "displayName": "Benefit",
+      "coordinates": [
+        "B"
+      ],
+      "grouperName": "AmountType",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    }
+  ],
+  "rows": [
+    {
+      "rowGroup": {
+        "coordinates": [
+          "BoP"
+        ],
+        "systemName": "BoP",
+        "displayName": "Beginning of Period",
+        "grouperName": "PropertyName",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": null,
+        "P": null,
+        "C": null,
+        "B": null
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "BoP",
+          "EUR"
+        ],
+        "systemName": "BoP.EUR",
+        "displayName": "Euro",
+        "grouperName": "Currency",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 384
+        },
+        "P": {
+          "Value": 384
+        },
+        "C": {
+          "Value": 384
+        },
+        "B": {
+          "Value": 384
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "BoP",
+          "RUB"
+        ],
+        "systemName": "BoP.RUB",
+        "displayName": "Russian rouble",
+        "grouperName": "Currency",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 384
+        },
+        "P": {
+          "Value": 384
+        },
+        "C": {
+          "Value": 384
+        },
+        "B": {
+          "Value": 384
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "BoP",
+          "CHF"
+        ],
+        "systemName": "BoP.CHF",
+        "displayName": "Swiss Franc",
+        "grouperName": "Currency",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 384
+        },
+        "P": {
+          "Value": 384
+        },
+        "C": {
+          "Value": 384
+        },
+        "B": {
+          "Value": 384
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "BoP",
+          "USD"
+        ],
+        "systemName": "BoP.USD",
+        "displayName": "US Dollar",
+        "grouperName": "Currency",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 384
+        },
+        "P": {
+          "Value": 384
+        },
+        "C": {
+          "Value": 384
+        },
+        "B": {
+          "Value": 384
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "Delta"
+        ],
+        "systemName": "Delta",
+        "displayName": "Delta",
+        "grouperName": "PropertyName",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": null,
+        "P": null,
+        "C": null,
+        "B": null
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "Delta",
+          "EUR"
+        ],
+        "systemName": "Delta.EUR",
+        "displayName": "Euro",
+        "grouperName": "Currency",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 384
+        },
+        "P": {
+          "Value": 384
+        },
+        "C": {
+          "Value": 384
+        },
+        "B": {
+          "Value": 384
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "Delta",
+          "RUB"
+        ],
+        "systemName": "Delta.RUB",
+        "displayName": "Russian rouble",
+        "grouperName": "Currency",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 384
+        },
+        "P": {
+          "Value": 384
+        },
+        "C": {
+          "Value": 384
+        },
+        "B": {
+          "Value": 384
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "Delta",
+          "CHF"
+        ],
+        "systemName": "Delta.CHF",
+        "displayName": "Swiss Franc",
+        "grouperName": "Currency",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 384
+        },
+        "P": {
+          "Value": 384
+        },
+        "C": {
+          "Value": 384
+        },
+        "B": {
+          "Value": 384
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "Delta",
+          "USD"
+        ],
+        "systemName": "Delta.USD",
+        "displayName": "US Dollar",
+        "grouperName": "Currency",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 384
+        },
+        "P": {
+          "Value": 384
+        },
+        "C": {
+          "Value": 384
+        },
+        "B": {
+          "Value": 384
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "EoP"
+        ],
+        "systemName": "EoP",
+        "displayName": "End of Period",
+        "grouperName": "PropertyName",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": null,
+        "P": null,
+        "C": null,
+        "B": null
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "EoP",
+          "EUR"
+        ],
+        "systemName": "EoP.EUR",
+        "displayName": "Euro",
+        "grouperName": "Currency",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 768
+        },
+        "P": {
+          "Value": 768
+        },
+        "C": {
+          "Value": 768
+        },
+        "B": {
+          "Value": 768
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "EoP",
+          "RUB"
+        ],
+        "systemName": "EoP.RUB",
+        "displayName": "Russian rouble",
+        "grouperName": "Currency",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 768
+        },
+        "P": {
+          "Value": 768
+        },
+        "C": {
+          "Value": 768
+        },
+        "B": {
+          "Value": 768
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "EoP",
+          "CHF"
+        ],
+        "systemName": "EoP.CHF",
+        "displayName": "Swiss Franc",
+        "grouperName": "Currency",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 768
+        },
+        "P": {
+          "Value": 768
+        },
+        "C": {
+          "Value": 768
+        },
+        "B": {
+          "Value": 768
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "EoP",
+          "USD"
+        ],
+        "systemName": "EoP.USD",
+        "displayName": "US Dollar",
+        "grouperName": "Currency",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "E": {
+          "Value": 768
+        },
+        "P": {
+          "Value": 768
+        },
+        "C": {
+          "Value": 768
+        },
+        "B": {
+          "Value": 768
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    }
+  ],
+  "hasRowGrouping": true,
+  "$type": "MeshWeaver.Pivot.Models.PivotModel"
+}

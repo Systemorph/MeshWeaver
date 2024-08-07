@@ -1,0 +1,9 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="CsvHelper" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.DataSetReader\MeshWeaver.DataSetReader.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Reflection\MeshWeaver.Reflection.csproj" />
+  </ItemGroup>
+</Project>

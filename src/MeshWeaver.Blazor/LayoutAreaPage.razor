@@ -1,0 +1,51 @@
+@page "/app/{Application}/{Environment}/{Area}/{**Id}"
+@using System.Collections.Immutable
+@using MeshWeaver.Application
+@using MeshWeaver.Layout.Domain
+@using MeshWeaver.Utils
+
+
+<PageTitle>@PageTitle</PageTitle>
+
+<LayoutArea 
+    Address="@Address" 
+    Reference="@Reference" 
+    Id="@Id" 
+/>
+
+@code{
+    private string area;
+    private string id;
+
+    [Parameter]
+    public string Application { get; set; }
+    [Parameter]
+    public string Environment { get; set; }
+
+    [Parameter]
+    public string Area
+    {
+        get => area;
+        set => area = (string)LayoutAreaReference.Decode(value);
+    }
+
+    [Parameter]
+    public string Id
+    {
+        get => id;
+        set => id = (string)LayoutAreaReference.Decode(value);
+    }
+
+    private string PageTitle => $"{Area.Wordify()} - {Application}";
+
+    [Parameter(CaptureUnmatchedValues = true)]
+    public IReadOnlyDictionary<string, object> Options { get; set; } = ImmutableDictionary<string, object>.Empty;
+    private object Address => new ApplicationAddress(Application, Environment);
+
+    private LayoutAreaReference Reference => new(Area)
+    {
+        Id = Id,
+        Layout = StandardPageLayout.Page,
+    };
+
+}

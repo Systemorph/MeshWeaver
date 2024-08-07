@@ -1,8 +1,0 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-  <ItemGroup>
-    <PackageReference Include="System.Interactive" />
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\OpenSmc.Collections\OpenSmc.Collections.csproj" />
-  </ItemGroup>
-</Project>

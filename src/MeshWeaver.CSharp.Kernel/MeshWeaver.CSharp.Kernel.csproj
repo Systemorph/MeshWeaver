@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" />
+    <PackageReference Include="Microsoft.DotNet.Interactive.CSharp" />
+    <PackageReference Include="Microsoft.DotNet.Interactive.PackageManagement" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.CSharp.Roslyn\MeshWeaver.CSharp.Roslyn.csproj" />
+    <ProjectReference Include="..\MeshWeaver.DotNet.Kernel\MeshWeaver.DotNet.Kernel.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Reflection\MeshWeaver.Reflection.csproj" />
+    <ProjectReference Include="..\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Session\MeshWeaver.Session.csproj" />
+  </ItemGroup>
+</Project>

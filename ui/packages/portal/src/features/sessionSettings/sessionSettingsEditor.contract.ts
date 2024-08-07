@@ -1,7 +1,7 @@
 import { contractMessage } from "@open-smc/application/src/contractMessage";
 import { BaseEvent } from "@open-smc/application/src/contract/application.contract";
 
-@contractMessage("OpenSmc.Notebook.SessionSettings.SessionSettingsChangedEvent")
+@contractMessage("MeshWeaver.Notebook.SessionSettings.SessionSettingsChangedEvent")
 export class SessionSettingsChangedEvent extends BaseEvent {
     constructor(public objectId: string,
                 public image: string,
@@ -14,7 +14,7 @@ export class SessionSettingsChangedEvent extends BaseEvent {
     }
 }
 
-@contractMessage("OpenSmc.Notebook.SessionSettings.SessionSettingsRestoredEvent")
+@contractMessage("MeshWeaver.Notebook.SessionSettings.SessionSettingsRestoredEvent")
 export class SessionSettingsRestoredEvent extends BaseEvent {
     constructor(public objectId: string) {
         super();

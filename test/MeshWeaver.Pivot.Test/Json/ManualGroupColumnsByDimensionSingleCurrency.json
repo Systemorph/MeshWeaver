@@ -1,0 +1,118 @@
+{
+  "columns": [
+    {
+      "children": [
+        {
+          "systemName": "B.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "B",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "B",
+      "displayName": "B",
+      "coordinates": [
+        "B"
+      ],
+      "grouperName": "AmountType",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "systemName": "C.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "C",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "C",
+      "displayName": "C",
+      "coordinates": [
+        "C"
+      ],
+      "grouperName": "AmountType",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "systemName": "E.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "E",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "E",
+      "displayName": "E",
+      "coordinates": [
+        "E"
+      ],
+      "grouperName": "AmountType",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    },
+    {
+      "children": [
+        {
+          "systemName": "P.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "P",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "P",
+      "displayName": "P",
+      "coordinates": [
+        "P"
+      ],
+      "grouperName": "AmountType",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    }
+  ],
+  "rows": [
+    {
+      "rowGroup": {
+        "coordinates": [
+          "TopGroup"
+        ],
+        "systemName": "TopGroup",
+        "displayName": "Total",
+        "grouperName": "Total",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "B": {
+          "Value": 96
+        },
+        "C": {
+          "Value": 96
+        },
+        "E": {
+          "Value": 96
+        },
+        "P": {
+          "Value": 96
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    }
+  ],
+  "hasRowGrouping": true,
+  "$type": "MeshWeaver.Pivot.Models.PivotModel"
+}

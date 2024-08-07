@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+      <PackageReference Include="Microsoft.DotNet.Interactive.Formatting" />
+      <PackageReference Include="Markdig" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Application.Styles\MeshWeaver.Application.Styles.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Data.Contract\MeshWeaver.Data.Contract.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Data\MeshWeaver.Data.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="Conventions\" />
+  </ItemGroup>
+
+</Project>

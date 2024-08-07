@@ -1,0 +1,191 @@
+{
+  "columns": [
+    {
+      "children": [
+        {
+          "systemName": "CHF.Value",
+          "displayName": "Value",
+          "coordinates": [
+            "CHF",
+            "Value"
+          ],
+          "grouperName": "ColumnName",
+          "$type": "MeshWeaver.Pivot.Models.Column"
+        }
+      ],
+      "systemName": "CHF",
+      "displayName": "Swiss Franc",
+      "coordinates": [
+        "CHF"
+      ],
+      "grouperName": "Currency",
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+    }
+  ],
+  "rows": [
+    {
+      "rowGroup": {
+        "coordinates": [
+          "BoP"
+        ],
+        "systemName": "BoP",
+        "displayName": "Beginning of Period",
+        "grouperName": "PropertyName",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "CHF": {
+          "Value": 0
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "BoP",
+          "P"
+        ],
+        "systemName": "BoP.P",
+        "displayName": "Premium",
+        "grouperName": "AmountType",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "CHF": {
+          "Value": 0
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "BoP",
+          "P",
+          "2021"
+        ],
+        "systemName": "BoP.P.2021",
+        "displayName": "2021",
+        "grouperName": "Year",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "CHF": {
+          "Value": 0
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "Delta"
+        ],
+        "systemName": "Delta",
+        "displayName": "Delta",
+        "grouperName": "PropertyName",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "CHF": {
+          "Value": 4
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "Delta",
+          "P"
+        ],
+        "systemName": "Delta.P",
+        "displayName": "Premium",
+        "grouperName": "AmountType",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "CHF": {
+          "Value": 4
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "Delta",
+          "P",
+          "2021"
+        ],
+        "systemName": "Delta.P.2021",
+        "displayName": "2021",
+        "grouperName": "Year",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "CHF": {
+          "Value": 4
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "EoP"
+        ],
+        "systemName": "EoP",
+        "displayName": "End of Period",
+        "grouperName": "PropertyName",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "CHF": {
+          "Value": 4
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "EoP",
+          "P"
+        ],
+        "systemName": "EoP.P",
+        "displayName": "Premium",
+        "grouperName": "AmountType",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "CHF": {
+          "Value": 4
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    },
+    {
+      "rowGroup": {
+        "coordinates": [
+          "EoP",
+          "P",
+          "2021"
+        ],
+        "systemName": "EoP.P.2021",
+        "displayName": "2021",
+        "grouperName": "Year",
+        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+      },
+      "data": {
+        "CHF": {
+          "Value": 4
+        }
+      },
+      "$type": "MeshWeaver.Pivot.Models.Row"
+    }
+  ],
+  "hasRowGrouping": true,
+  "$type": "MeshWeaver.Pivot.Models.PivotModel"
+}

@@ -1,0 +1,65 @@
+{
+  "data": {
+    "dataSets": [
+      {
+        "xAxisID": "x1",
+        "data": [
+          5.2,
+          11
+        ],
+        "label": "Italy",
+        "type": 0,
+        "$type": "MeshWeaver.Charting.Models.BarDataSet"
+      },
+      {
+        "xAxisID": "x1",
+        "data": [
+          21.1,
+          null
+        ],
+        "label": "Russia",
+        "type": 0,
+        "$type": "MeshWeaver.Charting.Models.BarDataSet"
+      }
+    ],
+    "labels": [
+      "1",
+      "2"
+    ],
+    "$type": "MeshWeaver.Charting.Models.Data"
+  },
+  "options": {
+    "responsive": true,
+    "scales": {
+      "x1": {
+        "labels": [
+          "Alessandro",
+          "Paolo"
+        ],
+        "display": true,
+        "stacked": false,
+        "$type": "MeshWeaver.Charting.Models.Options.Scales.CartesianCategoryScale"
+      },
+      "y": {
+        "stacked": false,
+        "$type": "MeshWeaver.Charting.Models.Options.Scales.Scale"
+      }
+    },
+    "plugins": {
+      "legend": {
+        "display": true,
+        "$type": "MeshWeaver.Charting.Models.Options.Legend"
+      },
+      "colorSchemes": {
+        "scheme": {
+          "palette": "brewer.PastelOne9",
+          "$type": "MeshWeaver.Charting.Enums.Palettes"
+        },
+        "$type": "MeshWeaver.Charting.Models.Options.ColorSchemes"
+      },
+      "$type": "MeshWeaver.Charting.Models.Options.Plugins"
+    },
+    "$type": "MeshWeaver.Charting.Models.Options.Options"
+  },
+  "$type": "MeshWeaver.Charting.Models.Chart"
+}

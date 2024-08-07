@@ -1,0 +1,101 @@
+{
+  "data": {
+    "dataSets": [
+      {
+        "xAxisID": "x1",
+        "data": [
+          -3.9,
+          3.4,
+          3,
+          2.7,
+          4.1,
+          4,
+          -2,
+          4,
+          3,
+          4,
+          4
+        ],
+        "label": "Alessandro",
+        "type": 0,
+        "$type": "MeshWeaver.Charting.Models.BarDataSet"
+      },
+      {
+        "xAxisID": "x1",
+        "data": [
+          1.1,
+          2.2,
+          3.3,
+          4.4,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "label": "Paolo",
+        "type": 0,
+        "$type": "MeshWeaver.Charting.Models.BarDataSet"
+      }
+    ],
+    "labels": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10",
+      "11"
+    ],
+    "$type": "MeshWeaver.Charting.Models.Data"
+  },
+  "options": {
+    "responsive": true,
+    "scales": {
+      "x1": {
+        "labels": [
+          "Italy.1",
+          "Italy.2",
+          "Italy.3",
+          "Italy.4",
+          "Russia.1",
+          "Russia.2",
+          "Russia.3",
+          "Russia.4",
+          "Russia.5",
+          "Russia.6",
+          "Russia.7"
+        ],
+        "display": true,
+        "stacked": false,
+        "$type": "MeshWeaver.Charting.Models.Options.Scales.CartesianCategoryScale"
+      },
+      "y": {
+        "stacked": false,
+        "$type": "MeshWeaver.Charting.Models.Options.Scales.Scale"
+      }
+    },
+    "plugins": {
+      "legend": {
+        "display": true,
+        "$type": "MeshWeaver.Charting.Models.Options.Legend"
+      },
+      "colorSchemes": {
+        "scheme": {
+          "palette": "brewer.PastelOne9",
+          "$type": "MeshWeaver.Charting.Enums.Palettes"
+        },
+        "$type": "MeshWeaver.Charting.Models.Options.ColorSchemes"
+      },
+      "$type": "MeshWeaver.Charting.Models.Options.Plugins"
+    },
+    "$type": "MeshWeaver.Charting.Models.Options.Options"
+  },
+  "$type": "MeshWeaver.Charting.Models.Chart"
+}

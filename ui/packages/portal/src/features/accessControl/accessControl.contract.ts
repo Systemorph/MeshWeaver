@@ -10,7 +10,7 @@ export class AccessChangedEvent extends BaseEvent {
 export type AccessChangeToggle = 'Allow' | 'Deny' | 'Inherit';
 export type GroupChangeToggle = 'Remove' | 'Add' | 'Inherit';
 
-@contractMessage("OpenSmc.Notebook.AccessControl.AccessMembershipChangedEvent")
+@contractMessage("MeshWeaver.Notebook.AccessControl.AccessMembershipChangedEvent")
 export class AccessMembershipChangedEvent extends AccessChangedEvent {
     constructor(public memberOf: string,
                 public accessObject: string,
@@ -20,7 +20,7 @@ export class AccessMembershipChangedEvent extends AccessChangedEvent {
     }
 }
 
-@contractMessage("OpenSmc.Notebook.AccessControl.AccessRestrictionChangedEvent")
+@contractMessage("MeshWeaver.Notebook.AccessControl.AccessRestrictionChangedEvent")
 export class AccessRestrictionChangedEvent extends AccessChangedEvent {
     constructor(public objectId: string,
                 public permission: Permission,

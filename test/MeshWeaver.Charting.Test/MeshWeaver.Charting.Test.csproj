@@ -1,0 +1,12 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<ItemGroup>
+		<PackageReference Include="Newtonsoft.Json" />
+		<PackageReference Include="Verify.Xunit" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <ProjectReference Include="..\..\src\MeshWeaver.Charting\MeshWeaver.Charting.csproj" />
+	  <ProjectReference Include="..\MeshWeaver.Json.Assertions\MeshWeaver.Json.Assertions.csproj" />
+	</ItemGroup>
+</Project>

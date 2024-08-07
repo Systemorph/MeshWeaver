@@ -1,0 +1,8 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.Activities\MeshWeaver.Activities.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Import\MeshWeaver.Import.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Data.TestDomain\MeshWeaver.Data.TestDomain.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Hub.Fixture\MeshWeaver.Hub.Fixture.csproj" />
+  </ItemGroup>
+</Project>

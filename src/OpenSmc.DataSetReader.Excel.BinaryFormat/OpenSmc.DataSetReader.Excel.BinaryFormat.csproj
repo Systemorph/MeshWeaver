@@ -1,5 +1,0 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-  <ItemGroup>
-    <ProjectReference Include="..\OpenSmc.DataSetReader.Excel.Utils\OpenSmc.DataSetReader.Excel.Utils.csproj" />
-  </ItemGroup>
-</Project>

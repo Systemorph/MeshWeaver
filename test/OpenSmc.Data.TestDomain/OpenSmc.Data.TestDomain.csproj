@@ -1,6 +1,0 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-  <ItemGroup>
-    <ProjectReference Include="..\..\src\OpenSmc.Data\OpenSmc.Data.csproj" />
-    <ProjectReference Include="..\..\src\OpenSmc.Import\OpenSmc.Import.csproj" />
-  </ItemGroup>
-</Project>

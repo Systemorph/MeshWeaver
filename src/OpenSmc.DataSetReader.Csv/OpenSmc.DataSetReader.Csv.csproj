@@ -1,9 +1,0 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-  <ItemGroup>
-    <PackageReference Include="CsvHelper" />
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\OpenSmc.DataSetReader\OpenSmc.DataSetReader.csproj" />
-    <ProjectReference Include="..\OpenSmc.Reflection\OpenSmc.Reflection.csproj" />
-  </ItemGroup>
-</Project>

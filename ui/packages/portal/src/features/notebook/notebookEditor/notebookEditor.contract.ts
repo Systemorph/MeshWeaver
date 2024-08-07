@@ -6,7 +6,7 @@ import {
 } from "../../../app/notebookFormat";
 import { contractMessage } from "@open-smc/application/src/contractMessage";
 
-@contractMessage("OpenSmc.Notebook.OpenNotebookEvent")
+@contractMessage("MeshWeaver.Notebook.OpenNotebookEvent")
 export class OpenNotebookEvent extends BaseEvent {
     constructor(public projectId: string,
                 public environment: string,
@@ -20,7 +20,7 @@ export class NotebookChangedEvent extends BaseEvent {
     status: EventStatus = 'Requested';
 }
 
-@contractMessage("OpenSmc.Notebook.NotebookElementCreatedEvent")
+@contractMessage("MeshWeaver.Notebook.NotebookElementCreatedEvent")
 export class NotebookElementCreatedEvent extends NotebookChangedEvent {
     constructor(
         public elementKind: ElementKind,
@@ -31,7 +31,7 @@ export class NotebookElementCreatedEvent extends NotebookChangedEvent {
     }
 }
 
-@contractMessage("OpenSmc.Notebook.NotebookElementMovedEvent")
+@contractMessage("MeshWeaver.Notebook.NotebookElementMovedEvent")
 export class NotebookElementMovedEvent extends NotebookChangedEvent {
     constructor(public readonly elementIds: string[],
                 public readonly afterElementId: string) {
@@ -39,41 +39,41 @@ export class NotebookElementMovedEvent extends NotebookChangedEvent {
     }
 }
 
-@contractMessage("OpenSmc.Notebook.NotebookElementDeletedEvent")
+@contractMessage("MeshWeaver.Notebook.NotebookElementDeletedEvent")
 export class NotebookElementDeletedEvent extends NotebookChangedEvent {
     constructor(public elementIds: string[]) {
         super();
     }
 }
 
-@contractMessage("OpenSmc.Notebook.StartSessionEvent")
+@contractMessage("MeshWeaver.Notebook.StartSessionEvent")
 export class StartSessionEvent extends BaseEvent {
     constructor(public specification: SessionSpecification) {
         super();
     }
 }
 
-@contractMessage("OpenSmc.Notebook.StopSessionEvent")
+@contractMessage("MeshWeaver.Notebook.StopSessionEvent")
 export class StopSessionEvent extends BaseEvent {
     constructor() {
         super();
     }
 }
 
-@contractMessage("OpenSmc.Notebook.SessionStatusEvent")
+@contractMessage("MeshWeaver.Notebook.SessionStatusEvent")
 export class SessionStatusEvent extends BaseEvent {
     constructor(public session: SessionDescriptor, public errorMessage?: string) {
         super();
     }
 }
 
-// @contractMessage("OpenSmc.Notebook.NotebookElementEvaluationStatusBulkEvent")
+// @contractMessage("MeshWeaver.Notebook.NotebookElementEvaluationStatusBulkEvent")
 // export class NotebookElementEvaluationStatusBulkEvent {
 //     readonly elementIds: string[];
 //     readonly evaluationStatus: EvaluationStatus;
 // }
 
-@contractMessage("OpenSmc.Notebook.NotebookElementEvaluationStatusEvent")
+@contractMessage("MeshWeaver.Notebook.NotebookElementEvaluationStatusEvent")
 export class NotebookElementEvaluationStatusEvent {
     readonly elementId: string;
     readonly evaluationStatus: EvaluationStatus;
@@ -90,39 +90,39 @@ export class NotebookElementEvaluationStatusEvent {
     }
 }
 
-// @contractMessage("OpenSmc.Notebook.NotebookElementsClearOutputEvent")
+// @contractMessage("MeshWeaver.Notebook.NotebookElementsClearOutputEvent")
 // export class NotebookElementsClearOutputEvent {
 //     readonly elementIds: string[];
 // }
 
-// @contractMessage("OpenSmc.Notebook.NotebookElementOutputAddedEvent")
+// @contractMessage("MeshWeaver.Notebook.NotebookElementOutputAddedEvent")
 // export class NotebookElementOutputAddedEvent {
 //     readonly elementId: string;
 //     readonly outputToken: string;
 // }
 
-@contractMessage("OpenSmc.Notebook.EvaluateElementsCommand")
+@contractMessage("MeshWeaver.Notebook.EvaluateElementsCommand")
 export class EvaluateElementsCommand extends BaseEvent {
     constructor(public elementIds: string[]) {
         super();
     }
 }
 
-@contractMessage("OpenSmc.Notebook.CancelCommand")
+@contractMessage("MeshWeaver.Notebook.CancelCommand")
 export class CancelCommand {
 }
 
-@contractMessage("OpenSmc.Notebook.SessionEvaluationStatusChangedEvent")
+@contractMessage("MeshWeaver.Notebook.SessionEvaluationStatusChangedEvent")
 export class SessionEvaluationStatusChangedEvent {
     constructor(public evaluationStatus: EvaluationStatus) {
     }
 }
 
-@contractMessage("OpenSmc.Notebook.DisposeSessionDialogEvent")
+@contractMessage("MeshWeaver.Notebook.DisposeSessionDialogEvent")
 export class DisposeSessionDialogEvent {
 }
 
-@contractMessage("OpenSmc.Notebook.ShowSessionDialogEvent")
+@contractMessage("MeshWeaver.Notebook.ShowSessionDialogEvent")
 export class ShowSessionDialogEvent {
     // presenter: PresenterSpec;
 }

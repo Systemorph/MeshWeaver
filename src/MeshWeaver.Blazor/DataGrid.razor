@@ -1,0 +1,73 @@
+@using System.Text.Json.Nodes
+@using System.Text.Json
+@using System.Linq.Expressions
+@using MeshWeaver.Layout.DataGrid
+@inherits BlazorView<DataGridControl>
+
+<div style="display: table; table-layout: fixed; width: 100%;">
+    <div style="overflow-x: auto;">
+        <FluentDataGrid Items="@QueryableData" 
+                        Virtualize="@ViewModel.Virtualize" 
+                        ItemSize="@ViewModel.ItemSize" 
+                        GenerateHeader="GenerateHeaderOption.Sticky"
+                        ResizableColumns="@ViewModel.ResizableColumns"
+                        Pagination="@Pagination"
+                        Style="@Style">
+            @foreach (DataGridColumn column in ViewModel.Columns)
+            {
+
+                @((RenderFragment) (builder =>
+                {
+                    builder.OpenComponent(0, typeof(PropertyColumn<,>).MakeGenericType(typeof(JsonObject), column.GetPropertyType()));
+                    var index = 0;
+                    builder.AddComponentParameter(++index, nameof(PropertyColumn<object,object>.Property), GetPropertyExpression((dynamic)column));
+                    builder.AddAttribute(++index, "Title", column.Title);
+                    if (!string.IsNullOrEmpty(column.Format))
+                        builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Format), column.Format);
+                    if (column.Sortable)
+                        builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Sortable), column.Sortable);
+                    if(column.Tooltip)
+                        builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Tooltip), column.Tooltip);
+                    if (column.TooltipText != null)
+                        builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.TooltipText), (Func<JsonObject,string>)(_ => column.TooltipText));
+
+                    builder.CloseComponent();
+                }))
+
+            }
+        </FluentDataGrid>
+    </div>
+</div>
+
+<div class="paginator">
+    @if (Pagination.TotalItemCount.HasValue && Pagination.TotalItemCount > Pagination.ItemsPerPage)
+    {
+        <FluentPaginator State="@Pagination"/>
+    }
+</div>
+
+@code{
+
+
+    private PaginationState Pagination { get;  } = new()
+    {
+        ItemsPerPage = 10
+    };
+
+    private IQueryable<JsonObject> QueryableData {get;set;}
+
+    private Expression<Func<JsonObject, T>> GetPropertyExpression<T>(DataGridColumn<T> column)
+    {
+        return e => e.ContainsKey(column.Property) ? e[column.Property].Deserialize<T>(Stream.Hub.JsonSerializerOptions) : default;
+    }
+    protected override void BindData()
+    {
+        base.BindData();
+        DataBind<object>(ViewModel.Data, x => QueryableData = ((System.Collections.IEnumerable)x)?.Cast<JsonObject>().AsQueryable());
+    }
+
+    protected override void OnInitialized()
+    {
+        Pagination.TotalItemCountChanged += (_, _) => StateHasChanged();
+    }
+}

@@ -1,0 +1,41 @@
+@using Icon = MeshWeaver.Application.Styles.Icon
+@inherits InputBase<TextBoxControl, string>
+
+<FluentTextField 
+    @bind-Value="Data"
+    Placeholder="@Placeholder"
+    Label="@Label"
+    Autofocus="@AutoFocus"
+    Disabled="@Disabled"
+    AutoComplete="@Autocomplete"
+    Immediate="@Immediate"
+    ImmediateDelay="@ImmediateDelay"
+    >
+    @if (IconStart is not null)
+    {
+        <FluentIcon Value="@IconStart.ToFluentIcon()" Slot="start" />
+    }
+    @if (IconEnd is not null)
+    {
+        <FluentIcon Value="@IconEnd.ToFluentIcon()" Slot="end" />
+    }
+</FluentTextField>
+    
+@code
+{
+    private string Autocomplete { get; set; }
+    private Icon IconStart { get; set; }
+    private Icon IconEnd { get; set; }
+
+    protected override void BindData()
+    {
+        base.BindData();
+
+        if (ViewModel != null)
+        {
+            DataBind<string>(ViewModel.Autocomplete, x => Autocomplete = x);
+            DataBind<Icon>(ViewModel.IconStart, x => IconStart = x);
+            DataBind<Icon>(ViewModel.IconEnd, x => IconEnd = x);
+        }
+    }
+}

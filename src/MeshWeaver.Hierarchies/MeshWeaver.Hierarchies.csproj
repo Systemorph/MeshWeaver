@@ -1,0 +1,6 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.DataCubes.Abstractions\MeshWeaver.DataCubes.Abstractions.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Data\MeshWeaver.Data.csproj" />
+  </ItemGroup>
+</Project>

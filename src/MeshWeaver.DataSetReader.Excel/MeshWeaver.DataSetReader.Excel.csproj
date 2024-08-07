@@ -1,0 +1,10 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="DocumentFormat.OpenXml" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.DataSetReader.Excel.BinaryFormat\MeshWeaver.DataSetReader.Excel.BinaryFormat.csproj" />
+    <ProjectReference Include="..\MeshWeaver.DataSetReader.Excel.OpenXmlFormat\MeshWeaver.DataSetReader.Excel.OpenXmlFormat.csproj" />
+    <ProjectReference Include="..\MeshWeaver.DataSetReader\MeshWeaver.DataSetReader.csproj" />
+  </ItemGroup>
+</Project>

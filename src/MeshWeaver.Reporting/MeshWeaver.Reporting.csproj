@@ -1,0 +1,9 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.DataCubes\MeshWeaver.DataCubes.csproj" />
+    <ProjectReference Include="..\MeshWeaver.GridModel\MeshWeaver.GridModel.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Pivot\MeshWeaver.Pivot.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Scopes\MeshWeaver.Scopes.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Utils\MeshWeaver.Utils.csproj" />
+  </ItemGroup>
+</Project>

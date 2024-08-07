@@ -1,0 +1,9 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Arithmetics.Abstractions\MeshWeaver.Arithmetics.Abstractions.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Equality\MeshWeaver.Equality.csproj" />
+    <ProjectReference Include="..\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />
+  </ItemGroup>
+
+</Project>
