@@ -32,7 +32,7 @@ public record PointValueChartBuilder : ChartBuilderBase<PointValueChartBuilder, 
         if (xList.Count != yList.Count || xList.Count != radiusList.Count)
             throw new InvalidOperationException();
 
-        var newData = ChartModel.Data ?? new Models.Data();
+        var newData = ChartModel.Data ?? new ChartData();
         var pointData = Enumerable.Range(0, xList.Count)
                                   .Select(i => new BubbleData { X = xList[i], Y = yList[i], R = radiusList[i] });
         var dataSet = new BubbleDataSet { Data = pointData };

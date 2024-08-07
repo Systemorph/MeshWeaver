@@ -64,14 +64,8 @@ public abstract record ChartBuilderBase<TChartBuilder, TDataSet, TOptionsBuilder
     public virtual TChartBuilder WithLabels(IEnumerable<string> labels) =>
         (TChartBuilder)(this with { ChartModel = ChartModel with { Data = ChartModel.Data.WithLabels(labels) } });
 
-    public TChartBuilder WithLegend(Func<Legend, Legend> legendModifier = null)
-        => WithOptions(o => o.WithPlugins(p =>
-                                          {
-                                              p.Legend = new Legend { Display = true };
-                                              if (legendModifier != null)
-                                                  return p with { Legend = legendModifier(p.Legend) };
-                                              return p;
-                                          }));
+    public TChartBuilder WithLegend(Func<Legend, Legend> builder = null)
+        => WithOptions(o => o.WithPlugins(p => p.WithLegend(builder)));
 
     public TChartBuilder WithTitle(string text, Func<Title, Title> titleModifier = null)
         => WithOptions(o => o.WithPlugins(p =>
@@ -105,10 +99,8 @@ public abstract record ChartBuilderBase<TChartBuilder, TDataSet, TOptionsBuilder
 
     public TChartBuilder WithOptions(Func<TOptionsBuilder, TOptionsBuilder> func) => (TChartBuilder)(this with { OptionsBuilder = func(OptionsBuilder) });
 
-    public TChartBuilder WithDataLabels(Func<DataLabels, DataLabels> func) => WithOptions(o => o.WithPlugins(p => p with
-    {
-        DataLabels = func(p.DataLabels ?? new DataLabels())
-    }));
+    public TChartBuilder WithDataLabels(Func<DataLabels, DataLabels> func = null) => 
+        WithOptions(o => o.WithPlugins(p => p.WithDataLabels(func)));
 
     public virtual Chart ToChart()
     {
@@ -120,8 +112,8 @@ public abstract record ChartBuilderBase<TChartBuilder, TDataSet, TOptionsBuilder
                                        Data = ChartModel.Data with { DataSets = DataSets }
                                    }
                   };
-        if (tmp.ChartModel.Options?.Plugins?.Legend is null && tmp.ChartModel.Data.DataSets.Any(item => item.HasLabel()))
-            return tmp.WithLegend().ChartModel;
+        // if (tmp.ChartModel.Options?.Plugins?.Legend is null && tmp.ChartModel.Data.DataSets.Any(item => item.HasLabel()))
+        //     return tmp.WithLegend().ChartModel;
 
         return tmp.ChartModel;
     }

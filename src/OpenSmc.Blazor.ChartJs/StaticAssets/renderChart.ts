@@ -11,6 +11,7 @@ Chart.defaults.elements.line.fill = false; // lines default to line, not area
 Chart.defaults.elements.line.tension = 0; // lines default to bezier curves. just draw lines as a default instead.
 Chart.defaults.plugins.legend.display = false; // default is no Legend.
 Chart.defaults.plugins.datalabels.display = false; // default is no DataLabels.
+Chart.defaults.plugins.tooltip.enabled = false;
 
 Chart.defaults.font.family = "roboto, \"sans-serif\"";
 Chart.defaults.font.size = 14;

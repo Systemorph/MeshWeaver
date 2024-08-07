@@ -2,7 +2,7 @@
 
 namespace OpenSmc.Charting.Models
 {
-    public record RadarOptions : OpenSmc.Charting.Models.Options.Options
+    public record RadarOptions : OpenSmc.Charting.Models.Options.ChartOptions
     {
         /// <summary>
         /// The number of degrees to rotate the chart clockwise.

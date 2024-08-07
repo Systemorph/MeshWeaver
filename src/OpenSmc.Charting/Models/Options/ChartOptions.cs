@@ -2,7 +2,7 @@
 
 namespace OpenSmc.Charting.Models.Options
 {
-    public record Options
+    public record ChartOptions
     {
         #region Responsive Charts
         //https://www.chartjs.org/docs/3.5.1/configuration/responsive.html

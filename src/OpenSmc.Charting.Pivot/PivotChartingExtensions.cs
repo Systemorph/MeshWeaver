@@ -5,34 +5,14 @@ namespace OpenSmc.Charting.Pivot;
 
 public static class PivotChartingExtensions
 {
-    public static IPivotBarChartBuilder ToBarChart<
-        T,
-        TTransformed,
-        TIntermediate,
-        TAggregate,
-        TPivotBuilder
-    >(this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
-        where TPivotBuilder : PivotBuilderBase<
-                T,
-                TTransformed,
-                TIntermediate,
-                TAggregate,
-                TPivotBuilder
-            >
-    {
-        return new PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>(
-            pivotBuilder
-        );
-    }
-
-    public static IPivotBarChartBuilder ToBarChart<
+    public static IPivotBarChartBuilder ToBarChartPivotBuilder<
         T,
         TTransformed,
         TIntermediate,
         TAggregate,
         TPivotBuilder
     >(this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
-        Func<BarChartBuilder, BarChartBuilder> chartBuilder)
+        Func<BarChartBuilder, BarChartBuilder> chartBuilder = null)
         where TPivotBuilder : PivotBuilderBase<
             T,
             TTransformed,
@@ -41,7 +21,13 @@ public static class PivotChartingExtensions
             TPivotBuilder
         >
     {
-        return pivotBuilder.ToBarChart().WithChartBuilder(chartBuilder);
+        var pivotChartBuilder = new PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>(
+            pivotBuilder
+        );
+
+        return chartBuilder is not null
+            ? pivotChartBuilder.WithChartBuilder(chartBuilder)
+            : pivotChartBuilder;
     }
 
     public static IPivotLineChartBuilder ToLineChart<

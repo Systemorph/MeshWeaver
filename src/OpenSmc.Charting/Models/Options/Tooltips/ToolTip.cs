@@ -2,7 +2,10 @@
 
 namespace OpenSmc.Charting.Models.Options.Tooltips
 {
-    // https://www.chartjs.org/docs/3.5.1/configuration/tooltip.html
+    /// <summary>
+    /// Tooltip configuration.
+    /// <see href="https://www.chartjs.org/docs/3.9.1/configuration/tooltip.html"/>
+    /// </summary>
     public record ToolTip
     {
         /// <summary>
