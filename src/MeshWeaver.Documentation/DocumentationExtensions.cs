@@ -42,10 +42,23 @@ public static class DocumentationExtensions
             Id = $"{EmbeddedDocumentationSource.Embedded}/{assembly.GetName().Name}/{name}"
         }.ToHref(layout.Hub.Address);
 
-    public static LayoutDefinition AddDocumentationMenu(this LayoutDefinition layout, Assembly assembly)
-        => layout.WithNavMenu((menu, _) =>
-            layout.Hub.GetDocumentationService().Context.GetSource(EmbeddedDocumentationSource.Embedded, assembly.GetName().Name)
-                ?.DocumentPaths
-                .Aggregate(menu, (m, i) => m.WithNavLink(i.Key, layout.DocumentationPath(assembly, i.Key))));
-
+    public static LayoutDefinition AddDocumentationMenuForAssemblies(this LayoutDefinition layout,
+        params Assembly[] assemblies)
+        => layout.WithNavMenu
+        (
+            (menu, _, _) => assemblies.Aggregate
+            (
+                menu,
+                (mm, assembly) =>
+                    layout.Hub.GetDocumentationService().Context
+                        .GetSource(EmbeddedDocumentationSource.Embedded, assembly.GetName().Name)
+                        ?.DocumentPaths
+                        .Aggregate
+                        (
+                            mm,
+                            (m, i) =>
+                                m.WithNavLink(i.Key, layout.DocumentationPath(assembly, i.Key))
+                        )
+            )
+        );
 }

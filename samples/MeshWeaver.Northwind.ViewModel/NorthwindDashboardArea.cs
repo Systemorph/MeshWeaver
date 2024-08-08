@@ -26,7 +26,7 @@ public static class NorthwindDashboardArea
     /// </remarks>
     public static LayoutDefinition AddDashboard(this LayoutDefinition layout)
         => layout.WithView(nameof(Dashboard), Dashboard)
-            .WithNavMenu((menu,_) =>
+            .WithNavMenu((menu,_, _) =>
                 menu.WithNavLink(
                     nameof(Dashboard),
                     new LayoutAreaReference(nameof(Dashboard)).ToHref(layout.Hub.Address), FluentIcons.Grid)

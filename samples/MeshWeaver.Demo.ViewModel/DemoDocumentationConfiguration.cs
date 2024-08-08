@@ -16,7 +16,7 @@ public static class DemoDocumentationConfiguration
 
     public static LayoutDefinition AddDocumentationMenu(this LayoutDefinition layout)
         => layout
-            .WithNavMenu((menu, _) =>
+            .WithNavMenu((menu, _, _) =>
                 menu
                     .WithNavLink(Overview, layout.DocumentationPath(typeof(CounterLayoutArea).Assembly, "Overview.md"), nl => nl with { Icon = FluentIcons.Home, })
                     .WithNavLink("ViewModel State", layout.DocumentationPath(typeof(CounterLayoutArea).Assembly, "Counter.md"), nl => nl with { Icon = FluentIcons.Box, })

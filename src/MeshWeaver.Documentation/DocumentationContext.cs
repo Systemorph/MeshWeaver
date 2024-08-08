@@ -44,6 +44,9 @@ public abstract record DocumentationSource(string Id)
     public abstract Stream GetStream(string name);
 
     public abstract string Type { get; }
+
+    public abstract string GetPath(string name);
+    public abstract string GetDocumentName(string documentId);
 }
 
 public abstract record DocumentationSource<TSource>(string Id) : DocumentationSource(Id)

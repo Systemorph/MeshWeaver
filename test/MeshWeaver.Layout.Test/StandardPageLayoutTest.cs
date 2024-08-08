@@ -28,8 +28,8 @@ public class StandardPageLayoutTest(ITestOutputHelper output) : HubTestBase(outp
                             StaticView,
                             Controls.Stack.WithView("Hello", "Hello").WithView("World", "World")
                         )
-                        .WithNavMenu((menu, _) => menu.WithNavLink("item1", "/item1", "icon1"))
-                        .WithNavMenu((menu, _) => menu.WithNavLink("item2", "/item2", "icon2"))
+                        .WithNavMenu((menu, _, _) => menu.WithNavLink("item1", "/item1", "icon1"))
+                        .WithNavMenu((menu, _, _) => menu.WithNavLink("item2", "/item2", "icon2"))
                 );
         }
 

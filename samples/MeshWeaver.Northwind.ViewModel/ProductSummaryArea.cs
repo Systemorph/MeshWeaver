@@ -22,7 +22,7 @@ public static class ProductSummaryArea
     /// </remarks>
     public static LayoutDefinition AddProductsSummary(this LayoutDefinition layout)
         => layout.WithView(nameof(ProductSummary), ProductSummary)
-            .WithNavMenu((menu, _) => menu.WithNavLink("Product Summary",
+            .WithNavMenu((menu, _, _) => menu.WithNavLink("Product Summary",
                 new LayoutAreaReference(nameof(ProductSummary)).ToHref(layout.Hub.Address), FluentIcons.Box)
             );
 

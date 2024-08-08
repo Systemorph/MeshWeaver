@@ -8,7 +8,7 @@ namespace MeshWeaver.Northwind.ViewModel
     /// <summary>
     /// Provides a centralized registration mechanism for all Northwind application views and configurations. This static class facilitates the addition of various Northwind-specific views and documentation to the application's MessageHub configuration.
     /// </summary>
-    public static class NorthwindViewModelsRegistry
+    public static class NorthwindViewModels
     {
         /// <summary>
         /// Registers all Northwind views and configurations to the provided MessageHub configuration.

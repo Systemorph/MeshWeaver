@@ -188,6 +188,15 @@ public record PdbDocumentationSource
 
     private static readonly Guid EmbeddedSource = new Guid("0E8A571B-6926-466E-B4AD-8AB04611F5FE");
 
+
+    public override string GetPath(string fullType)
+    {
+        var name = FilesByType.GetValueOrDefault(fullType);
+        return name == null ? null : $"{Pdb}/{Id}/{name}";
+    }
+
+    public override string GetDocumentName(string documentId)
+    => FilesByType.GetValueOrDefault(documentId, documentId);
 }
 
 

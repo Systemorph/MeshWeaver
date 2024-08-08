@@ -1,5 +1,4 @@
-﻿using System.Collections;
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Composition;
@@ -68,11 +67,6 @@ public abstract record UiControl(object Data) : IUiControl
     //public virtual IEnumerable<Func<EntityStore, EntityStore>> Render(LayoutAreaHost host, RenderingContext context)
     //=> RenderSelf(context);
 
-    protected IEnumerable<Func<EntityStore, EntityStore>> RenderSelf(RenderingContext context)
-    {
-        return RenderResults.Concat([store => store.UpdateControl(context.Area, PrepareRendering(context))]);
-
-    }
 
     protected virtual UiControl PrepareRendering(RenderingContext context)
         => this;
@@ -88,7 +82,7 @@ public abstract record UiControl(object Data) : IUiControl
         RenderResults
             .Concat([RenderSelf(host, context)]);
     protected virtual Func<EntityStore, EntityStore> RenderSelf(LayoutAreaHost host, RenderingContext context)
-        => store => store.UpdateControl(context.Area, this);
+        => store => store.UpdateControl(context.Area, PrepareRendering(context));
 
     public virtual bool Equals(UiControl other)
     {

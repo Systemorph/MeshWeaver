@@ -9,7 +9,7 @@ public static class SelectControlDemoArea
 {
     public static LayoutDefinition AddSelectControlDemo(this LayoutDefinition layout)
         => layout.WithView(nameof(YearSelectArea.YearSelect), YearSelectArea.YearSelect)
-            .WithNavMenu((menu, _) => menu
+            .WithNavMenu((menu, _, _) => menu
                 .WithNavLink(
                     "Raw: DropDown Control",
                     new LayoutAreaReference(nameof(YearSelectArea.YearSelect)).ToHref(layout.Hub.Address),

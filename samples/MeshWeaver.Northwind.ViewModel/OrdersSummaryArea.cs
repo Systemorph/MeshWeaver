@@ -1,6 +1,7 @@
 ﻿using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
+using MeshWeaver.Documentation;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
@@ -25,7 +26,9 @@ public static class OrdersSummaryArea
     /// </remarks>
     public static LayoutDefinition AddOrdersSummary(this LayoutDefinition layout)
         => layout.WithView(nameof(OrderSummary), OrderSummary)
-            .WithNavMenu((menu,_)=>menu.WithNavLink(nameof(OrderSummary).Wordify(),
+            .WithSourcesForType(ctx => ctx.Area == nameof(OrderSummary), typeof(OrdersSummaryArea), typeof(NorthwindViewModels))
+            .WithEmbeddedDocument(ctx => ctx.Area == nameof(OrderSummary),typeof(OrdersSummaryArea).Assembly, "Readme.md")
+            .WithNavMenu((menu,_, _) =>menu.WithNavLink(nameof(OrderSummary).Wordify(),
                 new LayoutAreaReference(nameof(OrderSummary)).ToHref(layout.Hub.Address), FluentIcons.Box)
         );
 

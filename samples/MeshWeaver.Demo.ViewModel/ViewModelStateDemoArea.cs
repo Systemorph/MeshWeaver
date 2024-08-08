@@ -12,7 +12,7 @@ public static class ViewModelStateDemoArea
 {
     public static LayoutDefinition AddViewModelStateDemo(this LayoutDefinition layout)
         => layout.WithView(nameof(CounterLayoutArea.Counter), CounterLayoutArea.Counter)
-            .WithNavMenu((menu, _) => menu
+            .WithNavMenu((menu, _, _) => menu
                 .WithNavLink(
                     "Raw: ViewModel State",
                     new LayoutAreaReference(nameof(CounterLayoutArea.Counter)).ToHref(layout.Hub.Address),

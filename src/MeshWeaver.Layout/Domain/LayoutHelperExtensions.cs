@@ -10,11 +10,11 @@ namespace MeshWeaver.Layout.Domain
             EntityStore store,
             string area,
             Func<TControl> factory,
-            Func<TControl, RenderingContext, TControl> config)
+            Func<TControl, LayoutAreaHost, RenderingContext, TControl> config)
             where TControl : UiControl
         {
             var menu = store.GetControl<TControl>(area) ?? factory();
-            menu = config(menu, context);
+            menu = config(menu, host, context);
             return host.RenderArea(context with { Area = area }, menu).Aggregate(store, (x, y) => y.Invoke(x));
         }
     }
