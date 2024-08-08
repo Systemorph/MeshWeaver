@@ -1,6 +1,4 @@
-﻿using MeshWeaver.Charting.Builders.ChartBuilders;
-using MeshWeaver.Pivot.Builder;
-using MeshWeaver.Pivot.Builder.Interfaces;
+﻿using MeshWeaver.Pivot.Builder;
 
 namespace MeshWeaver.Charting.Pivot;
 
@@ -15,7 +13,7 @@ public static class PivotChartBuilderExtensions
             TPivotBuilder
         >(
         this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
-        Func<BarChartBuilder, BarChartBuilder> chartBuilder = null
+        Func<IPivotBarChartBuilder, IPivotBarChartBuilder> builder = null
         )
         where TPivotBuilder : PivotBuilderBase<
             T,
@@ -25,7 +23,15 @@ public static class PivotChartBuilderExtensions
             TPivotBuilder
         >
     {
-        var chartModel = pivotBuilder.ToBarChartPivotBuilder(chartBuilder).Execute();
+        var pivotBarChartBuilder = pivotBuilder.ToBarChartPivotBuilder();
+
+        if (builder is not null)
+        {
+            pivotBarChartBuilder = builder(pivotBarChartBuilder);
+        }
+
+        var chartModel = pivotBarChartBuilder.Execute();
+
         return new(chartModel);
     }
 }

@@ -101,4 +101,50 @@ public static class PivotChartModelExtensions
     {
         return descriptor.Coordinates.Count == level;
     }
+
+    public static PivotChartModel OrderByValue(this PivotChartModel model, Func<PivotChartRow, bool> dataSetSelector = null) 
+        => OrderByValue(model, dataSetSelector, false);
+
+    public static PivotChartModel OrderByValueDescending(this PivotChartModel model, Func<PivotChartRow, bool> dataSetSelector = null) 
+        => OrderByValue(model, dataSetSelector, true);
+
+    private static PivotChartModel OrderByValue(
+        PivotChartModel model,
+        Func<PivotChartRow, bool> dataSetSelector,
+        bool descending)
+    {
+        var dataSet = dataSetSelector != null ? model.Rows.FirstOrDefault(dataSetSelector)
+            : model.Rows.FirstOrDefault();
+
+        if (dataSet == null)
+        {
+            return model;
+        }
+
+        var keySelector = new Func<PivotElementDescriptor, double>(d =>
+        {
+            var value = dataSet.DataByColumns
+                .FirstOrDefault(c => c.ColSystemName.Equals(d.Id)).Value;
+            return value ?? 0;
+        });
+
+        var reorderedColumns = descending
+            ? model.ColumnDescriptors.OrderByDescending(keySelector)
+            : model.ColumnDescriptors.OrderBy(keySelector);
+
+        return model with
+        {
+            ColumnDescriptors = reorderedColumns.ToList()
+        };
+    }
+
+    public static PivotChartModel TopValues(this PivotChartModel model, int n)
+    {
+        return model with
+        {
+            ColumnDescriptors = model.ColumnDescriptors
+                .Take(n)
+                .ToList()
+        };
+    }
 }
