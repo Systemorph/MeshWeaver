@@ -18,8 +18,8 @@ public partial class LayoutArea : IDisposable
 
     private IWorkspace Workspace => Hub.GetWorkspace();
 
-    [Parameter(CaptureUnmatchedValues = true)]
-    public Dictionary<string, object> Options { get; set; }
+    [Parameter]
+    public string Id { get; set; }
 
 
     [Parameter]
@@ -32,7 +32,6 @@ public partial class LayoutArea : IDisposable
     public string DisplayArea { get; set; }
 
 
-    [Parameter]
     public ISynchronizationStream<JsonElement, LayoutAreaReference> Stream { get; set; }
 
     private LayoutAreaProperties Properties { get; set; } 

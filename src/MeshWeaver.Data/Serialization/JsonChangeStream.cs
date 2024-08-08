@@ -83,10 +83,16 @@ public static class JsonSynchronizationStream
     {
         var patch = JsonSerializer.Deserialize<JsonPatch>(request.Change.Content, json.Hub.JsonSerializerOptions);
 
-        if (state.ValueKind == JsonValueKind.Undefined)
-            state = new();
-        return new(json.Owner, json.Reference,
-            patch.Apply(state), request.ChangedBy, patch,
-            json.Hub.Version);
+        try
+        {
+            return new(json.Owner, json.Reference,
+                patch.Apply(state), request.ChangedBy, patch,
+                json.Hub.Version);
+
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
     }
 }

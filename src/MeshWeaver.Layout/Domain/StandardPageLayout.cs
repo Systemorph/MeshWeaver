@@ -100,7 +100,7 @@ public static class StandardPageLayout
     //public static IEnumerable<Func<EntityStore,EntityStore>> RenderNavMenu(LayoutAreaHost host, RenderingContext context, EntityStore store) => NavLink("Put link to documentation", "/");
 
     public static LayoutDefinition WithNavMenu(this LayoutDefinition layout,
-        Func<NavMenuControl, RenderingContext, NavMenuControl> config)
+        Func<NavMenuControl, LayoutAreaHost, RenderingContext, NavMenuControl> config)
         => layout.WithRenderer(IsPage,
             (h, c) =>
             [
@@ -112,11 +112,11 @@ public static class StandardPageLayout
                     config)
             ]);
     public static LayoutDefinition WithContentHeading(this LayoutDefinition layout,
-        Func<LayoutStackControl, RenderingContext, LayoutStackControl> config)
+        Func<LayoutStackControl, LayoutAreaHost, RenderingContext, LayoutStackControl> config)
         => layout.WithRenderer(IsPage,
             (h, c) =>
             [
-                store => h.ConfigBasedRenderer<LayoutStackControl>(
+                store => h.ConfigBasedRenderer(
                     c,
                     store,
                     StandardPageLayout.ContentHeading,
@@ -132,7 +132,7 @@ public static class StandardPageLayout
     public static void SetContextMenu(this LayoutAreaHost host, UiControl view)
         => host.UpdateArea(new(ContextMenu), view.WithSkin(Skins.SplitterPane));
     public static LayoutDefinition WithToolbar(this LayoutDefinition layout,
-        Func<ToolbarControl, RenderingContext, ToolbarControl> config)
+        Func<ToolbarControl, LayoutAreaHost, RenderingContext, ToolbarControl> config)
         => layout.WithRenderer(IsPage,
             (h, c) =>
             [

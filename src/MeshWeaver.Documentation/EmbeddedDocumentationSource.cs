@@ -1,8 +1,5 @@
 ﻿using System.Collections.Immutable;
-using System.IO.Compression;
 using System.Reflection;
-using System.Reflection.Metadata;
-using System.Text;
 
 namespace MeshWeaver.Documentation;
 
@@ -33,4 +30,12 @@ public record EmbeddedDocumentationSource(string Id, Assembly Assembly) :
             return resourceName;
         return $"{split[^2]}.{split[^1]}";
     }
+
+    public override string GetPath(string name)
+        => $"{Embedded}/{Id}/{name}";
+
+    public override string GetDocumentName(string documentId)
+    => DocumentPaths.Keys.Contains(documentId)
+    ? documentId
+        : DocumentPaths.FirstOrDefault(x => x.Value == documentId).Key;
 }

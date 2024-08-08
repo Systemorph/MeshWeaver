@@ -1,7 +1,6 @@
 ﻿using System.Collections.Immutable;
-using System.Security.Cryptography.X509Certificates;
+using System.Reflection;
 using System.Text.RegularExpressions;
-using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
@@ -18,28 +17,23 @@ public static class DocumentationViewModels
 
     public static LayoutDefinition AddDocumentation(this LayoutDefinition layout)
         => layout
-            .WithRenderer(IsDocs, RenderDocs)
+            .WithDocumentation(
+                _ => true,
+                (tabs,host,ctx)=>tabs.WithTab(ctx.DisplayName, NamedArea(host.Stream.Reference.Area))
+                )
             .WithView(nameof(Doc), (Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<object>>)Doc);
 
 
 
-    private static IEnumerable<Func<EntityStore, EntityStore>>
-        RenderDocs(
-            LayoutAreaHost host,
-            RenderingContext context
-        )
-        =>
-        [
-            store => store.UpdateControl(
-                Documentation,
-                Tabs.WithTab(context.DisplayName, NamedArea(context.Area))
-            )
+    //private static TabsControl
+    //    RenderDocs(
+    //        LayoutAreaHost host,
+    //        RenderingContext context
+    //    )
+    //    =>
+    //        Tabs.WithTab(context.DisplayName, NamedArea(context.Area));
 
-        ];
-
-
-    public static LayoutDefinition WithSourcesForType(this LayoutDefinition layout,
-        Func<RenderingContext, bool> contextFilter, params Type[] sources)
+    public static LayoutDefinition WithDocumentation(this LayoutDefinition layout, Func<RenderingContext, bool> contextFilter, Func<TabsControl, LayoutAreaHost, RenderingContext, TabsControl> viewDefinition)
         => layout.WithRenderer(ctx => IsDocs(ctx) && contextFilter(ctx),
             (host, context) =>
             [
@@ -47,12 +41,60 @@ public static class DocumentationViewModels
                     context,
                     store,
                     Documentation,
-                    () => new TabsControl().WithTab(context.DisplayName, NamedArea(host.Stream.Reference.Area)),
-                    (tabs, _) =>
-                        sources.Select(type => new LayoutAreaControl(layout.Hub.Address, new(Documentation) { Id = $"" }))
-                            .Aggregate(tabs, (t, s) =>
-                                t.WithTab(context.DisplayName,s)))
+                    () => new TabsControl(),
+                    viewDefinition)
             ]);
+
+    public static LayoutDefinition WithSourcesForType(
+        this LayoutDefinition layout,
+        Func<RenderingContext, bool> contextFilter,
+        params Type[] types
+    )
+    {
+        var documentationService = layout.Hub.GetDocumentationService();
+        var sources = types
+            .Select(t => t.Assembly)
+            .Distinct()
+            .Select(a => new {
+                    Assembly = a,
+                    Source = documentationService.GetSource(PdbDocumentationSource.Pdb, a.GetName().Name)
+                        as PdbDocumentationSource
+                }
+            )
+            .Where(a => a.Source != null)
+            .ToDictionary(a => a.Assembly, a => a.Source);
+        
+        
+        return layout.WithDocumentation(contextFilter,
+            (tabs, _, context) => 
+                types
+                .Select(type => sources.TryGetValue(type.Assembly, out var source)
+                ? new{ Control =
+                        new LayoutAreaControl(layout.Hub.Address,
+                    new(nameof(Doc)) { Id = source.GetPath(type.FullName) })
+                    ,
+                    TabName = source.GetDocumentName(type.FullName)
+                }
+                    : null)
+                .Where(x => x is { Control.Reference.Id: not null })
+                .Aggregate(tabs, (t, s) =>
+                    t.WithTab(s.TabName, s.Control)));
+    }
+    public static LayoutDefinition WithEmbeddedDocument(
+        this LayoutDefinition layout,
+        Func<RenderingContext, bool> contextFilter,
+        Assembly assembly,
+        string name
+    )
+    {
+        var source = layout.Hub.GetDocumentationService().GetSource(EmbeddedDocumentationSource.Embedded, assembly.GetName().Name);
+        return layout.WithDocumentation(contextFilter,
+                (tabs, _, context) => tabs.WithTab(name,
+                    new LayoutAreaControl(layout.Hub.Address, new(nameof(Doc)) { Id = source.GetPath(name) })
+                )
+            )
+            ;
+    }
 
 
     private const string ReadPattern = @"^(?<sourceType>[^@]+)/(?<sourceId>[^@]+)/(?<documentId>[^@]+)$";

@@ -21,7 +21,7 @@ public static class CustomerSummaryArea
     /// </remarks>
     public static LayoutDefinition AddCustomerSummary(this LayoutDefinition layout)
         => layout.WithView(nameof(CustomerSummary), CustomerSummary)
-            .WithNavMenu((menu,_) => 
+            .WithNavMenu((menu,_, _) => 
                 menu.WithNavLink(
                     nameof(CustomerSummary).Wordify(),
                     new LayoutAreaReference(nameof(CustomerSummary)).ToHref(layout.Hub.Address),

@@ -41,6 +41,8 @@ public static class BlazorClientExtensions
 
         return control switch
         {
+            LayoutAreaControl layoutArea
+                => LayoutAreaMap(layoutArea, stream, area),
             HtmlControl html => StandardView<HtmlControl, HtmlView>(html, stream, area),
             SpinnerControl spinner => StandardView<SpinnerControl, Spinner>(spinner, stream, area),
             LabelControl label => StandardView<LabelControl, Label>(label, stream, area),
@@ -49,8 +51,6 @@ public static class BlazorClientExtensions
             MenuItemControl menu => StandardView<MenuItemControl, MenuItemView>(menu, stream, area),
             NavLinkControl link => StandardView<NavLinkControl, NavLink>(link, stream, area),
             NavGroupControl group => StandardView<NavGroupControl, NavGroup>(group, stream, area),
-            LayoutAreaControl layoutArea
-                => StandardView<LayoutAreaControl, LayoutArea>(layoutArea, stream, area),
             DataGridControl gc => StandardView<DataGridControl, DataGrid>(gc, stream, area),
             TextBoxControl textbox => skin switch
             {
@@ -78,6 +78,16 @@ public static class BlazorClientExtensions
             _ => DelegateToDotnetInteractive(instance, stream, area),
         };
     }
+
+    private static ViewDescriptor LayoutAreaMap(LayoutAreaControl layoutArea,
+        ISynchronizationStream<JsonElement, LayoutAreaReference> stream, string area)
+        => new(typeof(LayoutArea),
+            new Dictionary<string, object>
+            {
+                { nameof(LayoutArea.Address), layoutArea.Address },
+                { nameof(LayoutArea.Reference), layoutArea.Reference },
+                { nameof(LayoutArea.Id), layoutArea.Id },
+            });
 
     private static ViewDescriptor MapNamedAreaView(NamedAreaControl namedView,
         ISynchronizationStream<JsonElement, LayoutAreaReference> stream) =>
