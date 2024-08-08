@@ -1,7 +1,7 @@
 {
   "type": 5,
   "data": {
-    "dataSets": [
+    "datasets": [
       {
         "data": [
           {
@@ -42,7 +42,7 @@
         },
         "text": "Timed Chart"
       },
-      "colorSchemes": {
+      "colorschemes": {
         "scheme": {
           "palette": "brewer.PastelOne9"
         }

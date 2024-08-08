@@ -1,6 +1,6 @@
 {
   "data": {
-    "dataSets": [
+    "datasets": [
       {
         "backgroundColor": {
           "red": 102,
@@ -312,7 +312,7 @@
       "tooltip": {
         "enabled": false
       },
-      "colorSchemes": {
+      "colorschemes": {
         "scheme": [
           "#66B7FF",
           "#F56295",

@@ -1,7 +1,7 @@
 {
   "type": 5,
   "data": {
-    "dataSets": [
+    "datasets": [
       {
         "borderWidth": 3,
         "data": [
@@ -49,7 +49,7 @@
         },
         "text": "TimeLine Chart"
       },
-      "colorSchemes": {
+      "colorschemes": {
         "scheme": {
           "palette": "brewer.PastelOne9"
         }

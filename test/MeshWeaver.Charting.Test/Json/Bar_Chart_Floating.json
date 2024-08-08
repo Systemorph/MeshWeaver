@@ -1,6 +1,6 @@
 {
   "data": {
-    "dataSets": [
+    "datasets": [
       {
         "data": [
           [
@@ -41,7 +41,7 @@
         },
         "text": "Floating"
       },
-      "colorSchemes": {
+      "colorschemes": {
         "scheme": {
           "palette": "brewer.PastelOne9"
         }

@@ -1,13 +1,13 @@
 {
   "data": {
-    "dataSets": [
+    "datasets": [
       {
         "xAxisID": "x1",
         "data": [
           1.2999999999999998
         ],
         "label": "1",
-        "type": 0,
+        "type": "bar",
         "$type": "MeshWeaver.Charting.Models.BarDataSet"
       },
       {
@@ -16,7 +16,7 @@
           9.6
         ],
         "label": "2",
-        "type": 0,
+        "type": "bar",
         "$type": "MeshWeaver.Charting.Models.BarDataSet"
       },
       {
@@ -25,7 +25,7 @@
           4.3
         ],
         "label": "3",
-        "type": 0,
+        "type": "bar",
         "$type": "MeshWeaver.Charting.Models.BarDataSet"
       },
       {
@@ -34,7 +34,7 @@
           11.100000000000001
         ],
         "label": "4",
-        "type": 0,
+        "type": "bar",
         "$type": "MeshWeaver.Charting.Models.BarDataSet"
       },
       {
@@ -43,7 +43,7 @@
           3
         ],
         "label": "5",
-        "type": 0,
+        "type": "bar",
         "$type": "MeshWeaver.Charting.Models.BarDataSet"
       },
       {
@@ -52,7 +52,7 @@
           4
         ],
         "label": "6",
-        "type": 0,
+        "type": "bar",
         "$type": "MeshWeaver.Charting.Models.BarDataSet"
       },
       {
@@ -61,14 +61,14 @@
           4
         ],
         "label": "7",
-        "type": 0,
+        "type": "bar",
         "$type": "MeshWeaver.Charting.Models.BarDataSet"
       }
     ],
     "labels": [
       "1"
     ],
-    "$type": "MeshWeaver.Charting.Models.Data"
+    "$type": "MeshWeaver.Charting.Models.ChartData"
   },
   "options": {
     "responsive": true,
@@ -91,7 +91,7 @@
         "display": true,
         "$type": "MeshWeaver.Charting.Models.Options.Legend"
       },
-      "colorSchemes": {
+      "colorschemes": {
         "scheme": {
           "palette": "brewer.PastelOne9",
           "$type": "MeshWeaver.Charting.Enums.Palettes"
@@ -100,7 +100,7 @@
       },
       "$type": "MeshWeaver.Charting.Models.Options.Plugins"
     },
-    "$type": "MeshWeaver.Charting.Models.Options.Options"
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
   },
   "$type": "MeshWeaver.Charting.Models.Chart"
 }

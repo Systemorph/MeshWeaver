@@ -1,6 +1,6 @@
 {
   "data": {
-    "dataSets": [],
+    "datasets": [],
     "labels": [
       "1"
     ]
@@ -17,7 +17,7 @@
         },
         "text": "Empty Chart"
       },
-      "colorSchemes": {
+      "colorschemes": {
         "scheme": {
           "palette": "brewer.PastelOne9"
         }

@@ -1,6 +1,6 @@
 {
   "data": {
-    "dataSets": [
+    "datasets": [
       {
         "xAxisID": "x1",
         "data": [
@@ -8,7 +8,7 @@
           11
         ],
         "label": "Italy",
-        "type": 0,
+        "type": "bar",
         "$type": "MeshWeaver.Charting.Models.BarDataSet"
       },
       {
@@ -18,7 +18,7 @@
           null
         ],
         "label": "Russia",
-        "type": 0,
+        "type": "bar",
         "$type": "MeshWeaver.Charting.Models.BarDataSet"
       }
     ],
@@ -26,7 +26,7 @@
       "1",
       "2"
     ],
-    "$type": "MeshWeaver.Charting.Models.Data"
+    "$type": "MeshWeaver.Charting.Models.ChartData"
   },
   "options": {
     "responsive": true,
@@ -50,7 +50,7 @@
         "display": true,
         "$type": "MeshWeaver.Charting.Models.Options.Legend"
       },
-      "colorSchemes": {
+      "colorschemes": {
         "scheme": {
           "palette": "brewer.PastelOne9",
           "$type": "MeshWeaver.Charting.Enums.Palettes"
@@ -59,7 +59,7 @@
       },
       "$type": "MeshWeaver.Charting.Models.Options.Plugins"
     },
-    "$type": "MeshWeaver.Charting.Models.Options.Options"
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
   },
   "$type": "MeshWeaver.Charting.Models.Chart"
 }

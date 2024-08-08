@@ -1,6 +1,6 @@
 {
   "data": {
-    "dataSets": [
+    "datasets": [
       {
         "barThickness": 20,
         "backgroundColor": {
@@ -186,7 +186,7 @@
       "Italy. ",
       "Russia.Alessandro"
     ],
-    "$type": "MeshWeaver.Charting.Models.Data"
+    "$type": "MeshWeaver.Charting.Models.ChartData"
   },
   "options": {
     "scales": {
@@ -216,7 +216,7 @@
         "enabled": false,
         "$type": "MeshWeaver.Charting.Models.Options.Tooltips.ToolTip"
       },
-      "colorSchemes": {
+      "colorschemes": {
         "scheme": [
           "#08BFD1",
           "#01AB6C",
@@ -237,7 +237,7 @@
       },
       "$type": "MeshWeaver.Charting.Models.Options.Plugins"
     },
-    "$type": "MeshWeaver.Charting.Models.Options.Options"
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
   },
   "$type": "MeshWeaver.Charting.Models.Chart"
 }

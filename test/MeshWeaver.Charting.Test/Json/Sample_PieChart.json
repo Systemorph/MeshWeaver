@@ -1,7 +1,7 @@
 {
   "type": 4,
   "data": {
-    "dataSets": [
+    "datasets": [
       {
         "data": [
           -1,
@@ -33,7 +33,7 @@
         },
         "text": "Pie Chart"
       },
-      "colorSchemes": {
+      "colorschemes": {
         "scheme": {
           "palette": "brewer.PastelOne9"
         }
