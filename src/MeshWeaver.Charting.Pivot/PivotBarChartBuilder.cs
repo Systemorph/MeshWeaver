@@ -38,6 +38,12 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
         ChartBuilder = new BarChartBuilder();
     }
 
+    public new IPivotBarChartBuilder WithOptions(Func<PivotChartModel, PivotChartModel> postProcessor)
+    {
+        PivotChartModelBuilder.AddPostProcessor(postProcessor);
+        return this;
+    }
+
     public IPivotBarChartBuilder WithChartBuilder(Func<BarChartBuilder, BarChartBuilder> builder)
     {
         return this with { ChartBuilder = builder(ChartBuilder) };
@@ -122,15 +128,19 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
         var totalNbStackPoints = pivotChartModel.Rows.Count(row =>
             row.DataSetType == ChartType.Scatter
         );
+
         foreach (var row in pivotChartModel.Rows)
         {
+            var values = pivotChartModel.ColumnDescriptors.Select(c =>
+                row.DataByColumns.FirstOrDefault(x => x.ColSystemName == c.Id).Value);
+
             switch (row.DataSetType)
             {
                 case ChartType.Bar when row.Stack != null:
                 {
                     ChartBuilder.WithDataSet(builder =>
                         builder
-                            .WithData(row.DataByColumns.Select(x => x.Value))
+                            .WithData(values)
                             .SetType(ChartType.Bar)
                             .WithXAxis(PivotChartConst.XBarAxis)
                             .WithLabel(row.Descriptor.DisplayName)
@@ -143,7 +153,7 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
                 {
                     ChartBuilder.WithDataSet(builder =>
                         builder
-                            .WithData(row.DataByColumns.Select(x => x.Value))
+                            .WithData(values)
                             .SetType(ChartType.Bar)
                             .WithXAxis(PivotChartConst.XBarAxis)
                             .WithLabel(row.Descriptor.DisplayName)
@@ -154,8 +164,7 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
                 case ChartType.Scatter:
                 {
                     var shift = -0.4 + (0.4 / totalNbStackPoints) * (2 * countStackPoints + 1) + 1; // fix this! plus one was added just to have correct numbers in one example
-                    var dataSet = row
-                        .DataByColumns.Select((x, i) => (i + shift, x.Value ?? 0))
+                    var dataSet = values.Select((value, i) => (i + shift, value ?? 0))
                         .ToList();
                     ChartBuilder.WithDataSet<LineScatterDataSetBuilder, LineScatterDataSet>(
                         builder =>
@@ -174,7 +183,7 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
                 {
                     ChartBuilder.WithDataSet(builder =>
                         builder
-                            .WithData(row.DataByColumns.Select(x => x.Value))
+                            .WithData(values)
                             .SetType(ChartType.Line)
                             .WithXAxis(PivotChartConst.XBarAxis)
                             .WithLabel(row.Descriptor.DisplayName)

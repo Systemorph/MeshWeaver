@@ -84,8 +84,8 @@ public static class NorthwindDashboardArea
                     .SliceColumnsBy(nameof(Category))
                     .ToBarChart(
                         builder => builder
-                            .AsHorizontalBar()
-                            .WithDataLabels()
+                            .WithOptions(o => o.OrderByValueDescending())
+                            .WithChartBuilder(o => o.WithDataLabels())
                     )
             );
     }
@@ -98,7 +98,13 @@ public static class NorthwindDashboardArea
                     .State
                     .Pivot(cube)
                     .SliceColumnsBy(nameof(Product))
-                    .ToBarChart()
+                    .ToBarChart(builder => builder
+                        .WithOptions(o => o.OrderByValueDescending().TopValues(5))
+                        .WithChartBuilder(o =>
+                            o.AsHorizontalBar()
+                                .WithDataLabels()
+                        )
+                    )
             );
     }
 

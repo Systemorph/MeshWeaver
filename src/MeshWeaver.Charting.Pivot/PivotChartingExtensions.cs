@@ -11,8 +11,7 @@ public static class PivotChartingExtensions
         TIntermediate,
         TAggregate,
         TPivotBuilder
-    >(this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
-        Func<BarChartBuilder, BarChartBuilder> chartBuilder = null)
+    >(this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         where TPivotBuilder : PivotBuilderBase<
             T,
             TTransformed,
@@ -21,13 +20,9 @@ public static class PivotChartingExtensions
             TPivotBuilder
         >
     {
-        var pivotChartBuilder = new PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>(
+        return new PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>(
             pivotBuilder
         );
-
-        return chartBuilder is not null
-            ? pivotChartBuilder.WithChartBuilder(chartBuilder)
-            : pivotChartBuilder;
     }
 
     public static IPivotLineChartBuilder ToLineChart<
