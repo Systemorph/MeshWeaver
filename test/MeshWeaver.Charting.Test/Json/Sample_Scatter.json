@@ -1,7 +1,7 @@
 {
   "type": 8,
   "data": {
-    "dataSets": [
+    "datasets": [
       {
         "data": [
           {
@@ -61,7 +61,7 @@
         },
         "text": "Scatter Chart"
       },
-      "colorSchemes": {
+      "colorschemes": {
         "scheme": {
           "palette": "brewer.DarkTwo8"
         }

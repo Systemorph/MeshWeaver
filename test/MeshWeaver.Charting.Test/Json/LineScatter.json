@@ -1,7 +1,7 @@
 {
   "type": 8,
   "data": {
-    "dataSets": [
+    "datasets": [
       {
         "data": [
           {
@@ -27,7 +27,7 @@
       }
     },
     "plugins": {
-      "colorSchemes": {
+      "colorschemes": {
         "scheme": {
           "palette": "brewer.PastelOne9"
         }

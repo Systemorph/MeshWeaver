@@ -1,7 +1,7 @@
 {
   "type": 2,
   "data": {
-    "dataSets": [
+    "datasets": [
       {
         "fill": true,
         "tension": 0.2,
@@ -41,7 +41,7 @@
       "6",
       "7"
     ],
-    "$type": "MeshWeaver.Charting.Models.Data"
+    "$type": "MeshWeaver.Charting.Models.ChartData"
   },
   "options": {
     "plugins": {
@@ -62,7 +62,7 @@
         "text": "Two lines radar plot",
         "$type": "MeshWeaver.Charting.Models.Options.Title"
       },
-      "colorSchemes": {
+      "colorschemes": {
         "scheme": [
           "#1ECBE1",
           "#E1341E"
@@ -71,7 +71,7 @@
       },
       "$type": "MeshWeaver.Charting.Models.Options.Plugins"
     },
-    "$type": "MeshWeaver.Charting.Models.Options.Options"
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
   },
   "$type": "MeshWeaver.Charting.Models.Chart"
 }

@@ -1,7 +1,7 @@
 {
   "type": 2,
   "data": {
-    "dataSets": [
+    "datasets": [
       {
         "fill": false,
         "data": [
@@ -40,7 +40,7 @@
       "6",
       "7"
     ],
-    "$type": "MeshWeaver.Charting.Models.Data"
+    "$type": "MeshWeaver.Charting.Models.ChartData"
   },
   "options": {
     "plugins": {
@@ -48,7 +48,7 @@
         "display": true,
         "$type": "MeshWeaver.Charting.Models.Options.Legend"
       },
-      "colorSchemes": {
+      "colorschemes": {
         "scheme": {
           "palette": "brewer.PastelOne9",
           "$type": "MeshWeaver.Charting.Enums.Palettes"
@@ -57,7 +57,7 @@
       },
       "$type": "MeshWeaver.Charting.Models.Options.Plugins"
     },
-    "$type": "MeshWeaver.Charting.Models.Options.Options"
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
   },
   "$type": "MeshWeaver.Charting.Models.Chart"
 }

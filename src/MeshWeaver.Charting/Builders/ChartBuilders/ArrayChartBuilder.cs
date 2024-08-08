@@ -18,18 +18,18 @@ public abstract record ArrayChartBuilder<TBuilder, TDataSet, TOptionsBuilder, TD
     {
         var chart = base.ToChart();
 
-        // if (chart.Data.Labels is null)
-        // {
-        //     var maxLen = chart.Data.DataSets.Select(ds => ds.Data?.Count() ?? 0).DefaultIfEmpty(1).Max();
-        //
-        //     chart = chart with
-        //                      {
-        //                          Data = chart.Data with
-        //                                 {
-        //                                     Labels = Enumerable.Range(1, maxLen).Select(i => i.ToString())
-        //                                 }
-        //                      };
-        // }
+        if (chart.Data.Labels is null)
+        {
+            var maxLen = chart.Data.DataSets.Select(ds => ds.Data?.Count() ?? 0).DefaultIfEmpty(1).Max();
+        
+            chart = chart with
+                             {
+                                 Data = chart.Data with
+                                        {
+                                            Labels = Enumerable.Range(1, maxLen).Select(i => i.ToString())
+                                        }
+                             };
+        }
 
         return chart;
     }

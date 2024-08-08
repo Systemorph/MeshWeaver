@@ -1,6 +1,6 @@
 {
   "data": {
-    "dataSets": [
+    "datasets": [
       {
         "xAxisID": "x1",
         "data": [
@@ -13,7 +13,7 @@
           4
         ],
         "label": "Alessandro",
-        "type": 0,
+        "type": "bar",
         "$type": "MeshWeaver.Charting.Models.BarDataSet"
       },
       {
@@ -28,7 +28,7 @@
           null
         ],
         "label": "Paolo",
-        "type": 0,
+        "type": "bar",
         "$type": "MeshWeaver.Charting.Models.BarDataSet"
       }
     ],
@@ -41,7 +41,7 @@
       "6",
       "7"
     ],
-    "$type": "MeshWeaver.Charting.Models.Data"
+    "$type": "MeshWeaver.Charting.Models.ChartData"
   },
   "options": {
     "responsive": true,
@@ -66,10 +66,6 @@
       }
     },
     "plugins": {
-      "legend": {
-        "display": true,
-        "$type": "MeshWeaver.Charting.Models.Options.Legend"
-      },
       "title": {
         "display": true,
         "font": {
@@ -82,7 +78,7 @@
         "text": "AggregateByCountry",
         "$type": "MeshWeaver.Charting.Models.Options.Title"
       },
-      "colorSchemes": {
+      "colorschemes": {
         "scheme": {
           "palette": "brewer.PastelOne9",
           "$type": "MeshWeaver.Charting.Enums.Palettes"
@@ -91,7 +87,7 @@
       },
       "$type": "MeshWeaver.Charting.Models.Options.Plugins"
     },
-    "$type": "MeshWeaver.Charting.Models.Options.Options"
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
   },
   "$type": "MeshWeaver.Charting.Models.Chart"
 }
