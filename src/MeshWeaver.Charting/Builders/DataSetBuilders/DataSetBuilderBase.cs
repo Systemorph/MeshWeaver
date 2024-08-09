@@ -43,7 +43,6 @@ public abstract record DataSetBuilderBase<TDataSetBuilder, TDataSet>
                                                    "pie" => ChartType.Pie,
                                                    "line" => ChartType.Line,
                                                    "doughnut" => ChartType.Doughnut,
-                                                   "horizontalBar" => ChartType.HorizontalBar,
                                                    "scatter" => ChartType.Scatter,
                                                    _ => throw new ArgumentException(nameof(type))
                                                }

@@ -4,7 +4,7 @@
       {
         "xAxisID": "x2",
         "pointRadius": 4,
-        "pointStyle": 5,
+        "pointStyle": "rect",
         "data": [
           {
             "x": 0.8,
@@ -43,7 +43,7 @@
           }
         ],
         "label": "Alessandro, total",
-        "type": 8,
+        "type": "scatter",
         "$type": "MeshWeaver.Charting.Models.LineScatterDataSet"
       },
       {
@@ -81,7 +81,7 @@
       {
         "xAxisID": "x2",
         "pointRadius": 4,
-        "pointStyle": 5,
+        "pointStyle": "rect",
         "data": [
           {
             "x": 1.2000000000000002,
@@ -120,7 +120,7 @@
           }
         ],
         "label": "Paolo, total",
-        "type": 8,
+        "type": "scatter",
         "$type": "MeshWeaver.Charting.Models.LineScatterDataSet"
       },
       {

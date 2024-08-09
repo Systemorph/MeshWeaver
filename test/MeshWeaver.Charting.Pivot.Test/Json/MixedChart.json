@@ -28,7 +28,7 @@
           null
         ],
         "label": "Paolo",
-        "type": 5,
+        "type": "line",
         "$type": "MeshWeaver.Charting.Models.BarDataSet"
       }
     ],
