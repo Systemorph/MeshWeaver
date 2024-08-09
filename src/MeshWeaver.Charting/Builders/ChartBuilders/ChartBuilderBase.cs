@@ -5,6 +5,7 @@ using MeshWeaver.Charting.Helpers;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Models.Segmented;
+using Microsoft.Extensions.Options;
 
 namespace MeshWeaver.Charting.Builders.ChartBuilders;
 
@@ -53,7 +54,6 @@ public abstract record ChartBuilderBase<TChartBuilder, TDataSet, TOptionsBuilder
             not null when type == typeof(PieDataSet) => ChartType.Pie,
             not null when type == typeof(LineDataSet) => ChartType.Line,
             not null when type == typeof(DoughnutDataSet) => ChartType.Doughnut,
-            not null when type == typeof(HorizontalBarDataSet) => ChartType.HorizontalBar,
             not null when type == typeof(LineScatterDataSet) => ChartType.Scatter,
             _ => throw new ArgumentException(nameof(type))
         };
@@ -104,17 +104,19 @@ public abstract record ChartBuilderBase<TChartBuilder, TDataSet, TOptionsBuilder
 
     public virtual Chart ToChart()
     {
-        var tmp = this with
-                  {
-                      ChartModel = ChartModel with
-                                   {
-                                       Options = OptionsBuilder.Build(),
-                                       Data = ChartModel.Data with { DataSets = DataSets }
-                                   }
-                  };
-        // if (tmp.ChartModel.Options?.Plugins?.Legend is null && tmp.ChartModel.Data.DataSets.Any(item => item.HasLabel()))
-        //     return tmp.WithLegend().ChartModel;
+        var plugins = OptionsBuilder.Build().Plugins;
 
-        return tmp.ChartModel;
+        var optionsBuilder = OptionsBuilder;
+
+        if (plugins?.Legend is null && DataSets.Count > 1 && DataSets.Any(item => item.HasLabel()))
+        {
+            optionsBuilder = OptionsBuilder.WithPlugins(p => p.WithLegend());
+        }
+
+        return ChartModel with
+        {
+            Options = optionsBuilder.Build(), 
+            Data = ChartModel.Data with {DataSets = DataSets}
+        };
     }
 }

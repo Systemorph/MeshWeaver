@@ -33,9 +33,6 @@
   },
   "options": {
     "plugins": {
-      "legend": {
-        "display": true
-      },
       "colorschemes": {
         "scheme": {
           "palette": "brewer.PastelOne9"

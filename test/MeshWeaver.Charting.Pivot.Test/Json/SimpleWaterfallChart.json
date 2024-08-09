@@ -227,7 +227,7 @@
         ],
         "$type": "MeshWeaver.Charting.Models.Options.ColorSchemes"
       },
-      "dataLabels": {
+      "datalabels": {
         "align": "context =\u003E context.dataset.data[context.dataIndex].dataLabelAlignment",
         "anchor": "context =\u003E context.dataset.data[context.dataIndex].dataLabelAlignment",
         "color": "context =\u003E context.dataset.data[context.dataIndex].dataLabelColor",

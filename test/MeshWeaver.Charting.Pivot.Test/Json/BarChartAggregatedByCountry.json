@@ -66,6 +66,10 @@
       }
     },
     "plugins": {
+      "legend": {
+        "display": true,
+        "$type": "MeshWeaver.Charting.Models.Options.Legend"
+      },
       "title": {
         "display": true,
         "font": {

@@ -58,6 +58,7 @@ public enum Positions
     [EnumMember(Value = "right")] Right
 }
 
+// TODO: use JsonStringEnumMemberName after switching to .net 9 (09.08.2024, Alexander Kravets)
 public enum ChartType
 {
     [EnumMember(Value = "bar")] Bar,
@@ -67,7 +68,6 @@ public enum ChartType
     [EnumMember(Value = "pie")] Pie,
     [EnumMember(Value = "line")] Line,
     [EnumMember(Value = "doughnut")] Doughnut,
-    [EnumMember(Value = "horizontalBar")] HorizontalBar,
     [EnumMember(Value = "scatter")] Scatter
 }
 

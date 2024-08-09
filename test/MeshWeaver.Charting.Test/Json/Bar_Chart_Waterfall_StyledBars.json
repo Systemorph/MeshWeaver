@@ -253,7 +253,7 @@
           -20
         ],
         "label": "hidden",
-        "dataLabels": {
+        "datalabels": {
           "display": false
         },
         "type": 5
@@ -271,7 +271,7 @@
           null
         ],
         "label": "hidden",
-        "dataLabels": {
+        "datalabels": {
           "display": false
         },
         "type": 5
@@ -289,7 +289,7 @@
           null
         ],
         "label": "hidden",
-        "dataLabels": {
+        "datalabels": {
           "display": false
         },
         "type": 5
@@ -348,7 +348,7 @@
           "#A6ABC2"
         ]
       },
-      "dataLabels": {
+      "datalabels": {
         "align": "context =\u003E context.dataset.data[context.dataIndex].dataLabelAlignment",
         "anchor": "context =\u003E context.dataset.data[context.dataIndex].dataLabelAlignment",
         "color": "context =\u003E context.dataset.data[context.dataIndex].dataLabelColor",

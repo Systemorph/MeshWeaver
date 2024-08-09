@@ -360,12 +360,14 @@ public class ChartTests
     [Fact]
     public async Task Bar_Chart_AutoLegend()
     {
-        double[] data = { 1, 2, 3, 4 };
+        double[] data1 = { 1, 2, 3, 4 };
+        double[] data2 = { 5, 6, 7, 8 };
         string[] labels = { "One", "Two", "Three", "Four" };
 
         var myChart = ChartBuilder
             .Bar()
-            .WithDataSet(b => b.WithData(data).WithLabel("First"))
+            .WithDataSet(b => b.WithData(data1).WithLabel("First"))
+            .WithDataSet(b => b.WithData(data2).WithLabel("Second"))
             .WithLabels(labels)
             .ToChart();
 
@@ -373,7 +375,8 @@ public class ChartTests
 
         var myChart2 = ChartBuilder
             .Bar()
-            .WithDataSet(b => b.WithData(data).WithLabel("First"))
+            .WithDataSet(b => b.WithData(data1).WithLabel("First"))
+            .WithDataSet(b => b.WithData(data2).WithLabel("Second"))
             .WithLabels(labels)
             .WithTitle("My First Chart", o => o.AtPosition(Positions.Left))
             .ToChart();
