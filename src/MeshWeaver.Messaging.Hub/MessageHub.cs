@@ -2,6 +2,7 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.DataContractExtensions;
 using Json.More;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -108,7 +109,7 @@ public sealed class MessageHub<TAddress>
         {
             o.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
             o.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault;
-            o.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+            o.Converters.Add(new EnumMemberJsonStringEnumConverter());
         });
     }
 
