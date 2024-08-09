@@ -27,5 +27,30 @@
         /// Height of an individual line of text.
         /// </summary>
         public object LineHeight { get; init; }
+
+        public Font WithFamily(string family)
+        {
+            return this with {Family = family};
+        }
+
+        public Font WithSize(int? size)
+        {
+            return this with {Size = size};
+        }
+
+        public Font WithStyle(string style)
+        {
+            return this with {Style = style};
+        }
+
+        public Font WithWeight(string weight)
+        {
+            return this with {Weight = weight};
+        }
+
+        public Font WithLineHeight(object lineHeight)
+        {
+            return this with {LineHeight = lineHeight};
+        }
     }
 }
