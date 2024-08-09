@@ -14,7 +14,10 @@ Chart.defaults.plugins.datalabels.display = false; // default is no DataLabels.
 Chart.defaults.plugins.tooltip.enabled = false;
 
 Chart.defaults.font.family = "roboto, \"sans-serif\"";
-Chart.defaults.font.size = 14;
+Chart.defaults.font.size = 12;
+
+Chart.defaults.plugins.datalabels.formatter = (value, context) =>
+    typeof (value) == 'number' ? new Intl.NumberFormat([], { maximumFractionDigits: 0 }).format(value) : value;
 
 export const renderChart = (element: HTMLCanvasElement, config: ChartConfiguration) => {
     Chart.getChart(element)?.destroy();

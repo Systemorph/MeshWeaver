@@ -1,4 +1,6 @@
-﻿namespace MeshWeaver.Charting.Models.Options;
+﻿using System.Runtime.Serialization;
+
+namespace MeshWeaver.Charting.Models.Options;
 
 public record DataLabels
 {
@@ -10,7 +12,7 @@ public record DataLabels
     /// <summary>
     /// An anchor point is defined by an orientation vector and a position on the data element (center, start, end). Default 'center'
     /// </summary>
-    public string Anchor { get; set; }
+    public object Anchor { get; set; }
 
     public string Color { get; set; }
 
@@ -25,12 +27,12 @@ public record DataLabels
 
     public string TextAlign { get; set; }
 
-    public DataLabels WithAlign(object align)
+    public DataLabels WithAlign(DataLabelsAlign align)
     {
         return this with {Align = align};
     }
 
-    public DataLabels WithAnchor(string anchor)
+    public DataLabels WithAnchor(DataLabelsAnchor anchor)
     {
         return this with {Anchor = anchor};
     }
@@ -45,8 +47,42 @@ public record DataLabels
         return this with {Display = display};
     }
 
-    public DataLabels WithFont(Font font)
+    public DataLabels WithFont(Func<Font, Font> builder)
     {
+        var font = builder(Font ?? new Font());
         return this with {Font = font};
     }
+
+    public DataLabels WithFormatter(object formatter)
+    {
+        return this with {Formatter = formatter};
+    }
+}
+
+public enum DataLabelsAnchor
+{
+    [EnumMember(Value = "center")]
+    Center,
+    [EnumMember(Value = "start")] 
+    Start,
+    [EnumMember(Value = "end")] 
+    End
+}
+
+public enum DataLabelsAlign
+{
+    [EnumMember(Value = "center")]
+    Center,
+    [EnumMember(Value = "start")]
+    Start,
+    [EnumMember(Value = "end")]
+    End,
+    [EnumMember(Value = "right")]
+    Right,
+    [EnumMember(Value = "bottom")]
+    Bottom,
+    [EnumMember(Value = "left")]
+    Left,
+    [EnumMember(Value = "top")]
+    Top
 }
