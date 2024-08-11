@@ -1,5 +1,4 @@
-﻿using System.Reactive.Linq;
-using Microsoft.AspNetCore.Components;
+﻿using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Layout;
 using MeshWeaver.Utils;
@@ -36,8 +35,8 @@ public partial class NamedAreaView
                 .Subscribe(item => InvokeAsync(() => Render(item as UiControl)));
             return true;
         });
-        DataBindProperty<string>(ViewModel.DisplayArea, x => x.DisplayArea);
-        DataBindProperty<bool>(ViewModel.ShowProgress, x => x.ShowProgress);
+        DataBindProperty(ViewModel.DisplayArea, x => x.DisplayArea);
+        DataBindProperty(ViewModel.ShowProgress, x => x.ShowProgress);
 
         DisplayArea ??= ViewModelArea.Wordify();
     }

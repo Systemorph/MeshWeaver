@@ -17,14 +17,14 @@ public static class BaseColorListArea
                         new ChosenColor("yellow"),
                         nameof(ChosenColor),
                         cc => Controls.Listbox(cc.Color)
-                            .WithOptions(new[]
+                            .WithOptions(new Option[]
                             {
-                                new Option("red", "Red"),
-                                new Option("green", "Green"),
-                                new Option("blue", "Blue"),
-                                new Option("yellow", "Yellow"),
-                                new Option("magenta", "Magenta"),
-                                new Option("cyan", "Cyan"),
+                                new Option<string>("red", "Red"),
+                                new Option<string>("green", "Green"),
+                                new Option<string>("blue", "Blue"),
+                                new Option<string>("yellow", "Yellow"),
+                                new Option<string>("magenta", "Magenta"),
+                                new Option<string>("cyan", "Cyan"),
                             })
                     )
             )

@@ -81,6 +81,7 @@ public static class LayoutExtensions
                 typeof(LayoutAreaReference),
                 typeof(DataGridColumn<>), // this is not a control
                 typeof(Option), // this is not a control
+                typeof(Option<>), // this is not a control
                 typeof(Icon)
             );
 

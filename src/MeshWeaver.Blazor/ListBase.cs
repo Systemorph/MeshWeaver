@@ -15,7 +15,7 @@ public abstract class ListBase<TViewModel, TView> : BlazorView<TViewModel, ListB
         get => selected;
         set
         {
-            var needsUpdate = selected?.ItemString != value?.ItemString;
+            var needsUpdate = selected != null && selected.ItemString != value?.ItemString;
             selected = value;
             if (needsUpdate)
                 UpdatePointer(selected?.Item, Pointer);
@@ -45,7 +45,7 @@ public abstract class ListBase<TViewModel, TView> : BlazorView<TViewModel, ListB
         
         var newOptions = enumerable.Select
             (x =>
-                new Option(x.Item, x.Text, MapToString(x.Item))
+                new Option(x.GetItem(), x.Text, MapToString(x.GetItem()))
             )
             .ToArray();
 
