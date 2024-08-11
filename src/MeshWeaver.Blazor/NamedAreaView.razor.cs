@@ -33,7 +33,6 @@ public partial class NamedAreaView
             if (ViewModelArea == null)
                 return true;
             subscription = Stream.GetControlStream(ViewModelArea)
-                .DistinctUntilChanged()
                 .Subscribe(item => InvokeAsync(() => Render(item as UiControl)));
             return true;
         });
@@ -48,9 +47,11 @@ public partial class NamedAreaView
     {
         Logger.LogDebug(
             "Changing area {Area} to {Instance}",
-            Area,
+            ViewModelArea,
             control?.GetType().Name
         );
+        if (Equals(RootControl, control))
+            return;
         RootControl = control;
         StateHasChanged();
     }

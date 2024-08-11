@@ -16,5 +16,5 @@
     public ISynchronizationStream<JsonElement, LayoutAreaReference> Stream { get; set; }
 
     private string GetArea(NamedAreaControl control)
-        => $"{ParentArea}/{control.Area}";
+        => $"{control.Area}";
 }
