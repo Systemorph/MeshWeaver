@@ -19,12 +19,9 @@ public static class TermsAgreementTickArea
                         at => Controls.CheckBox("I agree with the Terms and Conditions", at.Signed)
                     )
             )
-            .WithView(
-                nameof(SubmitAgreement),
-                (a, _) => a
-                    .GetDataStream<AgreementTick>(nameof(AgreementTick))
-                    .Select(at => SubmitAgreement(at.Signed))
-            )
+            .WithView((a, _) => a
+                .GetDataStream<AgreementTick>(nameof(AgreementTick))
+                .Select(at => SubmitAgreement(at.Signed)), nameof(SubmitAgreement))
         ;
 
     private static object SubmitAgreement(bool signed)

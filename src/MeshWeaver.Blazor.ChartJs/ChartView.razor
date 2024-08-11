@@ -1,5 +1,5 @@
 ﻿@using Microsoft.JSInterop
-@inherits BlazorView<MeshWeaver.Charting.ChartControl>
+@inherits BlazorView<MeshWeaver.Charting.ChartControl, ChartView>
 
 <canvas @ref="element"></canvas>
 
@@ -17,7 +17,7 @@
         {
             jsModule = await JsRuntime.Import("index.mjs");
 
-            DataBind<object>(ViewModel.Data, o => Options = o);
+            DataBindProperty(ViewModel.Data, o => o.Options);
         }
 
         if (jsModule is not null)

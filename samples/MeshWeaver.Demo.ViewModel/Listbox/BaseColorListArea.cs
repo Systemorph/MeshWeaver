@@ -28,12 +28,9 @@ public static class BaseColorListArea
                             })
                     )
             )
-            .WithView(
-                nameof(ShowSelectedColor),
-                (a, _) => a
-                    .GetDataStream<ChosenColor>(nameof(ChosenColor))
-                    .Select(cc => ShowSelectedColor(cc.Color))
-            )
+            .WithView((a, _) => a
+                .GetDataStream<ChosenColor>(nameof(ChosenColor))
+                .Select(cc => ShowSelectedColor(cc.Color)), nameof(ShowSelectedColor))
         ;
 
     private static object ShowSelectedColor(string color)

@@ -2,6 +2,7 @@
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Humanizer;
 using Json.Patch;
 using Json.Path;
 using Json.Pointer;

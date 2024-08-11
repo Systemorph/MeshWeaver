@@ -21,18 +21,15 @@ public static class CounterLayoutArea
         var counter = 0;
         return Controls
             .Stack
-            .WithView(
-                "Button",
-                Controls
-                    .Button("Increase Counter")
-                    .WithClickAction(ctx =>
-                        ctx.Host.UpdateArea(
-                            new($"{context.Area}/{nameof(Counter)}"),
-                            Counter(++counter)
-                        )
+            .WithView(Controls
+                .Button("Increase Counter")
+                .WithClickAction(ctx =>
+                    ctx.Host.UpdateArea(
+                        new($"{context.Area}/{nameof(Counter)}"),
+                        Counter(++counter)
                     )
-            )
-            .WithView(nameof(Counter), Counter(counter));
+                ), "Button")
+            .WithView(Counter(counter), nameof(Counter));
     }
 
     /// <summary>

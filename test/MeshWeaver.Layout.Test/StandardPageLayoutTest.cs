@@ -60,7 +60,7 @@ public class StandardPageLayoutTest(ITestOutputHelper output) : HubTestBase(outp
             var page = await stream.GetControl(StandardPageLayout.Page);
             var stack = page.Should().BeOfType<LayoutStackControl>().Which;
                 stack.Areas.Should().HaveCountGreaterThan(0)
-                .And.Subject.Should().BeEquivalentTo(Enumerable.Range(1, stack.Areas.Count).Select(i => $"{StandardPageLayout.Page}/{i}"))
+                .And.Subject.Should().BeEquivalentTo(Enumerable.Range(1, stack.Areas.Count).Select(i => new NamedAreaControl($"{StandardPageLayout.Page}/{i}"){Id = i.ToString()}))
                 ;
 
             var header = await stream.GetControl(StandardPageLayout.Header);
@@ -71,7 +71,7 @@ public class StandardPageLayoutTest(ITestOutputHelper output) : HubTestBase(outp
                 .Which.Areas.Should().HaveCountGreaterThan(0);
             var mainContent = await stream.GetControl(StandardPageLayout.MainContent);
             mainContent.Should().BeOfType<NamedAreaControl>()
-                .Which.Data.Should().Be(reference.Area);
+                .Which.Area.Should().Be(reference.Area);
 
             var navMenu = await stream.GetControl(StandardPageLayout.NavMenu);
             navMenu.Should().BeOfType<NavMenuControl>()
