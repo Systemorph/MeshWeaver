@@ -1,11 +1,8 @@
-@inherits BlazorView<NavGroupControl>
+@inherits BlazorView<NavGroupControl, NavGroup>
 
 <FluentNavGroup Href="@Href" Icon="@Icon?.ToFluentIcon()" Title="@Title">
     
-    @foreach (var area in ViewModel.Areas)
-    {
-        <NamedAreaView Stream="@Stream" Area="@area" />
-    }
+    <NamedAreaContainer Container="ViewModel.Areas" Stream="@Stream" ParentArea="@Area" />
 
 </FluentNavGroup>
 
@@ -21,9 +18,9 @@
 
         if (ViewModel != null)
         {
-            DataBind<string>(ViewModel.Data, x => Title = x);
-            DataBind<string>(ViewModel.Href, x => Href = x);
-            DataBind<Application.Styles.Icon>(ViewModel.Icon, x => Icon = x);
+            DataBindProperty(ViewModel.Data, x => x.Title);
+            DataBindProperty(ViewModel.Href, x => x.Href);
+            DataBindProperty(ViewModel.Icon, x => x.Icon);
         }
     }
 

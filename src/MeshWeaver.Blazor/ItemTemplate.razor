@@ -1,6 +1,6 @@
 @using System.Reactive.Linq
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
-@inherits BlazorView<ItemTemplateControl>
+@inherits BlazorView<ItemTemplateControl, ItemTemplate>
 
 @if (Data != null)
 {
@@ -28,7 +28,7 @@
     protected override async Task OnParametersSetAsync()
     {
         await base.OnParametersSetAsync();
-        DataBind<IReadOnlyCollection<object>>(ViewModel.Data, d => Data = d);
+        DataBindProperty(ViewModel.Data, d => d.Data);
         view = Stream.GetControl(await Stream.FirstAsync(), ViewArea);
     }
 

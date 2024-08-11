@@ -2,10 +2,11 @@
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Layout;
+using MeshWeaver.Utils;
 
 namespace MeshWeaver.Blazor;
 
-public partial class NamedAreaView : IDisposable
+public partial class NamedAreaView
 {
     private IDisposable subscription;
     [Inject]
@@ -13,14 +14,35 @@ public partial class NamedAreaView : IDisposable
     private UiControl RootControl { get; set; }
 
 
-    protected override void OnParametersSet()
+
+    private string DisplayArea { get; set; }
+    private bool ShowProgress { get; set; }
+    private string ViewModelArea { get; set; }
+
+    private object RenderedStream { get; set; }
+    protected override void BindData()
     {
-        base.OnParametersSet();
-        DisplayArea ??= Area;
-        subscription = Stream.GetControlStream(Area)
-            .DistinctUntilChanged()
-            .Subscribe(item => InvokeAsync(() => Render(item as UiControl)));
+        base.BindData();
+        DataBind<string>(ViewModel.Area, x =>
+        {
+            if(RenderedStream == Stream && x == ViewModelArea)
+                return false;
+            ViewModelArea = x;
+            subscription?.Dispose();
+            subscription = null;
+            if (ViewModelArea == null)
+                return true;
+            subscription = Stream.GetControlStream(ViewModelArea)
+                .DistinctUntilChanged()
+                .Subscribe(item => InvokeAsync(() => Render(item as UiControl)));
+            return true;
+        });
+        DataBindProperty<string>(ViewModel.DisplayArea, x => x.DisplayArea);
+        DataBindProperty<bool>(ViewModel.ShowProgress, x => x.ShowProgress);
+
+        DisplayArea ??= ViewModelArea.Wordify();
     }
+
 
     private void Render(UiControl control)
     {
@@ -33,10 +55,10 @@ public partial class NamedAreaView : IDisposable
         StateHasChanged();
     }
 
-    public void Dispose()
+    public override void Dispose()
     {
         subscription?.Dispose();
         subscription = null;
-
+        base.Dispose();
     }
 }

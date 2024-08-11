@@ -1,5 +1,5 @@
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
-@inherits SkinnedView<LayoutStackControl, SplitterSkin>
+@inherits SkinnedView<LayoutStackControl, SplitterSkin, SplitterView>
 @{
     #pragma warning disable FluentMultiSplitter
 }
@@ -13,10 +13,7 @@
     Height="@ViewModel.Height"
     Style="@Style">
     
-    @foreach(var area in ViewModel.Areas) 
-    {
-        <NamedAreaView Stream="@Stream" Area="@area"/>
-    }
+    <NamedAreaContainer Container="ViewModel.Areas" Stream="@Stream" ParentArea="@Area" />
 </FluentMultiSplitter>
 
 @code

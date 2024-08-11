@@ -1,5 +1,5 @@
 ﻿@using Microsoft.JSInterop
-@inherits BlazorView<GridControl>
+@inherits BlazorView<GridControl, AgGrid>
 @implements IAsyncDisposable
 
 <HeadContent>
@@ -24,7 +24,6 @@
             await jsModule.InvokeVoidAsync("LicenseManager.setLicenseKey",
                 Environment.GetEnvironmentVariable("AG_GRID_LICENSE_KEY"));
             
-            DataBind<object>(ViewModel.Data, o => Options = o);
 
             if (jsModule is not null)
             {
@@ -33,7 +32,13 @@
         }
     }
 
-    private string id = Guid.NewGuid().ToString();
+    protected override void BindData()
+    {
+        base.BindData();
+        DataBindProperty(ViewModel.Data, o => o.Options);
+    }
+
+    private readonly string id = Guid.NewGuid().ToString();
 
     private object Options { get; set; }
 

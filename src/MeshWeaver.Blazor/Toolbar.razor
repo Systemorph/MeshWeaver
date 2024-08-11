@@ -1,15 +1,12 @@
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
-@inherits BlazorView<ToolbarControl>
+@inherits BlazorView<ToolbarControl, Toolbar>
 
 <FluentToolbar
     Class="@Class"
     Orientation="@Orientation"
     Style="@Style"
 >    
-@foreach (var area in ViewModel.Areas)
-{
-    <NamedAreaView Stream="@Stream" Area="@area"/>
-}
+    <NamedAreaContainer Container="ViewModel.Areas" Stream="@Stream" ParentArea="@Area" />
 </FluentToolbar>
 
 @code

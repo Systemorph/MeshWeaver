@@ -1,4 +1,4 @@
-﻿@inherits BlazorView<MenuItemControl>
+﻿@inherits BlazorView<MenuItemControl, MenuItemView>
 <div class="menu-item">
     <FluentMenuItem OnClick="OnClick">@Title</FluentMenuItem>
 </div>
@@ -10,7 +10,7 @@
         base.BindData();
         if (ViewModel != null)
         {
-            DataBind<string>(ViewModel.Title, x => Title = x);
+            DataBindProperty(ViewModel.Title, x => x.Title);
         }
 
     }

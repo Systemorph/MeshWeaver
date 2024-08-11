@@ -1,4 +1,4 @@
-@inherits BlazorView<NavMenuControl>
+@inherits BlazorView<NavMenuControl, NavMenuView>
 
 <div class="navmenu">
     <nav class="sitenav" aria-labelledby="main-menu" onclick="document.getElementById('navmenu-toggle').click();">
@@ -8,10 +8,7 @@
         </label>
 
         <FluentNavMenu Id="main-menu" Collapsible="@ViewModel.Collapsible" Width="@ViewModel.Width" @bind-Expanded="@expanded">
-            @foreach (var area in @ViewModel.Areas)
-            {
-                <NamedAreaView Stream="@Stream" Area="@area" />
-            }
+            <NamedAreaContainer Container="ViewModel.Areas" Stream="@Stream" ParentArea="@Area" />
         </FluentNavMenu>
     </nav>
 </div>

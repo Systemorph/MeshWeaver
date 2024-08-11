@@ -1,4 +1,6 @@
-﻿using System.Text.Json;
+﻿using System.Linq.Expressions;
+using System.Reflection;
+using System.Text.Json;
 using Json.Patch;
 using Json.Pointer;
 using Microsoft.AspNetCore.Components;
@@ -10,8 +12,9 @@ using MeshWeaver.Reflection;
 
 namespace MeshWeaver.Blazor
 {
-    public partial class BlazorView<TViewModel> : IDisposable
+    public partial class BlazorView<TViewModel, TView> : IDisposable
         where TViewModel : UiControl
+        where TView : BlazorView<TViewModel, TView>
     {
         [Inject] private IMessageHub Hub { get; set; }
         protected override void OnParametersSet()
@@ -29,7 +32,7 @@ namespace MeshWeaver.Blazor
 
         protected List<IDisposable> Disposables { get; } = new();
 
-        public void Dispose()
+        public virtual void Dispose()
         {
             foreach (var d in bindings.Concat(Disposables))
             {
@@ -39,9 +42,33 @@ namespace MeshWeaver.Blazor
 
 
         private readonly List<IDisposable> bindings = new();
-        protected void DataBind<T>(object value, Action<T> bindingAction)
+
+        protected void DataBindProperty<T>(object value, Expression<Func<TView, T>> propertySelector, Func<object, T> conversion = null)
         {
-            bindings.Add(Stream.GetObservable<T>(ViewModel.DataContext, value).Subscribe(bindingAction));
+            var expr = (propertySelector as LambdaExpression)?.Body as MemberExpression;
+            var property = expr?.Member as PropertyInfo;
+            if (property == null)
+                throw new ArgumentException("Expression needs to point to a property.");
+            DataBind<T>(value, v =>
+                {
+                    if (Equals(property.GetValue(this), v))
+                        return false;
+                    property.SetValue(this, v);
+                    return true;
+                },
+                conversion
+            );
+        }
+        protected void DataBind<T>(object value, Func<T, bool> bindingAction, Func<object, T> conversion = null)
+        {
+            bindings.Add(Stream.GetObservable<T>(ViewModel.DataContext, value, conversion).Subscribe(x =>
+            {
+                InvokeAsync(() =>
+                {
+                    if(bindingAction(x))
+                        StateHasChanged();
+                });
+            }));
         }
         protected void UpdatePointer<T>(T value, JsonPointerReference reference)
         {
@@ -85,10 +112,10 @@ namespace MeshWeaver.Blazor
 
             if (ViewModel != null)
             {
-                DataBind<string>(ViewModel.Id, x => Id = x);
-                DataBind<string>(ViewModel.Label, x => Label = x);
-                DataBind<string>(ViewModel.Class, x => Class = x);
-                DataBind<string>(ViewModel.Style, x => Style = x);
+                DataBindProperty(ViewModel.Id, x => x.Id);
+                DataBindProperty(ViewModel.Label, x => x.Label);
+                DataBindProperty(ViewModel.Class, x => x.Class);
+                DataBindProperty(ViewModel.Style, x => x.Style);
             }
         }
 

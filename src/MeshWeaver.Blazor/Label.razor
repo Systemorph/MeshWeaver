@@ -1,31 +1,43 @@
 @using HorizontalAlignment = Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment
 @using Typography = Microsoft.FluentUI.AspNetCore.Components.Typography
 @using FontWeight = Microsoft.FluentUI.AspNetCore.Components.FontWeight
-@inherits BlazorView<LabelControl>
+@inherits BlazorView<LabelControl, Label>
 
 <FluentLabel
-    Alignment="@alignment"
-    Disabled="@disabled"
-    Typo="@typo"
-    Weight="@weight">
-    @data
+    Alignment="@Alignment"
+    Disabled="@Disabled"
+    Typo="@Typo"
+    Weight="@Weight">
+    @InternalData
 </FluentLabel>
 
 @code
 {
-    private string data;
-    private HorizontalAlignment alignment;
-    private bool disabled;
-    private Typography typo;
-    private FontWeight weight;
+    private string InternalData { get; set; }
+    private HorizontalAlignment Alignment { get; set; }
+    private bool Disabled { get; set; }
+    private Typography Typo { get; set; }
+    private FontWeight Weight { get; set; }
 
     protected override void BindData()
     {
         base.BindData();
-        DataBind<string>(ViewModel.Data, x => data = x);
-        DataBind<Layout.HorizontalAlignment>(ViewModel.Alignment, x => alignment = x.ToFluentHorizontalAlignment());
-        DataBind<bool>(ViewModel.Disabled, x => disabled = x);
-        DataBind<Layout.Typography>(ViewModel.Typo, x => typo = x.ToFluentTypography());
-        DataBind<Layout.FontWeight>(ViewModel.Weight, x => weight = x.ToFluentFontWeight());
+        DataBindProperty(ViewModel.Data, x => x.InternalData );
+        DataBind<Layout.HorizontalAlignment>(ViewModel.Alignment, x =>
+        {
+            Alignment = x.ToFluentHorizontalAlignment();
+            return true;
+        });
+        DataBindProperty<bool>(ViewModel.Disabled, x => x.Disabled);
+        DataBind<Layout.Typography>(ViewModel.Typo, x =>
+        {
+            Typo = x.ToFluentTypography();
+            return true;
+        });
+        DataBind<Layout.FontWeight>(ViewModel.Weight, x =>
+        {
+            Weight = x.ToFluentFontWeight();
+            return true;
+        });
     }
 }

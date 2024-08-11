@@ -73,7 +73,7 @@ public static class DocumentationViewModels
                         new LayoutAreaControl(layout.Hub.Address,
                     new(nameof(Doc)) { Id = source.GetPath(type.FullName) })
                     ,
-                    TabName = source.GetDocumentName(type.FullName)
+                    TabName = source.GetDocumentName(type.FullName),
                 }
                     : null)
                 .Where(x => x is { Control.Reference.Id: not null })

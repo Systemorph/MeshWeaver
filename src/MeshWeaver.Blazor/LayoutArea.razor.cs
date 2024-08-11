@@ -27,9 +27,9 @@ public partial class LayoutArea : IDisposable
 
     [Parameter]
     public LayoutAreaReference Reference { get; set; }
+    public NamedAreaControl ViewModel { get; set; }
 
     public string Area { get; set; }
-    public string DisplayArea { get; set; }
 
 
     public ISynchronizationStream<JsonElement, LayoutAreaReference> Stream { get; set; }
@@ -40,7 +40,7 @@ public partial class LayoutArea : IDisposable
     {
         base.OnParametersSet();
         Area = Reference.Layout ?? Reference.Area;
-        DisplayArea = Reference.Area;
+        ViewModel = new (Area){DisplayArea = Reference.Area, ShowProgress = true};
 
         if(Stream != null && Equals(Stream?.Owner, Address) && Equals(Stream?.Reference, Reference))
             return;
@@ -51,13 +51,11 @@ public partial class LayoutArea : IDisposable
             throw new ArgumentNullException(nameof(Reference), "Reference cannot be null.");
 
         Area ??= Reference.Area;
-
         Stream?.Dispose();
 
         Stream = Address.Equals(Hub.Address)
             ? Workspace.Stream.Reduce<JsonElement, LayoutAreaReference>(Reference, Address)
             : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address, Reference);
-
 
    }
 

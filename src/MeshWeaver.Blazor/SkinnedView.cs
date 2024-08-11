@@ -3,13 +3,15 @@ using MeshWeaver.Layout;
 
 namespace MeshWeaver.Blazor;
 
-public class SkinnedView<TSkin> : SkinnedView<UiControl, TSkin>
+public class SkinnedView<TSkin, TView> : SkinnedView<UiControl, TSkin, TView>
     where TSkin : Skin<TSkin>
+    where TView:SkinnedView<TSkin,TView>
 {
 }
-public class SkinnedView<TControl, TSkin> : BlazorView<TControl> 
+public class SkinnedView<TControl, TSkin, TView> : BlazorView<TControl, TView> 
     where TControl : UiControl
     where TSkin : Skin<TSkin>
+    where TView : SkinnedView<TControl,TSkin, TView>
 {
     [Parameter]
     public TSkin Skin { get; set; }
@@ -17,7 +19,7 @@ public class SkinnedView<TControl, TSkin> : BlazorView<TControl>
     protected override void BindData()
     {
         DisposeBindings();
-        DataBind<string>(Skin.Class, x => Class = x);
-        DataBind<string>(Skin.Style, x => Style = x);
+        DataBindProperty(Skin.Class, x => x.Class);
+        DataBindProperty(Skin.Style, x => x.Style);
     }
 }

@@ -1,8 +1,5 @@
-@inherits SkinnedView<LayoutStackControl, LayoutSkin>
+@inherits SkinnedView<LayoutStackControl, LayoutSkin, LayoutView>
 
 <FluentLayout Class="@Class" Style="@Style">
-    @foreach (var area in ViewModel.Areas)
-    {
-        <NamedAreaView Stream="@Stream" Area="@area" />
-    }
+    <NamedAreaContainer Container="ViewModel.Areas" Stream="@Stream" ParentArea="@Area" />
 </FluentLayout>

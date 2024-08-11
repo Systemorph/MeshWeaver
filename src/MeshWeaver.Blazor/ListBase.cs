@@ -3,12 +3,12 @@ using MeshWeaver.Layout;
 
 namespace MeshWeaver.Blazor;
 
-public abstract class ListBase<TViewModel> : BlazorView<TViewModel>
+public abstract class ListBase<TViewModel, TView> : BlazorView<TViewModel, ListBase<TViewModel, TView>>
     where TViewModel : UiControl, IListControl
 {
     protected record Option(object Item, string Text, string ItemString);
 
-    protected IReadOnlyCollection<Option> Options { get; set; }
+    protected IReadOnlyCollection<Option> Options { get; set; } = [];
 
     protected Option Selected
     {
@@ -30,19 +30,29 @@ public abstract class ListBase<TViewModel> : BlazorView<TViewModel>
         Pointer = ViewModel.Data as JsonPointerReference;
     }
 
-    private void UpdateSelection(object selection)
+    private bool UpdateSelection(object selection)
     {
         current = MapToString(selection);
-        Selected = Options.FirstOrDefault(x => x.ItemString == current);
+        var newSelected = Options.FirstOrDefault(x => x.ItemString == current);
+        if (Equals(Selected, newSelected))
+            return false;
+        Selected = newSelected;
+        return true;
     }
 
-    private void BindOptions(IEnumerable<Layout.Option> enumerable)
+    private bool BindOptions(IEnumerable<Layout.Option> enumerable)
     {
-        Options = enumerable.Select
+        
+        var newOptions = enumerable.Select
             (x =>
                 new Option(x.Item, x.Text, MapToString(x.Item))
             )
             .ToArray();
+
+        if (Options.SequenceEqual(newOptions))
+            return false;
+        Options = newOptions;
+        return true;
     }
 
     private static string MapToString(object instance) =>

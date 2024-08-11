@@ -100,7 +100,7 @@ public static class ViewModelExtensions
             : null;
     }
 
-    public static IObservable<T> GetObservable<T>(this ISynchronizationStream<JsonElement> stream, string dataContext, object value)
+    public static IObservable<T> GetObservable<T>(this ISynchronizationStream<JsonElement> stream, string dataContext, object value, Func<object,T> conversion) 
     {
         if (value is null)
             return Observable.Empty<T>();
@@ -109,8 +109,13 @@ public static class ViewModelExtensions
         if (value is JsonPointerReference reference)
             return stream.Where(x => !stream.Hub.Address.Equals(x.ChangedBy))
                 .Select(x => stream.Extract<T>(dataContext + reference.Pointer.TrimEnd('/'), x, reference));
+
+        if(conversion != null)
+            return Observable.Return(conversion.Invoke(value));
         if (value is T t)
             return Observable.Return(t);
+
+
         // TODO V10: Should we add more ways to convert? Converting to primitives? (11.06.2024, Roland Bürgi)
         throw new InvalidOperationException($"Cannot bind to {value.GetType().Name}");
     }

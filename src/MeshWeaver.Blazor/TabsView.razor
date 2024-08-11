@@ -1,12 +1,8 @@
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
-@inherits BlazorView<TabsControl>
+@inherits BlazorView<TabsControl, TabsView>
 
-<FluentTabs Id="@Id" ActiveTabId="@ActiveTabId" Height="@Height" Orientation="@Orientation">
-    @foreach (var area in @ViewModel.Areas)
-    {
-        <NamedAreaView Area="@area" Stream="@Stream"/>
-    }
-
+<FluentTabs ActiveTabId="@ActiveTabId" Height="@Height" Orientation="@Orientation">
+    <NamedAreaContainer Container="ViewModel.Areas" Stream="@Stream" ParentArea="@Area" />
 </FluentTabs>
 
 @code
@@ -18,9 +14,9 @@
     protected override void BindData()
     {
         base.BindData();
-        DataBind<string>(ViewModel.ActiveTabId, x => ActiveTabId = x);
-        DataBind<string>(ViewModel.Height, x => Height = x);
-        DataBind<Orientation>(ViewModel.Orientation, x => Orientation = x);
+        DataBindProperty(ViewModel.ActiveTabId, x => x.ActiveTabId);
+        DataBindProperty(ViewModel.Height, x => x.Height);
+        DataBindProperty(ViewModel.Orientation, x => x.Orientation);
     }
 
 }

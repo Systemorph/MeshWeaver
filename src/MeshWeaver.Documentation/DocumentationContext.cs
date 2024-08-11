@@ -30,7 +30,7 @@ public record DocumentationContext(IMessageHub Hub)
         (type, id) =>
             type == PdbDocumentationSource.Pdb ? new PdbDocumentationSource(id): null,
         (type, id) =>
-            type == EmbeddedDocumentationSource.Embedded ? EmbeddedDocumentationSource.Create(id): null,
+            type == EmbeddedDocumentationSource.Embedded ? new EmbeddedDocumentationSource(id): null,
     ];
 
     public DocumentationContext WithSourceFactory(Func<string, string, DocumentationSource> factory)

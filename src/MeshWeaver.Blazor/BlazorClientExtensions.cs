@@ -66,7 +66,7 @@ public static class BlazorClientExtensions
             ItemTemplateControl itemTemplate
                 => StandardView<ItemTemplateControl, ItemTemplate>(itemTemplate, stream, area),
             MarkdownControl markdown => StandardView<MarkdownControl, MarkdownView>(markdown, stream, area),
-            NamedAreaControl namedView => MapNamedAreaView(namedView, stream),
+            NamedAreaControl namedView => StandardView<NamedAreaControl, NamedAreaView>(namedView, stream, area),
             SpacerControl spacer => StandardView<SpacerControl, SpacerView>(spacer, stream, area),
             LayoutStackControl stack => skin switch
             {
@@ -89,12 +89,6 @@ public static class BlazorClientExtensions
                 { nameof(LayoutArea.Id), layoutArea.Id },
             });
 
-    private static ViewDescriptor MapNamedAreaView(NamedAreaControl namedView,
-        ISynchronizationStream<JsonElement, LayoutAreaReference> stream) =>
-        new(
-            typeof(NamedAreaView),
-            new Dictionary<string, object> { { nameof(Stream), stream }, { nameof(Area), namedView.Data } }
-        );
 
     private static ViewDescriptor MapSkinnedView(UiControl control, ISynchronizationStream<JsonElement, LayoutAreaReference> stream, string area, object skin)
     {

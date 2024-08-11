@@ -83,7 +83,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
 
-        var control = await stream.GetControl(reference.Area);
+        var control = await stream.GetControlStream(reference.Area)
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x != null);
         var areas = control
             .Should()
             .BeOfType<LayoutStackControl>()
@@ -93,7 +95,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var areaControls = await areas
             .ToAsyncEnumerable()
-            .SelectAwait(async a => await stream.GetControl(a))
+            .SelectAwait(async a => 
+                await stream.GetControlStream(a.Area.ToString())
+                .Timeout(3.Seconds())
+                .FirstAsync(x => x != null))
             .ToArrayAsync();
 
         areaControls.Should().HaveCount(2).And.AllBeOfType<HtmlControl>();
@@ -140,17 +145,11 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         return Controls
             .Stack
-            .WithView(
-                "Toolbar",
-                (layoutArea, _) =>
-                    Template.Bind(toolbar, nameof(toolbar), tb => Controls.TextBox(tb.Year))
-            )
-            .WithView(
-                "Content",
-                (area, _) =>
-                    area.GetDataStream<Toolbar>(nameof(toolbar))
-                        .Select(tb => Controls.Html($"Report for year {tb.Year}"))
-            );
+            .WithView((_, _) =>
+                Template.Bind(toolbar, nameof(toolbar), tb => Controls.TextBox(tb.Year)), "Toolbar")
+            .WithView((area, _) =>
+                area.GetDataStream<Toolbar>(nameof(toolbar))
+                    .Select(tb => Controls.Html($"Report for year {tb.Year}")), "Content");
     }
 
     [HubFact]
@@ -269,18 +268,15 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var counter = 0;
         return Controls
             .Stack
-            .WithView(
-                "Button",
-                Controls
-                    .Menu("Increase Counter")
-                    .WithClickAction(context =>
-                        context.Host.UpdateArea(
-                            new($"{nameof(Counter)}/{nameof(Counter)}"),
-                            Controls.Html((++counter))
-                        )
+            .WithView(Controls
+                .Menu("Increase Counter")
+                .WithClickAction(context =>
+                    context.Host.UpdateArea(
+                        new($"{nameof(Counter)}/{nameof(Counter)}"),
+                        Controls.Html((++counter))
                     )
-            )
-            .WithView(nameof(Counter), Controls.Html(counter.ToString()));
+                ), "Button")
+            .WithView(Controls.Html(counter.ToString()), nameof(Counter));
     }
 
     [HubFact]
@@ -367,11 +363,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         ]);
 
         return Controls.Stack
-            .WithView(Filter, Template.Bind(data, nameof(DataBoundCheckboxes), x => Template.ItemTemplate(x.Data,y => Controls.CheckBox(y.Label, y.Value))))
-            .WithView(Results, (a, ctx) => a.GetDataStream<FilterEntity>(nameof(DataBoundCheckboxes))
+            .WithView(Template.Bind(data, nameof(DataBoundCheckboxes), x => Template.ItemTemplate(x.Data,y => Controls.CheckBox(y.Label, y.Value))), Filter)
+            .WithView((a, ctx) => a.GetDataStream<FilterEntity>(nameof(DataBoundCheckboxes))
                 .Select(d => d.Data.All(y => y.Value)
-                )
-            ) ;
+                ), Results) ;
     }
 
     private const string Filter = nameof(Filter);
@@ -519,11 +514,11 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
     private static object AsyncView =>
         Controls.Stack
-            .WithView("subarea", Observable.Return<ViewDefinition>(async (area, context, ct) =>
+            .WithView(Observable.Return<ViewDefinition>(async (area, context, ct) =>
             {
                 await Task.Delay(3000, ct);
                 return "Ok";
-            }));
+            }), "subarea");
 
     
     [HubFact]
@@ -545,7 +540,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstAsync(x => x != null);
 
         var subAreaName = content.Should().BeOfType<LayoutStackControl>().Which.Areas.Should().HaveCount(1).And.Subject.First();
-        var subArea = await stream.GetControlStream(subAreaName).FirstAsync();
+        var subArea = await stream.GetControlStream(subAreaName.Area.ToString()).FirstAsync();
 
         stopwatch.Stop();
 

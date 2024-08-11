@@ -1,4 +1,4 @@
-@inherits BlazorView<HtmlControl>
+@inherits BlazorView<HtmlControl, HtmlView>
 
 <div>@(@Html)</div>
 
@@ -10,6 +10,6 @@
     protected override void BindData()
     {
         base.BindData();
-        DataBind<string>(ViewModel.Data, h => Html = (MarkupString)h);
+        DataBindProperty(ViewModel.Data, h => h.Html, o => o is null ? default : new(o.ToString()!));
     }
 }

@@ -144,14 +144,14 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             var children = await areas
                 .ToAsyncEnumerable()
                 .SelectAwait(async s => new KeyValuePair<string, object>(
-                    s,
-                    await stream.GetControl(s)
+                    s.Area.ToString(),
+                    await stream.GetControl(s.Area.ToString())
                 ))
                 .ToArrayAsync();
             controls.AddRange(children);
             areas = children
                 .SelectMany(c =>
-                    (c.Value as LayoutStackControl)?.Areas ?? Enumerable.Empty<string>()
+                    (c.Value as LayoutStackControl)?.Areas ?? Enumerable.Empty<NamedAreaControl>()
                 )
                 .ToImmutableList();
         }

@@ -1,4 +1,4 @@
-@inherits SkinnedView<TabSkin>
+@inherits SkinnedView<TabSkin, TabView>
 
 <FluentTab Class="@Class" Style="@Style" Label="@Label">
     <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
@@ -9,7 +9,7 @@
     protected override void BindData()
     {
         base.BindData();
-        DataBind<string>(Skin.Label, value => Label = value);
+        DataBindProperty(Skin.Label, x => x.Label);
     }
 
 }

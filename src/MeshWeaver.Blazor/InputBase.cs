@@ -3,21 +3,22 @@ using MeshWeaver.Layout;
 
 namespace MeshWeaver.Blazor;
 
-public abstract class InputBase<TViewModel, TData> : BlazorView<TViewModel>
+public abstract class InputBase<TViewModel, TView, TData> : BlazorView<TViewModel, TView>
     where TViewModel : UiControl, IInputControl
+    where TView:InputBase<TViewModel, TView, TData>
 {
     protected TData Data
     {
-        get => data;
+        get => InnerData;
         set {
-            var needsUpdate = !EqualityComparer<TData>.Default.Equals(data, value);
-            data = value;
+            var needsUpdate = !EqualityComparer<TData>.Default.Equals(InnerData, value);
+            InnerData = value;
             if (needsUpdate)
-                UpdatePointer(data, DataPointer);
+                UpdatePointer(InnerData, DataPointer);
         }
     }
 
-    private TData data;
+    private TData InnerData { get; set; }
 
     protected string Placeholder { get; set; }
     protected bool Disabled { get; set; }
@@ -33,12 +34,12 @@ public abstract class InputBase<TViewModel, TData> : BlazorView<TViewModel>
         base.BindData();
         if (ViewModel != null)
         {
-            DataBind<TData>(ViewModel.Data, x => data = x);
-            DataBind<string>(ViewModel.Placeholder, x => Placeholder = x);
-            DataBind<bool>(ViewModel.Disabled, x => Disabled = x);
-            DataBind<bool>(ViewModel.AutoFocus, x => AutoFocus = x);
-            DataBind<bool>(ViewModel.Immediate, x => Immediate = x);
-            DataBind<int>(ViewModel.ImmediateDelay, x => ImmediateDelay = x);
+            DataBindProperty<TData>(ViewModel.Data, x => x.InnerData);
+            DataBindProperty<string>(ViewModel.Placeholder, x => x.Placeholder);
+            DataBindProperty<bool>(ViewModel.Disabled, x => x.Disabled);
+            DataBindProperty<bool>(ViewModel.AutoFocus, x => x.AutoFocus);
+            DataBindProperty<bool>(ViewModel.Immediate, x => x.Immediate);
+            DataBindProperty<int>(ViewModel.ImmediateDelay, x => x.ImmediateDelay);
 
             DataPointer = ViewModel.Data as JsonPointerReference;
         }

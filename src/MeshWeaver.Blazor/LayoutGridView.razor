@@ -1,15 +1,12 @@
-@inherits SkinnedView<LayoutStackControl, LayoutGridSkin>
+@inherits SkinnedView<LayoutStackControl, LayoutGridSkin, LayoutGridView>
 
 <FluentGrid 
     Class="@Class"
     AdaptiveRendering="@Skin.AdaptiveRendering"
     Justify="@Skin.Justify.ToFluentJustifyContent()"
     Spacing="@Spacing"
-    >
-        @foreach (var area in ViewModel.Areas)
-        {
-            <NamedAreaView Stream="@Stream" Area="@area"/>
-        }
+>    
+    <NamedAreaContainer Container="ViewModel.Areas" Stream="@Stream" ParentArea="@Area" />
 </FluentGrid>
 
 @code{

@@ -1,5 +1,5 @@
 @using Icon = MeshWeaver.Application.Styles.Icon
-@inherits InputBase<TextBoxControl, string>
+@inherits InputBase<TextBoxControl,Textbox, string>
 
 <FluentTextField 
     @bind-Value="Data"
@@ -33,9 +33,9 @@
 
         if (ViewModel != null)
         {
-            DataBind<string>(ViewModel.Autocomplete, x => Autocomplete = x);
-            DataBind<Icon>(ViewModel.IconStart, x => IconStart = x);
-            DataBind<Icon>(ViewModel.IconEnd, x => IconEnd = x);
+            DataBindProperty(ViewModel.Autocomplete, x => x.Autocomplete);
+            DataBindProperty(ViewModel.IconStart, x => x.IconStart);
+            DataBindProperty(ViewModel.IconEnd, x => x.IconEnd);
         }
     }
 }

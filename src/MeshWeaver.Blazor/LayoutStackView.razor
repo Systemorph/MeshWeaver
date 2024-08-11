@@ -1,5 +1,5 @@
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
-@inherits BlazorView<LayoutStackControl>
+@inherits BlazorView<LayoutStackControl, LayoutStackView>
 
 <FluentStack
     Class="@Class"
@@ -11,10 +11,7 @@
     Style="@Style"
     Wrap="@ViewModel.Wrap"
     >
-    @foreach (var area in ViewModel.Areas)
-    {
-        <NamedAreaView Stream="@Stream" Area="@area"/>
-    }
+        <NamedAreaContainer Container="ViewModel.Areas" Stream="@Stream" ParentArea="@Area" />
 </FluentStack>
 
 @code{

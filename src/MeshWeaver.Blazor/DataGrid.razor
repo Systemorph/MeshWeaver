@@ -2,7 +2,7 @@
 @using System.Text.Json
 @using System.Linq.Expressions
 @using MeshWeaver.Layout.DataGrid
-@inherits BlazorView<DataGridControl>
+@inherits BlazorView<DataGridControl, DataGrid>
 
 <div style="display: table; table-layout: fixed; width: 100%;">
     <div style="overflow-x: auto;">
@@ -63,7 +63,11 @@
     protected override void BindData()
     {
         base.BindData();
-        DataBind<object>(ViewModel.Data, x => QueryableData = ((System.Collections.IEnumerable)x)?.Cast<JsonObject>().AsQueryable());
+        DataBind<object>(ViewModel.Data, x =>
+        {
+            QueryableData = ((System.Collections.IEnumerable)x)?.Cast<JsonObject>().AsQueryable();
+            return true;
+        });
     }
 
     protected override void OnInitialized()

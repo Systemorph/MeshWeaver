@@ -1,7 +1,7 @@
 @using Markdig
 @using Microsoft.JSInterop
 @using MeshWeaver.Layout.Markdown
-@inherits BlazorView<MarkdownControl>
+@inherits BlazorView<MarkdownControl, MarkdownView>
 @inject IJSRuntime JsRuntime;
 <div class="markdown">
 @if(Html != null)
@@ -27,15 +27,20 @@
         DataBind<string>(ViewModel.Data, RenderMarkdown);
     }
 
-    private void RenderMarkdown(string markdown)
+    private bool RenderMarkdown(string markdown)
     {
         var layoutAreaExtension = new LayoutAreaMarkdownExtension(Stream.Hub);
         var pipeline = new MarkdownPipelineBuilder()
             .UseAdvancedExtensions()
             .Use(layoutAreaExtension)
             .Build();
-        Html = Markdown.ToHtml(markdown, pipeline);
-        LayoutAreaComponents = layoutAreaExtension.MarkdownParser.Areas;
+        var newHtml = Markdown.ToHtml(markdown, pipeline);
+        var newLayoutComponents = layoutAreaExtension.MarkdownParser.Areas;
+        if (newHtml == Html && LayoutAreaComponents.SequenceEqual(newLayoutComponents))
+            return false;
+        Html = newHtml;
+        LayoutAreaComponents = newLayoutComponents;
+        return true;
     }
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
