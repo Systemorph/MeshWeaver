@@ -16,7 +16,7 @@ public abstract record ListControlBase<TControl>(object Data)
     public TControl WithOptions(IReadOnlyCollection<Option> options) => (TControl) this with { Options = options };
 
     public TControl WithOptions<T>(IEnumerable<T> options) => 
-        WithOptions(options.Select(o => new Option(o, o.ToString())).ToArray());
+        WithOptions(options.Select(o => (Option)new Option<T>(o, o.ToString())).ToArray());
 
     public virtual bool Equals(ListControlBase<TControl> other)
     {
@@ -31,8 +31,15 @@ public abstract record ListControlBase<TControl>(object Data)
     }
 }
 
-public record Option(object Item, string Text);
+public abstract record Option(string Text)
+{
+    public abstract object GetItem();
+}
 
+public record Option<TItem>(TItem Item, string Text) : Option(Text)
+{
+    public override object GetItem() => Item;
+}
 
 public enum SelectPosition
 {
