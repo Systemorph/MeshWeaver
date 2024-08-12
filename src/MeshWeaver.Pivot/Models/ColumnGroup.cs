@@ -36,7 +36,7 @@ namespace MeshWeaver.Pivot.Models
                 return false;
             if (ReferenceEquals(this, other))
                 return true;
-            if (Id != other.Id || DisplayName != other.DisplayName)
+            if (!Equals(Id, other.Id) || DisplayName != other.DisplayName)
                 return false;
             return Coordinates.SequenceEqual(other.Coordinates);
         }
