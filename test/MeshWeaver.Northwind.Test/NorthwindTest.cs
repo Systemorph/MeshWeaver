@@ -158,17 +158,17 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public async Task ProductSummaryReport()
+    public async Task SupplierSummaryReport()
     {
         var workspace = GetHost().GetWorkspace();
         await workspace.Initialized;
 
-        var viewName = nameof(SupplierSummaryArea.SupplierSummaryGrid);
-        var stream = workspace.GetRemoteStream<EntityStore, LayoutAreaReference>(
-            new HostAddress(),
-            new LayoutAreaReference(viewName)
-        );
-        var grid = (await stream.GetControl(viewName)).Should().BeOfType<GridControl>().Subject;
+        const string ViewName = nameof(SupplierSummaryArea.SupplierSummary);
+        var controlName = $"{ViewName}/1/{nameof(SupplierSummaryArea.SupplierSummaryGrid)}"; // TODO V10: we need a better way to address sub-areas (2024/08/12, Dmitry Kalabin)
+        var stream = workspace.GetStreamFor(new LayoutAreaReference(ViewName), new HostAddress());
+
+        var control = await stream.GetControl(controlName);
+        var grid = control.Should().BeOfType<GridControl>().Subject;
         grid.Data.Should()
             .BeOfType<GridOptions>()
             .Which.RowData.Should()
