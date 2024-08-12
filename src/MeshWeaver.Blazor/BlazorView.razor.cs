@@ -24,6 +24,8 @@ namespace MeshWeaver.Blazor
                 BindData();
         }
 
+        [Parameter]
+        public bool IsVisible { get; set; } = true;
 
         protected string Label { get; set; }
 
@@ -135,8 +137,12 @@ namespace MeshWeaver.Blazor
 
 
         private IReadOnlyCollection<object> CurrentState { get; set; }
+        private object RenderedStream { get; set; }
         protected virtual bool IsUpToDate()
         {
+            if(RenderedStream != Stream)
+                return false;
+            RenderedStream = Stream;
             var oldState = CurrentState ?? Array.Empty<object>();
             var current = GetState();
             if (oldState.Count == 0 && current.Count == 0)

@@ -37,7 +37,7 @@ public static class DocumentationExtensions
         ?? new(hub);
 
     public static string DocumentationPath(this LayoutDefinition layout, Assembly assembly, string name)
-        => new LayoutAreaReference(nameof(DocumentationViewModels.Doc))
+        => new LayoutAreaReference(nameof(DocumentationLayout.Doc))
         {
             Id = $"{EmbeddedDocumentationSource.Embedded}/{assembly.GetName().Name}/{name}"
         }.ToHref(layout.Hub.Address);

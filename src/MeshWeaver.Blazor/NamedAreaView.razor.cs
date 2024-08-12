@@ -1,7 +1,6 @@
 ﻿using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Layout;
-using MeshWeaver.Utils;
 
 namespace MeshWeaver.Blazor;
 
@@ -16,37 +15,35 @@ public partial class NamedAreaView
 
     private string DisplayArea { get; set; }
     private bool ShowProgress { get; set; }
-    private string ViewModelArea { get; set; }
 
-    private object RenderedStream { get; set; }
     protected override void BindData()
     {
         base.BindData();
+        DataBindProperty(ViewModel.DisplayArea, x => x.DisplayArea);
+        DataBindProperty(ViewModel.ShowProgress, x => x.ShowProgress);
+        BindToStream();
+    }
+
+    protected void BindToStream() =>
         DataBind<string>(ViewModel.Area, x =>
         {
-            if(RenderedStream == Stream && x == ViewModelArea)
-                return false;
-            ViewModelArea = x;
+            Area = x;
             subscription?.Dispose();
             subscription = null;
-            if (ViewModelArea == null)
+            if (Area == null)
                 return true;
-            subscription = Stream.GetControlStream(ViewModelArea)
+            subscription = Stream.GetControlStream(Area)
                 .Subscribe(item => InvokeAsync(() => Render(item as UiControl)));
             return true;
         });
-        DataBindProperty(ViewModel.DisplayArea, x => x.DisplayArea);
-        DataBindProperty(ViewModel.ShowProgress, x => x.ShowProgress);
 
-        DisplayArea ??= ViewModelArea.Wordify();
-    }
 
 
     private void Render(UiControl control)
     {
         Logger.LogDebug(
             "Changing area {Area} to {Instance}",
-            ViewModelArea,
+            Area,
             control?.GetType().Name
         );
         if (Equals(RootControl, control))

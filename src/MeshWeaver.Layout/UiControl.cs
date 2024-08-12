@@ -147,7 +147,7 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion,
 {
     protected TControl This => (TControl)this;
 
-    public TControl WithId(string id) => This with { Id = id };
+    public TControl WithId(object id) => This with { Id = id };
 
     public TControl WithLabel(object label)
     {

@@ -4,24 +4,18 @@ public record NavMenuControl() :
     ContainerControl<NavMenuControl, UiControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
 {
 
-    public NavMenuControl WithItem(UiControl item) => 
-        WithItems(item) ;
+    public NavMenuControl WithEntry(UiControl item, Func<NamedAreaControl, NamedAreaControl> options = null) => 
+        WithItem(item, options ?? (x => x)) ;
 
     public bool Collapsible { get; init; } = true;
 
     public int? Width { get; init; } = 250;
 
 
-    public NavMenuControl WithGroup(object title) =>
-        WithGroup(title, x => x);
-
-    public NavMenuControl WithGroup(object title, Func<NavGroupControl, NavGroupControl> options) =>
-        WithItems(options.Invoke(new(title)));
-
     public NavMenuControl WithNavLink(object title, object href) =>
         WithNavLink(title, href, x => x);
     public NavMenuControl WithNavLink(NavLinkControl control) =>
-        WithItem(control);
+        WithEntry(control);
 
     public NavMenuControl WithNavLink(object title, object href, Func<NavLinkControl, NavLinkControl> options) =>
         WithNavLink(options.Invoke(new(title, href)));
@@ -30,9 +24,9 @@ public record NavMenuControl() :
         ;
 
     public NavMenuControl WithNavGroup(NavGroupControl navGroup) =>
-        WithItem(navGroup);
+        WithEntry(navGroup);
     public NavMenuControl WithNavGroup(object title, Func<NavGroupControl, NavGroupControl> config) =>
-        WithItem(config.Invoke(new(title)));
+        WithEntry(config.Invoke(new(title)));
     public NavMenuControl WithCollapsible(bool collapsible) => this with { Collapsible = collapsible };
 
     public NavMenuControl WithWidth(int width) => this with { Width = width };
@@ -69,8 +63,8 @@ public record NavGroupControl(object Data)
 {
 
     public NavGroupControl WithLink(string displayName, string link, Func<NavLinkControl, NavLinkControl> options) =>
-        WithItems(options.Invoke(new(displayName, link)));
-    public NavGroupControl WithGroup(NavGroupControl @group) => WithItems(group);
+        WithItem(options.Invoke(new(displayName, link)));
+    public NavGroupControl WithGroup(NavGroupControl @group) => WithItem(group);
 
 
 }

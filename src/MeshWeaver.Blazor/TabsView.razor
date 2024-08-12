@@ -2,7 +2,10 @@
 @inherits BlazorView<TabsControl, TabsView>
 
 <FluentTabs ActiveTabId="@ActiveTabId" Height="@Height" Orientation="@Orientation">
-    <NamedAreaContainer Container="ViewModel.Areas" Stream="@Stream" ParentArea="@Area" />
+    @foreach (var area in ViewModel.Areas)
+    {
+        <DispatchView ViewModel="@area" Stream="@Stream" IsVisible="@IsActive(area)" />
+    }
 </FluentTabs>
 
 @code
@@ -14,9 +17,16 @@
     protected override void BindData()
     {
         base.BindData();
-        DataBindProperty(ViewModel.ActiveTabId, x => x.ActiveTabId);
+        if(ActiveTabId != null)
+           DataBindProperty(ViewModel.ActiveTabId, x => x.ActiveTabId);
+        else 
+            ActiveTabId = ViewModel.Areas.First().Id.ToString();
         DataBindProperty(ViewModel.Height, x => x.Height);
         DataBindProperty(ViewModel.Orientation, x => x.Orientation);
     }
 
+    private bool IsActive(NamedAreaControl area)
+    {
+        return Equals(ActiveTabId, area.Id);
+    }
 }

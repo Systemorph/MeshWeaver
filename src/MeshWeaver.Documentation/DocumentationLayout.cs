@@ -8,7 +8,7 @@ using static MeshWeaver.Layout.Controls;
 
 namespace MeshWeaver.Documentation;
 
-public static class DocumentationViewModels
+public static class DocumentationLayout
 {
     public const string Documentation = nameof(Documentation);
     public const string MainContent = "$" + nameof(MainContent);

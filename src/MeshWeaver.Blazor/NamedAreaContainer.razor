@@ -2,19 +2,15 @@
 @using MeshWeaver.Data.Serialization
 @foreach (var area in Container)
 {
-    <NamedAreaView ViewModel="@area" Area="@GetArea(area)" Stream="@Stream"/>
+    <DispatchView ViewModel="@area" Stream="@Stream"/>
 }
 
 @code
 {
-    [Parameter]
-    public string ParentArea { get; set; }
     [Parameter]
     public IReadOnlyCollection<NamedAreaControl> Container { get; set; }
 
     [Parameter]
     public ISynchronizationStream<JsonElement, LayoutAreaReference> Stream { get; set; }
 
-    private string GetArea(NamedAreaControl control)
-        => $"{control.Area}";
 }

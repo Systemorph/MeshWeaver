@@ -19,6 +19,7 @@ public class SkinnedView<TControl, TSkin, TView> : BlazorView<TControl, TView>
     protected override void BindData()
     {
         DisposeBindings();
+        DataBindProperty(ViewModel.Id, x => x.Id);
         DataBindProperty(Skin.Class, x => x.Class);
         DataBindProperty(Skin.Style, x => x.Style);
     }

@@ -6,7 +6,7 @@
         public TabsControl WithTab(object label, UiControl item)
             => WithTab(label, item, x => x);
         public TabsControl WithTab(object label, UiControl item, Func<TabSkin, TabSkin> configuration)
-            => WithItems(item.WithSkin(configuration.Invoke(new(label))));
+            => WithItem(item, x => x.WithId(label).WithSkin(configuration.Invoke(new(label))));
 
         public object ActiveTabId { get; init; }
         public object Height { get; init; }
