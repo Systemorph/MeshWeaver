@@ -3,7 +3,7 @@
     {
       "children": [
         {
-          "systemName": "1.Value",
+          "id": "1.Value",
           "displayName": "Value",
           "coordinates": [
             "1",
@@ -13,7 +13,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "1",
+      "id": "1",
       "displayName": "1",
       "coordinates": [
         "1"
@@ -24,7 +24,7 @@
     {
       "children": [
         {
-          "systemName": "2.Value",
+          "id": "2.Value",
           "displayName": "Value",
           "coordinates": [
             "2",
@@ -34,7 +34,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "2",
+      "id": "2",
       "displayName": "2",
       "coordinates": [
         "2"
@@ -45,7 +45,7 @@
     {
       "children": [
         {
-          "systemName": "3.Value",
+          "id": "3.Value",
           "displayName": "Value",
           "coordinates": [
             "3",
@@ -55,7 +55,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "3",
+      "id": "3",
       "displayName": "3",
       "coordinates": [
         "3"
@@ -70,7 +70,7 @@
         "coordinates": [
           "BoP"
         ],
-        "systemName": "BoP",
+        "id": "BoP",
         "displayName": "Beginning of Period",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -93,7 +93,7 @@
         "coordinates": [
           "Delta"
         ],
-        "systemName": "Delta",
+        "id": "Delta",
         "displayName": "Delta",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -116,7 +116,7 @@
         "coordinates": [
           "EoP"
         ],
-        "systemName": "EoP",
+        "id": "EoP",
         "displayName": "End of Period",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"

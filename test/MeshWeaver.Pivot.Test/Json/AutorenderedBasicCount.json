@@ -1,7 +1,7 @@
 {
   "columns": [
     {
-      "systemName": "Value",
+      "id": "Value",
       "displayName": "Value",
       "coordinates": [
         "Value"
@@ -14,9 +14,9 @@
     {
       "rowGroup": {
         "coordinates": [
-          "1"
+          1
         ],
-        "systemName": "1",
+        "id": "1",
         "displayName": "1",
         "grouperName": "AutomaticNumber",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -29,9 +29,9 @@
     {
       "rowGroup": {
         "coordinates": [
-          "2"
+          2
         ],
-        "systemName": "2",
+        "id": "2",
         "displayName": "2",
         "grouperName": "AutomaticNumber",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -44,9 +44,9 @@
     {
       "rowGroup": {
         "coordinates": [
-          "3"
+          3
         ],
-        "systemName": "3",
+        "id": "3",
         "displayName": "3",
         "grouperName": "AutomaticNumber",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"

@@ -7,7 +7,7 @@
             {
               "children": [
                 {
-                  "systemName": "D.C.E.Value",
+                  "id": "D.C.E.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "D",
@@ -19,7 +19,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "D.C.E",
+              "id": "D.C.E",
               "displayName": "Expenses",
               "coordinates": [
                 "D",
@@ -32,7 +32,7 @@
             {
               "children": [
                 {
-                  "systemName": "D.C.P.Value",
+                  "id": "D.C.P.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "D",
@@ -44,7 +44,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "D.C.P",
+              "id": "D.C.P",
               "displayName": "Premium",
               "coordinates": [
                 "D",
@@ -57,7 +57,7 @@
             {
               "children": [
                 {
-                  "systemName": "D.C.C.Value",
+                  "id": "D.C.C.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "D",
@@ -69,7 +69,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "D.C.C",
+              "id": "D.C.C",
               "displayName": "Cost",
               "coordinates": [
                 "D",
@@ -82,7 +82,7 @@
             {
               "children": [
                 {
-                  "systemName": "D.C.B.Value",
+                  "id": "D.C.B.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "D",
@@ -94,7 +94,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "D.C.B",
+              "id": "D.C.B",
               "displayName": "Benefit",
               "coordinates": [
                 "D",
@@ -107,7 +107,7 @@
             {
               "children": [
                 {
-                  "systemName": "D.C.TotalGroup.Value",
+                  "id": "D.C.TotalGroup.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "D",
@@ -119,7 +119,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "D.C.TotalGroup",
+              "id": "D.C.TotalGroup",
               "displayName": " ",
               "coordinates": [
                 "D",
@@ -130,7 +130,7 @@
               "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
             }
           ],
-          "systemName": "D.C",
+          "id": "D.C",
           "displayName": "Casualty",
           "coordinates": [
             "D",
@@ -144,7 +144,7 @@
             {
               "children": [
                 {
-                  "systemName": "D.H.E.Value",
+                  "id": "D.H.E.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "D",
@@ -156,7 +156,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "D.H.E",
+              "id": "D.H.E",
               "displayName": "Expenses",
               "coordinates": [
                 "D",
@@ -169,7 +169,7 @@
             {
               "children": [
                 {
-                  "systemName": "D.H.P.Value",
+                  "id": "D.H.P.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "D",
@@ -181,7 +181,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "D.H.P",
+              "id": "D.H.P",
               "displayName": "Premium",
               "coordinates": [
                 "D",
@@ -194,7 +194,7 @@
             {
               "children": [
                 {
-                  "systemName": "D.H.C.Value",
+                  "id": "D.H.C.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "D",
@@ -206,7 +206,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "D.H.C",
+              "id": "D.H.C",
               "displayName": "Cost",
               "coordinates": [
                 "D",
@@ -219,7 +219,7 @@
             {
               "children": [
                 {
-                  "systemName": "D.H.B.Value",
+                  "id": "D.H.B.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "D",
@@ -231,7 +231,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "D.H.B",
+              "id": "D.H.B",
               "displayName": "Benefit",
               "coordinates": [
                 "D",
@@ -244,7 +244,7 @@
             {
               "children": [
                 {
-                  "systemName": "D.H.TotalGroup.Value",
+                  "id": "D.H.TotalGroup.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "D",
@@ -256,7 +256,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "D.H.TotalGroup",
+              "id": "D.H.TotalGroup",
               "displayName": " ",
               "coordinates": [
                 "D",
@@ -267,7 +267,7 @@
               "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
             }
           ],
-          "systemName": "D.H",
+          "id": "D.H",
           "displayName": "Health",
           "coordinates": [
             "D",
@@ -281,7 +281,7 @@
             {
               "children": [
                 {
-                  "systemName": "D.L.E.Value",
+                  "id": "D.L.E.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "D",
@@ -293,7 +293,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "D.L.E",
+              "id": "D.L.E",
               "displayName": "Expenses",
               "coordinates": [
                 "D",
@@ -306,7 +306,7 @@
             {
               "children": [
                 {
-                  "systemName": "D.L.P.Value",
+                  "id": "D.L.P.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "D",
@@ -318,7 +318,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "D.L.P",
+              "id": "D.L.P",
               "displayName": "Premium",
               "coordinates": [
                 "D",
@@ -331,7 +331,7 @@
             {
               "children": [
                 {
-                  "systemName": "D.L.C.Value",
+                  "id": "D.L.C.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "D",
@@ -343,7 +343,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "D.L.C",
+              "id": "D.L.C",
               "displayName": "Cost",
               "coordinates": [
                 "D",
@@ -356,7 +356,7 @@
             {
               "children": [
                 {
-                  "systemName": "D.L.B.Value",
+                  "id": "D.L.B.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "D",
@@ -368,7 +368,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "D.L.B",
+              "id": "D.L.B",
               "displayName": "Benefit",
               "coordinates": [
                 "D",
@@ -381,7 +381,7 @@
             {
               "children": [
                 {
-                  "systemName": "D.L.TotalGroup.Value",
+                  "id": "D.L.TotalGroup.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "D",
@@ -393,7 +393,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "D.L.TotalGroup",
+              "id": "D.L.TotalGroup",
               "displayName": " ",
               "coordinates": [
                 "D",
@@ -404,7 +404,7 @@
               "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
             }
           ],
-          "systemName": "D.L",
+          "id": "D.L",
           "displayName": "Life",
           "coordinates": [
             "D",
@@ -418,7 +418,7 @@
             {
               "children": [
                 {
-                  "systemName": "D.P.E.Value",
+                  "id": "D.P.E.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "D",
@@ -430,7 +430,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "D.P.E",
+              "id": "D.P.E",
               "displayName": "Expenses",
               "coordinates": [
                 "D",
@@ -443,7 +443,7 @@
             {
               "children": [
                 {
-                  "systemName": "D.P.P.Value",
+                  "id": "D.P.P.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "D",
@@ -455,7 +455,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "D.P.P",
+              "id": "D.P.P",
               "displayName": "Premium",
               "coordinates": [
                 "D",
@@ -468,7 +468,7 @@
             {
               "children": [
                 {
-                  "systemName": "D.P.C.Value",
+                  "id": "D.P.C.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "D",
@@ -480,7 +480,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "D.P.C",
+              "id": "D.P.C",
               "displayName": "Cost",
               "coordinates": [
                 "D",
@@ -493,7 +493,7 @@
             {
               "children": [
                 {
-                  "systemName": "D.P.B.Value",
+                  "id": "D.P.B.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "D",
@@ -505,7 +505,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "D.P.B",
+              "id": "D.P.B",
               "displayName": "Benefit",
               "coordinates": [
                 "D",
@@ -518,7 +518,7 @@
             {
               "children": [
                 {
-                  "systemName": "D.P.TotalGroup.Value",
+                  "id": "D.P.TotalGroup.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "D",
@@ -530,7 +530,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "D.P.TotalGroup",
+              "id": "D.P.TotalGroup",
               "displayName": " ",
               "coordinates": [
                 "D",
@@ -541,7 +541,7 @@
               "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
             }
           ],
-          "systemName": "D.P",
+          "id": "D.P",
           "displayName": "Property",
           "coordinates": [
             "D",
@@ -553,7 +553,7 @@
         {
           "children": [
             {
-              "systemName": "D.TotalGroup.Value",
+              "id": "D.TotalGroup.Value",
               "displayName": "Value",
               "coordinates": [
                 "D",
@@ -564,7 +564,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "D.TotalGroup",
+          "id": "D.TotalGroup",
           "displayName": " ",
           "coordinates": [
             "D",
@@ -574,7 +574,7 @@
           "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
         }
       ],
-      "systemName": "D",
+      "id": "D",
       "displayName": "Germany",
       "coordinates": [
         "D"
@@ -589,7 +589,7 @@
             {
               "children": [
                 {
-                  "systemName": "PT.C.E.Value",
+                  "id": "PT.C.E.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "PT",
@@ -601,7 +601,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "PT.C.E",
+              "id": "PT.C.E",
               "displayName": "Expenses",
               "coordinates": [
                 "PT",
@@ -614,7 +614,7 @@
             {
               "children": [
                 {
-                  "systemName": "PT.C.P.Value",
+                  "id": "PT.C.P.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "PT",
@@ -626,7 +626,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "PT.C.P",
+              "id": "PT.C.P",
               "displayName": "Premium",
               "coordinates": [
                 "PT",
@@ -639,7 +639,7 @@
             {
               "children": [
                 {
-                  "systemName": "PT.C.C.Value",
+                  "id": "PT.C.C.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "PT",
@@ -651,7 +651,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "PT.C.C",
+              "id": "PT.C.C",
               "displayName": "Cost",
               "coordinates": [
                 "PT",
@@ -664,7 +664,7 @@
             {
               "children": [
                 {
-                  "systemName": "PT.C.B.Value",
+                  "id": "PT.C.B.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "PT",
@@ -676,7 +676,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "PT.C.B",
+              "id": "PT.C.B",
               "displayName": "Benefit",
               "coordinates": [
                 "PT",
@@ -689,7 +689,7 @@
             {
               "children": [
                 {
-                  "systemName": "PT.C.TotalGroup.Value",
+                  "id": "PT.C.TotalGroup.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "PT",
@@ -701,7 +701,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "PT.C.TotalGroup",
+              "id": "PT.C.TotalGroup",
               "displayName": " ",
               "coordinates": [
                 "PT",
@@ -712,7 +712,7 @@
               "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
             }
           ],
-          "systemName": "PT.C",
+          "id": "PT.C",
           "displayName": "Casualty",
           "coordinates": [
             "PT",
@@ -726,7 +726,7 @@
             {
               "children": [
                 {
-                  "systemName": "PT.H.E.Value",
+                  "id": "PT.H.E.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "PT",
@@ -738,7 +738,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "PT.H.E",
+              "id": "PT.H.E",
               "displayName": "Expenses",
               "coordinates": [
                 "PT",
@@ -751,7 +751,7 @@
             {
               "children": [
                 {
-                  "systemName": "PT.H.P.Value",
+                  "id": "PT.H.P.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "PT",
@@ -763,7 +763,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "PT.H.P",
+              "id": "PT.H.P",
               "displayName": "Premium",
               "coordinates": [
                 "PT",
@@ -776,7 +776,7 @@
             {
               "children": [
                 {
-                  "systemName": "PT.H.C.Value",
+                  "id": "PT.H.C.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "PT",
@@ -788,7 +788,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "PT.H.C",
+              "id": "PT.H.C",
               "displayName": "Cost",
               "coordinates": [
                 "PT",
@@ -801,7 +801,7 @@
             {
               "children": [
                 {
-                  "systemName": "PT.H.B.Value",
+                  "id": "PT.H.B.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "PT",
@@ -813,7 +813,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "PT.H.B",
+              "id": "PT.H.B",
               "displayName": "Benefit",
               "coordinates": [
                 "PT",
@@ -826,7 +826,7 @@
             {
               "children": [
                 {
-                  "systemName": "PT.H.TotalGroup.Value",
+                  "id": "PT.H.TotalGroup.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "PT",
@@ -838,7 +838,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "PT.H.TotalGroup",
+              "id": "PT.H.TotalGroup",
               "displayName": " ",
               "coordinates": [
                 "PT",
@@ -849,7 +849,7 @@
               "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
             }
           ],
-          "systemName": "PT.H",
+          "id": "PT.H",
           "displayName": "Health",
           "coordinates": [
             "PT",
@@ -863,7 +863,7 @@
             {
               "children": [
                 {
-                  "systemName": "PT.L.E.Value",
+                  "id": "PT.L.E.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "PT",
@@ -875,7 +875,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "PT.L.E",
+              "id": "PT.L.E",
               "displayName": "Expenses",
               "coordinates": [
                 "PT",
@@ -888,7 +888,7 @@
             {
               "children": [
                 {
-                  "systemName": "PT.L.P.Value",
+                  "id": "PT.L.P.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "PT",
@@ -900,7 +900,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "PT.L.P",
+              "id": "PT.L.P",
               "displayName": "Premium",
               "coordinates": [
                 "PT",
@@ -913,7 +913,7 @@
             {
               "children": [
                 {
-                  "systemName": "PT.L.C.Value",
+                  "id": "PT.L.C.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "PT",
@@ -925,7 +925,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "PT.L.C",
+              "id": "PT.L.C",
               "displayName": "Cost",
               "coordinates": [
                 "PT",
@@ -938,7 +938,7 @@
             {
               "children": [
                 {
-                  "systemName": "PT.L.B.Value",
+                  "id": "PT.L.B.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "PT",
@@ -950,7 +950,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "PT.L.B",
+              "id": "PT.L.B",
               "displayName": "Benefit",
               "coordinates": [
                 "PT",
@@ -963,7 +963,7 @@
             {
               "children": [
                 {
-                  "systemName": "PT.L.TotalGroup.Value",
+                  "id": "PT.L.TotalGroup.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "PT",
@@ -975,7 +975,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "PT.L.TotalGroup",
+              "id": "PT.L.TotalGroup",
               "displayName": " ",
               "coordinates": [
                 "PT",
@@ -986,7 +986,7 @@
               "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
             }
           ],
-          "systemName": "PT.L",
+          "id": "PT.L",
           "displayName": "Life",
           "coordinates": [
             "PT",
@@ -1000,7 +1000,7 @@
             {
               "children": [
                 {
-                  "systemName": "PT.P.E.Value",
+                  "id": "PT.P.E.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "PT",
@@ -1012,7 +1012,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "PT.P.E",
+              "id": "PT.P.E",
               "displayName": "Expenses",
               "coordinates": [
                 "PT",
@@ -1025,7 +1025,7 @@
             {
               "children": [
                 {
-                  "systemName": "PT.P.P.Value",
+                  "id": "PT.P.P.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "PT",
@@ -1037,7 +1037,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "PT.P.P",
+              "id": "PT.P.P",
               "displayName": "Premium",
               "coordinates": [
                 "PT",
@@ -1050,7 +1050,7 @@
             {
               "children": [
                 {
-                  "systemName": "PT.P.C.Value",
+                  "id": "PT.P.C.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "PT",
@@ -1062,7 +1062,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "PT.P.C",
+              "id": "PT.P.C",
               "displayName": "Cost",
               "coordinates": [
                 "PT",
@@ -1075,7 +1075,7 @@
             {
               "children": [
                 {
-                  "systemName": "PT.P.B.Value",
+                  "id": "PT.P.B.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "PT",
@@ -1087,7 +1087,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "PT.P.B",
+              "id": "PT.P.B",
               "displayName": "Benefit",
               "coordinates": [
                 "PT",
@@ -1100,7 +1100,7 @@
             {
               "children": [
                 {
-                  "systemName": "PT.P.TotalGroup.Value",
+                  "id": "PT.P.TotalGroup.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "PT",
@@ -1112,7 +1112,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "PT.P.TotalGroup",
+              "id": "PT.P.TotalGroup",
               "displayName": " ",
               "coordinates": [
                 "PT",
@@ -1123,7 +1123,7 @@
               "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
             }
           ],
-          "systemName": "PT.P",
+          "id": "PT.P",
           "displayName": "Property",
           "coordinates": [
             "PT",
@@ -1135,7 +1135,7 @@
         {
           "children": [
             {
-              "systemName": "PT.TotalGroup.Value",
+              "id": "PT.TotalGroup.Value",
               "displayName": "Value",
               "coordinates": [
                 "PT",
@@ -1146,7 +1146,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "PT.TotalGroup",
+          "id": "PT.TotalGroup",
           "displayName": " ",
           "coordinates": [
             "PT",
@@ -1156,7 +1156,7 @@
           "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
         }
       ],
-      "systemName": "PT",
+      "id": "PT",
       "displayName": "Portugal",
       "coordinates": [
         "PT"
@@ -1171,7 +1171,7 @@
             {
               "children": [
                 {
-                  "systemName": "RU.C.E.Value",
+                  "id": "RU.C.E.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "RU",
@@ -1183,7 +1183,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "RU.C.E",
+              "id": "RU.C.E",
               "displayName": "Expenses",
               "coordinates": [
                 "RU",
@@ -1196,7 +1196,7 @@
             {
               "children": [
                 {
-                  "systemName": "RU.C.P.Value",
+                  "id": "RU.C.P.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "RU",
@@ -1208,7 +1208,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "RU.C.P",
+              "id": "RU.C.P",
               "displayName": "Premium",
               "coordinates": [
                 "RU",
@@ -1221,7 +1221,7 @@
             {
               "children": [
                 {
-                  "systemName": "RU.C.C.Value",
+                  "id": "RU.C.C.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "RU",
@@ -1233,7 +1233,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "RU.C.C",
+              "id": "RU.C.C",
               "displayName": "Cost",
               "coordinates": [
                 "RU",
@@ -1246,7 +1246,7 @@
             {
               "children": [
                 {
-                  "systemName": "RU.C.B.Value",
+                  "id": "RU.C.B.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "RU",
@@ -1258,7 +1258,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "RU.C.B",
+              "id": "RU.C.B",
               "displayName": "Benefit",
               "coordinates": [
                 "RU",
@@ -1271,7 +1271,7 @@
             {
               "children": [
                 {
-                  "systemName": "RU.C.TotalGroup.Value",
+                  "id": "RU.C.TotalGroup.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "RU",
@@ -1283,7 +1283,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "RU.C.TotalGroup",
+              "id": "RU.C.TotalGroup",
               "displayName": " ",
               "coordinates": [
                 "RU",
@@ -1294,7 +1294,7 @@
               "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
             }
           ],
-          "systemName": "RU.C",
+          "id": "RU.C",
           "displayName": "Casualty",
           "coordinates": [
             "RU",
@@ -1308,7 +1308,7 @@
             {
               "children": [
                 {
-                  "systemName": "RU.H.E.Value",
+                  "id": "RU.H.E.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "RU",
@@ -1320,7 +1320,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "RU.H.E",
+              "id": "RU.H.E",
               "displayName": "Expenses",
               "coordinates": [
                 "RU",
@@ -1333,7 +1333,7 @@
             {
               "children": [
                 {
-                  "systemName": "RU.H.P.Value",
+                  "id": "RU.H.P.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "RU",
@@ -1345,7 +1345,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "RU.H.P",
+              "id": "RU.H.P",
               "displayName": "Premium",
               "coordinates": [
                 "RU",
@@ -1358,7 +1358,7 @@
             {
               "children": [
                 {
-                  "systemName": "RU.H.C.Value",
+                  "id": "RU.H.C.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "RU",
@@ -1370,7 +1370,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "RU.H.C",
+              "id": "RU.H.C",
               "displayName": "Cost",
               "coordinates": [
                 "RU",
@@ -1383,7 +1383,7 @@
             {
               "children": [
                 {
-                  "systemName": "RU.H.B.Value",
+                  "id": "RU.H.B.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "RU",
@@ -1395,7 +1395,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "RU.H.B",
+              "id": "RU.H.B",
               "displayName": "Benefit",
               "coordinates": [
                 "RU",
@@ -1408,7 +1408,7 @@
             {
               "children": [
                 {
-                  "systemName": "RU.H.TotalGroup.Value",
+                  "id": "RU.H.TotalGroup.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "RU",
@@ -1420,7 +1420,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "RU.H.TotalGroup",
+              "id": "RU.H.TotalGroup",
               "displayName": " ",
               "coordinates": [
                 "RU",
@@ -1431,7 +1431,7 @@
               "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
             }
           ],
-          "systemName": "RU.H",
+          "id": "RU.H",
           "displayName": "Health",
           "coordinates": [
             "RU",
@@ -1445,7 +1445,7 @@
             {
               "children": [
                 {
-                  "systemName": "RU.L.E.Value",
+                  "id": "RU.L.E.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "RU",
@@ -1457,7 +1457,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "RU.L.E",
+              "id": "RU.L.E",
               "displayName": "Expenses",
               "coordinates": [
                 "RU",
@@ -1470,7 +1470,7 @@
             {
               "children": [
                 {
-                  "systemName": "RU.L.P.Value",
+                  "id": "RU.L.P.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "RU",
@@ -1482,7 +1482,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "RU.L.P",
+              "id": "RU.L.P",
               "displayName": "Premium",
               "coordinates": [
                 "RU",
@@ -1495,7 +1495,7 @@
             {
               "children": [
                 {
-                  "systemName": "RU.L.C.Value",
+                  "id": "RU.L.C.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "RU",
@@ -1507,7 +1507,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "RU.L.C",
+              "id": "RU.L.C",
               "displayName": "Cost",
               "coordinates": [
                 "RU",
@@ -1520,7 +1520,7 @@
             {
               "children": [
                 {
-                  "systemName": "RU.L.B.Value",
+                  "id": "RU.L.B.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "RU",
@@ -1532,7 +1532,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "RU.L.B",
+              "id": "RU.L.B",
               "displayName": "Benefit",
               "coordinates": [
                 "RU",
@@ -1545,7 +1545,7 @@
             {
               "children": [
                 {
-                  "systemName": "RU.L.TotalGroup.Value",
+                  "id": "RU.L.TotalGroup.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "RU",
@@ -1557,7 +1557,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "RU.L.TotalGroup",
+              "id": "RU.L.TotalGroup",
               "displayName": " ",
               "coordinates": [
                 "RU",
@@ -1568,7 +1568,7 @@
               "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
             }
           ],
-          "systemName": "RU.L",
+          "id": "RU.L",
           "displayName": "Life",
           "coordinates": [
             "RU",
@@ -1582,7 +1582,7 @@
             {
               "children": [
                 {
-                  "systemName": "RU.P.E.Value",
+                  "id": "RU.P.E.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "RU",
@@ -1594,7 +1594,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "RU.P.E",
+              "id": "RU.P.E",
               "displayName": "Expenses",
               "coordinates": [
                 "RU",
@@ -1607,7 +1607,7 @@
             {
               "children": [
                 {
-                  "systemName": "RU.P.P.Value",
+                  "id": "RU.P.P.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "RU",
@@ -1619,7 +1619,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "RU.P.P",
+              "id": "RU.P.P",
               "displayName": "Premium",
               "coordinates": [
                 "RU",
@@ -1632,7 +1632,7 @@
             {
               "children": [
                 {
-                  "systemName": "RU.P.C.Value",
+                  "id": "RU.P.C.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "RU",
@@ -1644,7 +1644,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "RU.P.C",
+              "id": "RU.P.C",
               "displayName": "Cost",
               "coordinates": [
                 "RU",
@@ -1657,7 +1657,7 @@
             {
               "children": [
                 {
-                  "systemName": "RU.P.B.Value",
+                  "id": "RU.P.B.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "RU",
@@ -1669,7 +1669,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "RU.P.B",
+              "id": "RU.P.B",
               "displayName": "Benefit",
               "coordinates": [
                 "RU",
@@ -1682,7 +1682,7 @@
             {
               "children": [
                 {
-                  "systemName": "RU.P.TotalGroup.Value",
+                  "id": "RU.P.TotalGroup.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "RU",
@@ -1694,7 +1694,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "RU.P.TotalGroup",
+              "id": "RU.P.TotalGroup",
               "displayName": " ",
               "coordinates": [
                 "RU",
@@ -1705,7 +1705,7 @@
               "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
             }
           ],
-          "systemName": "RU.P",
+          "id": "RU.P",
           "displayName": "Property",
           "coordinates": [
             "RU",
@@ -1717,7 +1717,7 @@
         {
           "children": [
             {
-              "systemName": "RU.TotalGroup.Value",
+              "id": "RU.TotalGroup.Value",
               "displayName": "Value",
               "coordinates": [
                 "RU",
@@ -1728,7 +1728,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "RU.TotalGroup",
+          "id": "RU.TotalGroup",
           "displayName": " ",
           "coordinates": [
             "RU",
@@ -1738,7 +1738,7 @@
           "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
         }
       ],
-      "systemName": "RU",
+      "id": "RU",
       "displayName": "Russia",
       "coordinates": [
         "RU"
@@ -1753,7 +1753,7 @@
             {
               "children": [
                 {
-                  "systemName": "CH.C.E.Value",
+                  "id": "CH.C.E.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "CH",
@@ -1765,7 +1765,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "CH.C.E",
+              "id": "CH.C.E",
               "displayName": "Expenses",
               "coordinates": [
                 "CH",
@@ -1778,7 +1778,7 @@
             {
               "children": [
                 {
-                  "systemName": "CH.C.P.Value",
+                  "id": "CH.C.P.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "CH",
@@ -1790,7 +1790,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "CH.C.P",
+              "id": "CH.C.P",
               "displayName": "Premium",
               "coordinates": [
                 "CH",
@@ -1803,7 +1803,7 @@
             {
               "children": [
                 {
-                  "systemName": "CH.C.C.Value",
+                  "id": "CH.C.C.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "CH",
@@ -1815,7 +1815,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "CH.C.C",
+              "id": "CH.C.C",
               "displayName": "Cost",
               "coordinates": [
                 "CH",
@@ -1828,7 +1828,7 @@
             {
               "children": [
                 {
-                  "systemName": "CH.C.B.Value",
+                  "id": "CH.C.B.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "CH",
@@ -1840,7 +1840,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "CH.C.B",
+              "id": "CH.C.B",
               "displayName": "Benefit",
               "coordinates": [
                 "CH",
@@ -1853,7 +1853,7 @@
             {
               "children": [
                 {
-                  "systemName": "CH.C.TotalGroup.Value",
+                  "id": "CH.C.TotalGroup.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "CH",
@@ -1865,7 +1865,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "CH.C.TotalGroup",
+              "id": "CH.C.TotalGroup",
               "displayName": " ",
               "coordinates": [
                 "CH",
@@ -1876,7 +1876,7 @@
               "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
             }
           ],
-          "systemName": "CH.C",
+          "id": "CH.C",
           "displayName": "Casualty",
           "coordinates": [
             "CH",
@@ -1890,7 +1890,7 @@
             {
               "children": [
                 {
-                  "systemName": "CH.H.E.Value",
+                  "id": "CH.H.E.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "CH",
@@ -1902,7 +1902,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "CH.H.E",
+              "id": "CH.H.E",
               "displayName": "Expenses",
               "coordinates": [
                 "CH",
@@ -1915,7 +1915,7 @@
             {
               "children": [
                 {
-                  "systemName": "CH.H.P.Value",
+                  "id": "CH.H.P.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "CH",
@@ -1927,7 +1927,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "CH.H.P",
+              "id": "CH.H.P",
               "displayName": "Premium",
               "coordinates": [
                 "CH",
@@ -1940,7 +1940,7 @@
             {
               "children": [
                 {
-                  "systemName": "CH.H.C.Value",
+                  "id": "CH.H.C.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "CH",
@@ -1952,7 +1952,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "CH.H.C",
+              "id": "CH.H.C",
               "displayName": "Cost",
               "coordinates": [
                 "CH",
@@ -1965,7 +1965,7 @@
             {
               "children": [
                 {
-                  "systemName": "CH.H.B.Value",
+                  "id": "CH.H.B.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "CH",
@@ -1977,7 +1977,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "CH.H.B",
+              "id": "CH.H.B",
               "displayName": "Benefit",
               "coordinates": [
                 "CH",
@@ -1990,7 +1990,7 @@
             {
               "children": [
                 {
-                  "systemName": "CH.H.TotalGroup.Value",
+                  "id": "CH.H.TotalGroup.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "CH",
@@ -2002,7 +2002,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "CH.H.TotalGroup",
+              "id": "CH.H.TotalGroup",
               "displayName": " ",
               "coordinates": [
                 "CH",
@@ -2013,7 +2013,7 @@
               "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
             }
           ],
-          "systemName": "CH.H",
+          "id": "CH.H",
           "displayName": "Health",
           "coordinates": [
             "CH",
@@ -2027,7 +2027,7 @@
             {
               "children": [
                 {
-                  "systemName": "CH.L.E.Value",
+                  "id": "CH.L.E.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "CH",
@@ -2039,7 +2039,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "CH.L.E",
+              "id": "CH.L.E",
               "displayName": "Expenses",
               "coordinates": [
                 "CH",
@@ -2052,7 +2052,7 @@
             {
               "children": [
                 {
-                  "systemName": "CH.L.P.Value",
+                  "id": "CH.L.P.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "CH",
@@ -2064,7 +2064,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "CH.L.P",
+              "id": "CH.L.P",
               "displayName": "Premium",
               "coordinates": [
                 "CH",
@@ -2077,7 +2077,7 @@
             {
               "children": [
                 {
-                  "systemName": "CH.L.C.Value",
+                  "id": "CH.L.C.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "CH",
@@ -2089,7 +2089,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "CH.L.C",
+              "id": "CH.L.C",
               "displayName": "Cost",
               "coordinates": [
                 "CH",
@@ -2102,7 +2102,7 @@
             {
               "children": [
                 {
-                  "systemName": "CH.L.B.Value",
+                  "id": "CH.L.B.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "CH",
@@ -2114,7 +2114,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "CH.L.B",
+              "id": "CH.L.B",
               "displayName": "Benefit",
               "coordinates": [
                 "CH",
@@ -2127,7 +2127,7 @@
             {
               "children": [
                 {
-                  "systemName": "CH.L.TotalGroup.Value",
+                  "id": "CH.L.TotalGroup.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "CH",
@@ -2139,7 +2139,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "CH.L.TotalGroup",
+              "id": "CH.L.TotalGroup",
               "displayName": " ",
               "coordinates": [
                 "CH",
@@ -2150,7 +2150,7 @@
               "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
             }
           ],
-          "systemName": "CH.L",
+          "id": "CH.L",
           "displayName": "Life",
           "coordinates": [
             "CH",
@@ -2164,7 +2164,7 @@
             {
               "children": [
                 {
-                  "systemName": "CH.P.E.Value",
+                  "id": "CH.P.E.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "CH",
@@ -2176,7 +2176,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "CH.P.E",
+              "id": "CH.P.E",
               "displayName": "Expenses",
               "coordinates": [
                 "CH",
@@ -2189,7 +2189,7 @@
             {
               "children": [
                 {
-                  "systemName": "CH.P.P.Value",
+                  "id": "CH.P.P.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "CH",
@@ -2201,7 +2201,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "CH.P.P",
+              "id": "CH.P.P",
               "displayName": "Premium",
               "coordinates": [
                 "CH",
@@ -2214,7 +2214,7 @@
             {
               "children": [
                 {
-                  "systemName": "CH.P.C.Value",
+                  "id": "CH.P.C.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "CH",
@@ -2226,7 +2226,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "CH.P.C",
+              "id": "CH.P.C",
               "displayName": "Cost",
               "coordinates": [
                 "CH",
@@ -2239,7 +2239,7 @@
             {
               "children": [
                 {
-                  "systemName": "CH.P.B.Value",
+                  "id": "CH.P.B.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "CH",
@@ -2251,7 +2251,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "CH.P.B",
+              "id": "CH.P.B",
               "displayName": "Benefit",
               "coordinates": [
                 "CH",
@@ -2264,7 +2264,7 @@
             {
               "children": [
                 {
-                  "systemName": "CH.P.TotalGroup.Value",
+                  "id": "CH.P.TotalGroup.Value",
                   "displayName": "Value",
                   "coordinates": [
                     "CH",
@@ -2276,7 +2276,7 @@
                   "$type": "MeshWeaver.Pivot.Models.Column"
                 }
               ],
-              "systemName": "CH.P.TotalGroup",
+              "id": "CH.P.TotalGroup",
               "displayName": " ",
               "coordinates": [
                 "CH",
@@ -2287,7 +2287,7 @@
               "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
             }
           ],
-          "systemName": "CH.P",
+          "id": "CH.P",
           "displayName": "Property",
           "coordinates": [
             "CH",
@@ -2299,7 +2299,7 @@
         {
           "children": [
             {
-              "systemName": "CH.TotalGroup.Value",
+              "id": "CH.TotalGroup.Value",
               "displayName": "Value",
               "coordinates": [
                 "CH",
@@ -2310,7 +2310,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "CH.TotalGroup",
+          "id": "CH.TotalGroup",
           "displayName": " ",
           "coordinates": [
             "CH",
@@ -2320,7 +2320,7 @@
           "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
         }
       ],
-      "systemName": "CH",
+      "id": "CH",
       "displayName": "Switzerland",
       "coordinates": [
         "CH"
@@ -2335,7 +2335,7 @@
         "coordinates": [
           "EUR"
         ],
-        "systemName": "EUR",
+        "id": "EUR",
         "displayName": "Euro",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2641,7 +2641,7 @@
         "coordinates": [
           "RUB"
         ],
-        "systemName": "RUB",
+        "id": "RUB",
         "displayName": "Russian rouble",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2947,7 +2947,7 @@
         "coordinates": [
           "CHF"
         ],
-        "systemName": "CHF",
+        "id": "CHF",
         "displayName": "Swiss Franc",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3253,7 +3253,7 @@
         "coordinates": [
           "USD"
         ],
-        "systemName": "USD",
+        "id": "USD",
         "displayName": "US Dollar",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"

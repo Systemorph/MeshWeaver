@@ -1,7 +1,7 @@
 {
   "columns": [
     {
-      "systemName": "Value",
+      "id": "Value",
       "displayName": "Value",
       "coordinates": [
         "Value"
@@ -16,7 +16,7 @@
         "coordinates": [
           "a"
         ],
-        "systemName": "a",
+        "id": "a",
         "displayName": "a",
         "grouperName": "Dim1",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -31,7 +31,7 @@
         "coordinates": [
           "c"
         ],
-        "systemName": "c",
+        "id": "c",
         "displayName": "c",
         "grouperName": "Dim1",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -46,7 +46,7 @@
         "coordinates": [
           "NullGroup"
         ],
-        "systemName": "NullGroup",
+        "id": "NullGroup",
         "displayName": " ",
         "grouperName": "Dim1",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"

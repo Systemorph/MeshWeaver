@@ -1,7 +1,7 @@
 {
   "columns": [
     {
-      "systemName": "Value",
+      "id": "Value",
       "displayName": "Value",
       "coordinates": [
         "Value"
@@ -16,7 +16,7 @@
         "coordinates": [
           "EUR"
         ],
-        "systemName": "EUR",
+        "id": "EUR",
         "displayName": "Euro",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -29,7 +29,7 @@
           "EUR",
           "Value"
         ],
-        "systemName": "EUR.Value",
+        "id": "EUR.Value",
         "displayName": "Value",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -44,7 +44,7 @@
         "coordinates": [
           "RUB"
         ],
-        "systemName": "RUB",
+        "id": "RUB",
         "displayName": "Russian rouble",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -57,7 +57,7 @@
           "RUB",
           "Value"
         ],
-        "systemName": "RUB.Value",
+        "id": "RUB.Value",
         "displayName": "Value",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -72,7 +72,7 @@
         "coordinates": [
           "CHF"
         ],
-        "systemName": "CHF",
+        "id": "CHF",
         "displayName": "Swiss Franc",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -85,7 +85,7 @@
           "CHF",
           "Value"
         ],
-        "systemName": "CHF.Value",
+        "id": "CHF.Value",
         "displayName": "Value",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -100,7 +100,7 @@
         "coordinates": [
           "USD"
         ],
-        "systemName": "USD",
+        "id": "USD",
         "displayName": "US Dollar",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -113,7 +113,7 @@
           "USD",
           "Value"
         ],
-        "systemName": "USD.Value",
+        "id": "USD.Value",
         "displayName": "Value",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"

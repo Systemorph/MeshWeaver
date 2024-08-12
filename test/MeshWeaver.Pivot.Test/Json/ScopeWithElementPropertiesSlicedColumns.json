@@ -3,7 +3,7 @@
     {
       "children": [
         {
-          "systemName": "P.Value",
+          "id": "P.Value",
           "displayName": "Value",
           "coordinates": [
             "P",
@@ -13,7 +13,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "P",
+      "id": "P",
       "displayName": "Premium",
       "coordinates": [
         "P"
@@ -28,7 +28,7 @@
         "coordinates": [
           "BoP"
         ],
-        "systemName": "BoP",
+        "id": "BoP",
         "displayName": "Beginning of Period",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -46,7 +46,7 @@
           "BoP",
           "CHF"
         ],
-        "systemName": "BoP.CHF",
+        "id": "BoP.CHF",
         "displayName": "Swiss Franc",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -63,7 +63,7 @@
         "coordinates": [
           "Delta"
         ],
-        "systemName": "Delta",
+        "id": "Delta",
         "displayName": "Delta",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -81,7 +81,7 @@
           "Delta",
           "CHF"
         ],
-        "systemName": "Delta.CHF",
+        "id": "Delta.CHF",
         "displayName": "Swiss Franc",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -98,7 +98,7 @@
         "coordinates": [
           "EoP"
         ],
-        "systemName": "EoP",
+        "id": "EoP",
         "displayName": "End of Period",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -116,7 +116,7 @@
           "EoP",
           "CHF"
         ],
-        "systemName": "EoP.CHF",
+        "id": "EoP.CHF",
         "displayName": "Swiss Franc",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"

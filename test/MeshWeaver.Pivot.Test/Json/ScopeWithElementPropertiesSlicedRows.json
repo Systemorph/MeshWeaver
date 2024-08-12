@@ -3,7 +3,7 @@
     {
       "children": [
         {
-          "systemName": "CHF.Value",
+          "id": "CHF.Value",
           "displayName": "Value",
           "coordinates": [
             "CHF",
@@ -13,7 +13,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "CHF",
+      "id": "CHF",
       "displayName": "Swiss Franc",
       "coordinates": [
         "CHF"
@@ -28,7 +28,7 @@
         "coordinates": [
           "BoP"
         ],
-        "systemName": "BoP",
+        "id": "BoP",
         "displayName": "Beginning of Period",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -46,7 +46,7 @@
           "BoP",
           "P"
         ],
-        "systemName": "BoP.P",
+        "id": "BoP.P",
         "displayName": "Premium",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -65,7 +65,7 @@
           "P",
           "2021"
         ],
-        "systemName": "BoP.P.2021",
+        "id": "BoP.P.2021",
         "displayName": "2021",
         "grouperName": "Year",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -82,7 +82,7 @@
         "coordinates": [
           "Delta"
         ],
-        "systemName": "Delta",
+        "id": "Delta",
         "displayName": "Delta",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -100,7 +100,7 @@
           "Delta",
           "P"
         ],
-        "systemName": "Delta.P",
+        "id": "Delta.P",
         "displayName": "Premium",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -119,7 +119,7 @@
           "P",
           "2021"
         ],
-        "systemName": "Delta.P.2021",
+        "id": "Delta.P.2021",
         "displayName": "2021",
         "grouperName": "Year",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -136,7 +136,7 @@
         "coordinates": [
           "EoP"
         ],
-        "systemName": "EoP",
+        "id": "EoP",
         "displayName": "End of Period",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -154,7 +154,7 @@
           "EoP",
           "P"
         ],
-        "systemName": "EoP.P",
+        "id": "EoP.P",
         "displayName": "Premium",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -173,7 +173,7 @@
           "P",
           "2021"
         ],
-        "systemName": "EoP.P.2021",
+        "id": "EoP.P.2021",
         "displayName": "2021",
         "grouperName": "Year",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"

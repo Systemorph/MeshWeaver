@@ -1,7 +1,7 @@
 {
   "columns": [
     {
-      "systemName": "Value",
+      "id": "Value",
       "displayName": "Value",
       "coordinates": [
         "Value"
@@ -16,7 +16,7 @@
         "coordinates": [
           "C"
         ],
-        "systemName": "C",
+        "id": "C",
         "displayName": "C",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -32,7 +32,7 @@
           "C",
           "B"
         ],
-        "systemName": "C.B",
+        "id": "C.B",
         "displayName": "B",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -48,7 +48,7 @@
           "C",
           "C"
         ],
-        "systemName": "C.C",
+        "id": "C.C",
         "displayName": "C",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -64,7 +64,7 @@
           "C",
           "E"
         ],
-        "systemName": "C.E",
+        "id": "C.E",
         "displayName": "E",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -80,7 +80,7 @@
           "C",
           "P"
         ],
-        "systemName": "C.P",
+        "id": "C.P",
         "displayName": "P",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -95,7 +95,7 @@
         "coordinates": [
           "H"
         ],
-        "systemName": "H",
+        "id": "H",
         "displayName": "H",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -111,7 +111,7 @@
           "H",
           "B"
         ],
-        "systemName": "H.B",
+        "id": "H.B",
         "displayName": "B",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -127,7 +127,7 @@
           "H",
           "C"
         ],
-        "systemName": "H.C",
+        "id": "H.C",
         "displayName": "C",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -143,7 +143,7 @@
           "H",
           "E"
         ],
-        "systemName": "H.E",
+        "id": "H.E",
         "displayName": "E",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -159,7 +159,7 @@
           "H",
           "P"
         ],
-        "systemName": "H.P",
+        "id": "H.P",
         "displayName": "P",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -174,7 +174,7 @@
         "coordinates": [
           "L"
         ],
-        "systemName": "L",
+        "id": "L",
         "displayName": "L",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -190,7 +190,7 @@
           "L",
           "B"
         ],
-        "systemName": "L.B",
+        "id": "L.B",
         "displayName": "B",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -206,7 +206,7 @@
           "L",
           "C"
         ],
-        "systemName": "L.C",
+        "id": "L.C",
         "displayName": "C",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -222,7 +222,7 @@
           "L",
           "E"
         ],
-        "systemName": "L.E",
+        "id": "L.E",
         "displayName": "E",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -238,7 +238,7 @@
           "L",
           "P"
         ],
-        "systemName": "L.P",
+        "id": "L.P",
         "displayName": "P",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -253,7 +253,7 @@
         "coordinates": [
           "P"
         ],
-        "systemName": "P",
+        "id": "P",
         "displayName": "P",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -269,7 +269,7 @@
           "P",
           "B"
         ],
-        "systemName": "P.B",
+        "id": "P.B",
         "displayName": "B",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -285,7 +285,7 @@
           "P",
           "C"
         ],
-        "systemName": "P.C",
+        "id": "P.C",
         "displayName": "C",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -301,7 +301,7 @@
           "P",
           "E"
         ],
-        "systemName": "P.E",
+        "id": "P.E",
         "displayName": "E",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -317,7 +317,7 @@
           "P",
           "P"
         ],
-        "systemName": "P.P",
+        "id": "P.P",
         "displayName": "P",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"

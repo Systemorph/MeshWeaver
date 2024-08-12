@@ -3,7 +3,7 @@
     {
       "children": [
         {
-          "systemName": "E.Value",
+          "id": "E.Value",
           "displayName": "Value",
           "coordinates": [
             "E",
@@ -13,7 +13,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "E",
+      "id": "E",
       "displayName": "Expenses",
       "coordinates": [
         "E"
@@ -24,7 +24,7 @@
     {
       "children": [
         {
-          "systemName": "P.Value",
+          "id": "P.Value",
           "displayName": "Value",
           "coordinates": [
             "P",
@@ -34,7 +34,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "P",
+      "id": "P",
       "displayName": "Premium",
       "coordinates": [
         "P"
@@ -45,7 +45,7 @@
     {
       "children": [
         {
-          "systemName": "C.Value",
+          "id": "C.Value",
           "displayName": "Value",
           "coordinates": [
             "C",
@@ -55,7 +55,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "C",
+      "id": "C",
       "displayName": "Cost",
       "coordinates": [
         "C"
@@ -66,7 +66,7 @@
     {
       "children": [
         {
-          "systemName": "B.Value",
+          "id": "B.Value",
           "displayName": "Value",
           "coordinates": [
             "B",
@@ -76,7 +76,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "B",
+      "id": "B",
       "displayName": "Benefit",
       "coordinates": [
         "B"
@@ -91,7 +91,7 @@
         "coordinates": [
           "CHF"
         ],
-        "systemName": "CHF",
+        "id": "CHF",
         "displayName": "Swiss Franc",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -118,7 +118,7 @@
           "CHF",
           "D"
         ],
-        "systemName": "CHF.D",
+        "id": "CHF.D",
         "displayName": "Germany",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -146,7 +146,7 @@
           "D",
           "C"
         ],
-        "systemName": "CHF.D.C",
+        "id": "CHF.D.C",
         "displayName": "Casualty",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -174,7 +174,7 @@
           "D",
           "H"
         ],
-        "systemName": "CHF.D.H",
+        "id": "CHF.D.H",
         "displayName": "Health",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -202,7 +202,7 @@
           "D",
           "L"
         ],
-        "systemName": "CHF.D.L",
+        "id": "CHF.D.L",
         "displayName": "Life",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -230,7 +230,7 @@
           "D",
           "P"
         ],
-        "systemName": "CHF.D.P",
+        "id": "CHF.D.P",
         "displayName": "Property",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -257,7 +257,7 @@
           "CHF",
           "PT"
         ],
-        "systemName": "CHF.PT",
+        "id": "CHF.PT",
         "displayName": "Portugal",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -285,7 +285,7 @@
           "PT",
           "C"
         ],
-        "systemName": "CHF.PT.C",
+        "id": "CHF.PT.C",
         "displayName": "Casualty",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -313,7 +313,7 @@
           "PT",
           "H"
         ],
-        "systemName": "CHF.PT.H",
+        "id": "CHF.PT.H",
         "displayName": "Health",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -341,7 +341,7 @@
           "PT",
           "L"
         ],
-        "systemName": "CHF.PT.L",
+        "id": "CHF.PT.L",
         "displayName": "Life",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -369,7 +369,7 @@
           "PT",
           "P"
         ],
-        "systemName": "CHF.PT.P",
+        "id": "CHF.PT.P",
         "displayName": "Property",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -396,7 +396,7 @@
           "CHF",
           "RU"
         ],
-        "systemName": "CHF.RU",
+        "id": "CHF.RU",
         "displayName": "Russia",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -424,7 +424,7 @@
           "RU",
           "C"
         ],
-        "systemName": "CHF.RU.C",
+        "id": "CHF.RU.C",
         "displayName": "Casualty",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -452,7 +452,7 @@
           "RU",
           "H"
         ],
-        "systemName": "CHF.RU.H",
+        "id": "CHF.RU.H",
         "displayName": "Health",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -480,7 +480,7 @@
           "RU",
           "L"
         ],
-        "systemName": "CHF.RU.L",
+        "id": "CHF.RU.L",
         "displayName": "Life",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -508,7 +508,7 @@
           "RU",
           "P"
         ],
-        "systemName": "CHF.RU.P",
+        "id": "CHF.RU.P",
         "displayName": "Property",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -535,7 +535,7 @@
           "CHF",
           "CH"
         ],
-        "systemName": "CHF.CH",
+        "id": "CHF.CH",
         "displayName": "Switzerland",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -563,7 +563,7 @@
           "CH",
           "C"
         ],
-        "systemName": "CHF.CH.C",
+        "id": "CHF.CH.C",
         "displayName": "Casualty",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -591,7 +591,7 @@
           "CH",
           "H"
         ],
-        "systemName": "CHF.CH.H",
+        "id": "CHF.CH.H",
         "displayName": "Health",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -619,7 +619,7 @@
           "CH",
           "L"
         ],
-        "systemName": "CHF.CH.L",
+        "id": "CHF.CH.L",
         "displayName": "Life",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -647,7 +647,7 @@
           "CH",
           "P"
         ],
-        "systemName": "CHF.CH.P",
+        "id": "CHF.CH.P",
         "displayName": "Property",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"

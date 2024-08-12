@@ -1,7 +1,7 @@
 {
   "columns": [
     {
-      "systemName": "Value",
+      "id": "Value",
       "displayName": "Value",
       "coordinates": [
         "Value"
@@ -16,7 +16,7 @@
         "coordinates": [
           "A1"
         ],
-        "systemName": "A1",
+        "id": "A1",
         "displayName": "A 1",
         "grouperName": "DimA0",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -32,7 +32,7 @@
           "A1",
           "A11"
         ],
-        "systemName": "A1.A11",
+        "id": "A1.A11",
         "displayName": "A 11",
         "grouperName": "DimA1",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -49,7 +49,7 @@
           "A11",
           "A111"
         ],
-        "systemName": "A1.A11.A111",
+        "id": "A1.A11.A111",
         "displayName": "A 111",
         "grouperName": "DimA2",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -66,7 +66,7 @@
           "A11",
           "A112"
         ],
-        "systemName": "A1.A11.A112",
+        "id": "A1.A11.A112",
         "displayName": "A 112",
         "grouperName": "DimA2",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -82,7 +82,7 @@
           "A1",
           "A12"
         ],
-        "systemName": "A1.A12",
+        "id": "A1.A12",
         "displayName": "A 12",
         "grouperName": "DimA1",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -99,7 +99,7 @@
           "A12",
           "NullGroup"
         ],
-        "systemName": "A1.A12.NullGroup",
+        "id": "A1.A12.NullGroup",
         "displayName": " ",
         "grouperName": "DimA2",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -114,7 +114,7 @@
         "coordinates": [
           "A2"
         ],
-        "systemName": "A2",
+        "id": "A2",
         "displayName": "A 2",
         "grouperName": "DimA0",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -130,7 +130,7 @@
           "A2",
           "NullGroup"
         ],
-        "systemName": "A2.NullGroup",
+        "id": "A2.NullGroup",
         "displayName": " ",
         "grouperName": "DimA1",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -147,7 +147,7 @@
           "NullGroup",
           "NullGroup"
         ],
-        "systemName": "A2.NullGroup.NullGroup",
+        "id": "A2.NullGroup.NullGroup",
         "displayName": " ",
         "grouperName": "DimA2",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"

@@ -1,7 +1,7 @@
 {
   "columns": [
     {
-      "systemName": "Value",
+      "id": "Value",
       "displayName": "Value",
       "coordinates": [
         "Value"
@@ -16,7 +16,7 @@
         "coordinates": [
           "EUR"
         ],
-        "systemName": "EUR",
+        "id": "EUR",
         "displayName": "Euro",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -32,7 +32,7 @@
           "EUR",
           "D"
         ],
-        "systemName": "EUR.D",
+        "id": "EUR.D",
         "displayName": "Germany",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -49,7 +49,7 @@
           "D",
           "C"
         ],
-        "systemName": "EUR.D.C",
+        "id": "EUR.D.C",
         "displayName": "Casualty",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -67,7 +67,7 @@
           "C",
           "B"
         ],
-        "systemName": "EUR.D.C.B",
+        "id": "EUR.D.C.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -85,7 +85,7 @@
           "C",
           "D"
         ],
-        "systemName": "EUR.D.C.D",
+        "id": "EUR.D.C.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -102,7 +102,7 @@
           "D",
           "H"
         ],
-        "systemName": "EUR.D.H",
+        "id": "EUR.D.H",
         "displayName": "Health",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -120,7 +120,7 @@
           "H",
           "B"
         ],
-        "systemName": "EUR.D.H.B",
+        "id": "EUR.D.H.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -138,7 +138,7 @@
           "H",
           "D"
         ],
-        "systemName": "EUR.D.H.D",
+        "id": "EUR.D.H.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -155,7 +155,7 @@
           "D",
           "L"
         ],
-        "systemName": "EUR.D.L",
+        "id": "EUR.D.L",
         "displayName": "Life",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -173,7 +173,7 @@
           "L",
           "B"
         ],
-        "systemName": "EUR.D.L.B",
+        "id": "EUR.D.L.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -191,7 +191,7 @@
           "L",
           "D"
         ],
-        "systemName": "EUR.D.L.D",
+        "id": "EUR.D.L.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -208,7 +208,7 @@
           "D",
           "P"
         ],
-        "systemName": "EUR.D.P",
+        "id": "EUR.D.P",
         "displayName": "Property",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -226,7 +226,7 @@
           "P",
           "B"
         ],
-        "systemName": "EUR.D.P.B",
+        "id": "EUR.D.P.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -244,7 +244,7 @@
           "P",
           "D"
         ],
-        "systemName": "EUR.D.P.D",
+        "id": "EUR.D.P.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -260,7 +260,7 @@
           "EUR",
           "PT"
         ],
-        "systemName": "EUR.PT",
+        "id": "EUR.PT",
         "displayName": "Portugal",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -277,7 +277,7 @@
           "PT",
           "C"
         ],
-        "systemName": "EUR.PT.C",
+        "id": "EUR.PT.C",
         "displayName": "Casualty",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -295,7 +295,7 @@
           "C",
           "B"
         ],
-        "systemName": "EUR.PT.C.B",
+        "id": "EUR.PT.C.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -313,7 +313,7 @@
           "C",
           "D"
         ],
-        "systemName": "EUR.PT.C.D",
+        "id": "EUR.PT.C.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -330,7 +330,7 @@
           "PT",
           "H"
         ],
-        "systemName": "EUR.PT.H",
+        "id": "EUR.PT.H",
         "displayName": "Health",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -348,7 +348,7 @@
           "H",
           "B"
         ],
-        "systemName": "EUR.PT.H.B",
+        "id": "EUR.PT.H.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -366,7 +366,7 @@
           "H",
           "D"
         ],
-        "systemName": "EUR.PT.H.D",
+        "id": "EUR.PT.H.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -383,7 +383,7 @@
           "PT",
           "L"
         ],
-        "systemName": "EUR.PT.L",
+        "id": "EUR.PT.L",
         "displayName": "Life",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -401,7 +401,7 @@
           "L",
           "B"
         ],
-        "systemName": "EUR.PT.L.B",
+        "id": "EUR.PT.L.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -419,7 +419,7 @@
           "L",
           "D"
         ],
-        "systemName": "EUR.PT.L.D",
+        "id": "EUR.PT.L.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -436,7 +436,7 @@
           "PT",
           "P"
         ],
-        "systemName": "EUR.PT.P",
+        "id": "EUR.PT.P",
         "displayName": "Property",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -454,7 +454,7 @@
           "P",
           "B"
         ],
-        "systemName": "EUR.PT.P.B",
+        "id": "EUR.PT.P.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -472,7 +472,7 @@
           "P",
           "D"
         ],
-        "systemName": "EUR.PT.P.D",
+        "id": "EUR.PT.P.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -488,7 +488,7 @@
           "EUR",
           "RU"
         ],
-        "systemName": "EUR.RU",
+        "id": "EUR.RU",
         "displayName": "Russia",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -505,7 +505,7 @@
           "RU",
           "C"
         ],
-        "systemName": "EUR.RU.C",
+        "id": "EUR.RU.C",
         "displayName": "Casualty",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -523,7 +523,7 @@
           "C",
           "B"
         ],
-        "systemName": "EUR.RU.C.B",
+        "id": "EUR.RU.C.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -541,7 +541,7 @@
           "C",
           "D"
         ],
-        "systemName": "EUR.RU.C.D",
+        "id": "EUR.RU.C.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -558,7 +558,7 @@
           "RU",
           "H"
         ],
-        "systemName": "EUR.RU.H",
+        "id": "EUR.RU.H",
         "displayName": "Health",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -576,7 +576,7 @@
           "H",
           "B"
         ],
-        "systemName": "EUR.RU.H.B",
+        "id": "EUR.RU.H.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -594,7 +594,7 @@
           "H",
           "D"
         ],
-        "systemName": "EUR.RU.H.D",
+        "id": "EUR.RU.H.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -611,7 +611,7 @@
           "RU",
           "L"
         ],
-        "systemName": "EUR.RU.L",
+        "id": "EUR.RU.L",
         "displayName": "Life",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -629,7 +629,7 @@
           "L",
           "B"
         ],
-        "systemName": "EUR.RU.L.B",
+        "id": "EUR.RU.L.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -647,7 +647,7 @@
           "L",
           "D"
         ],
-        "systemName": "EUR.RU.L.D",
+        "id": "EUR.RU.L.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -664,7 +664,7 @@
           "RU",
           "P"
         ],
-        "systemName": "EUR.RU.P",
+        "id": "EUR.RU.P",
         "displayName": "Property",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -682,7 +682,7 @@
           "P",
           "B"
         ],
-        "systemName": "EUR.RU.P.B",
+        "id": "EUR.RU.P.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -700,7 +700,7 @@
           "P",
           "D"
         ],
-        "systemName": "EUR.RU.P.D",
+        "id": "EUR.RU.P.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -716,7 +716,7 @@
           "EUR",
           "CH"
         ],
-        "systemName": "EUR.CH",
+        "id": "EUR.CH",
         "displayName": "Switzerland",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -733,7 +733,7 @@
           "CH",
           "C"
         ],
-        "systemName": "EUR.CH.C",
+        "id": "EUR.CH.C",
         "displayName": "Casualty",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -751,7 +751,7 @@
           "C",
           "B"
         ],
-        "systemName": "EUR.CH.C.B",
+        "id": "EUR.CH.C.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -769,7 +769,7 @@
           "C",
           "D"
         ],
-        "systemName": "EUR.CH.C.D",
+        "id": "EUR.CH.C.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -786,7 +786,7 @@
           "CH",
           "H"
         ],
-        "systemName": "EUR.CH.H",
+        "id": "EUR.CH.H",
         "displayName": "Health",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -804,7 +804,7 @@
           "H",
           "B"
         ],
-        "systemName": "EUR.CH.H.B",
+        "id": "EUR.CH.H.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -822,7 +822,7 @@
           "H",
           "D"
         ],
-        "systemName": "EUR.CH.H.D",
+        "id": "EUR.CH.H.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -839,7 +839,7 @@
           "CH",
           "L"
         ],
-        "systemName": "EUR.CH.L",
+        "id": "EUR.CH.L",
         "displayName": "Life",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -857,7 +857,7 @@
           "L",
           "B"
         ],
-        "systemName": "EUR.CH.L.B",
+        "id": "EUR.CH.L.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -875,7 +875,7 @@
           "L",
           "D"
         ],
-        "systemName": "EUR.CH.L.D",
+        "id": "EUR.CH.L.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -892,7 +892,7 @@
           "CH",
           "P"
         ],
-        "systemName": "EUR.CH.P",
+        "id": "EUR.CH.P",
         "displayName": "Property",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -910,7 +910,7 @@
           "P",
           "B"
         ],
-        "systemName": "EUR.CH.P.B",
+        "id": "EUR.CH.P.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -928,7 +928,7 @@
           "P",
           "D"
         ],
-        "systemName": "EUR.CH.P.D",
+        "id": "EUR.CH.P.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -943,7 +943,7 @@
         "coordinates": [
           "RUB"
         ],
-        "systemName": "RUB",
+        "id": "RUB",
         "displayName": "Russian rouble",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -959,7 +959,7 @@
           "RUB",
           "D"
         ],
-        "systemName": "RUB.D",
+        "id": "RUB.D",
         "displayName": "Germany",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -976,7 +976,7 @@
           "D",
           "C"
         ],
-        "systemName": "RUB.D.C",
+        "id": "RUB.D.C",
         "displayName": "Casualty",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -994,7 +994,7 @@
           "C",
           "B"
         ],
-        "systemName": "RUB.D.C.B",
+        "id": "RUB.D.C.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1012,7 +1012,7 @@
           "C",
           "D"
         ],
-        "systemName": "RUB.D.C.D",
+        "id": "RUB.D.C.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1029,7 +1029,7 @@
           "D",
           "H"
         ],
-        "systemName": "RUB.D.H",
+        "id": "RUB.D.H",
         "displayName": "Health",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1047,7 +1047,7 @@
           "H",
           "B"
         ],
-        "systemName": "RUB.D.H.B",
+        "id": "RUB.D.H.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1065,7 +1065,7 @@
           "H",
           "D"
         ],
-        "systemName": "RUB.D.H.D",
+        "id": "RUB.D.H.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1082,7 +1082,7 @@
           "D",
           "L"
         ],
-        "systemName": "RUB.D.L",
+        "id": "RUB.D.L",
         "displayName": "Life",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1100,7 +1100,7 @@
           "L",
           "B"
         ],
-        "systemName": "RUB.D.L.B",
+        "id": "RUB.D.L.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1118,7 +1118,7 @@
           "L",
           "D"
         ],
-        "systemName": "RUB.D.L.D",
+        "id": "RUB.D.L.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1135,7 +1135,7 @@
           "D",
           "P"
         ],
-        "systemName": "RUB.D.P",
+        "id": "RUB.D.P",
         "displayName": "Property",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1153,7 +1153,7 @@
           "P",
           "B"
         ],
-        "systemName": "RUB.D.P.B",
+        "id": "RUB.D.P.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1171,7 +1171,7 @@
           "P",
           "D"
         ],
-        "systemName": "RUB.D.P.D",
+        "id": "RUB.D.P.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1187,7 +1187,7 @@
           "RUB",
           "PT"
         ],
-        "systemName": "RUB.PT",
+        "id": "RUB.PT",
         "displayName": "Portugal",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1204,7 +1204,7 @@
           "PT",
           "C"
         ],
-        "systemName": "RUB.PT.C",
+        "id": "RUB.PT.C",
         "displayName": "Casualty",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1222,7 +1222,7 @@
           "C",
           "B"
         ],
-        "systemName": "RUB.PT.C.B",
+        "id": "RUB.PT.C.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1240,7 +1240,7 @@
           "C",
           "D"
         ],
-        "systemName": "RUB.PT.C.D",
+        "id": "RUB.PT.C.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1257,7 +1257,7 @@
           "PT",
           "H"
         ],
-        "systemName": "RUB.PT.H",
+        "id": "RUB.PT.H",
         "displayName": "Health",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1275,7 +1275,7 @@
           "H",
           "B"
         ],
-        "systemName": "RUB.PT.H.B",
+        "id": "RUB.PT.H.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1293,7 +1293,7 @@
           "H",
           "D"
         ],
-        "systemName": "RUB.PT.H.D",
+        "id": "RUB.PT.H.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1310,7 +1310,7 @@
           "PT",
           "L"
         ],
-        "systemName": "RUB.PT.L",
+        "id": "RUB.PT.L",
         "displayName": "Life",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1328,7 +1328,7 @@
           "L",
           "B"
         ],
-        "systemName": "RUB.PT.L.B",
+        "id": "RUB.PT.L.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1346,7 +1346,7 @@
           "L",
           "D"
         ],
-        "systemName": "RUB.PT.L.D",
+        "id": "RUB.PT.L.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1363,7 +1363,7 @@
           "PT",
           "P"
         ],
-        "systemName": "RUB.PT.P",
+        "id": "RUB.PT.P",
         "displayName": "Property",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1381,7 +1381,7 @@
           "P",
           "B"
         ],
-        "systemName": "RUB.PT.P.B",
+        "id": "RUB.PT.P.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1399,7 +1399,7 @@
           "P",
           "D"
         ],
-        "systemName": "RUB.PT.P.D",
+        "id": "RUB.PT.P.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1415,7 +1415,7 @@
           "RUB",
           "RU"
         ],
-        "systemName": "RUB.RU",
+        "id": "RUB.RU",
         "displayName": "Russia",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1432,7 +1432,7 @@
           "RU",
           "C"
         ],
-        "systemName": "RUB.RU.C",
+        "id": "RUB.RU.C",
         "displayName": "Casualty",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1450,7 +1450,7 @@
           "C",
           "B"
         ],
-        "systemName": "RUB.RU.C.B",
+        "id": "RUB.RU.C.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1468,7 +1468,7 @@
           "C",
           "D"
         ],
-        "systemName": "RUB.RU.C.D",
+        "id": "RUB.RU.C.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1485,7 +1485,7 @@
           "RU",
           "H"
         ],
-        "systemName": "RUB.RU.H",
+        "id": "RUB.RU.H",
         "displayName": "Health",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1503,7 +1503,7 @@
           "H",
           "B"
         ],
-        "systemName": "RUB.RU.H.B",
+        "id": "RUB.RU.H.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1521,7 +1521,7 @@
           "H",
           "D"
         ],
-        "systemName": "RUB.RU.H.D",
+        "id": "RUB.RU.H.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1538,7 +1538,7 @@
           "RU",
           "L"
         ],
-        "systemName": "RUB.RU.L",
+        "id": "RUB.RU.L",
         "displayName": "Life",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1556,7 +1556,7 @@
           "L",
           "B"
         ],
-        "systemName": "RUB.RU.L.B",
+        "id": "RUB.RU.L.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1574,7 +1574,7 @@
           "L",
           "D"
         ],
-        "systemName": "RUB.RU.L.D",
+        "id": "RUB.RU.L.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1591,7 +1591,7 @@
           "RU",
           "P"
         ],
-        "systemName": "RUB.RU.P",
+        "id": "RUB.RU.P",
         "displayName": "Property",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1609,7 +1609,7 @@
           "P",
           "B"
         ],
-        "systemName": "RUB.RU.P.B",
+        "id": "RUB.RU.P.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1627,7 +1627,7 @@
           "P",
           "D"
         ],
-        "systemName": "RUB.RU.P.D",
+        "id": "RUB.RU.P.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1643,7 +1643,7 @@
           "RUB",
           "CH"
         ],
-        "systemName": "RUB.CH",
+        "id": "RUB.CH",
         "displayName": "Switzerland",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1660,7 +1660,7 @@
           "CH",
           "C"
         ],
-        "systemName": "RUB.CH.C",
+        "id": "RUB.CH.C",
         "displayName": "Casualty",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1678,7 +1678,7 @@
           "C",
           "B"
         ],
-        "systemName": "RUB.CH.C.B",
+        "id": "RUB.CH.C.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1696,7 +1696,7 @@
           "C",
           "D"
         ],
-        "systemName": "RUB.CH.C.D",
+        "id": "RUB.CH.C.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1713,7 +1713,7 @@
           "CH",
           "H"
         ],
-        "systemName": "RUB.CH.H",
+        "id": "RUB.CH.H",
         "displayName": "Health",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1731,7 +1731,7 @@
           "H",
           "B"
         ],
-        "systemName": "RUB.CH.H.B",
+        "id": "RUB.CH.H.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1749,7 +1749,7 @@
           "H",
           "D"
         ],
-        "systemName": "RUB.CH.H.D",
+        "id": "RUB.CH.H.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1766,7 +1766,7 @@
           "CH",
           "L"
         ],
-        "systemName": "RUB.CH.L",
+        "id": "RUB.CH.L",
         "displayName": "Life",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1784,7 +1784,7 @@
           "L",
           "B"
         ],
-        "systemName": "RUB.CH.L.B",
+        "id": "RUB.CH.L.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1802,7 +1802,7 @@
           "L",
           "D"
         ],
-        "systemName": "RUB.CH.L.D",
+        "id": "RUB.CH.L.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1819,7 +1819,7 @@
           "CH",
           "P"
         ],
-        "systemName": "RUB.CH.P",
+        "id": "RUB.CH.P",
         "displayName": "Property",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1837,7 +1837,7 @@
           "P",
           "B"
         ],
-        "systemName": "RUB.CH.P.B",
+        "id": "RUB.CH.P.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1855,7 +1855,7 @@
           "P",
           "D"
         ],
-        "systemName": "RUB.CH.P.D",
+        "id": "RUB.CH.P.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1870,7 +1870,7 @@
         "coordinates": [
           "CHF"
         ],
-        "systemName": "CHF",
+        "id": "CHF",
         "displayName": "Swiss Franc",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1886,7 +1886,7 @@
           "CHF",
           "D"
         ],
-        "systemName": "CHF.D",
+        "id": "CHF.D",
         "displayName": "Germany",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1903,7 +1903,7 @@
           "D",
           "C"
         ],
-        "systemName": "CHF.D.C",
+        "id": "CHF.D.C",
         "displayName": "Casualty",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1921,7 +1921,7 @@
           "C",
           "B"
         ],
-        "systemName": "CHF.D.C.B",
+        "id": "CHF.D.C.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1939,7 +1939,7 @@
           "C",
           "D"
         ],
-        "systemName": "CHF.D.C.D",
+        "id": "CHF.D.C.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1956,7 +1956,7 @@
           "D",
           "H"
         ],
-        "systemName": "CHF.D.H",
+        "id": "CHF.D.H",
         "displayName": "Health",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1974,7 +1974,7 @@
           "H",
           "B"
         ],
-        "systemName": "CHF.D.H.B",
+        "id": "CHF.D.H.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -1992,7 +1992,7 @@
           "H",
           "D"
         ],
-        "systemName": "CHF.D.H.D",
+        "id": "CHF.D.H.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2009,7 +2009,7 @@
           "D",
           "L"
         ],
-        "systemName": "CHF.D.L",
+        "id": "CHF.D.L",
         "displayName": "Life",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2027,7 +2027,7 @@
           "L",
           "B"
         ],
-        "systemName": "CHF.D.L.B",
+        "id": "CHF.D.L.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2045,7 +2045,7 @@
           "L",
           "D"
         ],
-        "systemName": "CHF.D.L.D",
+        "id": "CHF.D.L.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2062,7 +2062,7 @@
           "D",
           "P"
         ],
-        "systemName": "CHF.D.P",
+        "id": "CHF.D.P",
         "displayName": "Property",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2080,7 +2080,7 @@
           "P",
           "B"
         ],
-        "systemName": "CHF.D.P.B",
+        "id": "CHF.D.P.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2098,7 +2098,7 @@
           "P",
           "D"
         ],
-        "systemName": "CHF.D.P.D",
+        "id": "CHF.D.P.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2114,7 +2114,7 @@
           "CHF",
           "PT"
         ],
-        "systemName": "CHF.PT",
+        "id": "CHF.PT",
         "displayName": "Portugal",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2131,7 +2131,7 @@
           "PT",
           "C"
         ],
-        "systemName": "CHF.PT.C",
+        "id": "CHF.PT.C",
         "displayName": "Casualty",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2149,7 +2149,7 @@
           "C",
           "B"
         ],
-        "systemName": "CHF.PT.C.B",
+        "id": "CHF.PT.C.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2167,7 +2167,7 @@
           "C",
           "D"
         ],
-        "systemName": "CHF.PT.C.D",
+        "id": "CHF.PT.C.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2184,7 +2184,7 @@
           "PT",
           "H"
         ],
-        "systemName": "CHF.PT.H",
+        "id": "CHF.PT.H",
         "displayName": "Health",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2202,7 +2202,7 @@
           "H",
           "B"
         ],
-        "systemName": "CHF.PT.H.B",
+        "id": "CHF.PT.H.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2220,7 +2220,7 @@
           "H",
           "D"
         ],
-        "systemName": "CHF.PT.H.D",
+        "id": "CHF.PT.H.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2237,7 +2237,7 @@
           "PT",
           "L"
         ],
-        "systemName": "CHF.PT.L",
+        "id": "CHF.PT.L",
         "displayName": "Life",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2255,7 +2255,7 @@
           "L",
           "B"
         ],
-        "systemName": "CHF.PT.L.B",
+        "id": "CHF.PT.L.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2273,7 +2273,7 @@
           "L",
           "D"
         ],
-        "systemName": "CHF.PT.L.D",
+        "id": "CHF.PT.L.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2290,7 +2290,7 @@
           "PT",
           "P"
         ],
-        "systemName": "CHF.PT.P",
+        "id": "CHF.PT.P",
         "displayName": "Property",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2308,7 +2308,7 @@
           "P",
           "B"
         ],
-        "systemName": "CHF.PT.P.B",
+        "id": "CHF.PT.P.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2326,7 +2326,7 @@
           "P",
           "D"
         ],
-        "systemName": "CHF.PT.P.D",
+        "id": "CHF.PT.P.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2342,7 +2342,7 @@
           "CHF",
           "RU"
         ],
-        "systemName": "CHF.RU",
+        "id": "CHF.RU",
         "displayName": "Russia",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2359,7 +2359,7 @@
           "RU",
           "C"
         ],
-        "systemName": "CHF.RU.C",
+        "id": "CHF.RU.C",
         "displayName": "Casualty",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2377,7 +2377,7 @@
           "C",
           "B"
         ],
-        "systemName": "CHF.RU.C.B",
+        "id": "CHF.RU.C.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2395,7 +2395,7 @@
           "C",
           "D"
         ],
-        "systemName": "CHF.RU.C.D",
+        "id": "CHF.RU.C.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2412,7 +2412,7 @@
           "RU",
           "H"
         ],
-        "systemName": "CHF.RU.H",
+        "id": "CHF.RU.H",
         "displayName": "Health",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2430,7 +2430,7 @@
           "H",
           "B"
         ],
-        "systemName": "CHF.RU.H.B",
+        "id": "CHF.RU.H.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2448,7 +2448,7 @@
           "H",
           "D"
         ],
-        "systemName": "CHF.RU.H.D",
+        "id": "CHF.RU.H.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2465,7 +2465,7 @@
           "RU",
           "L"
         ],
-        "systemName": "CHF.RU.L",
+        "id": "CHF.RU.L",
         "displayName": "Life",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2483,7 +2483,7 @@
           "L",
           "B"
         ],
-        "systemName": "CHF.RU.L.B",
+        "id": "CHF.RU.L.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2501,7 +2501,7 @@
           "L",
           "D"
         ],
-        "systemName": "CHF.RU.L.D",
+        "id": "CHF.RU.L.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2518,7 +2518,7 @@
           "RU",
           "P"
         ],
-        "systemName": "CHF.RU.P",
+        "id": "CHF.RU.P",
         "displayName": "Property",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2536,7 +2536,7 @@
           "P",
           "B"
         ],
-        "systemName": "CHF.RU.P.B",
+        "id": "CHF.RU.P.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2554,7 +2554,7 @@
           "P",
           "D"
         ],
-        "systemName": "CHF.RU.P.D",
+        "id": "CHF.RU.P.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2570,7 +2570,7 @@
           "CHF",
           "CH"
         ],
-        "systemName": "CHF.CH",
+        "id": "CHF.CH",
         "displayName": "Switzerland",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2587,7 +2587,7 @@
           "CH",
           "C"
         ],
-        "systemName": "CHF.CH.C",
+        "id": "CHF.CH.C",
         "displayName": "Casualty",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2605,7 +2605,7 @@
           "C",
           "B"
         ],
-        "systemName": "CHF.CH.C.B",
+        "id": "CHF.CH.C.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2623,7 +2623,7 @@
           "C",
           "D"
         ],
-        "systemName": "CHF.CH.C.D",
+        "id": "CHF.CH.C.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2640,7 +2640,7 @@
           "CH",
           "H"
         ],
-        "systemName": "CHF.CH.H",
+        "id": "CHF.CH.H",
         "displayName": "Health",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2658,7 +2658,7 @@
           "H",
           "B"
         ],
-        "systemName": "CHF.CH.H.B",
+        "id": "CHF.CH.H.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2676,7 +2676,7 @@
           "H",
           "D"
         ],
-        "systemName": "CHF.CH.H.D",
+        "id": "CHF.CH.H.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2693,7 +2693,7 @@
           "CH",
           "L"
         ],
-        "systemName": "CHF.CH.L",
+        "id": "CHF.CH.L",
         "displayName": "Life",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2711,7 +2711,7 @@
           "L",
           "B"
         ],
-        "systemName": "CHF.CH.L.B",
+        "id": "CHF.CH.L.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2729,7 +2729,7 @@
           "L",
           "D"
         ],
-        "systemName": "CHF.CH.L.D",
+        "id": "CHF.CH.L.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2746,7 +2746,7 @@
           "CH",
           "P"
         ],
-        "systemName": "CHF.CH.P",
+        "id": "CHF.CH.P",
         "displayName": "Property",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2764,7 +2764,7 @@
           "P",
           "B"
         ],
-        "systemName": "CHF.CH.P.B",
+        "id": "CHF.CH.P.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2782,7 +2782,7 @@
           "P",
           "D"
         ],
-        "systemName": "CHF.CH.P.D",
+        "id": "CHF.CH.P.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2797,7 +2797,7 @@
         "coordinates": [
           "USD"
         ],
-        "systemName": "USD",
+        "id": "USD",
         "displayName": "US Dollar",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2813,7 +2813,7 @@
           "USD",
           "D"
         ],
-        "systemName": "USD.D",
+        "id": "USD.D",
         "displayName": "Germany",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2830,7 +2830,7 @@
           "D",
           "C"
         ],
-        "systemName": "USD.D.C",
+        "id": "USD.D.C",
         "displayName": "Casualty",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2848,7 +2848,7 @@
           "C",
           "B"
         ],
-        "systemName": "USD.D.C.B",
+        "id": "USD.D.C.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2866,7 +2866,7 @@
           "C",
           "D"
         ],
-        "systemName": "USD.D.C.D",
+        "id": "USD.D.C.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2883,7 +2883,7 @@
           "D",
           "H"
         ],
-        "systemName": "USD.D.H",
+        "id": "USD.D.H",
         "displayName": "Health",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2901,7 +2901,7 @@
           "H",
           "B"
         ],
-        "systemName": "USD.D.H.B",
+        "id": "USD.D.H.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2919,7 +2919,7 @@
           "H",
           "D"
         ],
-        "systemName": "USD.D.H.D",
+        "id": "USD.D.H.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2936,7 +2936,7 @@
           "D",
           "L"
         ],
-        "systemName": "USD.D.L",
+        "id": "USD.D.L",
         "displayName": "Life",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2954,7 +2954,7 @@
           "L",
           "B"
         ],
-        "systemName": "USD.D.L.B",
+        "id": "USD.D.L.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2972,7 +2972,7 @@
           "L",
           "D"
         ],
-        "systemName": "USD.D.L.D",
+        "id": "USD.D.L.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -2989,7 +2989,7 @@
           "D",
           "P"
         ],
-        "systemName": "USD.D.P",
+        "id": "USD.D.P",
         "displayName": "Property",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3007,7 +3007,7 @@
           "P",
           "B"
         ],
-        "systemName": "USD.D.P.B",
+        "id": "USD.D.P.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3025,7 +3025,7 @@
           "P",
           "D"
         ],
-        "systemName": "USD.D.P.D",
+        "id": "USD.D.P.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3041,7 +3041,7 @@
           "USD",
           "PT"
         ],
-        "systemName": "USD.PT",
+        "id": "USD.PT",
         "displayName": "Portugal",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3058,7 +3058,7 @@
           "PT",
           "C"
         ],
-        "systemName": "USD.PT.C",
+        "id": "USD.PT.C",
         "displayName": "Casualty",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3076,7 +3076,7 @@
           "C",
           "B"
         ],
-        "systemName": "USD.PT.C.B",
+        "id": "USD.PT.C.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3094,7 +3094,7 @@
           "C",
           "D"
         ],
-        "systemName": "USD.PT.C.D",
+        "id": "USD.PT.C.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3111,7 +3111,7 @@
           "PT",
           "H"
         ],
-        "systemName": "USD.PT.H",
+        "id": "USD.PT.H",
         "displayName": "Health",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3129,7 +3129,7 @@
           "H",
           "B"
         ],
-        "systemName": "USD.PT.H.B",
+        "id": "USD.PT.H.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3147,7 +3147,7 @@
           "H",
           "D"
         ],
-        "systemName": "USD.PT.H.D",
+        "id": "USD.PT.H.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3164,7 +3164,7 @@
           "PT",
           "L"
         ],
-        "systemName": "USD.PT.L",
+        "id": "USD.PT.L",
         "displayName": "Life",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3182,7 +3182,7 @@
           "L",
           "B"
         ],
-        "systemName": "USD.PT.L.B",
+        "id": "USD.PT.L.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3200,7 +3200,7 @@
           "L",
           "D"
         ],
-        "systemName": "USD.PT.L.D",
+        "id": "USD.PT.L.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3217,7 +3217,7 @@
           "PT",
           "P"
         ],
-        "systemName": "USD.PT.P",
+        "id": "USD.PT.P",
         "displayName": "Property",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3235,7 +3235,7 @@
           "P",
           "B"
         ],
-        "systemName": "USD.PT.P.B",
+        "id": "USD.PT.P.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3253,7 +3253,7 @@
           "P",
           "D"
         ],
-        "systemName": "USD.PT.P.D",
+        "id": "USD.PT.P.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3269,7 +3269,7 @@
           "USD",
           "RU"
         ],
-        "systemName": "USD.RU",
+        "id": "USD.RU",
         "displayName": "Russia",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3286,7 +3286,7 @@
           "RU",
           "C"
         ],
-        "systemName": "USD.RU.C",
+        "id": "USD.RU.C",
         "displayName": "Casualty",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3304,7 +3304,7 @@
           "C",
           "B"
         ],
-        "systemName": "USD.RU.C.B",
+        "id": "USD.RU.C.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3322,7 +3322,7 @@
           "C",
           "D"
         ],
-        "systemName": "USD.RU.C.D",
+        "id": "USD.RU.C.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3339,7 +3339,7 @@
           "RU",
           "H"
         ],
-        "systemName": "USD.RU.H",
+        "id": "USD.RU.H",
         "displayName": "Health",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3357,7 +3357,7 @@
           "H",
           "B"
         ],
-        "systemName": "USD.RU.H.B",
+        "id": "USD.RU.H.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3375,7 +3375,7 @@
           "H",
           "D"
         ],
-        "systemName": "USD.RU.H.D",
+        "id": "USD.RU.H.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3392,7 +3392,7 @@
           "RU",
           "L"
         ],
-        "systemName": "USD.RU.L",
+        "id": "USD.RU.L",
         "displayName": "Life",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3410,7 +3410,7 @@
           "L",
           "B"
         ],
-        "systemName": "USD.RU.L.B",
+        "id": "USD.RU.L.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3428,7 +3428,7 @@
           "L",
           "D"
         ],
-        "systemName": "USD.RU.L.D",
+        "id": "USD.RU.L.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3445,7 +3445,7 @@
           "RU",
           "P"
         ],
-        "systemName": "USD.RU.P",
+        "id": "USD.RU.P",
         "displayName": "Property",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3463,7 +3463,7 @@
           "P",
           "B"
         ],
-        "systemName": "USD.RU.P.B",
+        "id": "USD.RU.P.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3481,7 +3481,7 @@
           "P",
           "D"
         ],
-        "systemName": "USD.RU.P.D",
+        "id": "USD.RU.P.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3497,7 +3497,7 @@
           "USD",
           "CH"
         ],
-        "systemName": "USD.CH",
+        "id": "USD.CH",
         "displayName": "Switzerland",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3514,7 +3514,7 @@
           "CH",
           "C"
         ],
-        "systemName": "USD.CH.C",
+        "id": "USD.CH.C",
         "displayName": "Casualty",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3532,7 +3532,7 @@
           "C",
           "B"
         ],
-        "systemName": "USD.CH.C.B",
+        "id": "USD.CH.C.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3550,7 +3550,7 @@
           "C",
           "D"
         ],
-        "systemName": "USD.CH.C.D",
+        "id": "USD.CH.C.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3567,7 +3567,7 @@
           "CH",
           "H"
         ],
-        "systemName": "USD.CH.H",
+        "id": "USD.CH.H",
         "displayName": "Health",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3585,7 +3585,7 @@
           "H",
           "B"
         ],
-        "systemName": "USD.CH.H.B",
+        "id": "USD.CH.H.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3603,7 +3603,7 @@
           "H",
           "D"
         ],
-        "systemName": "USD.CH.H.D",
+        "id": "USD.CH.H.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3620,7 +3620,7 @@
           "CH",
           "L"
         ],
-        "systemName": "USD.CH.L",
+        "id": "USD.CH.L",
         "displayName": "Life",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3638,7 +3638,7 @@
           "L",
           "B"
         ],
-        "systemName": "USD.CH.L.B",
+        "id": "USD.CH.L.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3656,7 +3656,7 @@
           "L",
           "D"
         ],
-        "systemName": "USD.CH.L.D",
+        "id": "USD.CH.L.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3673,7 +3673,7 @@
           "CH",
           "P"
         ],
-        "systemName": "USD.CH.P",
+        "id": "USD.CH.P",
         "displayName": "Property",
         "grouperName": "LineOfBusiness",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3691,7 +3691,7 @@
           "P",
           "B"
         ],
-        "systemName": "USD.CH.P.B",
+        "id": "USD.CH.P.B",
         "displayName": "Broked",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -3709,7 +3709,7 @@
           "P",
           "D"
         ],
-        "systemName": "USD.CH.P.D",
+        "id": "USD.CH.P.D",
         "displayName": "Direct",
         "grouperName": "Split",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
