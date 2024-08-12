@@ -9,13 +9,13 @@ public abstract record ContainerControl<TControl, TItem>(string ModuleName, stri
     where TControl : ContainerControl<TControl, TItem>
     where TItem : UiControl
 {
-    public TControl WithItems(params TItem[] items)
+    public TControl WithItem(TItem item, Func<NamedAreaControl, NamedAreaControl> options = null)
     {
+        options ??= x => x;
         return This with
         {
-            Items = Items.AddRange(items),
-            Areas = Areas.AddRange(
-                Enumerable.Range(Areas.Count+1,items.Length).Select(x => new NamedAreaControl(null){Id = x.ToString()}))
+            Items = Items.Add(item),
+            Areas = Areas.Add(options.Invoke(new(null){Id=Items.Count+1}))
         };
     }
 
@@ -26,9 +26,9 @@ public abstract record ContainerControl<TControl, TItem>(string ModuleName, stri
         RenderingContext context) =>
         base.Render(host, context)
             .Concat(
-                Items.Select((item, i) =>
+                Items.Zip(Areas, (item, area) =>
                     (Func<EntityStore, EntityStore>)(store =>
-                        store.UpdateControl($"{context.Area}/{i + 1}", item))));
+                        store.UpdateControl($"{context.Area}/{area.Id.ToString()}", item))));
 
     protected override UiControl PrepareRendering(RenderingContext context)
         => this with

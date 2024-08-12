@@ -18,10 +18,8 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
     /// </summary>
     /// <param name="configuration"></param>
     /// <returns></returns>
-    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
-    {
-        return base.ConfigureHost(configuration).AddDocumentation();
-    }
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration) => 
+        configuration.ConfigureDocumentationTestHost();
 
     /// <summary>
     /// This is how to retrieve a file from documentation service
