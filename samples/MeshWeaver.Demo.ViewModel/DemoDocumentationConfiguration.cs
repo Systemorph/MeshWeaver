@@ -1,6 +1,7 @@
 ﻿using MeshWeaver.Application.Styles;
 using MeshWeaver.Demo.ViewModel.CkeckBox;
 using MeshWeaver.Demo.ViewModel.DropDown;
+using MeshWeaver.Demo.ViewModel.ItemTemplate;
 using MeshWeaver.Demo.ViewModel.Listbox;
 using MeshWeaver.Documentation;
 using MeshWeaver.Layout;
@@ -23,6 +24,7 @@ public static class DemoDocumentationConfiguration
                     .WithNavLink("DropDown Control", layout.DocumentationPath(typeof(YearSelectArea).Assembly, "DropDown.md"), nl => nl with { Icon = FluentIcons.CalendarDataBar, })
                     .WithNavLink("Listbox Control", layout.DocumentationPath(typeof(BaseColorListArea).Assembly, "Listbox.md"), nl => nl with { Icon = FluentIcons.Grid, })
                     .WithNavLink("CheckBox Control", layout.DocumentationPath(typeof(TermsAgreementTickArea).Assembly, "CheckBox.md"), nl => nl with { Icon = FluentIcons.Box, })
+                    .WithNavLink("Item Template", layout.DocumentationPath(typeof(ItemTemplateDemoArea).Assembly, "ItemTemplate.md"), nl => nl with { Icon = FluentIcons.Grid, })
             )
         ;
 
