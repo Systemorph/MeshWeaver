@@ -41,8 +41,8 @@ namespace MeshWeaver.Pivot.Grouping
         {
             if (typeof(IOrdered).IsAssignableFrom(typeof(TDimension)))
                 return groups
-                    .OrderBy(x => (string)x.OrderKey == null)
-                    .ThenBy(g => GetOrder((string)g.OrderKey))
+                    .OrderBy(x => x.OrderKey == null)
+                    .ThenBy(g => GetOrder(g.OrderKey))
                     .Select(x => x.Identity);
             return groups
                 .OrderBy(x => x.OrderKey == null)
