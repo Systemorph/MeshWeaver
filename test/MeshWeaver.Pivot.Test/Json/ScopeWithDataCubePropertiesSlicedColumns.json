@@ -3,7 +3,7 @@
     {
       "children": [
         {
-          "systemName": "E.Value",
+          "id": "E.Value",
           "displayName": "Value",
           "coordinates": [
             "E",
@@ -13,7 +13,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "E",
+      "id": "E",
       "displayName": "Expenses",
       "coordinates": [
         "E"
@@ -24,7 +24,7 @@
     {
       "children": [
         {
-          "systemName": "P.Value",
+          "id": "P.Value",
           "displayName": "Value",
           "coordinates": [
             "P",
@@ -34,7 +34,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "P",
+      "id": "P",
       "displayName": "Premium",
       "coordinates": [
         "P"
@@ -45,7 +45,7 @@
     {
       "children": [
         {
-          "systemName": "C.Value",
+          "id": "C.Value",
           "displayName": "Value",
           "coordinates": [
             "C",
@@ -55,7 +55,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "C",
+      "id": "C",
       "displayName": "Cost",
       "coordinates": [
         "C"
@@ -66,7 +66,7 @@
     {
       "children": [
         {
-          "systemName": "B.Value",
+          "id": "B.Value",
           "displayName": "Value",
           "coordinates": [
             "B",
@@ -76,7 +76,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "B",
+      "id": "B",
       "displayName": "Benefit",
       "coordinates": [
         "B"
@@ -91,7 +91,7 @@
         "coordinates": [
           "BoP"
         ],
-        "systemName": "BoP",
+        "id": "BoP",
         "displayName": "Beginning of Period",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -110,7 +110,7 @@
           "BoP",
           "EUR"
         ],
-        "systemName": "BoP.EUR",
+        "id": "BoP.EUR",
         "displayName": "Euro",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -137,7 +137,7 @@
           "BoP",
           "RUB"
         ],
-        "systemName": "BoP.RUB",
+        "id": "BoP.RUB",
         "displayName": "Russian rouble",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -164,7 +164,7 @@
           "BoP",
           "CHF"
         ],
-        "systemName": "BoP.CHF",
+        "id": "BoP.CHF",
         "displayName": "Swiss Franc",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -191,7 +191,7 @@
           "BoP",
           "USD"
         ],
-        "systemName": "BoP.USD",
+        "id": "BoP.USD",
         "displayName": "US Dollar",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -217,7 +217,7 @@
         "coordinates": [
           "Delta"
         ],
-        "systemName": "Delta",
+        "id": "Delta",
         "displayName": "Delta",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -236,7 +236,7 @@
           "Delta",
           "EUR"
         ],
-        "systemName": "Delta.EUR",
+        "id": "Delta.EUR",
         "displayName": "Euro",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -263,7 +263,7 @@
           "Delta",
           "RUB"
         ],
-        "systemName": "Delta.RUB",
+        "id": "Delta.RUB",
         "displayName": "Russian rouble",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -290,7 +290,7 @@
           "Delta",
           "CHF"
         ],
-        "systemName": "Delta.CHF",
+        "id": "Delta.CHF",
         "displayName": "Swiss Franc",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -317,7 +317,7 @@
           "Delta",
           "USD"
         ],
-        "systemName": "Delta.USD",
+        "id": "Delta.USD",
         "displayName": "US Dollar",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -343,7 +343,7 @@
         "coordinates": [
           "EoP"
         ],
-        "systemName": "EoP",
+        "id": "EoP",
         "displayName": "End of Period",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -362,7 +362,7 @@
           "EoP",
           "EUR"
         ],
-        "systemName": "EoP.EUR",
+        "id": "EoP.EUR",
         "displayName": "Euro",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -389,7 +389,7 @@
           "EoP",
           "RUB"
         ],
-        "systemName": "EoP.RUB",
+        "id": "EoP.RUB",
         "displayName": "Russian rouble",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -416,7 +416,7 @@
           "EoP",
           "CHF"
         ],
-        "systemName": "EoP.CHF",
+        "id": "EoP.CHF",
         "displayName": "Swiss Franc",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -443,7 +443,7 @@
           "EoP",
           "USD"
         ],
-        "systemName": "EoP.USD",
+        "id": "EoP.USD",
         "displayName": "US Dollar",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"

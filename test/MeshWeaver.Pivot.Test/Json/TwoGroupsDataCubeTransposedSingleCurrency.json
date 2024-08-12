@@ -5,7 +5,7 @@
         {
           "children": [
             {
-              "systemName": "C.B.Value",
+              "id": "C.B.Value",
               "displayName": "Value",
               "coordinates": [
                 "C",
@@ -16,7 +16,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "C.B",
+          "id": "C.B",
           "displayName": "B",
           "coordinates": [
             "C",
@@ -28,7 +28,7 @@
         {
           "children": [
             {
-              "systemName": "C.C.Value",
+              "id": "C.C.Value",
               "displayName": "Value",
               "coordinates": [
                 "C",
@@ -39,7 +39,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "C.C",
+          "id": "C.C",
           "displayName": "C",
           "coordinates": [
             "C",
@@ -51,7 +51,7 @@
         {
           "children": [
             {
-              "systemName": "C.E.Value",
+              "id": "C.E.Value",
               "displayName": "Value",
               "coordinates": [
                 "C",
@@ -62,7 +62,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "C.E",
+          "id": "C.E",
           "displayName": "E",
           "coordinates": [
             "C",
@@ -74,7 +74,7 @@
         {
           "children": [
             {
-              "systemName": "C.P.Value",
+              "id": "C.P.Value",
               "displayName": "Value",
               "coordinates": [
                 "C",
@@ -85,7 +85,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "C.P",
+          "id": "C.P",
           "displayName": "P",
           "coordinates": [
             "C",
@@ -97,7 +97,7 @@
         {
           "children": [
             {
-              "systemName": "C.TotalGroup.Value",
+              "id": "C.TotalGroup.Value",
               "displayName": "Value",
               "coordinates": [
                 "C",
@@ -108,7 +108,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "C.TotalGroup",
+          "id": "C.TotalGroup",
           "displayName": " ",
           "coordinates": [
             "C",
@@ -118,7 +118,7 @@
           "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
         }
       ],
-      "systemName": "C",
+      "id": "C",
       "displayName": "C",
       "coordinates": [
         "C"
@@ -131,7 +131,7 @@
         {
           "children": [
             {
-              "systemName": "H.B.Value",
+              "id": "H.B.Value",
               "displayName": "Value",
               "coordinates": [
                 "H",
@@ -142,7 +142,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "H.B",
+          "id": "H.B",
           "displayName": "B",
           "coordinates": [
             "H",
@@ -154,7 +154,7 @@
         {
           "children": [
             {
-              "systemName": "H.C.Value",
+              "id": "H.C.Value",
               "displayName": "Value",
               "coordinates": [
                 "H",
@@ -165,7 +165,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "H.C",
+          "id": "H.C",
           "displayName": "C",
           "coordinates": [
             "H",
@@ -177,7 +177,7 @@
         {
           "children": [
             {
-              "systemName": "H.E.Value",
+              "id": "H.E.Value",
               "displayName": "Value",
               "coordinates": [
                 "H",
@@ -188,7 +188,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "H.E",
+          "id": "H.E",
           "displayName": "E",
           "coordinates": [
             "H",
@@ -200,7 +200,7 @@
         {
           "children": [
             {
-              "systemName": "H.P.Value",
+              "id": "H.P.Value",
               "displayName": "Value",
               "coordinates": [
                 "H",
@@ -211,7 +211,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "H.P",
+          "id": "H.P",
           "displayName": "P",
           "coordinates": [
             "H",
@@ -223,7 +223,7 @@
         {
           "children": [
             {
-              "systemName": "H.TotalGroup.Value",
+              "id": "H.TotalGroup.Value",
               "displayName": "Value",
               "coordinates": [
                 "H",
@@ -234,7 +234,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "H.TotalGroup",
+          "id": "H.TotalGroup",
           "displayName": " ",
           "coordinates": [
             "H",
@@ -244,7 +244,7 @@
           "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
         }
       ],
-      "systemName": "H",
+      "id": "H",
       "displayName": "H",
       "coordinates": [
         "H"
@@ -257,7 +257,7 @@
         {
           "children": [
             {
-              "systemName": "L.B.Value",
+              "id": "L.B.Value",
               "displayName": "Value",
               "coordinates": [
                 "L",
@@ -268,7 +268,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "L.B",
+          "id": "L.B",
           "displayName": "B",
           "coordinates": [
             "L",
@@ -280,7 +280,7 @@
         {
           "children": [
             {
-              "systemName": "L.C.Value",
+              "id": "L.C.Value",
               "displayName": "Value",
               "coordinates": [
                 "L",
@@ -291,7 +291,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "L.C",
+          "id": "L.C",
           "displayName": "C",
           "coordinates": [
             "L",
@@ -303,7 +303,7 @@
         {
           "children": [
             {
-              "systemName": "L.E.Value",
+              "id": "L.E.Value",
               "displayName": "Value",
               "coordinates": [
                 "L",
@@ -314,7 +314,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "L.E",
+          "id": "L.E",
           "displayName": "E",
           "coordinates": [
             "L",
@@ -326,7 +326,7 @@
         {
           "children": [
             {
-              "systemName": "L.P.Value",
+              "id": "L.P.Value",
               "displayName": "Value",
               "coordinates": [
                 "L",
@@ -337,7 +337,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "L.P",
+          "id": "L.P",
           "displayName": "P",
           "coordinates": [
             "L",
@@ -349,7 +349,7 @@
         {
           "children": [
             {
-              "systemName": "L.TotalGroup.Value",
+              "id": "L.TotalGroup.Value",
               "displayName": "Value",
               "coordinates": [
                 "L",
@@ -360,7 +360,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "L.TotalGroup",
+          "id": "L.TotalGroup",
           "displayName": " ",
           "coordinates": [
             "L",
@@ -370,7 +370,7 @@
           "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
         }
       ],
-      "systemName": "L",
+      "id": "L",
       "displayName": "L",
       "coordinates": [
         "L"
@@ -383,7 +383,7 @@
         {
           "children": [
             {
-              "systemName": "P.B.Value",
+              "id": "P.B.Value",
               "displayName": "Value",
               "coordinates": [
                 "P",
@@ -394,7 +394,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "P.B",
+          "id": "P.B",
           "displayName": "B",
           "coordinates": [
             "P",
@@ -406,7 +406,7 @@
         {
           "children": [
             {
-              "systemName": "P.C.Value",
+              "id": "P.C.Value",
               "displayName": "Value",
               "coordinates": [
                 "P",
@@ -417,7 +417,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "P.C",
+          "id": "P.C",
           "displayName": "C",
           "coordinates": [
             "P",
@@ -429,7 +429,7 @@
         {
           "children": [
             {
-              "systemName": "P.E.Value",
+              "id": "P.E.Value",
               "displayName": "Value",
               "coordinates": [
                 "P",
@@ -440,7 +440,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "P.E",
+          "id": "P.E",
           "displayName": "E",
           "coordinates": [
             "P",
@@ -452,7 +452,7 @@
         {
           "children": [
             {
-              "systemName": "P.P.Value",
+              "id": "P.P.Value",
               "displayName": "Value",
               "coordinates": [
                 "P",
@@ -463,7 +463,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "P.P",
+          "id": "P.P",
           "displayName": "P",
           "coordinates": [
             "P",
@@ -475,7 +475,7 @@
         {
           "children": [
             {
-              "systemName": "P.TotalGroup.Value",
+              "id": "P.TotalGroup.Value",
               "displayName": "Value",
               "coordinates": [
                 "P",
@@ -486,7 +486,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "P.TotalGroup",
+          "id": "P.TotalGroup",
           "displayName": " ",
           "coordinates": [
             "P",
@@ -496,7 +496,7 @@
           "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
         }
       ],
-      "systemName": "P",
+      "id": "P",
       "displayName": "P",
       "coordinates": [
         "P"
@@ -511,7 +511,7 @@
         "coordinates": [
           "Value"
         ],
-        "systemName": "Value",
+        "id": "Value",
         "displayName": "Value",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"

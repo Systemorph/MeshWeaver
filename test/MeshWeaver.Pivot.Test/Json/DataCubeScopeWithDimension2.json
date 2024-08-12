@@ -5,7 +5,7 @@
         {
           "children": [
             {
-              "systemName": "D.D.Value",
+              "id": "D.D.Value",
               "displayName": "Value",
               "coordinates": [
                 "D",
@@ -16,7 +16,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "D.D",
+          "id": "D.D",
           "displayName": "Velaro Germany",
           "coordinates": [
             "D",
@@ -26,7 +26,7 @@
           "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
         }
       ],
-      "systemName": "D",
+      "id": "D",
       "displayName": "Germany",
       "coordinates": [
         "D"
@@ -39,7 +39,7 @@
         {
           "children": [
             {
-              "systemName": "PT.PT.Value",
+              "id": "PT.PT.Value",
               "displayName": "Value",
               "coordinates": [
                 "PT",
@@ -50,7 +50,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "PT.PT",
+          "id": "PT.PT",
           "displayName": "Velaro Portugal",
           "coordinates": [
             "PT",
@@ -60,7 +60,7 @@
           "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
         }
       ],
-      "systemName": "PT",
+      "id": "PT",
       "displayName": "Portugal",
       "coordinates": [
         "PT"
@@ -73,7 +73,7 @@
         {
           "children": [
             {
-              "systemName": "RU.RU.Value",
+              "id": "RU.RU.Value",
               "displayName": "Value",
               "coordinates": [
                 "RU",
@@ -84,7 +84,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "RU.RU",
+          "id": "RU.RU",
           "displayName": "Velaro Russia",
           "coordinates": [
             "RU",
@@ -94,7 +94,7 @@
           "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
         }
       ],
-      "systemName": "RU",
+      "id": "RU",
       "displayName": "Russia",
       "coordinates": [
         "RU"
@@ -107,7 +107,7 @@
         {
           "children": [
             {
-              "systemName": "CH.CH.Value",
+              "id": "CH.CH.Value",
               "displayName": "Value",
               "coordinates": [
                 "CH",
@@ -118,7 +118,7 @@
               "$type": "MeshWeaver.Pivot.Models.Column"
             }
           ],
-          "systemName": "CH.CH",
+          "id": "CH.CH",
           "displayName": "Velaro Switzerland",
           "coordinates": [
             "CH",
@@ -128,7 +128,7 @@
           "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
         }
       ],
-      "systemName": "CH",
+      "id": "CH",
       "displayName": "Switzerland",
       "coordinates": [
         "CH"
@@ -143,7 +143,7 @@
         "coordinates": [
           "DataCubeScopeProperty"
         ],
-        "systemName": "DataCubeScopeProperty",
+        "id": "DataCubeScopeProperty",
         "displayName": "Data Cube Scope Property",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -174,7 +174,7 @@
           "DataCubeScopeProperty",
           "EUR"
         ],
-        "systemName": "DataCubeScopeProperty.EUR",
+        "id": "DataCubeScopeProperty.EUR",
         "displayName": "Euro",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -221,7 +221,7 @@
           "DataCubeScopeProperty",
           "RUB"
         ],
-        "systemName": "DataCubeScopeProperty.RUB",
+        "id": "DataCubeScopeProperty.RUB",
         "displayName": "Russian rouble",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -268,7 +268,7 @@
           "DataCubeScopeProperty",
           "CHF"
         ],
-        "systemName": "DataCubeScopeProperty.CHF",
+        "id": "DataCubeScopeProperty.CHF",
         "displayName": "Swiss Franc",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -315,7 +315,7 @@
           "DataCubeScopeProperty",
           "USD"
         ],
-        "systemName": "DataCubeScopeProperty.USD",
+        "id": "DataCubeScopeProperty.USD",
         "displayName": "US Dollar",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -361,7 +361,7 @@
         "coordinates": [
           "ElementProperty"
         ],
-        "systemName": "ElementProperty",
+        "id": "ElementProperty",
         "displayName": "Element Property",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -408,7 +408,7 @@
           "ElementProperty",
           "CHF"
         ],
-        "systemName": "ElementProperty.CHF",
+        "id": "ElementProperty.CHF",
         "displayName": "Swiss Franc",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"

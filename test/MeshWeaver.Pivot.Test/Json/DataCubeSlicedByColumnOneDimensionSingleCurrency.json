@@ -3,7 +3,7 @@
     {
       "children": [
         {
-          "systemName": "E.Value",
+          "id": "E.Value",
           "displayName": "Value",
           "coordinates": [
             "E",
@@ -13,7 +13,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "E",
+      "id": "E",
       "displayName": "Expenses",
       "coordinates": [
         "E"
@@ -24,7 +24,7 @@
     {
       "children": [
         {
-          "systemName": "P.Value",
+          "id": "P.Value",
           "displayName": "Value",
           "coordinates": [
             "P",
@@ -34,7 +34,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "P",
+      "id": "P",
       "displayName": "Premium",
       "coordinates": [
         "P"
@@ -45,7 +45,7 @@
     {
       "children": [
         {
-          "systemName": "C.Value",
+          "id": "C.Value",
           "displayName": "Value",
           "coordinates": [
             "C",
@@ -55,7 +55,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "C",
+      "id": "C",
       "displayName": "Cost",
       "coordinates": [
         "C"
@@ -66,7 +66,7 @@
     {
       "children": [
         {
-          "systemName": "B.Value",
+          "id": "B.Value",
           "displayName": "Value",
           "coordinates": [
             "B",
@@ -76,7 +76,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "B",
+      "id": "B",
       "displayName": "Benefit",
       "coordinates": [
         "B"
@@ -91,7 +91,7 @@
         "coordinates": [
           "CHF"
         ],
-        "systemName": "CHF",
+        "id": "CHF",
         "displayName": "Swiss Franc",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"

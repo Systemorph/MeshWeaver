@@ -1,7 +1,7 @@
 {
   "columns": [
     {
-      "systemName": "Value",
+      "id": "Value",
       "displayName": "Value",
       "coordinates": [
         "Value"
@@ -16,7 +16,7 @@
         "coordinates": [
           "E"
         ],
-        "systemName": "E",
+        "id": "E",
         "displayName": "Expenses",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -31,7 +31,7 @@
         "coordinates": [
           "P"
         ],
-        "systemName": "P",
+        "id": "P",
         "displayName": "Premium",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -46,7 +46,7 @@
         "coordinates": [
           "C"
         ],
-        "systemName": "C",
+        "id": "C",
         "displayName": "Cost",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -61,7 +61,7 @@
         "coordinates": [
           "B"
         ],
-        "systemName": "B",
+        "id": "B",
         "displayName": "Benefit",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"

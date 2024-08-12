@@ -3,7 +3,7 @@
     {
       "children": [
         {
-          "systemName": "C.Value",
+          "id": "C.Value",
           "displayName": "Value",
           "coordinates": [
             "C",
@@ -13,7 +13,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "C",
+      "id": "C",
       "displayName": "Casualty",
       "coordinates": [
         "C"
@@ -24,7 +24,7 @@
     {
       "children": [
         {
-          "systemName": "H.Value",
+          "id": "H.Value",
           "displayName": "Value",
           "coordinates": [
             "H",
@@ -34,7 +34,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "H",
+      "id": "H",
       "displayName": "Health",
       "coordinates": [
         "H"
@@ -45,7 +45,7 @@
     {
       "children": [
         {
-          "systemName": "L.Value",
+          "id": "L.Value",
           "displayName": "Value",
           "coordinates": [
             "L",
@@ -55,7 +55,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "L",
+      "id": "L",
       "displayName": "Life",
       "coordinates": [
         "L"
@@ -66,7 +66,7 @@
     {
       "children": [
         {
-          "systemName": "P.Value",
+          "id": "P.Value",
           "displayName": "Value",
           "coordinates": [
             "P",
@@ -76,7 +76,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "P",
+      "id": "P",
       "displayName": "Property",
       "coordinates": [
         "P"
@@ -91,7 +91,7 @@
         "coordinates": [
           "EUR"
         ],
-        "systemName": "EUR",
+        "id": "EUR",
         "displayName": "Euro",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -118,7 +118,7 @@
           "EUR",
           "D"
         ],
-        "systemName": "EUR.D",
+        "id": "EUR.D",
         "displayName": "Germany",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -145,7 +145,7 @@
           "EUR",
           "PT"
         ],
-        "systemName": "EUR.PT",
+        "id": "EUR.PT",
         "displayName": "Portugal",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -172,7 +172,7 @@
           "EUR",
           "RU"
         ],
-        "systemName": "EUR.RU",
+        "id": "EUR.RU",
         "displayName": "Russia",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -199,7 +199,7 @@
           "EUR",
           "CH"
         ],
-        "systemName": "EUR.CH",
+        "id": "EUR.CH",
         "displayName": "Switzerland",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -225,7 +225,7 @@
         "coordinates": [
           "RUB"
         ],
-        "systemName": "RUB",
+        "id": "RUB",
         "displayName": "Russian rouble",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -252,7 +252,7 @@
           "RUB",
           "D"
         ],
-        "systemName": "RUB.D",
+        "id": "RUB.D",
         "displayName": "Germany",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -279,7 +279,7 @@
           "RUB",
           "PT"
         ],
-        "systemName": "RUB.PT",
+        "id": "RUB.PT",
         "displayName": "Portugal",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -306,7 +306,7 @@
           "RUB",
           "RU"
         ],
-        "systemName": "RUB.RU",
+        "id": "RUB.RU",
         "displayName": "Russia",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -333,7 +333,7 @@
           "RUB",
           "CH"
         ],
-        "systemName": "RUB.CH",
+        "id": "RUB.CH",
         "displayName": "Switzerland",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -359,7 +359,7 @@
         "coordinates": [
           "CHF"
         ],
-        "systemName": "CHF",
+        "id": "CHF",
         "displayName": "Swiss Franc",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -386,7 +386,7 @@
           "CHF",
           "D"
         ],
-        "systemName": "CHF.D",
+        "id": "CHF.D",
         "displayName": "Germany",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -413,7 +413,7 @@
           "CHF",
           "PT"
         ],
-        "systemName": "CHF.PT",
+        "id": "CHF.PT",
         "displayName": "Portugal",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -440,7 +440,7 @@
           "CHF",
           "RU"
         ],
-        "systemName": "CHF.RU",
+        "id": "CHF.RU",
         "displayName": "Russia",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -467,7 +467,7 @@
           "CHF",
           "CH"
         ],
-        "systemName": "CHF.CH",
+        "id": "CHF.CH",
         "displayName": "Switzerland",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -493,7 +493,7 @@
         "coordinates": [
           "USD"
         ],
-        "systemName": "USD",
+        "id": "USD",
         "displayName": "US Dollar",
         "grouperName": "Currency",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -520,7 +520,7 @@
           "USD",
           "D"
         ],
-        "systemName": "USD.D",
+        "id": "USD.D",
         "displayName": "Germany",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -547,7 +547,7 @@
           "USD",
           "PT"
         ],
-        "systemName": "USD.PT",
+        "id": "USD.PT",
         "displayName": "Portugal",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -574,7 +574,7 @@
           "USD",
           "RU"
         ],
-        "systemName": "USD.RU",
+        "id": "USD.RU",
         "displayName": "Russia",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -601,7 +601,7 @@
           "USD",
           "CH"
         ],
-        "systemName": "USD.CH",
+        "id": "USD.CH",
         "displayName": "Switzerland",
         "grouperName": "Country",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"

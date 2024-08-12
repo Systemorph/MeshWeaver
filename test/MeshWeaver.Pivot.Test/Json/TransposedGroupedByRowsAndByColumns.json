@@ -3,7 +3,7 @@
     {
       "children": [
         {
-          "systemName": "C.Value",
+          "id": "C.Value",
           "displayName": "Value",
           "coordinates": [
             "C",
@@ -13,7 +13,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "C",
+      "id": "C",
       "displayName": "Casualty",
       "coordinates": [
         "C"
@@ -24,7 +24,7 @@
     {
       "children": [
         {
-          "systemName": "H.Value",
+          "id": "H.Value",
           "displayName": "Value",
           "coordinates": [
             "H",
@@ -34,7 +34,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "H",
+      "id": "H",
       "displayName": "Health",
       "coordinates": [
         "H"
@@ -45,7 +45,7 @@
     {
       "children": [
         {
-          "systemName": "L.Value",
+          "id": "L.Value",
           "displayName": "Value",
           "coordinates": [
             "L",
@@ -55,7 +55,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "L",
+      "id": "L",
       "displayName": "Life",
       "coordinates": [
         "L"
@@ -66,7 +66,7 @@
     {
       "children": [
         {
-          "systemName": "P.Value",
+          "id": "P.Value",
           "displayName": "Value",
           "coordinates": [
             "P",
@@ -76,7 +76,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "P",
+      "id": "P",
       "displayName": "Property",
       "coordinates": [
         "P"
@@ -91,7 +91,7 @@
         "coordinates": [
           "E"
         ],
-        "systemName": "E",
+        "id": "E",
         "displayName": "Expenses",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -104,7 +104,7 @@
           "E",
           "Value"
         ],
-        "systemName": "E.Value",
+        "id": "E.Value",
         "displayName": "Value",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -122,7 +122,7 @@
         "coordinates": [
           "P"
         ],
-        "systemName": "P",
+        "id": "P",
         "displayName": "Premium",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -135,7 +135,7 @@
           "P",
           "Value"
         ],
-        "systemName": "P.Value",
+        "id": "P.Value",
         "displayName": "Value",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -153,7 +153,7 @@
         "coordinates": [
           "C"
         ],
-        "systemName": "C",
+        "id": "C",
         "displayName": "Cost",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -166,7 +166,7 @@
           "C",
           "Value"
         ],
-        "systemName": "C.Value",
+        "id": "C.Value",
         "displayName": "Value",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -184,7 +184,7 @@
         "coordinates": [
           "B"
         ],
-        "systemName": "B",
+        "id": "B",
         "displayName": "Benefit",
         "grouperName": "AmountType",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -197,7 +197,7 @@
           "B",
           "Value"
         ],
-        "systemName": "B.Value",
+        "id": "B.Value",
         "displayName": "Value",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"

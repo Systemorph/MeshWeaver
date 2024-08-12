@@ -3,7 +3,7 @@
     {
       "children": [
         {
-          "systemName": "A.Value",
+          "id": "A.Value",
           "displayName": "Value",
           "coordinates": [
             "A",
@@ -13,7 +13,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "A",
+      "id": "A",
       "displayName": "A",
       "coordinates": [
         "A"
@@ -24,7 +24,7 @@
     {
       "children": [
         {
-          "systemName": "B.Value",
+          "id": "B.Value",
           "displayName": "Value",
           "coordinates": [
             "B",
@@ -34,7 +34,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "B",
+      "id": "B",
       "displayName": "B",
       "coordinates": [
         "B"
@@ -45,7 +45,7 @@
     {
       "children": [
         {
-          "systemName": "C.Value",
+          "id": "C.Value",
           "displayName": "Value",
           "coordinates": [
             "C",
@@ -55,7 +55,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "C",
+      "id": "C",
       "displayName": "C",
       "coordinates": [
         "C"
@@ -66,7 +66,7 @@
     {
       "children": [
         {
-          "systemName": "D.Value",
+          "id": "D.Value",
           "displayName": "Value",
           "coordinates": [
             "D",
@@ -76,7 +76,7 @@
           "$type": "MeshWeaver.Pivot.Models.Column"
         }
       ],
-      "systemName": "D",
+      "id": "D",
       "displayName": "D",
       "coordinates": [
         "D"
@@ -91,7 +91,7 @@
         "coordinates": [
           "a"
         ],
-        "systemName": "a",
+        "id": "a",
         "displayName": "a",
         "grouperName": "Dim1",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -111,7 +111,7 @@
         "coordinates": [
           "c"
         ],
-        "systemName": "c",
+        "id": "c",
         "displayName": "c",
         "grouperName": "Dim1",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -131,7 +131,7 @@
         "coordinates": [
           "NullGroup"
         ],
-        "systemName": "NullGroup",
+        "id": "NullGroup",
         "displayName": " ",
         "grouperName": "Dim1",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"

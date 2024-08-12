@@ -1,7 +1,7 @@
 {
   "columns": [
     {
-      "systemName": "BoP",
+      "id": "BoP",
       "displayName": "Beginning of Period",
       "coordinates": [
         "BoP"
@@ -10,7 +10,7 @@
       "$type": "MeshWeaver.Pivot.Models.Column"
     },
     {
-      "systemName": "Delta",
+      "id": "Delta",
       "displayName": "Delta",
       "coordinates": [
         "Delta"
@@ -19,7 +19,7 @@
       "$type": "MeshWeaver.Pivot.Models.Column"
     },
     {
-      "systemName": "EoP",
+      "id": "EoP",
       "displayName": "End of Period",
       "coordinates": [
         "EoP"
@@ -34,7 +34,7 @@
         "coordinates": [
           "TopGroup"
         ],
-        "systemName": "TopGroup",
+        "id": "TopGroup",
         "displayName": "Total",
         "grouperName": "Total",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"

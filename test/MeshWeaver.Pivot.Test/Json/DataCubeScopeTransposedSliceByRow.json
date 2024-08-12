@@ -1,7 +1,7 @@
 {
   "columns": [
     {
-      "systemName": "Value",
+      "id": "Value",
       "displayName": "Value",
       "coordinates": [
         "Value"
@@ -16,7 +16,7 @@
         "coordinates": [
           "2021"
         ],
-        "systemName": "2021",
+        "id": "2021",
         "displayName": "2021",
         "grouperName": "Year",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -29,7 +29,7 @@
           "2021",
           "BoP"
         ],
-        "systemName": "2021.BoP",
+        "id": "2021.BoP",
         "displayName": "Beginning of Period",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -45,7 +45,7 @@
           "2021",
           "Delta"
         ],
-        "systemName": "2021.Delta",
+        "id": "2021.Delta",
         "displayName": "Delta",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -61,7 +61,7 @@
           "2021",
           "EoP"
         ],
-        "systemName": "2021.EoP",
+        "id": "2021.EoP",
         "displayName": "End of Period",
         "grouperName": "PropertyName",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"

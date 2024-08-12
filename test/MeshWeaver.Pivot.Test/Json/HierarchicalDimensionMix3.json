@@ -1,7 +1,7 @@
 {
   "columns": [
     {
-      "systemName": "Value",
+      "id": "Value",
       "displayName": "Value",
       "coordinates": [
         "Value"
@@ -16,7 +16,7 @@
         "coordinates": [
           "D1"
         ],
-        "systemName": "D1",
+        "id": "D1",
         "displayName": "D1",
         "grouperName": "DimD",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -32,7 +32,7 @@
           "D1",
           "A1"
         ],
-        "systemName": "D1.A1",
+        "id": "D1.A1",
         "displayName": "A 1",
         "grouperName": "DimA0",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -49,7 +49,7 @@
           "A1",
           "A11"
         ],
-        "systemName": "D1.A1.A11",
+        "id": "D1.A1.A11",
         "displayName": "A 11",
         "grouperName": "DimA1",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -67,7 +67,7 @@
           "A11",
           "A111"
         ],
-        "systemName": "D1.A1.A11.A111",
+        "id": "D1.A1.A11.A111",
         "displayName": "A 111",
         "grouperName": "DimA2",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -85,7 +85,7 @@
           "A11",
           "A112"
         ],
-        "systemName": "D1.A1.A11.A112",
+        "id": "D1.A1.A11.A112",
         "displayName": "A 112",
         "grouperName": "DimA2",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -100,7 +100,7 @@
         "coordinates": [
           "D2"
         ],
-        "systemName": "D2",
+        "id": "D2",
         "displayName": "D2",
         "grouperName": "DimD",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -116,7 +116,7 @@
           "D2",
           "A1"
         ],
-        "systemName": "D2.A1",
+        "id": "D2.A1",
         "displayName": "A 1",
         "grouperName": "DimA0",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -133,7 +133,7 @@
           "A1",
           "A11"
         ],
-        "systemName": "D2.A1.A11",
+        "id": "D2.A1.A11",
         "displayName": "A 11",
         "grouperName": "DimA1",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -151,7 +151,7 @@
           "A11",
           "A111"
         ],
-        "systemName": "D2.A1.A11.A111",
+        "id": "D2.A1.A11.A111",
         "displayName": "A 111",
         "grouperName": "DimA2",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -166,7 +166,7 @@
         "coordinates": [
           "D3"
         ],
-        "systemName": "D3",
+        "id": "D3",
         "displayName": "D3",
         "grouperName": "DimD",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -182,7 +182,7 @@
           "D3",
           "A1"
         ],
-        "systemName": "D3.A1",
+        "id": "D3.A1",
         "displayName": "A 1",
         "grouperName": "DimA0",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -199,7 +199,7 @@
           "A1",
           "A11"
         ],
-        "systemName": "D3.A1.A11",
+        "id": "D3.A1.A11",
         "displayName": "A 11",
         "grouperName": "DimA1",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
@@ -217,7 +217,7 @@
           "A11",
           "A112"
         ],
-        "systemName": "D3.A1.A11.A112",
+        "id": "D3.A1.A11.A112",
         "displayName": "A 112",
         "grouperName": "DimA2",
         "$type": "MeshWeaver.Pivot.Models.RowGroup"
