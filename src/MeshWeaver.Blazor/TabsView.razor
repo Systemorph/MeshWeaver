@@ -14,7 +14,7 @@
     protected override void BindData()
     {
         base.BindData();
-        if(ActiveTabId != null)
+        if (ViewModel.ActiveTabId != null)
            DataBind(ViewModel.ActiveTabId, x => x.ActiveTabId);
         else 
             ActiveTabId = ViewModel.Areas.First().Id.ToString();

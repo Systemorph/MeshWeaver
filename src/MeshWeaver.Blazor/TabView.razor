@@ -1,15 +1,15 @@
 @inherits SkinnedView<TabSkin, TabView>
 
-<FluentTab Id="@Id" Class="@Class" Style="@Style" Label="@Label">
+<FluentTab Class="@Class" Style="@Style" Label="@SkinLabel">     
     <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
 </FluentTab>
 
 @code{
-
+    private string SkinLabel { get; set; }
     protected override void BindData()
     {
         base.BindData();
-        DataBind(Skin.Label, x => x.Label);
+        DataBind(Skin.Label, x => x.SkinLabel);
     }
 
 }

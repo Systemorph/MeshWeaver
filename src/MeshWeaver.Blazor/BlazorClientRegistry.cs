@@ -10,7 +10,7 @@ using static MeshWeaver.Layout.Client.LayoutClientConfiguration;
 
 namespace MeshWeaver.Blazor;
 
-public static class BlazorClientExtensions
+public static class BlazorClientRegistry
 {
     public static MessageHubConfiguration AddBlazor(this MessageHubConfiguration config) =>
         config.AddBlazor(x => x);
@@ -32,17 +32,14 @@ public static class BlazorClientExtensions
         if (control == null)
             return null;
 
-        var skin = control.Skins.LastOrDefault();
-        control = control.PopSkin();
-        var skinnedView = MapSkinnedView(control, stream, area, skin);
-
-        if (skinnedView != null)
-            return skinnedView;
+        control = control.PopSkin(out var skin);
+        if (skin != null)
+            return MapSkinnedView(control, stream, area, skin);
 
         return control switch
         {
             LayoutAreaControl layoutArea
-                => StandardView<LayoutAreaControl, LayoutArea>(layoutArea, stream, area),
+                => StandardView<LayoutAreaControl, LayoutArea>(layoutArea, null, area),
             HtmlControl html => StandardView<HtmlControl, HtmlView>(html, stream, area),
             SpinnerControl spinner => StandardView<SpinnerControl, Spinner>(spinner, stream, area),
             LabelControl label => StandardView<LabelControl, Label>(label, stream, area),
@@ -52,11 +49,7 @@ public static class BlazorClientExtensions
             NavLinkControl link => StandardView<NavLinkControl, NavLink>(link, stream, area),
             NavGroupControl group => StandardView<NavGroupControl, NavGroup>(group, stream, area),
             DataGridControl gc => StandardView<DataGridControl, DataGrid>(gc, stream, area),
-            TextBoxControl textbox => skin switch
-            {
-                TextBoxSkin.Search => StandardSkinnedView<TextBoxControl, SearchView>(textbox, stream, area, skin),
-                _ => StandardView<TextBoxControl, Textbox>(textbox, stream, area)
-            },
+            TextBoxControl textbox => StandardView<TextBoxControl, Textbox>(textbox, stream, area),
             ComboboxControl combobox => StandardView<ComboboxControl, Combobox>(combobox, stream, area),
             ListboxControl listbox => StandardView<ListboxControl, Listbox>(listbox, stream, area),
             ToolbarControl toolbar => StandardView<ToolbarControl, Toolbar>(toolbar, stream, area),
@@ -68,13 +61,7 @@ public static class BlazorClientExtensions
             MarkdownControl markdown => StandardView<MarkdownControl, MarkdownView>(markdown, stream, area),
             NamedAreaControl namedView => StandardView<NamedAreaControl, NamedAreaView>(namedView, stream, area),
             SpacerControl spacer => StandardView<SpacerControl, SpacerView>(spacer, stream, area),
-            LayoutStackControl stack => skin switch
-            {
-                LayoutSkin => StandardSkinnedView<LayoutStackControl, LayoutView>(stack, stream, area, skin),
-                LayoutGridSkin => StandardSkinnedView<LayoutStackControl, LayoutGridView>(stack, stream, area, skin),
-                SplitterSkin => StandardSkinnedView<LayoutStackControl, SplitterView>(stack, stream, area, skin),
-                _ => StandardView<LayoutStackControl, LayoutStackView>(stack, stream, area),
-            },
+            LayoutStackControl stack => StandardView<LayoutStackControl, LayoutStackView>(stack, stream, area), 
             _ => DelegateToDotnetInteractive(instance, stream, area),
         };
     }
@@ -84,6 +71,9 @@ public static class BlazorClientExtensions
     {
         return skin switch
         {
+            LayoutSkin layout => StandardSkinnedView<UiControl, LayoutView>(control, stream, area, layout),
+            LayoutGridSkin => StandardSkinnedView<UiControl, LayoutGridView>(control, stream, area, skin),
+            SplitterSkin => StandardSkinnedView<UiControl, SplitterView>(control, stream, area, skin),
             LayoutGridItemSkin gridItem => StandardSkinnedView<UiControl, LayoutGridItemView>(control, stream, area, gridItem),
             HeaderSkin header => StandardSkinnedView<UiControl, HeaderView>(control, stream, area, header),
             FooterSkin footer => StandardSkinnedView<UiControl, FooterView>(control, stream, area, footer),
@@ -92,7 +82,7 @@ public static class BlazorClientExtensions
             TabSkin tab => StandardSkinnedView<UiControl, TabView>(control, stream, area, tab),
             SplitterPaneSkin splitter
                 => StandardSkinnedView<UiControl, SplitterPane>(control, stream, area, splitter),
-            _ => null
+            _ => throw new NotSupportedException($"Skin {skin.GetType().Name} is not supported.")
         };
     }
 

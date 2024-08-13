@@ -2,9 +2,9 @@
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
-using Microsoft.FluentUI.AspNetCore.Components.DesignTokens;
 
 namespace MeshWeaver.Blazor;
 
@@ -27,14 +27,20 @@ public partial class LayoutArea
     private NamedAreaControl NamedArea =>
         new(AreaToBeRendered) { ShowProgress = ShowProgress, DisplayArea = DisplayArea };
 
+
     protected override void OnParametersSet()
     {
         if(IsUpToDate())
             return;
 
         BindStream();
-        BindViewModel();
         base.OnParametersSet();
+    }
+
+    protected override void BindData()
+    {
+        BindViewModel();
+        base.BindData();
     }
 
 
@@ -49,24 +55,24 @@ public partial class LayoutArea
 
     private bool ShowProgress { get; set; }
 
+    private ISynchronizationStream<JsonElement, LayoutAreaReference> AreaStream { get; set; }
     public override void Dispose()
     {
-        Stream?.Dispose();
-        Stream = null;
+        AreaStream?.Dispose();
+        AreaStream = null;
         base.Dispose();
     }
     private string RenderingArea { get; set; }
-    private bool BindStream()
+    private void BindStream()
     {
         var address = ViewModel.Address;
 
-        Stream?.Dispose();
+        AreaStream?.Dispose();
 
-        Stream = address.Equals(Hub.Address)
+        AreaStream = address.Equals(Hub.Address)
             ? Workspace.Stream.Reduce<JsonElement, LayoutAreaReference>(ViewModel.Reference, address)
             : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, ViewModel.Reference);
 
-        return true;
     }
 
 }

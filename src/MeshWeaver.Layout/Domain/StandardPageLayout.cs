@@ -62,7 +62,7 @@ public static class StandardPageLayout
                             )
 
                     )
-                    .WithView(NamedArea(Footer).WithSkin(Footer))
+                    .WithView(NamedArea(Footer).WithSkin(Skins.Footer))
             );
 
     public static IEnumerable<Func<EntityStore, EntityStore>>

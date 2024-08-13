@@ -17,19 +17,22 @@ public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry, Seriali
         ref Utf8JsonReader reader,
         Type typeToConvert,
         JsonSerializerOptions options
-    )
-    {
-        if (reader.TokenType == JsonTokenType.Number)
-            // Convert numeric values to strings
-            return reader.TryGetInt64(out long l)
+    ) =>
+        reader.TokenType switch
+        {
+            JsonTokenType.Number => reader.TryGetInt64(out var l)
                 ? l.ToString()
-                : reader.GetDouble().ToString(CultureInfo.InvariantCulture);
+                : reader.GetDouble().ToString(CultureInfo.InvariantCulture),
+            JsonTokenType.String => reader.GetString(),
+            JsonTokenType.True => true,
+            JsonTokenType.False => false,
+            JsonTokenType.Null => null,
+            _ => DeserializeNode(ref reader, typeToConvert, options)
+        };
 
-        if (reader.TokenType == JsonTokenType.String)
-            // Keep string values as-is
-            return reader.GetString();
-
-        using JsonDocument doc = JsonDocument.ParseValue(ref reader);
+    private object DeserializeNode(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        using var doc = JsonDocument.ParseValue(ref reader);
         var node = doc.RootElement.AsNode();
         return Deserialize(node, typeToConvert, options);
     }

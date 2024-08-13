@@ -8,7 +8,7 @@ public record TabsControl() :
     public TabsControl WithTab(TabSkin skin, UiControl item, Func<NamedAreaControl, NamedAreaControl> options = null)
     {
         options ??= x => x;
-        return WithItem(item, x => options.Invoke(x.WithId(skin.Label).WithSkin(skin)));
+        return WithItem(item.WithSkin(skin), x => options.Invoke(x.WithId(skin.Label)));
     }
 
     public object ActiveTabId { get; init; }

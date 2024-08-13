@@ -6,17 +6,13 @@
 
 
 <PageTitle>@PageTitle</PageTitle>
-
-<LayoutArea ViewModel="@ViewModel"/>
+<LayoutArea ViewModel="@ViewModel" />
 
 @code{
     private string area;
     private string id;
-    private LayoutAreaControl ViewModel => new(Address,Reference)
-    {
-        ShowProgress = true,
-        DisplayArea = Area.Wordify()
-    };
+    private LayoutAreaControl ViewModel { get; set; }
+        
     [Parameter]
     public string Application { get; set; }
     [Parameter]
@@ -47,5 +43,15 @@
         Id = Id,
         Layout = StandardPageLayout.Page,
     };
+
+    protected override void OnParametersSet()
+    {
+        ViewModel = new(Address,Reference)
+        {
+            ShowProgress = true,
+            DisplayArea = Area.Wordify()
+        };
+
+    }
 
 }

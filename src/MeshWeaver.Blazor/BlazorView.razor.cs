@@ -40,7 +40,7 @@ namespace MeshWeaver.Blazor
             RenderedViewModel = ViewModel;
             stream = Stream;
             Logger.LogDebug("Preparing data bindings for area {Area}", Area);
-
+            DisposeBindings();
             BindData();
         }
 
@@ -176,7 +176,6 @@ namespace MeshWeaver.Blazor
 
         protected virtual void BindData()
         {
-            DisposeBindings();
 
             if (ViewModel != null)
             {
