@@ -63,7 +63,7 @@
         "coordinates": [
           "BoP",
           "P",
-          "2021"
+          2021
         ],
         "id": "BoP.P.2021",
         "displayName": "2021",
@@ -117,7 +117,7 @@
         "coordinates": [
           "Delta",
           "P",
-          "2021"
+          2021
         ],
         "id": "Delta.P.2021",
         "displayName": "2021",
@@ -171,7 +171,7 @@
         "coordinates": [
           "EoP",
           "P",
-          "2021"
+          2021
         ],
         "id": "EoP.P.2021",
         "displayName": "2021",
