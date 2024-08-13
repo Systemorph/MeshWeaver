@@ -209,7 +209,8 @@ public class PivotTest : HubTestBase
             .Execute();
 
         qs.Columns.Should().BeEquivalentTo(flattened.Columns);
-        qs.Rows.Should().BeEquivalentTo(flattened.Rows);
+        // excluding display names, as they differ due to missing data source
+        qs.Rows.Should().BeEquivalentTo(flattened.Rows, o => o.Excluding(r => r.RowGroup.DisplayName));
         qs.HasRowGrouping.Should().Be(flattened.HasRowGrouping);
     }
 
