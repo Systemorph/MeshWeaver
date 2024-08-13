@@ -58,9 +58,17 @@ public abstract record UiControl(object Data) : IUiControl
     // TODO V10: Consider generalizing to WorkspaceReference. (22.07.2024, Roland Bürgi)
     public string DataContext { get; init; } = string.Empty;
 
-    public UiControl PopSkin() =>
-        this with { Skins = Skins.Count == 0 ? Skins : Skins.RemoveAt(Skins.Count - 1) };
-    
+    public UiControl PopSkin(out object skin)
+    {
+        if (Skins.Count == 0)
+        {
+            skin = null;
+            return this;
+        }
+        skin = Skins[^1];
+        return this with { Skins = Skins.Count == 0 ? Skins : Skins.RemoveAt(Skins.Count - 1) };
+    }
+
     public UiControl WithSkin(object skin)
     => this with { Skins = Skins.Add(skin) };
 
