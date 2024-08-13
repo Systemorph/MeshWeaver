@@ -7,16 +7,16 @@
 
 <PageTitle>@PageTitle</PageTitle>
 
-<LayoutArea 
-    Address="@Address" 
-    Reference="@Reference" 
-    Id="@Id" 
-/>
+<LayoutArea ViewModel="@ViewModel"/>
 
 @code{
     private string area;
     private string id;
-
+    private LayoutAreaControl ViewModel => new(Address,Reference)
+    {
+        ShowProgress = true,
+        DisplayArea = Area.Wordify()
+    };
     [Parameter]
     public string Application { get; set; }
     [Parameter]

@@ -108,8 +108,8 @@ public abstract record UiControl(object Data) : IUiControl
             return other.Data is null;
 
         if(Data is IEnumerable<object> e)
-            return other.Data is IEnumerable<object> e2 && e.SequenceEqual(e2, JsonObjectEqualityComparer.Singleton);
-        return JsonObjectEqualityComparer.Singleton.Equals(Data, other.Data);
+            return other.Data is IEnumerable<object> e2 && e.SequenceEqual(e2, JsonObjectEqualityComparer.Instance);
+        return JsonObjectEqualityComparer.Instance.Equals(Data, other.Data);
     }
 
 

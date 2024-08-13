@@ -129,11 +129,11 @@ namespace MeshWeaver.GridModel
                 return true;
 
             return ColumnDefs.SequenceEqual(other.ColumnDefs) &&
-                   RowData.SequenceEqual(other.RowData, JsonObjectEqualityComparer.Singleton) &&
+                   RowData.SequenceEqual(other.RowData, JsonObjectEqualityComparer.Instance) &&
                    EqualityComparer<ColDef>.Default.Equals(DefaultColDef, other.DefaultColDef) &&
                    EqualityComparer<ColGroupDef>.Default.Equals(DefaultColGroupDef, other.DefaultColGroupDef) &&
                    EqualityComparer<ColDef>.Default.Equals(AutoGroupColumnDef, other.AutoGroupColumnDef) &&
-                   JsonObjectEqualityComparer.Singleton.Equals(SideBar, other.SideBar) &&
+                   JsonObjectEqualityComparer.Instance.Equals(SideBar, other.SideBar) &&
                    PivotMode == other.PivotMode &&
                    PivotPanelShow == other.PivotPanelShow &&
                    SuppressAggFuncInHeader == other.SuppressAggFuncInHeader &&
@@ -172,11 +172,11 @@ namespace MeshWeaver.GridModel
         {
             var hash = new HashCode();
             hash.Add(ColumnDefs);
-            hash.Add(RowData, JsonObjectEqualityComparer.Singleton);
+            hash.Add(RowData, JsonObjectEqualityComparer.Instance);
             hash.Add(DefaultColDef);
             hash.Add(DefaultColGroupDef);
             hash.Add(AutoGroupColumnDef);
-            hash.Add(SideBar, JsonObjectEqualityComparer.Singleton);
+            hash.Add(SideBar, JsonObjectEqualityComparer.Instance);
             hash.Add(PivotMode);
             hash.Add(PivotPanelShow);
             hash.Add(SuppressAggFuncInHeader);

@@ -4,14 +4,21 @@ namespace MeshWeaver.Layout;
 
 public class JsonObjectEqualityComparer : IEqualityComparer<object>
 {
-    public static readonly JsonObjectEqualityComparer Singleton = new();
+    public static readonly JsonObjectEqualityComparer Instance = new();
     public new bool Equals(object x, object y)
     {
+        if(x == null)
+            return y == null;
+        if(y == null)
+            return false;
+
         if (x is JsonObject jsonX && y is JsonObject jsonY)
         {
             return jsonX.ToString() == jsonY.ToString();
         }
-        return x?.Equals(y) ?? y == null;
+        if(x is IEnumerable<object> enumerable && y is IEnumerable<object> yEnumerable)
+            return enumerable.SequenceEqual(yEnumerable, this);
+        return x.Equals(y);
     }
 
     public int GetHashCode(object obj)

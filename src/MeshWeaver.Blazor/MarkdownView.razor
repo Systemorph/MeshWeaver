@@ -12,35 +12,48 @@
 
 @foreach (var component in LayoutAreaComponents)
 {
-    <div id="@(ComponentContainerId(component.DivId))" style="display:none;">
-        <LayoutArea Address="@Stream.Owner" Reference="@component.Reference" />
-    </div>
+    <div id="@(ComponentContainerId(component.Id.ToString()))" style="display:none;">
+        Id: @component.Id
+        Area: @component.DisplayArea
+        Address: @component.Address
+@*         <LayoutArea ViewModel="@component" Area="@SubArea(component.Id.ToString())"/>*@
+     </div>
 }
 </div>
 @code 
 {
-    private IReadOnlyList<LayoutAreaComponentInfo> LayoutAreaComponents { get; set; } = [];
+    private IReadOnlyList<LayoutAreaControl> LayoutAreaComponents { get; set; } = [];
     private string Html { get; set; }
     protected override void BindData()
     {
         base.BindData();
-        DataBind<string>(ViewModel.Data, RenderMarkdown);
+        RenderMarkdown();
     }
 
-    private bool RenderMarkdown(string markdown)
+    private void RenderMarkdown()
     {
-        var layoutAreaExtension = new LayoutAreaMarkdownExtension(Stream.Hub);
-        var pipeline = new MarkdownPipelineBuilder()
-            .UseAdvancedExtensions()
-            .Use(layoutAreaExtension)
-            .Build();
-        var newHtml = Markdown.ToHtml(markdown, pipeline);
-        var newLayoutComponents = layoutAreaExtension.MarkdownParser.Areas;
-        if (newHtml == Html && LayoutAreaComponents.SequenceEqual(newLayoutComponents))
-            return false;
-        Html = newHtml;
-        LayoutAreaComponents = newLayoutComponents;
-        return true;
+        AddBinding(Convert<string>(ViewModel.Data).Subscribe(
+            markdown =>
+            {
+                var layoutAreaExtension = new LayoutAreaMarkdownExtension(Stream.Hub);
+                var pipeline = new MarkdownPipelineBuilder()
+                    .UseAdvancedExtensions()
+                    .Use(layoutAreaExtension)
+                    .Build();
+                var newHtml = Markdown.ToHtml(markdown, pipeline);
+                var newLayoutComponents =
+                    layoutAreaExtension
+                        .MarkdownParser
+                        .Areas
+                        .Select(component => new LayoutAreaControl(Stream.Owner, component.Reference) { Id = component.DivId })
+                        .ToArray();
+                if (newHtml == Html && LayoutAreaComponents.SequenceEqual(newLayoutComponents))
+                    return;
+                Html = newHtml;
+                LayoutAreaComponents = newLayoutComponents;
+                RequestStateChange();
+            })
+        );
     }
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -50,7 +63,7 @@
 
             foreach (var component in LayoutAreaComponents)
             {
-                await JsRuntime.InvokeVoidAsync("interop.moveComponentToTarget", ComponentContainerId(component.DivId), component.DivId);
+                await JsRuntime.InvokeVoidAsync("interop.moveComponentToTarget", ComponentContainerId(component.Id.ToString()), component.Id.ToString());
             }
         }
     }

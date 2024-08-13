@@ -33,9 +33,9 @@
 
         if (ViewModel != null)
         {
-            DataBindProperty(ViewModel.Autocomplete, x => x.Autocomplete);
-            DataBindProperty(ViewModel.IconStart, x => x.IconStart);
-            DataBindProperty(ViewModel.IconEnd, x => x.IconEnd);
+            DataBind(ViewModel.Autocomplete, x => x.Autocomplete);
+            DataBind(ViewModel.IconStart, x => x.IconStart);
+            DataBind(ViewModel.IconEnd, x => x.IconEnd);
         }
     }
 }

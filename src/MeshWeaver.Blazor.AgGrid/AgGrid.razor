@@ -35,7 +35,7 @@
     protected override void BindData()
     {
         base.BindData();
-        DataBindProperty(ViewModel.Data, o => o.Options);
+        DataBind(ViewModel.Data, o => o.Options);
     }
 
     private readonly string id = Guid.NewGuid().ToString();

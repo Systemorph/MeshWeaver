@@ -18,9 +18,9 @@
 
         if (ViewModel != null)
         {
-            DataBindProperty(ViewModel.Data, x => x.Title);
-            DataBindProperty(ViewModel.Href, x => x.Href);
-            DataBindProperty(ViewModel.Icon, x => x.Icon);
+            DataBind(ViewModel.Data, x => x.Title);
+            DataBind(ViewModel.Href, x => x.Href);
+            DataBind(ViewModel.Icon, x => x.Icon);
         }
     }
 

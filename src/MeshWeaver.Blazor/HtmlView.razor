@@ -10,6 +10,6 @@
     protected override void BindData()
     {
         base.BindData();
-        DataBindProperty(ViewModel.Data, h => h.Html, o => o is null ? default : new(o.ToString()!));
+        DataBind(ViewModel.Data, h => h.Html, o => o is null ? default : new(o.ToString()!));
     }
 }

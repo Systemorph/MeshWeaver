@@ -63,11 +63,11 @@
     protected override void BindData()
     {
         base.BindData();
-        DataBind<object>(ViewModel.Data, x =>
-        {
-            QueryableData = ((System.Collections.IEnumerable)x)?.Cast<JsonObject>().AsQueryable();
-            return true;
-        });
+        DataBind(
+            ViewModel.Data,
+            x => x.QueryableData,
+            o => ((IEnumerable<object>)o)?.Cast<JsonObject>().AsQueryable()
+        );
     }
 
     protected override void OnInitialized()

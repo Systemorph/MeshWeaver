@@ -11,10 +11,6 @@
         builder.OpenComponent(0, ViewDescriptor.Type);
         var index = 0;
 
-        if(!ViewDescriptor.Parameters.ContainsKey(nameof(IsVisible)))
-        {
-            builder.AddAttribute(++index, nameof(IsVisible), IsVisible);
-        }
         foreach (var parameter in ViewDescriptor.Parameters)
         {
             builder.AddAttribute(++index, parameter.Key, parameter.Value);

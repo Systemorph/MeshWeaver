@@ -49,7 +49,7 @@ public class StandardPageLayoutTest(ITestOutputHelper output) : HubTestBase(outp
                 reference
             );
 
-            var control = await stream.GetControl(reference.Area);
+            var control = await stream.GetControlAsync(reference.Area);
             control
                 .Should()
                 .BeOfType<LayoutStackControl>()
@@ -57,23 +57,23 @@ public class StandardPageLayoutTest(ITestOutputHelper output) : HubTestBase(outp
                 .HaveCount(2)
                 ;
 
-            var page = await stream.GetControl(StandardPageLayout.Page);
+            var page = await stream.GetControlAsync(StandardPageLayout.Page);
             var stack = page.Should().BeOfType<LayoutStackControl>().Which;
                 stack.Areas.Should().HaveCountGreaterThan(0)
                 .And.Subject.Should().BeEquivalentTo(Enumerable.Range(1, stack.Areas.Count).Select(i => new NamedAreaControl($"{StandardPageLayout.Page}/{i}"){Id = i.ToString()}))
                 ;
 
-            var header = await stream.GetControl(StandardPageLayout.Header);
+            var header = await stream.GetControlAsync(StandardPageLayout.Header);
             header.Should().BeOfType<LayoutStackControl>()
                 .Which.Areas.Should().HaveCountGreaterThan(0);
-            var footer = await stream.GetControl(StandardPageLayout.Footer);
+            var footer = await stream.GetControlAsync(StandardPageLayout.Footer);
             footer.Should().BeOfType<LayoutStackControl>()
                 .Which.Areas.Should().HaveCountGreaterThan(0);
-            var mainContent = await stream.GetControl(StandardPageLayout.MainContent);
+            var mainContent = await stream.GetControlAsync(StandardPageLayout.MainContent);
             mainContent.Should().BeOfType<NamedAreaControl>()
                 .Which.Area.Should().Be(reference.Area);
 
-            var navMenu = await stream.GetControl(StandardPageLayout.NavMenu);
+            var navMenu = await stream.GetControlAsync(StandardPageLayout.NavMenu);
             navMenu.Should().BeOfType<NavMenuControl>()
                 .Which.Areas.Should().HaveCount(2)
                 ;

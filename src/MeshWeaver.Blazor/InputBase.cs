@@ -34,12 +34,12 @@ public abstract class InputBase<TViewModel, TView, TData> : BlazorView<TViewMode
         base.BindData();
         if (ViewModel != null)
         {
-            DataBindProperty<TData>(ViewModel.Data, x => x.InnerData);
-            DataBindProperty<string>(ViewModel.Placeholder, x => x.Placeholder);
-            DataBindProperty<bool>(ViewModel.Disabled, x => x.Disabled);
-            DataBindProperty<bool>(ViewModel.AutoFocus, x => x.AutoFocus);
-            DataBindProperty<bool>(ViewModel.Immediate, x => x.Immediate);
-            DataBindProperty<int>(ViewModel.ImmediateDelay, x => x.ImmediateDelay);
+            DataBind<TData>(ViewModel.Data, x => x.InnerData);
+            DataBind<string>(ViewModel.Placeholder, x => x.Placeholder);
+            DataBind<bool>(ViewModel.Disabled, x => x.Disabled);
+            DataBind<bool>(ViewModel.AutoFocus, x => x.AutoFocus);
+            DataBind<bool>(ViewModel.Immediate, x => x.Immediate);
+            DataBind<int>(ViewModel.ImmediateDelay, x => x.ImmediateDelay);
 
             DataPointer = ViewModel.Data as JsonPointerReference;
         }

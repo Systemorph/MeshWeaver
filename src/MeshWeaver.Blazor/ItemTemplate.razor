@@ -28,7 +28,7 @@
     protected override async Task OnParametersSetAsync()
     {
         await base.OnParametersSetAsync();
-        DataBindProperty(ViewModel.Data, d => d.Data);
+        DataBind(ViewModel.Data, d => d.Data);
         view = Stream.GetControl(await Stream.FirstAsync(), ViewArea);
     }
 

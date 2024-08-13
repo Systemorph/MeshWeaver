@@ -24,10 +24,10 @@
         base.BindData();
         if (ViewModel != null)
         {
-            DataBindProperty(ViewModel.Data, x => x.Title);
-            DataBindProperty(ViewModel.IconStart, x => x.IconStart);
-            DataBindProperty(ViewModel.IconEnd, x => x.IconEnd);
-            DataBindProperty(ViewModel.Disabled, x => x.Disabled);
+            DataBind(ViewModel.Data, x => x.Title);
+            DataBind(ViewModel.IconStart, x => x.IconStart);
+            DataBind(ViewModel.IconEnd, x => x.IconEnd);
+            DataBind(ViewModel.Disabled, x => x.Disabled);
         }
     }
 

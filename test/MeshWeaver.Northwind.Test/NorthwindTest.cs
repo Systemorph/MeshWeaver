@@ -132,7 +132,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             new HostAddress(),
             new LayoutAreaReference(viewName)
         );
-        var dashboard = (await stream.GetControl(viewName))
+        var dashboard = (await stream.GetControlAsync(viewName))
             .Should()
             .BeOfType<LayoutStackControl>()
             .Subject;
@@ -145,7 +145,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
                 .ToAsyncEnumerable()
                 .SelectAwait(async s => new KeyValuePair<string, object>(
                     s.Area.ToString(),
-                    await stream.GetControl(s.Area.ToString())
+                    await stream.GetControlAsync(s.Area.ToString())
                 ))
                 .ToArrayAsync();
             controls.AddRange(children);

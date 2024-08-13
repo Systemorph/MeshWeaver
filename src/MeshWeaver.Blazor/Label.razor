@@ -22,22 +22,10 @@
     protected override void BindData()
     {
         base.BindData();
-        DataBindProperty(ViewModel.Data, x => x.InternalData );
-        DataBind<Layout.HorizontalAlignment>(ViewModel.Alignment, x =>
-        {
-            Alignment = x.ToFluentHorizontalAlignment();
-            return true;
-        });
-        DataBindProperty<bool>(ViewModel.Disabled, x => x.Disabled);
-        DataBind<Layout.Typography>(ViewModel.Typo, x =>
-        {
-            Typo = x.ToFluentTypography();
-            return true;
-        });
-        DataBind<Layout.FontWeight>(ViewModel.Weight, x =>
-        {
-            Weight = x.ToFluentFontWeight();
-            return true;
-        });
+        DataBind(ViewModel.Data, x => x.InternalData );
+        DataBind(ViewModel.Disabled, x => x.Disabled);
+        DataBind(ViewModel.Alignment, x => x.Alignment, o => ((Layout.HorizontalAlignment)o).ToFluentHorizontalAlignment());
+        DataBind(ViewModel.Typo, x => x.Typo, o => ((Layout.Typography)o).ToFluentTypography());
+        DataBind(ViewModel.Weight, x => x.Weight, o => ((Layout.FontWeight)o).ToFluentFontWeight());
     }
 }

@@ -24,7 +24,7 @@
         base.BindData();
         if (ViewModel != null)
         {
-            DataBind<bool>(ViewModel.Data, x => IsChecked = x);
+            DataBind(ViewModel.Data, x => x.IsChecked);
             Pointer = ViewModel.Data as JsonPointerReference;
         }
     }

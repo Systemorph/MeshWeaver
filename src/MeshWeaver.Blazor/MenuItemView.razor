@@ -10,7 +10,7 @@
         base.BindData();
         if (ViewModel != null)
         {
-            DataBindProperty(ViewModel.Title, x => x.Title);
+            DataBind(ViewModel.Title, x => x.Title);
         }
 
     }

@@ -5,7 +5,6 @@ using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Hub.Fixture;
 using MeshWeaver.Layout;
-using MeshWeaver.Layout.Domain;
 using MeshWeaver.Messaging;
 using Xunit.Abstractions;
 

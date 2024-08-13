@@ -91,6 +91,7 @@ public static class DocumentationLayout
         return layout.WithDocumentation(contextFilter,
                 (tabs, _, context) => tabs.WithTab(name,
                     new LayoutAreaControl(layout.Hub.Address, new(nameof(Doc)) { Id = source.GetPath(name) })
+                        .WithDisplayArea(name)
                 )
             )
             ;

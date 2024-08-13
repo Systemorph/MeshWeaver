@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Components;
+﻿using System.Reactive.Linq;
+using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Layout;
 
@@ -6,56 +7,36 @@ namespace MeshWeaver.Blazor;
 
 public partial class NamedAreaView
 {
-    private IDisposable subscription;
     [Inject]
-    private ILogger<LayoutArea> Logger { get; set; }
+    private ILogger<NamedAreaView> Logger { get; set; }
     private UiControl RootControl { get; set; }
-
 
 
     private string DisplayArea { get; set; }
     private bool ShowProgress { get; set; }
 
+    private IDisposable subscription = null;
+
+    private string AreaToBeRendered { get; set; }
     protected override void BindData()
-    {
-        base.BindData();
-        DataBindProperty(ViewModel.DisplayArea, x => x.DisplayArea);
-        DataBindProperty(ViewModel.ShowProgress, x => x.ShowProgress);
-        BindToStream();
-    }
-
-    protected void BindToStream() =>
-        DataBind<string>(ViewModel.Area, x =>
-        {
-            Area = x;
-            subscription?.Dispose();
-            subscription = null;
-            if (Area == null)
-                return true;
-            subscription = Stream.GetControlStream(Area)
-                .Subscribe(item => InvokeAsync(() => Render(item as UiControl)));
-            return true;
-        });
-
-
-
-    private void Render(UiControl control)
-    {
-        Logger.LogDebug(
-            "Changing area {Area} to {Instance}",
-            Area,
-            control?.GetType().Name
-        );
-        if (Equals(RootControl, control))
-            return;
-        RootControl = control;
-        StateHasChanged();
-    }
-
-    public override void Dispose()
     {
         subscription?.Dispose();
         subscription = null;
-        base.Dispose();
+        RootControl = null;
+        AreaToBeRendered = ViewModel.Area.ToString();
+        base.BindData();
+        DataBind(ViewModel.DisplayArea, x => x.DisplayArea);
+        DataBind(ViewModel.ShowProgress, x => x.ShowProgress);
+        if (AreaToBeRendered != null)
+            AddBinding(Stream.GetControlStream(AreaToBeRendered)
+                .Subscribe(x =>
+                {
+                    RootControl = (UiControl)x;
+                    Logger.LogDebug("Setting area {Area} to rendering area {AreaToBeRendered} to type {Type}", Area,  AreaToBeRendered,x?.GetType().Name ?? "null");
+                    RequestStateChange();
+                })
+            );
     }
+
+
 }

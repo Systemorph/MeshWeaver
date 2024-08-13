@@ -42,7 +42,7 @@ public static class BlazorClientExtensions
         return control switch
         {
             LayoutAreaControl layoutArea
-                => LayoutAreaMap(layoutArea, stream, area),
+                => StandardView<LayoutAreaControl, LayoutArea>(layoutArea, stream, area),
             HtmlControl html => StandardView<HtmlControl, HtmlView>(html, stream, area),
             SpinnerControl spinner => StandardView<SpinnerControl, Spinner>(spinner, stream, area),
             LabelControl label => StandardView<LabelControl, Label>(label, stream, area),
@@ -78,16 +78,6 @@ public static class BlazorClientExtensions
             _ => DelegateToDotnetInteractive(instance, stream, area),
         };
     }
-
-    private static ViewDescriptor LayoutAreaMap(LayoutAreaControl layoutArea,
-        ISynchronizationStream<JsonElement, LayoutAreaReference> stream, string area)
-        => new(typeof(LayoutArea),
-            new Dictionary<string, object>
-            {
-                { nameof(LayoutArea.Address), layoutArea.Address },
-                { nameof(LayoutArea.Reference), layoutArea.Reference },
-                { nameof(LayoutArea.Id), layoutArea.Id },
-            });
 
 
     private static ViewDescriptor MapSkinnedView(UiControl control, ISynchronizationStream<JsonElement, LayoutAreaReference> stream, string area, object skin)
