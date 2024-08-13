@@ -1,4 +1,5 @@
-﻿using FluentAssertions;
+﻿using System.Reactive.Linq;
+using FluentAssertions;
 using MeshWeaver.Hub.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
@@ -32,15 +33,17 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
         var collectionName = workspace.DataContext.GetTypeSource(typeof(MyData)).CollectionName;
         var stream = workspace.GetStreamFor(new CollectionsReference(collectionName), new ClientAddress());
         stream.Should().NotBeNull();
-        stream.Reduce(new EntityReference(collectionName, Instance), new ClientAddress()).Subscribe(i => tracker.Add((MyData)i.Value));
+        stream.Reduce(new EntityReference(collectionName, Instance), new ClientAddress())
+            .Select(i => i.Value)
+            .Cast<MyData>()
+            .Where(i => i != null)
+            .Subscribe(tracker.Add);
 
         var count = 0;
         Enumerable.Range(0, 10).AsParallel().ForEach(_ => stream.Update(state => stream.ToChangeItem((state ?? new()).Update(collectionName, instances  => (instances??new()).Update(Instance, new MyData(Instance,(++count).ToString()))))));
         await DisposeAsync();
-        tracker.Should().HaveCount(11);
-        for (var i = 0; i < 10; i++)
-            tracker[i].Text.Should().Be((i+1).ToString());
 
+        tracker.Should().HaveCount(10)
+            .And.Subject.Select(t => t.Text).Should().Equal(Enumerable.Range(0, 10).Select(exp => (exp+1).ToString()));
     }
-
 }
