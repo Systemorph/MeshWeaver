@@ -167,7 +167,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var controlName = $"{ViewName}/1/{nameof(SupplierSummaryArea.SupplierSummaryGrid)}"; // TODO V10: we need a better way to address sub-areas (2024/08/12, Dmitry Kalabin)
         var stream = workspace.GetStreamFor(new LayoutAreaReference(ViewName), new HostAddress());
 
-        var control = await stream.GetControl(controlName);
+        var control = await stream.GetControlAsync(controlName);
         var grid = control.Should().BeOfType<GridControl>().Subject;
         grid.Data.Should()
             .BeOfType<GridOptions>()
