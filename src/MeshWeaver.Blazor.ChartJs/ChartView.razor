@@ -17,7 +17,7 @@
         {
             jsModule = await JsRuntime.Import("index.mjs");
 
-            DataBindProperty(ViewModel.Data, o => o.Options);
+            DataBind(ViewModel.Data, o => o.Options);
         }
 
         if (jsModule is not null)

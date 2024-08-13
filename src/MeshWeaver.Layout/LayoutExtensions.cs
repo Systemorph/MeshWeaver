@@ -2,7 +2,6 @@
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Humanizer;
 using Json.Patch;
 using Json.Path;
 using Json.Pointer;
@@ -88,13 +87,31 @@ public static class LayoutExtensions
     public static IObservable<object> GetControlStream(
         this ISynchronizationStream<JsonElement> synchronizationItems,
         string area
-    ) =>
-        synchronizationItems.Select(i =>
-            JsonPointer
-                .Parse(LayoutAreaReference.GetControlPointer(area))
-                .Evaluate(i.Value)
-                ?.Deserialize<object>(synchronizationItems.Hub.JsonSerializerOptions)
-        );
+    )
+    {
+        var controlPointer = LayoutAreaReference.GetControlPointer(area);
+        var first = true;
+        return synchronizationItems
+            .Where(i => first || i.Patch == null || i.Patch.Operations.Any(p =>
+                p.Path.ToString().StartsWith(controlPointer)))
+            .Select(i =>
+                {
+                    first = false;
+                    return JsonPointer
+                        .Parse(LayoutAreaReference.GetControlPointer(area))
+                        .Evaluate(i.Value)
+                        ?.Deserialize<object>(synchronizationItems.Hub.JsonSerializerOptions);
+                }
+            );
+    }
+
+    public static object GetControl(
+        this ISynchronizationStream<JsonElement> stream,
+        string area
+    ) => JsonPointer
+        .Parse(LayoutAreaReference.GetControlPointer(area))
+        .Evaluate(stream.Current.Value)
+        ?.Deserialize<object>(stream.Hub.JsonSerializerOptions);
 
     public static IObservable<object> GetControlStream(
         this ISynchronizationStream<EntityStore> synchronizationItems,
@@ -105,17 +122,17 @@ public static class LayoutExtensions
                 ?.Instances.GetValueOrDefault(area)
         );
 
-    public static async Task<object> GetControl(
+    public static async Task<object> GetControlAsync(
         this ISynchronizationStream<JsonElement> synchronizationItems,
         string area
     ) => await synchronizationItems.GetControlStream(area).FirstAsync(x => x != null);
 
-    public static async Task<object> GetControl(
+    public static async Task<object> GetControlAsync(
         this ISynchronizationStream<EntityStore> synchronizationItems,
         string area
     ) => await synchronizationItems.GetControlStream(area).FirstAsync(x => x != null);
 
-    public static async Task<object> GetData(
+    public static async Task<object> GetDataAsync(
         this ISynchronizationStream<EntityStore> synchronizationItems,
         string id
     ) => await synchronizationItems.GetDataStream(id).FirstAsync(x => x != null);
