@@ -438,11 +438,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             );
         });
 
-        resultsControl = await stream
+        var hasControl = await stream
             .GetControlStream(resultsArea)
             .Select(x =>((string)((HtmlControl)x).Data).Contains("<pre>False</pre>"))
             .Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => !x);
+        hasControl.Should().BeTrue();
     }
     [HubFact]
     public void TestSerialization()

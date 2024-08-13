@@ -31,9 +31,13 @@ public partial class NamedAreaView
             AddBinding(Stream.GetControlStream(AreaToBeRendered)
                 .Subscribe(x =>
                 {
-                    RootControl = (UiControl)x;
-                    Logger.LogDebug("Setting area {Area} to rendering area {AreaToBeRendered} to type {Type}", Area,  AreaToBeRendered,x?.GetType().Name ?? "null");
-                    RequestStateChange();
+                    InvokeAsync(() =>
+                    {
+                        RootControl = (UiControl)x;
+                        Logger.LogDebug("Setting area {Area} to rendering area {AreaToBeRendered} to type {Type}", Area,
+                            AreaToBeRendered, x?.GetType().Name ?? "null");
+                        RequestStateChange();
+                    });
                 })
             );
     }

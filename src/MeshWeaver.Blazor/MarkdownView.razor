@@ -13,10 +13,7 @@
 @foreach (var component in LayoutAreaComponents)
 {
     <div id="@(ComponentContainerId(component.Id.ToString()))" style="display:none;">
-        Id: @component.Id
-        Area: @component.DisplayArea
-        Address: @component.Address
-@*         <LayoutArea ViewModel="@component" Area="@SubArea(component.Id.ToString())"/>*@
+        <LayoutArea ViewModel="@component" Area="@SubArea(component.Id.ToString())"/>
      </div>
 }
 </div>
@@ -33,7 +30,7 @@
     private void RenderMarkdown()
     {
         AddBinding(Convert<string>(ViewModel.Data).Subscribe(
-            markdown =>
+            markdown => InvokeAsync(() =>
             {
                 var layoutAreaExtension = new LayoutAreaMarkdownExtension(Stream.Hub);
                 var pipeline = new MarkdownPipelineBuilder()
@@ -52,7 +49,7 @@
                 Html = newHtml;
                 LayoutAreaComponents = newLayoutComponents;
                 RequestStateChange();
-            })
+            }))
         );
     }
     protected override async Task OnAfterRenderAsync(bool firstRender)

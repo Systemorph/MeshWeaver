@@ -30,19 +30,21 @@ namespace MeshWeaver.Blazor
 
         protected string Style { get; set; }
 
-        private TViewModel viewModel;
+        protected TViewModel RenderedViewModel { get; private set; }
         private ISynchronizationStream<JsonElement, LayoutAreaReference> stream;
         protected override void OnParametersSet()
         {
             base.OnParametersSet();
-            if (Equals(viewModel, ViewModel) && Equals(stream, Stream))
+            if (IsUpToDate())
                 return;
-            viewModel = ViewModel;
+            RenderedViewModel = ViewModel;
             stream = Stream;
             Logger.LogDebug("Preparing data bindings for area {Area}", Area);
 
             BindData();
         }
+
+        protected bool IsUpToDate() => Equals(RenderedViewModel, ViewModel) && Equals(stream, Stream);
 
         protected string Label { get; set; }
 
@@ -60,7 +62,6 @@ namespace MeshWeaver.Blazor
         }
 
 
-        private readonly List<IDisposable> bindings = new();
         protected void AddBinding(IDisposable binding)
         {
             bindings.Add(binding);
@@ -74,12 +75,15 @@ namespace MeshWeaver.Blazor
                 throw new ArgumentException("Expression needs to point to a property.");
 
             if (value is JsonPointerReference reference)
-                bindings.Add(Convert(value, conversion)
+                bindings.Add(DataBind(reference, conversion)
                 .Subscribe(v =>
                     {
                         Logger.LogTrace("Binding property {property} of {area}", property.Name, Area);
-                        property.SetValue(this, v);
-                        RequestStateChange();
+                        InvokeAsync(() =>
+                        {
+                            property.SetValue(this, v);
+                            RequestStateChange();
+                        });
                     }
                 )
             );
@@ -91,17 +95,7 @@ namespace MeshWeaver.Blazor
 
         protected void RequestStateChange()
         {
-            StartDebounceTimer();
-        }
-        private readonly Timer debounceTimer;
-
-        public BlazorView()
-        {
-            debounceTimer = new(_ => InvokeAsync(StateHasChanged));
-        }
-        private void StartDebounceTimer()
-        {
-            debounceTimer.Change(100, Timeout.Infinite);
+            StateHasChanged();
         }
         protected IObservable<T> Convert<T>(object value,  Func<object, T> conversion = null)
         {
@@ -113,15 +107,9 @@ namespace MeshWeaver.Blazor
             return Observable.Return(ConvertSingle(value, conversion));
         }
 
-        private IObservable<T> DataBind<T>(JsonPointerReference reference, Func<object, T> conversion)
-        {
-            var pointer = JsonPointer.Parse(reference.Pointer);
-
-            return Stream
-                .Where(change => change.Patch == null || change.Patch.Operations.Any(p => p.Path.ToString().StartsWith(reference.Pointer)))
-                .Select(change => ConvertJson(pointer.Evaluate(change.Value), conversion)
-                );
-        }
+        private IObservable<T> DataBind<T>(JsonPointerReference reference, Func<object, T> conversion) => 
+            Stream.GetStream<object>(JsonPointer.Parse(reference.Pointer))
+                .Select(conversion ?? (x => (T)x));
 
         protected string SubArea(string area)
         => $"{Area}/{area}";
@@ -198,9 +186,12 @@ namespace MeshWeaver.Blazor
                 DataBind(ViewModel.Style, x => x.Style);
             }
         }
+        private readonly List<IDisposable> bindings = new();
 
         protected virtual void DisposeBindings()
         {
+            foreach (var d in bindings)
+                d.Dispose();
             bindings.Clear();
         }
 

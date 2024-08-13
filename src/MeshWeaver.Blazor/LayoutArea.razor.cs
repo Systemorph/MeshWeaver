@@ -29,10 +29,14 @@ public partial class LayoutArea
 
     protected override void OnParametersSet()
     {
+        if(IsUpToDate())
+            return;
+
         BindStream();
         BindViewModel();
         base.OnParametersSet();
     }
+
 
     private void BindViewModel()
     {
@@ -51,22 +55,11 @@ public partial class LayoutArea
         Stream = null;
         base.Dispose();
     }
-
+    private string RenderingArea { get; set; }
     private bool BindStream()
     {
         var address = ViewModel.Address;
 
-        if (Stream is not null && Equals(Stream?.Owner, address) && Equals(Stream?.Reference, ViewModel.Reference))
-            return false;
-
-        if (address is null)
-            throw new ArgumentNullException(nameof(address), "Address cannot be null.");
-        if (ViewModel.Reference is null)
-            throw new ArgumentNullException(nameof(Reference), "Reference cannot be null.");
-
-        Area = ViewModel.Reference.Area;
-        if (Area is null)
-            throw new ArgumentNullException(nameof(Area), "Reference cannot be null.");
         Stream?.Dispose();
 
         Stream = address.Equals(Hub.Address)

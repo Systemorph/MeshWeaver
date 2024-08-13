@@ -84,27 +84,42 @@ public static class LayoutExtensions
                 typeof(Icon)
             );
 
-    public static IObservable<object> GetControlStream(
+    public static IObservable<UiControl> GetControlStream(
         this ISynchronizationStream<JsonElement> synchronizationItems,
         string area
+    ) =>
+        synchronizationItems.GetStream<UiControl>(JsonPointer
+            .Parse(LayoutAreaReference.GetControlPointer(area)));
+
+    public static IObservable<T> GetStream<T>(
+        this ISynchronizationStream<JsonElement> synchronizationItems,
+        JsonPointer referencePointer
     )
     {
-        var controlPointer = LayoutAreaReference.GetControlPointer(area);
         var first = true;
         return synchronizationItems
-            .Where(i => first || i.Patch == null || i.Patch.Operations.Any(p =>
-                p.Path.ToString().StartsWith(controlPointer)))
+            .Where(i =>
+                first
+                || i.Patch == null
+                || i.Patch.Operations.Any(
+                    p =>
+                        p.Path
+                            .Segments
+                            .Zip
+                            (
+                                referencePointer.Segments,
+                                (x, y) => x.Equals(y))
+                            .Aggregate(false, (x, y) => x || y)))
             .Select(i =>
                 {
                     first = false;
-                    return JsonPointer
-                        .Parse(LayoutAreaReference.GetControlPointer(area))
-                        .Evaluate(i.Value)
-                        ?.Deserialize<object>(synchronizationItems.Hub.JsonSerializerOptions);
+                    var evaluated = referencePointer
+                        .Evaluate(i.Value);
+                    return  evaluated is null ? default
+                        : evaluated.Value.Deserialize<T>(synchronizationItems.Hub.JsonSerializerOptions);
                 }
             );
     }
-
     public static object GetControl(
         this ISynchronizationStream<JsonElement> stream,
         string area
