@@ -14,7 +14,7 @@
     {
       "rowGroup": {
         "coordinates": [
-          "2021"
+          2021
         ],
         "id": "2021",
         "displayName": "2021",
@@ -26,7 +26,7 @@
     {
       "rowGroup": {
         "coordinates": [
-          "2021",
+          2021,
           "BoP"
         ],
         "id": "2021.BoP",
@@ -42,7 +42,7 @@
     {
       "rowGroup": {
         "coordinates": [
-          "2021",
+          2021,
           "Delta"
         ],
         "id": "2021.Delta",
@@ -58,7 +58,7 @@
     {
       "rowGroup": {
         "coordinates": [
-          "2021",
+          2021,
           "EoP"
         ],
         "id": "2021.EoP",
