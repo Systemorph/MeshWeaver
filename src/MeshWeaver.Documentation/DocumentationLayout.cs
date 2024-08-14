@@ -78,7 +78,7 @@ public static class DocumentationLayout
                     : null)
                 .Where(x => x is { Control.Reference.Id: not null })
                 .Aggregate(tabs, (t, s) =>
-                    t.WithTab(s.TabName, s.Control)));
+                    t.WithTab(s.TabName, s.Control.WithDisplayArea(s.TabName))));
     }
     public static LayoutDefinition WithEmbeddedDocument(
         this LayoutDefinition layout,

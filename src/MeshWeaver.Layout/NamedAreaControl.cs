@@ -9,5 +9,9 @@
         public NamedAreaControl WithArea(object area)
             => this with { Area = area };
 
+        public NamedAreaControl WithDisplayArea(object displayArea)
+        => this with { DisplayArea = displayArea };
+
+
     }
 }

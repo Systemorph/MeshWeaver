@@ -44,7 +44,7 @@ namespace MeshWeaver.Blazor
             BindData();
         }
 
-        protected bool IsUpToDate() => Equals(RenderedViewModel, ViewModel) && Equals(stream, Stream);
+        protected bool IsUpToDate() => RenderedViewModel != null && RenderedViewModel.Equals(ViewModel) && Equals(stream, Stream);
 
         protected string Label { get; set; }
 
