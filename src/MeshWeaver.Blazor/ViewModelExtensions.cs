@@ -109,5 +109,7 @@ public static class ViewModelExtensions
         var ret = pointer.Evaluate(changeItem.Value);
         return ret == null ? default : ret.Value.Deserialize<TResult>(stream.Hub.JsonSerializerOptions);
     }
+    public static string GetArea(this NamedAreaControl control)
+        => control.Area.ToString();
 
 }

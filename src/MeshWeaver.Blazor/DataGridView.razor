@@ -1,8 +1,6 @@
 @using System.Text.Json.Nodes
-@using System.Text.Json
-@using System.Linq.Expressions
 @using MeshWeaver.Layout.DataGrid
-@inherits BlazorView<DataGridControl, DataGrid>
+@inherits BlazorView<DataGridControl, DataGridView>
 
 <div style="display: table; table-layout: fixed; width: 100%;">
     <div style="overflow-x: auto;">
@@ -46,32 +44,3 @@
     }
 </div>
 
-@code{
-
-
-    private PaginationState Pagination { get;  } = new()
-    {
-        ItemsPerPage = 10
-    };
-
-    private IQueryable<JsonObject> QueryableData {get;set;}
-
-    private Expression<Func<JsonObject, T>> GetPropertyExpression<T>(DataGridColumn<T> column)
-    {
-        return e => e.ContainsKey(column.Property) ? e[column.Property].Deserialize<T>(Stream.Hub.JsonSerializerOptions) : default;
-    }
-    protected override void BindData()
-    {
-        base.BindData();
-        DataBind(
-            ViewModel.Data,
-            x => x.QueryableData,
-            o => ((IEnumerable<object>)o)?.Cast<JsonObject>().AsQueryable()
-        );
-    }
-
-    protected override void OnInitialized()
-    {
-        Pagination.TotalItemCountChanged += (_, _) => StateHasChanged();
-    }
-}

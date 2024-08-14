@@ -25,33 +25,25 @@ public partial class LayoutArea
     public string DisplayArea { get; set; }
 
     private NamedAreaControl NamedArea =>
-        new(AreaToBeRendered) { ShowProgress = ShowProgress, DisplayArea = DisplayArea };
+        new(Area) { ShowProgress = ShowProgress, DisplayArea = DisplayArea };
 
-
-    protected override void OnParametersSet()
+    public override async Task SetParametersAsync(ParameterView parameters)
     {
-        if(IsUpToDate())
-            return;
-
+        await base.SetParametersAsync(parameters);
         BindStream();
-        base.OnParametersSet();
+        BindViewModel();
     }
 
-    protected override void BindData()
-    {
-        BindViewModel();
-        base.BindData();
-    }
+
 
 
     private void BindViewModel()
     {
         DataBind(ViewModel.DisplayArea, x => x.DisplayArea);
         DataBind(ViewModel.ShowProgress, x => x.ShowProgress);
-        DataBind(ViewModel.Reference.Layout ?? ViewModel.Reference.Area, x => x.AreaToBeRendered);
+        DataBind(ViewModel.Reference.Layout ?? ViewModel.Reference.Area, x => x.Area);
     }
 
-    public string AreaToBeRendered { get; set; }
 
     private bool ShowProgress { get; set; }
 
@@ -65,13 +57,16 @@ public partial class LayoutArea
     private string RenderingArea { get; set; }
     private void BindStream()
     {
-        var address = ViewModel.Address;
+        if (AreaStream != null)
+        {
+            if (ViewModel.Address.Equals(AreaStream.Owner) && ViewModel.Reference.Equals(AreaStream.Reference))
+                return;
+            AreaStream.Dispose();
+        }
 
-        AreaStream?.Dispose();
-
-        AreaStream = address.Equals(Hub.Address)
-            ? Workspace.Stream.Reduce<JsonElement, LayoutAreaReference>(ViewModel.Reference, address)
-            : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, ViewModel.Reference);
+        AreaStream = ViewModel.Address.Equals(Hub.Address)
+            ? Workspace.Stream.Reduce<JsonElement, LayoutAreaReference>(ViewModel.Reference, ViewModel.Address)
+            : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(ViewModel.Address, ViewModel.Reference);
 
     }
 

@@ -2,7 +2,7 @@
 @using MeshWeaver.Data.Serialization
 @foreach (var area in Container)
 {
-    <DispatchView ViewModel="@area" Stream="@Stream" Area="@ConvertArea(area)" />
+    <DispatchView ViewModel="@area" Stream="@Stream" Area="@area.GetArea()" />
 }
 
 @code
@@ -14,6 +14,4 @@
     public ISynchronizationStream<JsonElement, LayoutAreaReference> Stream { get; set; }
 
 
-    private string ConvertArea(NamedAreaControl control)
-        => control.Area.ToString();
 }

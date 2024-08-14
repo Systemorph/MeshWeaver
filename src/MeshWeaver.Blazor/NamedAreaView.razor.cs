@@ -33,6 +33,8 @@ public partial class NamedAreaView
                 {
                     InvokeAsync(() =>
                     {
+                        if(RootControl is null && x is null || (RootControl != null && RootControl.Equals(x)))
+                            return;
                         RootControl = (UiControl)x;
                         Logger.LogDebug("Setting area {Area} to rendering area {AreaToBeRendered} to type {Type}", Area,
                             AreaToBeRendered, x?.GetType().Name ?? "null");

@@ -48,7 +48,7 @@ public static class BlazorClientRegistry
             MenuItemControl menu => StandardView<MenuItemControl, MenuItemView>(menu, stream, area),
             NavLinkControl link => StandardView<NavLinkControl, NavLink>(link, stream, area),
             NavGroupControl group => StandardView<NavGroupControl, NavGroup>(group, stream, area),
-            DataGridControl gc => StandardView<DataGridControl, DataGrid>(gc, stream, area),
+            DataGridControl gc => StandardView<DataGridControl, DataGridView>(gc, stream, area),
             TextBoxControl textbox => StandardView<TextBoxControl, Textbox>(textbox, stream, area),
             ComboboxControl combobox => StandardView<ComboboxControl, Combobox>(combobox, stream, area),
             ListboxControl listbox => StandardView<ListboxControl, Listbox>(listbox, stream, area),
