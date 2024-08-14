@@ -99,14 +99,14 @@ public abstract record UiControl(object Data) : IUiControl
         if (ReferenceEquals(this, other))
             return true;
 
-        return ((Id == null && other.Id == null) || (Id?.Equals(other.Id) == true)) &&
+        return ((Id == null && other.Id == null) || (Id != null && Id.Equals(other.Id))) &&
                DataEquality(other) &&
-               ((Style == null && other.Style == null) || (Style?.Equals(other.Style) == true)) &&
+               ((Style == null && other.Style == null) || (Style != null && Style.Equals(other.Style))) &&
                Tooltip == other.Tooltip &&
                IsReadonly == other.IsReadonly &&
-               ((Label == null && other.Label == null) || (Label?.Equals(other.Label) == true)) &&
+               ((Label == null && other.Label == null) || (Label != null && Label.Equals(other.Label))) &&
                Skins.SequenceEqual(other.Skins) &&
-               ((Class == null && other.Class == null) || (Class?.Equals(other.Class) == true)) &&
+               ((Class == null && other.Class == null) || (Class != null && Class.Equals(other.Class))) &&
                DataContext == other.DataContext;
     }
 

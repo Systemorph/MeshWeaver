@@ -273,7 +273,7 @@ public record LayoutAreaHost : IDisposable
             UpdateArea(context, view);
             logger.LogDebug("End rendering of {area}", context.Area);
         });
-        return [store => store.UpdateControl(context.Area, new SpinnerControl())];
+        return [];
     }
     internal IEnumerable<Func<EntityStore,EntityStore>> RenderArea(RenderingContext context, 
         IObservable<ViewDefinition> generator)
@@ -287,7 +287,7 @@ public record LayoutAreaHost : IDisposable
             )
         );
 
-        return [store => store.UpdateControl(context.Area, new SpinnerControl())];
+        return [];
     }
 
 
