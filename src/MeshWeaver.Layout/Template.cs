@@ -164,7 +164,7 @@ public static class Template{
 
 //result into ui control with DataBinding set
 public record ItemTemplateControl(UiControl View, object Data) :
-    UiControl<ItemTemplateControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data)
+    UiControl<ItemTemplateControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
     public static string ViewArea = nameof(View);
 
@@ -177,4 +177,25 @@ public record ItemTemplateControl(UiControl View, object Data) :
 
     public ItemTemplateControl WithWrap(bool wrap) => this with { Wrap = wrap };
 
+    public virtual bool Equals(ItemTemplateControl other)
+    {
+        if (other is null)
+            return false;
+        if (ReferenceEquals(this, other))
+            return true;
+        if (!base.Equals(other))
+            return false;
+        return Equals(View, other.View) && 
+               DataEquality(Data, other.Data);
+    }
+
+    private bool DataEquality(object data, object otherData)
+    {
+        if (Data is null)
+            return otherData is null;
+
+        if (Data is IEnumerable<object> e)
+            return otherData is IEnumerable<object> e2 && e.SequenceEqual(e2, JsonObjectEqualityComparer.Instance);
+        return JsonObjectEqualityComparer.Instance.Equals(Data, otherData);
+    }
 }

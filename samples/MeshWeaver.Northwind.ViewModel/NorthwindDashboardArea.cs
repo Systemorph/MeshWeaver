@@ -44,34 +44,28 @@ public static class NorthwindDashboardArea
     /// </remarks>
     public static object Dashboard(this LayoutAreaHost layoutArea, RenderingContext context)
     {
-        return Controls.Stack
-            .WithSkin(StackSkins.LayoutGrid)
+        return Controls.LayoutGrid
             .WithClass("main-content")
             .WithView(
                 (area, ctx) =>
-                    area.OrderSummary(ctx)
-                        .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
-            )
+                    area.OrderSummary(ctx), 
+                skin => skin.WithXs(12).WithSm(6)
+                )
             .WithView(
                 Controls.Stack
                     .WithView(Controls.PaneHeader("Sales by category"))
-                    .WithView((area, ctx) => area.SalesByCategory(ctx))
-                    .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
+                    .WithView((area, ctx) => area.SalesByCategory(ctx)), skin => 
+                    skin.WithXs(12).WithSm(6)
             )
-            // .WithView(
-            //     (area, ctx) =>
-            //         area.CustomerSummary(ctx)
-            //             .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
-            // )
             .WithView(
-                (area, ctx) => area.SupplierSummary(ctx)
-                    .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
+                (area, ctx) => area.SupplierSummary(ctx), skin => 
+                    skin.WithXs(12).WithSm(6)
             )
             .WithView(
                 Controls.Stack
                     .WithView(Controls.PaneHeader("Top products"))
-                    .WithView((area, ctx) => area.TopProducts(ctx))
-                    .WithSkin(Skins.LayoutGridItem.WithXs(12).WithSm(6))
+                    .WithView((area, ctx) => area.TopProducts(ctx)),
+                    skin => skin.WithXs(12).WithSm(6)
             );
     }
 

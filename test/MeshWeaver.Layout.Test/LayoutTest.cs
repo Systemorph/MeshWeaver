@@ -145,11 +145,11 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         return Controls
             .Stack
-            .WithView((_, _) =>
-                Template.Bind(toolbar, nameof(toolbar), tb => Controls.TextBox(tb.Year)), "Toolbar")
-            .WithView((area, _) =>
+            .WithView("Toolbar", (_, _) =>
+                Template.Bind(toolbar, nameof(toolbar), tb => Controls.TextBox(tb.Year)))
+            .WithView("Content", (area, _) =>
                 area.GetDataStream<Toolbar>(nameof(toolbar))
-                    .Select(tb => Controls.Html($"Report for year {tb.Year}")), "Content");
+                    .Select(tb => Controls.Html($"Report for year {tb.Year}")));
     }
 
     [HubFact]
@@ -268,15 +268,15 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var counter = 0;
         return Controls
             .Stack
-            .WithView(Controls
+            .WithView("Button", Controls
                 .Menu("Increase Counter")
                 .WithClickAction(context =>
                     context.Host.UpdateArea(
                         new($"{nameof(Counter)}/{nameof(Counter)}"),
                         Controls.Html((++counter))
                     )
-                ), "Button")
-            .WithView(Controls.Html(counter.ToString()), nameof(Counter));
+                ))
+            .WithView(nameof(Counter), Controls.Html(counter.ToString()));
     }
 
     [HubFact]
@@ -363,10 +363,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         ]);
 
         return Controls.Stack
-            .WithView(Template.Bind(data, nameof(DataBoundCheckboxes), x => Template.ItemTemplate(x.Data,y => Controls.CheckBox(y.Label, y.Value))), Filter)
-            .WithView((a, ctx) => a.GetDataStream<FilterEntity>(nameof(DataBoundCheckboxes))
+            .WithView(Filter, Template.Bind(data, nameof(DataBoundCheckboxes), x => Template.ItemTemplate(x.Data,y => Controls.CheckBox(y.Label, y.Value))))
+            .WithView(Results, (a, ctx) => a.GetDataStream<FilterEntity>(nameof(DataBoundCheckboxes))
                 .Select(d => d.Data.All(y => y.Value)
-                ), Results) ;
+                )) ;
     }
 
     private const string Filter = nameof(Filter);
@@ -515,11 +515,11 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
     private static object AsyncView =>
         Controls.Stack
-            .WithView(Observable.Return<ViewDefinition>(async (area, context, ct) =>
+            .WithView("subarea", Observable.Return<ViewDefinition>(async (area, context, ct) =>
             {
                 await Task.Delay(3000, ct);
                 return "Ok";
-            }), "subarea");
+            }));
 
     
     [HubFact]
@@ -545,7 +545,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         stopwatch.Stop();
 
-        subArea.Should().BeOfType<SpinnerControl>();
+        subArea.Should().BeNull();
         stopwatch.ElapsedMilliseconds.Should().BeLessThan(3000);
     }
 }

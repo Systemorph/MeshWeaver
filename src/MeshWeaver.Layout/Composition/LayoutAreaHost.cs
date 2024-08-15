@@ -105,7 +105,7 @@ public record LayoutAreaHost : IDisposable
         control = control with { DataContext = dataContext, };
 
             
-        return control.Render(this,context).ToArray();
+        return ((IUiControl)control).Render(this,context).ToArray();
 
     }
 

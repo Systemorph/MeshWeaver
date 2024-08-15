@@ -4,11 +4,12 @@ public record ListboxControl(object Data) : ListControlBase<ListboxControl>(Data
 
 public interface IListControl : IUiControl
 {
+    object Data { get; init; }    
     IReadOnlyCollection<Option> Options { get; init; }
 }
 
 public abstract record ListControlBase<TControl>(object Data)
-    : UiControl<TControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data)
+    : UiControl<TControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
     where TControl : ListControlBase<TControl>, IListControl
 {
     public IReadOnlyCollection<Option> Options { get; init; }

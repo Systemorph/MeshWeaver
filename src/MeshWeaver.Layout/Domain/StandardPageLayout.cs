@@ -38,23 +38,21 @@ public static class StandardPageLayout
         =>
             host.RenderArea(
                 new(Page) { Parent = context },
-                Stack
-                    .WithSkin(Skins.Layout)
-                    .WithWidth("100%")
-                    .WithView(NamedArea(Header).WithSkin(Skins.Header))
+                Controls.Layout
+                    .WithView(NamedArea(Header).AddSkin(Skins.Header))
                     .WithView(NamedArea(Toolbar))
                     .WithView(
                         Stack
                             .WithClass("main")
+                            .WithSkin( skin => skin
                             .WithOrientation(Orientation.Horizontal)
                             .WithWidth("100%")
+                            )
                             .WithView(NamedArea(NavMenu))
-                            .WithView(Stack
-                                .WithSkin(StackSkins.Splitter)
+                            .WithView(Splitter
                                 .WithView(
                                     Stack
-                                        .WithSkin(Skins.BodyContent)
-                                        .WithSkin(Skins.SplitterPane)
+                                        .AddSkin(Skins.BodyContent)
                                         .WithView(NamedArea(ContentHeading))
                                         .WithView(NamedArea(MainContent))
                                 )
@@ -62,7 +60,7 @@ public static class StandardPageLayout
                             )
 
                     )
-                    .WithView(NamedArea(Footer).WithSkin(Skins.Footer))
+                    .WithView(NamedArea(Footer).AddSkin(Skins.Footer))
             );
 
     public static IEnumerable<Func<EntityStore, EntityStore>>
@@ -71,7 +69,7 @@ public static class StandardPageLayout
             RenderingContext context) =>
         host.RenderArea(
             new(Header) { Parent = context },
-            Stack.WithSkin(Skins.Header)
+            Stack.AddSkin(Skins.Header)
                 .WithOrientation(Orientation.Horizontal)
                 .WithView(NavLink("Mesh Weaver", null, "/"))
         );
@@ -81,7 +79,7 @@ public static class StandardPageLayout
         host.RenderArea(
             new(Footer),
             Stack
-                .WithSkin(Skins.Footer)
+                .AddSkin(Skins.Footer)
                 .WithOrientation(Orientation.Horizontal)
                 .WithView(
                     Stack
@@ -129,8 +127,6 @@ public static class StandardPageLayout
     public static void SetMainContent(this LayoutAreaHost host, object view)
         => host.UpdateArea(new(MainContent), view);
 
-    public static void SetContextMenu(this LayoutAreaHost host, UiControl view)
-        => host.UpdateArea(new(ContextMenu), view.WithSkin(Skins.SplitterPane));
     public static LayoutDefinition WithToolbar(this LayoutDefinition layout,
         Func<ToolbarControl, LayoutAreaHost, RenderingContext, ToolbarControl> config)
         => layout.WithRenderer(IsPage,

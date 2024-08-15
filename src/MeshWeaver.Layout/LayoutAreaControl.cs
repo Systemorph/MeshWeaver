@@ -3,7 +3,7 @@
 namespace MeshWeaver.Layout;
 
 public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
-    : UiControl<LayoutAreaControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
+    : UiControl<LayoutAreaControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
     public object DisplayArea { get; init; } = Reference.Area.Wordify();
     public object ShowProgress { get; init; } = true;

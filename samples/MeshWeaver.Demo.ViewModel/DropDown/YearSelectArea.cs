@@ -24,9 +24,9 @@ public static class YearSelectArea
                             })
                     )
             )
-            .WithView((a, _) => a
+            .WithView(nameof(ShowSelectedYear), (a, _) => a
                 .GetDataStream<ChosenYear>(nameof(ChosenYear))
-                .Select(x => ShowSelectedYear(x.Year)), nameof(ShowSelectedYear))
+                .Select(x => ShowSelectedYear(x.Year)))
         ;
 
     private static object ShowSelectedYear(int year) => Controls.Html($"Year selected: {year}");

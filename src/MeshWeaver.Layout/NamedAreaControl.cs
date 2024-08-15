@@ -1,7 +1,7 @@
 ﻿namespace MeshWeaver.Layout
 {
     public record NamedAreaControl(object Area)
-        : UiControl<NamedAreaControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
+        : UiControl<NamedAreaControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
     {
         public object DisplayArea { get; init; }
         public object ShowProgress { get; init; }

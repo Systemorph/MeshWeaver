@@ -19,12 +19,12 @@ public static class DemoDocumentationConfiguration
         => layout
             .WithNavMenu((menu, _, _) =>
                 menu
-                    .WithNavLink(Overview, layout.DocumentationPath(typeof(CounterLayoutArea).Assembly, "Overview.md"), nl => nl with { Icon = FluentIcons.Home, })
-                    .WithNavLink("ViewModel State", layout.DocumentationPath(typeof(CounterLayoutArea).Assembly, "Counter.md"), nl => nl with { Icon = FluentIcons.Box, })
-                    .WithNavLink("DropDown Control", layout.DocumentationPath(typeof(YearSelectArea).Assembly, "DropDown.md"), nl => nl with { Icon = FluentIcons.CalendarDataBar, })
-                    .WithNavLink("Listbox Control", layout.DocumentationPath(typeof(BaseColorListArea).Assembly, "Listbox.md"), nl => nl with { Icon = FluentIcons.Grid, })
-                    .WithNavLink("CheckBox Control", layout.DocumentationPath(typeof(TermsAgreementTickArea).Assembly, "CheckBox.md"), nl => nl with { Icon = FluentIcons.Box, })
-                    .WithNavLink("Item Template", layout.DocumentationPath(typeof(ItemTemplateDemoArea).Assembly, "ItemTemplate.md"), nl => nl with { Icon = FluentIcons.Grid, })
+                    .WithNavLink(Overview, layout.DocumentationPath(typeof(CounterLayoutArea).Assembly, "Overview.md"), FluentIcons.Home)
+                    .WithNavLink("ViewModel State", layout.DocumentationPath(typeof(CounterLayoutArea).Assembly, "Counter.md"), FluentIcons.Box)
+                    .WithNavLink("DropDown Control", layout.DocumentationPath(typeof(YearSelectArea).Assembly, "DropDown.md"), FluentIcons.CalendarDataBar)
+                    .WithNavLink("Listbox Control", layout.DocumentationPath(typeof(BaseColorListArea).Assembly, "Listbox.md"), FluentIcons.Grid)
+                    .WithNavLink("CheckBox Control", layout.DocumentationPath(typeof(TermsAgreementTickArea).Assembly, "CheckBox.md"), FluentIcons.Box)
+                    .WithNavLink("Item Template", layout.DocumentationPath(typeof(ItemTemplateDemoArea).Assembly, "ItemTemplate.md"), FluentIcons.Grid)
             )
         ;
 
