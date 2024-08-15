@@ -56,7 +56,7 @@ public static class StandardPageLayout
                                         .WithView(NamedArea(ContentHeading))
                                         .WithView(NamedArea(MainContent))
                                 )
-                                .WithView(NamedArea(ContextMenu))
+                                .WithView(NamedArea(ContextMenu), skin => skin.WithCollapsed(true))
                             )
 
                     )
