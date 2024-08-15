@@ -8,6 +8,7 @@ where TSkin: Skin<TSkin>
     public object Class { get; init; }
     public object Style { get; init; }
     public TSkin WithClass(object @class) => This with { Class = @class };
+    public TSkin WithStyle(object style) => This with { Style = style };
 
     //public const string Modal = nameof(Modal);
     //public const string ContextMenu = nameof(ContextMenu);

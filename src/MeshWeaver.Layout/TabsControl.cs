@@ -7,7 +7,7 @@ public record TabsControl() :
 
     protected override TabSkin CreateItemSkin(NamedAreaControl ret)
     {
-        return new TabSkin(ret.Area);
+        return new TabSkin(ret.Id);
     }
 }
 
