@@ -1,4 +1,4 @@
-@inherits BlazorView<NavMenuControl, NavMenuView>
+@inherits SkinnedView<NavMenuControl, NavMenuSkin,NavMenuView>
 
 <div class="navmenu">
     <nav class="sitenav" aria-labelledby="main-menu" onclick="document.getElementById('navmenu-toggle').click();">
@@ -7,12 +7,23 @@
             <FluentIcon Value="@(new Icons.Regular.Size20.Navigation())" Color="Color.Fill"/>
         </label>
 
-        <FluentNavMenu Id="main-menu" Collapsible="@ViewModel.Collapsible" Width="@ViewModel.Width" @bind-Expanded="@expanded">
-            <NamedAreaContainer Container="ViewModel.Areas" Stream="@Stream" />
+        <FluentNavMenu Id="main-menu" Collapsible="@Collapsible" Width="@Width" @bind-Expanded="@expanded">
+            <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"  />
         </FluentNavMenu>
     </nav>
 </div>
 
 @code {
     private bool expanded = true;
+
+    private int? Width { get; set; }
+    public bool Collapsible { get; set; }
+
+    protected override void BindData()
+    {
+        base.BindData();
+        DataBind(Skin.Width, x => x.Width);
+        DataBind(Skin.Collapsible, x => x.Collapsible);
+    }
+
 }

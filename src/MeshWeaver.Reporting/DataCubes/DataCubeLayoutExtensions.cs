@@ -89,7 +89,6 @@ public static class DataCubeLayoutExtensions
                             .WithClass("dimension-values")
                             .WithView(
                                 TextBox(f.Search)
-                                    .WithSkin(TextBoxSkin.Search)
                                     .WithPlaceholder("Search...")
                                 // TODO V10: this throws an "access violation" exception, figure out why (08.07.2024, Alexander Kravets)
                                 // .WithImmediate(true)
@@ -150,22 +149,10 @@ public static class DataCubeLayoutExtensions
             .Subscribe(filter =>
                 host.UpdateArea(
                     new(StandardPageLayout.ContextMenu),
-                    host.Render(filter, DataCubeFilterId).ToContextPanel()
+                    host.Render(filter, DataCubeFilterId)
                 ));
     }
 
-    private static object ToContextPanel(this UiControl content)
-    {
-        return Controls.Stack
-            .WithClass("context-panel")
-            .WithView(
-                Controls.Stack
-                    .WithVerticalAlignment(VerticalAlignment.Top)
-                    .WithView(Controls.PaneHeader("Analyze").WithWeight(FontWeight.Bold))
-            )
-            .WithView(content)
-            .WithSkin(Skins.SplitterPane.WithMin("200px"));
-    }
 
 
 }

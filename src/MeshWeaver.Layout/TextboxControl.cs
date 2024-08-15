@@ -16,7 +16,3 @@ public record TextBoxControl(object Data)
     public TextBoxControl WithAutocomplete(object autocomplete) => this with { Autocomplete = autocomplete };
 }
 
-public static class TextBoxSkin
-{
-    public const string Search = nameof(Search);
-}

@@ -1,41 +1,45 @@
+@using JustifyContent = Microsoft.FluentUI.AspNetCore.Components.JustifyContent
 @inherits SkinnedView<LayoutGridItemSkin, LayoutGridItemView>
 
 <FluentGridItem
-    AdaptiveRendering="@Skin.AdaptiveRendering"
-    Gap="@Skin.Gap"
+    AdaptiveRendering="@AdaptiveRendering"
+    Gap="@Gap"
     HiddenWhen="@HiddenWhen"
-    Justify="@Skin.Justify?.ToFluentJustifyContent()"
-    lg="@Skin.Lg"
-    md="@Skin.Md"
-    sm="@Skin.Sm"
-    xl="@Skin.Xl"
-    xs="@Skin.Xs"
-    xxl="@Skin.Xxl">
+    Justify="@Justify"
+    lg="@Lg"
+    md="@Md"
+    sm="@Sm"
+    xl="@Xl"
+    xs="@Xs"
+    xxl="@Xxl">
     <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"/>
 </FluentGridItem>
 
 @code
 {
-    private GridItemHidden HiddenWhen => Skin.HiddenWhen switch
+    private bool AdaptiveRendering { get; set; }
+    private string Gap { get; set; }
+    private GridItemHidden? HiddenWhen { get; set; }
+    private JustifyContent Justify { get; set; }
+    private int Lg { get; set; }
+    private int Md { get; set; }
+    private int Sm { get; set; }
+    private int Xl { get; set; }
+    private int Xs { get; set; }
+    private int Xxl { get; set; }
+
+    protected override void BindData()
     {
-        LayoutGridItemHidden.Lg => GridItemHidden.Lg,
-        LayoutGridItemHidden.LgAndDown => GridItemHidden.LgAndDown,
-        LayoutGridItemHidden.LgAndUp => GridItemHidden.LgAndUp,
-        LayoutGridItemHidden.Md => GridItemHidden.Md,
-        LayoutGridItemHidden.Sm => GridItemHidden.Sm,
-        LayoutGridItemHidden.Xl => GridItemHidden.Xl,
-        LayoutGridItemHidden.Xs => GridItemHidden.Xs,
-        LayoutGridItemHidden.XsAndDown => GridItemHidden.XsAndDown,
-        LayoutGridItemHidden.XsAndUp => GridItemHidden.XsAndUp,
-        LayoutGridItemHidden.Xxl => GridItemHidden.Xxl,
-        LayoutGridItemHidden.XxlAndDown => GridItemHidden.XxlAndDown,
-        LayoutGridItemHidden.XxlAndUp => GridItemHidden.XxlAndUp,
-        LayoutGridItemHidden.SmAndDown => GridItemHidden.SmAndDown,
-        LayoutGridItemHidden.SmAndUp => GridItemHidden.SmAndUp,
-        LayoutGridItemHidden.MdAndDown => GridItemHidden.MdAndDown,
-        LayoutGridItemHidden.MdAndUp => GridItemHidden.MdAndUp,
-        LayoutGridItemHidden.XlAndDown => GridItemHidden.XlAndDown,
-        LayoutGridItemHidden.XlAndUp => GridItemHidden.XlAndUp,
-        _ => GridItemHidden.None
-    };
+        base.BindData();
+        DataBind(Skin.AdaptiveRendering, x => x.AdaptiveRendering);
+        DataBind(Skin.Gap, x => x.Gap);
+        DataBind(Skin.HiddenWhen, x => x.HiddenWhen);
+        DataBind(Skin.Justify, x => x.Justify);
+        DataBind(Skin.Lg, x => x.Lg);
+        DataBind(Skin.Md, x => x.Md);
+        DataBind(Skin.Sm, x => x.Sm);
+        DataBind(Skin.Xl, x => x.Xl);
+        DataBind(Skin.Xs, x => x.Xs);
+        DataBind(Skin.Xxl, x => x.Xxl);
+    }
 }

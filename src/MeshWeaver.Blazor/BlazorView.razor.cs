@@ -14,7 +14,7 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Blazor;
 
 public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
-    where TViewModel : UiControl
+    where TViewModel : IUiControl
     where TView : BlazorView<TViewModel, TView>
 {
     [Inject] private IMessageHub Hub { get; set; }
@@ -123,16 +123,35 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
 
     private T ConvertSingle<T>(object value, Func<object, T> conversion)
     {
-        if (value == null)
-            return default;
-        if (value is JsonElement element)
-            return ConvertJson(element, conversion);
-        if (conversion != null)
-            return conversion(value);
-        if (value is T t)
-            return t;
+        if(conversion != null)
+            return conversion.Invoke(value);
+        return value switch
+        {
+            null => default,
+            JsonElement element => ConvertJson(element, conversion),
+            T t => t,
+            string s => ConvertString<T>(s),
+            _ => throw new InvalidOperationException($"Cannot convert {value} to {typeof(T)}")
+        };
+    }
 
-        throw new InvalidOperationException($"Cannot convert {value} to {typeof(T)}");
+    private T ConvertString<T>(string s)
+    {
+        var targetType = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
+        if (targetType.IsEnum)
+            return (T)Enum.Parse(targetType, s);
+        return Type.GetTypeCode(targetType) switch
+        {
+            TypeCode.Int32 => (T)(object)int.Parse(s),
+            TypeCode.Double => (T)(object)double.Parse(s),
+            TypeCode.Single => (T)(object)float.Parse(s),
+            TypeCode.Boolean => (T)(object)bool.Parse(s),
+            TypeCode.Int64 => (T)(object)long.Parse(s),
+            TypeCode.Int16 => (T)(object)short.Parse(s),
+            TypeCode.Byte => (T)(object)byte.Parse(s),
+            TypeCode.Char => (T)(object)char.Parse(s),
+            _ => throw new InvalidOperationException($"Cannot convert {s} to {typeof(T)}")
+        };
 
     }
 

@@ -2,17 +2,17 @@
 
 public record ComboboxControl(object Data) : ListControlBase<ComboboxControl>(Data), IListControl
 {
-    public bool Autofocus { get; init; }
-    public ComboboxAutocomplete Autocomplete { get; init; }
-    public string Placeholder { get; init; }
-    public SelectPosition? Position { get; init; }
-    public bool Disabled { get; init; }
+    public object Autofocus { get; init; }
+    public object Autocomplete { get; init; }
+    public object Placeholder { get; init; }
+    public object Position { get; init; }
+    public object Disabled { get; init; }
 
-    ComboboxControl WithAutofocus(bool autofocus) => this with {Autofocus = autofocus};
-    ComboboxControl WithAutocomplete(ComboboxAutocomplete autocomplete) => this with {Autocomplete = autocomplete};
-    ComboboxControl WithPlaceholder(string placeholder) => this with {Placeholder = placeholder};
-    ComboboxControl WithPosition(SelectPosition position) => this with {Position = position};
-    ComboboxControl WithDisabled(bool disabled) => this with {Disabled = disabled};
+    ComboboxControl WithAutofocus(object autofocus) => this with {Autofocus = autofocus};
+    ComboboxControl WithAutocomplete(object autocomplete) => this with {Autocomplete = autocomplete};
+    ComboboxControl WithPlaceholder(object placeholder) => this with {Placeholder = placeholder};
+    ComboboxControl WithPosition(object position) => this with {Position = position};
+    ComboboxControl WithDisabled(object disabled) => this with {Disabled = disabled};
 }
 
 public enum ComboboxAutocomplete

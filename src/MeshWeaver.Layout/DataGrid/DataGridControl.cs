@@ -1,11 +1,10 @@
 ﻿
-using MeshWeaver.Data;
 using MeshWeaver.Layout.Composition;
 
 namespace MeshWeaver.Layout.DataGrid;
 
 public record DataGridControl(object Data)
-    : UiControl<DataGridControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data)
+    : UiControl<DataGridControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
     public IReadOnlyCollection<object> Columns { get; init; } = [];
     public bool Virtualize { get; init; } = false;
@@ -24,7 +23,7 @@ public record DataGridControl(object Data)
                ResizableColumns == other.ResizableColumns;
     }
 
-    protected override UiControl PrepareRendering(RenderingContext context)
+    protected override DataGridControl PrepareRendering(RenderingContext context)
     => this with
     {
         Style = Style ?? $"min-width: {Columns.Count * 120}px"

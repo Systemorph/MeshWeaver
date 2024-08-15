@@ -9,7 +9,7 @@ public class SkinnedView<TSkin, TView> : SkinnedView<UiControl, TSkin, TView>
 {
 }
 public class SkinnedView<TControl, TSkin, TView> : BlazorView<TControl, TView> 
-    where TControl : UiControl
+    where TControl : IUiControl
     where TSkin : Skin<TSkin>
     where TView : SkinnedView<TControl,TSkin, TView>
 {

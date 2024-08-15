@@ -3,9 +3,9 @@
 namespace MeshWeaver.Blazor;
 
 
-public abstract class NavItem<TViewModel, TView> : BlazorView<TViewModel, TView>
-    where TViewModel : NavItemControl<TViewModel>
-where TView:NavItem<TViewModel, TView>
+public abstract class NavItemView<TViewModel, TView> : BlazorView<TViewModel, TView>
+    where TViewModel : IMenuItem
+    where TView:NavItemView<TViewModel,TView>
 
 {
     protected string Href { get; set; }
@@ -18,7 +18,7 @@ where TView:NavItem<TViewModel, TView>
 
         if (ViewModel != null)
         {
-            DataBind(ViewModel.Data, x => x.Title );
+            DataBind(ViewModel.Title, x => x.Title );
             DataBind(ViewModel.Href, x => x.Href);
             DataBind(ViewModel.Icon, x => x.Icon);
         }

@@ -1,8 +1,8 @@
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
-@inherits BlazorView<TabsControl, TabsView>
+@inherits SkinnedView<TabsControl, TabsSkin, TabsView>
 
 <FluentTabs ActiveTabId="@ActiveTabId" Height="@Height" Orientation="@Orientation">
-    <NamedAreaContainer Container="@ViewModel.Areas" Stream="@Stream"></NamedAreaContainer>
+    <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"  />
 </FluentTabs>
 
 @code
@@ -14,12 +14,12 @@
     protected override void BindData()
     {
         base.BindData();
-        if (ViewModel.ActiveTabId != null)
-           DataBind(ViewModel.ActiveTabId, x => x.ActiveTabId);
+        if (Skin.ActiveTabId != null)
+           DataBind(Skin.ActiveTabId, x => x.ActiveTabId);
         else 
             ActiveTabId = ViewModel.Areas.First().Id.ToString();
-        DataBind(ViewModel.Height, x => x.Height);
-        DataBind(ViewModel.Orientation, x => x.Orientation);
+        DataBind(Skin.Height, x => x.Height);
+        DataBind(Skin.Orientation, x => x.Orientation);
     }
 
     private bool IsActive(NamedAreaControl area)

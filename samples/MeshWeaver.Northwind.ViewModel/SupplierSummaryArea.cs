@@ -56,7 +56,7 @@ public static class SupplierSummaryArea
             .WithView(
                 Controls.Stack
                     .WithView(Controls.PaneHeader("Supplier Summary"))
-                    .WithView(SupplierSummaryGrid, nameof(SupplierSummaryGrid))
+                    .WithView(nameof(SupplierSummaryGrid), SupplierSummaryGrid)
             );
 
 

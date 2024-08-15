@@ -1,0 +1,6 @@
+@inherits BlazorView<IContainerControl, ContainerView>
+
+@foreach (var area in ViewModel.Areas)
+{
+    <DispatchView ViewModel="@area" Stream="@Stream" Area="@area.GetArea()" />
+}

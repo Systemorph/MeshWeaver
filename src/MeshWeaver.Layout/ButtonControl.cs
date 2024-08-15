@@ -1,7 +1,7 @@
 ﻿namespace MeshWeaver.Layout;
 
 public record ButtonControl(object Data)
-    : UiControl<ButtonControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data)
+    : UiControl<ButtonControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
     public object IconStart { get; init; }
     public object IconEnd { get; init; }

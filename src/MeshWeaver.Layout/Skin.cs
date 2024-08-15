@@ -1,7 +1,7 @@
 ﻿namespace MeshWeaver.Layout;
 
-public record Skin;
-public record Skin<TSkin> : Skin
+public abstract record Skin;
+public abstract record Skin<TSkin> : Skin
 where TSkin: Skin<TSkin>
 {
     protected TSkin This => (TSkin)this;

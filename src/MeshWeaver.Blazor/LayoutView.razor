@@ -1,5 +1,5 @@
-@inherits SkinnedView<LayoutStackControl, LayoutSkin, LayoutView>
+@inherits SkinnedView<LayoutControl, LayoutSkin, LayoutView>
 
 <FluentLayout Class="@Class" Style="@Style">
-    <NamedAreaContainer Container="ViewModel.Areas" Stream="@Stream" />
+    <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"  />
 </FluentLayout>

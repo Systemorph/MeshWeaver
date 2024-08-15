@@ -49,9 +49,9 @@ public record LayoutClientConfiguration(IMessageHub Hub)
                 { nameof(Area), area }
             }
         );
-    public static ViewDescriptor StandardSkinnedView<TViewModel, TView>(TViewModel control, ISynchronizationStream<JsonElement, LayoutAreaReference> stream, string area, object skin)
+    public static ViewDescriptor StandardSkinnedView<TView>(Skin skin, ISynchronizationStream<JsonElement, LayoutAreaReference> stream, string area, UiControl control)
     {
-        var ret = StandardView<TViewModel, TView>(control, stream, area);
+        var ret = StandardView<UiControl, TView>(control, stream, area);
         ret.Parameters.Add(nameof(Skin), skin);
         return ret;
     }

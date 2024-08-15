@@ -1,14 +1,26 @@
-@inherits SkinnedView<LayoutStackControl, LayoutGridSkin, LayoutGridView>
+@using JustifyContent = Microsoft.FluentUI.AspNetCore.Components.JustifyContent
+@inherits SkinnedView<LayoutGridControl, LayoutGridSkin, LayoutGridView>
 
 <FluentGrid 
     Class="@Class"
-    AdaptiveRendering="@Skin.AdaptiveRendering"
-    Justify="@Skin.Justify.ToFluentJustifyContent()"
+    AdaptiveRendering="@AdaptiveRendering"
+    Justify="@JustifyContent"
     Spacing="@Spacing"
 >    
     <NamedAreaContainer Container="ViewModel.Areas" Stream="@Stream" />
 </FluentGrid>
 
 @code{
-    private int Spacing => Skin.Spacing ?? 3;
+
+    private JustifyContent JustifyContent { get; set; }
+    private bool AdaptiveRendering { get; set; }
+    private int Spacing { get; set; }
+    protected override void BindData()
+    {
+        base.BindData();
+        DataBind(Skin.Justify, x => x.JustifyContent);
+        DataBind(Skin.AdaptiveRendering, x => x.AdaptiveRendering);
+        DataBind(Skin.Spacing ?? 3, x => x.Spacing);
+
+    }
 }

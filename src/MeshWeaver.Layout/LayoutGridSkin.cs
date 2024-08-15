@@ -1,12 +1,20 @@
 ﻿namespace MeshWeaver.Layout;
 
+
+public record LayoutGridControl() : ContainerControlWithItemSkin<LayoutGridControl, LayoutGridSkin, LayoutGridItemSkin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new())
+{
+    protected override LayoutGridItemSkin CreateItemSkin(NamedAreaControl ret)
+    {
+        return new();
+    }
+}
 public record LayoutGridSkin : Skin<LayoutGridSkin>
 {
-    public bool AdaptiveRendering { get; init; }
-    public JustifyContent Justify { get; init; }
-    public int? Spacing { get; init; }
+    public object AdaptiveRendering { get; init; }
+    public object Justify { get; init; }
+    public object Spacing { get; init; }
 
-    public LayoutGridSkin WithAdaptiveRendering(bool adaptiveRendering) => this with { AdaptiveRendering = adaptiveRendering };
-    public LayoutGridSkin WithJustify(JustifyContent justify) => this with { Justify = justify };
-    public LayoutGridSkin WithSpacing(int spacing) => this with { Spacing = spacing };
+    public LayoutGridSkin WithAdaptiveRendering(object adaptiveRendering) => this with { AdaptiveRendering = adaptiveRendering };
+    public LayoutGridSkin WithJustify(object justify) => this with { Justify = justify };
+    public LayoutGridSkin WithSpacing(object spacing) => this with { Spacing = spacing };
 }
