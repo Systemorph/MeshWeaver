@@ -154,5 +154,5 @@ public static class DocumentationLayout
             .Add("cpp", "cpp")
             .Add("ts", "typescript");
     private static MarkdownControl FileNotFound(string path) => 
-        new($":error: **File not found**: {path}");
+        new($":x: **File not found**: {path}");
 }
