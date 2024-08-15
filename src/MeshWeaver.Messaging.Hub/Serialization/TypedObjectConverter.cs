@@ -1,4 +1,5 @@
 ﻿using System.Collections;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -104,6 +105,15 @@ public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry, Type excl
     )
     {
         throw new NotImplementedException();
+    }
+
+    public override void WriteAsPropertyName(Utf8JsonWriter writer, [DisallowNull] object value, JsonSerializerOptions options)
+    {
+        var clonedOptions = CloneOptions(options);
+        clonedOptions.Converters.Add(
+            new TypedObjectSerializeConverter(typeRegistry, value.GetType())
+        );
+        base.WriteAsPropertyName(writer, value, clonedOptions);
     }
 
     public override void Write(Utf8JsonWriter writer, object value, JsonSerializerOptions options)
