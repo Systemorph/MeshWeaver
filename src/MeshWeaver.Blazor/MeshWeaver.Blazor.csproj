@@ -6,20 +6,22 @@
         <RazorCompileOnBuild>true</RazorCompileOnBuild>
         <RazorLangVersion>3.0</RazorLangVersion>
     </PropertyGroup>
+
     <ItemGroup>
-    <SupportedPlatform Include="browser" />
-  </ItemGroup>
+        <SupportedPlatform Include="browser" />
+        <Content Update="StaticAssets\**" Pack="false" />
+    </ItemGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.Components.Web" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore" />
-    <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components" />
-    <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components.Icons" />    
-  </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="Microsoft.AspNetCore.Components.Web" />
+        <PackageReference Include="Microsoft.EntityFrameworkCore" />
+        <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components" />
+        <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components.Icons" />
+    </ItemGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\MeshWeaver.Application.Contract\MeshWeaver.Application.Contract.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
-  </ItemGroup>
+    <ItemGroup>
+        <ProjectReference Include="..\MeshWeaver.Application.Contract\MeshWeaver.Application.Contract.csproj" />
+        <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+    </ItemGroup>
 
 </Project>
