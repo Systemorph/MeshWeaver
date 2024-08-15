@@ -2,7 +2,6 @@
 
   <Import Project="StaticAssets\StaticAssets.targets" />
 
-
   <ItemGroup>
     <SupportedPlatform Include="browser" />
     <Content Update="StaticAssets\**" Pack="false" />

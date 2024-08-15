@@ -8,6 +8,12 @@
     border-left-width: 0.25em;
 }
 
+::deep pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+
     /* Ensure images, paragraphs, lists, and blockquotes are displayed as block-level elements */
     .markdown img,
     .markdown p,

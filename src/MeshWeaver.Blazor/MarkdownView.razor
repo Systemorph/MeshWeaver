@@ -3,22 +3,31 @@
 @using MeshWeaver.Layout.Markdown
 @inherits BlazorView<MarkdownControl, MarkdownView>
 @inject IJSRuntime JsRuntime;
-<div class="markdown">
-@if(Html != null)
-{
-    @((MarkupString)Html) 
-}
 
+<HeadContent>
+    <link href="_content/MeshWeaver.Blazor/node_modules/highlight.js/styles/default.min.css" rel="stylesheet" />
+</HeadContent>
 
-@foreach (var component in LayoutAreaComponents)
-{
-    <div id="@(ComponentContainerId(component.Id.ToString()))" style="display:none;">
-        <LayoutArea ViewModel="@component" Area="@SubArea(component.Id.ToString())"/>
-     </div>
-}
+<div @ref="element" class="markdown">
+    @if(Html != null)
+    {
+        @((MarkupString)Html) 
+    }
+
+    @foreach (var component in LayoutAreaComponents)
+    {
+        <div id="@(ComponentContainerId(component.Id.ToString()))" style="display:none;">
+            <LayoutArea ViewModel="@component" Area="@SubArea(component.Id.ToString())"/>
+         </div>
+    }
 </div>
 @code 
 {
+    private ElementReference element;
+    private IJSObjectReference htmlUtils;
+    private IJSObjectReference highlight;
+    private bool markdownChanged;
+
     private IReadOnlyList<LayoutAreaControl> LayoutAreaComponents { get; set; } = [];
     private string Html { get; set; }
     protected override void BindData()
@@ -49,6 +58,7 @@
                     return;
                 Html = newHtml;
                 LayoutAreaComponents = newLayoutComponents;
+                markdownChanged = true;
                 RequestStateChange();
             }))
         );
@@ -57,12 +67,20 @@
     {
         if (firstRender)
         {
-            await JsRuntime.Import("basicBlazorInterop.js");
+            htmlUtils = await JsRuntime.Import("htmlUtils.js");
+            highlight = await JsRuntime.Import("highlight.js");
+        }
+
+        if (firstRender || markdownChanged)
+        {
+            markdownChanged = false;
 
             foreach (var component in LayoutAreaComponents)
             {
-                await JsRuntime.InvokeVoidAsync("interop.moveComponentToTarget", ComponentContainerId(component.Id.ToString()), component.Id.ToString());
+                await htmlUtils.InvokeVoidAsync("moveElementContents", ComponentContainerId(component.Id.ToString()), component.Id.ToString());
             }
+
+            await highlight.InvokeVoidAsync("highlightCode", element);
         }
     }
 
