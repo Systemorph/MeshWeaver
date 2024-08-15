@@ -6,7 +6,7 @@
           "id": "1.Value",
           "displayName": "Value",
           "coordinates": [
-            "1",
+            1,
             "Value"
           ],
           "grouperName": "ColumnName",
@@ -16,7 +16,7 @@
       "id": "1",
       "displayName": "1",
       "coordinates": [
-        "1"
+        1
       ],
       "grouperName": "AutomaticNumber",
       "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
@@ -27,7 +27,7 @@
           "id": "2.Value",
           "displayName": "Value",
           "coordinates": [
-            "2",
+            2,
             "Value"
           ],
           "grouperName": "ColumnName",
@@ -37,7 +37,7 @@
       "id": "2",
       "displayName": "2",
       "coordinates": [
-        "2"
+        2
       ],
       "grouperName": "AutomaticNumber",
       "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
@@ -48,7 +48,7 @@
           "id": "3.Value",
           "displayName": "Value",
           "coordinates": [
-            "3",
+            3,
             "Value"
           ],
           "grouperName": "ColumnName",
@@ -58,7 +58,7 @@
       "id": "3",
       "displayName": "3",
       "coordinates": [
-        "3"
+        3
       ],
       "grouperName": "AutomaticNumber",
       "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
