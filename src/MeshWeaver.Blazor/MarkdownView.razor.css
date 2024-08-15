@@ -3,6 +3,11 @@
     flex-direction: column;
 }
 
+::deep blockquote {
+    margin: 0;
+    border-left-width: 0.25em;
+}
+
     /* Ensure images, paragraphs, lists, and blockquotes are displayed as block-level elements */
     .markdown img,
     .markdown p,
@@ -78,4 +83,85 @@
 
         .markdown a:hover {
             text-decoration: underline;
+        }
+
+::deep .markdown-alert {
+    --borderColor-default: #d0d7de;
+    --borderColor-accent-emphasis: #0969da;
+    --borderColor-done-emphasis: #8250df;
+    --borderColor-attention-emphasis: #bf8700;
+    --borderColor-success-emphasis: #1a7f37;
+    --borderColor-danger-emphasis: #cf222e;
+    --fgColor-accent: #0969da;
+    --fgColor-done: #8250df;
+    --fgColor-attention: #9a6700;
+    --fgColor-success: #1a7f37;
+    --fgColor-danger: #d1242f;
+    padding: 0.5rem 1rem;
+    margin-bottom: 1rem;
+    color: inherit;
+    border-left: 0.25em solid var(--borderColor-default);
+}
+
+    ::deep .markdown-alert > :first-child {
+        margin-top: 0;
+    }
+
+    ::deep .markdown-alert > :last-child {
+        margin-bottom: 0;
+    }
+
+    ::deep .markdown-alert .markdown-alert-title {
+        display: flex;
+        font-weight: 500;
+        align-items: center;
+        line-height: 1;
+    }
+
+        ::deep .markdown-alert .markdown-alert-title svg {
+            display: inline-block;
+            overflow: visible !important;
+            vertical-align: text-bottom;
+            fill: currentColor;
+            margin-right: 0.5rem;
+        }
+
+    ::deep .markdown-alert.markdown-alert-note {
+        border-left-color: var(--borderColor-accent-emphasis);
+    }
+
+        ::deep .markdown-alert.markdown-alert-note .markdown-alert-title {
+            color: var(--fgColor-accent);
+        }
+
+    ::deep .markdown-alert.markdown-alert-important {
+        border-left-color: var(--borderColor-done-emphasis);
+    }
+
+        ::deep .markdown-alert.markdown-alert-important .markdown-alert-title {
+            color: var(--fgColor-done);
+        }
+
+    ::deep .markdown-alert.markdown-alert-warning {
+        border-left-color: var(--borderColor-attention-emphasis);
+    }
+
+        ::deep .markdown-alert.markdown-alert-warning .markdown-alert-title {
+            color: var(--fgColor-attention);
+        }
+
+    ::deep .markdown-alert.markdown-alert-tip {
+        border-left-color: var(--borderColor-success-emphasis);
+    }
+
+        ::deep .markdown-alert.markdown-alert-tip .markdown-alert-title {
+            color: var(--fgColor-success);
+        }
+
+    ::deep .markdown-alert.markdown-alert-caution {
+        border-left-color: var(--borderColor-danger-emphasis);
+    }
+
+        ::deep .markdown-alert.markdown-alert-caution .markdown-alert-title {
+            color: var(--fgColor-danger);
         }

@@ -35,6 +35,7 @@
                 var layoutAreaExtension = new LayoutAreaMarkdownExtension(Stream.Hub);
                 var pipeline = new MarkdownPipelineBuilder()
                     .UseAdvancedExtensions()
+                    .UseEmojiAndSmiley()
                     .Use(layoutAreaExtension)
                     .Build();
                 var newHtml = Markdown.ToHtml(markdown, pipeline);
