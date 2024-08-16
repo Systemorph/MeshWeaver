@@ -168,7 +168,7 @@ public abstract record ContainerControl<TControl, TSkin>(string ModuleName, stri
     {
         return base.PrepareRendering(context)
             with
-            { Skins = Skins.RemoveAll(t => t is TSkin).Add(Skin) };
+            { Skins = Skins.RemoveAll(t => t is TSkin).Insert(0, Skin) };
     }
 
     public TControl WithSkin(Func<TSkin, TSkin> update)
