@@ -27,9 +27,9 @@ public static class Currencies
                         cf => Template.ItemTemplate(cf.Data, c => Controls.CheckBox(c.Label, c.Selected))
                     )
             )
-            .WithView(nameof(ShowSelectedCurrencies), (a, _) => a
+            .WithView((a, _) => a
                 .GetDataStream<CurrenciesFilter>(nameof(CurrenciesFilter))
-                .Select(x => ShowSelectedCurrencies(x.Data)));
+                .Select(x => ShowSelectedCurrencies(x.Data)), nameof(ShowSelectedCurrencies));
 
     private static object ShowSelectedCurrencies(IEnumerable<CurrenciesFilterItem> currencyData)
         => Controls.Html($"Currencies: {string.Join(",", currencyData.Where(x => x.Selected).Select(x => x.Id.ToString()))}");

@@ -18,29 +18,32 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
     protected string GetAutoName() => $"{Renderers.Count + 1}";
     IReadOnlyCollection<NamedAreaControl> IContainerControl.Areas => Areas;
     public ImmutableList<NamedAreaControl> Areas { get; init; } = ImmutableList<NamedAreaControl>.Empty;
-
     protected virtual NamedAreaControl GetNamedArea(Func<NamedAreaControl, NamedAreaControl> options)
     {
         return options.Invoke(new(null) { Id = GetAutoName() });
     }
-
-    public TControl WithView(IObservable<ViewDefinition> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
+    public TControl WithView(object view, Func<NamedAreaControl, NamedAreaControl> options)
     {
         var area = GetNamedArea(options);
         return This with
         {
             Areas = Areas.Add(area),
-            Renderers = Renderers.Add((host, context) =>
-                host.RenderArea(GetContextForArea(context, area.Id.ToString()), viewDefinition))
+            Renderers = Renderers.Add((host, context) => host.RenderArea(GetContextForArea(context, area.Id.ToString()), view))
         };
     }
+
+
+    public TControl WithView(object view) =>
+        WithView(view, opt => opt.WithId(GetAutoName()));
+    public TControl WithView(object view, string area) =>
+        WithView(view, opt => opt.WithId(area));
     public TControl WithView<T>(ViewDefinition<T> viewDefinition) =>
         WithView(Observable.Return(viewDefinition), x => x);
 
 
     public TControl WithView<T>(IObservable<ViewDefinition<T>> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
     {
-        var area = GetNamedArea(options);
+        var area = Evaluate(options);
         return This with
         {
             Areas = Areas.Add(area),
@@ -49,8 +52,38 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         };
     }
 
+    private NamedAreaControl Evaluate(Func<NamedAreaControl, NamedAreaControl> area)
+    {
+        return area.Invoke(new(null) { Id = GetAutoName() });
+    }
+
+    public TControl WithView(IObservable<ViewDefinition> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
+    {
+        var area = Evaluate(options);
+        return This with
+        {
+            Areas = Areas.Add(area),
+            Renderers = Renderers.Add((host, context) =>
+                host.RenderArea(GetContextForArea(context, area.Id.ToString()), viewDefinition))
+        };
+    }
 
     public TControl WithView(IObservable<ViewDefinition> viewDefinition, string area) =>
+        WithView(viewDefinition, control => control.WithId(area));
+    public TControl WithView(IObservable<object> viewDefinition) =>
+        WithView(viewDefinition, x => x);
+    public TControl WithView(IObservable<object> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
+    {
+        var area = Evaluate(options);
+        return This with
+        {
+            Areas = Areas.Add(area),
+            Renderers = Renderers.Add((host, context) =>
+                host.RenderArea(GetContextForArea(context, area.Id.ToString()), viewDefinition))
+        };
+    }
+
+    public TControl WithView(IObservable<object> viewDefinition, string area) =>
         WithView(viewDefinition, control => control.WithId(area));
     public TControl WithView(IObservable<ViewDefinition> viewDefinition)
         => WithView(viewDefinition, x => x);
@@ -59,7 +92,7 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         => WithView(viewDefinition, x => x);
     public TControl WithView<T>(ViewStream<T> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
     {
-        var area = GetNamedArea(options);
+        var area = Evaluate(options);
 
         return This with
         {
@@ -69,9 +102,15 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         };
     }
 
-    public TControl WithView<T>(object area, ViewStream<T> viewDefinition)
+    public TControl WithView<T>(ViewStream<T> viewDefinition, string area)
         => WithView(viewDefinition, control => control.WithId(area));
 
+    public TControl WithView(Func<LayoutAreaHost, RenderingContext, object> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
+        => WithView((la, ctx) => Observable.Return(viewDefinition.Invoke(la, ctx)), options);
+    public TControl WithView(Func<LayoutAreaHost, RenderingContext, object> viewDefinition, string area)
+    => WithView(viewDefinition, control => control.WithId(area));
+    public TControl WithView(Func<LayoutAreaHost, RenderingContext, object> viewDefinition)
+        => WithView(viewDefinition, x => x);
 
     protected override IEnumerable<Func<EntityStore, EntityStore>> Render(LayoutAreaHost host, RenderingContext context) =>
         base.Render(host, context)
@@ -119,89 +158,21 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
 }
 
 public abstract record ContainerControl<TControl, TSkin>(string ModuleName, string ApiVersion, TSkin Skin)
-    : ContainerControlWithItem<TControl, TSkin, object>(ModuleName, ApiVersion, Skin)
+: ContainerControl<TControl>(ModuleName, ApiVersion)
     where TControl : ContainerControl<TControl, TSkin>
     where TSkin : Skin
 {
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
-        => base.WithView((h, a) => viewDefinition.Invoke(h, a).Select(x => (object)x), options);
-    public TControl WithView<T>(object area, Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition)
-        => base.WithView((h,a)=>viewDefinition.Invoke(h,a).Select(x => (object)x), x => x.WithId(area));
-    public TControl WithView<T>(IObservable<T> viewDefinition) =>
-        base.WithView(viewDefinition.Select(x => (object)x), x => x);
-
-    public TControl WithView<T>(IObservable<T> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
-        => base.WithView(viewDefinition.Select(x => (object)x), options);
-    public TControl WithView<T>(object area, IObservable<T> viewDefinition) =>
-        base.WithView(viewDefinition.Select(x => (object)x), control => control.WithId(area));
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, T> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
-        => base.WithView((la, ctx) => viewDefinition.Invoke(la, ctx), options);
-    public TControl WithView<T>(object area, Func<LayoutAreaHost, RenderingContext, T> viewDefinition)
-        => base.WithView(area, (h, c) => viewDefinition.Invoke(h, c));
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, T> viewDefinition)
-        => base.WithView((h, c) => viewDefinition.Invoke(h, c), x => x);
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition)
-        => base.WithView((h, c) => viewDefinition.Invoke(h, c).Select(x => (object)x), x => x);
-
-}
-public abstract record ContainerControlWithItem<TControl, TSkin, TItem>(string ModuleName, string ApiVersion, TSkin Skin)
-    : ContainerControl<TControl>(ModuleName, ApiVersion)
-    where TControl : ContainerControlWithItem<TControl, TSkin, TItem>
-    where TSkin:Skin
-{
-    public TControl WithView(TItem value) => WithView(value, x => x);
-
-    public TControl WithSkin(Func<TSkin, TSkin> update)
-        => This with { Skin = update(Skin) };
-    public TControl WithView(TItem view, Func<NamedAreaControl, NamedAreaControl> options)
-    {
-        var area = GetNamedArea(options);
-        return This with
-        {
-            Areas = Areas.Add(area),
-            Renderers = Renderers.Add((host, context) => host.RenderArea(GetContextForArea(context, area.Id.ToString()), view))
-        };
-    }
 
 
     protected override TControl PrepareRendering(RenderingContext context)
     {
         return base.PrepareRendering(context)
-            with {Skins = Skins.RemoveAll(t => t is TSkin).Add(Skin)};
+            with
+            { Skins = Skins.RemoveAll(t => t is TSkin).Add(Skin) };
     }
 
-    public TControl WithView(object area, TItem view) =>
-        WithView(view, control => control.WithId(area));
-
-
-
-    public TControl WithView(IObservable<TItem> viewDefinition) =>
-        WithView(viewDefinition, x => x);
-    public TControl WithView(IObservable<TItem> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
-    {
-        var area = GetNamedArea(options);
-        return This with
-        {
-            Areas = Areas.Add(area),
-            Renderers = Renderers.Add((host, context) =>
-                host.RenderArea(GetContextForArea(context, area.Id.ToString()), viewDefinition.Select(x => (object)x)))
-        };
-    }
-
-    public TControl WithView(object area, IObservable<TItem> viewDefinition) =>
-        WithView(viewDefinition, control => control.WithId(area));
-    public TControl WithView(Func<LayoutAreaHost, RenderingContext, TItem> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
-        => WithView((la, ctx) => Observable.Return(viewDefinition.Invoke(la, ctx)), options);
-    public TControl WithView(Func<LayoutAreaHost, RenderingContext, IObservable<TItem>> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
-        => WithView((ViewStream<TItem>)viewDefinition.Invoke, options);
-    public TControl WithView(object area, Func<LayoutAreaHost, RenderingContext, TItem> viewDefinition)
-    => WithView(viewDefinition, control => control.WithId(area));
-    public TControl WithView(Func<LayoutAreaHost, RenderingContext, TItem> viewDefinition)
-        => WithView(viewDefinition, x => x);
-
-
-
-
+    public TControl WithSkin(Func<TSkin, TSkin> update)
+        => This with { Skin = update(Skin) };
 }
 
 

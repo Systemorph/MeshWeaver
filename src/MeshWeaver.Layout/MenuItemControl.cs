@@ -1,7 +1,7 @@
 ﻿namespace MeshWeaver.Layout;
 
 public record MenuItemControl(object Title, object Icon)
-    : ContainerControlWithItem<MenuItemControl, MenuItemSkin, UiControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new(Title, Icon))
+    : ContainerControl<MenuItemControl, MenuItemSkin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new(Title, Icon))
 {
 }
 
