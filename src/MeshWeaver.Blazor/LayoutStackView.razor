@@ -16,14 +16,14 @@
 </FluentStack>
 
 @code{
-    public string Width { get; set; }
-    public string Height { get; set; }
-    public int? VerticalGap { get; set; }
-    protected int? HorizontalGap { get; set; }
-    protected bool Wrap { get; set; }
-    protected Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment Vertical { get; set; }
-    protected Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment Horizontal { get; set; }
-    protected Orientation Orientation { get; set; }
+    private string Width { get; set; }
+    private string Height { get; set; }
+    private int? VerticalGap { get; set; }
+    private int? HorizontalGap { get; set; }
+    private bool Wrap { get; set; }
+    private Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment Vertical { get; set; }
+    private Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment Horizontal { get; set; }
+    private Orientation Orientation { get; set; }
     protected override void BindData()
     {
         base.BindData();
