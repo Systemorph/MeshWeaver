@@ -70,7 +70,7 @@ public static class StandardPageLayout
             RenderingContext context) =>
         host.RenderArea(
             new(Header) { Parent = context },
-            Stack.AddSkin(Skins.Header)
+            Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithView(NavLink("Mesh Weaver", null, "/"))
         );
@@ -80,7 +80,6 @@ public static class StandardPageLayout
         host.RenderArea(
             new(Footer),
             Stack
-                .AddSkin(Skins.Footer)
                 .WithOrientation(Orientation.Horizontal)
                 .WithView(
                     Stack
