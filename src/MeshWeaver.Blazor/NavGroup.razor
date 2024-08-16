@@ -2,7 +2,7 @@
 
 <FluentNavGroup Href="@Href" Icon="@Icon?.ToFluentIcon()" Title="@Title">
     
-    <NamedAreaContainer Container="ViewModel.Areas" Stream="@Stream"  />
+    <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
 
 </FluentNavGroup>
 
