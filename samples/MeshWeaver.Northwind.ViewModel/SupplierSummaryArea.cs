@@ -53,11 +53,8 @@ public static class SupplierSummaryArea
             //                 .WithClickAction(_ => layoutArea.SetContextMenu(Controls.H3("Analyze")))
             //         )
             // )
-            .WithView(
-                Controls.Stack
-                    .WithView(Controls.PaneHeader("Supplier Summary"))
-                    .WithView( SupplierSummaryGrid, nameof(SupplierSummaryGrid))
-            );
+            .WithView(Controls.PaneHeader("Supplier Summary"))
+            .WithView(SupplierSummaryGrid, nameof(SupplierSummaryGrid));
 
 
     /// <summary>
