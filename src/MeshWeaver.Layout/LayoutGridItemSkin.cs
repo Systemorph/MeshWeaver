@@ -2,25 +2,25 @@
 {
     public record LayoutGridItemSkin : Skin<LayoutGridItemSkin>
     {
-        public bool? AdaptiveRendering { get; init; }
-        public JustifyContent? Justify { get; init; }
-        public LayoutGridItemHidden HiddenWhen { get; init; }
-        public string Gap { get; init; }
-        public int? Lg { get; init; }
-        public int? Md { get; init; }
-        public int? Sm { get; init; }
-        public int? Xl { get; init; }
-        public int? Xs { get; init; }
-        public int? Xxl { get; init;}
+        public object AdaptiveRendering { get; init; }
+        public object Justify { get; init; }
+        public object HiddenWhen { get; init; }
+        public object Gap { get; init; }
+        public object Lg { get; init; }
+        public object Md { get; init; }
+        public object Sm { get; init; }
+        public object Xl { get; init; }
+        public object Xs { get; init; }
+        public object Xxl { get; init;}
 
-        public LayoutGridItemSkin WithAdaptiveRendering(bool adaptiveRendering) => this with { AdaptiveRendering = adaptiveRendering };
-        public LayoutGridItemSkin WithGap(string gap) => this with { Gap = gap };
-        public LayoutGridItemSkin WithLg(int lg) => this with { Lg = lg };
-        public LayoutGridItemSkin WithMd(int md) => this with { Md = md };
-        public LayoutGridItemSkin WithSm(int sm) => this with { Sm = sm };
-        public LayoutGridItemSkin WithXl(int xl) => this with { Xl = xl };
-        public LayoutGridItemSkin WithXs(int xs) => this with { Xs = xs };
-        public LayoutGridItemSkin WithXxl(int xxl) => this with { Xxl = xxl };
+        public LayoutGridItemSkin WithAdaptiveRendering(object adaptiveRendering) => this with { AdaptiveRendering = adaptiveRendering };
+        public LayoutGridItemSkin WithGap(object gap) => this with { Gap = gap };
+        public LayoutGridItemSkin WithLg(object lg) => this with { Lg = lg };
+        public LayoutGridItemSkin WithMd(object md) => this with { Md = md };
+        public LayoutGridItemSkin WithSm(object sm) => this with { Sm = sm };
+        public LayoutGridItemSkin WithXl(object xl) => this with { Xl = xl };
+        public LayoutGridItemSkin WithXs(object xs) => this with { Xs = xs };
+        public LayoutGridItemSkin WithXxl(object xxl) => this with { Xxl = xxl };
 
     }
 }

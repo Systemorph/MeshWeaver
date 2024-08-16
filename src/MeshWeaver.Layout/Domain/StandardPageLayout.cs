@@ -45,8 +45,8 @@ public static class StandardPageLayout
                         Stack
                             .WithClass("main")
                             .WithSkin( skin => skin
-                            .WithOrientation(Orientation.Horizontal)
-                            .WithWidth("100%")
+                                .WithOrientation(Orientation.Horizontal)
+                                .WithWidth("100%")
                             )
                             .WithView(NamedArea(NavMenu))
                             .WithView(Splitter
