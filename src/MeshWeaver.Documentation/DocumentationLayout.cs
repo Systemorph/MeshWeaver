@@ -19,7 +19,7 @@ public static class DocumentationLayout
         => layout
             .WithDocumentation(
                 _ => true,
-                (tabs,host,ctx)=>tabs.WithView(ctx.DisplayName, NamedArea(host.Stream.Reference.Area))
+                (tabs,host,ctx)=>tabs.WithView(NamedArea(host.Stream.Reference.Area), ctx.DisplayName)
                 )
             .WithView(nameof(Doc), (Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<object>>)Doc);
 
@@ -78,7 +78,7 @@ public static class DocumentationLayout
                     : null)
                 .Where(x => x is { Control.Reference.Id: not null })
                 .Aggregate(tabs, (t, s) =>
-                    t.WithView(s.TabName, s.Control.WithDisplayArea(s.TabName))));
+                    t.WithView(s.Control.WithDisplayArea(s.TabName), s.TabName)));
     }
     public static LayoutDefinition WithEmbeddedDocument(
         this LayoutDefinition layout,
@@ -89,9 +89,10 @@ public static class DocumentationLayout
     {
         var source = layout.Hub.GetDocumentationService().GetSource(EmbeddedDocumentationSource.Embedded, assembly.GetName().Name);
         return layout.WithDocumentation(contextFilter,
-                (tabs, _, context) => tabs.WithView(name,
+                (tabs, _, context) => tabs.WithView(
                     new LayoutAreaControl(layout.Hub.Address, new(nameof(Doc)) { Id = source.GetPath(name) })
-                        .WithDisplayArea(name)
+                        .WithDisplayArea(name),
+                    name
                 )
             )
             ;
