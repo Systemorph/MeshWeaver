@@ -1,4 +1,6 @@
-﻿namespace MeshWeaver.Layout;
+﻿using MeshWeaver.Layout.Domain;
+
+namespace MeshWeaver.Layout;
 
 public record ListboxControl(object Data) : ListControlBase<ListboxControl>(Data), IListControl;
 
@@ -23,12 +25,17 @@ public abstract record ListControlBase<TControl>(object Data)
     {
         if (ReferenceEquals(null, other)) return false;
         if (ReferenceEquals(this, other)) return true;
-        return base.Equals(other) && Options.SequenceEqual(other.Options);
+        return base.Equals(other) 
+               && Options.SequenceEqual(other.Options) 
+               && LayoutHelperExtensions.DataEquality(Data, other.Data);
     }
 
     public override int GetHashCode()
     {
-        return HashCode.Combine(base.GetHashCode(), Options.Aggregate(17, (x, y) => x ^y.GetHashCode()));
+        return HashCode.Combine(
+            base.GetHashCode(), 
+            Options.Aggregate(17, (x, y) => x ^y.GetHashCode()),
+            LayoutHelperExtensions.DataHashCode(Data));
     }
 }
 

@@ -37,6 +37,5 @@ public static class ViewModelExtensions
     //}
     internal static string GetArea(this NamedAreaControl control)
         => control.Area.ToString();
- 
 
 }

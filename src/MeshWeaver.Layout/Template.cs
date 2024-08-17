@@ -3,6 +3,7 @@ using System.Reflection;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataBinding;
+using MeshWeaver.Layout.Domain;
 using MeshWeaver.Reflection;
 
 namespace MeshWeaver.Layout;
@@ -185,17 +186,17 @@ public record ItemTemplateControl(UiControl View, object Data) :
             return true;
         if (!base.Equals(other))
             return false;
-        return Equals(View, other.View) && 
-               DataEquality(Data, other.Data);
+        return Equals(View, other.View)
+               && Equals(Wrap, other.Wrap)
+               && Equals(Orientation, other.Orientation)
+               && LayoutHelperExtensions.DataEquality(Data, other.Data);
     }
 
-    private bool DataEquality(object data, object otherData)
-    {
-        if (Data is null)
-            return otherData is null;
-
-        if (Data is IEnumerable<object> e)
-            return otherData is IEnumerable<object> e2 && e.SequenceEqual(e2, JsonObjectEqualityComparer.Instance);
-        return JsonObjectEqualityComparer.Instance.Equals(Data, otherData);
-    }
+    public override int GetHashCode() => 
+        HashCode.Combine(base.GetHashCode(),
+            Wrap,
+            View,
+            Orientation,
+            LayoutHelperExtensions.DataHashCode(Data)
+            );
 }
