@@ -1,10 +1,12 @@
-### How to Start Guide for the Northwind Project
-#### Prerequisites
-- **.NET SDK**: Ensure you have the .NET SDK installed. You can download it from the [official .NET website](https://dotnet.microsoft.com/download).
-- **IDE**: Visual Studio or Visual Studio Code is recommended for development.
+# How to Start Guide for the Northwind Project
 
+By following the steps from this guide, you should be able to set up and start working on the Northwind project efficiently.
 
-#### Step-by-Step Guide
+> Prerequisites
+> - **.NET SDK**: Ensure you have the .NET SDK installed. You can download it from the [official .NET website](https://dotnet.microsoft.com/download).
+> - **IDE**: Visual Studio or Visual Studio Code is recommended for development.
+
+## Step-by-Step Guide
 
 1. **Clone the Repository**
     ```sh
@@ -37,9 +39,7 @@
    - Begin by exploring the existing codebase and understanding the structure.
    - Implement new features or fix bugs as needed.
 
-#### Additional Resources
+## Additional Resources
 
-- Documentation: Refer to the docs folder for detailed documentation on various components.
-- Community: Join the project’s community forums or chat groups for support and collaboration.
-
-By following these steps, you should be able to set up and start working on the Northwind project efficiently.
+- **Documentation**: Refer to the docs folder for detailed documentation on various components.
+- **Community**: Join the project’s community forums or chat groups for support and collaboration.
