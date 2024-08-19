@@ -1,9 +1,18 @@
 import hljs from 'highlight.js';
 
 export function highlightCode(element: HTMLElement) {
-    var preTagList = element.getElementsByTagName('pre');
-    for (let el of preTagList) {
-        var codeTag = el.getElementsByTagName('code');
-        hljs.highlightElement(codeTag[0]);
+    var preElements = element.getElementsByTagName('pre');
+    for (let preElement of preElements) {
+        var codeElement = preElement.getElementsByTagName('code')[0];
+
+        if (codeElement) {
+            hljs.highlightElement(codeElement);
+
+            const copyButton = document.createElement('i');
+            copyButton.className = 'copy-to-clipboard';
+            copyButton.addEventListener('click',
+                (function (el: HTMLElement) { return () => navigator.clipboard.writeText(el.innerText) })(codeElement));
+            preElement.appendChild(copyButton);
+        }
     }
 }
