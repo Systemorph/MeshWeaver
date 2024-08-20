@@ -40,16 +40,15 @@ public static class MeshBrowserCatalogArea
     public static object Catalog(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         return MeshNodes
-            .Aggregate(Controls.Stack.WithSkin(StackSkins.LayoutGrid),
-                (stack, node) => 
-                    stack.WithView(GetNodeCard(node)
-                    .WithSkin(Skins.LayoutGridItem.WithXs(4)))
-                    );
+            .Aggregate(Controls.LayoutGrid,
+                (stack, node) =>
+                    stack.WithView(GetNodeCard(node), skin => skin.WithXs(4))
+            );
     }
 
     private static UiControl GetNodeCard(MeshNode node) =>
         Controls.Stack
-            .WithSkin(Skins.Card)
+            .AddSkin(Skins.Card)
             .WithView(Controls.H3(node.Name))
             .WithView(Controls.Body(node.Description))
             .WithView(

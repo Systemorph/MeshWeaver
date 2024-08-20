@@ -1,7 +1,7 @@
 ﻿namespace MeshWeaver.Layout;
 
 public record BadgeControl(object Data)
-    : UiControl<BadgeControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data)
+    : UiControl<BadgeControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
     public object Appearance { get; init; }
     public object BackgroundColor { get; init; }
