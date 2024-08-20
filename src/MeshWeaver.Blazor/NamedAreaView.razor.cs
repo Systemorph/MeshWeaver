@@ -7,8 +7,6 @@ namespace MeshWeaver.Blazor;
 
 public partial class NamedAreaView
 {
-    [Inject]
-    private ILogger<NamedAreaView> Logger { get; set; }
     private UiControl RootControl { get; set; }
 
 

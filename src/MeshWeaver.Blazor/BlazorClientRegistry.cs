@@ -79,7 +79,7 @@ public static class BlazorClientRegistry
             SplitterSkin splitter => StandardSkinnedView<SplitterView>(splitter, stream, area, control),
             LayoutGridItemSkin gridItem => StandardSkinnedView<LayoutGridItemView>(gridItem, stream, area, control),
             HeaderSkin header => StandardSkinnedView<HeaderView>(header, stream, area, control),
-            CardSkin card => StandardSkinnedView<UiControl, CardView>(control, stream, area, card),
+            CardSkin card => StandardSkinnedView<CardView>(card, stream, area, control),
             FooterSkin footer => StandardSkinnedView<FooterView>(footer, stream, area, control),
             BodyContentSkin bodyContent => StandardSkinnedView<BodyContentView>(bodyContent, stream, area, control),
             TabSkin tab => StandardSkinnedView<TabView>(tab, stream, area, control),
