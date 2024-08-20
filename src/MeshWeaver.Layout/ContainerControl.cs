@@ -28,7 +28,7 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         return This with
         {
             Areas = Areas.Add(area),
-            Renderers = Renderers.Add((host, context) => host.RenderArea(GetContextForArea(context, area.Id.ToString()), view))
+            Renderers = Renderers.Add((host, context, store) => host.RenderArea(GetContextForArea(context, area.Id.ToString()), view, store))
         };
     }
 
@@ -47,8 +47,8 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         return This with
         {
             Areas = Areas.Add(area),
-            Renderers = Renderers.Add((host, context) =>
-                host.RenderArea(GetContextForArea(context, area.Id.ToString()), viewDefinition))
+            Renderers = Renderers.Add((host, context, store) =>
+                host.RenderArea(GetContextForArea(context, area.Id.ToString()), viewDefinition, store))
         };
     }
 
@@ -63,8 +63,8 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         return This with
         {
             Areas = Areas.Add(area),
-            Renderers = Renderers.Add((host, context) =>
-                host.RenderArea(GetContextForArea(context, area.Id.ToString()), viewDefinition))
+            Renderers = Renderers.Add((host, context, store) =>
+                host.RenderArea(GetContextForArea(context, area.Id.ToString()), viewDefinition, store))
         };
     }
 
@@ -78,8 +78,8 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         return This with
         {
             Areas = Areas.Add(area),
-            Renderers = Renderers.Add((host, context) =>
-                host.RenderArea(GetContextForArea(context, area.Id.ToString()), viewDefinition))
+            Renderers = Renderers.Add((host, context, store) =>
+                host.RenderArea(GetContextForArea(context, area.Id.ToString()), viewDefinition, store))
         };
     }
 
@@ -97,8 +97,9 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         return This with
         {
             Areas = Areas.Add(area),
-            Renderers = Renderers.Add((host, context) =>
-                host.RenderArea(GetContextForArea(context, area.Id.ToString()), viewDefinition.Invoke))
+            Renderers = Renderers.Add((host, context, store) =>
+                host.RenderArea(GetContextForArea(context, area.Id.ToString()), 
+                    viewDefinition.Invoke, store))
         };
     }
 
@@ -106,17 +107,21 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         => WithView(viewDefinition, control => control.WithId(area));
 
     public TControl WithView(Func<LayoutAreaHost, RenderingContext, object> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
-        => WithView((la, ctx) => Observable.Return(viewDefinition.Invoke(la, ctx)), options);
+        => WithView((la, ctx, _) => Observable.Return(viewDefinition.Invoke(la, ctx)), options);
     public TControl WithView(Func<LayoutAreaHost, RenderingContext, object> viewDefinition, string area)
     => WithView(viewDefinition, control => control.WithId(area));
     public TControl WithView(Func<LayoutAreaHost, RenderingContext, object> viewDefinition)
         => WithView(viewDefinition, x => x);
 
-    protected override IEnumerable<Func<EntityStore, EntityStore>> Render(LayoutAreaHost host, RenderingContext context) =>
-        base.Render(host, context)
-            .Concat(Renderers.SelectMany(r => (r.Invoke(host, context))));
-    protected override Func<EntityStore, EntityStore> RenderSelf(LayoutAreaHost host, RenderingContext context)
-        => store => store.UpdateControl(context.Area, PrepareRendering(context));
+    protected override EntityStoreAndUpdates Render(LayoutAreaHost host, RenderingContext context, EntityStore store) =>
+        Renderers.Aggregate(base.Render(host, context, store),
+            (acc, r) =>
+            {
+                var newRender = r.Invoke(host, context, acc.Store);
+                return new EntityStoreAndUpdates(acc.Changes.Concat(newRender.Changes), newRender.Store);
+            });
+    protected override EntityStoreAndUpdates RenderSelf(LayoutAreaHost host, RenderingContext context, EntityStore store) => 
+        store.UpdateControl(context.Area, PrepareRendering(context));
 
     protected override  TControl PrepareRendering(RenderingContext context)
     {

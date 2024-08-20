@@ -27,14 +27,6 @@ public static class ViewModelExtensions
     }
 
 
-    //private static TResult Extract<TResult>(this ISynchronizationStream<JsonElement> stream, string basePath, ChangeItem<JsonElement> changeItem, JsonPointerReference reference)
-    //{
-    //    if (reference == null)
-    //        return default;
-    //    var pointer = JsonPointer.Parse(basePath);
-    //    var ret = pointer.Evaluate(changeItem.Value);
-    //    return ret == null ? default : ret.Value.Deserialize<TResult>(stream.Hub.JsonSerializerOptions);
-    //}
     internal static string GetArea(this NamedAreaControl control)
         => control.Area.ToString();
 

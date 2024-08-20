@@ -10,7 +10,7 @@ public static class LayoutDefinitionExtensions{
         Func<RenderingContext, bool> context,
         Func<LayoutAreaHost, RenderingContext, IObservable<object>> generator
     ) =>
-        layout.WithRenderer(context, (a, ctx) => a.RenderArea(ctx, generator.Invoke(a,ctx)));
+        layout.WithRenderer(context, (a, ctx, s) => a.RenderArea(ctx, generator.Invoke(a,ctx), s));
 
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         string area,
@@ -70,7 +70,7 @@ public static class LayoutDefinitionExtensions{
         Func<RenderingContext, bool> context,
         IObservable<ViewDefinition<T>> generator
     ) =>
-        layout.WithRenderer(context, (a, c) => a.RenderArea(c, generator));
+        layout.WithRenderer(context, (a, c,s) => a.RenderArea(c, generator,s));
 
     public static LayoutDefinition WithView<T>(this LayoutDefinition layout,
         string area,
@@ -80,14 +80,14 @@ public static class LayoutDefinitionExtensions{
 
 
     public static LayoutDefinition WithView(this LayoutDefinition layout,Func<RenderingContext, bool> context, object view) =>
-        layout.WithRenderer(context, (a, c) => a.RenderArea(c, view));
+        layout.WithRenderer(context, (a, c,s) => a.RenderArea(c, view,s));
 
     public static LayoutDefinition WithView(this LayoutDefinition layout, string area, object view) =>
         layout.WithView(c => c.Area == area, view);
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         Func<RenderingContext, bool> context,
         Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<object>> view)
-        => layout.WithRenderer(context, (a, c) => a.RenderArea(c, view.Invoke));
+        => layout.WithRenderer(context, (a, c,s) => a.RenderArea(c, view.Invoke, s));
 
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         string area,
@@ -110,19 +110,14 @@ public static class LayoutDefinitionExtensions{
 
 
 
-    public static EntityStore UpdateControl(this EntityStore store, string id, UiControl control)
-        => store.Update(
-            LayoutAreaReference.Areas,
-            i => i.SetItem(id, control)
-        );
-    public static EntityStore UpdateData(this EntityStore store, string id, object control)
-        => store.Update(
-            LayoutAreaReference.Data,
-            i => i.SetItem(id, control)
-        );
+    public static EntityStoreAndUpdates UpdateControl(this EntityStore store, string id, UiControl control)
+        => new([new EntityStoreUpdate(LayoutAreaReference.Areas, id, control)], store.Update(LayoutAreaReference.Areas, i => i.Update(id,control)));
+    public static EntityStoreAndUpdates UpdateData(this EntityStore store, string id, object control)
+        => new([new EntityStoreUpdate(LayoutAreaReference.Data, id, control)], store.Update(LayoutAreaReference.Areas, i => i.Update(id, control)));
 
-    public static LayoutDefinition WithRenderer(this LayoutDefinition layout,
+    public static LayoutDefinition WithRenderer(
+        this LayoutDefinition layout,
         Func<RenderingContext, bool> filter,
-        Func<LayoutAreaHost, RenderingContext, IEnumerable<Func<EntityStore,EntityStore>>> renderer)
+        Func<LayoutAreaHost, RenderingContext, EntityStore, EntityStoreAndUpdates> renderer)
         => layout.WithRenderer(filter, renderer.Invoke);
 }

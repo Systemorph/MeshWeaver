@@ -4,7 +4,6 @@ using MeshWeaver.Charting.Builders;
 using MeshWeaver.Charting.Builders.DataSetBuilders;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
-using MeshWeaver.Charting.Models.Line;
 using MeshWeaver.Json.Assertions;
 
 namespace MeshWeaver.Charting.Test;

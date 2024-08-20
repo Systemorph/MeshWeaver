@@ -148,3 +148,9 @@ public record EntityStore
         .Select(x => x.GetHashCode())
         .Aggregate((x, y) => x ^ y);
 }
+public record EntityStoreAndUpdates(IEnumerable<EntityStoreUpdate> Changes, EntityStore Store);
+
+public record EntityStoreUpdate(string Collection, object Id, object Value)
+{
+    public object OldValue { get; init; }
+}

@@ -92,10 +92,10 @@ public record LayoutAreaHost : IDisposable
     }
 
 
-    internal IEnumerable<Func<EntityStore,EntityStore>> RenderArea(RenderingContext context,  object view)
+    internal EntityStoreAndUpdates RenderArea(RenderingContext context,  object view, EntityStore store)
     {
         if (view == null)
-            return [];
+            return new([], store);
 
         var control = ConvertToControl(view);
 
@@ -105,8 +105,7 @@ public record LayoutAreaHost : IDisposable
         control = control with { DataContext = dataContext, };
 
             
-        return ((IUiControl)control).Render(this,context).ToArray();
-
+        return ((IUiControl)control).Render(this,context, store);
     }
 
 
@@ -116,15 +115,14 @@ public record LayoutAreaHost : IDisposable
     public void UpdateArea(RenderingContext context, object view)
     {
         Stream.Update(store =>
-            {
-                store = DisposeExistingAreas(store, context);
-                var updateStore = RenderArea(context, view)
-                        .Aggregate(store, (s, u) => u.Invoke(s))
-                    ;
-                return Stream.ToChangeItem(updateStore);
-            }
-        ); 
-
+        {
+            var changes = DisposeExistingAreas(store, context);
+            var updates = RenderArea(context, view, changes.Store);
+            return Stream.ApplyChanges(
+                updates.Store,
+                changes.Changes.Concat(updates.Changes)
+            );
+        });
     }
 
 
@@ -231,38 +229,45 @@ public record LayoutAreaHost : IDisposable
             return Task.CompletedTask;
         });
 
-    private EntityStore DisposeExistingAreas(EntityStore store,params RenderingContext[] contexts)
+    private EntityStoreAndUpdates DisposeExistingAreas(EntityStore store, RenderingContext  context)
     {
-        foreach (var context in contexts)
-            foreach (var area in disposablesByArea.Where(x => x.Key.StartsWith(context.Area)).ToArray())
+        var contextArea = context.Area;
+        foreach (var area in disposablesByArea.Where(x => x.Key.StartsWith(contextArea)).ToArray())
                 if (disposablesByArea.TryRemove(area.Key, out var disposables))
                     disposables.ForEach(d => d.Dispose());
 
-        return (store ?? new()).Update(LayoutAreaReference.Areas,
-            i => i
-                with
-                {
-                    Instances = i.Instances
-                        .Where(x => !contexts.Any(context => ((string)x.Key).StartsWith(context.Area)))
-                        .ToImmutableDictionary()
-                });
+        var existing = 
+            store.Collections
+                .GetValueOrDefault(LayoutAreaReference.Areas)
+            ?.Instances
+            .Where(x => ((string)x.Key).StartsWith(contextArea))
+                .ToArray();
+
+            if(existing == null)
+                return new([],store);
+
+            return new(
+                existing.Select(i =>
+                    new EntityStoreUpdate(LayoutAreaReference.Areas, contextArea, null) { OldValue = i }),
+                store.Update(LayoutAreaReference.Areas,
+                    i => i with { Instances = i.Instances.RemoveRange(existing.Select(x => x.Key)) }));
     }
 
 
-    internal IEnumerable<Func<EntityStore,EntityStore>> 
-        RenderArea<T>(RenderingContext context, ViewStream<T> generator)
+    internal EntityStoreAndUpdates 
+        RenderArea<T>(RenderingContext context, ViewStream<T> generator, EntityStore store)
     {
         AddDisposable(context.Parent?.Area ?? context.Area,
-            generator.Invoke(this, context)
+            generator.Invoke(this, context, store)
                 .Subscribe(c => InvokeAsync(() => UpdateArea(context, c)))
         );
-        return [];
+        return DisposeExistingAreas(store, context);
     }
 
     public void UpdateProgress(string area, ProgressControl progress)
-        => Stream.Update(x => Stream.ToChangeItem(x.UpdateControl(area, progress)));
+        => Stream.ApplyChanges(Stream.Current.Value, [new(LayoutAreaReference.Areas, area, progress)]);
 
-    internal IEnumerable<Func<EntityStore,EntityStore>> RenderArea(RenderingContext context, ViewDefinition generator)
+    internal EntityStoreAndUpdates RenderArea(RenderingContext context, ViewDefinition generator, EntityStore store)
     {
         logger.LogDebug("Schedule rendering of {area}", context.Area);
         InvokeAsync(async ct =>
@@ -273,10 +278,10 @@ public record LayoutAreaHost : IDisposable
             UpdateArea(context, view);
             logger.LogDebug("End rendering of {area}", context.Area);
         });
-        return [];
+        return DisposeExistingAreas(store, context);
     }
-    internal IEnumerable<Func<EntityStore,EntityStore>> RenderArea(RenderingContext context, 
-        IObservable<ViewDefinition> generator)
+    internal EntityStoreAndUpdates RenderArea(RenderingContext context, 
+        IObservable<ViewDefinition> generator, EntityStore store)
     {
         AddDisposable(context.Area, generator.Subscribe(vd =>
                 InvokeAsync(async ct =>
@@ -287,11 +292,11 @@ public record LayoutAreaHost : IDisposable
             )
         );
 
-        return [];
+        return DisposeExistingAreas(store, context);
     }
 
 
-    internal IEnumerable<Func<EntityStore,EntityStore>> RenderArea(RenderingContext context, IObservable<object> generator)
+    internal EntityStoreAndUpdates RenderArea(RenderingContext context, IObservable<object> generator, EntityStore store)
     {
         AddDisposable(
             context.Area, 
@@ -300,7 +305,7 @@ public record LayoutAreaHost : IDisposable
             )
         );
 
-        return [];
+        return DisposeExistingAreas(store, context);
     }
 
     internal ISynchronizationStream<EntityStore, LayoutAreaReference> RenderLayoutArea()
@@ -313,9 +318,16 @@ public record LayoutAreaHost : IDisposable
             logger.LogDebug("Start re-rendering");
             var reference = Stream.Reference;
             var context = new RenderingContext(reference.Area) { Layout = reference.Layout };
-            Stream.Update(_ => Stream.ToChangeItem(LayoutDefinition
-                .Render(this, context, new())
-            ));
+            Stream.Initialize(
+                new(
+                    Stream.Owner,
+                    Stream.Reference,
+                    LayoutDefinition
+                        .Render(this, context, new())
+                        .Store,
+                    Stream.Hub.Address,
+                    null,
+                    Stream.Hub.Version));
             logger.LogDebug("End re-rendering");
         });
         return Stream;
