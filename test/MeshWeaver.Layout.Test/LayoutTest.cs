@@ -305,8 +305,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var counterArea = $"{reference.Area}/Counter";
         content = await stream
             .GetControlStream(counterArea)
-            .FirstAsync(x => x is HtmlControl html && html.Data is not "0")
-            //.Timeout(TimeSpan.FromSeconds(5))
+            .FirstAsync(x => x is HtmlControl { Data: not "0" })
+            .Timeout(TimeSpan.FromSeconds(5))
             ;
         content.Should().BeOfType<HtmlControl>().Which.Data.Should().Be("1");
     }
