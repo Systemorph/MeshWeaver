@@ -1,11 +1,11 @@
 ﻿
-using MeshWeaver.Data;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Domain;
 
 namespace MeshWeaver.Layout.DataGrid;
 
 public record DataGridControl(object Data)
-    : UiControl<DataGridControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data)
+    : UiControl<DataGridControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
     public IReadOnlyCollection<object> Columns { get; init; } = [];
     public bool Virtualize { get; init; } = false;
@@ -21,10 +21,11 @@ public record DataGridControl(object Data)
                Columns.SequenceEqual(other.Columns) &&
                Virtualize == other.Virtualize &&
                ItemSize == other.ItemSize &&
-               ResizableColumns == other.ResizableColumns;
+               ResizableColumns == other.ResizableColumns &&
+               LayoutHelperExtensions.DataEquality(Data, other.Data);
     }
 
-    protected override UiControl PrepareRendering(RenderingContext context)
+    protected override DataGridControl PrepareRendering(RenderingContext context)
     => this with
     {
         Style = Style ?? $"min-width: {Columns.Count * 120}px"
@@ -36,7 +37,8 @@ public record DataGridControl(object Data)
             Columns.Aggregate(17, (r,c) => r ^c.GetHashCode()), 
             Virtualize, 
             ItemSize, 
-            ResizableColumns);
+            ResizableColumns,
+            LayoutHelperExtensions.DataHashCode(Data));
     }
 }
 

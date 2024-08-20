@@ -1,8 +1,8 @@
-@inherits BlazorView<NavGroupControl, NavGroup>
+@inherits SkinnedView<NavGroupControl, NavGroupSkin, NavGroup>
 
 <FluentNavGroup Href="@Href" Icon="@Icon?.ToFluentIcon()" Title="@Title">
     
-    <NamedAreaContainer Container="ViewModel.Areas" Stream="@Stream"  />
+    <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
 
 </FluentNavGroup>
 
@@ -18,9 +18,9 @@
 
         if (ViewModel != null)
         {
-            DataBind(ViewModel.Data, x => x.Title);
-            DataBind(ViewModel.Href, x => x.Href);
-            DataBind(ViewModel.Icon, x => x.Icon);
+            DataBind(Skin.Title, x => x.Title);
+            DataBind(Skin.Href, x => x.Href);
+            DataBind(Skin.Icon, x => x.Icon);
         }
     }
 

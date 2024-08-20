@@ -1,32 +1,42 @@
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
-@inherits BlazorView<LayoutStackControl, LayoutStackView>
+@inherits SkinnedView<LayoutStackControl, LayoutStackSkin, LayoutStackView>
 
 <FluentStack
     Class="@Class"
     Orientation="@Orientation"
     HorizontalAlignment="@Horizontal"
     VerticalAlignment="@Vertical"
-    VerticalGap="@ViewModel.VerticalGap"
-    HorizontalGap="@ViewModel.HorizontalGap"
+    Width="@Width"
+    VerticalGap="@VerticalGap"
+    HorizontalGap="@HorizontalGap"
     Style="@Style"
-    Wrap="@ViewModel.Wrap"
+    Wrap="@Wrap"
     >
-        <NamedAreaContainer Container="ViewModel.Areas" Stream="@Stream"  />
+        <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"  />
 </FluentStack>
 
 @code{
-    private Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment Vertical => ViewModel.VerticalAlignment 
-        switch
+    private string Width { get; set; }
+    private string Height { get; set; }
+    private int? VerticalGap { get; set; }
+    private int? HorizontalGap { get; set; }
+    private bool Wrap { get; set; }
+    private Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment Vertical { get; set; }
+    private Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment Horizontal { get; set; }
+    private Orientation Orientation { get; set; }
+    protected override void BindData()
     {
-        Layout.VerticalAlignment.Center => Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment.Center,
-        Layout.VerticalAlignment.Top => Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment.Top,
-        Layout.VerticalAlignment.Bottom => Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment.Bottom,
-        _ => Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment.Top
-    };
+        base.BindData();
+        DataBind(Skin.Height, x => x.Height);
+        DataBind(Skin.Width, x => x.Width);
+        DataBind(Skin.VerticalGap, x => x.VerticalGap);
+        DataBind(Skin.HorizontalGap, x => x.HorizontalGap);
+        DataBind(Skin.VerticalAlignment, x => x.Vertical);
+        DataBind(Skin.HorizontalAlignment, x => x.Horizontal);
+        DataBind(Skin.Orientation, x => x.Orientation);
+    }
 
-    private Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment Horizontal => ViewModel.HorizontalAlignment.ToFluentHorizontalAlignment();
 
-    private Orientation Orientation => ViewModel.Orientation?.ToFluentOrientation() ?? Orientation.Vertical;
 
 
 }

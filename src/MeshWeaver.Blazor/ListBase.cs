@@ -3,8 +3,9 @@ using MeshWeaver.Layout;
 
 namespace MeshWeaver.Blazor;
 
-public abstract class ListBase<TViewModel, TView> : BlazorView<TViewModel, ListBase<TViewModel, TView>>
+public abstract class ListBase<TViewModel, TView> : BlazorView<TViewModel, TView>
     where TViewModel : UiControl, IListControl
+    where TView : ListBase<TViewModel, TView>
 {
     protected record Option(object Item, string Text, string ItemString);
 

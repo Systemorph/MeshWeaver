@@ -1,25 +1,31 @@
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
-@inherits SkinnedView<LayoutStackControl, SplitterSkin, SplitterView>
+@inherits SkinnedView<SplitterControl, SplitterSkin, SplitterView>
 @{
     #pragma warning disable FluentMultiSplitter
 }
 
 <FluentMultiSplitter 
-    @ref="splitter"
     Class="@Class"
     Orientation="@Orientation"
-    BarSize="@Skin.BarSize"
-    Width="@ViewModel.Width"
-    Height="@ViewModel.Height"
+    Width="@Width"
+    Height="@Height"
     Style="@Style">
     
-    <NamedAreaContainer Container="ViewModel.Areas" Stream="@Stream" />
+    <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"  />
 </FluentMultiSplitter>
 
 @code
 {
-    // todo splitter.Refresh() should be called when panel is added/removed to add/remove splitter bar
-    private FluentMultiSplitter splitter;
+    private string Width { get; set; }
+    private string Height { get; set; }
+    protected Orientation Orientation { get; set; }
 
-    private Orientation Orientation => @ViewModel.Orientation?.ToFluentOrientation() ?? Orientation.Horizontal;
+    protected override void BindData()
+    {
+        base.BindData();
+        DataBind(Skin.Width, x => x.Width);
+        DataBind(Skin.Height, x => x.Height);
+        DataBind(Skin.Orientation, x => x.Orientation);
+    }
+
 }

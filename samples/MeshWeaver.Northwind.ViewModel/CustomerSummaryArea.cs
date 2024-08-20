@@ -25,7 +25,7 @@ public static class CustomerSummaryArea
                 menu.WithNavLink(
                     nameof(CustomerSummary).Wordify(),
                     new LayoutAreaReference(nameof(CustomerSummary)).ToHref(layout.Hub.Address),
-                    x => x.WithIcon(FluentIcons.Person)
+                    FluentIcons.Person
                     )
         );
 

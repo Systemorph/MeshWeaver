@@ -1,6 +1,8 @@
-﻿@inherits BlazorView<MenuItemControl, MenuItemView>
+﻿@inherits SkinnedView<MenuItemControl, MenuItemSkin, MenuItemView>
 <div class="menu-item">
-    <FluentMenuItem OnClick="OnClick">@Title</FluentMenuItem>
+    <FluentMenuItem 
+        OnClick="OnClick"
+    >@Title</FluentMenuItem>
 </div>
 @code
 {
@@ -8,11 +10,7 @@
     protected override void BindData()
     {
         base.BindData();
-        if (ViewModel != null)
-        {
-            DataBind(ViewModel.Title, x => x.Title);
-        }
-
+        DataBind(Skin.Title, x => x.Title);
     }
 
 }

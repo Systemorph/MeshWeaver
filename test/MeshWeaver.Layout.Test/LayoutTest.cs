@@ -133,6 +133,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var controls = await stream
             .GetControlStream(reference.Area)
             .TakeUntil(o => o is HtmlControl)
+            .Timeout(3.Seconds())
             .ToArray();
         controls.Should().HaveCountGreaterThan(1);// .And.HaveCountLessThan(12);
     }
@@ -145,7 +146,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         return Controls
             .Stack
-            .WithView((_, _) =>
+            .WithView( (_, _) =>
                 Template.Bind(toolbar, nameof(toolbar), tb => Controls.TextBox(tb.Year)), "Toolbar")
             .WithView((area, _) =>
                 area.GetDataStream<Toolbar>(nameof(toolbar))
@@ -171,7 +172,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Get toolbar and change value.
         var toolbarArea = $"{reference.Area}/Toolbar";
-        var yearTextBox = (TextBoxControl)await stream.GetControlStream(toolbarArea).FirstAsync();
+        var yearTextBox = (TextBoxControl)await stream
+            .GetControlStream(toolbarArea)
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x is not null);
         yearTextBox.DataContext.Should().Be("/data/\"toolbar\"");
 
         var dataPointer = yearTextBox.Data.Should().BeOfType<JsonPointerReference>().Which;
@@ -180,6 +184,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var year = await stream
             .GetDataStream<JsonElement>(new JsonPointerReference(yearTextBox.DataContext))
             .Select(s => pointer.Evaluate(s))
+            .Timeout(3.Seconds())
             .FirstAsync(x => x != null);
         year!.Value.GetInt32().Should().Be(2024);
 
@@ -196,7 +201,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 stream.Reference,
                 patch.Apply(ci),
                 hub.Address,
-                patch,
+                new(() =>patch),
                 hub.Version
             );
         });
@@ -276,7 +281,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                         Controls.Html((++counter))
                     )
                 ), "Button")
-            .WithView(Controls.Html(counter.ToString()), nameof(Counter));
+            .WithView( Controls.Html(counter.ToString()), nameof(Counter));
     }
 
     [HubFact]
@@ -304,8 +309,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var counterArea = $"{reference.Area}/Counter";
         content = await stream
             .GetControlStream(counterArea)
-            .FirstAsync(x => x is HtmlControl html && html.Data is not "0")
-            //.Timeout(TimeSpan.FromSeconds(5))
+            .FirstAsync(x => x is HtmlControl { Data: not "0" })
+            .Timeout(TimeSpan.FromSeconds(5))
             ;
         content.Should().BeOfType<HtmlControl>().Which.Data.Should().Be("1");
     }
@@ -415,7 +420,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => x != null);
         var resultItemTemplate = resultsControl.Should().BeOfType<HtmlControl>().Which;
-        resultItemTemplate.DataContext.Should().BeEmpty();
+        resultItemTemplate.DataContext.Should().BeNull();
 
         resultItemTemplate
             .Data.Should().BeOfType<string>()
@@ -433,17 +438,18 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 stream.Reference,
                 patch.Apply(ci),
                 hub.Address,
-                patch,
+                new(()=>patch),
                 hub.Version
             );
         });
 
-        var hasControl = await stream
+        resultsControl = await stream
             .GetControlStream(resultsArea)
-            .Select(x =>((string)((HtmlControl)x).Data).Contains("<pre>False</pre>"))
+            .Where(x =>!((string)((HtmlControl)x).Data).Contains("<pre>True</pre>"))
             .Timeout(TimeSpan.FromSeconds(3))
-            .FirstAsync(x => !x);
-        hasControl.Should().BeTrue();
+            .FirstAsync(x => true);
+
+        ((string)((HtmlControl)resultsControl).Data).Should().Contain("<pre>False</pre>");
     }
     [HubFact]
     public void TestSerialization()
@@ -545,7 +551,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         stopwatch.Stop();
 
-        subArea.Should().BeOfType<SpinnerControl>();
+        subArea.Should().BeNull();
         stopwatch.ElapsedMilliseconds.Should().BeLessThan(3000);
     }
 }

@@ -1,0 +1,20 @@
+@using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
+@inherits SkinnedView<ToolbarControl, ToolbarSkin, ToolbarView>
+
+<FluentToolbar
+    Class="@Class"
+    Orientation="@Orientation"
+    Style="@Style"
+>    
+    <DispatchView ViewModel="@ViewModel" Area="@Area" Stream="@Stream"></DispatchView>
+</FluentToolbar>
+
+@code
+{
+    private Orientation Orientation { get; set; }
+    protected override void BindData()
+    {
+        base.BindData();
+        DataBind(Skin.Orientation, x => x.Orientation);
+    }
+}

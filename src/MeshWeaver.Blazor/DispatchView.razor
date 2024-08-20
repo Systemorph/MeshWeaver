@@ -1,4 +1,5 @@
 @using Microsoft.Extensions.DependencyInjection
+@using static Microsoft.Extensions.Logging.LoggerExtensions;
 @using MeshWeaver.Layout.Client
 @using MeshWeaver.Messaging
 @inherits BlazorView<UiControl, DispatchView>
@@ -28,5 +29,6 @@
         await base.SetParametersAsync(parameters);
         var client = Hub.ServiceProvider.GetRequiredService<ILayoutClient>();
         ViewDescriptor = client.GetViewDescriptor(ViewModel, Stream, Area);
+        Logger.LogDebug($"Rendering Area {Area} to View {ViewDescriptor?.Type.Name}");
     }
 }

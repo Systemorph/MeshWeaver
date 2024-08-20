@@ -25,59 +25,62 @@ public static class StandardPageLayout
             .WithRenderer(IsPage, RenderFooter)
             .WithRenderer(IsPage, RenderMainContent);
 
-    private static IEnumerable<Func<EntityStore, EntityStore>> RenderMainContent(LayoutAreaHost host,
-        RenderingContext context)
-        => [s => s.UpdateControl(MainContent, NamedArea(context.Area))];
+    private static EntityStoreAndUpdates RenderMainContent(LayoutAreaHost host,
+        RenderingContext context, EntityStore store)
+        => store.UpdateControl(MainContent, NamedArea(context.Area));
 
 
-    private static IEnumerable<Func<EntityStore, EntityStore>>
+    private static EntityStoreAndUpdates
         RenderPage(
             LayoutAreaHost host,
-            RenderingContext context
+            RenderingContext context,
+            EntityStore store
         )
         =>
             host.RenderArea(
                 new(Page) { Parent = context },
-                Stack
-                    .WithSkin(Skins.Layout)
-                    .WithWidth("100%")
-                    .WithView(NamedArea(Header).WithSkin(Skins.Header))
+                Controls.Layout
+                    .WithView(NamedArea(Header).AddSkin(Skins.Header))
                     .WithView(NamedArea(Toolbar))
                     .WithView(
                         Stack
-                            .WithClass("main")
-                            .WithOrientation(Orientation.Horizontal)
-                            .WithWidth("100%")
-                            .WithView(NamedArea(NavMenu))
-                            .WithView(Stack
-                                .WithSkin(StackSkins.Splitter)
-                                .WithView(
-                                    Stack
-                                        .WithSkin(Skins.BodyContent)
-                                        .WithSkin(Skins.SplitterPane)
-                                        .WithView(NamedArea(ContentHeading))
-                                        .WithView(NamedArea(MainContent))
-                                )
-                                .WithView(NamedArea(ContextMenu))
+                            .WithSkin(skin => skin
+                                .WithOrientation(Orientation.Horizontal)
+                                .WithClass("main")
+                                .WithWidth("100%")
                             )
-
+                            .WithView(NamedArea(NavMenu))
+                            .WithView(
+                                Splitter
+                                    .AddSkin(Skins.BodyContent)
+                                    .WithView(
+                                        Stack
+                                            .WithView(NamedArea(ContentHeading))
+                                            .WithView(NamedArea(MainContent))
+                                    )
+                                    .WithView(NamedArea(ContextMenu), skin => skin.WithCollapsed(true))
+                            )
                     )
-                    .WithView(NamedArea(Footer).WithSkin(Skins.Footer))
+                    .WithView(NamedArea(Footer).AddSkin(Skins.Footer))
+                , store
             );
 
-    public static IEnumerable<Func<EntityStore, EntityStore>>
+    public static EntityStoreAndUpdates
         RenderHeader(
             LayoutAreaHost host,
-            RenderingContext context) =>
+            RenderingContext context,
+            EntityStore store
+        ) =>
         host.RenderArea(
             new(Header) { Parent = context },
             Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithView(NavLink("Mesh Weaver", null, "/"))
+            , store
         );
 
-    public static IEnumerable<Func<EntityStore, EntityStore>> RenderFooter(
-        LayoutAreaHost host, RenderingContext context) =>
+    public static EntityStoreAndUpdates RenderFooter(
+        LayoutAreaHost host, RenderingContext context, EntityStore store) =>
         host.RenderArea(
             new(Footer),
             Stack
@@ -95,53 +98,49 @@ public static class StandardPageLayout
                             Html("Terms of Service")
                         )
                 )
+            , store
         );
-    //public static IEnumerable<Func<EntityStore,EntityStore>> RenderNavMenu(LayoutAreaHost host, RenderingContext context, EntityStore store) => NavLink("Put link to documentation", "/");
+    //public static IEnumerable<EntityStoreUpdate> RenderNavMenu(LayoutAreaHost host, RenderingContext context, EntityStore store) => NavLink("Put link to documentation", "/");
 
     public static LayoutDefinition WithNavMenu(this LayoutDefinition layout,
         Func<NavMenuControl, LayoutAreaHost, RenderingContext, NavMenuControl> config)
         => layout.WithRenderer(IsPage,
-            (h, c) =>
-            [
-                store => h.ConfigBasedRenderer(
+            (h, c, store) =>
+               h.ConfigBasedRenderer(
                     c,
                     store,
                     StandardPageLayout.NavMenu,
                     () => new(),
                     config)
-            ]);
+            );
     public static LayoutDefinition WithContentHeading(this LayoutDefinition layout,
         Func<LayoutStackControl, LayoutAreaHost, RenderingContext, LayoutStackControl> config)
         => layout.WithRenderer(IsPage,
-            (h, c) =>
-            [
-                store => h.ConfigBasedRenderer(
+            (h, c, store) =>
+                h.ConfigBasedRenderer(
                     c,
                     store,
                     StandardPageLayout.ContentHeading,
                     () => new(),
                     config)
-            ]);
+            );
 
 
 
     public static void SetMainContent(this LayoutAreaHost host, object view)
         => host.UpdateArea(new(MainContent), view);
 
-    public static void SetContextMenu(this LayoutAreaHost host, UiControl view)
-        => host.UpdateArea(new(ContextMenu), view.WithSkin(Skins.SplitterPane));
     public static LayoutDefinition WithToolbar(this LayoutDefinition layout,
         Func<ToolbarControl, LayoutAreaHost, RenderingContext, ToolbarControl> config)
         => layout.WithRenderer(IsPage,
-            (h, c) =>
-            [
-                store => h.ConfigBasedRenderer(
+            (h, c, store) =>
+                h.ConfigBasedRenderer(
                     c,
                     store,
                     StandardPageLayout.Toolbar,
                     () => new(),
                     config)
-            ]);
+            );
 
 
 }

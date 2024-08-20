@@ -20,7 +20,7 @@
 @code
 {
     private IReadOnlyCollection<object> Data { get; set; } = Array.Empty<object>();
-
+    private Orientation Orientation { get; set; }
     private UiControl view;
 
     private string ViewArea => $"{Area}/{ItemTemplateControl.ViewArea}";
@@ -34,5 +34,4 @@
 
     private UiControl GetViewWithPath(int i) => ViewModel.View with { DataContext = $"{ViewModel.DataContext}{ViewModel.Data}/{i}" };
 
-    private Orientation Orientation => @ViewModel.Orientation?.ToFluentOrientation() ?? Orientation.Vertical;
 }

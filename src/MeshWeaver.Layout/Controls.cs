@@ -1,27 +1,27 @@
-﻿using System.Numerics;
-using MeshWeaver.Application.Styles;
+﻿using MeshWeaver.Application.Styles;
 
 namespace MeshWeaver.Layout;
 
 public static class Controls
 {
+    public static SplitterControl Splitter => new();
+    public static LayoutControl Layout => new();
+    public static LayoutGridControl LayoutGrid => new();
 
-    public static NavGroupControl NavGroup(string title) => new(title);
+    public static NavGroupControl NavGroup(string title, object icon=null, object href=null) => new(title, icon, href);
     public static TabsControl Tabs => new();
     public static NavMenuControl NavMenu => new();
 
-    public static NavLinkControl NavLink(object title, object href) => new(title, href);
-    public static NavLinkControl NavLink(object title, Icon icon, object href) => new(title, href) { Icon = icon };
+    public static NavLinkControl NavLink(object title, object href) => new(title, null, href);
+    public static NavLinkControl NavLink(object title, Icon icon, object href) => new(title, icon, href);
 
     public static LayoutStackControl Stack => new();
 
-    public static LayoutStackControl Toolbar => new ToolbarControl();
+    public static ToolbarControl Toolbar => new ToolbarControl();
 
     public static SelectControl Select(object item) => new(item);
     public static ListboxControl Listbox(object item) => new(item);
     public static ComboboxControl Combobox(object item) => new(item);
-
-    public static SpinnerControl Spinner() => new();
 
     public static TextBoxControl TextBox(object data) => new(data);
 

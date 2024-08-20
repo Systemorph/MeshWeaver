@@ -14,5 +14,12 @@
 
 @code
 {
-    private SelectPosition? Position => ViewModel.Position?.ToFluentPosition();
+    private SelectPosition? Position { get; set; }
+    protected override void BindData()
+    {
+        base.BindData();
+        DataBind(ViewModel.Position, x => x.Position);
+    }
+
+
 }

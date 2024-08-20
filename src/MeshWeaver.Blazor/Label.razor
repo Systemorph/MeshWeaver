@@ -14,7 +14,7 @@
 @code
 {
     private string InternalData { get; set; }
-    private HorizontalAlignment Alignment { get; set; }
+    private HorizontalAlignment? Alignment { get; set; }
     private bool Disabled { get; set; }
     private Typography Typo { get; set; }
     private FontWeight Weight { get; set; }
@@ -24,8 +24,8 @@
         base.BindData();
         DataBind(ViewModel.Data, x => x.InternalData );
         DataBind(ViewModel.Disabled, x => x.Disabled);
-        DataBind(ViewModel.Alignment, x => x.Alignment, o => ((Layout.HorizontalAlignment)o).ToFluentHorizontalAlignment());
-        DataBind(ViewModel.Typo, x => x.Typo, o => ((Layout.Typography)o).ToFluentTypography());
-        DataBind(ViewModel.Weight, x => x.Weight, o => ((Layout.FontWeight)o).ToFluentFontWeight());
+        DataBind(ViewModel.Alignment, x => x.Alignment);
+        DataBind(ViewModel.Typo, x => x.Typo);
+        DataBind(ViewModel.Weight, x => x.Weight);
     }
 }

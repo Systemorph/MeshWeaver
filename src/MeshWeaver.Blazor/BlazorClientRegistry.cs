@@ -1,11 +1,13 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json;
+using MeshWeaver.Application;
 using Microsoft.DotNet.Interactive.Formatting;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
+using MeshWeaver.Messaging.Serialization;
 using static MeshWeaver.Layout.Client.LayoutClientConfiguration;
 
 namespace MeshWeaver.Blazor;
@@ -19,6 +21,7 @@ public static class BlazorClientRegistry
         this MessageHubConfiguration config,
         Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration
     ) => config
+        .WithTypes(typeof(ApplicationAddress))
         .AddLayoutClient(c => configuration.Invoke(c.WithView(DefaultFormatting)))
     ;
     #region Standard Formatting
@@ -41,18 +44,14 @@ public static class BlazorClientRegistry
             LayoutAreaControl layoutArea
                 => StandardView<LayoutAreaControl, LayoutArea>(layoutArea, null, area),
             HtmlControl html => StandardView<HtmlControl, HtmlView>(html, stream, area),
-            SpinnerControl spinner => StandardView<SpinnerControl, Spinner>(spinner, stream, area),
             LabelControl label => StandardView<LabelControl, Label>(label, stream, area),
-            NavMenuControl navMenu => StandardView<NavMenuControl, NavMenuView>(navMenu, stream, area),
-            TabsControl tabs => StandardView<TabsControl, TabsView>(tabs, stream, area),
+            NavLinkControl link => StandardView<NavLinkControl,NavLink>(link, stream, area),
             MenuItemControl menu => StandardView<MenuItemControl, MenuItemView>(menu, stream, area),
-            NavLinkControl link => StandardView<NavLinkControl, NavLink>(link, stream, area),
-            NavGroupControl group => StandardView<NavGroupControl, NavGroup>(group, stream, area),
+            IContainerControl container => StandardView<IContainerControl, ContainerView>(container, stream, area),
             DataGridControl gc => StandardView<DataGridControl, DataGridView>(gc, stream, area),
             TextBoxControl textbox => StandardView<TextBoxControl, Textbox>(textbox, stream, area),
             ComboboxControl combobox => StandardView<ComboboxControl, Combobox>(combobox, stream, area),
             ListboxControl listbox => StandardView<ListboxControl, Listbox>(listbox, stream, area),
-            ToolbarControl toolbar => StandardView<ToolbarControl, Toolbar>(toolbar, stream, area),
             SelectControl select => StandardView<SelectControl, Select>(select, stream, area),
             ButtonControl button => StandardView<ButtonControl, Button>(button, stream, area),
             BadgeControl badge => StandardView<BadgeControl, BadgeView>(badge, stream, area),
@@ -62,7 +61,6 @@ public static class BlazorClientRegistry
             MarkdownControl markdown => StandardView<MarkdownControl, MarkdownView>(markdown, stream, area),
             NamedAreaControl namedView => StandardView<NamedAreaControl, NamedAreaView>(namedView, stream, area),
             SpacerControl spacer => StandardView<SpacerControl, SpacerView>(spacer, stream, area),
-            LayoutStackControl stack => StandardView<LayoutStackControl, LayoutStackView>(stack, stream, area), 
             _ => DelegateToDotnetInteractive(instance, stream, area),
         };
     }
@@ -72,18 +70,22 @@ public static class BlazorClientRegistry
     {
         return skin switch
         {
-            LayoutSkin layout => StandardSkinnedView<UiControl, LayoutView>(control, stream, area, layout),
-            LayoutGridSkin => StandardSkinnedView<UiControl, LayoutGridView>(control, stream, area, skin),
-            SplitterSkin => StandardSkinnedView<UiControl, SplitterView>(control, stream, area, skin),
-            LayoutGridItemSkin gridItem => StandardSkinnedView<UiControl, LayoutGridItemView>(control, stream, area, gridItem),
-            HeaderSkin header => StandardSkinnedView<UiControl, HeaderView>(control, stream, area, header),
-            FooterSkin footer => StandardSkinnedView<UiControl, FooterView>(control, stream, area, footer),
-            BodyContentSkin bodyContent => StandardSkinnedView<UiControl, BodyContentView>(control, stream, area,
-                bodyContent),
-            TabSkin tab => StandardSkinnedView<UiControl, TabView>(control, stream, area, tab),
+            LayoutSkin layout => StandardSkinnedView<LayoutView>(layout, stream, area, control),
+            LayoutGridSkin grid => StandardSkinnedView<LayoutGridView>(grid, stream, area, control),
+            NavGroupSkin group => StandardSkinnedView<NavGroup>(group, stream, area, control),
+            NavMenuSkin navMenu => StandardSkinnedView<NavMenuView>(navMenu, stream, area, control),
+            ToolbarSkin toolbar => StandardSkinnedView<ToolbarView>(toolbar, stream, area, control),
+            LayoutStackSkin stack => StandardSkinnedView<LayoutStackView>(stack, stream, area, control),
+            SplitterSkin splitter => StandardSkinnedView<SplitterView>(splitter, stream, area, control),
+            LayoutGridItemSkin gridItem => StandardSkinnedView<LayoutGridItemView>(gridItem, stream, area, control),
+            HeaderSkin header => StandardSkinnedView<HeaderView>(header, stream, area, control),
             CardSkin card => StandardSkinnedView<UiControl, CardView>(control, stream, area, card),
+            FooterSkin footer => StandardSkinnedView<FooterView>(footer, stream, area, control),
+            BodyContentSkin bodyContent => StandardSkinnedView<BodyContentView>(bodyContent, stream, area, control),
+            TabSkin tab => StandardSkinnedView<TabView>(tab, stream, area, control),
+            TabsSkin tabs => StandardSkinnedView<TabsView>(tabs, stream, area, control),
             SplitterPaneSkin splitter
-                => StandardSkinnedView<UiControl, SplitterPane>(control, stream, area, splitter),
+                => StandardSkinnedView<SplitterPane>(splitter, stream, area, control),
             _ => throw new NotSupportedException($"Skin {skin.GetType().Name} is not supported.")
         };
     }

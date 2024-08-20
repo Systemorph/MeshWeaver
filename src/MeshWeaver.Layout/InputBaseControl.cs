@@ -2,6 +2,7 @@
 
 public interface IInputControl : IUiControl
 {
+    object Data { get; init; }
     object Placeholder { get; init; }
     object AutoFocus { get; init; }
     object Disabled { get; init; }
@@ -11,7 +12,7 @@ public interface IInputControl : IUiControl
 }
 
 public abstract record InputBaseControl<TControl>(object Data)
-    : UiControl<TControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data)
+    : UiControl<TControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
     where TControl : InputBaseControl<TControl>, IInputControl
 {
     public object AutoFocus { get; init; }

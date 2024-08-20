@@ -8,24 +8,31 @@
     TOption="Option"
     OptionText="@(x => x.Text)"
     OptionValue="@(x => x.ItemString)"
-    Autofocus="@ViewModel.Autofocus"
+    Autofocus="@Autofocus"
     Autocomplete="@Autocomplete"
-    Placeholder="@ViewModel.Placeholder"
+    Placeholder="@Placeholder"
     Position="@Position"
-    Disabled="@ViewModel.Disabled"
+    Disabled="@Disabled"
     Class="@Class"
     @bind-SelectedOption="Selected"
 />
 
 @code
 {
-    private ComboboxAutocomplete Autocomplete => ViewModel.Autocomplete switch
-    {
-        Layout.ComboboxAutocomplete.Inline => ComboboxAutocomplete.Inline,
-        Layout.ComboboxAutocomplete.List => ComboboxAutocomplete.List,
-        Layout.ComboboxAutocomplete.Both => ComboboxAutocomplete.Both,
-        _ => ComboboxAutocomplete.Inline
-    };
+    private ComboboxAutocomplete? Autocomplete { get; set; }
+    private bool Autofocus { get; set; }
+    private string Placeholder { get; set; }
+    private SelectPosition? Position { get; set; }
+    private bool Disabled { get; set; }
 
-    private SelectPosition? Position => ViewModel.Position?.ToFluentPosition();
+    protected override void BindData()
+    {
+        base.BindData();
+        DataBind(ViewModel.Autocomplete, x => x.Autocomplete);
+        DataBind(ViewModel.Autofocus, x => x.Autofocus);
+        DataBind(ViewModel.Placeholder, x => x.Placeholder);
+        DataBind(ViewModel.Position, x => x.Position);
+        DataBind(ViewModel.Disabled, x => x.Disabled);
+    }
+
 }

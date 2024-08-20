@@ -97,8 +97,8 @@ namespace MeshWeaver.Data
             JsonSerializerOptions options
         )
         {
-            if (changeItem.Patch is not null)
-                foreach (var op in changeItem.Patch.Operations)
+            if (changeItem.Patch?.Value is not null)
+                foreach (var op in changeItem.Patch.Value.Operations)
                 {
                     switch (op.Path.Segments.Length)
                     {
