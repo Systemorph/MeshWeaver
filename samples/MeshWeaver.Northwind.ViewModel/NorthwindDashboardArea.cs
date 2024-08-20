@@ -47,25 +47,32 @@ public static class NorthwindDashboardArea
         return Controls.LayoutGrid
             .WithClass("main-content")
             .WithView(
-                (area, ctx) =>
-                    area.OrderSummary(ctx), 
+                Controls.Stack
+                    .WithView(Controls.PaneHeader("Order Summary"))
+                    .WithView(
+                        (area, ctx) => area.OrderSummary(ctx)
+                    ),
                 skin => skin.WithXs(12).WithSm(6)
-                )
+            )
             .WithView(
                 Controls.Stack
                     .WithView(Controls.PaneHeader("Sales by category"))
-                    .WithView((area, ctx) => area.SalesByCategory(ctx)), skin => 
+                    .WithView((area, ctx) => area.SalesByCategory(ctx)), skin =>
                     skin.WithXs(12).WithSm(6)
             )
             .WithView(
-                (area, ctx) => area.SupplierSummary(ctx), skin => 
-                    skin.WithXs(12).WithSm(6)
+                Controls.Stack
+                    .WithView(Controls.PaneHeader("Supplier Summary"))
+                    .WithView(
+                        (area, ctx) => area.SupplierSummary(ctx)
+                    ),
+                    skin=>skin.WithXs(12).WithSm(6)
             )
             .WithView(
                 Controls.Stack
                     .WithView(Controls.PaneHeader("Top products"))
                     .WithView((area, ctx) => area.TopProducts(ctx)),
-                    skin => skin.WithXs(12).WithSm(6)
+                skin => skin.WithXs(12).WithSm(6)
             );
     }
 
