@@ -40,7 +40,7 @@ public abstract record UiControl : IUiControl
     public object IsReadonly { get; init; } //TODO add concept of registering conventions for properties to distinguish if it is editable!!! have some defaults, no setter=> iseditable to false, or some attribute to mark as not editable, or checking if it has setter, so on... or BProcess open
 
     public object Label { get; init; }
-    public ImmutableList<Skin> Skins { get; init; } = ImmutableList<Skin>.Empty;
+    public ImmutableList<Skin> Skins { get; init; }
     public object Class { get; init; }
 
 
@@ -52,12 +52,11 @@ public abstract record UiControl : IUiControl
     internal Func<UiActionContext, Task> ClickAction { get; init; }
 
 
-    // TODO V10: Consider generalizing to WorkspaceReference. (22.07.2024, Roland Bürgi)
-    public string DataContext { get; init; } = string.Empty;
+    public string DataContext { get; init; } 
 
     public UiControl PopSkin(out object skin)
     {
-        if (Skins.Count == 0)
+        if (Skins == null || Skins.Count == 0)
         {
             skin = null;
             return this;
@@ -67,7 +66,7 @@ public abstract record UiControl : IUiControl
     }
 
     public UiControl AddSkin(Skin skin)
-    => this with { Skins = Skins.Add(skin) };
+    => this with { Skins = (Skins ?? ImmutableList<Skin>.Empty).Add(skin) };
 
 
     protected ImmutableList<Func<EntityStore, EntityStoreAndUpdates>> Updates { get; init; } =
