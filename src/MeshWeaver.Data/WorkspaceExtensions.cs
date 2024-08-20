@@ -1,4 +1,6 @@
 ﻿using System.Reactive.Linq;
+using System.Text.Json;
+using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
@@ -56,9 +58,31 @@ public static class WorkspaceExtensions
     public static IWorkspace GetWorkspace(this IMessageHub messageHub) =>
         messageHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
-    public static ChangeItem<EntityStore> ToChangeItem(
-        this ISynchronizationStream stream, EntityStore store)
-        => new ChangeItem<EntityStore>(stream.Owner, stream.Reference, store, stream.Hub.Address, null,
-            stream.Hub.Version);
 
+
+    public static ChangeItem<EntityStore> ApplyChanges(
+        this ISynchronizationStream<EntityStore> stream,
+        EntityStore store,
+        IEnumerable<EntityStoreUpdate> updates) =>
+        new(stream.Owner, 
+            stream.Reference, 
+            store, 
+            stream.Hub.Address, 
+            new(() => CreatePatch(updates, stream.Hub.JsonSerializerOptions)),
+            stream.Hub.Version
+            );
+
+    private static JsonPatch CreatePatch(IEnumerable<EntityStoreUpdate> updates, JsonSerializerOptions options)
+    {
+        return new(updates.GroupBy(x => new{x.Collection, x.Id})
+            .Aggregate(Enumerable.Empty<PatchOperation>(),(e,g) =>
+            {
+                var first = g.First().OldValue;
+                var last = g.Last().Value;
+                return e.Concat(first.CreatePatch(last, options).Operations);
+            }).ToArray());
+    }
+
+
+    
 }

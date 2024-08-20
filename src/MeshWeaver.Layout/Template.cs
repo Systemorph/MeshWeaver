@@ -91,7 +91,7 @@ public static class Template{
         var view = dataTemplate.Build(topLevel, out var _);
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
-        return view.WithRenderResult(store => store.UpdateData(id, data));
+        return view.WithUpdates(store => store.UpdateData(id, data));
     }
 
     private static string UpdateData(object data, string id)
@@ -156,7 +156,7 @@ public static class Template{
                 {
                     DataContext = dataContext
                 }
-                .WithRenderResult(store => store.UpdateData(id, data))
+                .WithUpdates(store => store.UpdateData(id, data))
             ;
     }
 

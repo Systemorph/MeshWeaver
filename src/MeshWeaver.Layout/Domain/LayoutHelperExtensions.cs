@@ -5,7 +5,7 @@ namespace MeshWeaver.Layout.Domain;
 
 public static class LayoutHelperExtensions
 { 
-    public static EntityStore ConfigBasedRenderer<TControl>(this LayoutAreaHost host,
+    public static EntityStoreAndUpdates ConfigBasedRenderer<TControl>(this LayoutAreaHost host,
         RenderingContext context,
         EntityStore store,
         string area,
@@ -15,7 +15,9 @@ public static class LayoutHelperExtensions
     {
         var menu = store.GetControl<TControl>(area) ?? factory();
         menu = config(menu, host, context);
-        return host.RenderArea(context with { Area = area }, menu).Aggregate(store, (x, y) => y.Invoke(x));
+        return host.RenderArea(
+            context with { Area = area }, menu, store)
+;
     }
 
     internal static bool DataEquality(object data, object otherData)

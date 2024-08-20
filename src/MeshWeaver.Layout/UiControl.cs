@@ -13,8 +13,9 @@ public interface IUiControl : IDisposable
     object Tooltip { get; init; }
     object Class { get; init; }
 
-    IEnumerable<Func<EntityStore, EntityStore>> Render(LayoutAreaHost host, RenderingContext context);
+    EntityStoreAndUpdates Render(LayoutAreaHost host, RenderingContext context, EntityStore store);
 }
+
 
 public interface IUiControl<out TControl> : IUiControl
     where TControl : IUiControl<TControl>
@@ -69,11 +70,11 @@ public abstract record UiControl : IUiControl
     => this with { Skins = Skins.Add(skin) };
 
 
-    protected ImmutableList<Func<EntityStore, EntityStore>> RenderResults { get; init; } =
-        ImmutableList<Func<EntityStore, EntityStore>>.Empty;
-    public UiControl WithRenderResult(Func<EntityStore, EntityStore> renderResult)
+    protected ImmutableList<Func<EntityStore, EntityStoreAndUpdates>> Updates { get; init; } =
+        ImmutableList<Func<EntityStore, EntityStoreAndUpdates>>.Empty;
+    public UiControl WithUpdates(Func<EntityStore, EntityStoreAndUpdates> update)
     {
-        return this with { RenderResults = RenderResults.Add(renderResult) };
+        return this with { Updates = Updates.Add(update) };
     }
 
 
@@ -113,10 +114,10 @@ public abstract record UiControl : IUiControl
             )
         );
     }
-    IEnumerable<Func<EntityStore, EntityStore>> IUiControl.Render(LayoutAreaHost host, RenderingContext context)
-        => Render(host, context);
+    EntityStoreAndUpdates IUiControl.Render(LayoutAreaHost host, RenderingContext context, EntityStore store)
+        => Render(host, context, store);
 
-    protected abstract IEnumerable<Func<EntityStore, EntityStore>> Render(LayoutAreaHost host, RenderingContext context);
+    protected abstract EntityStoreAndUpdates Render(LayoutAreaHost host, RenderingContext context, EntityStore store);
 }
 
 public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
@@ -174,12 +175,16 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
 
     public TControl WithClass(object @class) => This with { Class = @class };
 
-    protected override IEnumerable<Func<EntityStore, EntityStore>> Render
-        (LayoutAreaHost host, RenderingContext context) =>
-        RenderResults
-            .Concat([RenderSelf(host, context)]);
-    protected virtual Func<EntityStore, EntityStore> RenderSelf(LayoutAreaHost host, RenderingContext context)
-        => store => store.UpdateControl(context.Area, PrepareRendering(context));
+    protected override EntityStoreAndUpdates Render
+        (LayoutAreaHost host, RenderingContext context, EntityStore store) =>
+        Updates
+            .Aggregate(RenderSelf(host, context, store), (r, u) =>
+            {
+                var updated = u.Invoke(r.Store);
+                return new(r.Changes.Concat(updated.Changes), updated.Store);
+            });
+    protected virtual EntityStoreAndUpdates RenderSelf(LayoutAreaHost host, RenderingContext context, EntityStore store)
+        =>store.UpdateControl(context.Area, PrepareRendering(context));
 
     protected virtual TControl PrepareRendering(RenderingContext context)
         => This;

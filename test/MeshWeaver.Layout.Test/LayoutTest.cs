@@ -133,6 +133,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var controls = await stream
             .GetControlStream(reference.Area)
             .TakeUntil(o => o is HtmlControl)
+            .Timeout(3.Seconds())
             .ToArray();
         controls.Should().HaveCountGreaterThan(1);// .And.HaveCountLessThan(12);
     }
@@ -196,7 +197,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 stream.Reference,
                 patch.Apply(ci),
                 hub.Address,
-                patch,
+                new(() =>patch),
                 hub.Version
             );
         });
@@ -433,7 +434,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 stream.Reference,
                 patch.Apply(ci),
                 hub.Address,
-                patch,
+                new(()=>patch),
                 hub.Version
             );
         });

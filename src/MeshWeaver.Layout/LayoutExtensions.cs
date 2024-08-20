@@ -100,8 +100,8 @@ public static class LayoutExtensions
         return synchronizationItems
             .Where(i =>
                 first
-                || i.Patch == null
-                || i.Patch.Operations.Any(
+                || i.Patch?.Value == null
+                || i.Patch.Value.Operations.Any(
                     p =>
                         p.Path
                             .Segments
