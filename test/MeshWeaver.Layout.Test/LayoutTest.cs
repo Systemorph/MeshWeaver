@@ -420,7 +420,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => x != null);
         var resultItemTemplate = resultsControl.Should().BeOfType<HtmlControl>().Which;
-        resultItemTemplate.DataContext.Should().BeEmpty();
+        resultItemTemplate.DataContext.Should().BeNull();
 
         resultItemTemplate
             .Data.Should().BeOfType<string>()
@@ -443,12 +443,13 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             );
         });
 
-        var hasControl = await stream
+        resultsControl = await stream
             .GetControlStream(resultsArea)
-            .Select(x =>((string)((HtmlControl)x).Data).Contains("<pre>False</pre>"))
+            .Where(x =>!((string)((HtmlControl)x).Data).Contains("<pre>True</pre>"))
             .Timeout(TimeSpan.FromSeconds(3))
-            .FirstAsync(x => !x);
-        hasControl.Should().BeTrue();
+            .FirstAsync(x => true);
+
+        ((string)((HtmlControl)resultsControl).Data).Should().Contain("<pre>False</pre>");
     }
     [HubFact]
     public void TestSerialization()
