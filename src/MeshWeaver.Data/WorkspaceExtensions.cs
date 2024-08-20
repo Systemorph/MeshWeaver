@@ -1,7 +1,6 @@
 ﻿using System.Reactive.Linq;
 using System.Text.Json;
 using Json.Patch;
-using Json.Path;
 using Json.Pointer;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Data.Serialization;
@@ -83,7 +82,7 @@ public static class WorkspaceExtensions
                 var first = g.First().OldValue;
                 var last = g.Last().Value;
 
-                var parentPath = JsonPointer.Parse($"/{g.Key.Collection}/{JsonSerializer.Serialize(g.Key.Id, options)}");
+                var parentPath = JsonPointer.Create(PointerSegment.Create(g.Key.Collection), PointerSegment.Create(JsonSerializer.Serialize(g.Key.Id, options)));
                 if (last == null && first == null)
                     return e;
                 if (first == null)

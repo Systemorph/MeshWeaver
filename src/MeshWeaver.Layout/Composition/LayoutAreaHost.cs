@@ -248,7 +248,7 @@ public record LayoutAreaHost : IDisposable
 
             return new(
                 existing.Select(i =>
-                    new EntityStoreUpdate(LayoutAreaReference.Areas, contextArea, null) { OldValue = i }),
+                    new EntityStoreUpdate(LayoutAreaReference.Areas, contextArea, null) { OldValue = i.Value }),
                 store.Update(LayoutAreaReference.Areas,
                     i => i with { Instances = i.Instances.RemoveRange(existing.Select(x => x.Key)) }));
     }

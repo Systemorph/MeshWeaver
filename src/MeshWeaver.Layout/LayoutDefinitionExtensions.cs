@@ -113,7 +113,7 @@ public static class LayoutDefinitionExtensions{
     public static EntityStoreAndUpdates UpdateControl(this EntityStore store, string id, UiControl control)
         => new([new EntityStoreUpdate(LayoutAreaReference.Areas, id, control)], store.Update(LayoutAreaReference.Areas, i => i.Update(id,control)));
     public static EntityStoreAndUpdates UpdateData(this EntityStore store, string id, object control)
-        => new([new EntityStoreUpdate(LayoutAreaReference.Data, id, control)], store.Update(LayoutAreaReference.Areas, i => i.Update(id, control)));
+        => new([new EntityStoreUpdate(LayoutAreaReference.Data, id, control)], store.Update(LayoutAreaReference.Data, i => i.Update(id, control)));
 
     public static LayoutDefinition WithRenderer(
         this LayoutDefinition layout,
