@@ -3,6 +3,7 @@ using System.Reflection;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataBinding;
+using MeshWeaver.Layout.Domain;
 using MeshWeaver.Reflection;
 
 namespace MeshWeaver.Layout;
@@ -90,7 +91,7 @@ public static class Template{
         var view = dataTemplate.Build(topLevel, out var _);
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
-        return view.WithRenderResult(store => store.UpdateData(id, data));
+        return view.WithUpdates(store => store.UpdateData(id, data));
     }
 
     private static string UpdateData(object data, string id)
@@ -155,7 +156,7 @@ public static class Template{
                 {
                     DataContext = dataContext
                 }
-                .WithRenderResult(store => store.UpdateData(id, data))
+                .WithUpdates(store => store.UpdateData(id, data))
             ;
     }
 
@@ -164,7 +165,7 @@ public static class Template{
 
 //result into ui control with DataBinding set
 public record ItemTemplateControl(UiControl View, object Data) :
-    UiControl<ItemTemplateControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data)
+    UiControl<ItemTemplateControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
     public static string ViewArea = nameof(View);
 
@@ -177,4 +178,25 @@ public record ItemTemplateControl(UiControl View, object Data) :
 
     public ItemTemplateControl WithWrap(bool wrap) => this with { Wrap = wrap };
 
+    public virtual bool Equals(ItemTemplateControl other)
+    {
+        if (other is null)
+            return false;
+        if (ReferenceEquals(this, other))
+            return true;
+        if (!base.Equals(other))
+            return false;
+        return Equals(View, other.View)
+               && Equals(Wrap, other.Wrap)
+               && Equals(Orientation, other.Orientation)
+               && LayoutHelperExtensions.DataEquality(Data, other.Data);
+    }
+
+    public override int GetHashCode() => 
+        HashCode.Combine(base.GetHashCode(),
+            Wrap,
+            View,
+            Orientation,
+            LayoutHelperExtensions.DataHashCode(Data)
+            );
 }

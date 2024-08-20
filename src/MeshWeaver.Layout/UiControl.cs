@@ -1,5 +1,4 @@
 ﻿using System.Collections.Immutable;
-using System.Text.Json.Serialization;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Composition;
 
@@ -7,14 +6,16 @@ namespace MeshWeaver.Layout;
 
 public interface IUiControl : IDisposable
 {
-    object Id { get; }
+    object Id { get; init; }
+    string DataContext { get; init; }
+    object Style { get; init; }
+    object Label { get; init; }
+    object Tooltip { get; init; }
+    object Class { get; init; }
 
-    //object Data { get; init; }
-    IUiControl WithBuildAction(Func<IUiControl, IServiceProvider, IUiControl> buildFunction);
-    bool IsClickable { get; }
-
-    bool IsUpToDate(object other);
+    EntityStoreAndUpdates Render(LayoutAreaHost host, RenderingContext context, EntityStore store);
 }
+
 
 public interface IUiControl<out TControl> : IUiControl
     where TControl : IUiControl<TControl>
@@ -23,30 +24,26 @@ public interface IUiControl<out TControl> : IUiControl
     TControl WithClickAction(Func<UiActionContext, Task> onClick);
 }
 
-public abstract record UiControl(object Data) : IUiControl
+public abstract record UiControl : IUiControl
 {
     public object Id { get; init; }
 
-    IUiControl IUiControl.WithBuildAction(
-        Func<IUiControl, IServiceProvider, IUiControl> buildFunction
-    ) => WithBuild(buildFunction);
 
     void IDisposable.Dispose() => Dispose();
 
-    protected abstract IUiControl WithBuild(
-        Func<IUiControl, IServiceProvider, IUiControl> buildFunction
-    );
 
     protected abstract void Dispose();
 
     public object Style { get; init; } //depends on control, we need to give proper style here!
 
-    public string Tooltip { get; init; }
-    public bool IsReadonly { get; init; } //TODO add concept of registering conventions for properties to distinguish if it is editable!!! have some defaults, no setter=> iseditable to false, or some attribute to mark as not editable, or checking if it has setter, so on... or BProcess open
+    public object Tooltip { get; init; }
+    public object IsReadonly { get; init; } //TODO add concept of registering conventions for properties to distinguish if it is editable!!! have some defaults, no setter=> iseditable to false, or some attribute to mark as not editable, or checking if it has setter, so on... or BProcess open
 
     public object Label { get; init; }
-    public ImmutableList<object> Skins { get; init; } = ImmutableList<object>.Empty;
+    public ImmutableList<Skin> Skins { get; init; }
     public object Class { get; init; }
+
+
     public abstract bool IsUpToDate(object other);
 
     // ReSharper disable once IdentifierTypo
@@ -55,12 +52,11 @@ public abstract record UiControl(object Data) : IUiControl
     internal Func<UiActionContext, Task> ClickAction { get; init; }
 
 
-    // TODO V10: Consider generalizing to WorkspaceReference. (22.07.2024, Roland Bürgi)
-    public string DataContext { get; init; } = string.Empty;
+    public string DataContext { get; init; } 
 
     public UiControl PopSkin(out object skin)
     {
-        if (Skins.Count == 0)
+        if (Skins == null || Skins.Count == 0)
         {
             skin = null;
             return this;
@@ -69,28 +65,17 @@ public abstract record UiControl(object Data) : IUiControl
         return this with { Skins = Skins.Count == 0 ? Skins : Skins.RemoveAt(Skins.Count - 1) };
     }
 
-    public UiControl WithSkin(object skin)
-    => this with { Skins = Skins.Add(skin) };
-
-    //public virtual IEnumerable<Func<EntityStore, EntityStore>> Render(LayoutAreaHost host, RenderingContext context)
-    //=> RenderSelf(context);
+    public UiControl AddSkin(Skin skin)
+    => this with { Skins = (Skins ?? ImmutableList<Skin>.Empty).Add(skin) };
 
 
-    protected virtual UiControl PrepareRendering(RenderingContext context)
-        => this;
-    private ImmutableList<Func<EntityStore, EntityStore>> RenderResults { get; init; } =
-        ImmutableList<Func<EntityStore, EntityStore>>.Empty;
-    public UiControl WithRenderResult(Func<EntityStore, EntityStore> renderResult)
+    protected ImmutableList<Func<EntityStore, EntityStoreAndUpdates>> Updates { get; init; } =
+        ImmutableList<Func<EntityStore, EntityStoreAndUpdates>>.Empty;
+    public UiControl WithUpdates(Func<EntityStore, EntityStoreAndUpdates> update)
     {
-        return this with { RenderResults = RenderResults.Add(renderResult) };
+        return this with { Updates = Updates.Add(update) };
     }
 
-    public virtual IEnumerable<Func<EntityStore, EntityStore>> Render
-        (LayoutAreaHost host, RenderingContext context) =>
-        RenderResults
-            .Concat([RenderSelf(host, context)]);
-    protected virtual Func<EntityStore, EntityStore> RenderSelf(LayoutAreaHost host, RenderingContext context)
-        => store => store.UpdateControl(context.Area, PrepareRendering(context));
 
     public virtual bool Equals(UiControl other)
     {
@@ -100,25 +85,15 @@ public abstract record UiControl(object Data) : IUiControl
             return true;
 
         return ((Id == null && other.Id == null) || (Id != null && Id.Equals(other.Id))) &&
-               DataEquality(other) &&
                ((Style == null && other.Style == null) || (Style != null && Style.Equals(other.Style))) &&
                Tooltip == other.Tooltip &&
                IsReadonly == other.IsReadonly &&
                ((Label == null && other.Label == null) || (Label != null && Label.Equals(other.Label))) &&
-               Skins.SequenceEqual(other.Skins) &&
+               (Skins ?? []).SequenceEqual(other.Skins ?? []) &&
                ((Class == null && other.Class == null) || (Class != null && Class.Equals(other.Class))) &&
                DataContext == other.DataContext;
     }
 
-    private bool DataEquality(UiControl other)
-    {
-        if (Data is null)
-            return other.Data is null;
-
-        if(Data is IEnumerable<object> e)
-            return other.Data is IEnumerable<object> e2 && e.SequenceEqual(e2, JsonObjectEqualityComparer.Instance);
-        return JsonObjectEqualityComparer.Instance.Equals(Data, other.Data);
-    }
 
 
     public override int GetHashCode()
@@ -126,30 +101,26 @@ public abstract record UiControl(object Data) : IUiControl
         return HashCode.Combine(
             HashCode.Combine(
                 Id,
-                GetDataHashCode(Data),
                 Style,
                 Tooltip
             ),
             HashCode.Combine(
                 IsReadonly,
                 Label,
-                Skins.Aggregate(0, (acc, skin) => acc ^ skin.GetHashCode()),
+                Skins == null ? 0 : Skins.Aggregate(0, (acc, skin) => acc ^ skin.GetHashCode()),
                 Class,
                 DataContext
             )
         );
     }
+    EntityStoreAndUpdates IUiControl.Render(LayoutAreaHost host, RenderingContext context, EntityStore store)
+        => Render(host, context, store);
 
-    private int GetDataHashCode(object data)
-    {
-        if (data is IEnumerable<object> e)
-            return e.Aggregate(17, (r, o) => r ^ o.GetHashCode());
-        return data?.GetHashCode() ?? 0;
-    }
+    protected abstract EntityStoreAndUpdates Render(LayoutAreaHost host, RenderingContext context, EntityStore store);
 }
 
-public abstract record UiControl<TControl>(string ModuleName, string ApiVersion, object Data)
-    : UiControl(Data),
+public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
+    : UiControl,
         IUiControl<TControl>
     where TControl : UiControl<TControl>, IUiControl<TControl>
 {
@@ -198,36 +169,24 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion,
     private ImmutableList<Action<TControl>> DisposeActions { get; init; } =
         ImmutableList<Action<TControl>>.Empty;
 
-    public TControl WithBuildAction(Func<TControl, IServiceProvider, TControl> buildFunction) =>
-        This with
-        {
-            BuildFunctions = BuildFunctions.Add(buildFunction)
-        };
 
-    [JsonIgnore]
-    internal ImmutableList<
-        Func<TControl, IServiceProvider, TControl>
-    > BuildFunctions { get; init; } =
-        ImmutableList<Func<TControl, IServiceProvider, TControl>>.Empty;
-
-    protected override IUiControl WithBuild(
-        Func<IUiControl, IServiceProvider, IUiControl> buildFunction
-    )
-    {
-        return WithBuildAction((c, sp) => (TControl)buildFunction(c, sp));
-    }
-
-    IUiControl IUiControl.WithBuildAction(
-        Func<IUiControl, IServiceProvider, IUiControl> buildFunction
-    )
-    {
-        return WithBuildAction((c, sp) => (TControl)buildFunction(c, sp));
-    }
-
-    public new TControl WithSkin(object skin) => This with { Skins = Skins.Add(skin) };
+    public new TControl AddSkin(Skin skin) => This with { Skins = (Skins ?? ImmutableList<Skin>.Empty).Add(skin) };
 
     public TControl WithClass(object @class) => This with { Class = @class };
 
+    protected override EntityStoreAndUpdates Render
+        (LayoutAreaHost host, RenderingContext context, EntityStore store) =>
+        Updates
+            .Aggregate(RenderSelf(host, context, store), (r, u) =>
+            {
+                var updated = u.Invoke(r.Store);
+                return new(r.Changes.Concat(updated.Changes), updated.Store);
+            });
+    protected virtual EntityStoreAndUpdates RenderSelf(LayoutAreaHost host, RenderingContext context, EntityStore store)
+        =>store.UpdateControl(context.Area, PrepareRendering(context));
+
+    protected virtual TControl PrepareRendering(RenderingContext context)
+        => This;
 
 
 

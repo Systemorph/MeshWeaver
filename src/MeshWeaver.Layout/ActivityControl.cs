@@ -20,4 +20,4 @@ public record ActivityControl(
     DateTime Date,
     ImmutableList<MenuItemControl> Menu,
     ImmutableList<MenuItemControl> Options
-) : UiControl<ActivityControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null);
+) : UiControl<ActivityControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion);

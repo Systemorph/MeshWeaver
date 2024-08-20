@@ -4,7 +4,7 @@ using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Layout.Composition;
 
-public delegate IEnumerable<Func<EntityStore, EntityStore>> Renderer(LayoutAreaHost host, RenderingContext context);
+public delegate EntityStoreAndUpdates Renderer(LayoutAreaHost host, RenderingContext context, EntityStore store);
 public record LayoutDefinition(IMessageHub Hub)
 {
     private ImmutableList<(Func<RenderingContext, bool> Filter, Renderer Renderer)> Renderers { get; init; } = ImmutableList<(Func<RenderingContext, bool> Filter, Renderer Renderer)>.Empty;
@@ -15,21 +15,19 @@ public record LayoutDefinition(IMessageHub Hub)
             Renderers = Renderers.Add((filter, renderer))
         };
 
-    public EntityStore Render(
+    public EntityStoreAndUpdates Render(
         LayoutAreaHost host,
         RenderingContext context,
         EntityStore store) =>
         Renderers
             .Where(r => r.Filter(context))
-            .Select(x => x.Renderer)
-            .Aggregate(store ?? new(),
-                (s,
-                        renderer) => renderer
-                    .Invoke(host, context)
-                    .Aggregate(s, (ss, update) => update.Invoke(ss))
-
-            );
-
+            .Aggregate(new EntityStoreAndUpdates([], store),(r,x) =>
+            {
+                var ret = x.Renderer.Invoke(host, context, r.Store);
+                return ret with{
+                    Changes = r.Changes.Concat(ret.Changes)
+                };
+            });
 
     public int Count => Renderers.Count;
 

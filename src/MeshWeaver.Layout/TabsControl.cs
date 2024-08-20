@@ -1,17 +1,21 @@
 ﻿namespace MeshWeaver.Layout;
 
 public record TabsControl() :
-    ContainerControl<TabsControl, UiControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
+    ContainerControlWithItemSkin<TabsControl,TabsSkin,TabSkin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new())
 {
-    public TabsControl WithTab(object label, UiControl item, Func<NamedAreaControl, NamedAreaControl> options = null)
-        => WithTab(new(label), item, options);
-    public TabsControl WithTab(TabSkin skin, UiControl item, Func<NamedAreaControl, NamedAreaControl> options = null)
-    {
-        options ??= x => x;
-        return WithItem(item.WithSkin(skin), x => options.Invoke(x.WithId(skin.Label)));
-    }
 
-    public object ActiveTabId { get; init; }
-    public object Height { get; init; }
-    public object Orientation { get; init; }
+
+    protected override TabSkin CreateItemSkin(NamedAreaControl ret)
+    {
+        return new TabSkin(ret.Id);
+    }
 }
+
+public record TabsSkin : Skin<TabsSkin>
+{
+    public object ActiveTabId { get; init; }
+    public object Orientation { get; set; }
+    public object Height { get; set; }
+}
+
+public record TabSkin(object Label) : Skin<TabSkin>;

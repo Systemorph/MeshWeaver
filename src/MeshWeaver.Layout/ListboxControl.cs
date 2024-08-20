@@ -1,14 +1,17 @@
-﻿namespace MeshWeaver.Layout;
+﻿using MeshWeaver.Layout.Domain;
+
+namespace MeshWeaver.Layout;
 
 public record ListboxControl(object Data) : ListControlBase<ListboxControl>(Data), IListControl;
 
 public interface IListControl : IUiControl
 {
+    object Data { get; init; }    
     IReadOnlyCollection<Option> Options { get; init; }
 }
 
 public abstract record ListControlBase<TControl>(object Data)
-    : UiControl<TControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data)
+    : UiControl<TControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
     where TControl : ListControlBase<TControl>, IListControl
 {
     public IReadOnlyCollection<Option> Options { get; init; }
@@ -22,12 +25,17 @@ public abstract record ListControlBase<TControl>(object Data)
     {
         if (ReferenceEquals(null, other)) return false;
         if (ReferenceEquals(this, other)) return true;
-        return base.Equals(other) && Options.SequenceEqual(other.Options);
+        return base.Equals(other) 
+               && Options.SequenceEqual(other.Options) 
+               && LayoutHelperExtensions.DataEquality(Data, other.Data);
     }
 
     public override int GetHashCode()
     {
-        return HashCode.Combine(base.GetHashCode(), Options.Aggregate(17, (x, y) => x ^y.GetHashCode()));
+        return HashCode.Combine(
+            base.GetHashCode(), 
+            Options.Aggregate(17, (x, y) => x ^y.GetHashCode()),
+            LayoutHelperExtensions.DataHashCode(Data));
     }
 }
 

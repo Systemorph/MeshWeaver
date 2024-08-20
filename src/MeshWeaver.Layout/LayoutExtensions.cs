@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
@@ -100,8 +101,8 @@ public static class LayoutExtensions
         return synchronizationItems
             .Where(i =>
                 first
-                || i.Patch == null
-                || i.Patch.Operations.Any(
+                || i.Patch?.Value == null
+                || i.Patch.Value.Operations.Any(
                     p =>
                         p.Path
                             .Segments
@@ -109,7 +110,10 @@ public static class LayoutExtensions
                             (
                                 referencePointer.Segments,
                                 (x, y) => x.Equals(y))
-                            .Aggregate(false, (x, y) => x || y)))
+                            
+                            .All(x => x)
+                        )
+                )
             .Select(i =>
                 {
                     first = false;

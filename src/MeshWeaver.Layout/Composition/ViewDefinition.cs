@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Utils;
+﻿using MeshWeaver.Data;
+using MeshWeaver.Utils;
 
 namespace MeshWeaver.Layout.Composition;
 
@@ -13,6 +14,6 @@ public record RenderingContext(string Area)
     public RenderingContext Parent { get; init; }
 };
 
-public delegate IObservable<T> ViewStream<out T>(LayoutAreaHost area, RenderingContext context);
+public delegate IObservable<T> ViewStream<out T>(LayoutAreaHost area, RenderingContext context, EntityStore store);
 
 

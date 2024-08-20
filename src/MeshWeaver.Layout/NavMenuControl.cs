@@ -1,70 +1,57 @@
 ﻿namespace MeshWeaver.Layout;
 
-public record NavMenuControl() : 
-    ContainerControl<NavMenuControl, UiControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null)
+public record NavMenuSkin : Skin<NavMenuSkin>
 {
+    public object Width { get; init; }= 250;
+    public object Collapsible { get; init; } = true;
+    public NavMenuSkin WithCollapsible(bool collapsible) => this with { Collapsible = collapsible };
 
-    public NavMenuControl WithEntry(UiControl item, Func<NamedAreaControl, NamedAreaControl> options = null) => 
-        WithItem(item, options ?? (x => x)) ;
+    public NavMenuSkin WithWidth(int width) => this with { Width = width };
 
-    public bool Collapsible { get; init; } = true;
-
-    public int? Width { get; init; } = 250;
-
-
+}
+public record NavMenuControl() : ContainerControl<NavMenuControl, NavMenuSkin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new())
+{
     public NavMenuControl WithNavLink(object title, object href) =>
-        WithNavLink(title, href, x => x);
-    public NavMenuControl WithNavLink(NavLinkControl control) =>
-        WithEntry(control);
-
-    public NavMenuControl WithNavLink(object title, object href, Func<NavLinkControl, NavLinkControl> options) =>
-        WithNavLink(options.Invoke(new(title, href)));
+        WithView(new NavLinkControl(title, null,href));
     public NavMenuControl WithNavLink(object title, object href, object icon) =>
-        WithNavLink(new NavLinkControl(title, href){Icon = icon})
+        WithView(new NavLinkControl(title, icon, href))
         ;
+    public NavMenuControl WithNavLink(NavLinkControl navLink) => WithView(navLink);
 
     public NavMenuControl WithNavGroup(NavGroupControl navGroup) =>
-        WithEntry(navGroup);
-    public NavMenuControl WithNavGroup(object title, Func<NavGroupControl, NavGroupControl> config) =>
-        WithEntry(config.Invoke(new(title)));
-    public NavMenuControl WithCollapsible(bool collapsible) => this with { Collapsible = collapsible };
-
-    public NavMenuControl WithWidth(int width) => this with { Width = width };
+        WithView(navGroup);
+    public NavMenuControl WithNavGroup(object title, object icon = null, object href = null) =>
+        WithView(new NavGroupControl(title, icon, href));
 
 }
 
-
-
-public abstract record NavItemControl<TNavItemControl>(object Data) : ContainerControl<TNavItemControl, UiControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data)
-where TNavItemControl : NavItemControl<TNavItemControl>
+public interface IMenuItem : IUiControl
 {
-    public object Icon { get; init; }
-    public object Href { get; init; }
-    public object Title { get; init; }
-    public TNavItemControl WithTitle(object title) => This with { Title = title };
-    public TNavItemControl WithHref(object href) => This with { Href = href };
+    object Title { get; init; }
+    object Icon { get; init; }
+    object Href { get; init; }
+}
 
-    public TNavItemControl WithIcon(object icon) => This with { Icon = icon };
+public record NavLinkControl(object Title, object Icon, object Href) : UiControl<NavLinkControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion), IMenuItem
+{
+    public NavLinkControl WithTitle(object title) => This with { Title = title };
+    public NavLinkControl WithHref(object href) => This with { Href = href };
+
+    public NavLinkControl WithIcon(object icon) => This with { Icon = icon };
 
 
 }
 
-public record NavLinkControl : NavItemControl<NavLinkControl>
+public record NavGroupControl(object Title, object Icon, object Href) : ContainerControl<NavGroupControl, NavGroupSkin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new(Title, Icon, Href))
 {
-    public NavLinkControl(object Data, object Href) : base(Data)
-    {
-        this.Href = Href;
-    }
+
+    public NavGroupControl WithLink(object title, object href) =>
+        WithView(new NavLinkControl(title, null, href));
+    public NavGroupControl WithGroup(NavGroupControl @group) => WithView(group);
+
 
 }
-
-public record NavGroupControl(object Data)
-    : NavItemControl<NavGroupControl>(Data)
+public record NavGroupSkin(object Title, object Icon, object Href) : Skin<NavGroupSkin>
 {
-
-    public NavGroupControl WithLink(string displayName, string link, Func<NavLinkControl, NavLinkControl> options) =>
-        WithItem(options.Invoke(new(displayName, link)));
-    public NavGroupControl WithGroup(NavGroupControl @group) => WithItem(group);
-
-
+    public NavGroupSkin WithTitle(object title) => this with { Title = title };
 }

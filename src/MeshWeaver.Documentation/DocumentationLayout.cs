@@ -19,7 +19,7 @@ public static class DocumentationLayout
         => layout
             .WithDocumentation(
                 _ => true,
-                (tabs,host,ctx)=>tabs.WithTab(ctx.DisplayName, NamedArea(host.Stream.Reference.Area))
+                (tabs,host,ctx)=>tabs.WithView(NamedArea(host.Stream.Reference.Area), ctx.DisplayName)
                 )
             .WithView(nameof(Doc), (Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<object>>)Doc);
 
@@ -33,17 +33,18 @@ public static class DocumentationLayout
     //    =>
     //        Tabs.WithTab(context.DisplayName, NamedArea(context.Area));
 
-    public static LayoutDefinition WithDocumentation(this LayoutDefinition layout, Func<RenderingContext, bool> contextFilter, Func<TabsControl, LayoutAreaHost, RenderingContext, TabsControl> viewDefinition)
+    public static LayoutDefinition WithDocumentation(this LayoutDefinition layout,
+        Func<RenderingContext, bool> contextFilter,
+        Func<TabsControl, LayoutAreaHost, RenderingContext, TabsControl> viewDefinition)
         => layout.WithRenderer(ctx => IsDocs(ctx) && contextFilter(ctx),
-            (host, context) =>
-            [
-                store => host.ConfigBasedRenderer(
+            (host, context, store) =>
+                host.ConfigBasedRenderer(
                     context,
                     store,
                     Documentation,
                     () => new TabsControl(),
                     viewDefinition)
-            ]);
+        );
 
     public static LayoutDefinition WithSourcesForType(
         this LayoutDefinition layout,
@@ -66,7 +67,7 @@ public static class DocumentationLayout
         
         
         return layout.WithDocumentation(contextFilter,
-            (tabs, _, context) => 
+            (tabs, _, _) => 
                 types
                 .Select(type => sources.TryGetValue(type.Assembly, out var source)
                 ? new{ Control =
@@ -78,7 +79,7 @@ public static class DocumentationLayout
                     : null)
                 .Where(x => x is { Control.Reference.Id: not null })
                 .Aggregate(tabs, (t, s) =>
-                    t.WithTab(s.TabName, s.Control.WithDisplayArea(s.TabName))));
+                    t.WithView(s.Control.WithDisplayArea(s.TabName), s.TabName)));
     }
     public static LayoutDefinition WithEmbeddedDocument(
         this LayoutDefinition layout,
@@ -89,9 +90,10 @@ public static class DocumentationLayout
     {
         var source = layout.Hub.GetDocumentationService().GetSource(EmbeddedDocumentationSource.Embedded, assembly.GetName().Name);
         return layout.WithDocumentation(contextFilter,
-                (tabs, _, context) => tabs.WithTab(name,
+                (tabs, _, _) => tabs.WithView(
                     new LayoutAreaControl(layout.Hub.Address, new(nameof(Doc)) { Id = source.GetPath(name) })
-                        .WithDisplayArea(name)
+                        .WithDisplayArea(name),
+                    name
                 )
             )
             ;

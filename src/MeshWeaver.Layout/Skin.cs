@@ -1,13 +1,14 @@
 ﻿namespace MeshWeaver.Layout;
 
-public record Skin;
-public record Skin<TSkin> : Skin
+public abstract record Skin;
+public abstract record Skin<TSkin> : Skin
 where TSkin: Skin<TSkin>
 {
     protected TSkin This => (TSkin)this;
     public object Class { get; init; }
     public object Style { get; init; }
     public TSkin WithClass(object @class) => This with { Class = @class };
+    public TSkin WithStyle(object style) => This with { Style = style };
 
     //public const string Modal = nameof(Modal);
     //public const string ContextMenu = nameof(ContextMenu);

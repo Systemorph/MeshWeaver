@@ -40,24 +40,11 @@ public static class SupplierSummaryArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>A layout stack control representing the supplier summary.</returns>
-    public static LayoutStackControl SupplierSummary(
+    public static IObservable<object> SupplierSummary(
         this LayoutAreaHost layoutArea,
         RenderingContext context
     )
-        => Controls.Stack
-            // .WithView(
-            //     Controls.Toolbar
-            //         .WithView(
-            //             Controls.Button("Analyze")
-            //                 .WithIconStart(FluentIcons.CalendarDataBar)
-            //                 .WithClickAction(_ => layoutArea.SetContextMenu(Controls.H3("Analyze")))
-            //         )
-            // )
-            .WithView(
-                Controls.Stack
-                    .WithView(Controls.PaneHeader("Supplier Summary"))
-                    .WithView(SupplierSummaryGrid, nameof(SupplierSummaryGrid))
-            );
+        => SupplierSummaryGrid(layoutArea, context);
 
 
     /// <summary>
