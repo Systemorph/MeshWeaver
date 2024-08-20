@@ -1,0 +1,21 @@
+@inherits BlazorView<BadgeControl, BadgeView>
+
+<FluentBadge
+    >
+    @Content
+</FluentBadge>
+    
+@code
+{
+    private string Content { get; set; }
+
+    protected override void BindData()
+    {
+        base.BindData();
+        if (ViewModel != null)
+        {
+            DataBind(ViewModel.Data, x => x.Content);
+        }
+    }
+
+}

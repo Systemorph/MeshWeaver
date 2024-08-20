@@ -24,11 +24,6 @@ public record HtmlControl(object Data)
 public record CheckBoxControl(object Data)
     : UiControl<CheckBoxControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, Data);
 
-
-// TODO V10: fix build (2023.09.07, Armen Sirotenko)
-public record BadgeControl(object Title, object SubTitle, object Color)
-    : UiControl<BadgeControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, null);
-
 /// <summary>
 /// Control representing a progress bar
 /// </summary>

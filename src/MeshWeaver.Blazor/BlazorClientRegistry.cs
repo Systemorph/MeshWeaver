@@ -55,6 +55,7 @@ public static class BlazorClientRegistry
             ToolbarControl toolbar => StandardView<ToolbarControl, Toolbar>(toolbar, stream, area),
             SelectControl select => StandardView<SelectControl, Select>(select, stream, area),
             ButtonControl button => StandardView<ButtonControl, Button>(button, stream, area),
+            BadgeControl badge => StandardView<BadgeControl, BadgeView>(badge, stream, area),
             CheckBoxControl checkbox => StandardView<CheckBoxControl, Checkbox>(checkbox, stream, area),
             ItemTemplateControl itemTemplate
                 => StandardView<ItemTemplateControl, ItemTemplate>(itemTemplate, stream, area),
@@ -80,6 +81,7 @@ public static class BlazorClientRegistry
             BodyContentSkin bodyContent => StandardSkinnedView<UiControl, BodyContentView>(control, stream, area,
                 bodyContent),
             TabSkin tab => StandardSkinnedView<UiControl, TabView>(control, stream, area, tab),
+            CardSkin card => StandardSkinnedView<UiControl, CardView>(control, stream, area, card),
             SplitterPaneSkin splitter
                 => StandardSkinnedView<UiControl, SplitterPane>(control, stream, area, splitter),
             _ => throw new NotSupportedException($"Skin {skin.GetType().Name} is not supported.")
