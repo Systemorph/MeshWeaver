@@ -48,6 +48,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
         Logger.LogDebug("Preparing data bindings for area {Area}", Area);
         DisposeBindings();
         BindData();
+        Logger.LogDebug("Finished data bindings for area {Area}", Area);
     }
 
     protected bool IsUpToDate() => RenderedViewModel != null && RenderedViewModel.Equals(ViewModel) && Equals(stream, Stream);

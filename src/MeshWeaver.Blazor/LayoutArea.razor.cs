@@ -61,8 +61,10 @@ public partial class LayoutArea
         {
             if (ViewModel.Address.Equals(AreaStream.Owner) && ViewModel.Reference.Equals(AreaStream.Reference))
                 return;
+            Logger.LogDebug("Disposing old stream for {Owner} and {Reference}", AreaStream.Owner, AreaStream.Reference);
             AreaStream.Dispose();
         }
+        Logger.LogDebug("Acquiring stream for {Owner} and {Reference}", ViewModel.Address, ViewModel.Reference);
 
         AreaStream = ViewModel.Address.Equals(Hub.Address)
             ? Workspace.Stream.Reduce<JsonElement, LayoutAreaReference>(ViewModel.Reference, ViewModel.Address)

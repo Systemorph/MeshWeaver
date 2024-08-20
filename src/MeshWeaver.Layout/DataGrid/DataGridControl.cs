@@ -1,5 +1,6 @@
 ﻿
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Domain;
 
 namespace MeshWeaver.Layout.DataGrid;
 
@@ -20,7 +21,8 @@ public record DataGridControl(object Data)
                Columns.SequenceEqual(other.Columns) &&
                Virtualize == other.Virtualize &&
                ItemSize == other.ItemSize &&
-               ResizableColumns == other.ResizableColumns;
+               ResizableColumns == other.ResizableColumns &&
+               LayoutHelperExtensions.DataEquality(Data, other.Data);
     }
 
     protected override DataGridControl PrepareRendering(RenderingContext context)
@@ -35,7 +37,8 @@ public record DataGridControl(object Data)
             Columns.Aggregate(17, (r,c) => r ^c.GetHashCode()), 
             Virtualize, 
             ItemSize, 
-            ResizableColumns);
+            ResizableColumns,
+            LayoutHelperExtensions.DataHashCode(Data));
     }
 }
 

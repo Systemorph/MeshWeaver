@@ -3,6 +3,7 @@ using Microsoft.FluentUI.AspNetCore.Components;
 using MeshWeaver.Hosting;
 using MeshWeaver.Northwind.Application;
 using MeshWeaver.Northwind.Application.Data;
+using Microsoft.Extensions.Logging.Console;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,13 +14,18 @@ builder.Services.AddRazorPages();
 builder.Services.AddServerSideBlazor();
 builder.Services.AddFluentUIComponents();
 builder.Services.AddSingleton<WeatherForecastService>();
-builder.Services.AddLogging(config => config.AddSimpleConsole(
+builder.Services.AddSingleton<ConsoleFormatter, CustomCsvConsoleFormatter>();
+builder.Services.Configure<CustomCsvConsoleFormatterOptions>(options =>
+{
+    options.TimestampFormat = "hh:mm:ss:fff";
+    options.IncludeTimestamp = true;
+});
+builder.Services.AddLogging(config => config.AddConsole(
     options =>
     {
-        options.SingleLine = true;
-        options.TimestampFormat = "hh:mm:ss:fff";
-        options.IncludeScopes = true;
+        options.FormatterName = nameof(CustomCsvConsoleFormatter);
     }).AddDebug());
+
 builder.Services.AddFluentUIComponents();
 
 builder.Host.UseMeshWeaver(
