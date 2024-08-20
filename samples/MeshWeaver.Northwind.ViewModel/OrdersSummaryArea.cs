@@ -60,7 +60,6 @@ public static class OrdersSummaryArea
             .DistinctUntilChanged(x => string.Join(',', x.Select(y => y.Item)));
 
         return Controls.Stack
-            .WithView(Controls.PaneHeader("Order Summary"))
             .WithClass("order-summary")
             .WithView(ToolbarArea.Toolbar(years))
             .WithView(

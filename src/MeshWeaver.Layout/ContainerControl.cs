@@ -206,18 +206,18 @@ public abstract record ContainerControlWithItemSkin<TControl,TSkin, TItemSkin>(s
 
 
     public TControl WithView<T>(T view, Func<TItemSkin, TItemSkin> options)
-    => base.WithView(view, x => x.AddSkin(CreateItemSkin(x)));
+    => base.WithView(view, x => x.AddSkin(options.Invoke(CreateItemSkin(x))));
 
 
 
 
     public TControl WithView<T>(IObservable<T> viewDefinition, Func<TItemSkin, TItemSkin> options)
-        => base.WithView(viewDefinition, x => x with { Skins = Skins.Add(options.Invoke(CreateItemSkin(x))) });
+        => base.WithView(viewDefinition, x => x.AddSkin(options.Invoke(CreateItemSkin(x))));
 
     public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, EntityStore, T> viewDefinition, Func<TItemSkin, TItemSkin> options)
         => base.WithView((h, c, s) => viewDefinition.Invoke(h, c, s), x => x with { Skins = Skins.Add(options.Invoke(CreateItemSkin(x))) });
     public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, EntityStore, IObservable<T>> viewDefinition, Func<TItemSkin, TItemSkin> options)
-        => WithView(viewDefinition.Invoke, x => x with { Skins = Skins.Add(options.Invoke(CreateItemSkin(x))) });
+        => WithView(viewDefinition.Invoke, x => x.AddSkin(options.Invoke(CreateItemSkin(x))));
     public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, T> viewDefinition, Func<TItemSkin, TItemSkin> options)
         => base.WithView((h, c, _) => viewDefinition.Invoke(h, c), x => 
             x.AddSkin(options.Invoke(CreateItemSkin(x))));
