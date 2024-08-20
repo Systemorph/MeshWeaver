@@ -18,7 +18,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
     where TView : BlazorView<TViewModel, TView>
 {
     [Inject] private IMessageHub Hub { get; set; }
-    [Inject] private ILogger<TView> Logger { get; set; }
+    [Inject] protected ILogger<TView> Logger { get; set; }
 
     [Parameter]
     public TViewModel ViewModel { get; set; }

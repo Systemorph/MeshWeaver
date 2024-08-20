@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Data;
@@ -12,9 +13,6 @@ public partial class LayoutArea
 {
     [Inject]
     private IMessageHub Hub { get; set; }
-
-    [Inject]
-    private ILogger<LayoutArea> Logger { get; set; }
 
     private IWorkspace Workspace => Hub.GetWorkspace();
 
@@ -55,6 +53,7 @@ public partial class LayoutArea
         base.Dispose();
     }
     private string RenderingArea { get; set; }
+    private object Address { get; set; }
     private void BindStream()
     {
         if (AreaStream != null)
@@ -65,10 +64,14 @@ public partial class LayoutArea
             AreaStream.Dispose();
         }
         Logger.LogDebug("Acquiring stream for {Owner} and {Reference}", ViewModel.Address, ViewModel.Reference);
-
-        AreaStream = ViewModel.Address.Equals(Hub.Address)
-            ? Workspace.Stream.Reduce<JsonElement, LayoutAreaReference>(ViewModel.Reference, ViewModel.Address)
-            : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(ViewModel.Address, ViewModel.Reference);
+        if(ViewModel.Address is JsonObject obj)
+            Address = obj.Deserialize<object>(Hub.JsonSerializerOptions);
+        else
+            Address = ViewModel.Address;
+    
+        AreaStream = Address.Equals(Hub.Address)
+            ? Workspace.Stream.Reduce<JsonElement, LayoutAreaReference>(ViewModel.Reference, Address)
+            : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address, ViewModel.Reference);
 
     }
 
