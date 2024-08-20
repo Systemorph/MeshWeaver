@@ -89,7 +89,7 @@ public abstract record UiControl : IUiControl
                Tooltip == other.Tooltip &&
                IsReadonly == other.IsReadonly &&
                ((Label == null && other.Label == null) || (Label != null && Label.Equals(other.Label))) &&
-               Skins.SequenceEqual(other.Skins) &&
+               (Skins ?? []).SequenceEqual(other.Skins ?? []) &&
                ((Class == null && other.Class == null) || (Class != null && Class.Equals(other.Class))) &&
                DataContext == other.DataContext;
     }
@@ -107,7 +107,7 @@ public abstract record UiControl : IUiControl
             HashCode.Combine(
                 IsReadonly,
                 Label,
-                Skins.Aggregate(0, (acc, skin) => acc ^ skin.GetHashCode()),
+                Skins == null ? 0 : Skins.Aggregate(0, (acc, skin) => acc ^ skin.GetHashCode()),
                 Class,
                 DataContext
             )
@@ -170,7 +170,7 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
         ImmutableList<Action<TControl>>.Empty;
 
 
-    public new TControl AddSkin(Skin skin) => This with { Skins = Skins.Add(skin) };
+    public new TControl AddSkin(Skin skin) => This with { Skins = (Skins ?? ImmutableList<Skin>.Empty).Add(skin) };
 
     public TControl WithClass(object @class) => This with { Class = @class };
 
