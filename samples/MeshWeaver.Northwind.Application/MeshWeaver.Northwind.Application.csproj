@@ -13,6 +13,7 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\MeshWeaver.Northwind.ViewModel\MeshWeaver.Northwind.ViewModel.csproj" />
     <ProjectReference Include="..\MeshWeaver.Northwind.Views\MeshWeaver.Northwind.Views.csproj" />
+    <ProjectReference Include="..\MeshWeaver.MeshBrowser.ViewModel\MeshWeaver.MeshBrowser.ViewModel.csproj" />
   </ItemGroup>
 
   <ItemGroup>

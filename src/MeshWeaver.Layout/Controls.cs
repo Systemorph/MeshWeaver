@@ -51,6 +51,7 @@ public static class Controls
     // TODO V10: factor out into separate static class Labels (25.07.2024, Roland Bürgi)
     public static LabelControl Label(object text) => new(text);
 
+    public static LabelControl Body(object data) => Label(data).WithTypo(Typography.Body);
     public static LabelControl Subject(object data) => Label(data).WithTypo(Typography.Subject);
     public static LabelControl Header(object data) => Label(data).WithTypo(Typography.Header);
     public static LabelControl EmailHeader(object data) => Label(data).WithTypo(Typography.EmailHeader);
@@ -65,8 +66,7 @@ public static class Controls
     public static LabelControl H5(object data) => Label(data).WithTypo(Typography.H5);
     public static LabelControl H6(object data) => Label(data).WithTypo(Typography.H6);
 
-    public static BadgeControl Badge(object title, object subTitle = null, object color = null) =>
-        new(title, subTitle, color);
+    public static BadgeControl Badge(object data) => new(data);
 
     public static IconControl Icon(Icon icon, string color) => new(icon, color);
 
