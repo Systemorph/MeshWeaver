@@ -206,7 +206,7 @@ public abstract record ContainerControlWithItemSkin<TControl,TSkin, TItemSkin>(s
 
 
     public TControl WithView<T>(T view, Func<TItemSkin, TItemSkin> options)
-    => base.WithView(view, x => x with { Skins = Skins.Add(options.Invoke(CreateItemSkin(x))) });
+    => base.WithView(view, x => x.AddSkin(CreateItemSkin(x)));
 
 
 
@@ -219,7 +219,8 @@ public abstract record ContainerControlWithItemSkin<TControl,TSkin, TItemSkin>(s
     public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, EntityStore, IObservable<T>> viewDefinition, Func<TItemSkin, TItemSkin> options)
         => WithView(viewDefinition.Invoke, x => x with { Skins = Skins.Add(options.Invoke(CreateItemSkin(x))) });
     public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, T> viewDefinition, Func<TItemSkin, TItemSkin> options)
-        => base.WithView((h, c, _) => viewDefinition.Invoke(h, c), x => x with { Skins = Skins.Add(options.Invoke(CreateItemSkin(x))) });
+        => base.WithView((h, c, _) => viewDefinition.Invoke(h, c), x => 
+            x.AddSkin(options.Invoke(CreateItemSkin(x))));
     public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition, Func<TItemSkin, TItemSkin> options)
         => WithView((h, c, _) => viewDefinition.Invoke(h,c), x => x with { Skins = Skins.Add(options.Invoke(CreateItemSkin(x))) });
 
@@ -228,7 +229,7 @@ public abstract record ContainerControlWithItemSkin<TControl,TSkin, TItemSkin>(s
     protected override NamedAreaControl GetNamedArea(Func<NamedAreaControl, NamedAreaControl> options)
     {
         var ret = base.GetNamedArea(options);
-        if (!ret.Skins.Any(s => s is TItemSkin))
+        if (ret.Skins == null || !ret.Skins.Any(s => s is TItemSkin))
             ret = ret.AddSkin(CreateItemSkin(ret));
         return ret;
     }
