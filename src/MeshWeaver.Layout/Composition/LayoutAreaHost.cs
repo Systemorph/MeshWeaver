@@ -323,7 +323,10 @@ public record LayoutAreaHost : IDisposable
                     Stream.Owner,
                     Stream.Reference,
                     LayoutDefinition
-                        .Render(this, context, new())
+                        .Render(this, context, new EntityStore()
+                            .Update(LayoutAreaReference.Areas, x => x)
+                            .Update(LayoutAreaReference.Data, x => x)
+                        )
                         .Store,
                     Stream.Hub.Address,
                     null,
