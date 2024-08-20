@@ -1,6 +1,8 @@
 ﻿using System.Reactive.Linq;
 using System.Text.Json;
 using Json.Patch;
+using Json.Path;
+using Json.Pointer;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
@@ -72,17 +74,48 @@ public static class WorkspaceExtensions
             stream.Hub.Version
             );
 
+
     private static JsonPatch CreatePatch(IEnumerable<EntityStoreUpdate> updates, JsonSerializerOptions options)
     {
-        return new(updates.GroupBy(x => new{x.Collection, x.Id})
-            .Aggregate(Enumerable.Empty<PatchOperation>(),(e,g) =>
+        return new JsonPatch(updates.GroupBy(x => new { x.Collection, x.Id })
+            .Aggregate(Enumerable.Empty<PatchOperation>(), (e, g) =>
             {
                 var first = g.First().OldValue;
                 var last = g.Last().Value;
-                return e.Concat(first.CreatePatch(last, options).Operations);
+
+                var parentPath = JsonPointer.Parse($"/{g.Key.Collection}/{JsonSerializer.Serialize(g.Key.Id, options)}");
+                if (last == null && first == null)
+                    return e;
+                if (first == null)
+                    return e.Concat([PatchOperation.Add(parentPath, JsonSerializer.SerializeToNode(last, options))]);
+                if(last == null)
+                    return e.Concat([PatchOperation.Remove(parentPath)]);
+
+
+                var patches = first.CreatePatch(last, options).Operations;
+
+                patches = patches.Select(p =>
+                {
+                    var newPath = parentPath.Combine(p.Path);
+                    return CreatePatchOperation(p, newPath);
+                }).ToArray();
+
+                return e.Concat(patches);
             }).ToArray());
     }
 
+    private static PatchOperation CreatePatchOperation(PatchOperation original, JsonPointer newPath)
+    {
+        return original.Op switch
+        {
+            OperationType.Add => PatchOperation.Add(newPath, original.Value),
+            OperationType.Remove => PatchOperation.Remove(newPath),
+            OperationType.Replace => PatchOperation.Replace(newPath, original.Value),
+            OperationType.Move => PatchOperation.Move(newPath, original.From),
+            OperationType.Copy => PatchOperation.Copy(newPath, original.From),
+            OperationType.Test => PatchOperation.Test(newPath, original.Value),
+            _ => throw new InvalidOperationException($"Unsupported operation: {original.Op}")
+        };
+    }
 
-    
 }
