@@ -1,4 +1,6 @@
-﻿using MeshWeaver.Application.Styles;
+﻿using System.Globalization;
+using MeshWeaver.Application;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
@@ -42,43 +44,41 @@ public static class MeshBrowserCatalogArea
         return MeshNodes
             .Aggregate(Controls.LayoutGrid,
                 (stack, node) =>
-                    stack.WithView(GetNodeCard(node), skin => skin.WithXs(4))
+                    stack.WithView(CatalogItem(node), skin => skin.WithXs(12).WithSm(6).WithMd(4))
             );
     }
 
-    private static UiControl GetNodeCard(MeshNode node) =>
+    private static object CatalogItem(MeshDocument document) =>
         Controls.Stack
             .AddSkin(Skins.Card)
-            .WithView(Controls.H3(node.Name))
-            .WithView(Controls.Body(node.Description))
+            .WithView(Controls.H3(document.Name))
+            .WithView(Controls.Label(document.Created.ToString(CultureInfo.CurrentCulture)))
+            .WithView(Controls.Body(document.Description))
             .WithView(
-                node.Tags?.Aggregate(Controls.Stack.WithOrientation(Orientation.Horizontal).WithHorizontalGap(3),
+                document.Tags?.Aggregate(Controls.Stack
+                        .WithOrientation(Orientation.Horizontal)
+                        .WithHorizontalGap(10),
                     (stack, tag) => stack.WithView(Controls.Badge(tag)))
                 )
+            .WithView(Controls.Button("View").WithAppearance(Appearance.Accent))
+            .WithVerticalGap(10)
         ;
 
-    private static IEnumerable<MeshNode> MeshNodes =>
+    private static IEnumerable<MeshDocument> MeshNodes =>
     [
-        new("Northwind")
+        new("Northwind", new ApplicationAddress("Northwind", "dev"))
         {
             Description = "Sample data domain modelling an e-commerce store",
             Thumbnail = "thumbnail1.jpg",
-            Created = DateTime.Now,
+            Created = DateOnly.FromDateTime(DateTime.Today),
             Tags = ["northwind", "domain-model"]
         },
-        new("Examples Library")
+        new("Examples Library", new ApplicationAddress("Demo", "dev"))
         {
             Description = "Showcasing the basic functionality of the MeshWeaver",
             Thumbnail = "thumbnail2.jpg",
-            Created = DateTime.Now,
+            Created = DateOnly.FromDateTime(DateTime.Now),
             Tags = ["examples", "demo"]
-        },
-        new("MeshNode 3")
-        {
-            Description = "Sample description 3",
-            Thumbnail = "thumbnail3.jpg",
-            Created = DateTime.Now,
-            Tags = ["tag5", "tag6"]
         }
     ];
 }

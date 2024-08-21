@@ -13,5 +13,5 @@ public record CardSkin : Skin<CardSkin>
 
     public CardSkin WithWidth(object width) => This with { Width = width };
 
-    public CardSkin WithMinimalStyle(object minimalStyle) => This with { MinimalStyle = minimalStyle };
+    public CardSkin WithMinimalStyle() => This with { MinimalStyle = true };
 }
