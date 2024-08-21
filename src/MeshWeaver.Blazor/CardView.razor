@@ -1,5 +1,29 @@
 @inherits SkinnedView<CardSkin, CardView>
 
-<FluentCard Class="@Class" Style="@Style">     
+<FluentCard 
+    Class="@Class" 
+    Style="@Style"
+    AreaRestricted="@AreaRestricted"
+    Height="@Height"
+    Width="@Width"
+    MinimalStyle="@MinimalStyle"
+>     
     <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
 </FluentCard>
+
+@code
+{
+    private bool AreaRestricted { get; set; }
+    private string Height { get; set; }
+    private string Width { get; set; }
+    private bool MinimalStyle { get; set; }
+
+    protected override void BindData()
+    {
+        base.BindData();
+        DataBind(Skin.AreaRestricted, x => x.AreaRestricted);
+        DataBind(Skin.Height, x => x.Height);
+        DataBind(Skin.Width, x => x.Width);
+        DataBind(Skin.MinimalStyle, x => x.MinimalStyle);
+    }
+}

@@ -1,6 +1,6 @@
 @using Icon = MeshWeaver.Application.Styles.Icon
 @using Appearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
-@inherits BlazorView<ButtonControl, Button>
+@inherits BlazorView<ButtonControl, ButtonView>
 
 <FluentButton
     Appearance="@Appearance"
@@ -14,6 +14,7 @@
     
 @code
 {
+    private Appearance Appearance { get; set; }
     private string Title { get; set; }
     private Icon IconStart { get; set; }
     private Icon IconEnd { get; set; }
@@ -24,22 +25,11 @@
         base.BindData();
         if (ViewModel != null)
         {
+            DataBind(ViewModel.Appearance, x => x.Appearance);
             DataBind(ViewModel.Data, x => x.Title);
             DataBind(ViewModel.IconStart, x => x.IconStart);
             DataBind(ViewModel.IconEnd, x => x.IconEnd);
             DataBind(ViewModel.Disabled, x => x.Disabled);
         }
     }
-
-    private Appearance Appearance => ViewModel.Appearance 
-        switch
-        {
-            Layout.Appearance.Neutral => Appearance.Neutral,
-            Layout.Appearance.Accent => Appearance.Accent,
-            Layout.Appearance.Lightweight => Appearance.Lightweight,
-            Layout.Appearance.Outline => Appearance.Outline,
-            Layout.Appearance.Stealth => Appearance.Stealth,
-            Layout.Appearance.Filled => Appearance.Filled,
-            _ => Appearance.Neutral
-        };
 }

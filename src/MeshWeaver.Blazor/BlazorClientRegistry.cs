@@ -53,7 +53,7 @@ public static class BlazorClientRegistry
             ComboboxControl combobox => StandardView<ComboboxControl, Combobox>(combobox, stream, area),
             ListboxControl listbox => StandardView<ListboxControl, Listbox>(listbox, stream, area),
             SelectControl select => StandardView<SelectControl, Select>(select, stream, area),
-            ButtonControl button => StandardView<ButtonControl, Button>(button, stream, area),
+            ButtonControl button => StandardView<ButtonControl, ButtonView>(button, stream, area),
             BadgeControl badge => StandardView<BadgeControl, BadgeView>(badge, stream, area),
             CheckBoxControl checkbox => StandardView<CheckBoxControl, Checkbox>(checkbox, stream, area),
             ItemTemplateControl itemTemplate

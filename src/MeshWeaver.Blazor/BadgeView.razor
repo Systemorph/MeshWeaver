@@ -1,21 +1,49 @@
+@using Appearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
 @inherits BlazorView<BadgeControl, BadgeView>
 
 <FluentBadge
+    Appearance="@Appearance"
+    BackgroundColor="@BackgroundColor"
+    Circular="@Circular"
+    Color="@Color"
+    DismissIcon="@DismissIcon"
+    Fill="@Fill"
+    Height="@Height"
+    Width="@Width"
+    DismissTitle="@DismissTitle"
+    Data="@Content"
     >
     @Content
 </FluentBadge>
     
 @code
 {
+    private Appearance Appearance { get; set; }
+    private string BackgroundColor { get; set; }
+    private bool Circular { get; set; }
+    private string Color { get; set; }
     private string Content { get; set; }
+    private Icon DismissIcon { get; set; }
+    private string DismissTitle { get; set; }
+    private string Fill { get; set; }
+    private string Height { get; set; }
+    private string Width { get; set; }
 
     protected override void BindData()
     {
         base.BindData();
         if (ViewModel != null)
         {
+            DataBind(ViewModel.Appearance, x => x.Appearance);
+            DataBind(ViewModel.BackgroundColor, x => x.BackgroundColor);
+            DataBind(ViewModel.Circular, x => x.Circular);
+            DataBind(ViewModel.Color, x => x.Color);
             DataBind(ViewModel.Data, x => x.Content);
+            DataBind(ViewModel.DismissIcon, x => x.DismissIcon);
+            DataBind(ViewModel.DismissTitle, x => x.DismissTitle);
+            DataBind(ViewModel.Fill, x => x.Fill);
+            DataBind(ViewModel.Height, x => x.Height);
+            DataBind(ViewModel.Width, x => x.Width);
         }
     }
-
 }
