@@ -44,21 +44,20 @@ public static class StandardPageLayout
                     .WithView(NamedArea(Toolbar))
                     .WithView(
                         Stack
-                            .WithSkin(skin => skin
-                                .WithOrientation(Orientation.Horizontal)
-                                .WithClass("main")
-                                .WithWidth("100%")
-                            )
                             .WithView(NamedArea(NavMenu))
                             .WithView(
                                 Splitter
-                                    .AddSkin(Skins.BodyContent)
                                     .WithView(
                                         Stack
                                             .WithView(NamedArea(ContentHeading))
-                                            .WithView(NamedArea(MainContent))
+                                            .WithView(NamedArea(MainContent).AddSkin(Skins.BodyContent))
+                                            .WithSkin(skin => skin.WithClass("main-content-stack"))
                                     )
                                     .WithView(NamedArea(ContextMenu), skin => skin.WithCollapsed(true))
+                            )
+                            .WithSkin(skin => skin
+                                .WithOrientation(Orientation.Horizontal)
+                                .WithClass("main")
                             )
                     )
                     .WithView(NamedArea(Footer).AddSkin(Skins.Footer))
