@@ -1,8 +1,7 @@
 ﻿using System.Diagnostics;
-using MeshWeaver.Application;
 using Microsoft.FluentUI.AspNetCore.Components;
 using MeshWeaver.Hosting;
-using MeshWeaver.Northwind.Application;
+using MeshWeaver.Portal;
 using Microsoft.Extensions.Logging.Console;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -28,8 +27,8 @@ builder.Services.AddLogging(config => config.AddConsole(
 builder.Services.AddFluentUIComponents();
 
 builder.Host.UseMeshWeaver(
-    new UiAddress(),
-    config => config.ConfigureNorthwindHubs()
+    new BlazorServerAddress(),
+    config => config.ConfigurePortalHubs()
 );
 
 if (!builder.Environment.IsDevelopment())
@@ -54,7 +53,6 @@ if (!app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseStaticFiles();
-var docSitePath = Path.Combine(builder.Environment.ContentRootPath, "..\\MeshWeaver.Northwind.Docs\\_site");
 app.UseRouting();
 
 app.MapBlazorHub();
@@ -62,3 +60,7 @@ app.MapFallbackToPage("/_Host");
 
 app.Run();
 
+public record BlazorServerAddress
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+}

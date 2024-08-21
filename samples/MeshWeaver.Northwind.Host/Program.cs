@@ -4,8 +4,8 @@ using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.Northwind.Model;
+using Orleans.Hosting;
 using Orleans.Serialization;
-using static MeshWeaver.Application.SignalR.SignalRExtensions;
 using static MeshWeaver.Hosting.HostBuilderExtensions;
 
 namespace MeshWeaver.Northwind.Host;
@@ -16,12 +16,6 @@ public static class Program
     {
         var builder = WebApplication.CreateBuilder(args);
 
-        builder.Services.ConfigureApplicationSignalR(c =>
-            c.WithForwardToOrleansGrain<ApplicationAddress, IApplicationGrain>(
-                a => a.ToString(), // TODO V10: need to make this deterministic (2024/04/22, Dmitry Kalabin)
-                (g, d) => g.DeliverMessage(d)
-            )
-        );
 
         builder
             .Host.UseMeshWeaver(new RouterAddress(), conf => conf.ConfigureRouter())
@@ -46,7 +40,6 @@ public static class Program
 
         await using var app = builder.Build();
 
-        app.UseRouting().UseApplicationSignalR();
 
         await app.RunAsync();
     }
