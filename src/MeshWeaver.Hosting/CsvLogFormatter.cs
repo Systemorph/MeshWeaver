@@ -1,23 +1,23 @@
-﻿using Microsoft.Extensions.Logging.Abstractions;
+﻿using System.Text;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
-using System.Text;
 
-namespace MeshWeaver.Northwind.Application;
+namespace MeshWeaver.Hosting;
 
-public class CustomCsvConsoleFormatter : ConsoleFormatter, IDisposable
+public class CsvConsoleFormatter : ConsoleFormatter, IDisposable
 {
     private readonly IDisposable optionsReloadToken;
-    private CustomCsvConsoleFormatterOptions formatterOptions;
+    private CsvConsoleFormatterOptions formatterOptions;
 
-    public CustomCsvConsoleFormatter(IOptionsMonitor<CustomCsvConsoleFormatterOptions> options)
-        : base(nameof(CustomCsvConsoleFormatter))
+    public CsvConsoleFormatter(IOptionsMonitor<CsvConsoleFormatterOptions> options)
+        : base(nameof(CsvConsoleFormatter))
     {
         optionsReloadToken = options.OnChange(ReloadLoggerOptions);
         formatterOptions = options.CurrentValue;
     }
-
-    private void ReloadLoggerOptions(CustomCsvConsoleFormatterOptions options)
+    private void ReloadLoggerOptions(CsvConsoleFormatterOptions options)
     {
         formatterOptions = options;
     }
@@ -46,7 +46,7 @@ public class CustomCsvConsoleFormatter : ConsoleFormatter, IDisposable
     }
 }
 
-public class CustomCsvConsoleFormatterOptions
+public class CsvConsoleFormatterOptions
 {
     public bool IncludeTimestamp { get; set; } = true;
     public string TimestampFormat { get; set; } = "hh:mm:ss:fff";

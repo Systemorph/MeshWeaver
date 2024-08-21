@@ -7,11 +7,11 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Application.Contract\MeshWeaver.Application.Contract.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.ChartJs\MeshWeaver.Blazor.ChartJs.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Northwind.ServiceDefaults\MeshWeaver.Northwind.ServiceDefaults.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Northwind.Model\MeshWeaver.Northwind.Model.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Northwind.ViewModel\MeshWeaver.Northwind.ViewModel.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Northwind.ServiceDefaults\MeshWeaver.Northwind.ServiceDefaults.csproj" />
+      <ProjectReference Include="..\MeshWeaver.Northwind.Model\MeshWeaver.Northwind.Model.csproj" />
+      <ProjectReference Include="..\MeshWeaver.Northwind.ViewModel\MeshWeaver.Northwind.ViewModel.csproj" />
     <ProjectReference Include="..\MeshWeaver.Northwind.Views\MeshWeaver.Northwind.Views.csproj" />
     <ProjectReference Include="..\MeshWeaver.MeshBrowser.ViewModel\MeshWeaver.MeshBrowser.ViewModel.csproj" />
   </ItemGroup>
