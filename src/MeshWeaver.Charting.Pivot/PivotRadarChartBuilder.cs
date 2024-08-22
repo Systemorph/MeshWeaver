@@ -9,14 +9,14 @@ using MeshWeaver.Pivot.Models;
 namespace MeshWeaver.Charting.Pivot;
 
 public record PivotRadarChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> :
-    PivotArrayChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, RadarChartBuilder, RadarDataSet, RangeOptionsBuilder, RadarDataSetBuilder>,
+    PivotArrayChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, RadarChart, RadarDataSet, RangeOptionsBuilder, RadarDataSetBuilder>,
     IPivotRadarChartBuilder
     where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
 {
     public PivotRadarChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder)
     {
-        ChartBuilder = new RadarChartBuilder();
+        ChartBuilder = new RadarChart();
     }
 
     protected override PivotChartModel CreatePivotModel(PivotModel pivotModel)

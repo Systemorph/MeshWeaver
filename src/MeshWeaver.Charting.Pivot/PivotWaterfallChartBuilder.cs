@@ -10,7 +10,7 @@ namespace MeshWeaver.Charting.Pivot;
 
 
 public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-    : PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, WaterfallChartBuilder, FloatingBarDataSet, RangeOptionsBuilder, FloatingBarDataSetBuilder>, IPivotWaterfallChartBuilder
+    : PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, WaterfallChart, FloatingBarDataSet, RangeOptionsBuilder, FloatingBarDataSetBuilder>, IPivotWaterfallChartBuilder
     where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
 {
     private Func<PivotElementDescriptor, bool> totalsFilter;
@@ -18,7 +18,7 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
     public PivotWaterfallChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder)
     {
-        ChartBuilder = new WaterfallChartBuilder();
+        ChartBuilder = new WaterfallChart();
     }
 
     public IPivotWaterfallChartBuilder WithLegendItems(string incrementsLabel = null, string decrementsLabel = null, string totalLabel = null)
@@ -92,7 +92,7 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
 
 // TODO V10: extract common base to avoid duplication (2023/10/05, Ekaterina Mishina)
 public record PivotHorizontalWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-    : PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, HorizontalWaterfallChartBuilder, HorizontalFloatingBarDataSet, RangeOptionsBuilder, HorizontalFloatingBarDataSetBuilder>, IPivotWaterfallChartBuilder
+    : PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, HorizontalWaterfallChart, HorizontalFloatingBarDataSet, RangeOptionsBuilder, HorizontalFloatingBarDataSetBuilder>, IPivotWaterfallChartBuilder
     where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
 {
     private Func<PivotElementDescriptor, bool> totalsFilter;
@@ -100,7 +100,7 @@ public record PivotHorizontalWaterfallChartBuilder<T, TTransformed, TIntermediat
     public PivotHorizontalWaterfallChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder)
     {
-        ChartBuilder = new HorizontalWaterfallChartBuilder();
+        ChartBuilder = new HorizontalWaterfallChart();
     }
 
     public IPivotWaterfallChartBuilder WithLegendItems(string incrementsLabel = null, string decrementsLabel = null, string totalLabel = null)

@@ -10,7 +10,7 @@ namespace MeshWeaver.Charting.Pivot;
 public abstract record PivotArrayChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, TBuilder, TDataSet, TOptionsBuilder, TDataSetBuilder> :
         PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, TBuilder, TDataSet, TOptionsBuilder, TDataSetBuilder>, IPivotArrayChartBuilder
         where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-        where TBuilder : ArrayChartBuilder<TBuilder, TDataSet, TOptionsBuilder, TDataSetBuilder>, new()
+        where TBuilder : ArrayChart<TBuilder, TDataSet, TOptionsBuilder, TDataSetBuilder>, new()
         where TDataSet : DataSet, IDataSetWithPointStyle, IDataSetWithOrder, IDataSetWithFill, IDataSetWithTension, IDataSetWithPointRadiusAndRotation, new()
         where TOptionsBuilder : ArrayOptionsBuilder<TOptionsBuilder>, new()
         where TDataSetBuilder : ArrayDataSetWithTensionFillPointRadiusAndRotation<TDataSetBuilder, TDataSet>, new()
@@ -85,7 +85,7 @@ public abstract record PivotArrayChartBuilderBase<T, TTransformed, TIntermediate
         }
 
 
-        ChartBuilder = ChartBuilder.WithLabels(pivotChartModel.ColumnDescriptors.Select(x => x.DisplayName));
+        ChartBuilder = ChartBuilder.WithLabels(pivotChartModel.ColumnDescriptors.Select(x => x.DisplayName).ToArray());
     }
 
     protected override void AddOptions(PivotChartModel pivotChartModel)

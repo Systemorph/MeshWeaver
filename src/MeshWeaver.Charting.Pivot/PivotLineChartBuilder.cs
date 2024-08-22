@@ -10,13 +10,13 @@ namespace MeshWeaver.Charting.Pivot;
 
 
 record PivotLineChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-    : PivotArrayChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, LineChartBuilder, LineDataSet, LineOptionsBuilder, LineDataSetBuilder>, IPivotLineChartBuilder
+    : PivotArrayChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, LineChart, LineDataSet, LineOptionsBuilder, LineDataSetBuilder>, IPivotLineChartBuilder
      where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
 {
     public PivotLineChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder)
     {
-        ChartBuilder = new LineChartBuilder();
+        ChartBuilder = new LineChart();
     }
 
 
