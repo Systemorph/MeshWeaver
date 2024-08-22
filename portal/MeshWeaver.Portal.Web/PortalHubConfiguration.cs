@@ -1,10 +1,10 @@
 ﻿using MeshWeaver.Blazor;
-using MeshWeaver.Documentation;
 using MeshWeaver.Data;
+using MeshWeaver.Documentation;
 using MeshWeaver.Messaging;
 using MeshWeaver.Overview;
 
-namespace MeshWeaver.Portal
+namespace MeshWeaver.Portal.Web
 {
     internal static class PortalHubConfiguration
     {
