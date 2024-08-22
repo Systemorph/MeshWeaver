@@ -28,7 +28,7 @@ public abstract record PivotChartBuilderBase<
             TAggregate,
             TPivotBuilder
         >
-    where TChartBuilder : ChartBuilderBase<
+    where TChartBuilder : Chart<
             TChartBuilder,
             TDataSet,
             TOptionsBuilder,

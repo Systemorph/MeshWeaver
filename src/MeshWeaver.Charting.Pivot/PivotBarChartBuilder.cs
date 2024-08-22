@@ -16,7 +16,7 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
         TIntermediate,
         TAggregate,
         TPivotBuilder,
-        BarChartBuilder,
+        BarChart,
         BarDataSet,
         BarOptionsBuilder,
         BarDataSetBuilder
@@ -35,7 +35,7 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
     )
         : base(pivotBuilder)
     {
-        ChartBuilder = new BarChartBuilder();
+        ChartBuilder = new BarChart();
     }
 
     public new IPivotBarChartBuilder WithOptions(Func<PivotChartModel, PivotChartModel> postProcessor)
@@ -44,7 +44,7 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
         return this;
     }
 
-    public IPivotBarChartBuilder WithChartBuilder(Func<BarChartBuilder, BarChartBuilder> builder)
+    public IPivotBarChartBuilder WithChartBuilder(Func<BarChart, BarChart> builder)
     {
         return this with { ChartBuilder = builder(ChartBuilder) };
     }
@@ -258,6 +258,6 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
             scales.Add(PivotChartConst.YAxis, new Scale {Stacked = barStacked});
         }
 
-        ChartBuilder = ChartBuilder.WithOptions(o => o.WithScales(scales).Responsive());
+        ChartBuilder = ChartBuilder.WithOptions(o => o.WithScales(scales).WithResponsive());
     }
 }

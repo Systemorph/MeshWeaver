@@ -8,13 +8,13 @@ namespace MeshWeaver.Charting.Models
         [JsonPropertyName("datasets")]
         public IEnumerable<DataSet> DataSets { get; init; }
 
-        public IEnumerable<string> Labels { get; internal set; }
+        public IReadOnlyCollection<string> Labels { get; internal set; }
 
         public IEnumerable<string> XLabels { get; init; }
 
         public IEnumerable<string> YLabels { get; init; }
 
-        public ChartData WithLabels(IEnumerable<string> labels) => this with { Labels = labels };
+        public ChartData WithLabels(IReadOnlyCollection<string> labels) => this with { Labels = labels };
 
         public ChartData WithLabels(params string[] labels) => this with { Labels = labels };
 
