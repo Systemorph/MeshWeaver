@@ -151,9 +151,6 @@ public abstract record WaterfallChartBase<TChart, TDataSet, TDataSetBuilder> : R
 
         datasetsReady = true;
 
-
-
-
         var dataset1 = (TDataSet)new TDataSetBuilder()
             .WithDataRange(incrementRanges, incrementsLabel, dsb => (barDataSetModifier is null ? dsb : barDataSetModifier(dsb))
                                                                 .WithParsing()
@@ -177,37 +174,21 @@ public abstract record WaterfallChartBase<TChart, TDataSet, TDataSetBuilder> : R
             .Build();
 
         tmp = tmp with { DataSets = [dataset1, dataset2, dataset3] };  // HACK V10: This looks extreemely bad to combine this immutability style "with" constraint with all the rest of the logic to just mutate single instance (2024/08/22, Dmitry Kalabin)
-        //tmp = tmp.WithDataRange(incrementRanges, incrementsLabel, dsb => (barDataSetModifier is null ? dsb : barDataSetModifier(dsb))
-        //                                                                 .WithParsing()
-        //                                                                 //.WithBarThickness("flex")
-        //                                                                 .WithBackgroundColor(ChartColor.FromHexString(styling.IncrementColor))
-        //                                                                 .WithHoverBackgroundColor(ChartColor.FromHexString(styling.IncrementColor)))
-        //         .WithDataRange(decrementRanges, decrementsLabel, dsb => (barDataSetModifier is null ? dsb : barDataSetModifier(dsb))
-        //                                                                 .WithParsing()
-        //                                                                 //.WithBarThickness("flex")
-        //                                                                 .WithBackgroundColor(ChartColor.FromHexString(styling.DecrementColor))
-        //                                                                 .WithHoverBackgroundColor(ChartColor.FromHexString(styling.DecrementColor)))
-        //         .WithDataRange(totalRanges, totalLabel, dsb => (barDataSetModifier is null ? dsb : barDataSetModifier(dsb))
-        //                                                        .WithParsing()
-        //                                                        //.WithBarThickness("flex")
-        //                                                        .WithBackgroundColor(ChartColor.FromHexString(styling.TotalColor))
-        //                                                        .WithHoverBackgroundColor(ChartColor.FromHexString(styling.TotalColor)));
         
         if (includeConnectors)
         {
             LineDataSetBuilder Builder(LineDataSetBuilder b, IEnumerable<double?> data)
             {
-                var builder = b.WithData(data).WithLabel(ChartConst.Hidden).WithDataLabels(new DataLabels { Display = false });
+                var builder = b.WithData(data).WithLabel(ChartConst.Hidden).WithDataLabels(new DataLabels { Display = false }).SetType(ChartType.Line);
                 return connectorDataSetModifier != null
                            ? connectorDataSetModifier(builder)
                            : builder;
             }
 
-            // TODO V10: need to think about this case with Mixed Chart (2024/08/20, Dmitry Kalabin)
-            //tmp = tmp
-            //      .WithDataSet<LineDataSetBuilder, LineDataSet>(b => Builder(b, firstDottedValues))
-            //      .WithDataSet<LineDataSetBuilder, LineDataSet>(b => Builder(b, secondDottedValues))
-            //      .WithDataSet<LineDataSetBuilder, LineDataSet>(b => Builder(b, thirdDottedValues));
+            tmp = tmp
+                  .WithDataSet(Builder(new(), firstDottedValues).Build())
+                  .WithDataSet(Builder(new(), secondDottedValues).Build())
+                  .WithDataSet(Builder(new(), thirdDottedValues).Build());
         }
 
         var palette = new[] { styling.IncrementColor, styling.DecrementColor, styling.TotalColor, styling.TotalColor, styling.TotalColor, styling.TotalColor };
