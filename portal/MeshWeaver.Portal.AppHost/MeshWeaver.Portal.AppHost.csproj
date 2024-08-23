@@ -11,12 +11,15 @@
 
   <ItemGroup>
       <ProjectReference Include="..\MeshWeaver.Portal.Orleans\MeshWeaver.Portal.Orleans.csproj" />
+      <ProjectReference Include="..\MeshWeaver.Portal.Backend\MeshWeaver.Portal.Backend.csproj" />
       <ProjectReference Include="..\MeshWeaver.Portal.Web\MeshWeaver.Portal.Web.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting.AppHost" />
+    <PackageReference Include="Aspire.Hosting.Orleans" />
     <PackageReference Include="Aspire.Hosting.Redis" />
+    <PackageReference Include="Microsoft.Orleans.Clustering.Redis" />
   </ItemGroup>
 
 </Project>
