@@ -85,10 +85,20 @@ public class ChartingSamples
     [Fact]
     public async Task MixedChart()
     {
+        var dataSet1 = (LineDataSet)new LineDataSetBuilder()
+            .WithData(data1)
+            .WithLabel("First")
+            .SetType(ChartType.Line)
+            .Build();
+        var dataSet2 = (BarDataSet)new BarDataSetBuilder()
+            .WithData(data2)
+            .WithLabel("Second")
+            .Build();
+
         var actual = Charts
-            .Bar([])  // TODO V10: need to think about this case with Mixed Chart (2024/08/20, Dmitry Kalabin)
-            //.WithDataSet<LineDataSetBuilder, LineDataSet>(b => b.WithData(data1).WithLabel("First"))
-            //.WithDataSet(b => b.WithData(data2).WithLabel("Second"))
+            .Bar([])
+            .WithDataSet(dataSet1)
+            .WithDataSet(dataSet2)
             .WithLabels(labels)
             .WithLegend()
             .WithTitle("Line Chart")
