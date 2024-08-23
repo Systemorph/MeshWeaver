@@ -1,21 +1,17 @@
 ﻿using MeshWeaver.Charting.Builders.Chart;
 using MeshWeaver.Charting.Builders.DataSetBuilders;
-using MeshWeaver.Charting.Builders.OptionsBuilders;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Pivot.Builder;
 
 namespace MeshWeaver.Charting.Pivot;
 
-public abstract record PivotArrayChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, TBuilder, TDataSet, TOptionsBuilder, TDataSetBuilder> :
-        PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, TBuilder, TDataSet, TOptionsBuilder, TDataSetBuilder>, IPivotArrayChartBuilder
+public abstract record PivotArrayChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, TChart, TDataSet, TDataSetBuilder> :
+        PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, TChart, TDataSet>, IPivotArrayChartBuilder
         where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-        where TBuilder : ArrayChart<TBuilder, TDataSet, TOptionsBuilder, TDataSetBuilder>, new()
+        where TChart : ArrayChart<TChart, TDataSet>
         where TDataSet : DataSet, IDataSetWithPointStyle, IDataSetWithOrder, IDataSetWithFill, IDataSetWithTension, IDataSetWithPointRadiusAndRotation, new()
-        where TOptionsBuilder : ArrayOptionsBuilder<TOptionsBuilder>, new()
         where TDataSetBuilder : ArrayDataSetWithTensionFillPointRadiusAndRotation<TDataSetBuilder, TDataSet>, new()
-
-
 {
     protected PivotArrayChartBuilderBase(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder)
@@ -24,7 +20,7 @@ public abstract record PivotArrayChartBuilderBase<T, TTransformed, TIntermediate
 
     public IPivotArrayChartBuilder WithLegend(Func<Legend, Legend> func)
     {
-        ChartBuilder = ChartBuilder.WithLegend(func);
+        Chart = Chart.WithLegend(func);
         return this;
     }
 
@@ -72,7 +68,7 @@ public abstract record PivotArrayChartBuilderBase<T, TTransformed, TIntermediate
     {
         foreach (var row in pivotChartModel.Rows)
         {
-            ChartBuilder.WithDataSet(builder =>
+            Chart.WithDataSet(builder =>
                                      {
                                          builder = builder.WithData(row.DataByColumns.Select(x => x.Value))
                                                           .WithLabel(row.Descriptor.DisplayName);
@@ -85,7 +81,7 @@ public abstract record PivotArrayChartBuilderBase<T, TTransformed, TIntermediate
         }
 
 
-        ChartBuilder = ChartBuilder.WithLabels(pivotChartModel.ColumnDescriptors.Select(x => x.DisplayName).ToArray());
+        Chart = Chart.WithLabels(pivotChartModel.ColumnDescriptors.Select(x => x.DisplayName).ToArray());
     }
 
     protected override void AddOptions(PivotChartModel pivotChartModel)
