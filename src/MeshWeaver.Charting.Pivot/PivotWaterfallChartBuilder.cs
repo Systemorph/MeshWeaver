@@ -1,5 +1,4 @@
 ﻿using MeshWeaver.Charting.Builders.Chart;
-using MeshWeaver.Charting.Builders.DataSetBuilders;
 using MeshWeaver.Charting.Builders.OptionsBuilders;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
@@ -10,7 +9,7 @@ namespace MeshWeaver.Charting.Pivot;
 
 
 public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-    : PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, WaterfallChart, FloatingBarDataSet, RangeOptionsBuilder, FloatingBarDataSetBuilder>, IPivotWaterfallChartBuilder
+    : PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, WaterfallChart, FloatingBarDataSet>, IPivotWaterfallChartBuilder
     where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
 {
     private Func<PivotElementDescriptor, bool> totalsFilter;
@@ -18,24 +17,24 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
     public PivotWaterfallChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder)
     {
-        ChartBuilder = new WaterfallChart();
+        Chart = new WaterfallChart();
     }
 
     public IPivotWaterfallChartBuilder WithLegendItems(string incrementsLabel = null, string decrementsLabel = null, string totalLabel = null)
     {
-        ChartBuilder = ChartBuilder.WithLegendItems(incrementsLabel, decrementsLabel, totalLabel);
+        Chart = Chart.WithLegendItems(incrementsLabel, decrementsLabel, totalLabel);
         return this;
     }
 
     public IPivotWaterfallChartBuilder WithStylingOptions(Func<WaterfallStylingBuilder, WaterfallStylingBuilder> func)
     {
-        ChartBuilder = ChartBuilder.WithStylingOptions(func);
+        Chart = Chart.WithStylingOptions(func);
         return this;
     }
 
     public IPivotWaterfallChartBuilder WithRangeOptionsBuilder(Func<RangeOptionsBuilder, RangeOptionsBuilder> func)
     {
-        ChartBuilder = ChartBuilder.WithOptions(func);
+        Chart = Chart.WithOptions(func);
         return this;
     }
 
@@ -47,7 +46,7 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
 
     public IPivotWaterfallChartBuilder WithConnectors()
     {
-        ChartBuilder = ChartBuilder.WithConnectors();
+        Chart = Chart.WithConnectors();
         return this;
     }
 
@@ -64,9 +63,9 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
         var row = pivotChartModel.Rows.Single();
 
         if (row.DataSetType == ChartType.Bar)
-            ChartBuilder = ChartBuilder.WithDeltas(row.DataByColumns.Select(x => (double)x.Value!))
+            Chart = Chart.WithDeltas(row.DataByColumns.Select(x => (double)x.Value!))
                                        .WithBarDataSetOptions(o => o.WithBarThickness(20))
-                                       .WithLabels(pivotChartModel.ColumnDescriptors.Select(x => x.DisplayName));
+                                       .WithLabels(pivotChartModel.ColumnDescriptors.Select(x => x.DisplayName).ToArray());
         else
             throw new NotImplementedException("Only bar data set types are supported");
 
@@ -81,7 +80,7 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
                 i++;
             }
 
-            ChartBuilder = ChartBuilder.WithTotalsAtPositions(totals);
+            Chart = Chart.WithTotalsAtPositions(totals);
         }
     }
 
@@ -92,7 +91,7 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
 
 // TODO V10: extract common base to avoid duplication (2023/10/05, Ekaterina Mishina)
 public record PivotHorizontalWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-    : PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, HorizontalWaterfallChart, HorizontalFloatingBarDataSet, RangeOptionsBuilder, HorizontalFloatingBarDataSetBuilder>, IPivotWaterfallChartBuilder
+    : PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, HorizontalWaterfallChart, HorizontalFloatingBarDataSet>, IPivotWaterfallChartBuilder
     where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
 {
     private Func<PivotElementDescriptor, bool> totalsFilter;
@@ -100,24 +99,24 @@ public record PivotHorizontalWaterfallChartBuilder<T, TTransformed, TIntermediat
     public PivotHorizontalWaterfallChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder)
     {
-        ChartBuilder = new HorizontalWaterfallChart();
+        Chart = new HorizontalWaterfallChart();
     }
 
     public IPivotWaterfallChartBuilder WithLegendItems(string incrementsLabel = null, string decrementsLabel = null, string totalLabel = null)
     {
-        ChartBuilder = ChartBuilder.WithLegendItems(incrementsLabel, decrementsLabel, totalLabel);
+        Chart = Chart.WithLegendItems(incrementsLabel, decrementsLabel, totalLabel);
         return this;
     }
 
     public IPivotWaterfallChartBuilder WithStylingOptions(Func<WaterfallStylingBuilder, WaterfallStylingBuilder> func)
     {
-        ChartBuilder = ChartBuilder.WithStylingOptions(func);
+        Chart = Chart.WithStylingOptions(func);
         return this;
     }
 
     public IPivotWaterfallChartBuilder WithRangeOptionsBuilder(Func<RangeOptionsBuilder, RangeOptionsBuilder> func)
     {
-        ChartBuilder = ChartBuilder.WithOptions(func);
+        Chart = Chart.WithOptions(func);
         return this;
     }
 
@@ -129,7 +128,7 @@ public record PivotHorizontalWaterfallChartBuilder<T, TTransformed, TIntermediat
 
     public IPivotWaterfallChartBuilder WithConnectors()
     {
-        ChartBuilder = ChartBuilder.WithConnectors();
+        Chart = Chart.WithConnectors();
         return this;
     }
 
@@ -146,9 +145,9 @@ public record PivotHorizontalWaterfallChartBuilder<T, TTransformed, TIntermediat
         var row = pivotChartModel.Rows.Single();
 
         if (row.DataSetType == ChartType.Bar)
-            ChartBuilder = ChartBuilder.WithDeltas(row.DataByColumns.Select(x => (double)x.Value!))
+            Chart = Chart.WithDeltas(row.DataByColumns.Select(x => (double)x.Value!))
                                        .WithBarDataSetOptions(o => o.WithBarThickness(20))
-                                       .WithLabels(pivotChartModel.ColumnDescriptors.Select(x => x.DisplayName));
+                                       .WithLabels(pivotChartModel.ColumnDescriptors.Select(x => x.DisplayName).ToArray());
         else
             throw new NotImplementedException("Only bar data set types are supported");
 
@@ -163,7 +162,7 @@ public record PivotHorizontalWaterfallChartBuilder<T, TTransformed, TIntermediat
                 i++;
             }
 
-            ChartBuilder = ChartBuilder.WithTotalsAtPositions(totals);
+            Chart = Chart.WithTotalsAtPositions(totals);
         }
     }
 
