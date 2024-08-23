@@ -1,13 +1,15 @@
 ﻿using MeshWeaver.Hosting;
-using Orleans.Runtime;
 var builder = WebApplication.CreateBuilder(args);
-
+builder.AddKeyedRedisClient("hubs-redis");
 builder.AddServiceDefaults();
-builder.UseOrleans();
-
+builder.UseOrleans(orleansBuilder =>
+{
+    if (builder.Environment.IsDevelopment())
+    {
+        orleansBuilder.ConfigureEndpoints(Random.Shared.Next(10_000, 50_000), Random.Shared.Next(10_000, 50_000));
+    }
+});
 var app = builder.Build();
 
-app.MapGet("/", () => "OK");
-
-await app.RunAsync();
+app.Run();
 

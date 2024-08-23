@@ -73,5 +73,7 @@
     <PackageVersion Include="Aspire.Hosting.Redis" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Orleans.Clustering.Redis" Version="8.2.0" />
     <PackageVersion Include="Microsoft.Orleans.Persistence.Redis" Version="8.2.0" />
+    <PackageVersion Include="Aspire.StackExchange.Redis" Version="8.1.0" />
+
   </ItemGroup>
 </Project>

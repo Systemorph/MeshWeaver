@@ -11,7 +11,6 @@
 
   <ItemGroup>
       <ProjectReference Include="..\MeshWeaver.Portal.Orleans\MeshWeaver.Portal.Orleans.csproj" />
-      <ProjectReference Include="..\MeshWeaver.Portal.Backend\MeshWeaver.Portal.Backend.csproj" />
       <ProjectReference Include="..\MeshWeaver.Portal.Web\MeshWeaver.Portal.Web.csproj" />
   </ItemGroup>
 
