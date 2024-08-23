@@ -1,7 +1,7 @@
 ﻿using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
 
-namespace MeshWeaver.Charting.Builders.ChartBuilders;
+namespace MeshWeaver.Charting.Builders.Chart;
 
 public abstract record ArrayChart<TChart, TDataSet>
     : Chart<TChart, TDataSet>
@@ -11,14 +11,14 @@ public abstract record ArrayChart<TChart, TDataSet>
     protected ArrayChart(IReadOnlyCollection<TDataSet> dataSets, ChartType chartType)
         : base(dataSets, chartType) { }
 
-    public override Chart ToChart()
+    public override Models.Chart ToChart()
     {
         var chart = base.ToChart();
 
         if (chart.Data.Labels is null)
         {
             var maxLen = chart.Data.DataSets.Select(ds => ds.Data?.Count() ?? 0).DefaultIfEmpty(1).Max();
-        
+
             chart = chart with
             {
                 Data = chart.Data with

@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Charting.Builders.ChartBuilders;
+﻿using MeshWeaver.Charting.Builders.Chart;
 using MeshWeaver.Charting.Builders.DataSetBuilders;
 using MeshWeaver.Charting.Builders.OptionsBuilders;
 using MeshWeaver.Charting.Models;
