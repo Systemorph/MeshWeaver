@@ -2,6 +2,7 @@
 using MeshWeaver.Charting.Builders.OptionsBuilders;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
+using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Pivot.Models;
 
@@ -17,7 +18,7 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
     public PivotWaterfallChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder)
     {
-        Chart = new WaterfallChart();
+        Chart = new WaterfallChart([]);
     }
 
     public IPivotWaterfallChartBuilder WithLegendItems(string incrementsLabel = null, string decrementsLabel = null, string totalLabel = null)
@@ -32,7 +33,7 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
         return this;
     }
 
-    public IPivotWaterfallChartBuilder WithRangeOptionsBuilder(Func<RangeOptionsBuilder, RangeOptionsBuilder> func)
+    public IPivotWaterfallChartBuilder WithRangeOptionsBuilder(Func<ChartOptions, ChartOptions> func)
     {
         Chart = Chart.WithOptions(func);
         return this;
@@ -99,7 +100,7 @@ public record PivotHorizontalWaterfallChartBuilder<T, TTransformed, TIntermediat
     public PivotHorizontalWaterfallChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder)
     {
-        Chart = new HorizontalWaterfallChart();
+        Chart = new HorizontalWaterfallChart([]);
     }
 
     public IPivotWaterfallChartBuilder WithLegendItems(string incrementsLabel = null, string decrementsLabel = null, string totalLabel = null)
@@ -114,7 +115,7 @@ public record PivotHorizontalWaterfallChartBuilder<T, TTransformed, TIntermediat
         return this;
     }
 
-    public IPivotWaterfallChartBuilder WithRangeOptionsBuilder(Func<RangeOptionsBuilder, RangeOptionsBuilder> func)
+    public IPivotWaterfallChartBuilder WithRangeOptionsBuilder(Func<ChartOptions, ChartOptions> func)
     {
         Chart = Chart.WithOptions(func);
         return this;

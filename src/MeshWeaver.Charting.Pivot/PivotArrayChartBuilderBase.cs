@@ -68,16 +68,15 @@ public abstract record PivotArrayChartBuilderBase<T, TTransformed, TIntermediate
     {
         foreach (var row in pivotChartModel.Rows)
         {
-            Chart.WithDataSet(builder =>
-                                     {
-                                         builder = builder.WithData(row.DataByColumns.Select(x => x.Value))
-                                                          .WithLabel(row.Descriptor.DisplayName);
-                                         builder = row.Filled ? builder.WithArea() : builder.WithoutFill();
-                                         builder = row.SmoothingCoefficient != null ? 
-                                                       builder.Smoothed((double)row.SmoothingCoefficient) : 
-                                                       builder;
-                                         return builder;
-                                     });
+            var builder = new TDataSetBuilder();
+            builder = builder.WithData(row.DataByColumns.Select(x => x.Value))
+                             .WithLabel(row.Descriptor.DisplayName);
+            builder = row.Filled ? builder.WithArea() : builder.WithoutFill();
+            builder = row.SmoothingCoefficient != null ?
+                          builder.Smoothed((double)row.SmoothingCoefficient) :
+                          builder;
+            var dataset = builder.Build();
+            Chart = Chart.WithDataSet(dataset);
         }
 
 
