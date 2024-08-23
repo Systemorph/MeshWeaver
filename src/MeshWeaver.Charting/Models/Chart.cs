@@ -1,4 +1,6 @@
-﻿using MeshWeaver.Charting.Enums;
+﻿using System.Collections.Immutable;
+using System.Text.Json.Serialization;
+using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models.Options;
 
 namespace MeshWeaver.Charting.Models
@@ -19,5 +21,8 @@ namespace MeshWeaver.Charting.Models
         /// Chart options configuration
         /// </summary>
         public ChartOptions Options { get; init; } = new();
+
+        [JsonIgnore]
+        public ImmutableList<DataSet> DataSets { get; init; } = [];
     }
 }

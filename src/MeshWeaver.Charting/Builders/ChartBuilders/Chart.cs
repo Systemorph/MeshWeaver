@@ -1,4 +1,4 @@
-﻿using System.Text.Json.Serialization;
+﻿using System.Collections.Immutable;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Helpers;
 using MeshWeaver.Charting.Models;
@@ -7,11 +7,19 @@ using MeshWeaver.Charting.Models.Options;
 namespace MeshWeaver.Charting.Builders.ChartBuilders;
 
 // TODO V10: DataSets and ChartType are temporary ignored here to still try to match with old benchmarks (2024/08/21, Dmitry Kalabin)
-public abstract record Chart<TChart, TDataSet>([property: JsonIgnore] IReadOnlyCollection<TDataSet> DataSets/*, ChartOptions Options*/, [property: JsonIgnore] ChartType ChartType) : Chart(ChartType)
+public abstract record Chart<TChart, TDataSet> : Chart
     where TChart : Chart<TChart, TDataSet>
     where TDataSet : DataSet, new()
 {
+    public Chart(IReadOnlyCollection<TDataSet> dataSets/*, ChartOptions Options*/, ChartType chartType) : base(chartType)
+    {
+        DataSets = dataSets.Cast<DataSet>().ToImmutableList();
+    }
+
     protected TChart This => (TChart)this;
+
+    public TChart WithDataSet<TDataSet2>(TDataSet2 dataSet) where TDataSet2 : DataSet
+        => This with { DataSets = DataSets.Add(dataSet) };
 
     public virtual TChart WithLabels(params string[] labels) =>
         WithLabels(labels.AsReadOnly());
