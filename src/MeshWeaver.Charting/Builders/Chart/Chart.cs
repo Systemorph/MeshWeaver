@@ -4,10 +4,10 @@ using MeshWeaver.Charting.Helpers;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Models.Options;
 
-namespace MeshWeaver.Charting.Builders.ChartBuilders;
+namespace MeshWeaver.Charting.Builders.Chart;
 
 // TODO V10: DataSets and ChartType are temporary ignored here to still try to match with old benchmarks (2024/08/21, Dmitry Kalabin)
-public abstract record Chart<TChart, TDataSet> : Chart
+public abstract record Chart<TChart, TDataSet> : Models.Chart
     where TChart : Chart<TChart, TDataSet>
     where TDataSet : DataSet, new()
 {
@@ -64,7 +64,7 @@ public abstract record Chart<TChart, TDataSet> : Chart
     public TChart WithDataLabels(Func<DataLabels, DataLabels> func = null) =>
         WithOptions(o => o.WithPlugins(p => p.WithDataLabels(func)));
 
-    public virtual Chart ToChart()
+    public virtual Models.Chart ToChart()
     {
         var plugins = Options.Plugins;
 

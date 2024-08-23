@@ -1,7 +1,7 @@
 ﻿using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
 
-namespace MeshWeaver.Charting.Builders.ChartBuilders;
+namespace MeshWeaver.Charting.Builders.Chart;
 
 public record PolarAreaChart
     : ArrayChart<PolarAreaChart, PolarDataSet>

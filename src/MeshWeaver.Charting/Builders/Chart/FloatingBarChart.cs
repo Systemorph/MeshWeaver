@@ -9,7 +9,7 @@ using MeshWeaver.Charting.Models.Options.Scales;
 using MeshWeaver.Charting.Models.Options.Tooltips;
 using MeshWeaver.Utils;
 
-namespace MeshWeaver.Charting.Builders.ChartBuilders;
+namespace MeshWeaver.Charting.Builders.Chart;
 
 public record FloatingBarChart
     : RangeChart<FloatingBarChart, FloatingBarDataSet>
@@ -48,7 +48,7 @@ public abstract record WaterfallChartBase<TChart, TDataSet, TDataSetBuilder> : R
     private Func<TDataSetBuilder, TDataSetBuilder> barDataSetModifier;
     private WaterfallStylingBuilder StylingBuilder { get; set; } = new();
 
-    public override Chart ToChart()
+    public override Models.Chart ToChart()
     {
         if (datasetsReady)
             return base.ToChart();
@@ -68,9 +68,9 @@ public abstract record WaterfallChartBase<TChart, TDataSet, TDataSetBuilder> : R
         var labels = Data.Labels?.ToArray();
         if (labels?.Length != deltas.Count)
             throw new ArgumentException("Labels length does not match data");
-        
+
         var total = 0.0;
-        bool resetTotal = true;
+        var resetTotal = true;
 
         for (var index = 0; index < deltas.Count; index++)
         {
@@ -174,7 +174,7 @@ public abstract record WaterfallChartBase<TChart, TDataSet, TDataSetBuilder> : R
             .Build();
 
         tmp = tmp with { DataSets = [dataset1, dataset2, dataset3] };  // HACK V10: This looks extreemely bad to combine this immutability style "with" constraint with all the rest of the logic to just mutate single instance (2024/08/22, Dmitry Kalabin)
-        
+
         if (includeConnectors)
         {
             LineDataSetBuilder Builder(LineDataSetBuilder b, IEnumerable<double?> data)
@@ -193,24 +193,24 @@ public abstract record WaterfallChartBase<TChart, TDataSet, TDataSetBuilder> : R
 
         var palette = new[] { styling.IncrementColor, styling.DecrementColor, styling.TotalColor, styling.TotalColor, styling.TotalColor, styling.TotalColor };
         tmp = tmp.WithLegend(lm => lm with
-                                   {
-                                       Labels = (lm.Labels ?? new LegendLabel()) with
-                                                {
-                                                    Filter = $"item => item.text !== '{ChartConst.Hidden}'"
-                                                }
-                                   })
+        {
+            Labels = (lm.Labels ?? new LegendLabel()) with
+            {
+                Filter = $"item => item.text !== '{ChartConst.Hidden}'"
+            }
+        })
                  .WithDataLabels(o => o with
-                                      {
-                                          Color = $"context => context.dataset.data[context.dataIndex].{nameof(WaterfallBar.DataLabelColor).ToCamelCase()}",
-                                          Align = $"context => context.dataset.data[context.dataIndex].{nameof(WaterfallBar.DataLabelAlignment).ToCamelCase()}",
-                                          Anchor = $"context => context.dataset.data[context.dataIndex].{nameof(WaterfallBar.DataLabelAlignment).ToCamelCase()}",
-                                          Display = true,//$"context => context.dataset.data[context.dataIndex].{nameof(WaterfallBar.Range).ToCamelCase()} != null",
-                                          Formatter = $"(value, context) => context.dataset.data[context.dataIndex]?.{nameof(WaterfallBar.DataLabel).ToCamelCase()}"
-                                      })
+                 {
+                     Color = $"context => context.dataset.data[context.dataIndex].{nameof(WaterfallBar.DataLabelColor).ToCamelCase()}",
+                     Align = $"context => context.dataset.data[context.dataIndex].{nameof(WaterfallBar.DataLabelAlignment).ToCamelCase()}",
+                     Anchor = $"context => context.dataset.data[context.dataIndex].{nameof(WaterfallBar.DataLabelAlignment).ToCamelCase()}",
+                     Display = true,//$"context => context.dataset.data[context.dataIndex].{nameof(WaterfallBar.Range).ToCamelCase()} != null",
+                     Formatter = $"(value, context) => context.dataset.data[context.dataIndex]?.{nameof(WaterfallBar.DataLabel).ToCamelCase()}"
+                 })
                  .WithColorPalette(palette);
 
         tmp = tmp.WithOptions(o => o.WithPlugins(p => p with { Tooltip = (p.Tooltip ?? new ToolTip()) with { Enabled = false } }));
-        
+
         return tmp.ToChart();
     }
 
@@ -222,7 +222,7 @@ public abstract record WaterfallChartBase<TChart, TDataSet, TDataSetBuilder> : R
         return (TChart)this;
     }
 
-    public TChart WithStylingOptions(Func<WaterfallStylingBuilder,WaterfallStylingBuilder> func)
+    public TChart WithStylingOptions(Func<WaterfallStylingBuilder, WaterfallStylingBuilder> func)
     {
         StylingBuilder = func(StylingBuilder);
         return (TChart)this;

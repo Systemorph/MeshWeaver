@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Charting.Builders.ChartBuilders;
-using MeshWeaver.Pivot.Builder;
+﻿using MeshWeaver.Pivot.Builder;
 
 namespace MeshWeaver.Charting.Pivot;
 

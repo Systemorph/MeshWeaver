@@ -1,7 +1,7 @@
 ﻿using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
 
-namespace MeshWeaver.Charting.Builders.ChartBuilders;
+namespace MeshWeaver.Charting.Builders.Chart;
 
 public record PointChart : Chart<PointChart, LineScatterDataSet>
 {
@@ -13,7 +13,7 @@ public record PointChart : Chart<PointChart, LineScatterDataSet>
             ? base.WithLabels(names)
             : throw new Exception("Provided fewer labels than data sets");
 
-    public override Chart ToChart()
+    public override Models.Chart ToChart()
     {
         var chart = base.ToChart();
 
