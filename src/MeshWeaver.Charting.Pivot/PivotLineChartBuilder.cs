@@ -15,7 +15,7 @@ record PivotLineChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotB
     public PivotLineChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder)
     {
-        Chart = new LineChart();
+        Chart = new LineChart([]);
     }
 
 
@@ -24,7 +24,7 @@ record PivotLineChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotB
         return PivotChartModelBuilder.BuildFromPivotModel(pivotModel, ChartType.Line);
     }
 
-    public IPivotLineChartBuilder WithRangeOptionsBuilder(Func<LineOptionsBuilder, LineOptionsBuilder> func)
+    public IPivotLineChartBuilder WithRangeOptionsBuilder(Func<ChartOptions, ChartOptions> func)
     {
         Chart = Chart.WithOptions(func);
         return this;
