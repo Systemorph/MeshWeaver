@@ -1,6 +1,8 @@
 ﻿using System.Diagnostics;
+using MeshWeaver.Application;
 using Microsoft.FluentUI.AspNetCore.Components;
 using MeshWeaver.Hosting;
+using MeshWeaver.Orleans.Contract;
 using MeshWeaver.Portal;
 using MeshWeaver.Portal.Web;
 using Microsoft.Extensions.Logging.Console;
@@ -8,6 +10,7 @@ using Microsoft.Extensions.Logging.Console;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
+builder.AddKeyedRedisClient(StorageProviders.OrleansRedis);
 
 // Add services to the container.
 builder.Services.AddRazorPages();
@@ -27,9 +30,9 @@ builder.Services.AddLogging(config => config.AddConsole(
 
 builder.Services.AddFluentUIComponents();
 
-builder.Host.UseMeshWeaver(
-    new BlazorServerAddress(),
-    config => config.ConfigurePortalHubs()
+var blazorAddress = new UiAddress();
+builder.Host.UseMeshWeaver(blazorAddress,
+    config => config.ConfigurePortalHubs(blazorAddress)
 );
 
 if (!builder.Environment.IsDevelopment())
@@ -61,7 +64,3 @@ app.MapFallbackToPage("/_Host");
 
 app.Run();
 
-public record BlazorServerAddress
-{
-    public Guid Id { get; init; } = Guid.NewGuid();
-}

@@ -16,6 +16,8 @@ public static class MessageHubExtensions
     }
 }
 
+
+
 public record MessageHubConfiguration
 {
     public object Address { get; }
@@ -81,7 +83,9 @@ public record MessageHubConfiguration
 
     public MessageHubConfiguration WithHostedHub(object address,
         Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
-        => WithRoutes(f => f.RouteAddress<object>((a, d) =>
+        =>
+            this.WithTypes(address.GetType())
+                .WithRoutes(f => f.RouteAddress<object>((a, d) =>
         {
             if (!address.Equals(a))
                 return d;

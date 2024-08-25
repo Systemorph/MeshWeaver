@@ -21,7 +21,6 @@ public static class BlazorClientRegistry
         this MessageHubConfiguration config,
         Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration
     ) => config
-        .WithTypes(typeof(ApplicationAddress))
         .AddLayoutClient(c => configuration.Invoke(c.WithView(DefaultFormatting)))
     ;
     #region Standard Formatting
