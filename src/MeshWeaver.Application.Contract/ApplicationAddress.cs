@@ -14,5 +14,8 @@ public record ApplicationAddress(string Name, string Environment)
 public record UiAddress : IAddressWithId
 {
     public string Id { get; init; } = Guid.NewGuid().AsString();
+
+    public override string ToString()
+        => Id;
 }
 

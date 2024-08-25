@@ -1,9 +1,13 @@
 ﻿using System.Diagnostics;
 using MeshWeaver.Application;
+using MeshWeaver.Blazor;
+using MeshWeaver.Blazor.AgGrid;
+using MeshWeaver.Blazor.ChartJs;
+using MeshWeaver.Data;
+using MeshWeaver.Documentation;
 using Microsoft.FluentUI.AspNetCore.Components;
 using MeshWeaver.Hosting;
 using MeshWeaver.Orleans.Contract;
-using MeshWeaver.Portal.Web;
 using Microsoft.Extensions.Logging.Console;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -31,8 +35,16 @@ builder.Services.AddFluentUIComponents();
 
 var blazorAddress = new UiAddress();
 builder.Host.UseMeshWeaver(blazorAddress,
-    config => config.ConfigurePortalHubs(blazorAddress)
-);
+        config =>
+            config.AddBlazor(x =>
+                    x.AddChartJs()
+                        .AddAgGrid()
+                )
+                .AddData()
+                .AddDocumentation()
+                .ConfigureOrleansHub(blazorAddress)
+            )
+    ;
 
 if (!builder.Environment.IsDevelopment())
 {
