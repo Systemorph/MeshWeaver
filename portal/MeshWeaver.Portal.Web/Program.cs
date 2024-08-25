@@ -3,7 +3,6 @@ using MeshWeaver.Application;
 using Microsoft.FluentUI.AspNetCore.Components;
 using MeshWeaver.Hosting;
 using MeshWeaver.Orleans.Contract;
-using MeshWeaver.Portal;
 using MeshWeaver.Portal.Web;
 using Microsoft.Extensions.Logging.Console;
 
