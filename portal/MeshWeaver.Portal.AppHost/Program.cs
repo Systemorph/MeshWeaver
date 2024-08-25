@@ -1,6 +1,4 @@
-﻿using Orleans.Core;
-
-var builder = DistributedApplication.CreateBuilder(args);
+﻿var builder = DistributedApplication.CreateBuilder(args);
 var storage = builder.AddAzureStorage("storage").RunAsEmulator();
 
 var redis = builder.AddRedis("orleans-redis");

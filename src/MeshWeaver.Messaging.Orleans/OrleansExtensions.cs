@@ -1,20 +1,17 @@
-﻿using MeshWeaver.Application;
-using MeshWeaver.Messaging;
-using MeshWeaver.Orleans.Contract;
-using Microsoft.Extensions.DependencyInjection;
-using Orleans;
+﻿using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
 
-namespace MeshWeaver.Orleans
+namespace MeshWeaver.Orleans;
+
+public static class OrleansExtensions
 {
-    public static class OrleansExtensions
-    {
-        public const string Storage = "storage";
-        public const string StreamProvider = "SMS";
+    public const string Storage = "storage";
 
 
-        public static MessageHubConfiguration ConfigureOrleans(this MessageHubConfiguration configuration)
-            => configuration.WithTypes(typeof(ApplicationAddress))
-                .WithServices(services => services.AddScoped<IMeshCatalog, MeshCatalog>());
 
-    }
+}
+
+public record OrleansAddress : IAddressWithId
+{
+    public string Id { get; set; } = Guid.NewGuid().AsString();
 }

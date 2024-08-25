@@ -2,19 +2,18 @@
 using MeshWeaver.Orleans.Contract;
 using Microsoft.Extensions.Logging;
 using Orleans;
+using Orleans.Placement;
 using Orleans.Providers;
 using Orleans.Streams;
 
 namespace MeshWeaver.Orleans;
 
+[PreferLocalPlacement]
 public class RoutingGrain(ILogger<RoutingGrain> logger, IMessageHub hub) : Grain, IRoutingGrain
 {
-    public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery message)
+    public async Task<IMessageDelivery> DeliverMessage(object target, IMessageDelivery message)
     {
         logger.LogDebug("Delivering Message {Message} from {Sender} to {Target}", message.Message, message.Sender, message.Target);
-        var target = message.Target;
-        if(target == null)
-            return message;
         var targetId = SerializationExtensions.GetId(target);
         var streamInfo = await GrainFactory.GetGrain<IAddressMapGrain>(targetId).Get(targetId);
         var stream = this.GetStreamProvider(streamInfo.StreamProvider).GetStream<IMessageDelivery>(streamInfo.Namespace, targetId);

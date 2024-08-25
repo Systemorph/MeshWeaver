@@ -2,6 +2,7 @@
 using System.Reflection;
 using System.Runtime.Loader;
 using MeshWeaver.Messaging;
+using MeshWeaver.Orleans.Contract;
 using Microsoft.Extensions.Logging;
 using Orleans;
 using Orleans.Providers;

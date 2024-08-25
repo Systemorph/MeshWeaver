@@ -1,6 +1,8 @@
-﻿using MeshWeaver.Hosting;
+﻿using Autofac.Core;
+using MeshWeaver.Hosting;
 using MeshWeaver.Messaging;
 using MeshWeaver.Orleans;
+using MeshWeaver.Orleans.Contract;
 using Orleans.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -8,6 +10,13 @@ builder.AddServiceDefaults();
 builder.AddKeyedAzureTableClient(StorageProviders.MeshCatalog);
 builder.AddKeyedAzureTableClient(StorageProviders.Activity);
 builder.AddKeyedRedisClient(StorageProviders.OrleansRedis);
+builder.Services.AddSingleton<IMeshCatalog, MeshCatalog>();
+var address = new OrleansAddress();
+
+builder.Host.UseMeshWeaver(address,
+    config => config.ConfigureOrleansHub(address)
+);
+
 
 builder.UseOrleans(orleansBuilder =>
 {

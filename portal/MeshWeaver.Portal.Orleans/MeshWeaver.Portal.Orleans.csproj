@@ -9,7 +9,6 @@
         <PackageReference Include="Aspire.Hosting.Redis" />
         <PackageReference Include="Aspire.StackExchange.Redis" />
         <PackageReference Include="Microsoft.Orleans.Persistence.Redis" />
-        <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" />
         <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" />
         <PackageReference Include="Aspire.Hosting.Azure.Storage" />
         <PackageReference Include="Microsoft.Orleans.Serialization.SystemTextJson" />

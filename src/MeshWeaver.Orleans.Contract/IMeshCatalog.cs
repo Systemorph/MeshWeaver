@@ -15,11 +15,11 @@ public interface IArticleGrain : IGrainWithGuidKey
     public Task Update(ArticleEntry entry);
 }
 
-public interface IRoutingGrain : IGrainWithIntegerKey
+public interface IRoutingGrain : IGrainWithStringKey
 {
-
+    Task<IMessageDelivery> DeliverMessage(object routeAddress, IMessageDelivery request);
 }
 
-public interface IMessageHubGrain : IGrainWithGuidKey
+public interface IMessageHubGrain : IGrainWithStringKey
 {
 }
