@@ -1,25 +1,25 @@
 ﻿using MeshWeaver.Messaging;
-using Orleans;
+using System.Collections.Immutable;
 
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("MeshWeaver.Orleans")]
 namespace MeshWeaver.Orleans.Contract;
 
-public interface IMeshNodeGrain : IGrainWithStringKey
+
+
+public interface IMeshCatalog
 {
-    public Task<MeshNode> Get();
-    public Task Update(MeshNode entry);
+    void Configure(Func<MeshNodeInfoConfiguration, MeshNodeInfoConfiguration> config);
+    string GetMeshNodeId(object address);
+    Task<MeshNode> GetNodeAsync(object address);
+    public Task UpdateMeshNodeAsync(MeshNode node);
 }
 
-public interface IArticleGrain : IGrainWithGuidKey
+public record MeshNodeInfoConfiguration
 {
-    public Task<ArticleEntry> Get();
-    public Task Update(ArticleEntry entry);
-}
+    internal ImmutableList<Func<object, string>> ModuleLoaders { get; init; }
+        = [];
 
-public interface IRoutingGrain : IGrainWithStringKey
-{
-    Task<IMessageDelivery> DeliverMessage(object routeAddress, IMessageDelivery request);
-}
+    public MeshNodeInfoConfiguration WithModuleMapping(Func<object, string> moduleInfoProvider)
+        => this with { ModuleLoaders = ModuleLoaders.Insert(0, moduleInfoProvider) };
 
-public interface IMessageHubGrain : IGrainWithStringKey
-{
 }

@@ -9,13 +9,13 @@ using Orleans.Streams;
 namespace MeshWeaver.Orleans;
 
 [PreferLocalPlacement]
-public class RoutingGrain(ILogger<RoutingGrain> logger, IMessageHub hub) : Grain, IRoutingGrain
+public class RoutingGrain(ILogger<RoutingGrain> logger) : Grain, IRoutingGrain
 {
     public async Task<IMessageDelivery> DeliverMessage(object target, IMessageDelivery message)
     {
         logger.LogDebug("Delivering Message {Message} from {Sender} to {Target}", message.Message, message.Sender, message.Target);
         var targetId = SerializationExtensions.GetId(target);
-        var streamInfo = await GrainFactory.GetGrain<IAddressMapGrain>(targetId).Get(targetId);
+        var streamInfo = await GrainFactory.GetGrain<IAddressRegistryGrain>(targetId).Register(targetId);
         var stream = this.GetStreamProvider(streamInfo.StreamProvider).GetStream<IMessageDelivery>(streamInfo.Namespace, targetId);
         await stream.OnNextAsync(message);
         return message.Forwarded([target]);
@@ -23,46 +23,54 @@ public class RoutingGrain(ILogger<RoutingGrain> logger, IMessageHub hub) : Grain
 
 }
 
-public interface IAddressMapGrain : IGrainWithStringKey
-{
-    Task<StreamInfo> Get(object address);
-    Task<string> GetNodeId();
 
-    Task<StartupInfo> GetStartupInfo();
-}
 
-public record StartupInfo(string NodeId, string BaseDirectory, string AssemblyLocation, object Address);
-
-public class AddressMapGrain(ILogger<AddressMapGrain> logger, IMeshCatalog meshCatalog) : Grain, IAddressMapGrain
+[PreferLocalPlacement]
+[StorageProvider(ProviderName = StorageProviders.OrleansRedis)]
+public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCatalog meshCatalog) : Grain<StreamInfo>, IAddressRegistryGrain
 {
     private MeshNode Node { get; set; }
-    private object Address { get; set; }
 
-    public async Task<StreamInfo> Get(object address)
+    public async Task<StreamInfo> Register(object address)
     {
-        Address = address;
-        Node ??= await meshCatalog.GetNodeAsync(address);
-        return ConvertNode();
+        if (State != null)
+            return State;
+
+        if (Node == null)
+        {
+            Node = await meshCatalog.GetNodeAsync(address);
+            logger.LogDebug("Mapping address {Address} to Id {Id} for {Node}", address, this.GetPrimaryKeyString(), Node);
+        }
+        State = ConvertNode(address);
+        if(State != null)
+            await WriteStateAsync();
+        return State;
     }
 
-    private StreamInfo ConvertNode() =>
+    public async Task Register(StreamInfo streamInfo)
+    {
+        State = streamInfo;
+        await WriteStateAsync();
+    }
+
+    private StreamInfo ConvertNode(object address) =>
         Node != null
-            ? new(Node.Id, Node.StreamProvider, Node.Namespace)
+            ? new(this.GetPrimaryKeyString(), Node.StreamProvider, Node.Namespace, address)
             :
             // TODO V10: What to do here? ==> we don't find route. Throw exception? (25.08.2024, Roland Bürgi)
             null;
 
-    public Task<string> GetNodeId()
-        => Task.FromResult(Node?.Id);
 
-    public Task<StartupInfo> GetStartupInfo() =>
-        Task.FromResult(Node == null ? null : new StartupInfo(Node.Id, Node.BaseDirectory, Node.AssemblyLocation, Address));
+    public Task<NodeStorageInfo> GetStorageInfo() =>
+        Task.FromResult(Node == null ? null : new NodeStorageInfo(Node.Id, Node.BaseDirectory, Node.AssemblyLocation, State.Address));
+
+    public async Task Unregister()
+    {
+        await ClearStateAsync();
+        DeactivateOnIdle();
+    }
 }
 
-public record StreamInfo(string CatalogId, string StreamProvider, string Namespace)
-{
-    public Guid StreamId { get; init; } = Guid.NewGuid();
-}
 
 
 /// <summary>

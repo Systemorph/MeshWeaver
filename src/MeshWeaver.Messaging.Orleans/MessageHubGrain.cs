@@ -30,12 +30,12 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub parent
         logger.LogInformation($"OnSubscribed: {handleFactory.ProviderName}/{handleFactory.StreamId}");
 
         var streamId = this.GetPrimaryKeyString();
-        var startupInfo = await GrainFactory.GetGrain<IAddressMapGrain>(streamId).GetStartupInfo();
+        var startupInfo = await GrainFactory.GetGrain<IAddressRegistryGrain>(streamId).GetStorageInfo();
 
         var pathToAssembly = Path.Combine(startupInfo.BaseDirectory, startupInfo.AssemblyLocation);
         loadContext = new(this.GetPrimaryKeyString());
         var loaded = loadContext.LoadFromAssemblyPath(pathToAssembly);
-        var startupAttribute = loaded.GetCustomAttributes<HubStartupAttribute>().FirstOrDefault(a => a.Id == startupInfo.NodeId);
+        var startupAttribute = loaded.GetCustomAttributes<MeshNodeAttribute>().FirstOrDefault(a => a.Id == startupInfo.NodeId);
         if (startupAttribute == null)
             throw new InvalidOperationException($"No HubStartupAttribute found for {startupInfo.NodeId}");
 
@@ -54,6 +54,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub parent
                 EventCounter = State.EventCounter.SetItem(messageType, State.EventCounter.GetValueOrDefault(messageType) + 1),
                 Token = token,
             };
+            Hub.DeliverMessage(value);
             await this.WriteStateAsync();
         }
 
@@ -64,7 +65,14 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub parent
             await this.WriteStateAsync();
         }
 
-        Task OnCompleted() => Task.CompletedTask;
+        async Task OnCompleted()
+        {
+            if(Hub != null)
+                await Hub.DisposeAsync();
+            Hub = null;
+            State = State with { IsDeactivated = true };
+            await WriteStateAsync();
+        }
     }
 
     public override async Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
