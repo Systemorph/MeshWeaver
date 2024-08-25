@@ -14,7 +14,7 @@ public class CollectionsOfObjectTest : TestBase
     record ClientAddress;
 
     [Inject]
-    private IMessageHub<ClientAddress> Client { get; set; }
+    private IMessageHub Client { get; set; }
 
     public CollectionsOfObjectTest(ITestOutputHelper output) : base(output)
     {

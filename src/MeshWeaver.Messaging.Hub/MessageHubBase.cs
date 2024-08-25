@@ -1,5 +1,4 @@
-﻿using System.Collections.Immutable;
-using System.Linq.Expressions;
+﻿using System.Linq.Expressions;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Disposables;
@@ -9,10 +8,10 @@ using MeshWeaver.ServiceProvider;
 
 namespace MeshWeaver.Messaging;
 
-public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsyncDisposable
+public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
 {
     protected ITypeRegistry TypeRegistry;
-    public virtual TAddress Address { get; }
+    public virtual object Address { get; }
     protected readonly LinkedList<AsyncDelivery> Rules = new();
     private readonly HashSet<Type> registeredTypes = new();
 
@@ -24,7 +23,7 @@ public abstract class MessageHubBase<TAddress> : IMessageHandlerRegistry, IAsync
         : this(hub.ServiceProvider)
     {
         Hub = hub;
-        Address = (TAddress)hub.Address;
+        Address = hub.Address;
     }
 
     protected internal MessageHubBase(IServiceProvider serviceProvider)

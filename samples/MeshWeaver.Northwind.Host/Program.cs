@@ -4,7 +4,6 @@ using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.Northwind.Model;
-using Orleans.Hosting;
 using Orleans.Serialization;
 using static MeshWeaver.Hosting.HostBuilderExtensions;
 

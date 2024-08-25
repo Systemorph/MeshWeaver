@@ -1,7 +1,7 @@
 ﻿namespace MeshWeaver.Messaging;
 
 public class MessageHubPlugin : 
-    MessageHubBase<object>,
+    MessageHubBase,
     IMessageHubPlugin
 {
 

@@ -10,7 +10,7 @@ namespace MeshWeaver.Messaging.Serialization;
 
 public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry, SerializationConfiguration configuration) : JsonConverter<object>
 {
-    private const string TypeProperty = "$type";
+    public const string TypeProperty = "$type";
 
     public override bool CanConvert(Type typeToConvert) => !typeof(IEnumerable).IsAssignableFrom(typeToConvert) && (typeToConvert == typeof(object) || typeToConvert.IsAbstract);
 
@@ -109,7 +109,7 @@ public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry, Type excl
 
     public override void WriteAsPropertyName(Utf8JsonWriter writer, [DisallowNull] object value, JsonSerializerOptions options)
     {
-        var clonedOptions = CloneOptions(options);
+        var clonedOptions = options.CloneAndRemove(this);
         clonedOptions.Converters.Add(
             new TypedObjectSerializeConverter(typeRegistry, value.GetType())
         );
@@ -118,7 +118,7 @@ public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry, Type excl
 
     public override void Write(Utf8JsonWriter writer, object value, JsonSerializerOptions options)
     {
-        var clonedOptions = CloneOptions(options);
+        var clonedOptions = options.CloneAndRemove(this);
         clonedOptions.Converters.Add(
             new TypedObjectSerializeConverter(typeRegistry, value.GetType())
         );
@@ -130,10 +130,4 @@ public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry, Type excl
         serialized!.WriteTo(writer);
     }
 
-    private JsonSerializerOptions CloneOptions(JsonSerializerOptions options)
-    {
-        var clonedOptions = new JsonSerializerOptions(options);
-        clonedOptions.Converters.Remove(this);
-        return clonedOptions;
-    }
 }
