@@ -14,6 +14,7 @@ public record RouteConfiguration(IMessageHub Hub)
 
     internal readonly Dictionary<object, HashSet<object>> RoutedMessageAddresses = new();
 
+    public RouteConfiguration WithHandler(AsyncDelivery handler) => this with { Handlers = Handlers.Add(handler) };
 
     public RouteConfiguration RouteAddressToHub<TAddress>(Func<TAddress, IMessageHub> hubFactory) =>
         RouteAddress<TAddress>((routedAddress, d) =>

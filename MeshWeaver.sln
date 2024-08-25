@@ -17,8 +17,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Messaging.Hub.Te
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Application.Contract", "src\MeshWeaver.Application.Contract\MeshWeaver.Application.Contract.csproj", "{F4DB9118-0BAD-4941-A756-E38CD3300AA2}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Portal.Contract", "src\MeshWeaver.Portal.Contract\MeshWeaver.Portal.Contract.csproj", "{B7470432-1E38-42C8-877C-4FADA2CA16F2}"
-EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{0E47DEC0-ECB0-43FC-B8DA-C5CD4CBAA8B1}"
 	ProjectSection(SolutionItems) = preProject
 		.editorconfig = .editorconfig
@@ -120,7 +118,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Import.Test", "t
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Scopes.Test", "test\MeshWeaver.Scopes.Test\MeshWeaver.Scopes.Test.csproj", "{DC713E3E-90F7-42CC-B719-29B76D96EA7C}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Messaging.Orleans", "src\MeshWeaver.Messaging.Orleans\MeshWeaver.Messaging.Orleans.csproj", "{B6CDE776-12B4-4340-9E98-C2E4E8D75A47}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Orleans", "src\MeshWeaver.Messaging.Orleans\MeshWeaver.Orleans.csproj", "{B6CDE776-12B4-4340-9E98-C2E4E8D75A47}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.CSharp.Kernel", "src\MeshWeaver.CSharp.Kernel\MeshWeaver.CSharp.Kernel.csproj", "{CE5F2FC3-8B56-414F-807D-906DE4DE3123}"
 EndProject
@@ -192,7 +190,9 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Portal.Web", "po
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Portal.Backend", "portal\MeshWeaver.Portal.Backend\MeshWeaver.Portal.Backend.csproj", "{6BE9848A-6CC5-40D4-97DC-481064D6E24D}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Portal.Orleans", "portal\MeshWeaver.Portal.Orleans\MeshWeaver.Portal.Orleans.csproj", "{DD4D94A7-9019-4049-8557-8A9EF4B14EB9}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Portal.Orleans", "portal\MeshWeaver.Portal.Orleans\MeshWeaver.Portal.Orleans.csproj", "{DD4D94A7-9019-4049-8557-8A9EF4B14EB9}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Orleans.Contract", "src\MeshWeaver.Orleans.Contract\MeshWeaver.Orleans.Contract.csproj", "{FF0E37D4-E738-4A08-A9F1-4B9BF49FE42B}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -216,10 +216,6 @@ Global
 		{F4DB9118-0BAD-4941-A756-E38CD3300AA2}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F4DB9118-0BAD-4941-A756-E38CD3300AA2}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F4DB9118-0BAD-4941-A756-E38CD3300AA2}.Release|Any CPU.Build.0 = Release|Any CPU
-		{B7470432-1E38-42C8-877C-4FADA2CA16F2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{B7470432-1E38-42C8-877C-4FADA2CA16F2}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{B7470432-1E38-42C8-877C-4FADA2CA16F2}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{B7470432-1E38-42C8-877C-4FADA2CA16F2}.Release|Any CPU.Build.0 = Release|Any CPU
 		{38BFFE57-7A3B-49DD-9E55-14EA53BE8A9A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{38BFFE57-7A3B-49DD-9E55-14EA53BE8A9A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{38BFFE57-7A3B-49DD-9E55-14EA53BE8A9A}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -548,6 +544,10 @@ Global
 		{DD4D94A7-9019-4049-8557-8A9EF4B14EB9}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{DD4D94A7-9019-4049-8557-8A9EF4B14EB9}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{DD4D94A7-9019-4049-8557-8A9EF4B14EB9}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FF0E37D4-E738-4A08-A9F1-4B9BF49FE42B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FF0E37D4-E738-4A08-A9F1-4B9BF49FE42B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FF0E37D4-E738-4A08-A9F1-4B9BF49FE42B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FF0E37D4-E738-4A08-A9F1-4B9BF49FE42B}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

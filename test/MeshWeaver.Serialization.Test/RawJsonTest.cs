@@ -20,7 +20,7 @@ public class RawJsonTest : TestBase
     record ClientAddress;
 
     [Inject]
-    private IMessageHub<ClientAddress> Client { get; set; }
+    private IMessageHub Client { get; set; }
 
     [Inject]
     private IMessageHub Router { get; set; }

@@ -1,8 +1,6 @@
 ﻿using System.Text.Json;
-using MeshWeaver.Messaging.Serialization;
 
 namespace MeshWeaver.Messaging;
-
 
 public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDisposable
 {
@@ -73,10 +71,5 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
 
 
 
-public interface IMessageHub<out TAddress> : IMessageHub
-{
-    new TAddress Address { get; }
-
-}
 
 

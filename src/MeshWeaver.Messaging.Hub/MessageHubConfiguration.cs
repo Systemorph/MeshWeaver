@@ -9,10 +9,10 @@ namespace MeshWeaver.Messaging;
 
 public static class MessageHubExtensions
 {
-    public static IMessageHub<TAddress> CreateMessageHub<TAddress>(this IServiceProvider serviceProvider, TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
+    public static IMessageHub CreateMessageHub(this IServiceProvider serviceProvider, object address, Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
     {
         var hubSetup = new MessageHubConfiguration(serviceProvider, address);
-        return (IMessageHub<TAddress>)configuration(hubSetup).Build(serviceProvider, address);
+        return configuration(hubSetup).Build(serviceProvider, address);
     }
 }
 
@@ -90,10 +90,10 @@ public record MessageHubConfiguration
         }));
 
 
-    protected virtual ServiceCollection ConfigureServices<TAddress>(IMessageHub parent)
+    protected virtual ServiceCollection ConfigureServices(IMessageHub parent)
     {
         var services = new ServiceCollection();
-        services.Replace(ServiceDescriptor.Singleton<IMessageHub>(sp => new MessageHub<TAddress>(sp, sp.GetRequiredService<HostedHubsCollection>(), this, parent)));
+        services.Replace(ServiceDescriptor.Singleton<IMessageHub>(sp => new MessageHub(sp, sp.GetRequiredService<HostedHubsCollection>(), this, parent)));
         services.Replace(ServiceDescriptor.Singleton<HostedHubsCollection, HostedHubsCollection>());
         services.Replace(ServiceDescriptor.Singleton(typeof(ITypeRegistry),
             _ => new TypeRegistry(ParentServiceProvider.GetService<ITypeRegistry>())));
@@ -116,10 +116,10 @@ public record MessageHubConfiguration
     public MessageHubConfiguration WithDeferral(DeliveryFilter deferral)
         => this with { Deferrals = Deferrals.Add(deferral) };
 
-    protected void CreateServiceProvider<TAddress>(IMessageHub parent)
+    protected void CreateServiceProvider(IMessageHub parent)
     {
 
-        ServiceProvider = ConfigureServices<TAddress>(parent)
+        ServiceProvider = ConfigureServices(parent)
             .SetupModules(ParentServiceProvider);
     }
 
@@ -127,7 +127,7 @@ public record MessageHubConfiguration
     {
         // TODO V10: Check whether this address is already built in hosted hubs collection, if not build. (18.01.2024, Roland Buergi)
         var parentHub = ParentServiceProvider.GetService<ParentMessageHub>()?.Value;
-        CreateServiceProvider<TAddress>(parentHub);
+        CreateServiceProvider(parentHub);
         var parentHubs = ParentServiceProvider.GetService<HostedHubsCollection>();
 
         HubInstance = ServiceProvider.GetRequiredService<IMessageHub>();
