@@ -1,7 +1,7 @@
 ﻿using System.Reflection;
 using System.Runtime.Loader;
+using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
-using MeshWeaver.Orleans.Contract;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans;
 

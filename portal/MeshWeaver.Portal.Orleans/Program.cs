@@ -1,9 +1,7 @@
 ﻿using MeshWeaver.Hosting;
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
-using MeshWeaver.Orleans;
 using MeshWeaver.Orleans.Client;
-using MeshWeaver.Orleans.Contract;
 using MeshWeaver.Overview;
 using Orleans.Serialization;
 
@@ -12,7 +10,6 @@ builder.AddServiceDefaults();
 builder.AddKeyedAzureTableClient(StorageProviders.MeshCatalog);
 builder.AddKeyedAzureTableClient(StorageProviders.Activity);
 builder.AddKeyedRedisClient(StorageProviders.OrleansRedis);
-builder.Services.AddSingleton<IMeshCatalog, MeshCatalog>();
 var address = new OrleansAddress();
 
 builder.Host.UseMeshWeaver(address,

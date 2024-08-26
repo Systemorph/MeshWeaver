@@ -1,6 +1,5 @@
 ﻿using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
-using MeshWeaver.Orleans.Contract;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Streams;
 
