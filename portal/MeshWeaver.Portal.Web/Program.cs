@@ -3,8 +3,6 @@ using MeshWeaver.Application;
 using MeshWeaver.Blazor;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
-using MeshWeaver.Data;
-using MeshWeaver.Documentation;
 using Microsoft.FluentUI.AspNetCore.Components;
 using MeshWeaver.Hosting;
 using MeshWeaver.Orleans.Contract;
@@ -40,9 +38,7 @@ builder.Host.UseMeshWeaver(blazorAddress,
                     x.AddChartJs()
                         .AddAgGrid()
                 )
-                .AddData()
-                .AddDocumentation()
-                .ConfigureOrleansHub(blazorAddress)
+                .ConfigureOrleansMesh(blazorAddress)
             )
     ;
 

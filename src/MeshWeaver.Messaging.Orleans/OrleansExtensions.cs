@@ -11,7 +11,7 @@ public static class OrleansExtensions
 
 }
 
-public record OrleansAddress : IAddressWithId
+public record OrleansAddress
 {
     public string Id { get; set; } = Guid.NewGuid().AsString();
 

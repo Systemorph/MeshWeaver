@@ -11,7 +11,7 @@ public static class StreamProviders
 
 
 
-public record MeshNode(string Id, string BaseDirectory, string AssemblyLocation, string HubConfiguration)
+public record MeshNode(string Id, string Name, string BasePath, string AssemblyLocation, string ContentPath)
 {
     public const string MessageIn = nameof(MessageIn);
     public string Thumbnail { get; init; }
