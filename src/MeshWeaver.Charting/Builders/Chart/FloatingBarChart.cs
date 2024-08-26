@@ -27,6 +27,220 @@ public record HorizontalFloatingBarChart
     }
 }
 
+public static class WaterfallChartExtensions
+{
+    public static BarChart ToWaterfallChart(this BarChart chart, List<double> deltas, Func<WaterfallStylingBuilder, WaterfallStylingBuilder> stylingOptions = null)
+        => chart
+            .ToWaterfallChart<FloatingBarDataSet, FloatingBarDataSetBuilder>(deltas, stylingOptions)
+            .WithOptions(o => o
+                .Stacked("x")
+                .HideAxis("y")
+                .HideGrid("x")
+            );
+
+    public static BarChart ToHorizontalWaterfallChart(this BarChart chart, List<double> deltas, Func<WaterfallStylingBuilder, WaterfallStylingBuilder> stylingOptions = null)
+        => chart
+            .ToWaterfallChart<HorizontalFloatingBarDataSet, HorizontalFloatingBarDataSetBuilder>(deltas, stylingOptions)
+            .WithOptions(o => o
+                .Stacked("y")
+                //.HideAxis("x")
+                .Grace<CartesianLinearScale>("x", "10%")
+                // TODO V10: understand why the line below helps and find less random approach (2023/10/08, Ekaterina Mishina)
+                .SuggestedMax("x", 10) // this helps in case of all negative values
+                .ShortenAxisNumbers("x")
+                .WithIndexAxis("y")
+            );
+
+    private static BarChart ToWaterfallChart<TDataSet, TDataSetBuilder>(this BarChart chart, List<double> deltas, Func<WaterfallStylingBuilder, WaterfallStylingBuilder> stylingOptions = null)
+        where TDataSet : BarDataSetBase, IDataSetWithStack, new()
+        where TDataSetBuilder : FloatingBarDataSetBuilderBase<TDataSetBuilder, TDataSet>, new()
+    {
+        var stylingBuilder = new WaterfallStylingBuilder();
+        stylingBuilder = stylingOptions?.Invoke(stylingBuilder) ?? stylingBuilder;
+        var styling = stylingBuilder.Build();
+
+        var incrementRanges = new List<IncrementBar>(deltas.Count);
+        var decrementRanges = new List<DecrementBar>(deltas.Count);
+        var totalRanges = new List<TotalBar>(deltas.Count);
+
+        var firstDottedValues = new List<double?>(deltas.Count);
+        var secondDottedValues = new List<double?>(deltas.Count);
+        var thirdDottedValues = new List<double?>(deltas.Count);
+
+        var tmp = chart;
+        if (tmp.Data.Labels is null)
+            tmp = tmp.WithLabels(Enumerable.Range(1, deltas.Count).Select(i => i.ToString()).ToArray());
+
+        var labels = tmp.Data.Labels?.ToArray();
+        if (labels?.Length != deltas.Count)
+            throw new ArgumentException("Labels length does not match data");
+
+        var total = 0.0;
+        var resetTotal = true;
+
+        for (var index = 0; index < deltas.Count; index++)
+        {
+            var delta = deltas[index];
+            var prevTotal = total;
+            if (resetTotal)
+                total = 0.0;
+
+            // TODO V10: need to follow up on passing totalIndexes through (2024/08/26, Dmitry Kalabin)
+            //var isTotal = totalIndexes != null && totalIndexes.Contains(index);
+            var isTotal = false;
+
+            if (isTotal)
+            {
+                totalRanges.Add(delta >= 0
+                                    ? new TotalBar(new[] { 0, delta }, labels[index], delta, styling)
+                                    : new TotalBar(new[] { delta, 0 }, labels[index], delta, styling));
+                incrementRanges.Add(new IncrementBar(null, labels[index], null, styling));
+                decrementRanges.Add(new DecrementBar(null, labels[index], null, styling));
+                total = delta;
+            }
+            else
+            {
+                totalRanges.Add(new TotalBar(null, labels[index], null, styling));
+                if (delta >= 0)
+                {
+                    incrementRanges.Add(new IncrementBar(new[] { total, total + delta }, labels[index], delta, styling));
+                    decrementRanges.Add(new DecrementBar(null, labels[index], null, styling));
+                }
+                else
+                {
+                    decrementRanges.Add(new DecrementBar(new[] { total + delta, total }, labels[index], delta, styling));
+                    incrementRanges.Add(new IncrementBar(null, labels[index], null, styling));
+                }
+
+                total += delta;
+            }
+
+            var beforeReset = index == deltas.Count - 1 || isTotal;
+
+            if (index == 0)
+            {
+                firstDottedValues.Add(total);
+                secondDottedValues.Add(null);
+                thirdDottedValues.Add(null);
+            }
+            else
+            {
+                switch (index % 3)
+                {
+                    case 0:
+                        if (!beforeReset)
+                            firstDottedValues.Add(total);
+                        else
+                            firstDottedValues.Add(null);
+                        secondDottedValues.Add(null);
+                        thirdDottedValues.Add(prevTotal);
+                        break;
+                    case 1:
+                        firstDottedValues.Add(prevTotal);
+                        if (!beforeReset)
+                            secondDottedValues.Add(total);
+                        else
+                            secondDottedValues.Add(null);
+                        thirdDottedValues.Add(null);
+                        break;
+                    case 2:
+                        firstDottedValues.Add(null);
+                        secondDottedValues.Add(prevTotal);
+                        if (!beforeReset)
+                            thirdDottedValues.Add(total);
+                        else
+                            thirdDottedValues.Add(null);
+                        break;
+                }
+            }
+
+            resetTotal = beforeReset;
+        }
+
+        // TODO V10: extend to provide a way to specify labels (2024/08/26, Dmitry Kalabin)
+        var incrementsLabel = ChartConst.Hidden;
+        var decrementsLabel = ChartConst.Hidden;
+        var totalLabel = ChartConst.Hidden;
+
+        // TODO V10: take care about barDataSetModifier (2024/08/26, Dmitry Kalabin)
+        Func<TDataSetBuilder, TDataSetBuilder> barDataSetModifier = o => o;
+
+        var dataset1 = (TDataSet)new TDataSetBuilder()
+            .WithDataRange(incrementRanges, incrementsLabel, dsb => (barDataSetModifier is null ? dsb : barDataSetModifier(dsb))
+                                                                .WithParsing()
+                                                                //.WithBarThickness("flex")
+                                                                .WithBackgroundColor(ChartColor.FromHexString(styling.IncrementColor))
+                                                                .WithHoverBackgroundColor(ChartColor.FromHexString(styling.IncrementColor)))
+            .Build();
+        var dataset2 = (TDataSet)new TDataSetBuilder()
+            .WithDataRange(decrementRanges, decrementsLabel, dsb => (barDataSetModifier is null ? dsb : barDataSetModifier(dsb))
+                                                                .WithParsing()
+                                                                //.WithBarThickness("flex")
+                                                                .WithBackgroundColor(ChartColor.FromHexString(styling.DecrementColor))
+                                                                .WithHoverBackgroundColor(ChartColor.FromHexString(styling.DecrementColor)))
+            .Build();
+        var dataset3 = (TDataSet)new TDataSetBuilder()
+            .WithDataRange(totalRanges, totalLabel, dsb => (barDataSetModifier is null ? dsb : barDataSetModifier(dsb))
+                                                                .WithParsing()
+                                                                //.WithBarThickness("flex")
+                                                                .WithBackgroundColor(ChartColor.FromHexString(styling.TotalColor))
+                                                                .WithHoverBackgroundColor(ChartColor.FromHexString(styling.TotalColor)))
+            .Build();
+
+        tmp = tmp with { DataSets = [dataset1, dataset2, dataset3] };
+
+        // TODO V10: take care about includeConnectors and connectorDataSetModifier (2024/08/26, Dmitry Kalabin)
+        var includeConnectors = true;
+        Func<LineDataSetBuilder, LineDataSetBuilder> connectorDataSetModifier = d => d.ThinLine();
+
+        if (includeConnectors)
+        {
+            LineDataSetBuilder Builder(LineDataSetBuilder b, IEnumerable<double?> data)
+            {
+                var builder = b.WithData(data).WithLabel(ChartConst.Hidden).WithDataLabels(new DataLabels { Display = false }).SetType(ChartType.Line);
+                return connectorDataSetModifier != null
+                           ? connectorDataSetModifier(builder)
+                           : builder;
+            }
+
+            tmp = tmp
+                  .WithDataSet(Builder(new(), firstDottedValues).Build())
+                  .WithDataSet(Builder(new(), secondDottedValues).Build())
+                  .WithDataSet(Builder(new(), thirdDottedValues).Build());
+        }
+
+        var palette = new[] { styling.IncrementColor, styling.DecrementColor, styling.TotalColor, styling.TotalColor, styling.TotalColor, styling.TotalColor };
+        tmp = tmp.ApplyFinalStyling(palette);
+
+        return tmp;
+    }
+
+    private static BarChart ApplyFinalStyling(this BarChart chart, string[] palette)
+    {
+        var tmp = chart;
+        tmp = tmp
+            .WithLegend(lm => lm with
+            {
+                Labels = (lm.Labels ?? new LegendLabel()) with
+                {
+                    Filter = $"item => item.text !== '{ChartConst.Hidden}'"
+                }
+            })
+            .WithDataLabels(o => o with
+            {
+                Color = $"context => context.dataset.data[context.dataIndex].{nameof(WaterfallBar.DataLabelColor).ToCamelCase()}",
+                Align = $"context => context.dataset.data[context.dataIndex].{nameof(WaterfallBar.DataLabelAlignment).ToCamelCase()}",
+                Anchor = $"context => context.dataset.data[context.dataIndex].{nameof(WaterfallBar.DataLabelAlignment).ToCamelCase()}",
+                Display = true,//$"context => context.dataset.data[context.dataIndex].{nameof(WaterfallBar.Range).ToCamelCase()} != null",
+                Formatter = $"(value, context) => context.dataset.data[context.dataIndex]?.{nameof(WaterfallBar.DataLabel).ToCamelCase()}"
+            })
+            .WithColorPalette(palette);
+
+        tmp = tmp.WithOptions(o => o.WithPlugins(p => p with { Tooltip = (p.Tooltip ?? new ToolTip()) with { Enabled = false } }));
+        return tmp;
+    }
+}
+
 public abstract record WaterfallChartBase<TChart, TDataSet, TDataSetBuilder> : RangeChart<TChart, TDataSet>
     where TChart : WaterfallChartBase<TChart, TDataSet, TDataSetBuilder>
     where TDataSet : BarDataSetBase, IDataSetWithStack, new()
