@@ -1,5 +1,4 @@
-﻿using Autofac.Core;
-using MeshWeaver.Hosting;
+﻿using MeshWeaver.Hosting;
 using MeshWeaver.Messaging;
 using MeshWeaver.Orleans;
 using MeshWeaver.Orleans.Contract;
@@ -16,7 +15,7 @@ var address = new OrleansAddress();
 
 builder.Host.UseMeshWeaver(address,
     config => config
-        .ConfigureOrleansMesh(address, mesh => mesh.InstallAssemblies(typeof(MeshWeaverOverviewAttribute).Assembly.Location))
+        .AddOrleansMesh(address, mesh => mesh.InstallAssemblies(typeof(MeshWeaverOverviewAttribute).Assembly.Location))
 );
 
 

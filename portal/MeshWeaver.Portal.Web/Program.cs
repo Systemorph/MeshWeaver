@@ -38,7 +38,7 @@ builder.Host.UseMeshWeaver(blazorAddress,
                     x.AddChartJs()
                         .AddAgGrid()
                 )
-                .ConfigureOrleansMesh(blazorAddress)
+                .AddOrleansMesh(blazorAddress)
             )
     ;
 
