@@ -28,6 +28,7 @@
     </PackageVersion>
     <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="8.2.0" />
     <PackageVersion Include="Microsoft.Orleans.Runtime" Version="8.2.0" />
+    <PackageVersion Include="Microsoft.Orleans.Serialization.Abstractions" Version="8.2.0" />
     <PackageVersion Include="System.Collections.Immutable" Version="8.0.0" />
     <PackageVersion Include="System.Text.Encodings.Web" Version="8.0.0" />
     <PackageVersion Include="System.Text.Json" Version="8.0.4" />
