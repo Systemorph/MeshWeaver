@@ -297,103 +297,20 @@ public abstract record WaterfallChartBase<TChart, TDataSet, TDataSetBuilder> : R
         if (datasetsReady)
             return base.ToChart();
         var styling = StylingBuilder.Build();
-        var incrementRanges = new List<IncrementBar>(deltas.Count);
-        var decrementRanges = new List<DecrementBar>(deltas.Count);
-        var totalRanges = new List<TotalBar>(deltas.Count);
-
-        var firstDottedValues = new List<double?>(deltas.Count);
-        var secondDottedValues = new List<double?>(deltas.Count);
-        var thirdDottedValues = new List<double?>(deltas.Count);
 
         var tmp = this;
         if (Data.Labels is null)
             tmp = tmp.WithLabels(Enumerable.Range(1, deltas.Count).Select(i => i.ToString()).ToArray());
 
         var labels = Data.Labels?.ToArray();
-        if (labels?.Length != deltas.Count)
-            throw new ArgumentException("Labels length does not match data");
 
-        var total = 0.0;
-        var resetTotal = true;
-
-        for (var index = 0; index < deltas.Count; index++)
-        {
-            var delta = deltas[index];
-            var prevTotal = total;
-            if (resetTotal)
-                total = 0.0;
-
-            var isTotal = totalIndexes != null && totalIndexes.Contains(index);
-
-            if (isTotal)
-            {
-                totalRanges.Add(delta >= 0
-                                    ? new TotalBar(new[] { 0, delta }, labels[index], delta, styling)
-                                    : new TotalBar(new[] { delta, 0 }, labels[index], delta, styling));
-                incrementRanges.Add(new IncrementBar(null, labels[index], null, styling));
-                decrementRanges.Add(new DecrementBar(null, labels[index], null, styling));
-                total = delta;
-            }
-            else
-            {
-                totalRanges.Add(new TotalBar(null, labels[index], null, styling));
-                if (delta >= 0)
-                {
-                    incrementRanges.Add(new IncrementBar(new[] { total, total + delta }, labels[index], delta, styling));
-                    decrementRanges.Add(new DecrementBar(null, labels[index], null, styling));
-                }
-                else
-                {
-                    decrementRanges.Add(new DecrementBar(new[] { total + delta, total }, labels[index], delta, styling));
-                    incrementRanges.Add(new IncrementBar(null, labels[index], null, styling));
-                }
-
-                total += delta;
-            }
-
-            var beforeReset = index == deltas.Count - 1 || isTotal;
-
-            if (index == 0)
-            {
-                firstDottedValues.Add(total);
-                secondDottedValues.Add(null);
-                thirdDottedValues.Add(null);
-            }
-            else
-            {
-                switch (index % 3)
-                {
-                    case 0:
-                        if (!beforeReset)
-                            firstDottedValues.Add(total);
-                        else
-                            firstDottedValues.Add(null);
-                        secondDottedValues.Add(null);
-                        thirdDottedValues.Add(prevTotal);
-                        break;
-                    case 1:
-                        firstDottedValues.Add(prevTotal);
-                        if (!beforeReset)
-                            secondDottedValues.Add(total);
-                        else
-                            secondDottedValues.Add(null);
-                        thirdDottedValues.Add(null);
-                        break;
-                    case 2:
-                        firstDottedValues.Add(null);
-                        secondDottedValues.Add(prevTotal);
-                        if (!beforeReset)
-                            thirdDottedValues.Add(total);
-                        else
-                            thirdDottedValues.Add(null);
-                        break;
-                }
-            }
-
-            resetTotal = beforeReset;
-        }
+        var dataModel = deltas.CalculateModel(labels, totalIndexes);
 
         datasetsReady = true;
+
+        var incrementRanges = dataModel.IncrementRanges.Select(d => new IncrementBar(d.range, d.label, d.delta, styling)).ToList();
+        var decrementRanges = dataModel.DecrementRanges.Select(d => new DecrementBar(d.range, d.label, d.delta, styling)).ToList();
+        var totalRanges = dataModel.TotalRanges.Select(d => new TotalBar(d.range, d.label, d.delta, styling)).ToList();
 
         var dataset1 = (TDataSet)new TDataSetBuilder()
             .WithDataRange(incrementRanges, incrementsLabel, dsb => (barDataSetModifier is null ? dsb : barDataSetModifier(dsb))
@@ -430,9 +347,9 @@ public abstract record WaterfallChartBase<TChart, TDataSet, TDataSetBuilder> : R
             }
 
             tmp = tmp
-                  .WithDataSet(Builder(new(), firstDottedValues).Build())
-                  .WithDataSet(Builder(new(), secondDottedValues).Build())
-                  .WithDataSet(Builder(new(), thirdDottedValues).Build());
+                  .WithDataSet(Builder(new(), dataModel.FirstDottedValues).Build())
+                  .WithDataSet(Builder(new(), dataModel.SecondDottedValues).Build())
+                  .WithDataSet(Builder(new(), dataModel.ThirdDottedValues).Build());
         }
 
         var palette = new[] { styling.IncrementColor, styling.DecrementColor, styling.TotalColor, styling.TotalColor, styling.TotalColor, styling.TotalColor };
