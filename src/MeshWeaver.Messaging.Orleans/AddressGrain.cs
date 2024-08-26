@@ -9,9 +9,9 @@ namespace MeshWeaver.Orleans.Server;
 
 
 [StorageProvider(ProviderName = StorageProviders.MeshCatalog)]
-public class MeshCatalogGrain(ILogger<MeshNode> logger) : Grain<MeshNode>, IMeshCatalogGrain
+public class MeshNodeGrain(ILogger<MeshNode> logger) : Grain<MeshNode>, IMeshNodeGrain
 {
-    public Task<MeshNode> GetEntry()
+    public Task<MeshNode> Get()
     {
         logger.LogDebug("Retrieving Application {State} Entry {Application}", State, this.GetPrimaryKeyString());
         return Task.FromResult(State);
