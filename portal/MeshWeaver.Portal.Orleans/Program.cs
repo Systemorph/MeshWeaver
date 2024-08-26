@@ -25,6 +25,7 @@ builder.UseOrleans(orleansBuilder =>
     {
         orleansBuilder.ConfigureEndpoints(Random.Shared.Next(10_000, 50_000), Random.Shared.Next(10_000, 50_000));
     }
+
     orleansBuilder.Services.AddSerializer(serializerBuilder =>
     {
         serializerBuilder.AddJsonSerializer(

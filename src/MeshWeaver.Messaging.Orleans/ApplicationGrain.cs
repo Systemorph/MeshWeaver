@@ -8,12 +8,26 @@ using Orleans.Streams;
 
 namespace MeshWeaver.Orleans;
 
+public interface IRoutingGrain : IGrainWithStringKey
+{
+    Task<IMessageDelivery> DeliverMessage(IMessageDelivery request);
+}
+public class RoutingService(IGrainFactory grainFactory, IMessageHub hub) : IRoutingService
+{
+    private readonly IRoutingGrain routingGrain = grainFactory.GetGrain<IRoutingGrain>(hub.Address.ToString());
+
+    public Task<IMessageDelivery> DeliverMessage(IMessageDelivery request)
+        => routingGrain.DeliverMessage(request);
+}
+
+
 [PreferLocalPlacement]
 public class RoutingGrain(ILogger<RoutingGrain> logger) : Grain, IRoutingGrain
 {
-    public async Task<IMessageDelivery> DeliverMessage(object target, IMessageDelivery message)
+    public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery message)
     {
         logger.LogDebug("Delivering Message {Message} from {Sender} to {Target}", message.Message, message.Sender, message.Target);
+        var target = message.Target;
         var targetId = SerializationExtensions.GetId(target);
         var streamInfo = await GrainFactory.GetGrain<IAddressRegistryGrain>(targetId).Register(targetId);
         var stream = this.GetStreamProvider(streamInfo.StreamProvider).GetStream<IMessageDelivery>(streamInfo.Namespace, targetId);
@@ -80,4 +94,6 @@ public interface IStreamingService
 {
     public StreamInfo Get(object address);
 }
+
+
 
