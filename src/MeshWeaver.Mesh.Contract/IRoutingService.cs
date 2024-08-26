@@ -1,9 +1,9 @@
 ﻿using MeshWeaver.Messaging;
-using Orleans;
 
-namespace MeshWeaver.Orleans.Contract;
+namespace MeshWeaver.Mesh.Contract;
 
 public interface IRoutingService
 {
     Task<IMessageDelivery> DeliverMessage(IMessageDelivery request);
+    Task RegisterHubAsync(IMessageHub hub);
 }

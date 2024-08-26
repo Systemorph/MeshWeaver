@@ -1,6 +1,6 @@
 ﻿using Orleans;
 
-namespace MeshWeaver.Orleans.Contract
+namespace MeshWeaver.Orleans.Client
 {
     public interface IMessageHubGrain : IGrainWithStringKey
     {

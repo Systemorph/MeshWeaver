@@ -5,7 +5,7 @@ using MeshWeaver.Orleans.Contract;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans;
 
-namespace MeshWeaver.Orleans
+namespace MeshWeaver.Orleans.Client
 {
     public class MeshCatalog(IMessageHub hub) : IMeshCatalog
     {
@@ -38,6 +38,7 @@ namespace MeshWeaver.Orleans
                 var assembly = loadContext.LoadFromAssemblyPath(assemblyLocation);
                 foreach (var node in assembly.GetCustomAttributes<MeshNodeAttribute>().Select(a => a.Node))
                     await grainFactory.GetGrain<IMeshNodeGrain>(node.Id).Update(node);
+                loadContext.Unload();
             }
         }
     }

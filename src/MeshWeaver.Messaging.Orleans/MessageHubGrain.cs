@@ -1,15 +1,15 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
 using System.Runtime.Loader;
+using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
-using MeshWeaver.Orleans.Contract;
+using MeshWeaver.Orleans.Client;
 using Microsoft.Extensions.Logging;
-using Orleans;
 using Orleans.Providers;
 using Orleans.Streams;
 using Orleans.Streams.Core;
 
-namespace MeshWeaver.Orleans;
+namespace MeshWeaver.Orleans.Server;
 
 [ImplicitStreamSubscription(MessageIn)]
 [StorageProvider(ProviderName = StorageProviders.Activity)]

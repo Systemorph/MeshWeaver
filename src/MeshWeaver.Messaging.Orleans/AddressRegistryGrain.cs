@@ -1,43 +1,12 @@
-﻿using MeshWeaver.Messaging;
+﻿using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Messaging;
+using MeshWeaver.Orleans.Client;
 using MeshWeaver.Orleans.Contract;
 using Microsoft.Extensions.Logging;
-using Orleans;
 using Orleans.Placement;
 using Orleans.Providers;
-using Orleans.Streams;
 
-namespace MeshWeaver.Orleans;
-
-public interface IRoutingGrain : IGrainWithStringKey
-{
-    Task<IMessageDelivery> DeliverMessage(IMessageDelivery request);
-}
-public class RoutingService(IGrainFactory grainFactory, IMessageHub hub) : IRoutingService
-{
-    private readonly IRoutingGrain routingGrain = grainFactory.GetGrain<IRoutingGrain>(hub.Address.ToString());
-
-    public Task<IMessageDelivery> DeliverMessage(IMessageDelivery request)
-        => routingGrain.DeliverMessage(request);
-}
-
-
-[PreferLocalPlacement]
-public class RoutingGrain(ILogger<RoutingGrain> logger) : Grain, IRoutingGrain
-{
-    public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery message)
-    {
-        logger.LogDebug("Delivering Message {Message} from {Sender} to {Target}", message.Message, message.Sender, message.Target);
-        var target = message.Target;
-        var targetId = SerializationExtensions.GetId(target);
-        var streamInfo = await GrainFactory.GetGrain<IAddressRegistryGrain>(targetId).Register(targetId);
-        var stream = this.GetStreamProvider(streamInfo.StreamProvider).GetStream<IMessageDelivery>(streamInfo.Namespace, targetId);
-        await stream.OnNextAsync(message);
-        return message.Forwarded([target]);
-    }
-
-}
-
-
+namespace MeshWeaver.Orleans.Server;
 
 [PreferLocalPlacement]
 [StorageProvider(ProviderName = StorageProviders.OrleansRedis)]
@@ -84,16 +53,5 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
         DeactivateOnIdle();
     }
 }
-
-
-
-/// <summary>
-/// Key is the full type name of the address type. 
-/// </summary>
-public interface IStreamingService
-{
-    public StreamInfo Get(object address);
-}
-
 
 

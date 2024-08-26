@@ -1,4 +1,4 @@
-﻿namespace MeshWeaver.Orleans.Contract;
+﻿namespace MeshWeaver.Mesh.Contract;
 
 public static class StorageProviders
 {

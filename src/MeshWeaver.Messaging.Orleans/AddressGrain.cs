@@ -1,10 +1,10 @@
-﻿using MeshWeaver.Messaging;
-using MeshWeaver.Orleans.Contract;
+﻿using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Messaging;
+using MeshWeaver.Orleans.Client;
 using Microsoft.Extensions.Logging;
-using Orleans;
 using Orleans.Providers;
 
-namespace MeshWeaver.Orleans;
+namespace MeshWeaver.Orleans.Server;
 
 
 
@@ -25,10 +25,3 @@ public class MeshCatalogGrain(ILogger<MeshNode> logger) : Grain<MeshNode>, IMesh
     }
 
 }
-
-public interface IMeshCatalogGrain : IGrainWithStringKey
-{
-    Task<MeshNode> GetEntry();
-    Task Update(MeshNode node);
-}
-
