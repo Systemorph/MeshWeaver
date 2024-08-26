@@ -5,7 +5,7 @@ using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
 using Microsoft.FluentUI.AspNetCore.Components;
 using MeshWeaver.Hosting;
-using MeshWeaver.Orleans.Contract;
+using MeshWeaver.Mesh.Contract;
 using Microsoft.Extensions.Logging.Console;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -38,7 +38,7 @@ builder.Host.UseMeshWeaver(blazorAddress,
                     x.AddChartJs()
                         .AddAgGrid()
                 )
-                .AddOrleansMeshClient(blazorAddress)
+                .AddMeshClient(blazorAddress)
             )
     ;
 

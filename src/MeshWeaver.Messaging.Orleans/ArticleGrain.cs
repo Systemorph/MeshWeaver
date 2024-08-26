@@ -1,11 +1,9 @@
 ﻿using MeshWeaver.Messaging;
-using MeshWeaver.Orleans.Contract;
+using MeshWeaver.Orleans.Client;
 using Microsoft.Extensions.Logging;
-using Orleans;
 using Orleans.Providers;
-using Orleans.Runtime;
 
-namespace MeshWeaver.Orleans;
+namespace MeshWeaver.Orleans.Server;
 
 [StorageProvider(ProviderName = Storage)]
 public record ArticleGrain : IArticleGrain

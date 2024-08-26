@@ -1,7 +1,7 @@
 ﻿using MeshWeaver.Messaging;
 using Orleans;
 
-namespace MeshWeaver.Orleans.Contract
+namespace MeshWeaver.Orleans.Client
 {
     public interface IMeshNodeGrain : IGrainWithStringKey
     {

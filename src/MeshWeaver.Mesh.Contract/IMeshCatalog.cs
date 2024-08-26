@@ -14,3 +14,5 @@ public interface IMeshCatalog
     Task InitializeAsync(CancellationToken cancellationToken);
 }
 
+public record StreamInfo(string Id, string StreamProvider, string Namespace, object Address);
+public record NodeStorageInfo(string NodeId, string BaseDirectory, string AssemblyLocation, object Address);

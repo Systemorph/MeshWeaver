@@ -6,16 +6,17 @@
     <ItemGroup>
     <PackageReference Include="Azure.Data.Tables" />
     <PackageReference Include="Microsoft.DotNet.Interactive.CSharp" />
-    <PackageReference Include="Microsoft.Orleans.Sdk" />
     <PackageReference Include="Microsoft.Orleans.Core" />
     <PackageReference Include="Microsoft.Orleans.Runtime" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" />
     <PackageReference Include="Microsoft.Orleans.Streaming" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Application.Contract\MeshWeaver.Application.Contract.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Orleans.Contract\MeshWeaver.Orleans.Contract.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Orleans.Client\MeshWeaver.Orleans.Client.csproj" />
     <ProjectReference Include="..\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />
   </ItemGroup>
 
