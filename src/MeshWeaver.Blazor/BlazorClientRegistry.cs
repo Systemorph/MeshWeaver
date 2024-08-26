@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json;
 using MeshWeaver.Application;
+using MeshWeaver.Data;
 using Microsoft.DotNet.Interactive.Formatting;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Layout;
@@ -21,6 +22,7 @@ public static class BlazorClientRegistry
         this MessageHubConfiguration config,
         Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration
     ) => config
+        .AddData()
         .AddLayoutClient(c => configuration.Invoke(c.WithView(DefaultFormatting)))
     ;
     #region Standard Formatting

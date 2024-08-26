@@ -3,6 +3,7 @@ using MeshWeaver.Hosting;
 using MeshWeaver.Messaging;
 using MeshWeaver.Orleans;
 using MeshWeaver.Orleans.Contract;
+using MeshWeaver.Overview;
 using Orleans.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -14,7 +15,8 @@ builder.Services.AddSingleton<IMeshCatalog, MeshCatalog>();
 var address = new OrleansAddress();
 
 builder.Host.UseMeshWeaver(address,
-    config => config.ConfigureOrleansHub(address)
+    config => config
+        .ConfigureOrleansMesh(address, mesh => mesh.InstallAssemblies(typeof(MeshWeaverOverviewAttribute).Assembly.Location))
 );
 
 

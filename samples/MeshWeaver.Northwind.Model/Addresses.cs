@@ -6,7 +6,7 @@
 	/// <remarks>
 	/// This file contains declarations for address-related classes that represent different types of addresses within the Northwind application, such as addresses for reference data, customers, products, employees, orders, shippers, and suppliers.
 	/// </remarks>
-	public class ReferenceDataAddress
+	public record ReferenceDataAddress
 	{
 		/// <summary>
 		/// Represents an address related to reference data within the Northwind application.
@@ -19,7 +19,7 @@
 	/// <summary>
 	/// Represents a customer's address within the Northwind application.
 	/// </summary>
-	public class CustomerAddress
+	public record CustomerAddress
 	{
 		/// <summary>
 		/// Represents a customer's address within the Northwind application.
@@ -32,7 +32,7 @@
 	/// <summary>
 	/// Represents an address related to a product within the Northwind application.
 	/// </summary>
-	public class ProductAddress
+	public record ProductAddress
 	{
 		/// <summary>
 		/// Represents an address related to a product within the Northwind application.
@@ -45,7 +45,7 @@
 	/// <summary>
 	/// Represents an employee's address within the Northwind application.
 	/// </summary>
-	public class EmployeeAddress
+	public record EmployeeAddress
 	{
 		/// <summary>
 		/// Represents an employee's address within the Northwind application.
@@ -58,7 +58,7 @@
 	/// <summary>
 	/// Represents an address related to an order within the Northwind application.
 	/// </summary>
-	public class OrderAddress
+	public record OrderAddress
 	{
 		/// <summary>
 		/// Represents an address related to an order within the Northwind application.
@@ -71,7 +71,7 @@
 	/// <summary>
 	/// Represents a shipper's address within the Northwind application.
 	/// </summary>
-	public class ShipperAddress
+	public record ShipperAddress
 	{
 		/// <summary>
 		/// Represents a shipper's address within the Northwind application.
@@ -84,7 +84,7 @@
 	/// <summary>
 	/// Represents a supplier's address within the Northwind application.
 	/// </summary>
-	public class SupplierAddress
+	public record SupplierAddress
 	{
 		/// <summary>
 		/// Represents a supplier's address within the Northwind application.

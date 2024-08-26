@@ -11,11 +11,11 @@ public record ApplicationAddress(string Name, string Environment)
     public override string ToString()
         => $"app/{Name}/{Environment}";
 }
-public record UiAddress : IAddressWithId
+public record UiAddress 
 {
     public string Id { get; init; } = Guid.NewGuid().AsString();
 
     public override string ToString()
-        => Id;
+        => $"ui/{Id}";
 }
 
