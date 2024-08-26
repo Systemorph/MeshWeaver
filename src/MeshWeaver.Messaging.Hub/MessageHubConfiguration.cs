@@ -110,10 +110,20 @@ public record MessageHubConfiguration
     private record ParentMessageHub(IMessageHub Value);
 
     public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery) => WithHandler<TMessage>((h,d,_) => Task.FromResult(delivery.Invoke(h, d)));
-    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, CancellationToken, Task<IMessageDelivery>> delivery) => this with {MessageHandlers = MessageHandlers.Add(new(typeof(TMessage), (h,m,c) => delivery.Invoke(h,(IMessageDelivery<TMessage>)m,c)))};
+    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, CancellationToken, Task<IMessageDelivery>> delivery) => 
+        this with
+        {
+            MessageHandlers = MessageHandlers.Add(new(typeof(TMessage), (h,m,c) => delivery.Invoke(h,(IMessageDelivery<TMessage>)m,c)))
+        };
 
 
-    public MessageHubConfiguration WithInitialization(Action<IMessageHub> action) => this with { BuildupActions = BuildupActions.Add((hub,_) => { action(hub); return Task.CompletedTask; }) };
+    public MessageHubConfiguration WithInitialization(Action<IMessageHub> action) => this with
+    {
+        BuildupActions = BuildupActions.Add((hub, _) =>
+        {
+            action(hub); return Task.CompletedTask; 
+        })
+    };
     public MessageHubConfiguration WithBuildupAction(Func<IMessageHub, CancellationToken, Task> action) => this with { BuildupActions = BuildupActions.Add(action) };
 
 

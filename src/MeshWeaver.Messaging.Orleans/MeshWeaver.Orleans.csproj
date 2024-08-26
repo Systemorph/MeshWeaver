@@ -1,9 +1,12 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <OrleansBuildTimeCodeGen>true</OrleansBuildTimeCodeGen>
+    </PropertyGroup>
 
-
-  <ItemGroup>
+    <ItemGroup>
     <PackageReference Include="Azure.Data.Tables" />
     <PackageReference Include="Microsoft.DotNet.Interactive.CSharp" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" />
     <PackageReference Include="Microsoft.Orleans.Core" />
     <PackageReference Include="Microsoft.Orleans.Runtime" />
     <PackageReference Include="Microsoft.Orleans.Streaming" />

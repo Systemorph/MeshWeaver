@@ -3,10 +3,13 @@ using MeshWeaver.Application;
 using MeshWeaver.Documentation;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
+using MeshWeaver.Overview;
+
+[assembly:MeshWeaverOverview]
 
 namespace MeshWeaver.Overview;
 
-public class MeshWeaverOverviewAttribute(string id) : MeshNodeAttribute(id)
+public class MeshWeaverOverviewAttribute : MeshNodeAttribute
 {
     private static readonly ApplicationAddress Address = new("MeshWeaver", "Overview");
     private static readonly Assembly Assembly = typeof(MeshWeaverOverviewAttribute).Assembly;
