@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Orleans.Contract;
+﻿using MeshWeaver.Mesh.Contract;
 using Orleans;
 
 namespace MeshWeaver.Orleans.Client;

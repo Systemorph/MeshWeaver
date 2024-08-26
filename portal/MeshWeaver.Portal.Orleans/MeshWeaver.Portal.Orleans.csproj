@@ -1,8 +1,4 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk.Web">
-    <PropertyGroup>
-        <OrleansBuildTimeCodeGen>true</OrleansBuildTimeCodeGen>
-    </PropertyGroup>
-
     <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Messaging.Orleans\MeshWeaver.Orleans.Server.csproj" />

@@ -1,7 +1,6 @@
 ﻿using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
 using MeshWeaver.Orleans.Client;
-using MeshWeaver.Orleans.Contract;
 using Microsoft.Extensions.Logging;
 using Orleans.Placement;
 using Orleans.Providers;

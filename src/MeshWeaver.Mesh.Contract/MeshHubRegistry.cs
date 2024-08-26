@@ -1,5 +1,4 @@
 ﻿using MeshWeaver.Messaging;
-using MeshWeaver.Orleans.Contract;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Mesh.Contract;

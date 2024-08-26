@@ -10,7 +10,10 @@ public static class OrleansExtensions
     public static MessageHubConfiguration AddOrleansMesh<TAddress>(this MessageHubConfiguration conf, TAddress address, Func<OrleansMeshContext, OrleansMeshContext> configuration = null)
     => conf.AddMeshClient(address)
         .WithServices(services => 
-            services.AddSingleton<IRoutingService, RoutingService>())
+            services
+                .AddSingleton<IRoutingService, RoutingService>()
+                .AddSingleton<IMeshCatalog, MeshCatalog>()
+            )
         .Set(configuration);
 
     private static Func<OrleansMeshContext, OrleansMeshContext> GetLambda(

@@ -6,6 +6,7 @@ using MeshWeaver.Blazor.ChartJs;
 using Microsoft.FluentUI.AspNetCore.Components;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Orleans.Client;
 using Microsoft.Extensions.Logging.Console;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -38,7 +39,7 @@ builder.Host.UseMeshWeaver(blazorAddress,
                     x.AddChartJs()
                         .AddAgGrid()
                 )
-                .AddMeshClient(blazorAddress)
+                .AddOrleansMesh(blazorAddress)
             )
     ;
 
@@ -60,7 +61,6 @@ app.MapDefaultEndpoints();
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error");
-    // The default HSTS value is 30 days. Yoseru may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
     app.UseHsts();
 }
 

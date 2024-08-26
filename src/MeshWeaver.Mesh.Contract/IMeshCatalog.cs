@@ -1,8 +1,7 @@
 ﻿using MeshWeaver.Messaging;
-using System.Collections.Immutable;
 
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("MeshWeaver.Orleans")]
-namespace MeshWeaver.Orleans.Contract;
+namespace MeshWeaver.Mesh.Contract;
 
 
 
