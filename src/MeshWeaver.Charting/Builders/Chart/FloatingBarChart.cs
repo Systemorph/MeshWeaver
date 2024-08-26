@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Charting.Builders.DataSetBuilders;
+﻿using System.Collections.Immutable;
+using MeshWeaver.Charting.Builders.DataSetBuilders;
 using MeshWeaver.Charting.Builders.OptionsBuilders;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Helpers;
@@ -51,27 +52,26 @@ public static class WaterfallChartExtensions
                 .WithIndexAxis("y")
             );
 
-    private static BarChart ToWaterfallChart<TDataSet, TDataSetBuilder>(this BarChart chart, List<double> deltas, Func<WaterfallStylingBuilder, WaterfallStylingBuilder> stylingOptions = null)
-        where TDataSet : BarDataSetBase, IDataSetWithStack, new()
-        where TDataSetBuilder : FloatingBarDataSetBuilderBase<TDataSetBuilder, TDataSet>, new()
+    internal record WaterfallChartDataModel(List<double> deltas)
     {
-        var stylingBuilder = new WaterfallStylingBuilder();
-        stylingBuilder = stylingOptions?.Invoke(stylingBuilder) ?? stylingBuilder;
-        var styling = stylingBuilder.Build();
+        internal ImmutableList<(double[] range, string label, double? delta)> IncrementRanges { get; init; } = [];
+        internal ImmutableList<(double[] range, string label, double? delta)> DecrementRanges { get; init; } = [];
+        internal ImmutableList<(double[] range, string label, double? delta)> TotalRanges { get; init; } = [];
+        internal ImmutableList<double?> FirstDottedValues { get; init; } = [];
+        internal ImmutableList<double?> SecondDottedValues { get; init; } = [];
+        internal ImmutableList<double?> ThirdDottedValues { get; init; } = [];
+    }
 
-        var incrementRanges = new List<IncrementBar>(deltas.Count);
-        var decrementRanges = new List<DecrementBar>(deltas.Count);
-        var totalRanges = new List<TotalBar>(deltas.Count);
+    internal static WaterfallChartDataModel CalculateModel(this List<double> deltas, string[] labels, HashSet<int> totalIndexes)
+    {
+        var incrementRanges = new List<(double[] range, string label, double? delta)>(deltas.Count);
+        var decrementRanges = new List<(double[] range, string label, double? delta)>(deltas.Count);
+        var totalRanges = new List<(double[] range, string label, double? delta)>(deltas.Count);
 
         var firstDottedValues = new List<double?>(deltas.Count);
         var secondDottedValues = new List<double?>(deltas.Count);
         var thirdDottedValues = new List<double?>(deltas.Count);
 
-        var tmp = chart;
-        if (tmp.Data.Labels is null)
-            tmp = tmp.WithLabels(Enumerable.Range(1, deltas.Count).Select(i => i.ToString()).ToArray());
-
-        var labels = tmp.Data.Labels?.ToArray();
         if (labels?.Length != deltas.Count)
             throw new ArgumentException("Labels length does not match data");
 
@@ -85,31 +85,29 @@ public static class WaterfallChartExtensions
             if (resetTotal)
                 total = 0.0;
 
-            // TODO V10: need to follow up on passing totalIndexes through (2024/08/26, Dmitry Kalabin)
-            //var isTotal = totalIndexes != null && totalIndexes.Contains(index);
-            var isTotal = false;
+            var isTotal = totalIndexes != null && totalIndexes.Contains(index);
 
             if (isTotal)
             {
                 totalRanges.Add(delta >= 0
-                                    ? new TotalBar(new[] { 0, delta }, labels[index], delta, styling)
-                                    : new TotalBar(new[] { delta, 0 }, labels[index], delta, styling));
-                incrementRanges.Add(new IncrementBar(null, labels[index], null, styling));
-                decrementRanges.Add(new DecrementBar(null, labels[index], null, styling));
+                                    ? (new[] { 0, delta }, labels[index], delta)
+                                    : (new[] { delta, 0 }, labels[index], delta));
+                incrementRanges.Add((null, labels[index], null));
+                decrementRanges.Add((null, labels[index], null));
                 total = delta;
             }
             else
             {
-                totalRanges.Add(new TotalBar(null, labels[index], null, styling));
+                totalRanges.Add((null, labels[index], null));
                 if (delta >= 0)
                 {
-                    incrementRanges.Add(new IncrementBar(new[] { total, total + delta }, labels[index], delta, styling));
-                    decrementRanges.Add(new DecrementBar(null, labels[index], null, styling));
+                    incrementRanges.Add((new[] { total, total + delta }, labels[index], delta));
+                    decrementRanges.Add((null, labels[index], null));
                 }
                 else
                 {
-                    decrementRanges.Add(new DecrementBar(new[] { total + delta, total }, labels[index], delta, styling));
-                    incrementRanges.Add(new IncrementBar(null, labels[index], null, styling));
+                    decrementRanges.Add((new[] { total + delta, total }, labels[index], delta));
+                    incrementRanges.Add((null, labels[index], null));
                 }
 
                 total += delta;
@@ -157,6 +155,34 @@ public static class WaterfallChartExtensions
             resetTotal = beforeReset;
         }
 
+        return new(deltas)
+        {
+            IncrementRanges = incrementRanges.ToImmutableList(),
+            DecrementRanges = decrementRanges.ToImmutableList(),
+            TotalRanges = totalRanges.ToImmutableList(),
+            FirstDottedValues = firstDottedValues.ToImmutableList(),
+            SecondDottedValues = secondDottedValues.ToImmutableList(),
+            ThirdDottedValues = thirdDottedValues.ToImmutableList(),
+        };
+    }
+
+    private static BarChart ToWaterfallChart<TDataSet, TDataSetBuilder>(this BarChart chart, List<double> deltas, Func<WaterfallStylingBuilder, WaterfallStylingBuilder> stylingOptions = null)
+        where TDataSet : BarDataSetBase, IDataSetWithStack, new()
+        where TDataSetBuilder : FloatingBarDataSetBuilderBase<TDataSetBuilder, TDataSet>, new()
+    {
+        var stylingBuilder = new WaterfallStylingBuilder();
+        stylingBuilder = stylingOptions?.Invoke(stylingBuilder) ?? stylingBuilder;
+        var styling = stylingBuilder.Build();
+
+        var tmp = chart;
+        if (tmp.Data.Labels is null)
+            tmp = tmp.WithLabels(Enumerable.Range(1, deltas.Count).Select(i => i.ToString()).ToArray());
+
+        var labels = tmp.Data.Labels?.ToArray();
+
+        // TODO V10: need to follow up on passing totalIndexes through (2024/08/26, Dmitry Kalabin)
+        var dataModel = deltas.CalculateModel(labels, totalIndexes: null);
+
         // TODO V10: extend to provide a way to specify labels (2024/08/26, Dmitry Kalabin)
         var incrementsLabel = ChartConst.Hidden;
         var decrementsLabel = ChartConst.Hidden;
@@ -164,6 +190,10 @@ public static class WaterfallChartExtensions
 
         // TODO V10: take care about barDataSetModifier (2024/08/26, Dmitry Kalabin)
         Func<TDataSetBuilder, TDataSetBuilder> barDataSetModifier = o => o;
+
+        var incrementRanges = dataModel.IncrementRanges.Select(d => new IncrementBar(d.range, d.label, d.delta, styling)).ToList();
+        var decrementRanges = dataModel.DecrementRanges.Select(d => new DecrementBar(d.range, d.label, d.delta, styling)).ToList();
+        var totalRanges = dataModel.TotalRanges.Select(d => new TotalBar(d.range, d.label, d.delta, styling)).ToList();
 
         var dataset1 = (TDataSet)new TDataSetBuilder()
             .WithDataRange(incrementRanges, incrementsLabel, dsb => (barDataSetModifier is null ? dsb : barDataSetModifier(dsb))
@@ -204,9 +234,9 @@ public static class WaterfallChartExtensions
             }
 
             tmp = tmp
-                  .WithDataSet(Builder(new(), firstDottedValues).Build())
-                  .WithDataSet(Builder(new(), secondDottedValues).Build())
-                  .WithDataSet(Builder(new(), thirdDottedValues).Build());
+                  .WithDataSet(Builder(new(), dataModel.FirstDottedValues).Build())
+                  .WithDataSet(Builder(new(), dataModel.SecondDottedValues).Build())
+                  .WithDataSet(Builder(new(), dataModel.ThirdDottedValues).Build());
         }
 
         var palette = new[] { styling.IncrementColor, styling.DecrementColor, styling.TotalColor, styling.TotalColor, styling.TotalColor, styling.TotalColor };
