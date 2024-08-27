@@ -16,12 +16,12 @@ namespace MeshWeaver.Charting.Builders.Chart;
 public static class WaterfallChartExtensions
 {
     public static BarChart ToWaterfallChart(this BarChart chart, List<double> deltas,
-        HashSet<int> totalIndexes = null, bool hasLastAsTotal = false,
+        HashSet<int> totalIndexes = null,
         Func<FloatingBarDataSetBuilder, FloatingBarDataSetBuilder> barDataSetModifier = null,
         Func<WaterfallChartOptions, WaterfallChartOptions> options = null
     )
         => chart
-            .ToWaterfallChart<FloatingBarDataSet, FloatingBarDataSetBuilder>(deltas, totalIndexes, hasLastAsTotal, barDataSetModifier, options)
+            .ToWaterfallChart<FloatingBarDataSet, FloatingBarDataSetBuilder>(deltas, totalIndexes, barDataSetModifier, options)
             .WithOptions(o => o
                 .Stacked("x")
                 .HideAxis("y")
@@ -29,12 +29,12 @@ public static class WaterfallChartExtensions
             );
 
     public static BarChart ToHorizontalWaterfallChart(this BarChart chart, List<double> deltas,
-        HashSet<int> totalIndexes = null, bool hasLastAsTotal = false,
+        HashSet<int> totalIndexes = null,
         Func<HorizontalFloatingBarDataSetBuilder, HorizontalFloatingBarDataSetBuilder> barDataSetModifier = null,
         Func<WaterfallChartOptions, WaterfallChartOptions> options = null
     )
         => chart
-            .ToWaterfallChart<HorizontalFloatingBarDataSet, HorizontalFloatingBarDataSetBuilder>(deltas, totalIndexes, hasLastAsTotal, barDataSetModifier, options)
+            .ToWaterfallChart<HorizontalFloatingBarDataSet, HorizontalFloatingBarDataSetBuilder>(deltas, totalIndexes, barDataSetModifier, options)
             .WithOptions(o => o
                 .Stacked("y")
                 //.HideAxis("x")
@@ -198,7 +198,7 @@ public static class WaterfallChartExtensions
     }
 
     private static BarChart ToWaterfallChart<TDataSet, TDataSetBuilder>(this BarChart chart, List<double> deltas,
-        HashSet<int> totalIndexes = null, bool hasLastAsTotal = false,
+        HashSet<int> totalIndexes = null,
         Func<TDataSetBuilder, TDataSetBuilder> barDataSetModifier = null,
         Func<WaterfallChartOptions, WaterfallChartOptions> optionsFunc = null
     )
@@ -212,7 +212,7 @@ public static class WaterfallChartExtensions
         stylingBuilder = options.StylingOptions?.Invoke(stylingBuilder) ?? stylingBuilder;
         var styling = stylingBuilder.Build();
 
-        if (hasLastAsTotal)
+        if (options.HasLastAsTotal)
         {
             deltas = deltas.Append(deltas.Sum()).ToList();
             totalIndexes ??= [];
