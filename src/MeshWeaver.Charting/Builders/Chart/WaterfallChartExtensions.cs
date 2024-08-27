@@ -14,18 +14,24 @@ namespace MeshWeaver.Charting.Builders.Chart;
 
 public static class WaterfallChartExtensions
 {
-    public static BarChart ToWaterfallChart(this BarChart chart, List<double> deltas, HashSet<int> totalIndexes = null, Func<WaterfallStylingBuilder, WaterfallStylingBuilder> stylingOptions = null)
+    public static BarChart ToWaterfallChart(this BarChart chart, List<double> deltas, HashSet<int> totalIndexes = null, Func<WaterfallStylingBuilder, WaterfallStylingBuilder> stylingOptions = null,
+        string incrementsLabel = ChartConst.Hidden, string decrementsLabel = ChartConst.Hidden, string totalLabel = ChartConst.Hidden,
+        Func<FloatingBarDataSetBuilder, FloatingBarDataSetBuilder> barDataSetModifier = null
+    )
         => chart
-            .ToWaterfallChart<FloatingBarDataSet, FloatingBarDataSetBuilder>(deltas, totalIndexes, stylingOptions)
+            .ToWaterfallChart<FloatingBarDataSet, FloatingBarDataSetBuilder>(deltas, totalIndexes, stylingOptions, incrementsLabel, decrementsLabel, totalLabel, barDataSetModifier)
             .WithOptions(o => o
                 .Stacked("x")
                 .HideAxis("y")
                 .HideGrid("x")
             );
 
-    public static BarChart ToHorizontalWaterfallChart(this BarChart chart, List<double> deltas, HashSet<int> totalIndexes = null, Func<WaterfallStylingBuilder, WaterfallStylingBuilder> stylingOptions = null)
+    public static BarChart ToHorizontalWaterfallChart(this BarChart chart, List<double> deltas, HashSet<int> totalIndexes = null, Func<WaterfallStylingBuilder, WaterfallStylingBuilder> stylingOptions = null,
+        string incrementsLabel = ChartConst.Hidden, string decrementsLabel = ChartConst.Hidden, string totalLabel = ChartConst.Hidden,
+        Func<HorizontalFloatingBarDataSetBuilder, HorizontalFloatingBarDataSetBuilder> barDataSetModifier = null
+    )
         => chart
-            .ToWaterfallChart<HorizontalFloatingBarDataSet, HorizontalFloatingBarDataSetBuilder>(deltas, totalIndexes, stylingOptions)
+            .ToWaterfallChart<HorizontalFloatingBarDataSet, HorizontalFloatingBarDataSetBuilder>(deltas, totalIndexes, stylingOptions, incrementsLabel, decrementsLabel, totalLabel, barDataSetModifier)
             .WithOptions(o => o
                 .Stacked("y")
                 //.HideAxis("x")
