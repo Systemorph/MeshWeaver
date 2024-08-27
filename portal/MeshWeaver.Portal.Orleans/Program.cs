@@ -1,15 +1,15 @@
-﻿using Azure.Data.Tables;
-using MeshWeaver.Hosting;
+﻿using MeshWeaver.Hosting;
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
 using MeshWeaver.Orleans.Client;
 using MeshWeaver.Overview;
-using Microsoft.Azure.Cosmos;
 using Orleans.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
-
+builder.AddKeyedAzureTableClient(StorageProviders.MeshCatalog);
+builder.AddKeyedAzureTableClient(StorageProviders.Activity);
+builder.AddKeyedRedisClient(StorageProviders.OrleansRedis);
 var address = new OrleansAddress();
 
 builder.Host.UseMeshWeaver(address,
@@ -18,25 +18,14 @@ builder.Host.UseMeshWeaver(address,
 );
 
 
-builder.AddAzureCosmosClient(StorageProviders.Clustering);
-builder.AddAzureCosmosClient(StorageProviders.Routing);
-builder.AddAzureCosmosClient(StorageProviders.MeshCatalog);
-
-builder.UseOrleans(siloBuilder =>
+builder.UseOrleans(orleansBuilder =>
 {
     if (builder.Environment.IsDevelopment())
     {
-        siloBuilder.ConfigureEndpoints(Random.Shared.Next(10_000, 50_000), Random.Shared.Next(10_000, 50_000));
+        orleansBuilder.ConfigureEndpoints(Random.Shared.Next(10_000, 50_000), Random.Shared.Next(10_000, 50_000));
     }
-    siloBuilder.UseCosmosClustering(
-        configureOptions: static options =>
-        {
-            options.IsResourceCreationEnabled = true;
-            options.DatabaseName = StorageProviders.Clustering;
-            options.ContainerName = "OrleansCluster";
-            options.ContainerThroughputProperties = ThroughputProperties.CreateAutoscaleThroughput(1000);
-        });
-    siloBuilder.Services.AddSerializer(serializerBuilder =>
+
+    orleansBuilder.Services.AddSerializer(serializerBuilder =>
     {
         serializerBuilder.AddJsonSerializer(
             type => true,

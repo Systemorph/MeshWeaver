@@ -9,10 +9,7 @@
     <PackageVersion Include="AngleSharp" Version="0.17.1" />
     <PackageVersion Include="AspectCore.Extensions.Reflection" Version="2.2.0" />
     <PackageVersion Include="Aspire.Hosting.AppHost" Version="8.0.1" />
-    <PackageVersion Include="Aspire.Hosting.Azure.CosmosDB" Version="8.1.0" />
     <PackageVersion Include="Aspire.Hosting.Orleans" Version="8.1.0" />
-    <PackageVersion Include="Aspire.Microsoft.Azure.Cosmos" Version="8.1.0" />
-    <PackageVersion Include="Aspire.Microsoft.Data.SqlClient" Version="8.1.0" />
     <PackageVersion Include="Autofac" Version="8.0.0" />
     <PackageVersion Include="Autofac.Extensions.DependencyInjection" Version="9.0.0" />
     <PackageVersion Include="Azure.Data.Tables" Version="12.8.3" />
@@ -24,15 +21,12 @@
     <PackageVersion Include="JsonPatch.Net" Version="3.0.0" />
     <PackageVersion Include="JsonPath.Net" Version="0.8.1" />
     <PackageVersion Include="Markdig" Version="0.37.0" />
-    <PackageVersion Include="Microsoft.Azure.Cosmos" Version="3.42.0" />
     <PackageVersion Include="Microsoft.Bcl.AsyncInterfaces" Version="8.0.0" />
     <PackageVersion Include="Microsoft.DiaSymReader.PortablePdb" Version="1.6.0">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageVersion>
-    <PackageVersion Include="Microsoft.Orleans.Clustering.Cosmos" Version="8.2.0" />
     <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="8.2.0" />
-    <PackageVersion Include="Microsoft.Orleans.Persistence.Cosmos" Version="8.2.0" />
     <PackageVersion Include="Microsoft.Orleans.Runtime" Version="8.2.0" />
     <PackageVersion Include="Microsoft.Orleans.Serialization.Abstractions" Version="8.2.0" />
     <PackageVersion Include="System.Collections.Immutable" Version="8.0.0" />
