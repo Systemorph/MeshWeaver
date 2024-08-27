@@ -5,7 +5,12 @@ using MeshWeaver.Charting.Helpers;
 
 namespace MeshWeaver.Charting.Builders.Options;
 
-public record WaterfallChartOptions
+public record WaterfallChartOptions : WaterfallChartOptions<WaterfallChartOptions, FloatingBarDataSetBuilder>;
+
+public record HorizontalWaterfallChartOptions : WaterfallChartOptions<HorizontalWaterfallChartOptions, HorizontalFloatingBarDataSetBuilder>;
+
+public record WaterfallChartOptions<TOptions, TDataSetBuilder>
+    where TOptions : WaterfallChartOptions<TOptions, TDataSetBuilder>
 {
     internal string IncrementsLabel { get; init; } = ChartConst.Hidden;
     internal string DecrementsLabel { get; init; } = ChartConst.Hidden;
@@ -21,17 +26,19 @@ public record WaterfallChartOptions
 
     internal Func<WaterfallStylingBuilder, WaterfallStylingBuilder> StylingOptions { get; init; }
 
-    public WaterfallChartOptions WithLegendItems(string incrementsLabel = null, string decrementsLabel = null, string totalLabel = null)
-        => this with { IncrementsLabel = incrementsLabel, DecrementsLabel = decrementsLabel, TotalLabel = totalLabel, };
+    private TOptions This => (TOptions)this;
 
-    public WaterfallChartOptions WithConnectors(Func<LineDataSetBuilder, LineDataSetBuilder> connectorLineModifier = null)
-        => this with { ConnectorDataSetModifier = connectorLineModifier ?? ConnectorDataSetModifier, IncludeConnectors = true, };
+    public TOptions WithLegendItems(string incrementsLabel = null, string decrementsLabel = null, string totalLabel = null)
+        => This with { IncrementsLabel = incrementsLabel, DecrementsLabel = decrementsLabel, TotalLabel = totalLabel, };
 
-    public WaterfallChartOptions WithTotalsAtPositions(params int[] totalIndexes)
-        => this with { TotalIndexes = TotalIndexes.Union(totalIndexes) };
+    public TOptions WithConnectors(Func<LineDataSetBuilder, LineDataSetBuilder> connectorLineModifier = null)
+        => This with { ConnectorDataSetModifier = connectorLineModifier ?? ConnectorDataSetModifier, IncludeConnectors = true, };
 
-    public WaterfallChartOptions WithLastAsTotal() => this with { HasLastAsTotal = true, };
+    public TOptions WithTotalsAtPositions(params int[] totalIndexes)
+        => This with { TotalIndexes = TotalIndexes.Union(totalIndexes) };
 
-    public WaterfallChartOptions WithStylingOptions(Func<WaterfallStylingBuilder, WaterfallStylingBuilder> styling)
-        => this with { StylingOptions = styling, };
+    public TOptions WithLastAsTotal() => This with { HasLastAsTotal = true, };
+
+    public TOptions WithStylingOptions(Func<WaterfallStylingBuilder, WaterfallStylingBuilder> styling)
+        => This with { StylingOptions = styling, };
 }
