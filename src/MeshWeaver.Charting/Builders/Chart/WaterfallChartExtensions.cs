@@ -196,7 +196,8 @@ public static class WaterfallChartExtensions
 
     private static BarChart ToWaterfallChart<TDataSet, TDataSetBuilder>(this BarChart chart, List<double> deltas, HashSet<int> totalIndexes = null, Func<WaterfallStylingBuilder, WaterfallStylingBuilder> stylingOptions = null,
         string incrementsLabel = ChartConst.Hidden, string decrementsLabel = ChartConst.Hidden, string totalLabel = ChartConst.Hidden,
-        Func<TDataSetBuilder, TDataSetBuilder> barDataSetModifier = null
+        Func<TDataSetBuilder, TDataSetBuilder> barDataSetModifier = null,
+        bool includeConnectors = false, Func<LineDataSetBuilder, LineDataSetBuilder> connectorDataSetModifier = null
     )
         where TDataSet : BarDataSetBase, IDataSetWithStack, new()
         where TDataSetBuilder : FloatingBarDataSetBuilderBase<TDataSetBuilder, TDataSet>, new()
@@ -217,18 +218,14 @@ public static class WaterfallChartExtensions
 
         tmp = tmp with { DataSets = datasets, };
 
-        // TODO V10: take care about includeConnectors and connectorDataSetModifier (2024/08/26, Dmitry Kalabin)
-        var includeConnectors = true;
-        Func<LineDataSetBuilder, LineDataSetBuilder> connectorDataSetModifier = d => d.ThinLine();
-
         if (includeConnectors)
         {
+            connectorDataSetModifier ??= (d => d.ThinLine());
+
             LineDataSetBuilder Builder(LineDataSetBuilder b, IEnumerable<double?> data)
             {
                 var builder = b.WithData(data).WithLabel(ChartConst.Hidden).WithDataLabels(new DataLabels { Display = false }).SetType(ChartType.Line);
-                return connectorDataSetModifier != null
-                           ? connectorDataSetModifier(builder)
-                           : builder;
+                return connectorDataSetModifier(builder);
             }
 
             tmp = tmp
