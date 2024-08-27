@@ -32,9 +32,6 @@
   },
   "options": {
     "plugins": {
-      "legend": {
-        "display": true
-      },
       "title": {
         "display": true,
         "font": {
