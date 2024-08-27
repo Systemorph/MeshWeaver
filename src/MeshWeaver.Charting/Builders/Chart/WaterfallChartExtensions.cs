@@ -19,11 +19,10 @@ public static class WaterfallChartExtensions
         HashSet<int> totalIndexes = null, bool hasLastAsTotal = false,
         string incrementsLabel = ChartConst.Hidden, string decrementsLabel = ChartConst.Hidden, string totalLabel = ChartConst.Hidden,
         Func<FloatingBarDataSetBuilder, FloatingBarDataSetBuilder> barDataSetModifier = null,
-        bool includeConnectors = false, Func<LineDataSetBuilder, LineDataSetBuilder> connectorDataSetModifier = null,
         Func<WaterfallChartOptions, WaterfallChartOptions> options = null
     )
         => chart
-            .ToWaterfallChart<FloatingBarDataSet, FloatingBarDataSetBuilder>(deltas, totalIndexes, hasLastAsTotal, incrementsLabel, decrementsLabel, totalLabel, barDataSetModifier, includeConnectors, connectorDataSetModifier, options)
+            .ToWaterfallChart<FloatingBarDataSet, FloatingBarDataSetBuilder>(deltas, totalIndexes, hasLastAsTotal, incrementsLabel, decrementsLabel, totalLabel, barDataSetModifier, options)
             .WithOptions(o => o
                 .Stacked("x")
                 .HideAxis("y")
@@ -34,11 +33,10 @@ public static class WaterfallChartExtensions
         HashSet<int> totalIndexes = null, bool hasLastAsTotal = false,
         string incrementsLabel = ChartConst.Hidden, string decrementsLabel = ChartConst.Hidden, string totalLabel = ChartConst.Hidden,
         Func<HorizontalFloatingBarDataSetBuilder, HorizontalFloatingBarDataSetBuilder> barDataSetModifier = null,
-        bool includeConnectors = false, Func<LineDataSetBuilder, LineDataSetBuilder> connectorDataSetModifier = null,
         Func<WaterfallChartOptions, WaterfallChartOptions> options = null
     )
         => chart
-            .ToWaterfallChart<HorizontalFloatingBarDataSet, HorizontalFloatingBarDataSetBuilder>(deltas, totalIndexes, hasLastAsTotal, incrementsLabel, decrementsLabel, totalLabel, barDataSetModifier, includeConnectors, connectorDataSetModifier, options)
+            .ToWaterfallChart<HorizontalFloatingBarDataSet, HorizontalFloatingBarDataSetBuilder>(deltas, totalIndexes, hasLastAsTotal, incrementsLabel, decrementsLabel, totalLabel, barDataSetModifier, options)
             .WithOptions(o => o
                 .Stacked("y")
                 //.HideAxis("x")
@@ -205,7 +203,6 @@ public static class WaterfallChartExtensions
         HashSet<int> totalIndexes = null, bool hasLastAsTotal = false,
         string incrementsLabel = ChartConst.Hidden, string decrementsLabel = ChartConst.Hidden, string totalLabel = ChartConst.Hidden,
         Func<TDataSetBuilder, TDataSetBuilder> barDataSetModifier = null,
-        bool includeConnectors = false, Func<LineDataSetBuilder, LineDataSetBuilder> connectorDataSetModifier = null,
         Func<WaterfallChartOptions, WaterfallChartOptions> optionsFunc = null
     )
         where TDataSet : BarDataSetBase, IDataSetWithStack, new()
@@ -237,14 +234,14 @@ public static class WaterfallChartExtensions
 
         tmp = tmp with { DataSets = datasets, };
 
-        if (includeConnectors)
+        if (options.IncludeConnectors)
         {
-            connectorDataSetModifier ??= (d => d.ThinLine());
-
             LineDataSetBuilder Builder(LineDataSetBuilder b, IEnumerable<double?> data)
             {
                 var builder = b.WithData(data).WithLabel(ChartConst.Hidden).WithDataLabels(new DataLabels { Display = false }).SetType(ChartType.Line);
-                return connectorDataSetModifier(builder);
+                return options.ConnectorDataSetModifier != null
+                           ? options.ConnectorDataSetModifier(builder)
+                           : builder;
             }
 
             tmp = tmp
