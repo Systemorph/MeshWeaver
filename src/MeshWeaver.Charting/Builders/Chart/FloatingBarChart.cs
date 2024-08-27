@@ -28,10 +28,11 @@ public record HorizontalFloatingBarChart
     }
 }
 
-public abstract record WaterfallChartBase<TChart, TDataSet, TDataSetBuilder> : RangeChart<TChart, TDataSet>
-    where TChart : WaterfallChartBase<TChart, TDataSet, TDataSetBuilder>
+public abstract record WaterfallChartBase<TChart, TDataSet, TDataSetBuilder, TOptions> : RangeChart<TChart, TDataSet>
+    where TChart : WaterfallChartBase<TChart, TDataSet, TDataSetBuilder, TOptions>
     where TDataSet : BarDataSetBase, IDataSetWithStack, new()
     where TDataSetBuilder : FloatingBarDataSetBuilderBase<TDataSetBuilder, TDataSet>, new()
+    where TOptions : WaterfallChartOptions<TOptions, TDataSetBuilder>, new()
 {
     protected WaterfallChartBase(IReadOnlyCollection<TDataSet> dataSets, ChartType chartType)
         : base(dataSets, chartType)
@@ -56,7 +57,7 @@ public abstract record WaterfallChartBase<TChart, TDataSet, TDataSetBuilder> : R
         var styling = StylingBuilder.Build();
 
         // HACK V10: we are constructing local options here just for the sake of temporal refactoring purposes (2024/08/27, Dmitry Kalabin)
-        var options = new WaterfallChartOptions
+        var options = new TOptions
         {
             IncrementsLabel = incrementsLabel,
             DecrementsLabel = decrementsLabel,
@@ -73,7 +74,7 @@ public abstract record WaterfallChartBase<TChart, TDataSet, TDataSetBuilder> : R
 
         datasetsReady = true;
 
-        var datasets = dataModel.BuildDataSets<TDataSet, TDataSetBuilder>(styling, barDataSetModifier, options);
+        var datasets = dataModel.BuildDataSets<TDataSet, TDataSetBuilder, TOptions>(styling, barDataSetModifier, options);
 
         tmp = tmp with { DataSets = datasets, };
 
@@ -185,7 +186,7 @@ public abstract record WaterfallChartBase<TChart, TDataSet, TDataSetBuilder> : R
 }
 
 public record WaterfallChart
-    : WaterfallChartBase<WaterfallChart, FloatingBarDataSet, FloatingBarDataSetBuilder>/*(ChartModel, (OptionsBuilder ?? new RangeOptionsBuilder()).Stacked("x")
+    : WaterfallChartBase<WaterfallChart, FloatingBarDataSet, FloatingBarDataSetBuilder, WaterfallChartOptions>/*(ChartModel, (OptionsBuilder ?? new RangeOptionsBuilder()).Stacked("x")
                                                                                                                                                                .HideAxis("y")
                                                                                                                                                                .HideGrid("x"))*/
 {
@@ -201,7 +202,7 @@ public record WaterfallChart
 }
 
 public record HorizontalWaterfallChart//(Chart ChartModel = null, RangeOptionsBuilder OptionsBuilder = null)
-    : WaterfallChartBase<HorizontalWaterfallChart, HorizontalFloatingBarDataSet, HorizontalFloatingBarDataSetBuilder>/*(ChartModel, (OptionsBuilder ?? new RangeOptionsBuilder())
+    : WaterfallChartBase<HorizontalWaterfallChart, HorizontalFloatingBarDataSet, HorizontalFloatingBarDataSetBuilder, HorizontalWaterfallChartOptions>/*(ChartModel, (OptionsBuilder ?? new RangeOptionsBuilder())
                                                                                                                                                 .Stacked("y")
                                                                                                                                                 //.HideAxis("x")
                                                                                                                                                 .Grace<CartesianLinearScale>("x","10%")
