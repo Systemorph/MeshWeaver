@@ -17,12 +17,11 @@ public static class WaterfallChartExtensions
 {
     public static BarChart ToWaterfallChart(this BarChart chart, List<double> deltas,
         HashSet<int> totalIndexes = null, bool hasLastAsTotal = false,
-        string incrementsLabel = ChartConst.Hidden, string decrementsLabel = ChartConst.Hidden, string totalLabel = ChartConst.Hidden,
         Func<FloatingBarDataSetBuilder, FloatingBarDataSetBuilder> barDataSetModifier = null,
         Func<WaterfallChartOptions, WaterfallChartOptions> options = null
     )
         => chart
-            .ToWaterfallChart<FloatingBarDataSet, FloatingBarDataSetBuilder>(deltas, totalIndexes, hasLastAsTotal, incrementsLabel, decrementsLabel, totalLabel, barDataSetModifier, options)
+            .ToWaterfallChart<FloatingBarDataSet, FloatingBarDataSetBuilder>(deltas, totalIndexes, hasLastAsTotal, barDataSetModifier, options)
             .WithOptions(o => o
                 .Stacked("x")
                 .HideAxis("y")
@@ -31,12 +30,11 @@ public static class WaterfallChartExtensions
 
     public static BarChart ToHorizontalWaterfallChart(this BarChart chart, List<double> deltas,
         HashSet<int> totalIndexes = null, bool hasLastAsTotal = false,
-        string incrementsLabel = ChartConst.Hidden, string decrementsLabel = ChartConst.Hidden, string totalLabel = ChartConst.Hidden,
         Func<HorizontalFloatingBarDataSetBuilder, HorizontalFloatingBarDataSetBuilder> barDataSetModifier = null,
         Func<WaterfallChartOptions, WaterfallChartOptions> options = null
     )
         => chart
-            .ToWaterfallChart<HorizontalFloatingBarDataSet, HorizontalFloatingBarDataSetBuilder>(deltas, totalIndexes, hasLastAsTotal, incrementsLabel, decrementsLabel, totalLabel, barDataSetModifier, options)
+            .ToWaterfallChart<HorizontalFloatingBarDataSet, HorizontalFloatingBarDataSetBuilder>(deltas, totalIndexes, hasLastAsTotal, barDataSetModifier, options)
             .WithOptions(o => o
                 .Stacked("y")
                 //.HideAxis("x")
@@ -164,8 +162,8 @@ public static class WaterfallChartExtensions
     internal static ImmutableList<DataSet> BuildDataSets<TDataSet, TDataSetBuilder>(
         this WaterfallChartDataModel dataModel,
         WaterfallStyling styling,
-        string incrementsLabel, string decrementsLabel, string totalLabel,
-        Func<TDataSetBuilder, TDataSetBuilder> barDataSetModifier
+        Func<TDataSetBuilder, TDataSetBuilder> barDataSetModifier,
+        WaterfallChartOptions options
     )
         where TDataSet : BarDataSetBase, IDataSetWithStack, new()
         where TDataSetBuilder : FloatingBarDataSetBuilderBase<TDataSetBuilder, TDataSet>, new()
@@ -175,21 +173,21 @@ public static class WaterfallChartExtensions
         var totalRanges = dataModel.TotalRanges.Select(d => new TotalBar(d.range, d.label, d.delta, styling)).ToList();
 
         var dataset1 = new TDataSetBuilder()
-            .WithDataRange(incrementRanges, incrementsLabel, dsb => (barDataSetModifier is null ? dsb : barDataSetModifier(dsb))
+            .WithDataRange(incrementRanges, options.IncrementsLabel, dsb => (barDataSetModifier is null ? dsb : barDataSetModifier(dsb))
                                                                 .WithParsing()
                                                                 //.WithBarThickness("flex")
                                                                 .WithBackgroundColor(ChartColor.FromHexString(styling.IncrementColor))
                                                                 .WithHoverBackgroundColor(ChartColor.FromHexString(styling.IncrementColor)))
             .Build();
         var dataset2 = new TDataSetBuilder()
-            .WithDataRange(decrementRanges, decrementsLabel, dsb => (barDataSetModifier is null ? dsb : barDataSetModifier(dsb))
+            .WithDataRange(decrementRanges, options.DecrementsLabel, dsb => (barDataSetModifier is null ? dsb : barDataSetModifier(dsb))
                                                                 .WithParsing()
                                                                 //.WithBarThickness("flex")
                                                                 .WithBackgroundColor(ChartColor.FromHexString(styling.DecrementColor))
                                                                 .WithHoverBackgroundColor(ChartColor.FromHexString(styling.DecrementColor)))
             .Build();
         var dataset3 = new TDataSetBuilder()
-            .WithDataRange(totalRanges, totalLabel, dsb => (barDataSetModifier is null ? dsb : barDataSetModifier(dsb))
+            .WithDataRange(totalRanges, options.TotalLabel, dsb => (barDataSetModifier is null ? dsb : barDataSetModifier(dsb))
                                                                 .WithParsing()
                                                                 //.WithBarThickness("flex")
                                                                 .WithBackgroundColor(ChartColor.FromHexString(styling.TotalColor))
@@ -201,7 +199,6 @@ public static class WaterfallChartExtensions
 
     private static BarChart ToWaterfallChart<TDataSet, TDataSetBuilder>(this BarChart chart, List<double> deltas,
         HashSet<int> totalIndexes = null, bool hasLastAsTotal = false,
-        string incrementsLabel = ChartConst.Hidden, string decrementsLabel = ChartConst.Hidden, string totalLabel = ChartConst.Hidden,
         Func<TDataSetBuilder, TDataSetBuilder> barDataSetModifier = null,
         Func<WaterfallChartOptions, WaterfallChartOptions> optionsFunc = null
     )
@@ -230,7 +227,7 @@ public static class WaterfallChartExtensions
 
         var dataModel = deltas.CalculateModel(labels, totalIndexes);
 
-        var datasets = dataModel.BuildDataSets<TDataSet, TDataSetBuilder>(styling, incrementsLabel, decrementsLabel, totalLabel, barDataSetModifier);
+        var datasets = dataModel.BuildDataSets<TDataSet, TDataSetBuilder>(styling, barDataSetModifier, options);
 
         tmp = tmp with { DataSets = datasets, };
 
