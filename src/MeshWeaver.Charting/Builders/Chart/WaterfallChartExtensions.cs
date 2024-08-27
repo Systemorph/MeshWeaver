@@ -16,12 +16,11 @@ namespace MeshWeaver.Charting.Builders.Chart;
 public static class WaterfallChartExtensions
 {
     public static BarChart ToWaterfallChart(this BarChart chart, List<double> deltas,
-        HashSet<int> totalIndexes = null,
         Func<FloatingBarDataSetBuilder, FloatingBarDataSetBuilder> barDataSetModifier = null,
         Func<WaterfallChartOptions, WaterfallChartOptions> options = null
     )
         => chart
-            .ToWaterfallChart<FloatingBarDataSet, FloatingBarDataSetBuilder>(deltas, totalIndexes, barDataSetModifier, options)
+            .ToWaterfallChart<FloatingBarDataSet, FloatingBarDataSetBuilder>(deltas, barDataSetModifier, options)
             .WithOptions(o => o
                 .Stacked("x")
                 .HideAxis("y")
@@ -29,12 +28,11 @@ public static class WaterfallChartExtensions
             );
 
     public static BarChart ToHorizontalWaterfallChart(this BarChart chart, List<double> deltas,
-        HashSet<int> totalIndexes = null,
         Func<HorizontalFloatingBarDataSetBuilder, HorizontalFloatingBarDataSetBuilder> barDataSetModifier = null,
         Func<WaterfallChartOptions, WaterfallChartOptions> options = null
     )
         => chart
-            .ToWaterfallChart<HorizontalFloatingBarDataSet, HorizontalFloatingBarDataSetBuilder>(deltas, totalIndexes, barDataSetModifier, options)
+            .ToWaterfallChart<HorizontalFloatingBarDataSet, HorizontalFloatingBarDataSetBuilder>(deltas, barDataSetModifier, options)
             .WithOptions(o => o
                 .Stacked("y")
                 //.HideAxis("x")
@@ -55,7 +53,7 @@ public static class WaterfallChartExtensions
         internal ImmutableList<double?> ThirdDottedValues { get; init; } = [];
     }
 
-    internal static WaterfallChartDataModel CalculateModel(this List<double> deltas, string[] labels, HashSet<int> totalIndexes)
+    internal static WaterfallChartDataModel CalculateModel(this List<double> deltas, string[] labels, IReadOnlySet<int> totalIndexes)
     {
         var incrementRanges = new List<(double[] range, string label, double? delta)>(deltas.Count);
         var decrementRanges = new List<(double[] range, string label, double? delta)>(deltas.Count);
@@ -198,7 +196,6 @@ public static class WaterfallChartExtensions
     }
 
     private static BarChart ToWaterfallChart<TDataSet, TDataSetBuilder>(this BarChart chart, List<double> deltas,
-        HashSet<int> totalIndexes = null,
         Func<TDataSetBuilder, TDataSetBuilder> barDataSetModifier = null,
         Func<WaterfallChartOptions, WaterfallChartOptions> optionsFunc = null
     )
@@ -212,11 +209,11 @@ public static class WaterfallChartExtensions
         stylingBuilder = options.StylingOptions?.Invoke(stylingBuilder) ?? stylingBuilder;
         var styling = stylingBuilder.Build();
 
+        var totalIndexes = options.TotalIndexes;
         if (options.HasLastAsTotal)
         {
             deltas = deltas.Append(deltas.Sum()).ToList();
-            totalIndexes ??= [];
-            totalIndexes.Add(deltas.Count - 1);
+            totalIndexes = totalIndexes.Add(deltas.Count - 1);
         }
 
         var tmp = chart;

@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Charting.Builders.DataSetBuilders;
+﻿using System.Collections.Immutable;
+using MeshWeaver.Charting.Builders.DataSetBuilders;
 using MeshWeaver.Charting.Builders.OptionsBuilders;
 using MeshWeaver.Charting.Helpers;
 
@@ -12,6 +13,8 @@ public record WaterfallChartOptions
 
     internal bool IncludeConnectors { get; init; }
 
+    internal ImmutableHashSet<int> TotalIndexes { get; init; } = [];
+
     internal bool HasLastAsTotal { get; init; }
 
     internal Func<LineDataSetBuilder, LineDataSetBuilder> ConnectorDataSetModifier { get; init; } = d => d.ThinLine();
@@ -23,6 +26,9 @@ public record WaterfallChartOptions
 
     public WaterfallChartOptions WithConnectors(Func<LineDataSetBuilder, LineDataSetBuilder> connectorLineModifier = null)
         => this with { ConnectorDataSetModifier = connectorLineModifier ?? ConnectorDataSetModifier, IncludeConnectors = true, };
+
+    public WaterfallChartOptions WithTotalsAtPositions(params int[] totalIndexes)
+        => this with { TotalIndexes = TotalIndexes.Union(totalIndexes) };
 
     public WaterfallChartOptions WithLastAsTotal() => this with { HasLastAsTotal = true, };
 
