@@ -64,33 +64,9 @@ public abstract record WaterfallChartBase<TChart, TDataSet, TDataSetBuilder> : R
 
         datasetsReady = true;
 
-        var incrementRanges = dataModel.IncrementRanges.Select(d => new IncrementBar(d.range, d.label, d.delta, styling)).ToList();
-        var decrementRanges = dataModel.DecrementRanges.Select(d => new DecrementBar(d.range, d.label, d.delta, styling)).ToList();
-        var totalRanges = dataModel.TotalRanges.Select(d => new TotalBar(d.range, d.label, d.delta, styling)).ToList();
+        var datasets = dataModel.BuildDataSets<TDataSet, TDataSetBuilder>(styling, incrementsLabel, decrementsLabel, totalLabel, barDataSetModifier);
 
-        var dataset1 = (TDataSet)new TDataSetBuilder()
-            .WithDataRange(incrementRanges, incrementsLabel, dsb => (barDataSetModifier is null ? dsb : barDataSetModifier(dsb))
-                                                                .WithParsing()
-                                                                //.WithBarThickness("flex")
-                                                                .WithBackgroundColor(ChartColor.FromHexString(styling.IncrementColor))
-                                                                .WithHoverBackgroundColor(ChartColor.FromHexString(styling.IncrementColor)))
-            .Build();
-        var dataset2 = (TDataSet)new TDataSetBuilder()
-            .WithDataRange(decrementRanges, decrementsLabel, dsb => (barDataSetModifier is null ? dsb : barDataSetModifier(dsb))
-                                                                .WithParsing()
-                                                                //.WithBarThickness("flex")
-                                                                .WithBackgroundColor(ChartColor.FromHexString(styling.DecrementColor))
-                                                                .WithHoverBackgroundColor(ChartColor.FromHexString(styling.DecrementColor)))
-            .Build();
-        var dataset3 = (TDataSet)new TDataSetBuilder()
-            .WithDataRange(totalRanges, totalLabel, dsb => (barDataSetModifier is null ? dsb : barDataSetModifier(dsb))
-                                                                .WithParsing()
-                                                                //.WithBarThickness("flex")
-                                                                .WithBackgroundColor(ChartColor.FromHexString(styling.TotalColor))
-                                                                .WithHoverBackgroundColor(ChartColor.FromHexString(styling.TotalColor)))
-            .Build();
-
-        tmp = tmp with { DataSets = [dataset1, dataset2, dataset3] };  // HACK V10: This looks extreemely bad to combine this immutability style "with" constraint with all the rest of the logic to just mutate single instance (2024/08/22, Dmitry Kalabin)
+        tmp = tmp with { DataSets = datasets, };
 
         if (includeConnectors)
         {
