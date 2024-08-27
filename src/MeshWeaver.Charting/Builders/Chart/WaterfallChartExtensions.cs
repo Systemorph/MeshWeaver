@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using MeshWeaver.Charting.Builders.DataSetBuilders;
+using MeshWeaver.Charting.Builders.Options;
 using MeshWeaver.Charting.Builders.OptionsBuilders;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Helpers;
@@ -16,13 +17,13 @@ public static class WaterfallChartExtensions
 {
     public static BarChart ToWaterfallChart(this BarChart chart, List<double> deltas,
         HashSet<int> totalIndexes = null, bool hasLastAsTotal = false,
-        Func<WaterfallStylingBuilder, WaterfallStylingBuilder> stylingOptions = null,
         string incrementsLabel = ChartConst.Hidden, string decrementsLabel = ChartConst.Hidden, string totalLabel = ChartConst.Hidden,
         Func<FloatingBarDataSetBuilder, FloatingBarDataSetBuilder> barDataSetModifier = null,
-        bool includeConnectors = false, Func<LineDataSetBuilder, LineDataSetBuilder> connectorDataSetModifier = null
-        )
+        bool includeConnectors = false, Func<LineDataSetBuilder, LineDataSetBuilder> connectorDataSetModifier = null,
+        Func<WaterfallChartOptions, WaterfallChartOptions> options = null
+    )
         => chart
-            .ToWaterfallChart<FloatingBarDataSet, FloatingBarDataSetBuilder>(deltas, totalIndexes, hasLastAsTotal, stylingOptions, incrementsLabel, decrementsLabel, totalLabel, barDataSetModifier, includeConnectors, connectorDataSetModifier)
+            .ToWaterfallChart<FloatingBarDataSet, FloatingBarDataSetBuilder>(deltas, totalIndexes, hasLastAsTotal, incrementsLabel, decrementsLabel, totalLabel, barDataSetModifier, includeConnectors, connectorDataSetModifier, options)
             .WithOptions(o => o
                 .Stacked("x")
                 .HideAxis("y")
@@ -31,13 +32,13 @@ public static class WaterfallChartExtensions
 
     public static BarChart ToHorizontalWaterfallChart(this BarChart chart, List<double> deltas,
         HashSet<int> totalIndexes = null, bool hasLastAsTotal = false,
-        Func<WaterfallStylingBuilder, WaterfallStylingBuilder> stylingOptions = null, 
         string incrementsLabel = ChartConst.Hidden, string decrementsLabel = ChartConst.Hidden, string totalLabel = ChartConst.Hidden,
         Func<HorizontalFloatingBarDataSetBuilder, HorizontalFloatingBarDataSetBuilder> barDataSetModifier = null,
-        bool includeConnectors = false, Func<LineDataSetBuilder, LineDataSetBuilder> connectorDataSetModifier = null
+        bool includeConnectors = false, Func<LineDataSetBuilder, LineDataSetBuilder> connectorDataSetModifier = null,
+        Func<WaterfallChartOptions, WaterfallChartOptions> options = null
     )
         => chart
-            .ToWaterfallChart<HorizontalFloatingBarDataSet, HorizontalFloatingBarDataSetBuilder>(deltas, totalIndexes, hasLastAsTotal, stylingOptions, incrementsLabel, decrementsLabel, totalLabel, barDataSetModifier, includeConnectors, connectorDataSetModifier)
+            .ToWaterfallChart<HorizontalFloatingBarDataSet, HorizontalFloatingBarDataSetBuilder>(deltas, totalIndexes, hasLastAsTotal, incrementsLabel, decrementsLabel, totalLabel, barDataSetModifier, includeConnectors, connectorDataSetModifier, options)
             .WithOptions(o => o
                 .Stacked("y")
                 //.HideAxis("x")
@@ -202,16 +203,19 @@ public static class WaterfallChartExtensions
 
     private static BarChart ToWaterfallChart<TDataSet, TDataSetBuilder>(this BarChart chart, List<double> deltas,
         HashSet<int> totalIndexes = null, bool hasLastAsTotal = false,
-        Func<WaterfallStylingBuilder, WaterfallStylingBuilder> stylingOptions = null,
         string incrementsLabel = ChartConst.Hidden, string decrementsLabel = ChartConst.Hidden, string totalLabel = ChartConst.Hidden,
         Func<TDataSetBuilder, TDataSetBuilder> barDataSetModifier = null,
-        bool includeConnectors = false, Func<LineDataSetBuilder, LineDataSetBuilder> connectorDataSetModifier = null
+        bool includeConnectors = false, Func<LineDataSetBuilder, LineDataSetBuilder> connectorDataSetModifier = null,
+        Func<WaterfallChartOptions, WaterfallChartOptions> optionsFunc = null
     )
         where TDataSet : BarDataSetBase, IDataSetWithStack, new()
         where TDataSetBuilder : FloatingBarDataSetBuilderBase<TDataSetBuilder, TDataSet>, new()
     {
+        optionsFunc ??= (o => o);
+        var options = optionsFunc(new WaterfallChartOptions());
+
         var stylingBuilder = new WaterfallStylingBuilder();
-        stylingBuilder = stylingOptions?.Invoke(stylingBuilder) ?? stylingBuilder;
+        stylingBuilder = options.StylingOptions?.Invoke(stylingBuilder) ?? stylingBuilder;
         var styling = stylingBuilder.Build();
 
         if (hasLastAsTotal)
