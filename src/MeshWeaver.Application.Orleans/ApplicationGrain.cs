@@ -29,14 +29,14 @@ public class ApplicationGrain : Grain, IApplicationGrain
     {
         if (delivery.Target is JsonElement jsonTarget)
         {
-            var target = JsonSerializer.Deserialize(jsonTarget, typeof(object), Hub.JsonSerializerOptions);
+            var target = jsonTarget.Deserialize(typeof(object), Hub.JsonSerializerOptions);
             if (target is not JsonObject)
                 delivery = (MessageDelivery)delivery with { Target = target, };
         }
 
         if (delivery.Sender is JsonElement jsonSender)
         {
-            var sender = JsonSerializer.Deserialize(jsonSender, typeof(object), Hub.JsonSerializerOptions);
+            var sender = jsonSender.Deserialize(typeof(object), Hub.JsonSerializerOptions);
             if (sender is not JsonObject)
                 delivery = (MessageDelivery)delivery with { Sender = sender, };
         }

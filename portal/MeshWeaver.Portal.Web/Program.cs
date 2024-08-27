@@ -2,6 +2,7 @@
 using Microsoft.FluentUI.AspNetCore.Components;
 using MeshWeaver.Hosting;
 using MeshWeaver.Portal;
+using MeshWeaver.Portal.Web;
 using Microsoft.Extensions.Logging.Console;
 
 var builder = WebApplication.CreateBuilder(args);

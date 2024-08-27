@@ -2,7 +2,6 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Text.Json.Serialization.DataContractExtensions;
 using Json.More;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;

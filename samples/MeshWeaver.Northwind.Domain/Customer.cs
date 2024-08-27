@@ -40,3 +40,4 @@ public record Customer(
 {
     string INamed.DisplayName => CompanyName;
 }
+
