@@ -14,24 +14,30 @@ namespace MeshWeaver.Charting.Builders.Chart;
 
 public static class WaterfallChartExtensions
 {
-    public static BarChart ToWaterfallChart(this BarChart chart, List<double> deltas, HashSet<int> totalIndexes = null, Func<WaterfallStylingBuilder, WaterfallStylingBuilder> stylingOptions = null,
+    public static BarChart ToWaterfallChart(this BarChart chart, List<double> deltas,
+        HashSet<int> totalIndexes = null, bool hasLastAsTotal = false,
+        Func<WaterfallStylingBuilder, WaterfallStylingBuilder> stylingOptions = null,
         string incrementsLabel = ChartConst.Hidden, string decrementsLabel = ChartConst.Hidden, string totalLabel = ChartConst.Hidden,
-        Func<FloatingBarDataSetBuilder, FloatingBarDataSetBuilder> barDataSetModifier = null
-    )
+        Func<FloatingBarDataSetBuilder, FloatingBarDataSetBuilder> barDataSetModifier = null,
+        bool includeConnectors = false, Func<LineDataSetBuilder, LineDataSetBuilder> connectorDataSetModifier = null
+        )
         => chart
-            .ToWaterfallChart<FloatingBarDataSet, FloatingBarDataSetBuilder>(deltas, totalIndexes, stylingOptions, incrementsLabel, decrementsLabel, totalLabel, barDataSetModifier)
+            .ToWaterfallChart<FloatingBarDataSet, FloatingBarDataSetBuilder>(deltas, totalIndexes, hasLastAsTotal, stylingOptions, incrementsLabel, decrementsLabel, totalLabel, barDataSetModifier, includeConnectors, connectorDataSetModifier)
             .WithOptions(o => o
                 .Stacked("x")
                 .HideAxis("y")
                 .HideGrid("x")
             );
 
-    public static BarChart ToHorizontalWaterfallChart(this BarChart chart, List<double> deltas, HashSet<int> totalIndexes = null, Func<WaterfallStylingBuilder, WaterfallStylingBuilder> stylingOptions = null,
+    public static BarChart ToHorizontalWaterfallChart(this BarChart chart, List<double> deltas,
+        HashSet<int> totalIndexes = null, bool hasLastAsTotal = false,
+        Func<WaterfallStylingBuilder, WaterfallStylingBuilder> stylingOptions = null, 
         string incrementsLabel = ChartConst.Hidden, string decrementsLabel = ChartConst.Hidden, string totalLabel = ChartConst.Hidden,
-        Func<HorizontalFloatingBarDataSetBuilder, HorizontalFloatingBarDataSetBuilder> barDataSetModifier = null
+        Func<HorizontalFloatingBarDataSetBuilder, HorizontalFloatingBarDataSetBuilder> barDataSetModifier = null,
+        bool includeConnectors = false, Func<LineDataSetBuilder, LineDataSetBuilder> connectorDataSetModifier = null
     )
         => chart
-            .ToWaterfallChart<HorizontalFloatingBarDataSet, HorizontalFloatingBarDataSetBuilder>(deltas, totalIndexes, stylingOptions, incrementsLabel, decrementsLabel, totalLabel, barDataSetModifier)
+            .ToWaterfallChart<HorizontalFloatingBarDataSet, HorizontalFloatingBarDataSetBuilder>(deltas, totalIndexes, hasLastAsTotal, stylingOptions, incrementsLabel, decrementsLabel, totalLabel, barDataSetModifier, includeConnectors, connectorDataSetModifier)
             .WithOptions(o => o
                 .Stacked("y")
                 //.HideAxis("x")
@@ -194,7 +200,9 @@ public static class WaterfallChartExtensions
         return [dataset1, dataset2, dataset3];
     }
 
-    private static BarChart ToWaterfallChart<TDataSet, TDataSetBuilder>(this BarChart chart, List<double> deltas, HashSet<int> totalIndexes = null, Func<WaterfallStylingBuilder, WaterfallStylingBuilder> stylingOptions = null,
+    private static BarChart ToWaterfallChart<TDataSet, TDataSetBuilder>(this BarChart chart, List<double> deltas,
+        HashSet<int> totalIndexes = null, bool hasLastAsTotal = false,
+        Func<WaterfallStylingBuilder, WaterfallStylingBuilder> stylingOptions = null,
         string incrementsLabel = ChartConst.Hidden, string decrementsLabel = ChartConst.Hidden, string totalLabel = ChartConst.Hidden,
         Func<TDataSetBuilder, TDataSetBuilder> barDataSetModifier = null,
         bool includeConnectors = false, Func<LineDataSetBuilder, LineDataSetBuilder> connectorDataSetModifier = null
@@ -205,6 +213,13 @@ public static class WaterfallChartExtensions
         var stylingBuilder = new WaterfallStylingBuilder();
         stylingBuilder = stylingOptions?.Invoke(stylingBuilder) ?? stylingBuilder;
         var styling = stylingBuilder.Build();
+
+        if (hasLastAsTotal)
+        {
+            deltas = deltas.Append(deltas.Sum()).ToList();
+            totalIndexes ??= [];
+            totalIndexes.Add(deltas.Count - 1);
+        }
 
         var tmp = chart;
         if (tmp.Data.Labels is null)
