@@ -1,4 +1,4 @@
-<!-- todo rename to "Demo.Shell" -->
+﻿<!-- todo rename to "Demo.Shell" -->
 <!-- leave hardcoded references to northwind only if local dev using precompiled vars -->
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <ItemGroup>
@@ -10,10 +10,12 @@
     <ProjectReference Include="..\..\src\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\MeshWeaver.Northwind.ServiceDefaults\MeshWeaver.Northwind.ServiceDefaults.csproj" />
-      <ProjectReference Include="..\MeshWeaver.Northwind.Model\MeshWeaver.Northwind.Model.csproj" />
-      <ProjectReference Include="..\MeshWeaver.Northwind.ViewModel\MeshWeaver.Northwind.ViewModel.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Northwind.Model\MeshWeaver.Northwind.Model.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Northwind.ViewModel\MeshWeaver.Northwind.ViewModel.csproj" />
     <ProjectReference Include="..\MeshWeaver.Northwind.Views\MeshWeaver.Northwind.Views.csproj" />
-    <ProjectReference Include="..\MeshWeaver.MeshBrowser.ViewModel\MeshWeaver.MeshBrowser.ViewModel.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Catalog.ViewModel\MeshWeaver.Catalog.ViewModel.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Catalog.Data\MeshWeaver.Catalog.Data.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Catalog.Views\MeshWeaver.Catalog.Views.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -2,9 +2,11 @@
 using MeshWeaver.Blazor;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
+using MeshWeaver.Catalog.Data;
+using MeshWeaver.Catalog.ViewModel;
+using MeshWeaver.Catalog.Views;
 using MeshWeaver.Messaging;
 using MeshWeaver.Demo.ViewModel;
-using MeshWeaver.MeshBrowser.ViewModel;
 using MeshWeaver.Northwind.Model;
 using MeshWeaver.Northwind.ViewModel;
 
@@ -34,6 +36,7 @@ public static class HubConfiguration
             .AddBlazor(x => 
                 x.AddChartJs()
                     .AddAgGrid()
+                    .AddCatalogViews()
             )
             .WithHostedHub(
                 new ApplicationAddress("Northwind", "dev"),
@@ -48,10 +51,11 @@ public static class HubConfiguration
                         .AddNorthwindReferenceData()
             )
             .WithHostedHub(
-                new ApplicationAddress("MeshBrowser", "dev"),
-                application =>
-                    application
-                        .AddMeshBrowserViewModels()
+                new ApplicationAddress("Catalog", "dev"),
+                hubConfig =>
+                    hubConfig
+                        .AddCatalogData()
+                        .AddCatalogViewModels()
             )
             .WithHostedHub(
                 new ApplicationAddress("Demo", "dev"),
