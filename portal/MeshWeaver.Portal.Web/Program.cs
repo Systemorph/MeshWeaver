@@ -12,7 +12,6 @@ using Microsoft.Extensions.Logging.Console;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
-builder.AddKeyedRedisClient(StorageProviders.OrleansRedis);
 
 // Add services to the container.
 builder.Services.AddRazorPages();
@@ -35,8 +34,8 @@ builder.Services.AddFluentUIComponents();
 var blazorAddress = new UiAddress();
 builder.Host.UseMeshWeaver(blazorAddress,
         config =>
-            config.AddBlazor(x =>
-                    x.AddChartJs()
+            config.AddBlazor(x => x
+                        .AddChartJs()
                         .AddAgGrid()
                 )
                 .AddOrleansMesh(blazorAddress)
@@ -46,9 +45,7 @@ builder.Host.UseMeshWeaver(blazorAddress,
 builder.UseOrleans();
 
 if (!builder.Environment.IsDevelopment())
-{
     builder.WebHost.UseStaticWebAssets();
-}
 
 var app = builder.Build();
 

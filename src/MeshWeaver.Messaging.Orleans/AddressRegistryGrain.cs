@@ -8,7 +8,7 @@ using Orleans.Providers;
 namespace MeshWeaver.Orleans.Server;
 
 [PreferLocalPlacement]
-[StorageProvider(ProviderName = StorageProviders.OrleansRedis)]
+[StorageProvider(ProviderName = StorageProviders.Routing)]
 public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCatalog meshCatalog) : Grain<StreamInfo>, IAddressRegistryGrain
 {
     private MeshNode Node { get; set; }

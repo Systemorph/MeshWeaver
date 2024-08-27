@@ -14,10 +14,11 @@
 
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting.AppHost" />
+    <PackageReference Include="Aspire.Hosting.Azure.CosmosDB" />
     <PackageReference Include="Aspire.Hosting.Orleans" />
-    <PackageReference Include="Aspire.Hosting.Azure.Storage" />
-    <PackageReference Include="Aspire.Hosting.Redis" />
-    <PackageReference Include="Microsoft.Orleans.Clustering.Redis" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" />
+      <PackageReference Include="Microsoft.Orleans.Clustering.Cosmos" />
+    <PackageReference Include="Microsoft.Orleans.Persistence.Cosmos" />
   </ItemGroup>
 
 </Project>

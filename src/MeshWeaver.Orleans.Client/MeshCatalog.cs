@@ -3,7 +3,6 @@ using System.Runtime.Loader;
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
-using Orleans;
 
 namespace MeshWeaver.Orleans.Client
 {
