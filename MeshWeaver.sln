@@ -178,15 +178,23 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Documentation.Te
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Demo.ViewModel", "samples\MeshWeaver.Demo.ViewModel\MeshWeaver.Demo.ViewModel.csproj", "{A0F6F075-3AA4-484A-B3CD-3980B48C8D66}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.MeshBrowser.ViewModel", "samples\MeshWeaver.MeshBrowser.ViewModel\MeshWeaver.MeshBrowser.ViewModel.csproj", "{97CF5D14-9D0A-48C7-B837-6816293E0A4E}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Catalog.ViewModel", "samples\MeshWeaver.Catalog.ViewModel\MeshWeaver.Catalog.ViewModel.csproj", "{97CF5D14-9D0A-48C7-B837-6816293E0A4E}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "portal", "portal", "{65DFF413-97CB-45FE-9874-93B82E027D1B}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Portal", "portal\MeshWeaver.Portal\MeshWeaver.Portal.csproj", "{15850225-6D3E-4D25-9D78-6748CEC05483}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Portal", "portal\MeshWeaver.Portal\MeshWeaver.Portal.csproj", "{15850225-6D3E-4D25-9D78-6748CEC05483}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Application.AspNetCore", "MeshWeaver.Application.AspNetCore\MeshWeaver.Application.AspNetCore.csproj", "{B1129EB5-5D85-42C1-B1F4-94D7AB273DE2}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Application.AspNetCore", "MeshWeaver.Application.AspNetCore\MeshWeaver.Application.AspNetCore.csproj", "{B1129EB5-5D85-42C1-B1F4-94D7AB273DE2}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Northwind.Host", "samples\MeshWeaver.Northwind.Host\MeshWeaver.Northwind.Host.csproj", "{5D9D0C27-D21C-4931-B11C-B97538F5C690}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Catalog.Data", "samples\MeshWeaver.Catalog.Data\MeshWeaver.Catalog.Data.csproj", "{AC5B8BDF-2A76-4540-B0FE-77615AC02CDE}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Catalog.Views", "samples\MeshWeaver.Catalog.Views\MeshWeaver.Catalog.Views.csproj", "{4707F203-FAEA-455A-BD61-8005165380D5}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Catalog.Domain", "samples\MeshWeaver.Catalog.Domain\MeshWeaver.Catalog.Domain.csproj", "{1B870309-3EF2-490F-B224-3FA616225CC5}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Catalog.Layout", "samples\MeshWeaver.Catalog.Layout\MeshWeaver.Catalog.Layout.csproj", "{566A2DED-1F0A-4F2B-B22E-497AC9BF3ECB}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -530,6 +538,22 @@ Global
 		{5D9D0C27-D21C-4931-B11C-B97538F5C690}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{5D9D0C27-D21C-4931-B11C-B97538F5C690}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{5D9D0C27-D21C-4931-B11C-B97538F5C690}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AC5B8BDF-2A76-4540-B0FE-77615AC02CDE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AC5B8BDF-2A76-4540-B0FE-77615AC02CDE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AC5B8BDF-2A76-4540-B0FE-77615AC02CDE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AC5B8BDF-2A76-4540-B0FE-77615AC02CDE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4707F203-FAEA-455A-BD61-8005165380D5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4707F203-FAEA-455A-BD61-8005165380D5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4707F203-FAEA-455A-BD61-8005165380D5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4707F203-FAEA-455A-BD61-8005165380D5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1B870309-3EF2-490F-B224-3FA616225CC5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1B870309-3EF2-490F-B224-3FA616225CC5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1B870309-3EF2-490F-B224-3FA616225CC5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1B870309-3EF2-490F-B224-3FA616225CC5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{566A2DED-1F0A-4F2B-B22E-497AC9BF3ECB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{566A2DED-1F0A-4F2B-B22E-497AC9BF3ECB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{566A2DED-1F0A-4F2B-B22E-497AC9BF3ECB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{566A2DED-1F0A-4F2B-B22E-497AC9BF3ECB}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -567,6 +591,10 @@ Global
 		{97CF5D14-9D0A-48C7-B837-6816293E0A4E} = {FD265214-FBC1-4C25-A8F8-0C6827B143C8}
 		{15850225-6D3E-4D25-9D78-6748CEC05483} = {65DFF413-97CB-45FE-9874-93B82E027D1B}
 		{5D9D0C27-D21C-4931-B11C-B97538F5C690} = {FD265214-FBC1-4C25-A8F8-0C6827B143C8}
+		{AC5B8BDF-2A76-4540-B0FE-77615AC02CDE} = {FD265214-FBC1-4C25-A8F8-0C6827B143C8}
+		{4707F203-FAEA-455A-BD61-8005165380D5} = {FD265214-FBC1-4C25-A8F8-0C6827B143C8}
+		{1B870309-3EF2-490F-B224-3FA616225CC5} = {FD265214-FBC1-4C25-A8F8-0C6827B143C8}
+		{566A2DED-1F0A-4F2B-B22E-497AC9BF3ECB} = {FD265214-FBC1-4C25-A8F8-0C6827B143C8}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {331ADDC7-02A4-4F0E-8C47-2060003082F2}

@@ -1,0 +1,33 @@
+﻿article {
+    display: flex;
+    gap: 1rem;
+}
+
+.details {
+
+}
+
+.title {
+
+}
+
+.title a {
+    text-decoration: none;
+}
+
+.summary {
+    display: flex;
+}
+
+.footer {
+    display: flex;
+}
+
+.tags {
+    display: flex;
+    gap: 0.25rem;
+}
+
+.tags ::deep fluent-badge span {
+    padding: 0 0.2rem;
+}
