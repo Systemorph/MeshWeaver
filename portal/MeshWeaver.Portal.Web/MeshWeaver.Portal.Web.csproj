@@ -12,7 +12,6 @@
     </ItemGroup>
     <ItemGroup>
         <PackageReference Include="Microsoft.Orleans.Client" />
-        <PackageReference Include="Microsoft.Orleans.Clustering.Redis" />
-        <PackageReference Include="Aspire.StackExchange.Redis" />
+        <PackageReference Include="Microsoft.Orleans.Clustering.Cosmos" />
     </ItemGroup>
 </Project>

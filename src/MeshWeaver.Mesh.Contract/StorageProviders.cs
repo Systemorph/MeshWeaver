@@ -2,7 +2,7 @@
 
 public static class StorageProviders
 {
+    public const string Clustering = "clustering";
     public const string MeshCatalog = "mesh-catalog";
-    public const string OrleansRedis = "orleans-redis";
-    public const string Activity = "activity";
+    public const string Routing = "routing";
 }

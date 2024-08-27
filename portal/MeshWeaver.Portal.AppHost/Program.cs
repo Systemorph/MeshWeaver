@@ -1,18 +1,24 @@
-﻿var builder = DistributedApplication.CreateBuilder(args);
-var storage = builder.AddAzureStorage("storage").RunAsEmulator();
+﻿using Microsoft.Extensions.Hosting;
 
-var redis = builder.AddRedis("orleans-redis");
+var builder = DistributedApplication.CreateBuilder(args);
+//var storage = builder.AddAzureStorage("storage").RunAsEmulator();
 
+//var redis = builder.AddRedis("orleans-redis");
+
+var cosmos = builder.AddAzureCosmosDB("cosmos");
+var cosmosClustering = cosmos.AddDatabase("clustering");
+
+if (builder.Environment.IsDevelopment())
+    cosmos.RunAsEmulator();
 
 // Add the Orleans resource to the Aspire DistributedApplication
 // builder, then configure it with Redis for clustering.
 // We do not explicitly include any grain storage, as this is 
 // typically done lower level in the message hubs.
 var orleans = builder.AddOrleans("default")
-    .WithClustering(redis)
-    .WithGrainStorage("orleans-redis", redis)
-    .WithGrainStorage("mesh-catalog", storage.AddTables("mesh-catalog"))
-    .WithGrainStorage("activity", storage.AddTables("activity"))
+    .WithClustering(cosmosClustering)
+    .WithGrainStorage("mesh-catalog", cosmos.AddDatabase("mesh-catalog"))
+    .WithGrainStorage("routing", cosmos.AddDatabase("routing"))
     ;
 
 // Add our server project and reference your 'orleans' resource from it.

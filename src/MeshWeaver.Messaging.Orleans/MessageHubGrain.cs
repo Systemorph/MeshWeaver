@@ -12,7 +12,7 @@ using Orleans.Streams.Core;
 namespace MeshWeaver.Orleans.Server;
 
 [ImplicitStreamSubscription(MessageIn)]
-[StorageProvider(ProviderName = StorageProviders.Activity)]
+[StorageProvider(ProviderName = StorageProviders.Routing)]
 public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub parentHub) : Grain<StreamActivity>, IStreamSubscriptionObserver
 {
     public const string MessageIn = nameof(MessageIn);
