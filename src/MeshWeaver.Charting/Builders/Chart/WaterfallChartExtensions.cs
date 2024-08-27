@@ -150,7 +150,7 @@ public static class WaterfallChartExtensions
         };
     }
 
-    private static ImmutableList<DataSet> BuildDataSets<TDataSet, TDataSetBuilder>(
+    internal static ImmutableList<DataSet> BuildDataSets<TDataSet, TDataSetBuilder>(
         this WaterfallChartDataModel dataModel,
         WaterfallStyling styling,
         string incrementsLabel, string decrementsLabel, string totalLabel,
