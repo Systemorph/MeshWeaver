@@ -62,6 +62,7 @@ public abstract record WaterfallChartBase<TChart, TDataSet, TDataSetBuilder, TOp
             IncrementsLabel = incrementsLabel,
             DecrementsLabel = decrementsLabel,
             TotalLabel = totalLabel,
+            BarDataSetModifier = barDataSetModifier,
         };
 
         var tmp = this;
@@ -74,7 +75,7 @@ public abstract record WaterfallChartBase<TChart, TDataSet, TDataSetBuilder, TOp
 
         datasetsReady = true;
 
-        var datasets = dataModel.BuildDataSets<TDataSet, TDataSetBuilder, TOptions>(styling, barDataSetModifier, options);
+        var datasets = dataModel.BuildDataSets<TDataSet, TDataSetBuilder, TOptions>(styling, options);
 
         tmp = tmp with { DataSets = datasets, };
 

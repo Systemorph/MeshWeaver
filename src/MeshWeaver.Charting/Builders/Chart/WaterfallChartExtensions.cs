@@ -16,11 +16,10 @@ namespace MeshWeaver.Charting.Builders.Chart;
 public static class WaterfallChartExtensions
 {
     public static BarChart ToWaterfallChart(this BarChart chart, List<double> deltas,
-        Func<FloatingBarDataSetBuilder, FloatingBarDataSetBuilder> barDataSetModifier = null,
         Func<WaterfallChartOptions, WaterfallChartOptions> options = null
     )
         => chart
-            .ToWaterfallChart<FloatingBarDataSet, FloatingBarDataSetBuilder, WaterfallChartOptions>(deltas, barDataSetModifier, options)
+            .ToWaterfallChart<FloatingBarDataSet, FloatingBarDataSetBuilder, WaterfallChartOptions>(deltas, options)
             .WithOptions(o => o
                 .Stacked("x")
                 .HideAxis("y")
@@ -28,11 +27,10 @@ public static class WaterfallChartExtensions
             );
 
     public static BarChart ToHorizontalWaterfallChart(this BarChart chart, List<double> deltas,
-        Func<HorizontalFloatingBarDataSetBuilder, HorizontalFloatingBarDataSetBuilder> barDataSetModifier = null,
         Func<HorizontalWaterfallChartOptions, HorizontalWaterfallChartOptions> options = null
     )
         => chart
-            .ToWaterfallChart<HorizontalFloatingBarDataSet, HorizontalFloatingBarDataSetBuilder, HorizontalWaterfallChartOptions>(deltas, barDataSetModifier, options)
+            .ToWaterfallChart<HorizontalFloatingBarDataSet, HorizontalFloatingBarDataSetBuilder, HorizontalWaterfallChartOptions>(deltas, options)
             .WithOptions(o => o
                 .Stacked("y")
                 //.HideAxis("x")
@@ -160,7 +158,6 @@ public static class WaterfallChartExtensions
     internal static ImmutableList<DataSet> BuildDataSets<TDataSet, TDataSetBuilder, TOptions>(
         this WaterfallChartDataModel dataModel,
         WaterfallStyling styling,
-        Func<TDataSetBuilder, TDataSetBuilder> barDataSetModifier,
         TOptions options
     )
         where TDataSet : BarDataSetBase, IDataSetWithStack, new()
@@ -171,6 +168,8 @@ public static class WaterfallChartExtensions
         var incrementRanges = dataModel.IncrementRanges.Select(d => new IncrementBar(d.range, d.label, d.delta, styling)).ToList();
         var decrementRanges = dataModel.DecrementRanges.Select(d => new DecrementBar(d.range, d.label, d.delta, styling)).ToList();
         var totalRanges = dataModel.TotalRanges.Select(d => new TotalBar(d.range, d.label, d.delta, styling)).ToList();
+
+        var barDataSetModifier = options.BarDataSetModifier;
 
         var dataset1 = new TDataSetBuilder()
             .WithDataRange(incrementRanges, options.IncrementsLabel, dsb => (barDataSetModifier is null ? dsb : barDataSetModifier(dsb))
@@ -198,7 +197,6 @@ public static class WaterfallChartExtensions
     }
 
     private static BarChart ToWaterfallChart<TDataSet, TDataSetBuilder, TOptions>(this BarChart chart, List<double> deltas,
-        Func<TDataSetBuilder, TDataSetBuilder> barDataSetModifier = null,
         Func<TOptions, TOptions> optionsFunc = null
     )
         where TDataSet : BarDataSetBase, IDataSetWithStack, new()
@@ -227,7 +225,7 @@ public static class WaterfallChartExtensions
 
         var dataModel = deltas.CalculateModel(labels, totalIndexes);
 
-        var datasets = dataModel.BuildDataSets<TDataSet, TDataSetBuilder, TOptions>(styling, barDataSetModifier, options);
+        var datasets = dataModel.BuildDataSets<TDataSet, TDataSetBuilder, TOptions>(styling, options);
 
         tmp = tmp with { DataSets = datasets, };
 

@@ -20,6 +20,8 @@ public record WaterfallChartOptions<TOptions, TDataSetBuilder>
 
     internal ImmutableHashSet<int> TotalIndexes { get; init; } = [];
 
+    internal Func<TDataSetBuilder, TDataSetBuilder> BarDataSetModifier { get; init; }
+
     internal bool HasLastAsTotal { get; init; }
 
     internal Func<LineDataSetBuilder, LineDataSetBuilder> ConnectorDataSetModifier { get; init; } = d => d.ThinLine();
@@ -36,6 +38,9 @@ public record WaterfallChartOptions<TOptions, TDataSetBuilder>
 
     public TOptions WithTotalsAtPositions(params int[] totalIndexes)
         => This with { TotalIndexes = TotalIndexes.Union(totalIndexes) };
+
+    public TOptions WithBarDataSetOptions(Func<TDataSetBuilder, TDataSetBuilder> barDataSetModifier)
+        => This with { BarDataSetModifier = barDataSetModifier, };
 
     public TOptions WithLastAsTotal() => This with { HasLastAsTotal = true, };
 
