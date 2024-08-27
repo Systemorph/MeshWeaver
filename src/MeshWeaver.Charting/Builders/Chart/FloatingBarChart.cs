@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Charting.Builders.DataSetBuilders;
+using MeshWeaver.Charting.Builders.Options;
 using MeshWeaver.Charting.Builders.OptionsBuilders;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Helpers;
@@ -54,6 +55,14 @@ public abstract record WaterfallChartBase<TChart, TDataSet, TDataSetBuilder> : R
             return base.ToChart();
         var styling = StylingBuilder.Build();
 
+        // HACK V10: we are constructing local options here just for the sake of temporal refactoring purposes (2024/08/27, Dmitry Kalabin)
+        var options = new WaterfallChartOptions
+        {
+            IncrementsLabel = incrementsLabel,
+            DecrementsLabel = decrementsLabel,
+            TotalLabel = totalLabel,
+        };
+
         var tmp = this;
         if (Data.Labels is null)
             tmp = tmp.WithLabels(Enumerable.Range(1, deltas.Count).Select(i => i.ToString()).ToArray());
@@ -64,7 +73,7 @@ public abstract record WaterfallChartBase<TChart, TDataSet, TDataSetBuilder> : R
 
         datasetsReady = true;
 
-        var datasets = dataModel.BuildDataSets<TDataSet, TDataSetBuilder>(styling, incrementsLabel, decrementsLabel, totalLabel, barDataSetModifier);
+        var datasets = dataModel.BuildDataSets<TDataSet, TDataSetBuilder>(styling, barDataSetModifier, options);
 
         tmp = tmp with { DataSets = datasets, };
 
