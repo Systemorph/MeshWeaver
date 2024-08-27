@@ -12,6 +12,8 @@ public record WaterfallChartOptions
 
     internal bool IncludeConnectors { get; init; }
 
+    internal bool HasLastAsTotal { get; init; }
+
     internal Func<LineDataSetBuilder, LineDataSetBuilder> ConnectorDataSetModifier { get; init; } = d => d.ThinLine();
 
     internal Func<WaterfallStylingBuilder, WaterfallStylingBuilder> StylingOptions { get; init; }
@@ -21,6 +23,8 @@ public record WaterfallChartOptions
 
     public WaterfallChartOptions WithConnectors(Func<LineDataSetBuilder, LineDataSetBuilder> connectorLineModifier = null)
         => this with { ConnectorDataSetModifier = connectorLineModifier ?? ConnectorDataSetModifier, IncludeConnectors = true, };
+
+    public WaterfallChartOptions WithLastAsTotal() => this with { HasLastAsTotal = true, };
 
     public WaterfallChartOptions WithStylingOptions(Func<WaterfallStylingBuilder, WaterfallStylingBuilder> styling)
         => this with { StylingOptions = styling, };
