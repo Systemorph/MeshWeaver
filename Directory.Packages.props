@@ -9,6 +9,7 @@
     <PackageVersion Include="AngleSharp" Version="0.17.1" />
     <PackageVersion Include="AspectCore.Extensions.Reflection" Version="2.2.0" />
     <PackageVersion Include="Aspire.Hosting.AppHost" Version="8.0.1" />
+    <PackageVersion Include="Aspire.Hosting.Orleans" Version="8.1.0" />
     <PackageVersion Include="Autofac" Version="8.0.0" />
     <PackageVersion Include="Autofac.Extensions.DependencyInjection" Version="9.0.0" />
     <PackageVersion Include="Castle.Core" Version="5.1.1" />
@@ -68,5 +69,11 @@
     <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components" Version="4.7.2 " />
     <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components.Icons" Version="4.7.2" />
     <PackageVersion Include="System.Xml.XmlSerializer" Version="4.3.0" />
+    <PackageVersion Include="Aspire.StackExchange.Redis.OutputCaching" Version="8.0.0" />
+    <PackageVersion Include="Aspire.Hosting.Redis" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Orleans.Clustering.Redis" Version="8.2.0" />
+    <PackageVersion Include="Microsoft.Orleans.Persistence.Redis" Version="8.2.0" />
+    <PackageVersion Include="Aspire.StackExchange.Redis" Version="8.1.0" />
+
   </ItemGroup>
 </Project>
