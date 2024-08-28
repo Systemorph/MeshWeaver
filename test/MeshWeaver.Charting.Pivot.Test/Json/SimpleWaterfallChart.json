@@ -239,5 +239,5 @@
     },
     "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
   },
-  "$type": "MeshWeaver.Charting.Builders.Chart.WaterfallChart"
+  "$type": "MeshWeaver.Charting.Builders.Chart.BarChart"
 }
