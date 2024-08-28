@@ -5,7 +5,7 @@ using MeshWeaver.ServiceProvider;
 
 namespace MeshWeaver.Hosting;
 
-internal class MessageHubServiceProviderFactory(
+public class MessageHubServiceProviderFactory(
     object address,
     Func<MessageHubConfiguration, MessageHubConfiguration> configuration
 ) : IServiceProviderFactory<IServiceCollection>
@@ -22,7 +22,7 @@ internal class MessageHubServiceProviderFactory(
 
 public static class HostBuilderExtensions
 {
-    public static IHostBuilder UseMeshWeaver(
+    public static IHostBuilder AddMeshWeaver(
         this IHostBuilder hostBuilder,
         object address,
         Func<MessageHubConfiguration, MessageHubConfiguration> configuration

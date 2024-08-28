@@ -7,6 +7,7 @@ using Microsoft.FluentUI.AspNetCore.Components;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Orleans.Client;
+using MeshWeaver.Portal.ServiceDefaults;
 using Microsoft.Extensions.Logging.Console;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -33,17 +34,15 @@ builder.Services.AddLogging(config => config.AddConsole(
 builder.Services.AddFluentUIComponents();
 
 var blazorAddress = new UiAddress();
-builder.Host.UseMeshWeaver(blazorAddress,
-        config =>
+builder.AddOrleansMesh(blazorAddress,
+        hubConfiguration: config =>
             config.AddBlazor(x =>
                     x.AddChartJs()
                         .AddAgGrid()
                 )
-                .AddOrleansMesh(blazorAddress)
             )
     ;
 
-builder.UseOrleans();
 
 if (!builder.Environment.IsDevelopment())
 {

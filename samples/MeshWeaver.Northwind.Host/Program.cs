@@ -17,7 +17,7 @@ public static class Program
 
 
         builder
-            .Host.UseMeshWeaver(new RouterAddress(), conf => conf.ConfigureRouter())
+            .Host.AddMeshWeaver(new RouterAddress(), conf => conf.ConfigureRouter())
             .UseOrleans(static siloBuilder =>
             {
                 siloBuilder.UseLocalhostClustering();

@@ -3,6 +3,7 @@ using MeshWeaver.Application;
 using Microsoft.FluentUI.AspNetCore.Components;
 using MeshWeaver.Hosting;
 using MeshWeaver.Northwind.Application;
+using MeshWeaver.Portal.ServiceDefaults;
 using Microsoft.Extensions.Logging.Console;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -27,7 +28,7 @@ builder.Services.AddLogging(config => config.AddConsole(
 
 builder.Services.AddFluentUIComponents();
 
-builder.Host.UseMeshWeaver(
+builder.Host.AddMeshWeaver(
     new UiAddress(),
     config => config.ConfigureNorthwindHubs()
 );

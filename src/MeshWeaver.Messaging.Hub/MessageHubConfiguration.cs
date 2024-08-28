@@ -124,7 +124,7 @@ public record MessageHubConfiguration
             action(hub); return Task.CompletedTask; 
         })
     };
-    public MessageHubConfiguration WithBuildupAction(Func<IMessageHub, CancellationToken, Task> action) => this with { BuildupActions = BuildupActions.Add(action) };
+    public MessageHubConfiguration WithInitialization(Func<IMessageHub, CancellationToken, Task> action) => this with { BuildupActions = BuildupActions.Add(action) };
 
 
     public MessageHubConfiguration WithDeferral(DeliveryFilter deferral)
