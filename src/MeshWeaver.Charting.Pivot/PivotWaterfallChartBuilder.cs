@@ -1,4 +1,7 @@
-﻿using MeshWeaver.Charting.Builders.Chart;
+﻿using System.Collections.Immutable;
+using MeshWeaver.Charting.Builders;
+using MeshWeaver.Charting.Builders.Chart;
+using MeshWeaver.Charting.Builders.Options;
 using MeshWeaver.Charting.Builders.OptionsBuilders;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
@@ -10,28 +13,29 @@ namespace MeshWeaver.Charting.Pivot;
 
 
 public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-    : PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, WaterfallChart, FloatingBarDataSet>, IPivotWaterfallChartBuilder
+    : PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, BarChart, BarDataSet>, IPivotWaterfallChartBuilder
     where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
 {
     private Func<PivotElementDescriptor, bool> totalsFilter;
 
+    private List<double> deltas = [];
+    private ImmutableList<Func<WaterfallChartOptions, WaterfallChartOptions>> WaterfallOptions { get; init; } = [];
+    private ImmutableList<Func<WaterfallChartOptions, WaterfallChartOptions>> ExtraWaterfallOptions { get; set; } = [];
+
     public PivotWaterfallChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder)
     {
-        Chart = new WaterfallChart([]);
+        Chart = Charts.Bar([]);
     }
+
+    private IPivotWaterfallChartBuilder WithWaterfallOptions(Func<WaterfallChartOptions, WaterfallChartOptions> option)
+        => this with { WaterfallOptions = WaterfallOptions.Add(option), };
 
     public IPivotWaterfallChartBuilder WithLegendItems(string incrementsLabel = null, string decrementsLabel = null, string totalLabel = null)
-    {
-        Chart = Chart.WithLegendItems(incrementsLabel, decrementsLabel, totalLabel);
-        return this;
-    }
+        => WithWaterfallOptions(w => w.WithLegendItems(incrementsLabel, decrementsLabel, totalLabel));
 
     public IPivotWaterfallChartBuilder WithStylingOptions(Func<WaterfallStylingBuilder, WaterfallStylingBuilder> func)
-    {
-        Chart = Chart.WithStylingOptions(func);
-        return this;
-    }
+        => WithWaterfallOptions(w => w.WithStylingOptions(func));
 
     public IPivotWaterfallChartBuilder WithRangeOptionsBuilder(Func<ChartOptions, ChartOptions> func)
     {
@@ -46,10 +50,7 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
     }
 
     public IPivotWaterfallChartBuilder WithConnectors()
-    {
-        Chart = Chart.WithConnectors();
-        return this;
-    }
+        => WithWaterfallOptions(w => w.WithConnectors());
 
     protected override PivotChartModel CreatePivotModel(PivotModel pivotModel)
     {
@@ -64,9 +65,12 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
         var row = pivotChartModel.Rows.Single();
 
         if (row.DataSetType == ChartType.Bar)
-            Chart = Chart.WithDeltas(row.DataByColumns.Select(x => (double)x.Value!))
-                                       .WithBarDataSetOptions(o => o.WithBarThickness(20))
-                                       .WithLabels(pivotChartModel.ColumnDescriptors.Select(x => x.DisplayName).ToArray());
+        {
+            // TODO V10: reconsider to get rid of this "mutability" approach here (2024/08/28, Dmitry Kalabin)
+            deltas = row.DataByColumns.Select(x => (double)x.Value!).ToList();
+            ExtraWaterfallOptions = ExtraWaterfallOptions.Add(w => w.WithBarDataSetOptions(o => o.WithBarThickness(20)));
+            Chart = Chart.WithLabels(pivotChartModel.ColumnDescriptors.Select(x => x.DisplayName).ToArray());
+        }
         else
             throw new NotImplementedException("Only bar data set types are supported");
 
@@ -81,8 +85,15 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
                 i++;
             }
 
-            Chart = Chart.WithTotalsAtPositions(totals);
+            // TODO V10: reconsider to get rid of this "mutability" approach here (2024/08/28, Dmitry Kalabin)
+            ExtraWaterfallOptions = ExtraWaterfallOptions.Add(w => w.WithTotalsAtPositions(totals));
         }
+    }
+
+    protected override void ApplyCustomChartConfigs()
+    {
+        base.ApplyCustomChartConfigs();
+        Chart = Chart.ToWaterfallChart(deltas, o => WaterfallOptions.Concat(ExtraWaterfallOptions).Aggregate(o, (x, modifier) => modifier(x)));
     }
 
     protected override void AddOptions(PivotChartModel pivotChartModel)

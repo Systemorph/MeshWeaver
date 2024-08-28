@@ -77,6 +77,7 @@ public abstract record PivotChartBuilderBase<
         AddDataSets(pivotChartModel);
         AddOptions(pivotChartModel);
 
+        ApplyCustomChartConfigs();
         return Chart.ToChart();
     }
 
@@ -107,4 +108,8 @@ public abstract record PivotChartBuilderBase<
     protected abstract void AddDataSets(PivotChartModel pivotChartModel);
 
     protected abstract void AddOptions(PivotChartModel pivotChartModel);
+
+    protected virtual void ApplyCustomChartConfigs()
+    {
+    }
 }
