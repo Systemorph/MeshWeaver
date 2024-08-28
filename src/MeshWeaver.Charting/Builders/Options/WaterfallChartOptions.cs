@@ -36,8 +36,11 @@ public record WaterfallChartOptions<TOptions, TDataSetBuilder>
     public TOptions WithConnectors(Func<LineDataSetBuilder, LineDataSetBuilder> connectorLineModifier = null)
         => This with { ConnectorDataSetModifier = connectorLineModifier ?? ConnectorDataSetModifier, IncludeConnectors = true, };
 
-    public TOptions WithTotalsAtPositions(params int[] totalIndexes)
+    public TOptions WithTotalsAtPositions(IEnumerable<int> totalIndexes)
         => This with { TotalIndexes = TotalIndexes.Union(totalIndexes) };
+
+    public TOptions WithTotalsAtPositions(params int[] totalIndexes)
+        => WithTotalsAtPositions(totalIndexes.AsEnumerable());
 
     public TOptions WithBarDataSetOptions(Func<TDataSetBuilder, TDataSetBuilder> barDataSetModifier)
         => This with { BarDataSetModifier = barDataSetModifier, };
