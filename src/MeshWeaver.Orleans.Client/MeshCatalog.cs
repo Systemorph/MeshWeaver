@@ -11,11 +11,11 @@ namespace MeshWeaver.Orleans.Client
     {
         private readonly IGrainFactory grainFactory = hub.ServiceProvider.GetRequiredService<IGrainFactory>();
 
-        private OrleansMeshContext Context { get; } = hub.Configuration.GetMeshContext();
+        private MeshConfiguration Configuration { get; } = hub.Configuration.GetMeshContext();
 
 
         public string GetMeshNodeId(object address)
-            => Context.AddressToMeshNodeMappers
+            => Configuration.AddressToMeshNodeMappers
                 .Select(loader => loader(address))
                 .FirstOrDefault(x => x != null);
 
@@ -32,7 +32,7 @@ namespace MeshWeaver.Orleans.Client
 
         public async Task InitializeAsync(CancellationToken cancellationToken)
         {
-            foreach (var assemblyLocation in Context.InstallAtStartup)
+            foreach (var assemblyLocation in Configuration.InstallAtStartup)
             {
                 var loadContext = new AssemblyLoadContext(assemblyLocation);
                 var assembly = loadContext.LoadFromAssemblyPath(assemblyLocation);

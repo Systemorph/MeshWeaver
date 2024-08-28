@@ -24,6 +24,7 @@ public static class BlazorClientRegistry
     ) => config
         .AddData()
         .AddLayoutClient(c => configuration.Invoke(c.WithView(DefaultFormatting)))
+
     ;
     #region Standard Formatting
     private static ViewDescriptor DefaultFormatting(

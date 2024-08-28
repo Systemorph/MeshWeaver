@@ -11,7 +11,7 @@ public record ArticleGrain : IArticleGrain
     private readonly IPersistentState<ArticleEntry> state;
     private readonly ILogger<ArticleGrain> logger;
 
-    public ArticleGrain([PersistentState(OrleansExtensions.Storage, storageName: Storage)] IPersistentState<ArticleEntry> state, ILogger<ArticleGrain> logger )
+    public ArticleGrain([PersistentState(OrleansClientExtensions.Storage, storageName: Storage)] IPersistentState<ArticleEntry> state, ILogger<ArticleGrain> logger )
     {
         this.state = state;
         this.logger = logger;

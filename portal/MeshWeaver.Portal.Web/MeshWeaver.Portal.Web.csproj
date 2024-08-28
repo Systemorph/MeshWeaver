@@ -9,6 +9,7 @@
         <ProjectReference Include="..\..\src\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Application.Contract\MeshWeaver.Application.Contract.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+        <ProjectReference Include="..\MeshWeaver.Portal.ServiceDefaults\MeshWeaver.Portal.ServiceDefaults.csproj" />
     </ItemGroup>
     <ItemGroup>
         <PackageReference Include="Microsoft.Orleans.Client" />

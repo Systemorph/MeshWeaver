@@ -192,9 +192,11 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Portal.Backend",
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Portal.Orleans", "portal\MeshWeaver.Portal.Orleans\MeshWeaver.Portal.Orleans.csproj", "{DD4D94A7-9019-4049-8557-8A9EF4B14EB9}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Orleans.Client", "src\MeshWeaver.Orleans.Client\MeshWeaver.Orleans.Client.csproj", "{05A1EE89-B681-4605-8AA0-D1AC90F84A28}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Orleans.Client", "src\MeshWeaver.Orleans.Client\MeshWeaver.Orleans.Client.csproj", "{05A1EE89-B681-4605-8AA0-D1AC90F84A28}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Mesh.Contract", "src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj", "{58079FC4-0FDB-4848-9571-F8D380F0D818}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Portal.ServiceDefaults", "portal\MeshWeaver.Portal.ServiceDefaults\MeshWeaver.Portal.ServiceDefaults.csproj", "{E00FF7F9-E783-41EA-A410-959B27BEA367}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -554,6 +556,10 @@ Global
 		{58079FC4-0FDB-4848-9571-F8D380F0D818}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{58079FC4-0FDB-4848-9571-F8D380F0D818}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{58079FC4-0FDB-4848-9571-F8D380F0D818}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E00FF7F9-E783-41EA-A410-959B27BEA367}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E00FF7F9-E783-41EA-A410-959B27BEA367}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E00FF7F9-E783-41EA-A410-959B27BEA367}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E00FF7F9-E783-41EA-A410-959B27BEA367}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -595,6 +601,7 @@ Global
 		{E0D05CC9-3E10-4486-B79F-BF9198B2D8BB} = {65DFF413-97CB-45FE-9874-93B82E027D1B}
 		{6BE9848A-6CC5-40D4-97DC-481064D6E24D} = {65DFF413-97CB-45FE-9874-93B82E027D1B}
 		{DD4D94A7-9019-4049-8557-8A9EF4B14EB9} = {65DFF413-97CB-45FE-9874-93B82E027D1B}
+		{E00FF7F9-E783-41EA-A410-959B27BEA367} = {65DFF413-97CB-45FE-9874-93B82E027D1B}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {331ADDC7-02A4-4F0E-8C47-2060003082F2}

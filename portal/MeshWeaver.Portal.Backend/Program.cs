@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Hosting;
+using MeshWeaver.Portal.ServiceDefaults;
 
 var builder = WebApplication.CreateBuilder(args);
 
