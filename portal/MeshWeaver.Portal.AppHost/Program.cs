@@ -14,8 +14,8 @@ builder.AddProject<Projects.MeshWeaver_Portal_Orleans>("silo")
        .WithReference(orleans)
        .WithReplicas(3);
 
-builder.AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
-    .WithExternalHttpEndpoints()
-    .WithReference(orleans.AsClient());
+//builder.AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
+//    .WithExternalHttpEndpoints()
+//    .WithReference(orleans.AsClient());
 
 builder.Build().Run();
