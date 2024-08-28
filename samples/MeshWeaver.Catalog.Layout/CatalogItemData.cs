@@ -4,17 +4,18 @@ namespace MeshWeaver.Catalog.Layout;
 
 public record CatalogItemData()
 {
-    public CatalogItemData(MeshDocument Document, MeshNode Node, User User) : this()
+    public CatalogItemData(MeshDocument document, MeshNode node, User user) : this()
     {
-        Title = Document.Title;
-        Description = Document.Description;
-        Thumbnail = Document.Thumbnail;
-        Created = Document.Created;
-        Tags = Document.Tags;
-        Views = Document.Views;
-        Likes = Document.Likes;
-        Author = User.Name;
-        Avatar = User.Avatar;
+        Title = document.Title;
+        Description = document.Description;
+        Thumbnail = document.Thumbnail;
+        Created = document.Created;
+        Tags = document.Tags;
+        Views = document.Views;
+        Likes = document.Likes;
+        Author = user.Name;
+        AuthorAvatar = user.Avatar;
+        NodeName = node.Name;
     }
 
     public string Title { get; init; }
@@ -25,5 +26,7 @@ public record CatalogItemData()
     public int Views { get; init; }
     public int Likes { get; init; }
     public string Author { get; init; }
-    public string Avatar { get; init; }
+    public string AuthorAvatar { get; init; }
+    public string NodeName { get; init; }
+    public string DocumentUrl { get; init; }
 }
