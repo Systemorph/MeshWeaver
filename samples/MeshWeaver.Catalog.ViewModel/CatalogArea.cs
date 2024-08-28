@@ -50,7 +50,7 @@ public static class CatalogArea
     {
         return layoutArea.MeshDocuments()
             .Select(documents =>
-                documents.Aggregate(Controls.Stack.WithSkin(skin => skin.WithVerticalGap(10)),
+                documents.Aggregate(Controls.Stack.WithSkin(skin => skin.WithVerticalGap(24)),
                     (stack, data) =>
                         stack
                             .WithView(CatalogControls.CatalogItem(data))
