@@ -1,17 +1,20 @@
-﻿using MeshWeaver.Application;
+﻿using System.Runtime.CompilerServices;
+using MeshWeaver.Application;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
+[assembly:InternalsVisibleTo("MeshWeaver.Orleans.Server")]
 namespace MeshWeaver.Orleans.Client;
 
 public static class OrleansClientExtensions
 {
     public const string Storage = "storage";
 
-    public static void AddOrleansMesh<TAddress>(this IHostApplicationBuilder builder, TAddress address,
+    public static void AddOrleansMesh<TAddress>(this WebApplicationBuilder builder, TAddress address,
         Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration = null,
         Func<MeshConfiguration, MeshConfiguration> meshConfiguration = null)
     {
@@ -20,7 +23,14 @@ public static class OrleansClientExtensions
                 conf => (hubConfiguration == null ? conf : hubConfiguration(conf)).AddOrleansMesh(address,
                     meshConfiguration)));
 
+        AddOrleansMeshInternal(builder, address, hubConfiguration, meshConfiguration);
         builder.UseOrleansClient();
+    }
+    internal static void AddOrleansMeshInternal<TAddress>(this WebApplicationBuilder builder, TAddress address,
+        Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration = null,
+        Func<MeshConfiguration, MeshConfiguration> meshConfiguration = null)
+    {
+        builder.Host.AddMeshWeaver(address, c => (hubConfiguration == null ? c : hubConfiguration(c)).Set(meshConfiguration));
     }
 
 
