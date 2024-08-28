@@ -14,8 +14,6 @@ public static class Charts
     public static RadarChart Radar(IReadOnlyCollection<RadarDataSet> dataSets) => new(dataSets);
     public static FloatingBarChart FloatingBar(IReadOnlyCollection<FloatingBarDataSet> dataSets) => new(dataSets);
     public static HorizontalFloatingBarChart HorizontalFloatingBar(IReadOnlyCollection<HorizontalFloatingBarDataSet> dataSets) => new(dataSets);
-    public static WaterfallChart Waterfall(IReadOnlyCollection<FloatingBarDataSet> dataSets) => new(dataSets);
-    public static HorizontalWaterfallChart HorizontalWaterfall(IReadOnlyCollection<HorizontalFloatingBarDataSet> dataSets) => new(dataSets);
     public static PointChart Scatter(IReadOnlyCollection<LineScatterDataSet> dataSets) => new(dataSets);
     public static PointValueChart Bubble(IReadOnlyCollection<BubbleDataSet> dataSets) => new(dataSets);
     public static TimeChart TimeLine(IReadOnlyCollection<TimeLineDataSet> dataSets) => new(dataSets);
