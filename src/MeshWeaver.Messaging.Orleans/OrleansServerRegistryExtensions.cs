@@ -24,7 +24,10 @@ public static  class OrleansServerRegistryExtensions
 
             if(siloConfiguration != null)
                 siloConfiguration.Invoke(silo);
-
+            if (builder.Environment.IsDevelopment())
+            {
+                silo.ConfigureEndpoints(Random.Shared.Next(10_000, 50_000), Random.Shared.Next(10_000, 50_000));
+            }
             silo.AddMemoryStreams(StreamProviders.Memory)
                 .AddMemoryGrainStorage("PubSubStore");
 

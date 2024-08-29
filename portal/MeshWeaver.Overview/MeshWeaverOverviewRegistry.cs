@@ -2,6 +2,7 @@
 using MeshWeaver.Application;
 using MeshWeaver.Documentation;
 using MeshWeaver.Layout;
+using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
 using MeshWeaver.Overview;
 

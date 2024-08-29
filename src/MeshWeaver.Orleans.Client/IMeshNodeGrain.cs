@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Messaging;
-using Orleans;
+﻿using MeshWeaver.Mesh.Contract;
 
 namespace MeshWeaver.Orleans.Client
 {

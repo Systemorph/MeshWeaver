@@ -1,7 +1,7 @@
 ﻿using System.Collections.Immutable;
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Orleans.Client
+namespace MeshWeaver.Mesh.Contract
 {
     public record OrleansMeshContext
     {
