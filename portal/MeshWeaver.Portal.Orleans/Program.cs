@@ -7,7 +7,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 builder.AddKeyedAzureTableClient(StorageProviders.MeshCatalog);
 builder.AddKeyedAzureTableClient(StorageProviders.Activity);
-builder.AddKeyedRedisClient(StorageProviders.OrleansRedis);
+builder.AddKeyedRedisClient(StorageProviders.Redis);
 var address = new OrleansAddress();
 
 builder.AddOrleansMeshServer(address);

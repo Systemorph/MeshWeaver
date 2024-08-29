@@ -8,7 +8,7 @@ using Orleans.Providers;
 namespace MeshWeaver.Orleans.Server;
 
 [PreferLocalPlacement]
-[StorageProvider(ProviderName = StorageProviders.OrleansRedis)]
+[StorageProvider(ProviderName = StorageProviders.Redis)]
 public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCatalog meshCatalog) : Grain<StreamInfo>, IAddressRegistryGrain
 {
     private MeshNode Node { get; set; }
@@ -36,7 +36,7 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
     }
 
     private StreamInfo ConvertNode(object address) =>
-        Node != null
+        Node is { StreamProvider: not null }
             ? new(this.GetPrimaryKeyString(), Node.StreamProvider, Node.Namespace, address)
             :
             new StreamInfo(SerializationExtensions.GetId(address), StreamProviders.Memory, MeshNode.MessageIn, address);

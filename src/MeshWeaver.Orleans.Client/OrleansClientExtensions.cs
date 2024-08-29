@@ -6,6 +6,8 @@ using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Orleans.Runtime;
+using Orleans.Serialization;
 
 [assembly:InternalsVisibleTo("MeshWeaver.Orleans.Server")]
 namespace MeshWeaver.Orleans.Client;
@@ -13,7 +15,7 @@ namespace MeshWeaver.Orleans.Client;
 public static class OrleansClientExtensions
 {
 
-    public static void AddOrleansMesh<TAddress>(this WebApplicationBuilder builder, TAddress address,
+    public static void AddOrleansMeshClient<TAddress>(this WebApplicationBuilder builder, TAddress address,
         Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration = null,
         Func<MeshConfiguration, MeshConfiguration> meshConfiguration = null,
         Func<IClientBuilder, IClientBuilder> orleansConfiguration = null)
@@ -22,6 +24,26 @@ public static class OrleansClientExtensions
         builder.UseOrleansClient(client => (orleansConfiguration ?? (x => x)).Invoke( 
             client.AddMemoryStreams(StreamProviders.Memory)));
     }
+
+    private static void AddOrleansClientDefaults(IClientBuilder client)
+    {
+        client.AddMemoryStreams(StreamProviders.Memory);
+        client.Services.AddSerializer(serializerBuilder =>
+        {
+
+            serializerBuilder.AddJsonSerializer(
+                type => true,
+                type => true,
+                ob =>
+                    ob.PostConfigure<IMessageHub>(
+                        (o, hub) => o.SerializerOptions = hub.JsonSerializerOptions
+                    )
+            );
+        });
+
+
+    }
+
     internal static void AddOrleansMeshInternal<TAddress>(this WebApplicationBuilder builder, TAddress address,
         Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration = null,
         Func<MeshConfiguration, MeshConfiguration> meshConfiguration = null)
