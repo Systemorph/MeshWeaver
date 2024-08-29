@@ -5,7 +5,7 @@ namespace MeshWeaver.Messaging;
 
 public static class StreamProviders
 {
-    public const string SMS = nameof(SMS);
+    public const string Memory = nameof(Memory);
     
 }
 
@@ -15,7 +15,7 @@ public record MeshNode(string Id, string Name, string BasePath, string AssemblyL
 {
     public const string MessageIn = nameof(MessageIn);
     public string Thumbnail { get; init; }
-    public string StreamProvider { get; init; } = StreamProviders.SMS;
+    public string StreamProvider { get; init; } = StreamProviders.Memory;
     public string Namespace { get; init; } = MessageIn;
 }
 

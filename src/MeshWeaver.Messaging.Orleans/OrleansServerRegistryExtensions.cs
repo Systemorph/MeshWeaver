@@ -19,14 +19,18 @@ public static  class OrleansServerRegistryExtensions
     {
         builder.AddOrleansMeshInternal(address, hubConfiguration, meshConfiguration);
         
-        builder.UseOrleans(orleansBuilder =>
+        builder.UseOrleans(silo =>
         {
 
             if(siloConfiguration != null)
-                siloConfiguration.Invoke(orleansBuilder);
+                siloConfiguration.Invoke(silo);
 
-            orleansBuilder.Services.AddSerializer(serializerBuilder =>
+            silo.AddMemoryStreams(StreamProviders.Memory)
+                .AddMemoryGrainStorage("PubSubStore");
+
+            silo.Services.AddSerializer(serializerBuilder =>
             {
+
                 serializerBuilder.AddJsonSerializer(
                     type => true,
                     type => true,
