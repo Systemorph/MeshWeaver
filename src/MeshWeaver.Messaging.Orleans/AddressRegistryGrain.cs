@@ -15,7 +15,7 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
 
     public async Task<StreamInfo> Register(object address)
     {
-        if (State != null)
+        if (State is { StreamProvider: not null })
             return State;
 
         if (Node == null)
@@ -39,8 +39,7 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
         Node != null
             ? new(this.GetPrimaryKeyString(), Node.StreamProvider, Node.Namespace, address)
             :
-            // TODO V10: What to do here? ==> we don't find route. Throw exception? (25.08.2024, Roland Bürgi)
-            null;
+            new StreamInfo(SerializationExtensions.GetId(address), StreamProviders.Memory, MeshNode.MessageIn, address);
 
 
     public Task<NodeStorageInfo> GetStorageInfo() =>
