@@ -3,7 +3,6 @@ using System.Runtime.Loader;
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
-using Orleans;
 
 namespace MeshWeaver.Orleans.Client
 {
@@ -14,14 +13,18 @@ namespace MeshWeaver.Orleans.Client
         private MeshConfiguration Configuration { get; } = hub.Configuration.GetMeshContext();
 
 
-        public string GetMeshNodeId(object address)
+        public string GetNodeId(object address)
             => Configuration.AddressToMeshNodeMappers
                 .Select(loader => loader(address))
                 .FirstOrDefault(x => x != null);
 
-        public Task<MeshNode> GetNodeAsync(object address)=> grainFactory.GetGrain<IMeshNodeGrain>(GetMeshNodeId(address)).Get();
+        public Task<MeshNode> GetNodeAsync(object address)=> 
+        GetNodeById(GetNodeId(address));
 
-        public Task UpdateMeshNodeAsync(MeshNode node) => grainFactory.GetGrain<IMeshNodeGrain>(node.Id).Update(node);
+        public Task<MeshNode> GetNodeById(string id)
+            => grainFactory.GetGrain<IMeshNodeGrain>(id).Get();
+
+        public Task UpdateAsync(MeshNode node) => grainFactory.GetGrain<IMeshNodeGrain>(node.Id).Update(node);
         public async Task InstallModuleAsync(string fullPathToDll)
         {
             var assemblyLoadContext = new AssemblyLoadContext("ModuleRegistry");
@@ -41,5 +44,11 @@ namespace MeshWeaver.Orleans.Client
                 loadContext.Unload();
             }
         }
+
+        public Task<ArticleEntry> GetArticle(string id)
+            => grainFactory.GetGrain<IArticleGrain>(id).Get();
+
+        public Task UpdateArticle(ArticleEntry article)
+            => grainFactory.GetGrain<IArticleGrain>(article.Id).Update(article);
     }
 }

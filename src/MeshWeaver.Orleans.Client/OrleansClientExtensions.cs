@@ -12,7 +12,6 @@ namespace MeshWeaver.Orleans.Client;
 
 public static class OrleansClientExtensions
 {
-    public const string Storage = "storage";
 
     public static void AddOrleansMesh<TAddress>(this WebApplicationBuilder builder, TAddress address,
         Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration = null,

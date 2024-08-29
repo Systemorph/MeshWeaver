@@ -8,10 +8,14 @@ namespace MeshWeaver.Mesh.Contract;
 
 public interface IMeshCatalog
 {
-    string GetMeshNodeId(object address);
+    string GetNodeId(object address);
     Task<MeshNode> GetNodeAsync(object address);
-    Task UpdateMeshNodeAsync(MeshNode node);
+    Task<MeshNode> GetNodeById(string id);
+    Task UpdateAsync(MeshNode node);
     Task InitializeAsync(CancellationToken cancellationToken);
+
+    Task<ArticleEntry> GetArticle(string id);
+    Task UpdateArticle(ArticleEntry article);
 }
 
 [GenerateSerializer]
