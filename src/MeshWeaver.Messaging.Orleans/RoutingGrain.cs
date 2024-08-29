@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Messaging;
+﻿using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Messaging;
 using MeshWeaver.Orleans.Client;
 using Microsoft.Extensions.Logging;
 using Orleans.Placement;
@@ -15,6 +16,8 @@ namespace MeshWeaver.Orleans.Server
             var target = message.Target;
             var targetId = SerializationExtensions.GetId(target);
             var streamInfo = await GrainFactory.GetGrain<IAddressRegistryGrain>(targetId).Register(targetId);
+            if(streamInfo.StreamProvider == StreamProviders.Mesh)
+                return await GrainFactory.GetGrain<IMessageHubGrain>(targetId).DeliverMessage(message);
             var stream = this.GetStreamProvider(streamInfo.StreamProvider).GetStream<IMessageDelivery>(streamInfo.Namespace, targetId);
             await stream.OnNextAsync(message);
             return message.Forwarded([target]);

@@ -23,7 +23,7 @@ namespace MeshWeaver.Messaging.Serialization
 
             var delivery = (IMessageDelivery)value;
             var clonedOptions = options.CloneAndRemove(this);
-            var serialized = (JsonObject)JsonSerializer.SerializeToNode(delivery.Message, clonedOptions)!;
+            var serialized = (JsonObject)JsonSerializer.SerializeToNode(delivery, clonedOptions)!;
             if (delivery.Target != null && delivery.Target is not JsonNode && serialized.TryGetPropertyValue(nameof(IMessageDelivery.Target).ToCamelCase(), out var serializedTarget))
             {
                 serializedTarget![IdProperty] = delivery.Target.ToString();

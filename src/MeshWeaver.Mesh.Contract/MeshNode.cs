@@ -5,7 +5,7 @@
     {
         public const string MessageIn = nameof(MessageIn);
         public string Thumbnail { get; init; }
-        public string StreamProvider { get; init; } = StreamProviders.Memory;
+        public string StreamProvider { get; init; } = StreamProviders.Mesh;
         public string Namespace { get; init; } = MessageIn;
     }
 }
