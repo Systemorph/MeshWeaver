@@ -6,7 +6,6 @@ using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Orleans.Runtime;
 using Orleans.Serialization;
 
 [assembly:InternalsVisibleTo("MeshWeaver.Orleans.Server")]
@@ -21,28 +20,28 @@ public static class OrleansClientExtensions
         Func<IClientBuilder, IClientBuilder> orleansConfiguration = null)
     {
         AddOrleansMeshInternal(builder, address, hubConfiguration, meshConfiguration);
-        builder.UseOrleansClient(client => (orleansConfiguration ?? (x => x)).Invoke( 
-            client.AddMemoryStreams(StreamProviders.Memory)));
+        builder
+            .UseOrleansClient(client =>
+            {
+                client.AddMemoryStreams(StreamProviders.Memory);
+
+                client.Services.AddSerializer(serializerBuilder =>
+                {
+
+                    serializerBuilder.AddJsonSerializer(
+                        _ => true,
+                        _ => true,
+                        ob =>
+                            ob.PostConfigure<IMessageHub>(
+                                (o, hub) => o.SerializerOptions = hub.JsonSerializerOptions
+                            )
+                    );
+                });
+                if (orleansConfiguration != null)
+                    orleansConfiguration.Invoke(client);
+            });
     }
 
-    private static void AddOrleansClientDefaults(IClientBuilder client)
-    {
-        client.AddMemoryStreams(StreamProviders.Memory);
-        client.Services.AddSerializer(serializerBuilder =>
-        {
-
-            serializerBuilder.AddJsonSerializer(
-                type => true,
-                type => true,
-                ob =>
-                    ob.PostConfigure<IMessageHub>(
-                        (o, hub) => o.SerializerOptions = hub.JsonSerializerOptions
-                    )
-            );
-        });
-
-
-    }
 
     internal static void AddOrleansMeshInternal<TAddress>(this WebApplicationBuilder builder, TAddress address,
         Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration = null,
@@ -52,7 +51,14 @@ public static class OrleansClientExtensions
                 .AddSingleton<IRoutingService, RoutingService>()
                 .AddSingleton<IMeshCatalog, MeshCatalog>();
         builder.Host.AddMeshWeaver(address,
-                conf => conf.Set<Func<MeshConfiguration, MeshConfiguration>>(x =>
+                conf => (hubConfiguration == null ? conf : hubConfiguration.Invoke(conf))
+                    .WithTypes(typeof(TAddress))
+                    .WithRoutes(routes =>
+                        routes.WithHandler((delivery, _) =>
+                            delivery.State != MessageDeliveryState.Submitted || delivery.Target == null || delivery.Target.Equals(address)
+                                ? Task.FromResult(delivery)
+                                : routes.Hub.ServiceProvider.GetRequiredService<IRoutingService>().DeliverMessage(delivery)))
+                    .Set<Func<MeshConfiguration, MeshConfiguration>>(x =>
                     CreateStandardConfiguration(meshConfiguration == null ? x : meshConfiguration(x))))
             ;
     }
@@ -76,19 +82,6 @@ public static class OrleansClientExtensions
         return dataPluginConfig.Invoke(new());
     }
 
-    private static MessageHubConfiguration AddMeshClient<TAddress>(this MessageHubConfiguration conf, TAddress address)
-        => conf
-            .WithTypes(typeof(TAddress))
-            .WithRoutes(routes =>
-                routes.WithHandler((delivery, _) =>
-                    delivery.State != MessageDeliveryState.Submitted || delivery.Target == null || delivery.Target.Equals(address)
-                        ? Task.FromResult(delivery)
-                        : routes.Hub.ServiceProvider.GetRequiredService<IRoutingService>().DeliverMessage(delivery)))
-            .WithInitialization(async (hub, cancellationToken) =>
-            {
-                await hub.ServiceProvider.GetRequiredService<IMeshCatalog>().InitializeAsync(cancellationToken);
-            })
-    ;
 
 
 }
