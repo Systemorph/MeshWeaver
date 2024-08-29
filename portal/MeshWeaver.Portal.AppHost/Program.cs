@@ -1,11 +1,11 @@
 ﻿var builder = DistributedApplication.CreateBuilder(args);
 var storage = builder.AddAzureStorage("storage").RunAsEmulator();
 
-var redis = builder.AddRedis("redis");
+var redis = builder.AddRedis("orleans-redis");
 
 var orleans = builder.AddOrleans("default")
     .WithClustering(redis)
-    .WithGrainStorage("redis", redis)
+    .WithGrainStorage(redis)
     .WithGrainStorage("mesh-catalog", storage.AddTables("mesh-catalog"))
     .WithGrainStorage("activity", storage.AddTables("activity"))
     ;

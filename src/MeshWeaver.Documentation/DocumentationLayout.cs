@@ -99,6 +99,8 @@ public static class DocumentationLayout
             ;
     }
 
+    public static LayoutAreaReference GetLayoutAreaReferenceForEmbeddedResource(this Assembly assembly, string resource)
+        => new(nameof(Doc)) { Id = $"Embedded/{assembly.GetName().Name}/{resource}" };
 
     private const string ReadPattern = @"^(?<sourceType>[^@]+)/(?<sourceId>[^@]+)/(?<documentId>[^@]+)$";
 

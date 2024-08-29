@@ -2,13 +2,13 @@
 @using MeshWeaver.Application
 @using MeshWeaver.Layout
 
-<div class="splash-screen">
+@* <div class="splash-screen">
     <img src="images/SplashScreen.jpg" alt="Splash Screen Image">
 </div>
-
-<PageTitle>Mesh Weaver></PageTitle>
-@* <LayoutArea ViewModel="@ViewModel"/>
  *@
+<PageTitle>Mesh Weaver></PageTitle>
+<LayoutArea ViewModel="@ViewModel"/>
+
 @code {
-    private LayoutAreaControl ViewModel = new(new ApplicationAddress("MeshWeaver", "Overview"), new("Index"));
+    private LayoutAreaControl ViewModel = new(new ApplicationAddress("MeshWeaver", "Overview"), new("Doc"){Id = "Embedded/MeshWeaver.Overview/Readme.md"});
 }
