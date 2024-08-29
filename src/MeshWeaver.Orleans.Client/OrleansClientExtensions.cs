@@ -16,32 +16,27 @@ public static class OrleansClientExtensions
 
     public static void AddOrleansMesh<TAddress>(this WebApplicationBuilder builder, TAddress address,
         Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration = null,
-        Func<MeshConfiguration, MeshConfiguration> meshConfiguration = null)
+        Func<MeshConfiguration, MeshConfiguration> meshConfiguration = null,
+        Func<IClientBuilder, IClientBuilder> orleansConfiguration = null)
     {
-        builder.Services.AddSingleton<IServiceProviderFactory<IServiceCollection>>(
-            new MessageHubServiceProviderFactory(address,
-                conf => (hubConfiguration == null ? conf : hubConfiguration(conf)).AddOrleansMesh(address,
-                    meshConfiguration)));
-
         AddOrleansMeshInternal(builder, address, hubConfiguration, meshConfiguration);
-        builder.UseOrleansClient();
+        builder.UseOrleansClient(client => (orleansConfiguration ?? (x => x)).Invoke( 
+            client.AddMemoryStreams(StreamProviders.Memory)));
     }
     internal static void AddOrleansMeshInternal<TAddress>(this WebApplicationBuilder builder, TAddress address,
         Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration = null,
         Func<MeshConfiguration, MeshConfiguration> meshConfiguration = null)
     {
-        builder.Host.AddMeshWeaver(address, c => (hubConfiguration == null ? c : hubConfiguration(c)).Set(meshConfiguration));
+        builder.Services
+                .AddSingleton<IRoutingService, RoutingService>()
+                .AddSingleton<IMeshCatalog, MeshCatalog>();
+        builder.Host.AddMeshWeaver(address,
+                conf => conf.Set<Func<MeshConfiguration, MeshConfiguration>>(x =>
+                    CreateStandardConfiguration(meshConfiguration == null ? x : meshConfiguration(x))))
+            ;
     }
 
 
-    private static MessageHubConfiguration AddOrleansMesh<TAddress>(this MessageHubConfiguration conf, TAddress address, Func<MeshConfiguration, MeshConfiguration> configuration = null)
-    => conf.AddMeshClient(address)
-        .WithServices(services => 
-            services
-                .AddSingleton<IRoutingService, RoutingService>()
-                .AddSingleton<IMeshCatalog, MeshCatalog>()
-            )
-        .Set<Func<MeshConfiguration, MeshConfiguration>>(x => CreateStandardConfiguration(configuration == null ? x : configuration(x)));
 
     private static MeshConfiguration CreateStandardConfiguration(MeshConfiguration conf) => conf
         .WithAddressToMeshNodeIdMapping(o => o is ApplicationAddress ? SerializationExtensions.GetId(o) : null);

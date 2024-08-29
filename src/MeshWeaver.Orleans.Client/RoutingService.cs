@@ -17,7 +17,7 @@ namespace MeshWeaver.Orleans.Client
         {
             var address = hub.Address;
             var addressId = address.ToString();
-            var streamInfo = new StreamInfo(addressId, StreamProviders.SMS, hub.Address.GetType().Name, address);
+            var streamInfo = new StreamInfo(addressId, StreamProviders.Memory, hub.Address.GetType().Name, address);
             var info = await hub.ServiceProvider.GetRequiredService<IGrainFactory>().GetGrain<IAddressRegistryGrain>(streamInfo.Id).Register(address);
             var subscription = await hub.ServiceProvider
                 .GetRequiredKeyedService<IStreamProvider>(info.StreamProvider)
