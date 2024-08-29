@@ -22,7 +22,10 @@ public class MeshWeaverOverviewAttribute : MeshNodeAttribute
         => serviceProvider.CreateMessageHub(Address, config => config.AddMeshWeaverOverview());
 
     public override MeshNode Node { get; } =
-        new(Address.ToString(), "Mesh Weaver Overview", BasePath, AssemblyPath, ContentPath);
+        new(Address.ToString(), "Mesh Weaver Overview", BasePath, AssemblyPath, ContentPath)
+        {
+
+        };
 }
 
 public static class MeshWeaverOverviewRegistry

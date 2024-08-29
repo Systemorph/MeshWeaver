@@ -57,7 +57,7 @@ public static class OrleansClientExtensions
                         routes.WithHandler((delivery, _) =>
                             delivery.State != MessageDeliveryState.Submitted || delivery.Target == null || delivery.Target.Equals(address)
                                 ? Task.FromResult(delivery)
-                                : routes.Hub.ServiceProvider.GetRequiredService<IRoutingService>().DeliverMessage(delivery)))
+                                : routes.Hub.ServiceProvider.GetRequiredService<IRoutingService>().DeliverMessage(delivery.Package(routes.Hub.JsonSerializerOptions))))
                     .Set<Func<MeshConfiguration, MeshConfiguration>>(x =>
                     CreateStandardConfiguration(meshConfiguration == null ? x : meshConfiguration(x))))
             ;

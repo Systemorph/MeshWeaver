@@ -13,7 +13,8 @@ namespace MeshWeaver.Orleans.Server;
 
 [ImplicitStreamSubscription(MessageIn)]
 [StorageProvider(ProviderName = StorageProviders.Activity)]
-public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub parentHub) : Grain<StreamActivity>, IStreamSubscriptionObserver
+public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub parentHub)
+    : Grain<StreamActivity>, IMessageHubGrain
 {
     public const string MessageIn = nameof(MessageIn);
 
@@ -23,11 +24,8 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub parent
     private IMessageHub Hub { get; set; }
 
 
-
-
-    public async Task OnSubscribed(IStreamSubscriptionHandleFactory handleFactory)
+    public override async Task OnActivateAsync(CancellationToken cancellationToken)
     {
-        logger.LogInformation($"OnSubscribed: {handleFactory.ProviderName}/{handleFactory.StreamId}");
 
         var streamId = this.GetPrimaryKeyString();
         var startupInfo = await GrainFactory.GetGrain<IAddressRegistryGrain>(streamId).GetStorageInfo();
@@ -35,49 +33,37 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub parent
         var pathToAssembly = Path.Combine(startupInfo.BaseDirectory, startupInfo.AssemblyLocation);
         loadContext = new(this.GetPrimaryKeyString());
         var loaded = loadContext.LoadFromAssemblyPath(pathToAssembly);
-        var startupAttribute = loaded.GetCustomAttributes<MeshNodeAttribute>().FirstOrDefault(a => a.Node.Id == startupInfo.NodeId);
+        var startupAttribute = loaded.GetCustomAttributes<MeshNodeAttribute>()
+            .FirstOrDefault(a => a.Node.Id == startupInfo.NodeId);
         if (startupAttribute == null)
             throw new InvalidOperationException($"No HubStartupAttribute found for {startupInfo.NodeId}");
 
         Hub = startupAttribute.Create(parentHub.ServiceProvider, startupInfo.Address);
         State = State with { IsDeactivated = false };
         await this.WriteStateAsync();
-        
-        await handleFactory.Create<IMessageDelivery>().ResumeAsync(OnNext, OnError, OnCompleted, this.State.Token);
-
-        async Task OnNext(IMessageDelivery value, StreamSequenceToken token)
-        {
-            logger.LogDebug("Received: [{Value} {Token}]", value, token);
-            var messageType = value.Message.GetType().FullName;
-            this.State = State with
-            {
-                EventCounter = State.EventCounter.SetItem(messageType, State.EventCounter.GetValueOrDefault(messageType) + 1),
-                Token = token,
-            };
-            Hub.DeliverMessage(value);
-            await this.WriteStateAsync();
-        }
-
-        async Task OnError(Exception ex)
-        {
-            logger.LogError("Error: {Exception}", ex);
-            this.State = State with{ErrorCounter = State.ErrorCounter + 1};
-            await this.WriteStateAsync();
-        }
-
-        async Task OnCompleted()
-        {
-            if(Hub != null)
-                await Hub.DisposeAsync();
-            Hub = null;
-            State = State with { IsDeactivated = true };
-            await WriteStateAsync();
-        }
     }
+
+
+
+
+    public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery request)
+    {
+        logger.LogDebug("Received: [{Value} {Token}]", request);
+        var messageType = request.Message.GetType().FullName;
+        this.State = State with
+        {
+            EventCounter =
+            State.EventCounter.SetItem(messageType, State.EventCounter.GetValueOrDefault(messageType) + 1),
+        };
+        var ret = Hub.DeliverMessage(request);
+        await this.WriteStateAsync();
+        return ret;
+    }
+
 
     public override async Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
     {
-        if(Hub != null)
+        if (Hub != null)
             await Hub.DisposeAsync();
         Hub = null;
         if (loadContext != null)
