@@ -227,7 +227,7 @@ public static class WaterfallChartExtensions
 
         var datasets = dataModel.BuildDataSets<TDataSet, TDataSetBuilder, TOptions>(styling, options);
 
-        tmp = tmp with { DataSets = datasets, };
+        tmp = tmp with { Data = tmp.Data.WithDataSets(datasets), };
 
         if (options.IncludeConnectors)
         {
