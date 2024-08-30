@@ -25,7 +25,8 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
         typeof(TimeSpan),
         typeof(Guid),
         typeof(Uri),
-        typeof(byte[])
+        typeof(byte[]),
+        typeof(RawJson)
     ];
 
     private readonly ConcurrentDictionary<string, Type> typeByName =
