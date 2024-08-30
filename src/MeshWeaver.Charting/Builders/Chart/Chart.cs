@@ -1,5 +1,4 @@
-﻿using System.Collections.Immutable;
-using MeshWeaver.Charting.Enums;
+﻿using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Helpers;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Models.Options;
@@ -13,13 +12,13 @@ public abstract record Chart<TChart, TDataSet> : Models.Chart
 {
     public Chart(IReadOnlyCollection<TDataSet> dataSets/*, ChartOptions Options*/, ChartType chartType) : base(chartType)
     {
-        DataSets = dataSets.Cast<DataSet>().ToImmutableList();
+        Data = Data.WithDataSets(dataSets);
     }
 
     protected TChart This => (TChart)this;
 
     public TChart WithDataSet<TDataSet2>(TDataSet2 dataSet) where TDataSet2 : DataSet
-        => This with { DataSets = DataSets.Add(dataSet) };
+        => This with { Data = Data.WithDataSets(dataSet), };
 
     public virtual TChart WithLabels(params string[] labels) =>
         WithLabels(labels.AsReadOnly());
@@ -70,7 +69,7 @@ public abstract record Chart<TChart, TDataSet> : Models.Chart
 
         var options = Options;
 
-        if (plugins?.Legend is null && DataSets.Count > 1 && DataSets.Any(item => item.HasLabel()))
+        if (plugins?.Legend is null && Data.DataSets.Count > 1 && Data.DataSets.Any(item => item.HasLabel()))
         {
             options = Options.WithPlugins(p => p.WithLegend());
         }
@@ -78,7 +77,6 @@ public abstract record Chart<TChart, TDataSet> : Models.Chart
         return this with
         {
             Options = options,
-            Data = Data with { DataSets = DataSets, },
         };
     }
 }

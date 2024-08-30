@@ -9,7 +9,7 @@ public record PointChart : Chart<PointChart, LineScatterDataSet>
         : base(dataSets, ChartType.Scatter) { }
 
     public override PointChart WithLabels(IReadOnlyCollection<string> names)
-        => DataSets.Count <= names.Count
+        => Data.DataSets.Count <= names.Count
             ? base.WithLabels(names)
             : throw new Exception("Provided fewer labels than data sets");
 
