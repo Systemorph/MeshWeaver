@@ -72,8 +72,10 @@ public sealed class MessageHub
         serializationOptions.Converters.Add(new ImmutableDictionaryOfStringObjectConverter());
         serializationOptions.Converters.Add(new TypedObjectSerializeConverter(typeRegistry, null));
         serializationOptions.Converters.Add(new MessageDeliveryConverter());
+        serializationOptions.Converters.Add(new RawJsonConverter());
         deserializationOptions.Converters.Add(new ImmutableDictionaryOfStringObjectConverter());
         deserializationOptions.Converters.Add(new TypedObjectDeserializeConverter(typeRegistry, serializationConfig));
+        deserializationOptions.Converters.Add(new RawJsonConverter());
 
         JsonSerializerOptions = new JsonSerializerOptions();
         JsonSerializerOptions.Converters.Add(
