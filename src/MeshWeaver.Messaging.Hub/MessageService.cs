@@ -1,5 +1,6 @@
 ﻿using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks.Dataflow;
 using Microsoft.Extensions.Logging;
 
@@ -73,6 +74,9 @@ public class MessageService : IMessageService
     {
         if (isDisposing)
             return delivery.Failed("Hub disposing");
+
+        if (delivery.Target is JsonNode node)
+            delivery = delivery.WithTarget(node.Deserialize<object>(deserializeOptions));
 
         if (Address.Equals(delivery.Target))
             delivery = UnpackIfNecessary(delivery);

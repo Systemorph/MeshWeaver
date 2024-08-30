@@ -45,11 +45,11 @@ public abstract record MessageDelivery(object Sender, object Target) : IMessageD
 
 
 
-    IMessageDelivery IMessageDelivery.WithRoutedSender(object address)
+    IMessageDelivery IMessageDelivery.WithSender(object address)
     {
         return this with { Sender = address };
     }
-    IMessageDelivery IMessageDelivery.WithRoutedTarget(object address)
+    IMessageDelivery IMessageDelivery.WithTarget(object address)
     {
         return this with { Target = address };
     }

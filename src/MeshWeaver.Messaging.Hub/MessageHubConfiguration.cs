@@ -100,7 +100,7 @@ public record MessageHubConfiguration
         services.Replace(ServiceDescriptor.Singleton<IMessageHub>(sp => new MessageHub(sp, sp.GetRequiredService<HostedHubsCollection>(), this, parent)));
         services.Replace(ServiceDescriptor.Singleton<HostedHubsCollection, HostedHubsCollection>());
         services.Replace(ServiceDescriptor.Singleton(typeof(ITypeRegistry),
-            _ => new TypeRegistry(ParentServiceProvider.GetService<ITypeRegistry>())));
+            _ => new TypeRegistry(ParentServiceProvider.GetService<ITypeRegistry>()).WithType(Address.GetType())));
         services.Replace(ServiceDescriptor.Singleton<IMessageService>(sp => new MessageService(Address,sp.GetRequiredService<ILogger<MessageService>>())));
         services.Replace(ServiceDescriptor.Singleton(sp => new ParentMessageHub(sp.GetRequiredService<IMessageHub>())));
         Services.Invoke(services);
