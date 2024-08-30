@@ -5,6 +5,6 @@ namespace MeshWeaver.Orleans.Client
 {
     public interface IRoutingGrain : IGrainWithStringKey
     {
-        Task<IMessageDelivery> DeliverMessage(IMessageDelivery request);
+        Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery);
     }
 }

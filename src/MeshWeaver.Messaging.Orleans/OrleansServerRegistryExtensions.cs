@@ -29,6 +29,7 @@ public static  class OrleansServerRegistryExtensions
                 silo.ConfigureEndpoints(Random.Shared.Next(10_000, 50_000), Random.Shared.Next(10_000, 50_000));
             }
             silo.AddMemoryStreams(StreamProviders.Memory)
+                .AddMemoryStreams(StreamProviders.Mesh)
                 .AddMemoryGrainStorage("PubSubStore");
 
             silo.Services.AddSerializer(serializerBuilder =>

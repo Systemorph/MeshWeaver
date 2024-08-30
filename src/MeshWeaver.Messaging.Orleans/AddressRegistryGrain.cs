@@ -12,20 +12,26 @@ namespace MeshWeaver.Orleans.Server;
 public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCatalog meshCatalog) : Grain<StreamInfo>, IAddressRegistryGrain
 {
     private MeshNode Node { get; set; }
+    public override async Task OnActivateAsync(CancellationToken cancellationToken)
+    {
+        await base.OnActivateAsync(cancellationToken);
+        Node = await meshCatalog.GetNodeById(this.GetPrimaryKeyString());
+        if (Node is { Id: null })
+            Node = null;
+        if (State is { Id: null })
+            State = null;
+    }
 
     public async Task<StreamInfo> Register(object address)
     {
-        if (State is { StreamProvider: not null })
-            return State;
 
-        if (Node == null)
+        if (State == null)
         {
-            Node = await meshCatalog.GetNodeAsync(address);
-            logger.LogDebug("Mapping address {Address} to Id {Id} for {Node}", address, this.GetPrimaryKeyString(), Node);
-        }
-        State = ConvertNode(address);
-        if(State != null)
+            State = InitializeState(address);
             await WriteStateAsync();
+        }
+
+        logger.LogDebug("Mapping address {Address} to Id {Id} for {Node}", address, this.GetPrimaryKeyString(), Node);
         return State;
     }
 
@@ -35,11 +41,11 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
         await WriteStateAsync();
     }
 
-    private StreamInfo ConvertNode(object address) =>
-        Node is { StreamProvider: not null }
+    private StreamInfo InitializeState(object address) =>
+        Node != null 
             ? new(this.GetPrimaryKeyString(), Node.StreamProvider, Node.Namespace, address)
             :
-            new StreamInfo(SerializationExtensions.GetId(address), StreamProviders.Memory, MeshNode.MessageIn, address);
+            new StreamInfo(SerializationExtensions.GetId(address), StreamProviders.Memory, IRoutingService.MessageIn, address);
 
 
     public Task<NodeStorageInfo> GetStorageInfo() =>

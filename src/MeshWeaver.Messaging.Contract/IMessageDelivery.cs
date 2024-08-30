@@ -9,7 +9,7 @@ namespace MeshWeaver.Messaging;
 public interface IMessageDelivery
 {
     private const string Error = nameof(Error);
-    ImmutableDictionary<string, object> Properties { get; }
+    IReadOnlyDictionary<string, object> Properties { get; }
     string Id { get; }
     object Sender { get; }
     object Target { get; }

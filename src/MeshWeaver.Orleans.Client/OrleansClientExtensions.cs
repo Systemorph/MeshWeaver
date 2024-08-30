@@ -24,6 +24,7 @@ public static class OrleansClientExtensions
             .UseOrleansClient(client =>
             {
                 client.AddMemoryStreams(StreamProviders.Memory);
+                client.AddMemoryStreams(StreamProviders.Mesh);
 
                 client.Services.AddSerializer(serializerBuilder =>
                 {

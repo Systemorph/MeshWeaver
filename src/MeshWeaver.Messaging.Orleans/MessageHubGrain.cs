@@ -1,24 +1,20 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
-using System.Runtime.Loader;
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
 using MeshWeaver.Orleans.Client;
 using Microsoft.Extensions.Logging;
 using Orleans.Providers;
 using Orleans.Streams;
-using Orleans.Streams.Core;
 
 namespace MeshWeaver.Orleans.Server;
 
-[ImplicitStreamSubscription(MessageIn)]
 [StorageProvider(ProviderName = StorageProviders.Activity)]
 public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub parentHub)
     : Grain<StreamActivity>, IMessageHubGrain
 {
-    public const string MessageIn = nameof(MessageIn);
 
-    private AssemblyLoadContext loadContext;
+    private CollectibleAssemblyLoadContext loadContext;
 
 
     private IMessageHub Hub { get; set; }
@@ -29,9 +25,14 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub parent
 
         var streamId = this.GetPrimaryKeyString();
         var startupInfo = await GrainFactory.GetGrain<IAddressRegistryGrain>(streamId).GetStorageInfo();
+        if (startupInfo == null || startupInfo is { AssemblyLocation: null })
+        {
+            logger.LogError("Cannot find info for {address}", this.GetPrimaryKeyString());
+            return;
+        }
 
         var pathToAssembly = Path.Combine(startupInfo.BaseDirectory, startupInfo.AssemblyLocation);
-        loadContext = new(this.GetPrimaryKeyString());
+        loadContext = new();
         var loaded = loadContext.LoadFromAssemblyPath(pathToAssembly);
         var startupAttribute = loaded.GetCustomAttributes<MeshNodeAttribute>()
             .FirstOrDefault(a => a.Node.Id == startupInfo.NodeId);
@@ -40,22 +41,32 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub parent
 
         Hub = startupAttribute.Create(parentHub.ServiceProvider, startupInfo.Address);
         State = State with { IsDeactivated = false };
+
         await this.WriteStateAsync();
     }
 
 
 
 
-    public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery request)
+    public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
     {
-        logger.LogDebug("Received: [{Value} {Token}]", request);
-        var messageType = request.Message.GetType().FullName;
+        logger.LogDebug("Received: {request}", delivery);
+        if (Hub == null)
+        {
+            var address = this.GetPrimaryKeyString();
+            logger.LogError("Hub not started for {address}", this.GetPrimaryKeyString());
+            DeactivateOnIdle();
+            return delivery.Failed($"Hub not started for {address}");
+        }
+
+
+        var messageType = delivery.Message.GetType().FullName;
         this.State = State with
         {
             EventCounter =
             State.EventCounter.SetItem(messageType, State.EventCounter.GetValueOrDefault(messageType) + 1),
         };
-        var ret = Hub.DeliverMessage(request);
+        var ret = Hub.DeliverMessage(delivery);
         await this.WriteStateAsync();
         return ret;
     }
