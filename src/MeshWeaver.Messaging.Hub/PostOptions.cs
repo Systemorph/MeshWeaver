@@ -6,9 +6,17 @@ public record PostOptions(object Sender)
 {
     public const string RequestId = nameof(RequestId);
     internal object Target { get; init; }
-    public ImmutableDictionary<string, object> Properties { get; init; } = ImmutableDictionary<string, object>.Empty;
 
-    public PostOptions WithProperty(string key, object value) => this with { Properties = Properties.SetItem(key, value)};
+    public IReadOnlyDictionary<string, object> Properties
+    {
+        get => PropertiesInternal;
+        init => PropertiesInternal = value.ToImmutableDictionary();
+    }
+
+    private ImmutableDictionary<string, object> PropertiesInternal { get; init; } =
+        ImmutableDictionary<string, object>.Empty;
+
+    public PostOptions WithProperty(string key, object value) => this with { PropertiesInternal = PropertiesInternal.SetItem(key, value) };
     public PostOptions WithTarget(object targetAddress) => this with { Target = targetAddress };
 
     public PostOptions ResponseFor(IMessageDelivery requestDelivery) =>
@@ -16,19 +24,18 @@ public record PostOptions(object Sender)
         this with
         {
             Target = requestDelivery.Sender,
-            Properties = requestDelivery.Properties
-                                        .SetItem(RequestId, requestDelivery.Id)
+            PropertiesInternal = requestDelivery.Properties.ToImmutableDictionary().SetItem(RequestId, requestDelivery.Id)
         };
 
     public PostOptions WithRequestIdFrom(IMessageDelivery requestDelivery) => this with
                                                                               {
-                                                                                  Properties = requestDelivery.Properties
+                                                                                  PropertiesInternal = requestDelivery.Properties.ToImmutableDictionary()
                                                                                                               .SetItem(RequestId, requestDelivery.Id)
                                                                               };
 
 
-    public PostOptions WithProperties(IDictionary<string, object> properties)
+    public PostOptions WithProperties(IReadOnlyDictionary<string, object> properties)
     {
-        return this with { Properties = Properties.AddRange(properties) };
+        return this with { PropertiesInternal = PropertiesInternal.AddRange(properties) };
     }
 }

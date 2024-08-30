@@ -6,4 +6,6 @@ public interface IRoutingService
 {
     Task<IMessageDelivery> DeliverMessage(IMessageDelivery request);
     Task RegisterHubAsync(IMessageHub hub);
+
+    public const string MessageIn = nameof(MessageIn);
 }

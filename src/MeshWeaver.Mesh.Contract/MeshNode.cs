@@ -1,11 +1,8 @@
 ﻿namespace MeshWeaver.Mesh.Contract
 {
     [GenerateSerializer]
-    public record MeshNode(string Id, string Name, string BasePath, string AssemblyLocation, string ContentPath)
+    public record MeshNode(string Id, string Name, string BasePath, string AssemblyLocation, string ContentPath, string ThumbNail = null, string StreamProvider = StreamProviders.Mesh, string Namespace = MeshNode.MeshIn)
     {
-        public const string MessageIn = nameof(MessageIn);
-        public string Thumbnail { get; init; }
-        public string StreamProvider { get; init; } = StreamProviders.Mesh;
-        public string Namespace { get; init; } = MessageIn;
+        public const string MeshIn = nameof(MeshIn);
     }
 }

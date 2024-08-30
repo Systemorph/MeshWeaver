@@ -10,17 +10,17 @@ namespace MeshWeaver.Orleans.Server
     [PreferLocalPlacement]
     public class RoutingGrain(ILogger<RoutingGrain> logger) : Grain, IRoutingGrain
     {
-        public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery message)
+        public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
         {
-            logger.LogDebug("Delivering Message {Message} from {Sender} to {Target}", message.Message, message.Sender, message.Target);
-            var target = message.Target;
+            logger.LogDebug("Delivering Message {Message} from {Sender} to {Target}", delivery.Message, delivery.Sender, delivery.Target);
+            var target = delivery.Target;
             var targetId = SerializationExtensions.GetId(target);
             var streamInfo = await GrainFactory.GetGrain<IAddressRegistryGrain>(targetId).Register(targetId);
-            if(streamInfo.StreamProvider == StreamProviders.Mesh)
-                return await GrainFactory.GetGrain<IMessageHubGrain>(targetId).DeliverMessage(message);
+            if(streamInfo.StreamProvider is StreamProviders.Mesh)
+                return await GrainFactory.GetGrain<IMessageHubGrain>(targetId).DeliverMessage(delivery);
             var stream = this.GetStreamProvider(streamInfo.StreamProvider).GetStream<IMessageDelivery>(streamInfo.Namespace, targetId);
-            await stream.OnNextAsync(message);
-            return message.Forwarded([target]);
+            await stream.OnNextAsync(delivery);
+            return delivery.Forwarded([target]);
         }
 
     }

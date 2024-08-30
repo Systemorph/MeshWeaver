@@ -37,7 +37,7 @@ namespace MeshWeaver.Orleans.Client
         {
             foreach (var assemblyLocation in Configuration.InstallAtStartup)
             {
-                var loadContext = new AssemblyLoadContext(assemblyLocation);
+                var loadContext = new CollectibleAssemblyLoadContext();
                 var assembly = loadContext.LoadFromAssemblyPath(assemblyLocation);
                 foreach (var node in assembly.GetCustomAttributes<MeshNodeAttribute>().Select(a => a.Node))
                     await grainFactory.GetGrain<IMeshNodeGrain>(node.Id).Update(node);
@@ -52,3 +52,5 @@ namespace MeshWeaver.Orleans.Client
             => grainFactory.GetGrain<IArticleGrain>(article.Id).Update(article);
     }
 }
+
+public class CollectibleAssemblyLoadContext() : AssemblyLoadContext(true){}
