@@ -31,6 +31,7 @@ public class MeshWeaverOverviewAttribute : MeshNodeAttribute
 public static class MeshWeaverOverviewRegistry
 {
     public static MessageHubConfiguration AddMeshWeaverOverview(this MessageHubConfiguration configuration)
-        => configuration.AddLayout(layout => layout)
+        => configuration
+            .AddLayout(layout => layout)
             .AddDocumentation();
 }
