@@ -591,11 +591,11 @@ public class ChartTests
 
         var dataSet = (LineScatterDataSet)new LineScatterDataSetBuilder()
             .WithDataPoint(exes, whys)
+            .WithLabel("pp")
             .Build();
 
         var plot = Charts
             .Scatter([dataSet])
-            .WithLabels("pp")
             .WithLegend(l =>
                 l with
                 {
