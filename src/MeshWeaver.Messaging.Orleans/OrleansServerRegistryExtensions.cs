@@ -46,20 +46,17 @@ public static  class OrleansServerRegistryExtensions
             });
         });
 
-        builder.Services.AddSingleton<IHostedService, CatalogInitializationHostedService>();
+        builder.Services.AddSingleton<IHostedService, ServerInitializationHostedService>();
     }
 }
 
-public class CatalogInitializationHostedService(IMessageHub hub) : IHostedService
+public class ServerInitializationHostedService(IMessageHub hub) : ClientInitializationHostedService(hub)
 {
     private readonly IMeshCatalog catalog = hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public override async Task StartAsync(CancellationToken cancellationToken)
     {
-        await hub.ServiceProvider.GetRequiredService<IRoutingService>().RegisterHubAsync(hub);
+        await base.StartAsync(cancellationToken);
         await catalog.InitializeAsync(cancellationToken);
 
     }
-
-    public Task StopAsync(CancellationToken cancellationToken)
-        => Task.CompletedTask;
 }
