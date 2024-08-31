@@ -41,6 +41,7 @@ public static class OrleansClientExtensions
                 if (orleansConfiguration != null)
                     orleansConfiguration.Invoke(client);
             });
+        builder.Services.AddSingleton<IHostedService, ClientInitializationHostedService>();
     }
 
 
@@ -87,3 +88,13 @@ public static class OrleansClientExtensions
 
 }
 
+public class ClientInitializationHostedService(IMessageHub hub) : IHostedService
+{
+    public virtual async Task StartAsync(CancellationToken cancellationToken)
+    {
+        await hub.ServiceProvider.GetRequiredService<IRoutingService>().RegisterHubAsync(hub);
+    }
+
+    public virtual Task StopAsync(CancellationToken cancellationToken)
+        => Task.CompletedTask;
+}
