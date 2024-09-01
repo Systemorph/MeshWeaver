@@ -1,5 +1,4 @@
 ﻿using System.Runtime.CompilerServices;
-using MeshWeaver.Application;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
@@ -45,7 +44,7 @@ public static class OrleansClientExtensions
     }
 
 
-    internal static void AddOrleansMeshInternal<TAddress>(this WebApplicationBuilder builder, TAddress address,
+    internal static void AddOrleansMeshInternal<TAddress>(this IHostApplicationBuilder builder, TAddress address,
         Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration = null,
         Func<MeshConfiguration, MeshConfiguration> meshConfiguration = null)
     {
