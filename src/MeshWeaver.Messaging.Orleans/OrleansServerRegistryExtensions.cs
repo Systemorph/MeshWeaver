@@ -10,7 +10,7 @@ namespace MeshWeaver.Orleans.Server;
 
 public static  class OrleansServerRegistryExtensions
 {
-    public static void AddOrleansMeshServer<TAddress>(this WebApplicationBuilder builder, 
+    public static void AddOrleansMeshServer<TAddress>(this IHostApplicationBuilder builder, 
         TAddress address,
         Func<MeshConfiguration, MeshConfiguration> meshConfiguration = null,
         Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration = null,

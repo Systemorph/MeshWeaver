@@ -3,8 +3,9 @@ using MeshWeaver.Orleans.Client;
 using MeshWeaver.Orleans.Server;
 using MeshWeaver.Overview;
 using MeshWeaver.Portal.ServiceDefaults;
+using Microsoft.Extensions.Hosting;
 
-var builder = WebApplication.CreateBuilder(args);
+var builder = Host.CreateApplicationBuilder(args);
 builder.AddServiceDefaults();
 builder.AddKeyedAzureTableClient(StorageProviders.MeshCatalog);
 builder.AddKeyedAzureTableClient(StorageProviders.Activity);
