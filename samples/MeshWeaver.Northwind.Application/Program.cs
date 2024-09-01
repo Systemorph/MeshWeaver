@@ -1,5 +1,8 @@
 ﻿using System.Diagnostics;
 using MeshWeaver.Application;
+using MeshWeaver.Blazor;
+using MeshWeaver.Blazor.AgGrid;
+using MeshWeaver.Blazor.ChartJs;
 using Microsoft.FluentUI.AspNetCore.Components;
 using MeshWeaver.Hosting;
 using MeshWeaver.Northwind.Application;
@@ -30,7 +33,11 @@ builder.Services.AddFluentUIComponents();
 
 builder.AddMeshWeaver(
     new UiAddress(),
-    config => config.ConfigureNorthwindHubs()
+    config => config    
+        .AddBlazor(x =>
+        x.AddChartJs()
+            .AddAgGrid()
+    )
 );
 
 
