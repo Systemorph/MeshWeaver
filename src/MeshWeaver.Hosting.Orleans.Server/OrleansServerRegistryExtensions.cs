@@ -1,29 +1,26 @@
-﻿using MeshWeaver.Mesh.Contract;
+﻿using MeshWeaver.Hosting.Orleans.Client;
+using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
-using MeshWeaver.Orleans.Client;
-using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Orleans.Serialization;
 
-namespace MeshWeaver.Orleans.Server;
+namespace MeshWeaver.Hosting.Orleans.Server;
 
 public static  class OrleansServerRegistryExtensions
 {
-    public static void AddOrleansMeshServer<TAddress>(this IHostApplicationBuilder builder, 
-        TAddress address,
-        Func<MeshConfiguration, MeshConfiguration> meshConfiguration = null,
-        Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration = null,
+    public static TBuilder AddOrleansMeshServer<TBuilder>(this TBuilder builder, 
         Action<ISiloBuilder> siloConfiguration = null)
+    where TBuilder:MeshWeaverApplicationBuilder<TBuilder>
     {
-        builder.AddOrleansMeshInternal(address, hubConfiguration, meshConfiguration);
+        builder.AddOrleansMeshInternal();
         
-        builder.UseOrleans(silo =>
+        builder.Host.UseOrleans(silo =>
         {
 
             if(siloConfiguration != null)
                 siloConfiguration.Invoke(silo);
-            if (builder.Environment.IsDevelopment())
+            if (builder.Host.Environment.IsDevelopment())
             {
                 silo.ConfigureEndpoints(Random.Shared.Next(10_000, 50_000), Random.Shared.Next(10_000, 50_000));
             }
@@ -45,7 +42,8 @@ public static  class OrleansServerRegistryExtensions
             });
         });
 
-        builder.Services.AddSingleton<IHostedService, ServerInitializationHostedService>();
+        builder.Host.Services.AddSingleton<IHostedService, ServerInitializationHostedService>();
+        return builder;
     }
 }
 

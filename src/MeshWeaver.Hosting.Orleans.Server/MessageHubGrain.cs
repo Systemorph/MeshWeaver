@@ -1,13 +1,13 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
+using MeshWeaver.Hosting.Orleans.Client;
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
-using MeshWeaver.Orleans.Client;
 using Microsoft.Extensions.Logging;
 using Orleans.Providers;
 using Orleans.Streams;
 
-namespace MeshWeaver.Orleans.Server;
+namespace MeshWeaver.Hosting.Orleans.Server;
 
 [StorageProvider(ProviderName = StorageProviders.Activity)]
 public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub parentHub)

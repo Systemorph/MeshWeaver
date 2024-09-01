@@ -1,11 +1,10 @@
 ﻿using System.Reflection;
 using System.Runtime.Loader;
-using MeshWeaver.Hosting;
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace MeshWeaver.Orleans.Client
+namespace MeshWeaver.Hosting.Orleans.Client
 {
     public class MeshCatalog(IMessageHub hub) : IMeshCatalog
     {
@@ -20,7 +19,7 @@ namespace MeshWeaver.Orleans.Client
                 .FirstOrDefault(x => x != null);
 
         public Task<MeshNode> GetNodeAsync(object address)=> 
-        GetNodeById(GetNodeId(address));
+            GetNodeById(GetNodeId(address));
 
         public Task<MeshNode> GetNodeById(string id)
             => grainFactory.GetGrain<IMeshNodeGrain>(id).Get();
@@ -52,6 +51,6 @@ namespace MeshWeaver.Orleans.Client
         public Task UpdateArticle(ArticleEntry article)
             => grainFactory.GetGrain<IArticleGrain>(article.Id).Update(article);
     }
-}
 
-public class CollectibleAssemblyLoadContext() : AssemblyLoadContext(true){}
+    public class CollectibleAssemblyLoadContext() : AssemblyLoadContext(true){}
+}

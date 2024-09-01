@@ -1,5 +1,4 @@
 ﻿using System.Runtime.CompilerServices;
-using MeshWeaver.Hosting;
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
@@ -7,19 +6,18 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Orleans.Serialization;
 
-[assembly:InternalsVisibleTo("MeshWeaver.Orleans.Server")]
-namespace MeshWeaver.Orleans.Client;
+[assembly:InternalsVisibleTo("MeshWeaver.Hosting.Orleans.Server")]
+namespace MeshWeaver.Hosting.Orleans.Client;
 
 public static class OrleansClientExtensions
 {
 
-    public static void AddOrleansMeshClient<TAddress>(this WebApplicationBuilder builder, TAddress address,
-        Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration = null,
-        Func<MeshConfiguration, MeshConfiguration> meshConfiguration = null,
+    public static TBuilder AddOrleansMeshClient<TBuilder>(this TBuilder builder,
         Func<IClientBuilder, IClientBuilder> orleansConfiguration = null)
+        where TBuilder:MeshWeaverApplicationBuilder<TBuilder>
     {
-        AddOrleansMeshInternal(builder, address, hubConfiguration, meshConfiguration);
-        builder
+        builder.AddOrleansMeshInternal();
+        builder.Host
             .UseOrleansClient(client =>
             {
                 client.AddMemoryStreams(StreamProviders.Memory);
@@ -40,18 +38,17 @@ public static class OrleansClientExtensions
                 if (orleansConfiguration != null)
                     orleansConfiguration.Invoke(client);
             });
-        builder.Services.AddSingleton<IHostedService, ClientInitializationHostedService>();
+        builder.Host.Services.AddSingleton<IHostedService, ClientInitializationHostedService>();
+        return builder;
     }
 
 
-    internal static void AddOrleansMeshInternal<TAddress>(this IHostApplicationBuilder builder, TAddress address,
-        Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration = null,
-        Func<MeshConfiguration, MeshConfiguration> meshConfiguration = null)
+    internal static void AddOrleansMeshInternal<TBuilder>(this TBuilder builder)
+        where TBuilder:MeshWeaverApplicationBuilder<TBuilder>
     {
-        builder.Services
+        builder.Host.Services
                 .AddSingleton<IRoutingService, RoutingService>()
                 .AddSingleton<IMeshCatalog, MeshCatalog>();
-        builder.AddMeshWeaver(address, hubConfiguration, meshConfiguration);
     }
 
 

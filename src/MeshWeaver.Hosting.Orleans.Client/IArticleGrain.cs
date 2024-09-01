@@ -1,8 +1,6 @@
 ﻿using MeshWeaver.Mesh.Contract;
-using MeshWeaver.Messaging;
-using Orleans;
 
-namespace MeshWeaver.Orleans.Client
+namespace MeshWeaver.Hosting.Orleans.Client
 {
     public interface IArticleGrain : IGrainWithStringKey
     {

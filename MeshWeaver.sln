@@ -118,8 +118,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Import.Test", "t
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Scopes.Test", "test\MeshWeaver.Scopes.Test\MeshWeaver.Scopes.Test.csproj", "{DC713E3E-90F7-42CC-B719-29B76D96EA7C}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Orleans.Server", "src\MeshWeaver.Messaging.Orleans\MeshWeaver.Orleans.Server.csproj", "{B6CDE776-12B4-4340-9E98-C2E4E8D75A47}"
-EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.CSharp.Kernel", "src\MeshWeaver.CSharp.Kernel\MeshWeaver.CSharp.Kernel.csproj", "{CE5F2FC3-8B56-414F-807D-906DE4DE3123}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.CSharp.Roslyn", "src\MeshWeaver.CSharp.Roslyn\MeshWeaver.CSharp.Roslyn.csproj", "{F4515ED6-789C-4C34-A430-FBE3CFB38E9E}"
@@ -182,11 +180,15 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Portal.Backend",
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Portal.Orleans", "portal\MeshWeaver.Portal.Orleans\MeshWeaver.Portal.Orleans.csproj", "{DD4D94A7-9019-4049-8557-8A9EF4B14EB9}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Orleans.Client", "src\MeshWeaver.Orleans.Client\MeshWeaver.Orleans.Client.csproj", "{05A1EE89-B681-4605-8AA0-D1AC90F84A28}"
-EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Mesh.Contract", "src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj", "{58079FC4-0FDB-4848-9571-F8D380F0D818}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Portal.ServiceDefaults", "portal\MeshWeaver.Portal.ServiceDefaults\MeshWeaver.Portal.ServiceDefaults.csproj", "{E00FF7F9-E783-41EA-A410-959B27BEA367}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Hosting.Blazor", "src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj", "{85775595-715C-4D9C-A6B9-5418AD17B449}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Hosting.Orleans.Client", "src\MeshWeaver.Hosting.Orleans.Client\MeshWeaver.Hosting.Orleans.Client.csproj", "{9B3AA001-2993-44EA-8B04-04F4D948DAC2}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Hosting.Orleans.Server", "src\MeshWeaver.Hosting.Orleans.Server\MeshWeaver.Hosting.Orleans.Server.csproj", "{F0A41B37-2087-4DEF-A41E-F4C0ECA2D2D6}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -398,10 +400,6 @@ Global
 		{DC713E3E-90F7-42CC-B719-29B76D96EA7C}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{DC713E3E-90F7-42CC-B719-29B76D96EA7C}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{DC713E3E-90F7-42CC-B719-29B76D96EA7C}.Release|Any CPU.Build.0 = Release|Any CPU
-		{B6CDE776-12B4-4340-9E98-C2E4E8D75A47}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{B6CDE776-12B4-4340-9E98-C2E4E8D75A47}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{B6CDE776-12B4-4340-9E98-C2E4E8D75A47}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{B6CDE776-12B4-4340-9E98-C2E4E8D75A47}.Release|Any CPU.Build.0 = Release|Any CPU
 		{CE5F2FC3-8B56-414F-807D-906DE4DE3123}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{CE5F2FC3-8B56-414F-807D-906DE4DE3123}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{CE5F2FC3-8B56-414F-807D-906DE4DE3123}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -518,10 +516,6 @@ Global
 		{DD4D94A7-9019-4049-8557-8A9EF4B14EB9}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{DD4D94A7-9019-4049-8557-8A9EF4B14EB9}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{DD4D94A7-9019-4049-8557-8A9EF4B14EB9}.Release|Any CPU.Build.0 = Release|Any CPU
-		{05A1EE89-B681-4605-8AA0-D1AC90F84A28}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{05A1EE89-B681-4605-8AA0-D1AC90F84A28}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{05A1EE89-B681-4605-8AA0-D1AC90F84A28}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{05A1EE89-B681-4605-8AA0-D1AC90F84A28}.Release|Any CPU.Build.0 = Release|Any CPU
 		{58079FC4-0FDB-4848-9571-F8D380F0D818}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{58079FC4-0FDB-4848-9571-F8D380F0D818}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{58079FC4-0FDB-4848-9571-F8D380F0D818}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -530,6 +524,18 @@ Global
 		{E00FF7F9-E783-41EA-A410-959B27BEA367}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{E00FF7F9-E783-41EA-A410-959B27BEA367}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{E00FF7F9-E783-41EA-A410-959B27BEA367}.Release|Any CPU.Build.0 = Release|Any CPU
+		{85775595-715C-4D9C-A6B9-5418AD17B449}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{85775595-715C-4D9C-A6B9-5418AD17B449}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{85775595-715C-4D9C-A6B9-5418AD17B449}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{85775595-715C-4D9C-A6B9-5418AD17B449}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9B3AA001-2993-44EA-8B04-04F4D948DAC2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9B3AA001-2993-44EA-8B04-04F4D948DAC2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9B3AA001-2993-44EA-8B04-04F4D948DAC2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9B3AA001-2993-44EA-8B04-04F4D948DAC2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F0A41B37-2087-4DEF-A41E-F4C0ECA2D2D6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F0A41B37-2087-4DEF-A41E-F4C0ECA2D2D6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F0A41B37-2087-4DEF-A41E-F4C0ECA2D2D6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F0A41B37-2087-4DEF-A41E-F4C0ECA2D2D6}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

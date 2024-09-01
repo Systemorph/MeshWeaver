@@ -1,6 +1,6 @@
 ﻿using MeshWeaver.Mesh.Contract;
 
-namespace MeshWeaver.Orleans.Client
+namespace MeshWeaver.Hosting.Orleans.Client
 {
     public interface IMeshNodeGrain : IGrainWithStringKey
     {

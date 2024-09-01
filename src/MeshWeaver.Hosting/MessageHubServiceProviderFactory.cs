@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Application;
-using MeshWeaver.Mesh.Contract;
+﻿using MeshWeaver.Mesh.Contract;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using MeshWeaver.Messaging;
@@ -22,28 +21,53 @@ public class MessageHubServiceProviderFactory(
     }
 }
 
+public record MeshWeaverApplicationBuilder(IHostApplicationBuilder Host) : MeshWeaverApplicationBuilder<MeshWeaverApplicationBuilder>(Host);
+public record MeshWeaverApplicationBuilder<TBuilder>(IHostApplicationBuilder Host)
+    where TBuilder:MeshWeaverApplicationBuilder<TBuilder>
+{
+    internal Func<MessageHubConfiguration, MessageHubConfiguration> HubConfiguration { get; init; } = x => x;
+    public TBuilder This => (TBuilder)this;
+    public TBuilder ConfigureHub(
+        Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration)
+        => This with { HubConfiguration = conf => hubConfiguration.Invoke(HubConfiguration.Invoke(conf)) };
+
+    internal Func<MeshConfiguration, MeshConfiguration> MeshConfiguration { get; init; } = x => x;
+        
+
+    public TBuilder ConfigureMesh(Func<MeshConfiguration, MeshConfiguration> configuration)
+        => This with { MeshConfiguration = conf => configuration.Invoke(MeshConfiguration.Invoke(conf)) };
+}
+
 public static class HostBuilderExtensions
 {
-    public static void AddMeshWeaver(
+    public static void AddMeshWeaver
+    (
         this IHostApplicationBuilder hostBuilder,
         object address,
-        Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration = null,
-        Func<MeshConfiguration, MeshConfiguration> meshConfiguration = null)
+        Func<MeshWeaverApplicationBuilder, MeshWeaverApplicationBuilder>  configuration = null)
     {
-        hostBuilder.ConfigureContainer(
-            new MessageHubServiceProviderFactory(address, conf => (hubConfiguration == null ? conf : hubConfiguration.Invoke(conf))
-                .WithRoutes(routes =>
-                    routes.WithHandler((delivery, _) =>
-                        delivery.State != MessageDeliveryState.Submitted || delivery.Target == null || delivery.Target.Equals(address)
-                            ? Task.FromResult(delivery)
-                            : routes.Hub.ServiceProvider.GetRequiredService<IRoutingService>().DeliverMessage(delivery.Package(routes.Hub.JsonSerializerOptions))))
-                .Set<Func<MeshConfiguration, MeshConfiguration>>(x =>
-                    CreateStandardConfiguration(meshConfiguration == null ? x : meshConfiguration(x))))
+        var builder = new MeshWeaverApplicationBuilder(hostBuilder);
+        if (configuration != null)
+            builder = configuration.Invoke(builder);
 
-        );
+        hostBuilder.AddMeshWeaver(address, builder);
     }
-    private static MeshConfiguration CreateStandardConfiguration(MeshConfiguration conf) => conf
-        .WithAddressToMeshNodeIdMapping(o => o is ApplicationAddress ? SerializationExtensions.GetId(o) : null);
+
+    public static void AddMeshWeaver<TBuilder>(
+        this IHostApplicationBuilder hostBuilder,
+        object address,
+        TBuilder builder)
+    where TBuilder:MeshWeaverApplicationBuilder<TBuilder>
+    {
+        builder.ConfigureHub(conf => conf.WithRoutes(routes =>
+                routes.WithHandler((delivery, _) =>
+                    delivery.State != MessageDeliveryState.Submitted || delivery.Target == null || delivery.Target.Equals(address)
+                        ? Task.FromResult(delivery)
+                        : routes.Hub.ServiceProvider.GetRequiredService<IRoutingService>().DeliverMessage(delivery.Package(routes.Hub.JsonSerializerOptions))))
+            .Set(builder.MeshConfiguration)
+        );
+        hostBuilder.ConfigureContainer(new MessageHubServiceProviderFactory(address, builder.HubConfiguration));
+    }
 
     private static Func<MeshConfiguration, MeshConfiguration> GetLambda(
         this MessageHubConfiguration config

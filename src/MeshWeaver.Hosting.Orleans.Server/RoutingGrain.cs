@@ -1,11 +1,11 @@
-﻿using MeshWeaver.Mesh.Contract;
+﻿using MeshWeaver.Hosting.Orleans.Client;
+using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
-using MeshWeaver.Orleans.Client;
 using Microsoft.Extensions.Logging;
 using Orleans.Placement;
 using Orleans.Streams;
 
-namespace MeshWeaver.Orleans.Server
+namespace MeshWeaver.Hosting.Orleans.Server
 {
     [PreferLocalPlacement]
     public class RoutingGrain(ILogger<RoutingGrain> logger) : Grain, IRoutingGrain
