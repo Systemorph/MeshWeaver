@@ -1,11 +1,9 @@
 ﻿using System.Diagnostics;
 using MeshWeaver.Application;
-using MeshWeaver.Blazor;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
-using Microsoft.FluentUI.AspNetCore.Components;
 using MeshWeaver.Hosting;
-using MeshWeaver.Northwind.Application;
+using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Portal.ServiceDefaults;
 using Microsoft.Extensions.Logging.Console;
 
@@ -14,9 +12,6 @@ var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 
 // Add services to the container.
-builder.Services.AddRazorPages();
-builder.Services.AddServerSideBlazor();
-builder.Services.AddFluentUIComponents();
 builder.Services.AddSingleton<ConsoleFormatter, CsvConsoleFormatter>();
 builder.Services.Configure<CsvConsoleFormatterOptions>(options =>
 {
@@ -29,7 +24,6 @@ builder.Services.AddLogging(config => config.AddConsole(
         options.FormatterName = nameof(CsvConsoleFormatter);
     }).AddDebug());
 
-builder.Services.AddFluentUIComponents();
 
 builder.AddMeshWeaver(
     new UiAddress(),

@@ -1,10 +1,9 @@
-﻿using MeshWeaver.Mesh.Contract;
-using MeshWeaver.Messaging;
-using MeshWeaver.Orleans.Client;
+﻿using MeshWeaver.Hosting.Orleans.Client;
+using MeshWeaver.Mesh.Contract;
 using Microsoft.Extensions.Logging;
 using Orleans.Providers;
 
-namespace MeshWeaver.Orleans.Server;
+namespace MeshWeaver.Hosting.Orleans.Server;
 
 
 

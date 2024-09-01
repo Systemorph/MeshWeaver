@@ -3,7 +3,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Streams;
 
-namespace MeshWeaver.Orleans.Client
+namespace MeshWeaver.Hosting.Orleans.Client
 {
     public class RoutingService(IGrainFactory grainFactory, IMessageHub hub) : IRoutingService
     {

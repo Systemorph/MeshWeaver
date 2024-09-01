@@ -1,12 +1,11 @@
 ﻿using System.Diagnostics;
 using MeshWeaver.Application;
-using MeshWeaver.Blazor;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
-using Microsoft.FluentUI.AspNetCore.Components;
 using MeshWeaver.Hosting;
+using MeshWeaver.Hosting.Blazor;
+using MeshWeaver.Hosting.Orleans.Client;
 using MeshWeaver.Mesh.Contract;
-using MeshWeaver.Orleans.Client;
 using MeshWeaver.Portal.ServiceDefaults;
 using Microsoft.Extensions.Logging.Console;
 
@@ -28,18 +27,16 @@ builder.Services.AddLogging(config => config.AddConsole(
     }).AddDebug());
 
 // Add services to the container.
-builder.Services.AddRazorPages();
-builder.Services.AddServerSideBlazor();
-builder.Services.AddFluentUIComponents();
-
 var blazorAddress = new UiAddress();
-builder.AddOrleansMeshClient(blazorAddress,
-        hubConfiguration: config =>
-            config.AddBlazor(x =>
-                    x.AddChartJs()
-                        .AddAgGrid()
-                )
+
+builder.AddMeshWeaver(blazorAddress,
+        config => config
+            .AddBlazor(x =>
+                x.AddChartJs()
+                    .AddAgGrid()
             )
+            .AddOrleansMeshClient()
+    )
     ;
 
 

@@ -1,6 +1,6 @@
 ﻿using MeshWeaver.ShortGuid;
 
-namespace MeshWeaver.Orleans.Client
+namespace MeshWeaver.Hosting.Orleans.Client
 {
     public record OrleansAddress
     {
