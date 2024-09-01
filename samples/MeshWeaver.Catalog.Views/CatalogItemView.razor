@@ -1,0 +1,72 @@
+@using System.Reflection
+@inherits BlazorView<CatalogItemControl, CatalogItemView>
+
+<article>
+    <div class="details">
+        <div class="title">
+            <a href="@Data.DocumentUrl">
+                <h3>@Data.Title</h3>
+            </a>
+        </div>
+        <p class="summary">
+            @Data.Description
+        </p>
+        <div class="footer">
+            <div class="mesh-node">
+                <FluentPersona Name="@Data.NodeName" ImageSize="24px" />
+            </div>
+            <div class="stats">
+                <span>@Created</span>
+                <span class="label">
+                    <FluentIcon
+                        Title="Views"
+                        Value="@(new Icons.Regular.Size20.Eye())"/>
+                    <span>@Data.Views</span>
+                </span>
+                <span class="label">
+                    <FluentIcon 
+                        Title="Likes"
+                        Value="@(new Icons.Regular.Size20.ThumbLike())"/>
+                    <span>@Data.Likes</span>
+                </span>
+            </div>
+        </div>
+        <div class="tags">
+            @foreach (var tag in Data.Tags)
+            {
+                <FluentBadge>@tag</FluentBadge>
+            }
+        </div>
+    </div>
+    <div class="thumbnail">
+        <a href="@Data.DocumentUrl">
+            <img 
+                alt="@Data.Title" 
+                src="@Thumbnail" 
+                width="160"
+                height="100"
+            />
+        </a>
+    </div>
+</article>
+
+@code
+{
+    private CatalogItemData Data { get; set; }
+    private string Created => Data.Created.ToShortDateString();
+
+    // TODO V10: urls are to be clarified (28.08.2024, Alexander Kravets)
+    private readonly string imageBasePath = $"_content/{Assembly.GetExecutingAssembly().GetName().Name}";
+    private string Avatar => $"{imageBasePath}/avatars/{Data.AuthorAvatar}";
+    private string Thumbnail => $"{imageBasePath}/images/{Data.Thumbnail}";
+
+    protected override void BindData()
+    {
+        base.BindData();
+
+        if (ViewModel != null)
+        {
+            DataBind(ViewModel.Data, x => x.Data);
+        }
+    }
+}
