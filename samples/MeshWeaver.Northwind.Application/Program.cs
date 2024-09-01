@@ -28,10 +28,11 @@ builder.Services.AddLogging(config => config.AddConsole(
 
 builder.Services.AddFluentUIComponents();
 
-builder.Host.AddMeshWeaver(
+builder.AddMeshWeaver(
     new UiAddress(),
     config => config.ConfigureNorthwindHubs()
 );
+
 
 if (!builder.Environment.IsDevelopment())
 {
