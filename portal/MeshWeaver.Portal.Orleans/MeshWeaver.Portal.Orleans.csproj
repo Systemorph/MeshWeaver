@@ -9,9 +9,7 @@
       <Content Include="properties\launchSettings.json" />
     </ItemGroup>
     <ItemGroup>
-    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Orleans.Client\MeshWeaver.Hosting.Orleans.Client.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Orleans.Server\MeshWeaver.Hosting.Orleans.Server.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\MeshWeaver.Overview\MeshWeaver.Overview.csproj" />
     <ProjectReference Include="..\MeshWeaver.Portal.ServiceDefaults\MeshWeaver.Portal.ServiceDefaults.csproj" />
   </ItemGroup>
