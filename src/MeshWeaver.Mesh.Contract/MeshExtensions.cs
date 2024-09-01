@@ -14,8 +14,8 @@ namespace MeshWeaver.Mesh.Contract
 
         public static MeshConfiguration GetMeshContext(this MessageHubConfiguration config)
         {
-            var dataPluginConfig = config.GetLambda();
-            return dataPluginConfig.Invoke(new());
+            var meshConf= config.GetLambda();
+            return meshConf.Invoke(new());
         }
 
     }
