@@ -15,7 +15,7 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
     public override async Task OnActivateAsync(CancellationToken cancellationToken)
     {
         await base.OnActivateAsync(cancellationToken);
-        Node = await meshCatalog.GetNodeById(this.GetPrimaryKeyString());
+        Node = await meshCatalog.GetNodeAsync(this.GetPrimaryKeyString());
         if (Node is { Id: null })
             Node = null;
         if (State is { Id: null })

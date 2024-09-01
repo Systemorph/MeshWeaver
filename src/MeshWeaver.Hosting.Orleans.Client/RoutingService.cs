@@ -9,9 +9,9 @@ namespace MeshWeaver.Hosting.Orleans.Client
     {
         private readonly IRoutingGrain routingGrain = grainFactory.GetGrain<IRoutingGrain>(hub.Address.ToString());
 
-        public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery request)
+        public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
         {
-            var ret = await routingGrain.DeliverMessage(request);
+            var ret = await routingGrain.DeliverMessage(delivery);
             if (ret.State == MessageDeliveryState.Submitted)
                 return ret.Ignored();
             return ret;

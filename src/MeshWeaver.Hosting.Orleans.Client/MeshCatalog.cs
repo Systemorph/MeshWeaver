@@ -19,9 +19,9 @@ namespace MeshWeaver.Hosting.Orleans.Client
                 .FirstOrDefault(x => x != null);
 
         public Task<MeshNode> GetNodeAsync(object address)=> 
-            GetNodeById(GetNodeId(address));
+            GetNodeAsync(GetNodeId(address));
 
-        public Task<MeshNode> GetNodeById(string id)
+        public Task<MeshNode> GetNodeAsync(string id)
             => grainFactory.GetGrain<IMeshNodeGrain>(id).Get();
 
         public Task UpdateAsync(MeshNode node) => grainFactory.GetGrain<IMeshNodeGrain>(node.Id).Update(node);
@@ -45,10 +45,10 @@ namespace MeshWeaver.Hosting.Orleans.Client
             }
         }
 
-        public Task<ArticleEntry> GetArticle(string id)
+        public Task<ArticleEntry> GetArticleAsync(string id)
             => grainFactory.GetGrain<IArticleGrain>(id).Get();
 
-        public Task UpdateArticle(ArticleEntry article)
+        public Task UpdateArticleAsync(ArticleEntry article)
             => grainFactory.GetGrain<IArticleGrain>(article.Id).Update(article);
     }
 
