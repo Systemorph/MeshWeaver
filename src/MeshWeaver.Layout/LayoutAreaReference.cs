@@ -29,14 +29,14 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
 
 
 
-    public string ToHref(object address)
+    public string ToAppHref(object address)
     {
-        var ret = $"{address}/{Encode(Area)}";
+        var ret = $"app/{address}/{LayoutExtensions.Encode(Area)}";
         if (Id?.ToString() is { } s)
-            ret = $"{ret}/{Encode(s)}";
+            ret = $"{ret}/{LayoutExtensions.Encode(s)}";
         return ret;
     }
 
-    public static object Encode(object value) => value is string s ? s.Replace(".", "%9Y") : value;
-    public static object Decode(object value) => value is string s ? s.Replace("%9Y", ".") : value;
+
+
 }

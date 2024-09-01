@@ -25,7 +25,7 @@ public static class MeshBrowserCatalogArea
             .WithNavMenu((menu,_, _) =>
                 menu.WithNavLink(
                     nameof(Catalog),
-                    new LayoutAreaReference(nameof(Catalog)).ToHref(layout.Hub.Address), 
+                    new LayoutAreaReference(nameof(Catalog)).ToAppHref(layout.Hub.Address), 
                     FluentIcons.Grid
                     )
             );

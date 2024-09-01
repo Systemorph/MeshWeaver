@@ -23,6 +23,11 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
                ;
     }
 
+    public override string ToString()
+    {
+        return Reference.ToAppHref(Address);
+    }
+
     public override int GetHashCode()
     {
         return HashCode.Combine(

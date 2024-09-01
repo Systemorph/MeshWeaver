@@ -15,7 +15,7 @@ public static class ViewModelStateDemoArea
             .WithNavMenu((menu, _, _) => menu
                 .WithNavLink(
                     "Raw: ViewModel State",
-                    new LayoutAreaReference(nameof(CounterLayoutArea.Counter)).ToHref(layout.Hub.Address),
+                    new LayoutAreaReference(nameof(CounterLayoutArea.Counter)).ToAppHref(layout.Hub.Address),
                     FluentIcons.Box
                 )
             );

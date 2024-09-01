@@ -30,7 +30,7 @@ public static class NorthwindDashboardArea
             .WithNavMenu((menu,_, _) =>
                 menu.WithNavLink(
                     nameof(Dashboard),
-                    new LayoutAreaReference(nameof(Dashboard)).ToHref(layout.Hub.Address), FluentIcons.Grid)
+                    new LayoutAreaReference(nameof(Dashboard)).ToAppHref(layout.Hub.Address), FluentIcons.Grid)
             );
 
     /// <summary>

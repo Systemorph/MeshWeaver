@@ -236,4 +236,8 @@ public static class LayoutExtensions
         var patchDocument = new JsonPatch(op);
         return (JsonObject)patchDocument.Apply(obj).Result;
     }
+
+    public static object Encode(object value) => value is string s ? s.Replace(".", "%9Y") : value;
+    public static object Decode(object value) => value is string s ? s.Replace("%9Y", ".") : value;
+
 }

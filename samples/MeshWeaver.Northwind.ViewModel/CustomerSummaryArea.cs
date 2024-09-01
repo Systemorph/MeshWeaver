@@ -24,7 +24,7 @@ public static class CustomerSummaryArea
             .WithNavMenu((menu,_, _) => 
                 menu.WithNavLink(
                     nameof(CustomerSummary).Wordify(),
-                    new LayoutAreaReference(nameof(CustomerSummary)).ToHref(layout.Hub.Address),
+                    new LayoutAreaReference(nameof(CustomerSummary)).ToAppHref(layout.Hub.Address),
                     FluentIcons.Person
                     )
         );

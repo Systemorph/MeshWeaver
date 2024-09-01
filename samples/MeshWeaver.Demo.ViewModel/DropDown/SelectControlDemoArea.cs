@@ -12,7 +12,7 @@ public static class SelectControlDemoArea
             .WithNavMenu((menu, _, _) => menu
                 .WithNavLink(
                     "Raw: DropDown Control",
-                    new LayoutAreaReference(nameof(YearSelectArea.YearSelect)).ToHref(layout.Hub.Address),
+                    new LayoutAreaReference(nameof(YearSelectArea.YearSelect)).ToAppHref(layout.Hub.Address),
                     FluentIcons.CalendarDataBar
                 )
             );

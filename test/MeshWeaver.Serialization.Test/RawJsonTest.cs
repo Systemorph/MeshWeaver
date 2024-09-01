@@ -25,8 +25,9 @@ public class RawJsonTest : TestBase
     [Inject]
     private IMessageHub Router { get; set; }
 
-    public RawJsonTest(ITestOutputHelper output) : base(output)
+    public RawJsonTest(ITestOutputHelper output, IMessageHub client) : base(output)
     {
+        Client = client;
         Services.AddSingleton(sp => sp.CreateMessageHub(new ClientAddress(), ConfigureClient));
         Services.AddMessageHubs(
             new RouterAddress(),
@@ -37,7 +38,7 @@ public class RawJsonTest : TestBase
                         serialization.WithOptions(options =>
                         {
                             if (!options.Converters.Any(c => c is RawJsonConverter))
-                                options.Converters.Insert(0, new RawJsonConverter(serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()));
+                                options.Converters.Insert(0, new RawJsonConverter());
                         })
                     )
         );
@@ -50,7 +51,7 @@ public class RawJsonTest : TestBase
                 serialization.WithOptions(options =>
                 {
                     if (!options.Converters.Any(c => c is RawJsonConverter))
-                        options.Converters.Insert(0, new RawJsonConverter(serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()));
+                        options.Converters.Insert(0, new RawJsonConverter());
                 })
             );
 
