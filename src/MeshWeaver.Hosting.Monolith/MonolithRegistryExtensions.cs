@@ -10,6 +10,6 @@ public static class MonolithRegistryExtensions
     {
         builder.Host.Services.AddSingleton<IMeshCatalog, MonolithMeshCatalog>();
         builder.Host.Services.AddSingleton<IRoutingService, MonolithRoutingService>();
-        return builder;
+        return builder.ConfigureHub(conf => conf.WithInitialization((hub,ct) => hub.ServiceProvider.GetRequiredService<IMeshCatalog>().InitializeAsync(ct)));
     }
 }
