@@ -6,6 +6,7 @@ using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Portal.ServiceDefaults;
 using Microsoft.Extensions.Logging.Console;
+using MeshWeaver.Hosting.Monolith;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -32,6 +33,7 @@ builder.AddMeshWeaver(
         x.AddChartJs()
             .AddAgGrid()
     )
+        .AddMonolithMesh()
 );
 
 
@@ -47,17 +49,14 @@ logger.LogInformation("Starting blazor server on PID: {PID}", Process.GetCurrent
 
 app.MapDefaultEndpoints();
 
-// Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error");
-    // The default HSTS value is 30 days. Yoseru may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
     app.UseHsts();
 }
 
 app.UseHttpsRedirection();
 app.UseStaticFiles();
-var docSitePath = Path.Combine(builder.Environment.ContentRootPath, "..\\MeshWeaver.Northwind.Docs\\_site");
 app.UseRouting();
 
 app.MapBlazorHub();

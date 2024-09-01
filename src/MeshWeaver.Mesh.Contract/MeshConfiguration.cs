@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using MeshWeaver.Application;
 using MeshWeaver.Messaging;
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans.Client")]
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Monolith")]
 
 namespace MeshWeaver.Mesh.Contract;
 

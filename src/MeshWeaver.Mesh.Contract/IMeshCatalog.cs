@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Messaging;
-using Orleans;
+﻿using Orleans;
 
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("MeshWeaver.Orleans")]
 namespace MeshWeaver.Mesh.Contract;
@@ -8,14 +7,12 @@ namespace MeshWeaver.Mesh.Contract;
 
 public interface IMeshCatalog
 {
-    string GetNodeId(object address);
-    Task<MeshNode> GetNodeAsync(object address);
-    Task<MeshNode> GetNodeById(string id);
+    Task<MeshNode> GetNodeAsync(string id);
     Task UpdateAsync(MeshNode node);
     Task InitializeAsync(CancellationToken cancellationToken);
 
-    Task<ArticleEntry> GetArticle(string id);
-    Task UpdateArticle(ArticleEntry article);
+    Task<ArticleEntry> GetArticleAsync(string id);
+    Task UpdateArticleAsync(ArticleEntry article);
 }
 
 [GenerateSerializer]
