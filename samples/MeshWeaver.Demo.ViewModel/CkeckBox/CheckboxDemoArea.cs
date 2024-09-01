@@ -12,7 +12,7 @@ public static class CheckboxDemoArea
             .WithNavMenu((menu, _, _) => menu
                 .WithNavLink(
                     "Raw: Checkbox Control",
-                    new LayoutAreaReference(nameof(TermsAgreementTickArea.TermsTick)).ToHref(layout.Hub.Address),
+                    new LayoutAreaReference(nameof(TermsAgreementTickArea.TermsTick)).ToAppHref(layout.Hub.Address),
                     FluentIcons.Person
                 )
             );

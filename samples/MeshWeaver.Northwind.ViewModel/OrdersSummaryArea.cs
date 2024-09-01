@@ -29,7 +29,7 @@ public static class OrdersSummaryArea
             .WithSourcesForType(ctx => ctx.Area == nameof(OrderSummary), typeof(OrdersSummaryArea), typeof(NorthwindViewModels))
             .WithEmbeddedDocument(ctx => ctx.Area == nameof(OrderSummary),typeof(OrdersSummaryArea).Assembly, "Readme.md")
             .WithNavMenu((menu,_, _) =>menu.WithNavLink(nameof(OrderSummary).Wordify(),
-                new LayoutAreaReference(nameof(OrderSummary)).ToHref(layout.Hub.Address), FluentIcons.Box)
+                new LayoutAreaReference(nameof(OrderSummary)).ToAppHref(layout.Hub.Address), FluentIcons.Box)
         );
 
     /// <summary>

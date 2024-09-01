@@ -36,9 +36,9 @@ public partial class LayoutAreaPage
     protected override async Task OnParametersSetAsync()
     {
         await base.OnParametersSetAsync();
-        Reference = new((string)LayoutAreaReference.Decode(Area))
+        Reference = new((string)LayoutExtensions.Decode(Area))
         {
-            Id = (string)LayoutAreaReference.Decode(Id),
+            Id = (string)LayoutExtensions.Decode(Id),
             Layout = StandardPageLayout.Page,
         };
 

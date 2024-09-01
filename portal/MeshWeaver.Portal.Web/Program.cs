@@ -15,10 +15,6 @@ var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 builder.AddKeyedRedisClient(StorageProviders.Redis);
 
-// Add services to the container.
-builder.Services.AddRazorPages();
-builder.Services.AddServerSideBlazor();
-builder.Services.AddFluentUIComponents();
 builder.Services.AddSingleton<ConsoleFormatter, CsvConsoleFormatter>();
 builder.Services.Configure<CsvConsoleFormatterOptions>(options =>
 {
@@ -31,6 +27,9 @@ builder.Services.AddLogging(config => config.AddConsole(
         options.FormatterName = nameof(CsvConsoleFormatter);
     }).AddDebug());
 
+// Add services to the container.
+builder.Services.AddRazorPages();
+builder.Services.AddServerSideBlazor();
 builder.Services.AddFluentUIComponents();
 
 var blazorAddress = new UiAddress();

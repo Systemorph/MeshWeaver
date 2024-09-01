@@ -12,7 +12,7 @@ public static class ListboxDemoArea
             .WithNavMenu((menu, _, _) => menu
                 .WithNavLink(
                     "Raw: Listbox Control",
-                    new LayoutAreaReference(nameof(BaseColorListArea.BaseColorList)).ToHref(layout.Hub.Address),
+                    new LayoutAreaReference(nameof(BaseColorListArea.BaseColorList)).ToAppHref(layout.Hub.Address),
                     FluentIcons.Grid
                 )
             );

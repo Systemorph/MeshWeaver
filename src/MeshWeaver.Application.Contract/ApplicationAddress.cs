@@ -9,7 +9,7 @@ namespace MeshWeaver.Application;
 public record ApplicationAddress(string Name, string Environment)
 {
     public override string ToString()
-        => $"app/{Name}/{Environment}";
+        => $"{Name}/{Environment}";
 }
 public record UiAddress 
 {
