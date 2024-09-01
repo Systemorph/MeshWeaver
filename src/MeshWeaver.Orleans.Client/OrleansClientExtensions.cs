@@ -52,37 +52,11 @@ public static class OrleansClientExtensions
         builder.Services
                 .AddSingleton<IRoutingService, RoutingService>()
                 .AddSingleton<IMeshCatalog, MeshCatalog>();
-        builder.Host.AddMeshWeaver(address,
-                conf => (hubConfiguration == null ? conf : hubConfiguration.Invoke(conf))
-                    .WithTypes(typeof(TAddress))
-                    .WithRoutes(routes =>
-                        routes.WithHandler((delivery, _) =>
-                            delivery.State != MessageDeliveryState.Submitted || delivery.Target == null || delivery.Target.Equals(address)
-                                ? Task.FromResult(delivery)
-                                : routes.Hub.ServiceProvider.GetRequiredService<IRoutingService>().DeliverMessage(delivery.Package(routes.Hub.JsonSerializerOptions))))
-                    .Set<Func<MeshConfiguration, MeshConfiguration>>(x =>
-                    CreateStandardConfiguration(meshConfiguration == null ? x : meshConfiguration(x))))
-            ;
+        builder.Host.AddMeshWeaver(address, hubConfiguration, meshConfiguration);
     }
 
 
 
-    private static MeshConfiguration CreateStandardConfiguration(MeshConfiguration conf) => conf
-        .WithAddressToMeshNodeIdMapping(o => o is ApplicationAddress ? SerializationExtensions.GetId(o) : null);
-
-    private static Func<MeshConfiguration, MeshConfiguration> GetLambda(
-        this MessageHubConfiguration config
-    )
-    {
-        return config.Get<Func<MeshConfiguration, MeshConfiguration>>()
-               ?? (x => x);
-    }
-
-    internal static MeshConfiguration GetMeshContext(this MessageHubConfiguration config)
-    {
-        var dataPluginConfig = config.GetLambda();
-        return dataPluginConfig.Invoke(new());
-    }
 
 
 

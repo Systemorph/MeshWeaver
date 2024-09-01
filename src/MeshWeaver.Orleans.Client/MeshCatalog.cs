@@ -1,5 +1,6 @@
 ﻿using System.Reflection;
 using System.Runtime.Loader;
+using MeshWeaver.Hosting;
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
