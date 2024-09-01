@@ -59,7 +59,7 @@ public static class HostBuilderExtensions
         TBuilder builder)
     where TBuilder:MeshWeaverApplicationBuilder<TBuilder>
     {
-        builder.ConfigureHub(conf => conf.WithRoutes(routes =>
+        builder = builder.ConfigureHub(conf => conf.WithRoutes(routes =>
                 routes.WithHandler((delivery, _) =>
                     delivery.State != MessageDeliveryState.Submitted || delivery.Target == null || delivery.Target.Equals(address)
                         ? Task.FromResult(delivery)
