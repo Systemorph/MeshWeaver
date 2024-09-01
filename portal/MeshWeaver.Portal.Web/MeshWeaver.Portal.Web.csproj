@@ -9,13 +9,8 @@
         <ProjectReference Include="..\..\src\MeshWeaver.Blazor.AgGrid\MeshWeaver.Blazor.AgGrid.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Orleans.Client\MeshWeaver.Hosting.Orleans.Client.csproj" />
-        <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
-        <ProjectReference Include="..\..\src\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Blazor.ChartJs\MeshWeaver.Blazor.ChartJs.csproj" />
-        <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />
-        <ProjectReference Include="..\..\src\MeshWeaver.Application.Contract\MeshWeaver.Application.Contract.csproj" />
-        <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
         <ProjectReference Include="..\MeshWeaver.Portal.ServiceDefaults\MeshWeaver.Portal.ServiceDefaults.csproj" />
     </ItemGroup>
     <ItemGroup>
