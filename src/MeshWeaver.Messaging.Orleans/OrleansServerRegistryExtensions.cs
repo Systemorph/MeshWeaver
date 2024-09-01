@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Hosting;
-using MeshWeaver.Mesh.Contract;
+﻿using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
 using MeshWeaver.Orleans.Client;
 using Microsoft.AspNetCore.Builder;

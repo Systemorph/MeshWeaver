@@ -1,22 +1,25 @@
 ﻿using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
+using MeshWeaver.Application;
 using MeshWeaver.Messaging;
+[assembly: InternalsVisibleTo("MeshWeaver.Orleans.Client")]
 
-namespace MeshWeaver.Mesh.Contract
+namespace MeshWeaver.Mesh.Contract;
+
+public record MeshConfiguration
 {
-    public record OrleansMeshContext
-    {
-        internal ImmutableList<string> InstallAtStartup { get; init; } = ImmutableList<string>.Empty;
+    internal ImmutableList<string> InstallAtStartup { get; init; } = ImmutableList<string>.Empty;
 
-        public OrleansMeshContext InstallAssemblies(params string[] assemblyLocations)
-            => this with { InstallAtStartup = InstallAtStartup.AddRange(assemblyLocations) };
+    public MeshConfiguration InstallAssemblies(params string[] assemblyLocations)
+        => this with { InstallAtStartup = InstallAtStartup.AddRange(assemblyLocations) };
 
-        internal ImmutableList<Func<object, string>> AddressToMeshNodeMappers { get; init; }
-            = ImmutableList<Func<object, string>>.Empty
-                .Add(SerializationExtensions.GetTypeName);
+    internal ImmutableList<Func<object, string>> AddressToMeshNodeMappers { get; init; }
+        = ImmutableList<Func<object, string>>.Empty
+            .Add(o => o is ApplicationAddress ? SerializationExtensions.GetId(o) : null)
+            .Add(SerializationExtensions.GetTypeName);
 
-        public OrleansMeshContext WithAddressToMeshNodeIdMapping(Func<object, string> addressToMeshNodeMap)
-            => this with { AddressToMeshNodeMappers = AddressToMeshNodeMappers.Insert(0, addressToMeshNodeMap) };
+    public MeshConfiguration WithAddressToMeshNodeIdMapping(Func<object, string> addressToMeshNodeMap)
+        => this with { AddressToMeshNodeMappers = AddressToMeshNodeMappers.Insert(0, addressToMeshNodeMap) };
 
 
-    }
 }
