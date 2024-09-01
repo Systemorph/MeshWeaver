@@ -24,13 +24,13 @@ public class MessageHubServiceProviderFactory(
 
 public static class HostBuilderExtensions
 {
-    public static IHostBuilder AddMeshWeaver(
-        this IHostBuilder hostBuilder,
+    public static void AddMeshWeaver(
+        this IHostApplicationBuilder hostBuilder,
         object address,
         Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration = null,
         Func<MeshConfiguration, MeshConfiguration> meshConfiguration = null)
     {
-        return hostBuilder.UseServiceProviderFactory(
+        hostBuilder.ConfigureContainer(
             new MessageHubServiceProviderFactory(address, conf => (hubConfiguration == null ? conf : hubConfiguration.Invoke(conf))
                 .WithRoutes(routes =>
                     routes.WithHandler((delivery, _) =>

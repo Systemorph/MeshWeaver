@@ -52,7 +52,7 @@ public static class OrleansClientExtensions
         builder.Services
                 .AddSingleton<IRoutingService, RoutingService>()
                 .AddSingleton<IMeshCatalog, MeshCatalog>();
-        builder.Host.AddMeshWeaver(address, hubConfiguration, meshConfiguration);
+        builder.AddMeshWeaver(address, hubConfiguration, meshConfiguration);
     }
 
 
