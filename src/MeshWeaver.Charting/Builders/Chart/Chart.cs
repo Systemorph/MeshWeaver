@@ -13,6 +13,7 @@ public abstract record Chart<TChart, TDataSet> : Models.Chart
     public Chart(IReadOnlyCollection<TDataSet> dataSets/*, ChartOptions Options*/, ChartType chartType) : base(chartType)
     {
         Data = Data.WithDataSets(dataSets);
+        Options = GetAutoLegendOptions();
     }
 
     protected TChart This => (TChart)this;
@@ -20,7 +21,9 @@ public abstract record Chart<TChart, TDataSet> : Models.Chart
     protected bool AutoLabels { get; set; }
 
     public TChart WithDataSet<TDataSet2>(TDataSet2 dataSet) where TDataSet2 : DataSet
-        => (This with { Data = Data.WithDataSets(dataSet), }).WithAutoUpdatedLabels();
+        => (This with { Data = Data.WithDataSets(dataSet), })
+            .WithAutoUpdatedLabels()
+            .WithAutoLegend();
 
     public virtual TChart WithLabels(params string[] labels) =>
         WithLabels(labels.AsReadOnly());
@@ -42,6 +45,15 @@ public abstract record Chart<TChart, TDataSet> : Models.Chart
     }
 
     private TChart WithAutoUpdatedLabels() => This with { Data = Data with { Labels = GetUpdatedLabels(), } };
+
+    private ChartOptions GetAutoLegendOptions()
+    {
+        if (Data.DataSets.Count > 1 && Data.DataSets.Any(item => item.HasLabel()))
+            return Options.WithPlugins(p => p.WithLegend());
+        return Options;
+    }
+
+    private TChart WithAutoLegend() => This with { Options = GetAutoLegendOptions(), };
 
     public TChart WithLegend(Func<Legend, Legend> builder = null)
         => WithOptions(o => o.WithPlugins(p => p.WithLegend(builder)));
@@ -80,20 +92,5 @@ public abstract record Chart<TChart, TDataSet> : Models.Chart
     public TChart WithDataLabels(Func<DataLabels, DataLabels> func = null) =>
         WithOptions(o => o.WithPlugins(p => p.WithDataLabels(func)));
 
-    public virtual Models.Chart ToChart()
-    {
-        var plugins = Options.Plugins;
-
-        var options = Options;
-
-        if (plugins?.Legend is null && Data.DataSets.Count > 1 && Data.DataSets.Any(item => item.HasLabel()))
-        {
-            options = Options.WithPlugins(p => p.WithLegend());
-        }
-
-        return this with
-        {
-            Options = options,
-        };
-    }
+    public virtual Models.Chart ToChart() => this;
 }
