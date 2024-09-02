@@ -27,7 +27,7 @@ builder.Services.AddLogging(config => config.AddConsole(
     }).AddDebug());
 
 
-builder.AddMeshWeaver(
+builder.UseMeshWeaver(
     new UiAddress(),
     config => config
         .ConfigureMesh(mesh => mesh.InstallAssemblies(typeof(NorthwindApplicationAttribute).Assembly.Location))

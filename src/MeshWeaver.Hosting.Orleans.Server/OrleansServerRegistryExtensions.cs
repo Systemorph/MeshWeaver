@@ -54,6 +54,5 @@ public class ServerInitializationHostedService(IMessageHub hub) : ClientInitiali
     {
         await base.StartAsync(cancellationToken);
         await catalog.InitializeAsync(cancellationToken);
-
     }
 }

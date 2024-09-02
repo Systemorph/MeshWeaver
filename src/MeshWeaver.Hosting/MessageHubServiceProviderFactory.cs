@@ -40,7 +40,7 @@ public record MeshWeaverApplicationBuilder<TBuilder>(IHostApplicationBuilder Hos
 
 public static class HostBuilderExtensions
 {
-    public static void AddMeshWeaver
+    public static void UseMeshWeaver
     (
         this IHostApplicationBuilder hostBuilder,
         object address,
@@ -50,21 +50,22 @@ public static class HostBuilderExtensions
         if (configuration != null)
             builder = configuration.Invoke(builder);
 
-        hostBuilder.AddMeshWeaver(address, builder);
+        hostBuilder.UseMeshWeaver(address, builder);
     }
 
-    public static void AddMeshWeaver<TBuilder>(
+    public static void UseMeshWeaver<TBuilder>(
         this IHostApplicationBuilder hostBuilder,
         object address,
         TBuilder builder)
     where TBuilder:MeshWeaverApplicationBuilder<TBuilder>
     {
+        var meshConfig = builder.MeshConfiguration;
         builder = builder.ConfigureHub(conf => conf.WithRoutes(routes =>
                 routes.WithHandler((delivery, _) =>
                     delivery.State != MessageDeliveryState.Submitted || delivery.Target == null || delivery.Target.Equals(address)
                         ? Task.FromResult(delivery)
                         : routes.Hub.ServiceProvider.GetRequiredService<IRoutingService>().DeliverMessage(delivery.Package(routes.Hub.JsonSerializerOptions))))
-            .Set(builder.MeshConfiguration)
+            .Set(meshConfig)
         );
         hostBuilder.ConfigureContainer(new MessageHubServiceProviderFactory(address, builder.HubConfiguration));
     }

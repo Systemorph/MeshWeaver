@@ -47,7 +47,7 @@ public static class OrleansClientExtensions
         where TBuilder:MeshWeaverApplicationBuilder<TBuilder>
     {
         builder.Host.Services
-                .AddSingleton<IRoutingService, RoutingService>()
+                .AddSingleton<IRoutingService, OrleansRoutingService>()
                 .AddSingleton<IMeshCatalog, MeshCatalog>();
     }
 
