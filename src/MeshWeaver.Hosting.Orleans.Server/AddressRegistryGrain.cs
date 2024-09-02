@@ -18,8 +18,7 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
         Node = await meshCatalog.GetNodeAsync(this.GetPrimaryKeyString());
         if (Node is { Id: null })
             Node = null;
-        if (State is { Id: null })
-            State = null;
+        State = Node != null ? InitializeState(Node.Address) : null;
     }
 
     public async Task<StreamInfo> Register(object address)
@@ -37,6 +36,8 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
 
     public async Task Register(StreamInfo streamInfo)
     {
+        if (Equals(State, streamInfo))
+            return;
         State = streamInfo;
         await WriteStateAsync();
     }
@@ -49,7 +50,7 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
 
 
     public Task<NodeStorageInfo> GetStorageInfo() =>
-        Task.FromResult(Node == null ? null : new NodeStorageInfo(Node.Id, Node.BasePath, Node.AssemblyLocation, Node.Address));
+        Task.FromResult(Node == null ? null : new NodeStorageInfo(Node.Id, Node.BasePath, Node.AssemblyLocation, State.Address));
 
     public async Task Unregister()
     {

@@ -29,7 +29,7 @@ builder.Services.AddLogging(config => config.AddConsole(
 // Add services to the container.
 var blazorAddress = new UiAddress();
 
-builder.AddMeshWeaver(blazorAddress,
+builder.UseMeshWeaver(blazorAddress,
         config => config
             .AddBlazor(x =>
                 x.AddChartJs()

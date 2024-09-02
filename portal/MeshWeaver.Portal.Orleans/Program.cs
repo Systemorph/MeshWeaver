@@ -14,7 +14,7 @@ builder.AddKeyedRedisClient(StorageProviders.Redis);
 var address = new OrleansAddress();
 
 builder.
-    AddMeshWeaver(address, conf => conf
+    UseMeshWeaver(address, conf => conf
         .ConfigureMesh(mesh => mesh.InstallAssemblies(typeof(MeshWeaverOverviewAttribute).Assembly.Location))
             .AddOrleansMeshServer()
     );

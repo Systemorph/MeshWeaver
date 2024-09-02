@@ -1,8 +1,6 @@
 ﻿using MeshWeaver.Blazor;
 using MeshWeaver.Layout.Client;
-using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Hosting.Blazor;

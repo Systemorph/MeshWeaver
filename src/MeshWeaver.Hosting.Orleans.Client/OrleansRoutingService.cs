@@ -5,7 +5,7 @@ using Orleans.Streams;
 
 namespace MeshWeaver.Hosting.Orleans.Client
 {
-    public class RoutingService(IGrainFactory grainFactory, IMessageHub hub) : IRoutingService
+    public class OrleansRoutingService(IGrainFactory grainFactory, IMessageHub hub) : IRoutingService
     {
         private readonly IRoutingGrain routingGrain = grainFactory.GetGrain<IRoutingGrain>(hub.Address.ToString());
 
@@ -24,8 +24,14 @@ namespace MeshWeaver.Hosting.Orleans.Client
             var addressId = address.ToString();
             var streamInfo = new StreamInfo(addressId, StreamProviders.Memory, hub.Address.GetType().Name, address);
             var info = await hub.ServiceProvider.GetRequiredService<IGrainFactory>().GetGrain<IAddressRegistryGrain>(streamInfo.Id).Register(address);
-            var subscription = await hub.ServiceProvider
-                .GetRequiredKeyedService<IStreamProvider>(info.StreamProvider)
+            
+            var streamProvider = hub.ServiceProvider
+                .GetKeyedService<IStreamProvider>(info.StreamProvider);
+            
+            if (streamProvider == null)
+                return;
+
+            var subscription = await streamProvider
                 .GetStream<IMessageDelivery>(info.Namespace, info.Id)
                 .SubscribeAsync((delivery, _) => Task.FromResult(hub.DeliverMessage(delivery)));
             hub.WithDisposeAction(_ => subscription.UnsubscribeAsync());
