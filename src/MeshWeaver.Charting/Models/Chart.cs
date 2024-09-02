@@ -3,12 +3,18 @@ using MeshWeaver.Charting.Models.Options;
 
 namespace MeshWeaver.Charting.Models
 {
-    public record Chart(ChartType Type)
+    public record Chart
     {
+        public Chart(IReadOnlyCollection<DataSet> dataSets, ChartType type)
+        {
+            Type = type;
+            Data = Data.WithDataSets(dataSets);
+        }
+
         /// <summary>
         /// Chart type e.g. bar, line, etc
         /// </summary>
-        public ChartType Type { get; init; } = Type;
+        public ChartType Type { get; init; }
 
         /// <summary>
         /// Chart data

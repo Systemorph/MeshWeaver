@@ -10,9 +10,8 @@ public abstract record Chart<TChart, TDataSet> : Models.Chart
     where TChart : Chart<TChart, TDataSet>
     where TDataSet : DataSet, new()
 {
-    public Chart(IReadOnlyCollection<TDataSet> dataSets/*, ChartOptions Options*/, ChartType chartType) : base(chartType)
+    public Chart(IReadOnlyCollection<TDataSet> dataSets/*, ChartOptions Options*/, ChartType chartType) : base(dataSets, chartType)
     {
-        Data = Data.WithDataSets(dataSets);
         Options = GetAutoLegendOptions();
     }
 
