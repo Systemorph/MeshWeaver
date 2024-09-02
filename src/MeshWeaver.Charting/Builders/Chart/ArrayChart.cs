@@ -9,25 +9,16 @@ public abstract record ArrayChart<TChart, TDataSet>
     where TDataSet : DataSet, new()
 {
     protected ArrayChart(IReadOnlyCollection<TDataSet> dataSets, ChartType chartType)
-        : base(dataSets, chartType) { }
-
-    public override Models.Chart ToChart()
+        : base(dataSets, chartType)
     {
-        var chart = base.ToChart();
-
-        if (chart.Data.Labels is null)
+        if (Data.Labels is null)
         {
-            var maxLen = chart.Data.DataSets.Select(ds => ds.Data?.Count() ?? 0).DefaultIfEmpty(1).Max();
+            var maxLen = Data.DataSets.Select(ds => ds.Data?.Count() ?? 0).DefaultIfEmpty(1).Max();
 
-            chart = chart with
+            Data = Data with
             {
-                Data = chart.Data with
-                {
-                    Labels = Enumerable.Range(1, maxLen).Select(i => i.ToString()).ToArray(),
-                }
+                Labels = Enumerable.Range(1, maxLen).Select(i => i.ToString()).ToArray(),
             };
         }
-
-        return chart;
     }
 }
