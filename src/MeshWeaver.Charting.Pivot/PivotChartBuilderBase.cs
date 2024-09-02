@@ -78,7 +78,7 @@ public abstract record PivotChartBuilderBase<
         AddOptions(pivotChartModel);
 
         ApplyCustomChartConfigs();
-        return Chart.ToChart();
+        return Chart;
     }
 
     public IPivotChartBuilder WithOptions(Func<PivotChartModel, PivotChartModel> postProcessor)
