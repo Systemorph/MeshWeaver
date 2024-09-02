@@ -11,14 +11,7 @@ public abstract record ArrayChart<TChart, TDataSet>
     protected ArrayChart(IReadOnlyCollection<TDataSet> dataSets, ChartType chartType)
         : base(dataSets, chartType)
     {
-        if (Data.Labels is null)
-        {
-            var maxLen = Data.DataSets.Select(ds => ds.Data?.Count() ?? 0).DefaultIfEmpty(1).Max();
-
-            Data = Data with
-            {
-                Labels = Enumerable.Range(1, maxLen).Select(i => i.ToString()).ToArray(),
-            };
-        }
+        AutoLabels = true;
+        Data = Data with { Labels = GetUpdatedLabels(), };
     }
 }
