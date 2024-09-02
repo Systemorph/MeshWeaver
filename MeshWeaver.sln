@@ -186,8 +186,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Hosting.Monolith
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "modules", "modules", "{BFCF5E5D-1964-434B-BB7E-97F24C884FBC}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Sdk", "src\MeshWeaver.Sdk\MeshWeaver.Sdk.csproj", "{B9567418-E95D-40C1-B552-73B4C086D4F7}"
-EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Northwind", "Northwind", "{80489276-45B5-4FCF-ADDF-980A56D4D2E9}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Demo.ViewModel", "modules\MeshWeaver.Demo.ViewModel\MeshWeaver.Demo.ViewModel.csproj", "{FC95295B-F038-48A8-A857-20AEBDDB9FCF}"
@@ -536,10 +534,6 @@ Global
 		{EABBF29A-4DD9-4618-AF31-41FB705A6828}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{EABBF29A-4DD9-4618-AF31-41FB705A6828}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{EABBF29A-4DD9-4618-AF31-41FB705A6828}.Release|Any CPU.Build.0 = Release|Any CPU
-		{B9567418-E95D-40C1-B552-73B4C086D4F7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{B9567418-E95D-40C1-B552-73B4C086D4F7}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{B9567418-E95D-40C1-B552-73B4C086D4F7}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{B9567418-E95D-40C1-B552-73B4C086D4F7}.Release|Any CPU.Build.0 = Release|Any CPU
 		{FC95295B-F038-48A8-A857-20AEBDDB9FCF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{FC95295B-F038-48A8-A857-20AEBDDB9FCF}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{FC95295B-F038-48A8-A857-20AEBDDB9FCF}.Release|Any CPU.ActiveCfg = Release|Any CPU

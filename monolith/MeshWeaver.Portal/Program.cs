@@ -6,6 +6,7 @@ using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Blazor;
 using Microsoft.Extensions.Logging.Console;
 using MeshWeaver.Hosting.Monolith;
+using MeshWeaver.Northwind.ViewModel;
 using MeshWeaver.Portal;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -25,11 +26,10 @@ builder.Services.AddLogging(config => config.AddConsole(
         options.FormatterName = nameof(CsvConsoleFormatter);
     }).AddDebug());
 
-
 builder.UseMeshWeaver(
     new UiAddress(),
     config => config
-        .ConfigureMesh()
+        .ConfigureMesh(mesh => mesh.InstallAssemblies(typeof(NorthwindViewModels).Assembly.Location))
         .AddBlazor(x =>
             x
                 .AddChartJs()
