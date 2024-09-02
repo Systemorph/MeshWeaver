@@ -52,8 +52,7 @@ public class ChartingSamples
             .Bar([dataSet1, dataSet2])
             .WithLabels(labels)
             .WithLegend()
-            .WithTitle("Bar Chart")
-            .ToChart();
+            .WithTitle("Bar Chart");
 
         await actual.JsonShouldMatch(Options, "Sample_BarChart.json");
     }
@@ -76,8 +75,7 @@ public class ChartingSamples
             .Line([dataSet1, dataSet2])
             .WithLabels(labels)
             .WithLegend()
-            .WithTitle("Line Chart")
-            .ToChart();
+            .WithTitle("Line Chart");
 
         await actual.JsonShouldMatch(Options, "Sample_LineChart.json");
     }
@@ -101,8 +99,7 @@ public class ChartingSamples
             .WithDataSet(dataSet2)
             .WithLabels(labels)
             .WithLegend()
-            .WithTitle("Line Chart")
-            .ToChart();
+            .WithTitle("Line Chart");
 
         await actual.JsonShouldMatch(Options, "Sample_MixedChart.json");
     }
@@ -123,8 +120,7 @@ public class ChartingSamples
             .WithOptions(o =>
                 o.SetTimeUnit(TimeIntervals.Month).ShortenYAxisNumbers().SetTimeFormat("D MMM YYYY")
             )
-            .WithTitle("TimeLine Chart", o => o.WithFontSize(20))
-            .ToChart();
+            .WithTitle("TimeLine Chart", o => o.WithFontSize(20));
 
         await actual.JsonShouldMatch(Options, "Sample_TimeLineChart.json");
     }
@@ -140,8 +136,7 @@ public class ChartingSamples
         var actual = Charts
             .FloatingBar([dataSet])
             .WithLabels(labels)
-            .WithTitle("FloatingBar Chart")
-            .ToChart();
+            .WithTitle("FloatingBar Chart");
 
         await actual.JsonShouldMatch(Options, "Sample_FloatingBarChart.json");
     }
@@ -163,8 +158,7 @@ public class ChartingSamples
             .Bubble([dataSet1, dataSet2])
             .WithLegend()
             .WithTitle("Bubble Chart")
-            .WithColorPalette(Palettes.Brewer.DarkTwo8)
-            .ToChart();
+            .WithColorPalette(Palettes.Brewer.DarkTwo8);
 
         await actual.JsonShouldMatch(Options, "Sample_BubbleChart.json");
     }
@@ -180,8 +174,7 @@ public class ChartingSamples
             .Pie([dataSet])
             .WithLabels(labels)
             .WithLegend()
-            .WithTitle("Pie Chart")
-            .ToChart();
+            .WithTitle("Pie Chart");
 
         await actual.JsonShouldMatch(Options, "Sample_PieChart.json");
     }
@@ -197,8 +190,7 @@ public class ChartingSamples
             .Doughnut([dataSet])
             .WithLabels(labels)
             .WithLegend()
-            .WithTitle("Doughnut Chart")
-            .ToChart();
+            .WithTitle("Doughnut Chart");
 
         await actual.JsonShouldMatch(Options, "Sample_Doughnut.json");
     }
@@ -214,8 +206,7 @@ public class ChartingSamples
             .PolarArea([dataSet])
             .WithLabels(labels)
             .WithLegend()
-            .WithTitle("Polar Chart")
-            .ToChart();
+            .WithTitle("Polar Chart");
 
         await actual.JsonShouldMatch(Options, "Sample_Polar.json");
     }
@@ -236,8 +227,7 @@ public class ChartingSamples
             .Radar([dataSet1, dataSet2])
             .WithLabels(labels)
             .WithLegend()
-            .WithTitle("Radar Chart")
-            .ToChart();
+            .WithTitle("Radar Chart");
 
         await actual.JsonShouldMatch(Options, "Sample_Radar.json");
     }
@@ -258,8 +248,7 @@ public class ChartingSamples
             .Scatter([dataSet1, dataSet2])
             .WithLegend()
             .WithTitle("Scatter Chart")
-            .WithColorPalette(Palettes.Brewer.DarkTwo8)
-            .ToChart();
+            .WithColorPalette(Palettes.Brewer.DarkTwo8);
 
         await actual.JsonShouldMatch(Options, "Sample_Scatter.json");
     }
@@ -277,7 +266,7 @@ public class ChartingSamples
             .WithData(x1)
             .Build();
 
-        var actual = Charts.Bar([dataSet1, dataSet2, dataSet3]).ToChart();
+        var actual = Charts.Bar([dataSet1, dataSet2, dataSet3]);
 
         await actual.JsonShouldMatch(Options, "Sample_QuickDraw.json");
     }
@@ -295,8 +284,7 @@ public class ChartingSamples
             .Build();
 
         var actual = Charts
-            .Line([dataSet1, dataSet2])
-            .ToChart();
+            .Line([dataSet1, dataSet2]);
 
         await actual.JsonShouldMatch(Options, "Sample_AreaChart.json");
     }

@@ -91,6 +91,4 @@ public abstract record Chart<TChart, TDataSet> : Models.Chart
 
     public TChart WithDataLabels(Func<DataLabels, DataLabels> func = null) =>
         WithOptions(o => o.WithPlugins(p => p.WithDataLabels(func)));
-
-    public virtual Models.Chart ToChart() => this;
 }

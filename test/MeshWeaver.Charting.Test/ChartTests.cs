@@ -35,8 +35,7 @@ public class ChartTests
         var chart3 = Charts
             .Bar([dataSet])
             .WithLabels(labels)
-            .WithTitle("My First Chart", o => o.AtPosition(Positions.Left))
-            .ToChart();
+            .WithTitle("My First Chart", o => o.AtPosition(Positions.Left));
 
         await chart3.JsonShouldMatch(Options, "Bar_Chart_Basic.json");
     }
@@ -54,8 +53,7 @@ public class ChartTests
         var chart3 = Charts
             .Line([dataSet])
             .WithTitle("My First Chart", o => o.AtPosition(Positions.Left))
-            .WithLabels(labels)
-            .ToChart();
+            .WithLabels(labels);
 
         await chart3.JsonShouldMatch(Options, "Line_Chart_Basic.json");
     }
@@ -74,8 +72,7 @@ public class ChartTests
         var myChart = Charts
             .TimeLine([dataSet])
             .WithOptions(o => o.SetTimeUnit(TimeIntervals.Day).SetTimeFormat("D MMM YYYY"))
-            .WithTitle("Timed Chart", o => o.AtPosition(Positions.Bottom).WithFontSize(20))
-            .ToChart();
+            .WithTitle("Timed Chart", o => o.AtPosition(Positions.Bottom).WithFontSize(20));
 
         await myChart.JsonShouldMatch(Options, "Line_Chart_Times.json");
     }
@@ -100,8 +97,7 @@ public class ChartTests
             .Bar([dataSet1, dataSet2])
             .Stacked()
             .WithLabels(labels)
-            .WithTitle("Stacked", o => o.AtPosition(Positions.Top))
-            .ToChart();
+            .WithTitle("Stacked", o => o.AtPosition(Positions.Top));
 
         await myChart.JsonShouldMatch(Options, "Bar_Chart_Stacked.json");
     }
@@ -126,8 +122,7 @@ public class ChartTests
             .Bar([dataSet1, dataSet2])
             .WithOptions(o => o.WithoutAnimation())
             .WithLabels(labels)
-            .WithTitle("No animation", o => o.AtPosition(Positions.Top))
-            .ToChart();
+            .WithTitle("No animation", o => o.AtPosition(Positions.Top));
 
         await myChart.JsonShouldMatch(Options, "Bar_Chart_NoAnimation.json");
     }
@@ -137,8 +132,7 @@ public class ChartTests
     {
         var myChart = Charts
             .Bar([])
-            .WithTitle("Empty Chart", o => o.AtPosition(Positions.Top))
-            .ToChart();
+            .WithTitle("Empty Chart", o => o.AtPosition(Positions.Top));
         await myChart.JsonShouldMatch(Options, "Empty_Bar_Chart.json");
     }
 
@@ -156,8 +150,7 @@ public class ChartTests
         var chart3 = Charts
             .FloatingBar([dataSet])
             .WithLabels(labels)
-            .WithTitle("Floating", o => o.AtPosition(Positions.Top))
-            .ToChart();
+            .WithTitle("Floating", o => o.AtPosition(Positions.Top));
 
         await chart3.JsonShouldMatch(Options, "Bar_Chart_Floating.json");
     }
@@ -181,8 +174,7 @@ public class ChartTests
             .FloatingBar([dataSet1, dataSet2])
             .Stacked()
             .WithLabels(labels)
-            .WithTitle("Floating stacked", o => o.AtPosition(Positions.Top))
-            .ToChart();
+            .WithTitle("Floating stacked", o => o.AtPosition(Positions.Top));
 
         await chart3.JsonShouldMatch(Options, "Bar_Chart_Floating_Stacked.json");
     }
@@ -201,8 +193,7 @@ public class ChartTests
                 .WithLegendItems("Increments", "Decrements", "Total")
                 .WithConnectors()
             )
-            .WithTitle("Waterfall", o => o.AtPosition(Positions.Top))
-            .ToChart();
+            .WithTitle("Waterfall", o => o.AtPosition(Positions.Top));
 
         await chart3.JsonShouldMatch(Options, "Bar_Chart_Waterfall.json");
     }
@@ -221,8 +212,7 @@ public class ChartTests
                 .WithLegendItems("Increments", "Decrements", "Total")
                 .WithConnectors()
             )
-            .WithTitle("Waterfall", o => o.AtPosition(Positions.Top))
-            .ToChart();
+            .WithTitle("Waterfall", o => o.AtPosition(Positions.Top));
 
         await chart3.JsonShouldMatch(Options, "Bar_Chart_HorizontalWaterfall.json");
     }
@@ -242,8 +232,7 @@ public class ChartTests
                 .WithConnectors()
                 .WithLastAsTotal()
             )
-            .WithTitle("Waterfall", o => o.AtPosition(Positions.Top))
-            .ToChart();
+            .WithTitle("Waterfall", o => o.AtPosition(Positions.Top));
 
         await chart3.JsonShouldMatch(Options, "Bar_Chart_Waterfall_AutoTotal.json");
     }
@@ -273,8 +262,7 @@ public class ChartTests
                 .WithLegendItems("Increments", "Decrements", "Total")
                 .WithConnectors(b => b.ThinLine())
             )
-            .WithTitle("Waterfall", o => o.AtPosition(Positions.Top))
-            .ToChart();
+            .WithTitle("Waterfall", o => o.AtPosition(Positions.Top));
 
         await chart3.JsonShouldMatch(Options, "Bar_Chart_Waterfall_MarkedTotals.json");
     }
@@ -304,8 +292,7 @@ public class ChartTests
                 .WithLegendItems("Increments", "Decrements", "Total")
                 .WithConnectors()
             )
-            .WithTitle("Waterfall", o => o.AtPosition(Positions.Top))
-            .ToChart();
+            .WithTitle("Waterfall", o => o.AtPosition(Positions.Top));
 
         await chart3.JsonShouldMatch(Options, "Bar_Chart_HorizontalWaterfall_MarkedTotals.json");
     }
@@ -336,8 +323,7 @@ public class ChartTests
                 .WithLegendItems("Increments", "Decrements", "Total")
                 .WithConnectors(b => b.WithLineWidth(1).WithoutPoint())
             )
-            .WithTitle("Waterfall", o => o.AtPosition(Positions.Top))
-            .ToChart();
+            .WithTitle("Waterfall", o => o.AtPosition(Positions.Top));
 
         await chart3.JsonShouldMatch(Options, "Bar_Chart_Waterfall_StyledBars.json");
     }
@@ -357,8 +343,7 @@ public class ChartTests
                 .WithLegendItems("Increments", "Decrements", "Total")
                 .WithConnectors()
             )
-            .WithTitle("Waterfall", o => o.AtPosition(Positions.Top))
-            .ToChart();
+            .WithTitle("Waterfall", o => o.AtPosition(Positions.Top));
 
         await chart3.JsonShouldMatch(Options, "Bar_Chart_HorizontalWaterfall_AutoTotal.json");
     }
@@ -381,8 +366,7 @@ public class ChartTests
         var chart3 = Charts
             .HorizontalFloatingBar([dataSet1,dataSet2])
             .WithLabels(labels)
-            .WithTitle("Horizontal floating", o => o.AtPosition(Positions.Top))
-            .ToChart();
+            .WithTitle("Horizontal floating", o => o.AtPosition(Positions.Top));
 
         await chart3.JsonShouldMatch(Options, "Bar_Chart_Horizontal_Floating.json");
     }
@@ -401,8 +385,7 @@ public class ChartTests
             .Bar([dataSet])
             .WithLabels(labels)
             .WithColorPalette(Palettes.Brewer.Paired10)
-            .WithTitle("My First Chart", o => o.AtPosition(Positions.Left))
-            .ToChart();
+            .WithTitle("My First Chart", o => o.AtPosition(Positions.Left));
 
         await myChart.JsonShouldMatch(Options, "Bar_Chart_Palette.json");
     }
@@ -425,16 +408,14 @@ public class ChartTests
 
         var myChart = Charts
             .Bar([dataSet1, dataSet2])
-            .WithLabels(labels)
-            .ToChart();
+            .WithLabels(labels);
 
         await myChart.JsonShouldMatch(Options, "Bar_Chart_AutoLegend.json");
 
         var myChart2 = Charts
             .Bar([dataSet1, dataSet2])
             .WithLabels(labels)
-            .WithTitle("My First Chart", o => o.AtPosition(Positions.Left))
-            .ToChart();
+            .WithTitle("My First Chart", o => o.AtPosition(Positions.Left));
 
         await myChart2.JsonShouldMatch(Options, "Bar_Chart_AutoLegend_WithTitle.json");
     }
@@ -453,16 +434,14 @@ public class ChartTests
         var myChart = Charts
             .Bar([dataSet])
             .WithLabels(labels)
-            .WithOptions(o => o.WithYAxisMin(-1))
-            .ToChart();
+            .WithOptions(o => o.WithYAxisMin(-1));
 
         await myChart.JsonShouldMatch(Options, "Bar_Chart_SetMin.json");
 
         var myChart2 = Charts
             .Bar([dataSet])
             .WithLabels(labels)
-            .WithOptions(o => o.WithYAxisMin(-1).WithYAxisMax(10).ShortenYAxisNumbers())
-            .ToChart();
+            .WithOptions(o => o.WithYAxisMin(-1).WithYAxisMax(10).ShortenYAxisNumbers());
 
         await myChart2.JsonShouldMatch(Options, "Bar_Chart_SetMinMax.json");
     }
@@ -484,9 +463,9 @@ public class ChartTests
             .WithLegend()
             .WithColorPalette(myPalette);
 
-        await myChart.ToChart().JsonShouldMatch(Options, "CustomPalette1.json");
+        await myChart.JsonShouldMatch(Options, "CustomPalette1.json");
 
-        var myChartWithStringColor = myChart.WithColorPalette(Palettes.Brewer.YlGn8).ToChart();
+        var myChartWithStringColor = myChart.WithColorPalette(Palettes.Brewer.YlGn8);
         await myChartWithStringColor.JsonShouldMatch(Options, "CustomPalette2.json");
     }
 
@@ -507,7 +486,7 @@ public class ChartTests
             .WithData(x1)
             .Build();
 
-        var actual = Charts.Bar([dataSet1, dataSet2, dataSet3]).ToChart();
+        var actual = Charts.Bar([dataSet1, dataSet2, dataSet3]);
 
         await actual.JsonShouldMatch(Options, "QuickDraw.json");
     }
@@ -527,8 +506,7 @@ public class ChartTests
             .Build();
 
         var actual = Charts
-            .Line([dataSet1, dataSet2])
-            .ToChart();
+            .Line([dataSet1, dataSet2]);
 
         await actual.JsonShouldMatch(Options, "AreaChart.json");
     }
@@ -544,8 +522,7 @@ public class ChartTests
             .Build();
 
         var actual = Charts
-            .Bubble([dataSet])
-            .ToChart();
+            .Bubble([dataSet]);
 
         await actual.JsonShouldMatch(Options, "BubbleChart.json");
     }
@@ -571,8 +548,7 @@ public class ChartTests
                         }
                     )
                 )
-            )
-            .ToChart();
+            );
 
         await actual.JsonShouldMatch(Options, "LineScatter.json");
     }
@@ -602,8 +578,8 @@ public class ChartTests
                     Position = Positions.Bottom,
                     Labels = new LegendLabel() { BoxWidth = 3, BoxHeight = 3 }
                 }
-            )
-            .ToChart();
+            );
+
         await plot.JsonShouldMatch(Options, $"{nameof(GenerateScatterWithLabels)}.json");
     }
 }
