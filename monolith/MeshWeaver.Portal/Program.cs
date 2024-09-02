@@ -4,16 +4,15 @@ using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Blazor;
-using MeshWeaver.Hosting.Orleans.Client;
-using MeshWeaver.Mesh.Contract;
-using MeshWeaver.Portal.ServiceDefaults;
 using Microsoft.Extensions.Logging.Console;
+using MeshWeaver.Hosting.Monolith;
+using MeshWeaver.Portal;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
-builder.AddKeyedRedisClient(StorageProviders.Redis);
 
+// Add services to the container.
 builder.Services.AddSingleton<ConsoleFormatter, CsvConsoleFormatter>();
 builder.Services.Configure<CsvConsoleFormatterOptions>(options =>
 {
@@ -26,18 +25,18 @@ builder.Services.AddLogging(config => config.AddConsole(
         options.FormatterName = nameof(CsvConsoleFormatter);
     }).AddDebug());
 
-// Add services to the container.
-var blazorAddress = new UiAddress();
 
-builder.UseMeshWeaver(blazorAddress,
-        config => config
-            .AddBlazor(x =>
-                x.AddChartJs()
-                    .AddAgGrid()
-            )
-            .AddOrleansMeshClient()
-    )
-    ;
+builder.UseMeshWeaver(
+    new UiAddress(),
+    config => config
+        .ConfigureMesh()
+        .AddBlazor(x =>
+            x
+                .AddChartJs()
+                .AddAgGrid()
+        )
+        .AddMonolithMesh()
+);
 
 
 if (!builder.Environment.IsDevelopment())
@@ -52,7 +51,6 @@ logger.LogInformation("Starting blazor server on PID: {PID}", Process.GetCurrent
 
 app.MapDefaultEndpoints();
 
-// Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error");
@@ -63,7 +61,6 @@ app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseRouting();
 
-app.MapStaticContent(app.Services.GetRequiredService<IMeshCatalog>());
 app.MapBlazorHub();
 app.MapFallbackToPage("/_Host");
 

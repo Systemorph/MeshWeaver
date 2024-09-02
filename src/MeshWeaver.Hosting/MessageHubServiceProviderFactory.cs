@@ -34,8 +34,10 @@ public record MeshWeaverApplicationBuilder<TBuilder>(IHostApplicationBuilder Hos
     internal Func<MeshConfiguration, MeshConfiguration> MeshConfiguration { get; init; } = x => x;
         
 
-    public TBuilder ConfigureMesh(Func<MeshConfiguration, MeshConfiguration> configuration)
-        => This with { MeshConfiguration = conf => configuration.Invoke(MeshConfiguration.Invoke(conf)) };
+    public TBuilder ConfigureMesh(Func<MeshConfiguration, MeshConfiguration> configuration = null)
+        => configuration == null 
+            ? This 
+            : This with { MeshConfiguration = conf => configuration.Invoke(MeshConfiguration.Invoke(conf)) };
 }
 
 public static class HostBuilderExtensions
