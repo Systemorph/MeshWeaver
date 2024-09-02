@@ -4,9 +4,9 @@ using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Blazor;
-using MeshWeaver.Portal.ServiceDefaults;
 using Microsoft.Extensions.Logging.Console;
 using MeshWeaver.Hosting.Monolith;
+using MeshWeaver.Northwind.Application;
 using MeshWeaver.Northwind.ViewModel;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -29,12 +29,13 @@ builder.Services.AddLogging(config => config.AddConsole(
 
 builder.AddMeshWeaver(
     new UiAddress(),
-    config => config   
+    config => config
         .ConfigureMesh(mesh => mesh.InstallAssemblies(typeof(NorthwindApplicationAttribute).Assembly.Location))
         .AddBlazor(x =>
-        x.AddChartJs()
-            .AddAgGrid()
-    )
+            x
+                .AddChartJs()
+                .AddAgGrid()
+        )
         .AddMonolithMesh()
 );
 
