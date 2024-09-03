@@ -93,7 +93,7 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
     protected override void ApplyCustomChartConfigs()
     {
         base.ApplyCustomChartConfigs();
-        Chart = ((BarChart)Chart).ToWaterfallChart(deltas, o => WaterfallOptions.Concat(ExtraWaterfallOptions).Aggregate(o, (x, modifier) => modifier(x)));
+        Chart = Chart.ToWaterfallChart(deltas, o => WaterfallOptions.Concat(ExtraWaterfallOptions).Aggregate(o, (x, modifier) => modifier(x)));
     }
 
     protected override void AddOptions(PivotChartModel pivotChartModel)
@@ -183,7 +183,7 @@ public record PivotHorizontalWaterfallChartBuilder<T, TTransformed, TIntermediat
     protected override void ApplyCustomChartConfigs()
     {
         base.ApplyCustomChartConfigs();
-        Chart = ((BarChart)Chart).ToHorizontalWaterfallChart(deltas, o => WaterfallOptions.Concat(ExtraWaterfallOptions).Aggregate(o, (x, modifier) => modifier(x)));
+        Chart = Chart.ToHorizontalWaterfallChart(deltas, o => WaterfallOptions.Concat(ExtraWaterfallOptions).Aggregate(o, (x, modifier) => modifier(x)));
     }
 
     protected override void AddOptions(PivotChartModel pivotChartModel)
