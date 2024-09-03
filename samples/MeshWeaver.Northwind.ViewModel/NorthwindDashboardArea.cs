@@ -1,5 +1,6 @@
 ﻿using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
+using MeshWeaver.Charting.Builders.Chart;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
@@ -88,7 +89,7 @@ public static class NorthwindDashboardArea
                         builder => builder
                             .WithOptions(o => o.OrderByValueDescending())
                             .WithChartBuilder(o => 
-                                o.WithDataLabels(d => 
+                                (BarChart)o.WithDataLabels(d =>
                                     d.WithAnchor(DataLabelsAnchor.End)
                                         .WithAlign(DataLabelsAlign.End))
                                 )
@@ -107,7 +108,7 @@ public static class NorthwindDashboardArea
                     .ToBarChart(builder => builder
                         .WithOptions(o => o.OrderByValueDescending().TopValues(5))
                         .WithChartBuilder(o =>
-                            o.AsHorizontalBar()
+                            (BarChart)o.AsHorizontalBar()
                                 .WithDataLabels()
                         )
                     )

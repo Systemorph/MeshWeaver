@@ -26,7 +26,7 @@ record PivotLineChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotB
 
     public IPivotLineChartBuilder WithRangeOptionsBuilder(Func<ChartOptions, ChartOptions> func)
     {
-        Chart = Chart.WithOptions(func);
+        Chart = (LineChart)Chart.WithOptions(func);
         return this;
     }
 }

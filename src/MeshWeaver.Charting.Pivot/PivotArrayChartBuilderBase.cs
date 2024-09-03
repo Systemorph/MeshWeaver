@@ -7,9 +7,9 @@ using MeshWeaver.Pivot.Builder;
 namespace MeshWeaver.Charting.Pivot;
 
 public abstract record PivotArrayChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, TChart, TDataSet, TDataSetBuilder> :
-        PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, TChart, TDataSet>, IPivotArrayChartBuilder
+        PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>, IPivotArrayChartBuilder
         where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-        where TChart : ArrayChart<TChart, TDataSet>
+        where TChart : ArrayChart
         where TDataSet : DataSet, IDataSetWithPointStyle, IDataSetWithOrder, IDataSetWithFill, IDataSetWithTension, IDataSetWithPointRadiusAndRotation, new()
         where TDataSetBuilder : ArrayDataSetWithTensionFillPointRadiusAndRotation<TDataSetBuilder, TDataSet>, new()
 {

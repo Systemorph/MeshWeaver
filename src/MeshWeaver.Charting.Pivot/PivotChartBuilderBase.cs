@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Charting.Builders.Chart;
-using MeshWeaver.Charting.Enums;
+﻿using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Pivot.Builder;
@@ -12,9 +11,7 @@ public abstract record PivotChartBuilderBase<
     TTransformed,
     TIntermediate,
     TAggregate,
-    TPivotBuilder,
-    TChart,
-    TDataSet
+    TPivotBuilder
 >(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
     : IPivotChartBuilder
     where TPivotBuilder : PivotBuilderBase<
@@ -24,11 +21,6 @@ public abstract record PivotChartBuilderBase<
             TAggregate,
             TPivotBuilder
         >
-    where TChart : Chart<
-            TChart,
-            TDataSet
-        >
-    where TDataSet : DataSet, new()
 {
     private readonly PivotBuilderBase<
         T,
@@ -37,7 +29,7 @@ public abstract record PivotChartBuilderBase<
         TAggregate,
         TPivotBuilder
     > pivotBuilder = pivotBuilder;
-    protected TChart Chart;
+    protected Chart Chart;
     protected PivotChartModelBuilder PivotChartModelBuilder { get; init; } = new();
 
     public IPivotChartBuilder WithLegend(Func<Legend, Legend> legendModifier = null)

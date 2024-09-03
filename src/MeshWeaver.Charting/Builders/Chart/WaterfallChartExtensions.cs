@@ -15,7 +15,7 @@ namespace MeshWeaver.Charting.Builders.Chart;
 
 public static class WaterfallChartExtensions
 {
-    public static BarChart ToWaterfallChart(this BarChart chart, List<double> deltas,
+    public static Models.Chart ToWaterfallChart(this BarChart chart, List<double> deltas,
         Func<WaterfallChartOptions, WaterfallChartOptions> options = null
     )
         => chart
@@ -26,7 +26,7 @@ public static class WaterfallChartExtensions
                 .HideGrid("x")
             );
 
-    public static BarChart ToHorizontalWaterfallChart(this BarChart chart, List<double> deltas,
+    public static Models.Chart ToHorizontalWaterfallChart(this BarChart chart, List<double> deltas,
         Func<HorizontalWaterfallChartOptions, HorizontalWaterfallChartOptions> options = null
     )
         => chart
@@ -196,7 +196,7 @@ public static class WaterfallChartExtensions
         return [dataset1, dataset2, dataset3];
     }
 
-    private static BarChart ToWaterfallChart<TDataSet, TDataSetBuilder, TOptions>(this BarChart chart, List<double> deltas,
+    private static Models.Chart ToWaterfallChart<TDataSet, TDataSetBuilder, TOptions>(this BarChart chart, List<double> deltas,
         Func<TOptions, TOptions> optionsFunc = null
     )
         where TDataSet : BarDataSetBase, IDataSetWithStack, new()
@@ -217,7 +217,7 @@ public static class WaterfallChartExtensions
             totalIndexes = totalIndexes.Add(deltas.Count - 1);
         }
 
-        var tmp = chart;
+        var tmp = (Models.Chart)chart;
         if (tmp.Data.Labels is null)
             tmp = tmp.WithLabels(Enumerable.Range(1, deltas.Count).Select(i => i.ToString()).ToArray());
 
@@ -251,7 +251,7 @@ public static class WaterfallChartExtensions
         return tmp;
     }
 
-    private static BarChart ApplyFinalStyling(this BarChart chart, string[] palette)
+    private static Models.Chart ApplyFinalStyling(this Models.Chart chart, string[] palette)
     {
         var tmp = chart;
         tmp = tmp
