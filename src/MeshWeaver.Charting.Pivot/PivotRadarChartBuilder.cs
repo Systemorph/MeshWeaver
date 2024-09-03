@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Charting.Builders.Chart;
+﻿using MeshWeaver.Charting.Builders;
 using MeshWeaver.Charting.Builders.DataSetBuilders;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
@@ -15,7 +15,7 @@ public record PivotRadarChartBuilder<T, TTransformed, TIntermediate, TAggregate,
     public PivotRadarChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder)
     {
-        Chart = new RadarChart([]);
+        Chart = Charts.Radar([]);
     }
 
     protected override PivotChartModel CreatePivotModel(PivotModel pivotModel)

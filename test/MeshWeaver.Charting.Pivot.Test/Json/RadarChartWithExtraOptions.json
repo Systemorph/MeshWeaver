@@ -73,5 +73,5 @@
     },
     "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
   },
-  "$type": "MeshWeaver.Charting.Builders.Chart.RadarChart"
+  "$type": "MeshWeaver.Charting.Models.Chart"
 }
