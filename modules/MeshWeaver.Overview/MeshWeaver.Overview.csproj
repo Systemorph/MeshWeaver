@@ -4,10 +4,9 @@
   <ItemGroup>
     <Folder Include="Content\" />
     <EmbeddedResource Include="Content\**\*" />
-    <None Remove="wwwroot\images\SplashScreen.jpg" />
     <Content Include="wwwroot\images\SplashScreen.jpg">
-      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
 
