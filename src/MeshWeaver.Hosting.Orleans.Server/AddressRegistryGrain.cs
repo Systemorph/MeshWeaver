@@ -18,19 +18,18 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
         Node = await meshCatalog.GetNodeAsync(this.GetPrimaryKeyString());
         if (Node is { Id: null })
             Node = null;
-        State = Node != null ? InitializeState(Node.Address) : null;
+        if (Node != null)
+            await InitializeState(Node.Address);
+        else
+            State = null;
     }
 
     public async Task<StreamInfo> Register(object address)
     {
 
         if (State == null)
-        {
-            State = InitializeState(address);
-            await WriteStateAsync();
-        }
+            await InitializeState(address);
 
-        logger.LogDebug("Mapping address {Address} to Id {Id} for {Node}", address, this.GetPrimaryKeyString(), Node);
         return State;
     }
 
@@ -38,15 +37,20 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
     {
         if (Equals(State, streamInfo))
             return;
+        logger.LogInformation("Registering {Stream} for address {Id}", streamInfo, this.GetPrimaryKeyString());
         State = streamInfo;
         await WriteStateAsync();
     }
 
-    private StreamInfo InitializeState(object address) =>
-        Node != null 
+    private Task InitializeState(object address)
+    {
+        State = Node != null
             ? new(this.GetPrimaryKeyString(), Node.StreamProvider, Node.Namespace, address)
-            :
-            new StreamInfo(SerializationExtensions.GetId(address), StreamProviders.Memory, IRoutingService.MessageIn, address);
+            : new StreamInfo(SerializationExtensions.GetId(address), StreamProviders.Memory, IRoutingService.MessageIn,
+                address);
+        logger.LogInformation("Mapping address {Address} for {Id} to {State}", address, this.GetPrimaryKeyString(),  State);
+        return WriteStateAsync();
+    }
 
 
     public Task<NodeStorageInfo> GetStorageInfo() =>

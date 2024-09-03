@@ -44,7 +44,6 @@ public record MessageHubConfiguration
 
     protected internal ImmutableList<Func<IMessageHub, CancellationToken, Task>> BuildupActions { get; init; } = ImmutableList<Func<IMessageHub, CancellationToken, Task>>.Empty;
 
-    internal ImmutableList<DeliveryFilter> Deferrals { get; init; } = ImmutableList<DeliveryFilter>.Empty;
 
     internal IMessageHub HubInstance { get; set; }
 
@@ -128,8 +127,6 @@ public record MessageHubConfiguration
     public MessageHubConfiguration WithInitialization(Func<IMessageHub, CancellationToken, Task> action) => this with { BuildupActions = BuildupActions.Add(action) };
 
 
-    public MessageHubConfiguration WithDeferral(DeliveryFilter deferral)
-        => this with { Deferrals = Deferrals.Add(deferral) };
 
     protected void CreateServiceProvider(IMessageHub parent)
     {
