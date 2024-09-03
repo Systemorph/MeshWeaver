@@ -12,8 +12,7 @@ namespace MeshWeaver.Hosting.Blazor;
 
 public  static class BlazorHostingExtensions
 {
-    public static TBuilder AddBlazor<TBuilder>(this TBuilder builder, Func<LayoutClientConfiguration, LayoutClientConfiguration> clientConfig = null)
-    where TBuilder:MeshWeaverApplicationBuilder<TBuilder>
+    public static MeshWeaverHostBuilder AddBlazor(this MeshWeaverHostBuilder builder, Func<LayoutClientConfiguration, LayoutClientConfiguration> clientConfig = null)
     {
         builder.Host.Services.AddRazorPages();
         builder.Host.Services.AddServerSideBlazor();

@@ -3,6 +3,7 @@ using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Orleans.Serialization;
 
 [assembly:InternalsVisibleTo("MeshWeaver.Hosting.Orleans.Server")]
@@ -13,7 +14,7 @@ public static class OrleansClientExtensions
 
     public static TBuilder AddOrleansMeshClient<TBuilder>(this TBuilder builder,
         Func<IClientBuilder, IClientBuilder> orleansConfiguration = null)
-        where TBuilder:MeshWeaverApplicationBuilder<TBuilder>
+        where TBuilder:MeshWeaverHostBuilder
     {
         builder.Host
             .UseOrleansClient(client =>
@@ -42,7 +43,7 @@ public static class OrleansClientExtensions
 
 
     internal static void AddOrleansMeshInternal<TBuilder>(this TBuilder builder)
-        where TBuilder:MeshWeaverApplicationBuilder<TBuilder>
+        where TBuilder:MeshWeaverHostBuilder
     {
         builder.Host.Services
                 .AddSingleton<IRoutingService, OrleansRoutingService>()
@@ -57,10 +58,11 @@ public static class OrleansClientExtensions
 
 }
 
-public class InitializationHostedService(IMessageHub hub, IMeshCatalog catalog) : IHostedService
+public class InitializationHostedService(IMessageHub hub, IMeshCatalog catalog, ILogger<InitializationHostedService> logger) : IHostedService
 {
     public virtual async Task StartAsync(CancellationToken cancellationToken)
     {
+        logger.LogInformation("Starting initialization of {Address}", hub.Address);
         await hub.ServiceProvider.GetRequiredService<IRoutingService>().RegisterHubAsync(hub);
         await catalog.InitializeAsync(cancellationToken);
     }

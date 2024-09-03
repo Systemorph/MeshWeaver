@@ -23,6 +23,7 @@
       <Content Include="properties\launchSettings.json" />
     </ItemGroup>
     <ItemGroup>
+    <ProjectReference Include="..\..\modules\MeshWeaver.Overview\MeshWeaver.Overview.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Orleans.Server\MeshWeaver.Hosting.Orleans.Server.csproj" />
     <ProjectReference Include="..\MeshWeaver.Portal.ServiceDefaults\MeshWeaver.Portal.ServiceDefaults.csproj" />
   </ItemGroup>

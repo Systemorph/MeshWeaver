@@ -3,10 +3,11 @@ using System.Runtime.Loader;
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Orleans.Client
 {
-    public class MeshCatalog(IMessageHub hub) : IMeshCatalog
+    public class MeshCatalog(IMessageHub hub, ILogger<MeshCatalog> logger) : IMeshCatalog
     {
         private readonly IDisposable deferral = hub.Defer(_ => true);
         private readonly IGrainFactory grainFactory = hub.ServiceProvider.GetRequiredService<IGrainFactory>();
@@ -36,13 +37,20 @@ namespace MeshWeaver.Hosting.Orleans.Client
 
         public async Task InitializeAsync(CancellationToken cancellationToken)
         {
+            logger.LogInformation("Starting initialization of Mesh Catalog for {Number} of assemblies:", Configuration.InstallAtStartup.Count);
             foreach (var assemblyLocation in Configuration.InstallAtStartup)
             {
                 var basePath = Path.GetDirectoryName(assemblyLocation);
                 var loadContext = new CollectibleAssemblyLoadContext(basePath);
                 var assembly = loadContext.LoadFromAssemblyPath(assemblyLocation);
-                foreach (var node in assembly.GetCustomAttributes<MeshNodeAttribute>().Select(a => a.Node))
+                foreach (var node in assembly
+                             .GetCustomAttributes()
+                             .OfType<MeshNodeAttribute>()
+                             .Select(a => a.Node))
+                {
+                    logger.LogInformation("Initializing {Node}", node);
                     await grainFactory.GetGrain<IMeshNodeGrain>(node.Id).Update(node);
+                }
                 loadContext.Unload();
             }
 
@@ -60,6 +68,15 @@ namespace MeshWeaver.Hosting.Orleans.Client
 
         protected override Assembly Load(AssemblyName assemblyName)
         {
+            // Check if the assembly is already loaded
+            var loadedAssembly = AssemblyLoadContext.Default.Assemblies
+                .FirstOrDefault(a => a.GetName().Name == assemblyName.Name);
+
+            if (loadedAssembly != null)
+            {
+                return loadedAssembly;
+            }
+
             var assemblyPath = Path.Combine(basePath, $"{assemblyName.Name}.dll");
             if (File.Exists(assemblyPath))
             {
