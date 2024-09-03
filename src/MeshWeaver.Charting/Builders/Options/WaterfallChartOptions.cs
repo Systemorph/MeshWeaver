@@ -28,6 +28,8 @@ public record WaterfallChartOptions<TOptions, TDataSetBuilder>
 
     internal Func<WaterfallStylingBuilder, WaterfallStylingBuilder> StylingOptions { get; init; }
 
+    internal ImmutableList<string> Labels { get; init; }
+
     private TOptions This => (TOptions)this;
 
     public TOptions WithLegendItems(string incrementsLabel = null, string decrementsLabel = null, string totalLabel = null)
@@ -49,4 +51,7 @@ public record WaterfallChartOptions<TOptions, TDataSetBuilder>
 
     public TOptions WithStylingOptions(Func<WaterfallStylingBuilder, WaterfallStylingBuilder> styling)
         => This with { StylingOptions = styling, };
+
+    public TOptions WithLabels(IReadOnlyCollection<string> labels)
+        => This with { Labels = labels.ToImmutableList(), };
 }

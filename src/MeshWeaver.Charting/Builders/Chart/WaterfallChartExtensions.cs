@@ -51,7 +51,7 @@ public static class WaterfallChartExtensions
         internal ImmutableList<double?> ThirdDottedValues { get; init; } = [];
     }
 
-    internal static WaterfallChartDataModel CalculateModel(this List<double> deltas, string[] labels, IReadOnlySet<int> totalIndexes)
+    internal static WaterfallChartDataModel CalculateModel(this List<double> deltas, IReadOnlyList<string> labels, IReadOnlySet<int> totalIndexes)
     {
         var incrementRanges = new List<(double[] range, string label, double? delta)>(deltas.Count);
         var decrementRanges = new List<(double[] range, string label, double? delta)>(deltas.Count);
@@ -61,7 +61,7 @@ public static class WaterfallChartExtensions
         var secondDottedValues = new List<double?>(deltas.Count);
         var thirdDottedValues = new List<double?>(deltas.Count);
 
-        if (labels?.Length != deltas.Count)
+        if (labels?.Count != deltas.Count)
             throw new ArgumentException("Labels length does not match data");
 
         var total = 0.0;
@@ -218,10 +218,9 @@ public static class WaterfallChartExtensions
         }
 
         var tmp = (Models.Chart)chart;
-        if (tmp.Data.Labels is null)
-            tmp = tmp.WithLabels(Enumerable.Range(1, deltas.Count).Select(i => i.ToString()).ToArray());
 
-        var labels = tmp.Data.Labels?.ToArray();
+        var labels = options.Labels ?? Enumerable.Range(1, deltas.Count).Select(i => i.ToString()).ToImmutableList();
+        tmp = tmp.WithLabels(labels);
 
         var dataModel = deltas.CalculateModel(labels, totalIndexes);
 

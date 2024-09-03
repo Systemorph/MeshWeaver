@@ -69,7 +69,7 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
             // TODO V10: reconsider to get rid of this "mutability" approach here (2024/08/28, Dmitry Kalabin)
             deltas = row.DataByColumns.Select(x => (double)x.Value!).ToList();
             ExtraWaterfallOptions = ExtraWaterfallOptions.Add(w => w.WithBarDataSetOptions(o => o.WithBarThickness(20)));
-            Chart = Chart.WithLabels(pivotChartModel.ColumnDescriptors.Select(x => x.DisplayName).ToArray());
+            ExtraWaterfallOptions = ExtraWaterfallOptions.Add(w => w.WithLabels(pivotChartModel.ColumnDescriptors.Select(x => x.DisplayName).ToArray()));
         }
         else
             throw new NotImplementedException("Only bar data set types are supported");
@@ -159,7 +159,7 @@ public record PivotHorizontalWaterfallChartBuilder<T, TTransformed, TIntermediat
             // TODO V10: reconsider to get rid of this "mutability" approach here (2024/08/28, Dmitry Kalabin)
             deltas = row.DataByColumns.Select(x => (double)x.Value!).ToList();
             ExtraWaterfallOptions = ExtraWaterfallOptions.Add(w => w.WithBarDataSetOptions(o => o.WithBarThickness(20)));
-            Chart = Chart.WithLabels(pivotChartModel.ColumnDescriptors.Select(x => x.DisplayName).ToArray());
+            ExtraWaterfallOptions = ExtraWaterfallOptions.Add(w => w.WithLabels(pivotChartModel.ColumnDescriptors.Select(x => x.DisplayName).ToArray()));
         }
         else
             throw new NotImplementedException("Only bar data set types are supported");
