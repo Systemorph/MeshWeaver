@@ -34,6 +34,7 @@ public static  class OrleansServerRegistryExtensions
                 );
             });
         });
+        builder.ConfigureHub(conf => conf.WithTypes(typeof(StreamActivity)));
         builder.AddOrleansMeshInternal();
 
         return builder;
