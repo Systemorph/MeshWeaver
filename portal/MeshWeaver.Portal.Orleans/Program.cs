@@ -2,7 +2,6 @@
 using MeshWeaver.Hosting.Orleans.Client;
 using MeshWeaver.Hosting.Orleans.Server;
 using MeshWeaver.Mesh.Contract;
-using MeshWeaver.Overview;
 using MeshWeaver.Portal.ServiceDefaults;
 using Microsoft.Extensions.Hosting;
 
@@ -13,10 +12,19 @@ builder.AddKeyedAzureTableClient(StorageProviders.Activity);
 builder.AddKeyedRedisClient(StorageProviders.Redis);
 var address = new OrleansAddress();
 
+
+var currentDirectory = Directory.GetCurrentDirectory();
+var deployDirectory = Path.GetFullPath(Path.Combine(currentDirectory, "..", "..", "..", "..", "..", "deploy"));
+var directories = Directory.GetDirectories(deployDirectory);
+var modules = directories.Select(d => Path.Combine(d, $"{Path.GetFileName(d)}.dll")).ToArray();
+
+// Now you can use the solutionDirectory and deployFolder variables as needed
+
+
 builder.
-    UseMeshWeaver(address, conf => 
+    UseMeshWeaver(address, conf =>
         conf
-            .ConfigureMesh(mesh => mesh.InstallAssemblies(typeof(MeshWeaverOverviewAttribute).Assembly.Location))
+            .ConfigureMesh(mesh => mesh.InstallAssemblies(modules))
             .AddOrleansMeshServer());
 
 var app = builder.Build();

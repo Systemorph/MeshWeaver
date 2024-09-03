@@ -41,7 +41,7 @@ namespace MeshWeaver.Hosting.Orleans.Client
             foreach (var assemblyLocation in Configuration.InstallAtStartup)
             {
                 var basePath = Path.GetDirectoryName(assemblyLocation);
-                var loadContext = new CollectibleAssemblyLoadContext(basePath);
+                var loadContext = new ModulesAssemblyLoadContext(basePath);
                 var assembly = loadContext.LoadFromAssemblyPath(assemblyLocation);
                 foreach (var node in assembly
                              .GetCustomAttributes()
@@ -64,7 +64,7 @@ namespace MeshWeaver.Hosting.Orleans.Client
             => grainFactory.GetGrain<IArticleGrain>(article.Id).Update(article);
     }
 
-    public class CollectibleAssemblyLoadContext(string basePath) : AssemblyLoadContext(true){
+    public class ModulesAssemblyLoadContext(string basePath) : AssemblyLoadContext(true){
 
         protected override Assembly Load(AssemblyName assemblyName)
         {
@@ -73,15 +73,16 @@ namespace MeshWeaver.Hosting.Orleans.Client
                 .FirstOrDefault(a => a.GetName().Name == assemblyName.Name);
 
             if (loadedAssembly != null)
-            {
                 return loadedAssembly;
-            }
 
-            var assemblyPath = Path.Combine(basePath, $"{assemblyName.Name}.dll");
+            var assemblyPath = Path.Combine(Directory.GetCurrentDirectory(), $"{assemblyName.Name}.dll");
             if (File.Exists(assemblyPath))
-            {
                 return LoadFromAssemblyPath(assemblyPath);
-            }
+
+
+            assemblyPath = Path.Combine(basePath, $"{assemblyName.Name}.dll");
+            if (File.Exists(assemblyPath))
+                return LoadFromAssemblyPath(assemblyPath);
 
             return null;
         }
