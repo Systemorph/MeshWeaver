@@ -9,7 +9,7 @@ using MeshWeaver.Pivot.Models;
 namespace MeshWeaver.Charting.Pivot;
 
 record PivotLineChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-    : PivotArrayChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, LineChart, LineDataSet, LineDataSetBuilder>, IPivotLineChartBuilder
+    : PivotArrayChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, LineDataSet, LineDataSetBuilder>, IPivotLineChartBuilder
      where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
 {
     public PivotLineChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
