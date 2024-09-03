@@ -5,11 +5,11 @@ using MeshWeaver.Charting.Models;
 namespace MeshWeaver.Charting.Builders.Chart;
 
 public record BarChart
-    : ArrayChart<BarChart, BarDataSet>
+    : ArrayChart
 {
     public BarChart(IReadOnlyCollection<BarDataSet> dataSets) : base(dataSets, ChartType.Bar) { }
 
-    public BarChart AsHorizontalBar()
+    public Models.Chart AsHorizontalBar()
     {
         return WithOptions(options => options.WithIndexAxis("y"));
     }

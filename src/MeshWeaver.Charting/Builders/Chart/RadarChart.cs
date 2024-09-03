@@ -4,7 +4,7 @@ using MeshWeaver.Charting.Models;
 namespace MeshWeaver.Charting.Builders.Chart;
 
 public record RadarChart
-    : ArrayChart<RadarChart, RadarDataSet>
+    : ArrayChart
 {
     public RadarChart(IReadOnlyCollection<RadarDataSet> dataSets) : base(dataSets, ChartType.Radar) { }
 }

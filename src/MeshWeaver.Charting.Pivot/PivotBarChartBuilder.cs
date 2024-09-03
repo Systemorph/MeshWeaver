@@ -14,9 +14,7 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
         TTransformed,
         TIntermediate,
         TAggregate,
-        TPivotBuilder,
-        BarChart,
-        BarDataSet
+        TPivotBuilder
     >,
         IPivotBarChartBuilder
     where TPivotBuilder : PivotBuilderBase<
@@ -43,7 +41,7 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
 
     public IPivotBarChartBuilder WithChartBuilder(Func<BarChart, BarChart> builder)
     {
-        return this with { Chart = builder(Chart) };
+        return this with { Chart = builder((BarChart)Chart) };
     }
 
     public IPivotBarChartBuilder AsStackedWithScatterTotals()
@@ -219,7 +217,7 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
             {
                 case ChartType.Bar: // do we have to make sure this axis goes first?
                     scales.Add(
-                        Chart.IsHorizontal ? PivotChartConst.YAxis : PivotChartConst.XBarAxis,
+                        ((BarChart)Chart).IsHorizontal ? PivotChartConst.YAxis : PivotChartConst.XBarAxis,
                         new CartesianCategoryScale
                         {
                             Stacked = barStacked,
@@ -251,7 +249,7 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
             }
         }
 
-        if (!Chart.IsHorizontal)
+        if (!((BarChart)Chart).IsHorizontal)
         {
             scales.Add(PivotChartConst.YAxis, new Scale {Stacked = barStacked});
         }

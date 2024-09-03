@@ -13,7 +13,7 @@ namespace MeshWeaver.Charting.Pivot;
 
 
 public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-    : PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, BarChart, BarDataSet>, IPivotWaterfallChartBuilder
+    : PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>, IPivotWaterfallChartBuilder
     where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
 {
     private Func<PivotElementDescriptor, bool> totalsFilter;
@@ -93,7 +93,7 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
     protected override void ApplyCustomChartConfigs()
     {
         base.ApplyCustomChartConfigs();
-        Chart = Chart.ToWaterfallChart(deltas, o => WaterfallOptions.Concat(ExtraWaterfallOptions).Aggregate(o, (x, modifier) => modifier(x)));
+        Chart = ((BarChart)Chart).ToWaterfallChart(deltas, o => WaterfallOptions.Concat(ExtraWaterfallOptions).Aggregate(o, (x, modifier) => modifier(x)));
     }
 
     protected override void AddOptions(PivotChartModel pivotChartModel)
@@ -103,7 +103,7 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
 
 // TODO V10: extract common base to avoid duplication (2023/10/05, Ekaterina Mishina)
 public record PivotHorizontalWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-    : PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, BarChart, BarDataSet>, IPivotWaterfallChartBuilder
+    : PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>, IPivotWaterfallChartBuilder
     where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
 {
     private Func<PivotElementDescriptor, bool> totalsFilter;
@@ -183,7 +183,7 @@ public record PivotHorizontalWaterfallChartBuilder<T, TTransformed, TIntermediat
     protected override void ApplyCustomChartConfigs()
     {
         base.ApplyCustomChartConfigs();
-        Chart = Chart.ToHorizontalWaterfallChart(deltas, o => WaterfallOptions.Concat(ExtraWaterfallOptions).Aggregate(o, (x, modifier) => modifier(x)));
+        Chart = ((BarChart)Chart).ToHorizontalWaterfallChart(deltas, o => WaterfallOptions.Concat(ExtraWaterfallOptions).Aggregate(o, (x, modifier) => modifier(x)));
     }
 
     protected override void AddOptions(PivotChartModel pivotChartModel)
