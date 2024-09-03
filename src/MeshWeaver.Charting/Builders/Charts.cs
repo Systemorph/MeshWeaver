@@ -8,7 +8,8 @@ namespace MeshWeaver.Charting.Builders;
 
 public static class Charts
 {
-    public static BarChart Bar(IReadOnlyCollection<BarDataSet> dataSets) => new(dataSets);
+    public static Models.Chart Bar(IReadOnlyCollection<BarDataSet> dataSets)
+        => new Models.Chart(dataSets, ChartType.Bar).AsArrayChart();
     public static Models.Chart Doughnut(IReadOnlyCollection<DoughnutDataSet> dataSets)
         => new Models.Chart(dataSets, ChartType.Doughnut).AsArrayChart();
     public static Models.Chart Line(IReadOnlyCollection<LineDataSet> dataSets)

@@ -102,5 +102,5 @@
     },
     "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
   },
-  "$type": "MeshWeaver.Charting.Builders.Chart.BarChart"
+  "$type": "MeshWeaver.Charting.Models.Chart"
 }
