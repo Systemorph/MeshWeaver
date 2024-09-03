@@ -12,15 +12,11 @@ namespace MeshWeaver.Hosting.Orleans.Server;
 public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCatalog meshCatalog) : Grain<StreamInfo>, IAddressRegistryGrain
 {
     private MeshNode Node { get; set; }
+
     public override async Task OnActivateAsync(CancellationToken cancellationToken)
     {
         await base.OnActivateAsync(cancellationToken);
-        Node = await meshCatalog.GetNodeAsync(this.GetPrimaryKeyString());
-        if (Node is { Id: null })
-            Node = null;
-        if (Node != null)
-            await InitializeState(Node.Address);
-        else
+        if (State is { Id: null })
             State = null;
     }
 
@@ -42,14 +38,22 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
         await WriteStateAsync();
     }
 
-    private Task InitializeState(object address)
+    private async Task InitializeState(object address)
     {
+        if (Node == null)
+        {
+            var id = this.GetPrimaryKeyString();
+            Node = await meshCatalog.GetNodeAsync(id);
+            if(Node == null)
+                logger.LogInformation("No mesh node found for {Id}", id);
+            else logger.LogInformation("Mapping {Id} to {Node}", id, Node);
+        }
         State = Node != null
             ? new(this.GetPrimaryKeyString(), Node.StreamProvider, Node.Namespace, address)
-            : new StreamInfo(SerializationExtensions.GetId(address), StreamProviders.Memory, IRoutingService.MessageIn,
-                address);
+            : new StreamInfo(SerializationExtensions.GetId(address), StreamProviders.Memory, IRoutingService.MessageIn, address); 
+        
         logger.LogInformation("Mapping address {Address} for {Id} to {State}", address, this.GetPrimaryKeyString(),  State);
-        return WriteStateAsync();
+       await WriteStateAsync();
     }
 
 

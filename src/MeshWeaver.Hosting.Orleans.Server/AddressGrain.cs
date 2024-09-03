@@ -20,13 +20,13 @@ public class MeshNodeGrain(ILogger<MeshNode> logger) : Grain<MeshNode>, IMeshNod
 
     public Task<MeshNode> Get()
     {
-        logger.LogDebug("Retrieving Application {State} Entry {Application}", State, this.GetPrimaryKeyString());
+        logger.LogDebug("Retrieving Application {State} Entry {Id}", State, this.GetPrimaryKeyString());
         return Task.FromResult(State);
     }
 
     public async Task Update(MeshNode entry)
     {
-        logger.LogDebug("Updating Application to {Application}", entry);
+        logger.LogInformation("Updating MeshNode of {Id} to {Node}", this.GetPrimaryKeyString(), entry);
         State = entry;
         await WriteStateAsync();
     }

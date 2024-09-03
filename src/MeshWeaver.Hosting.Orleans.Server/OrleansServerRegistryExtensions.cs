@@ -11,18 +11,12 @@ public static  class OrleansServerRegistryExtensions
 {
     public static TBuilder AddOrleansMeshServer<TBuilder>(this TBuilder builder, 
         Action<ISiloBuilder> siloConfiguration = null)
-    where TBuilder:MeshWeaverApplicationBuilder<TBuilder>
+    where TBuilder:MeshWeaverHostBuilder
     {
         
         builder.Host.UseOrleans(silo =>
         {
-
-            if(siloConfiguration != null)
-                siloConfiguration.Invoke(silo);
-            if (builder.Host.Environment.IsDevelopment())
-            {
-                silo.ConfigureEndpoints(Random.Shared.Next(10_000, 50_000), Random.Shared.Next(10_000, 50_000));
-            }
+            siloConfiguration?.Invoke(silo);
             silo.AddMemoryStreams(StreamProviders.Memory)
                 .AddMemoryStreams(StreamProviders.Mesh)
                 .AddMemoryGrainStorage("PubSubStore");
