@@ -1,5 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-  <ItemGroup>
+    <PropertyGroup>
+        <HasMeshNodes>true</HasMeshNodes>
+        <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    </PropertyGroup>
+    <ItemGroup>
     <ProjectReference Include="..\..\..\src\MeshWeaver.DataCubes\MeshWeaver.DataCubes.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />

@@ -1,13 +1,15 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-
-
-  <ItemGroup>
-    <Folder Include="Content\" />
-    <EmbeddedResource Include="Content\**\*" />
-    <Content Include="wwwroot\images\SplashScreen.jpg">
-        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
+    <PropertyGroup>
+        <HasMeshNodes>true</HasMeshNodes>
+        <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    </PropertyGroup>
+    <ItemGroup>
+        <Folder Include="Content\" />
+        <EmbeddedResource Include="Content\**\*" />
+        <Content Include="wwwroot\images\SplashScreen.jpg">
+            <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
   </ItemGroup>
 
 

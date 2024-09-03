@@ -14,7 +14,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub parent
     : Grain<StreamActivity>, IMessageHubGrain
 {
 
-    private CollectibleAssemblyLoadContext loadContext;
+    private ModulesAssemblyLoadContext loadContext;
 
 
     private IMessageHub Hub { get; set; }
