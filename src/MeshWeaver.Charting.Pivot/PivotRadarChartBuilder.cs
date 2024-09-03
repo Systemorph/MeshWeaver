@@ -8,7 +8,7 @@ using MeshWeaver.Pivot.Models;
 namespace MeshWeaver.Charting.Pivot;
 
 public record PivotRadarChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> :
-    PivotArrayChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, RadarChart, RadarDataSet, RadarDataSetBuilder>,
+    PivotArrayChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, RadarDataSet, RadarDataSetBuilder>,
     IPivotRadarChartBuilder
     where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
 {
