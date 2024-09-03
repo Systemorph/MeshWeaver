@@ -9,7 +9,7 @@ namespace MeshWeaver.Messaging;
 public interface IMessageDelivery
 {
     private const string Error = nameof(Error);
-    ImmutableDictionary<string, object> Properties { get; }
+    IReadOnlyDictionary<string, object> Properties { get; }
     string Id { get; }
     object Sender { get; }
     object Target { get; }
@@ -33,8 +33,8 @@ public interface IMessageDelivery
     IMessageDelivery Ignored() => ChangeState(MessageDeliveryState.Ignored);
 
     IMessageDelivery WithMessage(object message);
-    internal IMessageDelivery WithRoutedSender(object address);
-    internal IMessageDelivery WithRoutedTarget(object address);
+    internal IMessageDelivery WithSender(object address);
+    internal IMessageDelivery WithTarget(object address);
     IReadOnlyCollection<object> ToBeForwarded(IEnumerable<object> addresses);
     IMessageDelivery Forwarded(IEnumerable<object> addresses);
 }

@@ -9,12 +9,15 @@ namespace MeshWeaver.Messaging;
 
 public static class MessageHubExtensions
 {
-    public static IMessageHub<TAddress> CreateMessageHub<TAddress>(this IServiceProvider serviceProvider, TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
+    public static IMessageHub CreateMessageHub(this IServiceProvider serviceProvider, object address, Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
     {
-        var hubSetup = new MessageHubConfiguration(serviceProvider, address);
-        return (IMessageHub<TAddress>)configuration(hubSetup).Build(serviceProvider, address);
+        var hubSetup = new MessageHubConfiguration(serviceProvider, address)
+            .WithTypes(address.GetType());
+        return configuration(hubSetup).Build(serviceProvider, address);
     }
 }
+
+
 
 public record MessageHubConfiguration
 {
@@ -81,7 +84,9 @@ public record MessageHubConfiguration
 
     public MessageHubConfiguration WithHostedHub(object address,
         Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
-        => WithRoutes(f => f.RouteAddress<object>((a, d) =>
+        =>
+            this.WithTypes(address.GetType())
+                .WithRoutes(f => f.RouteAddress<object>((a, d) =>
         {
             if (!address.Equals(a))
                 return d;
@@ -90,13 +95,13 @@ public record MessageHubConfiguration
         }));
 
 
-    protected virtual ServiceCollection ConfigureServices<TAddress>(IMessageHub parent)
+    protected virtual ServiceCollection ConfigureServices(IMessageHub parent)
     {
         var services = new ServiceCollection();
-        services.Replace(ServiceDescriptor.Singleton<IMessageHub>(sp => new MessageHub<TAddress>(sp, sp.GetRequiredService<HostedHubsCollection>(), this, parent)));
+        services.Replace(ServiceDescriptor.Singleton<IMessageHub>(sp => new MessageHub(sp, sp.GetRequiredService<HostedHubsCollection>(), this, parent)));
         services.Replace(ServiceDescriptor.Singleton<HostedHubsCollection, HostedHubsCollection>());
         services.Replace(ServiceDescriptor.Singleton(typeof(ITypeRegistry),
-            _ => new TypeRegistry(ParentServiceProvider.GetService<ITypeRegistry>())));
+            _ => new TypeRegistry(ParentServiceProvider.GetService<ITypeRegistry>()).WithType(Address.GetType())));
         services.Replace(ServiceDescriptor.Singleton<IMessageService>(sp => new MessageService(Address,sp.GetRequiredService<ILogger<MessageService>>())));
         services.Replace(ServiceDescriptor.Singleton(sp => new ParentMessageHub(sp.GetRequiredService<IMessageHub>())));
         Services.Invoke(services);
@@ -106,20 +111,30 @@ public record MessageHubConfiguration
     private record ParentMessageHub(IMessageHub Value);
 
     public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery) => WithHandler<TMessage>((h,d,_) => Task.FromResult(delivery.Invoke(h, d)));
-    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, CancellationToken, Task<IMessageDelivery>> delivery) => this with {MessageHandlers = MessageHandlers.Add(new(typeof(TMessage), (h,m,c) => delivery.Invoke(h,(IMessageDelivery<TMessage>)m,c)))};
+    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, CancellationToken, Task<IMessageDelivery>> delivery) => 
+        this with
+        {
+            MessageHandlers = MessageHandlers.Add(new(typeof(TMessage), (h,m,c) => delivery.Invoke(h,(IMessageDelivery<TMessage>)m,c)))
+        };
 
 
-    public MessageHubConfiguration WithInitialization(Action<IMessageHub> action) => this with { BuildupActions = BuildupActions.Add((hub,_) => { action(hub); return Task.CompletedTask; }) };
-    public MessageHubConfiguration WithBuildupAction(Func<IMessageHub, CancellationToken, Task> action) => this with { BuildupActions = BuildupActions.Add(action) };
+    public MessageHubConfiguration WithInitialization(Action<IMessageHub> action) => this with
+    {
+        BuildupActions = BuildupActions.Add((hub, _) =>
+        {
+            action(hub); return Task.CompletedTask; 
+        })
+    };
+    public MessageHubConfiguration WithInitialization(Func<IMessageHub, CancellationToken, Task> action) => this with { BuildupActions = BuildupActions.Add(action) };
 
 
     public MessageHubConfiguration WithDeferral(DeliveryFilter deferral)
         => this with { Deferrals = Deferrals.Add(deferral) };
 
-    protected void CreateServiceProvider<TAddress>(IMessageHub parent)
+    protected void CreateServiceProvider(IMessageHub parent)
     {
 
-        ServiceProvider = ConfigureServices<TAddress>(parent)
+        ServiceProvider = ConfigureServices(parent)
             .SetupModules(ParentServiceProvider);
     }
 
@@ -127,7 +142,7 @@ public record MessageHubConfiguration
     {
         // TODO V10: Check whether this address is already built in hosted hubs collection, if not build. (18.01.2024, Roland Buergi)
         var parentHub = ParentServiceProvider.GetService<ParentMessageHub>()?.Value;
-        CreateServiceProvider<TAddress>(parentHub);
+        CreateServiceProvider(parentHub);
         var parentHubs = ParentServiceProvider.GetService<HostedHubsCollection>();
 
         HubInstance = ServiceProvider.GetRequiredService<IMessageHub>();

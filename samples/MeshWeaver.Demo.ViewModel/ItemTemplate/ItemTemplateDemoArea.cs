@@ -12,7 +12,7 @@ public static class ItemTemplateDemoArea
             .WithNavMenu((menu, _, _) => menu
                 .WithNavLink(
                     "Raw: ItemTemplate (currencies)",
-                    new LayoutAreaReference(nameof(Currencies.CurrenciesFilter)).ToHref(layout.Hub.Address),
+                    new LayoutAreaReference(nameof(Currencies.CurrenciesFilter)).ToAppHref(layout.Hub.Address),
                     FluentIcons.Person
                 )
             );

@@ -23,12 +23,12 @@ public enum MessageHubRunLevel
 
 public record ExecutionRequest(Func<CancellationToken, Task> Action);
 
-public sealed class MessageHub<TAddress>
-    : MessageHubBase<TAddress>,
-        IMessageHub<TAddress>,
+public sealed class MessageHub
+    : MessageHubBase,
+        IMessageHub,
         IMessageHandler<ShutdownRequest>
 {
-    public override TAddress Address => (TAddress)MessageService.Address;
+    public override object Address => MessageService.Address;
 
     public void InvokeAsync(Func<CancellationToken, Task> action) =>
         Post(new ExecutionRequest(action));
@@ -55,7 +55,7 @@ public sealed class MessageHub<TAddress>
 
         this.hostedHubs = hostedHubs;
         ServiceProvider = serviceProvider;
-        logger = serviceProvider.GetRequiredService<ILogger<MessageHub<TAddress>>>();
+        logger = serviceProvider.GetRequiredService<ILogger<MessageHub>>();
 
         Configuration = configuration;
         var configurations =
@@ -71,8 +71,11 @@ public sealed class MessageHub<TAddress>
         serializationOptions.Converters.Add(new JsonNodeConverter());
         serializationOptions.Converters.Add(new ImmutableDictionaryOfStringObjectConverter());
         serializationOptions.Converters.Add(new TypedObjectSerializeConverter(typeRegistry, null));
+        serializationOptions.Converters.Add(new MessageDeliveryConverter());
+        serializationOptions.Converters.Add(new RawJsonConverter());
         deserializationOptions.Converters.Add(new ImmutableDictionaryOfStringObjectConverter());
         deserializationOptions.Converters.Add(new TypedObjectDeserializeConverter(typeRegistry, serializationConfig));
+        deserializationOptions.Converters.Add(new RawJsonConverter());
 
         JsonSerializerOptions = new JsonSerializerOptions();
         JsonSerializerOptions.Converters.Add(

@@ -1,18 +1,19 @@
 ﻿using System.Diagnostics;
-using Microsoft.FluentUI.AspNetCore.Components;
+using MeshWeaver.Application;
+using MeshWeaver.Blazor.AgGrid;
+using MeshWeaver.Blazor.ChartJs;
 using MeshWeaver.Hosting;
-using MeshWeaver.Portal;
-using MeshWeaver.Portal.Web;
+using MeshWeaver.Hosting.Blazor;
+using MeshWeaver.Hosting.Orleans.Client;
+using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Portal.ServiceDefaults;
 using Microsoft.Extensions.Logging.Console;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
+builder.AddKeyedRedisClient(StorageProviders.Redis);
 
-// Add services to the container.
-builder.Services.AddRazorPages();
-builder.Services.AddServerSideBlazor();
-builder.Services.AddFluentUIComponents();
 builder.Services.AddSingleton<ConsoleFormatter, CsvConsoleFormatter>();
 builder.Services.Configure<CsvConsoleFormatterOptions>(options =>
 {
@@ -25,12 +26,19 @@ builder.Services.AddLogging(config => config.AddConsole(
         options.FormatterName = nameof(CsvConsoleFormatter);
     }).AddDebug());
 
-builder.Services.AddFluentUIComponents();
+// Add services to the container.
+var blazorAddress = new UiAddress();
 
-builder.Host.UseMeshWeaver(
-    new BlazorServerAddress(),
-    config => config.ConfigurePortalHubs()
-);
+builder.UseMeshWeaver(blazorAddress,
+        config => config
+            .AddBlazor(x =>
+                x.AddChartJs()
+                    .AddAgGrid()
+            )
+            .AddOrleansMeshClient()
+    )
+    ;
+
 
 if (!builder.Environment.IsDevelopment())
 {
@@ -48,7 +56,6 @@ app.MapDefaultEndpoints();
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error");
-    // The default HSTS value is 30 days. Yoseru may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
     app.UseHsts();
 }
 
@@ -61,7 +68,3 @@ app.MapFallbackToPage("/_Host");
 
 app.Run();
 
-public record BlazorServerAddress
-{
-    public Guid Id { get; init; } = Guid.NewGuid();
-}

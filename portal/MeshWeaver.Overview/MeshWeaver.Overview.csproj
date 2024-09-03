@@ -4,11 +4,18 @@
   <ItemGroup>
     <Folder Include="Content\" />
     <EmbeddedResource Include="Content\**\*" />
+    <None Remove="wwwroot\images\SplashScreen.jpg" />
+    <Content Include="wwwroot\images\SplashScreen.jpg">
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
   </ItemGroup>
 
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.Application.Contract\MeshWeaver.Application.Contract.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
   </ItemGroup>
 
 </Project>

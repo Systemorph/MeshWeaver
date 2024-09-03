@@ -1,15 +1,24 @@
 ﻿using MeshWeaver.Hosting;
-var builder = WebApplication.CreateBuilder(args);
-builder.AddKeyedRedisClient("hubs-redis");
+using MeshWeaver.Hosting.Orleans.Client;
+using MeshWeaver.Hosting.Orleans.Server;
+using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Overview;
+using MeshWeaver.Portal.ServiceDefaults;
+using Microsoft.Extensions.Hosting;
+
+var builder = Host.CreateApplicationBuilder(args);
 builder.AddServiceDefaults();
-builder.UseOrleans(orleansBuilder =>
-{
-    if (builder.Environment.IsDevelopment())
-    {
-        orleansBuilder.ConfigureEndpoints(Random.Shared.Next(10_000, 50_000), Random.Shared.Next(10_000, 50_000));
-    }
-});
+builder.AddKeyedAzureTableClient(StorageProviders.MeshCatalog);
+builder.AddKeyedAzureTableClient(StorageProviders.Activity);
+builder.AddKeyedRedisClient(StorageProviders.Redis);
+var address = new OrleansAddress();
+
+builder.
+    UseMeshWeaver(address, conf => conf
+        .ConfigureMesh(mesh => mesh.InstallAssemblies(typeof(MeshWeaverOverviewAttribute).Assembly.Location))
+            .AddOrleansMeshServer()
+    );
+
 var app = builder.Build();
 
 app.Run();
-

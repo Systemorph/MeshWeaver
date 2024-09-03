@@ -23,7 +23,7 @@ public class HubTestBase : TestBase
     {
         Services.AddSingleton(
             (Func<IServiceProvider, IMessageHub>)(
-                sp => sp.CreateMessageHub(new RouterAddress(), conf => ConfigureRouter(conf))
+                sp => sp.CreateMessageHub(new RouterAddress(), ConfigureRouter)
             )
         );
     }

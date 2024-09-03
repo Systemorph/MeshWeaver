@@ -1,18 +1,19 @@
 ﻿using System.Diagnostics;
 using MeshWeaver.Application;
-using Microsoft.FluentUI.AspNetCore.Components;
+using MeshWeaver.Blazor.AgGrid;
+using MeshWeaver.Blazor.ChartJs;
 using MeshWeaver.Hosting;
-using MeshWeaver.Northwind.Application;
+using MeshWeaver.Hosting.Blazor;
 using Microsoft.Extensions.Logging.Console;
+using MeshWeaver.Hosting.Monolith;
+using MeshWeaver.Northwind.Application;
+using MeshWeaver.Northwind.ViewModel;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
 
 // Add services to the container.
-builder.Services.AddRazorPages();
-builder.Services.AddServerSideBlazor();
-builder.Services.AddFluentUIComponents();
 builder.Services.AddSingleton<ConsoleFormatter, CsvConsoleFormatter>();
 builder.Services.Configure<CsvConsoleFormatterOptions>(options =>
 {
@@ -25,12 +26,19 @@ builder.Services.AddLogging(config => config.AddConsole(
         options.FormatterName = nameof(CsvConsoleFormatter);
     }).AddDebug());
 
-builder.Services.AddFluentUIComponents();
 
-builder.Host.UseMeshWeaver(
+builder.UseMeshWeaver(
     new UiAddress(),
-    config => config.ConfigureNorthwindHubs()
+    config => config
+        .ConfigureMesh(mesh => mesh.InstallAssemblies(typeof(NorthwindApplicationAttribute).Assembly.Location))
+        .AddBlazor(x =>
+            x
+                .AddChartJs()
+                .AddAgGrid()
+        )
+        .AddMonolithMesh()
 );
+
 
 if (!builder.Environment.IsDevelopment())
 {
@@ -44,17 +52,14 @@ logger.LogInformation("Starting blazor server on PID: {PID}", Process.GetCurrent
 
 app.MapDefaultEndpoints();
 
-// Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error");
-    // The default HSTS value is 30 days. Yoseru may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
     app.UseHsts();
 }
 
 app.UseHttpsRedirection();
 app.UseStaticFiles();
-var docSitePath = Path.Combine(builder.Environment.ContentRootPath, "..\\MeshWeaver.Northwind.Docs\\_site");
 app.UseRouting();
 
 app.MapBlazorHub();

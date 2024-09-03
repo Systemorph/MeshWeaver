@@ -9,9 +9,13 @@ namespace MeshWeaver.Application;
 public record ApplicationAddress(string Name, string Environment)
 {
     public override string ToString()
-        => $"app/{Name}/{Environment}";
+        => $"{Name}/{Environment}";
 }
-public record UiAddress
+public record UiAddress 
 {
     public string Id { get; init; } = Guid.NewGuid().AsString();
+
+    public override string ToString()
+        => $"ui_{Id}";
 }
+

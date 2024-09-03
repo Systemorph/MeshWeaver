@@ -12,6 +12,7 @@
     <PackageVersion Include="Aspire.Hosting.Orleans" Version="8.1.0" />
     <PackageVersion Include="Autofac" Version="8.0.0" />
     <PackageVersion Include="Autofac.Extensions.DependencyInjection" Version="9.0.0" />
+    <PackageVersion Include="Azure.Data.Tables" Version="12.8.3" />
     <PackageVersion Include="Castle.Core" Version="5.1.1" />
     <PackageVersion Include="CSharpVitamins.ShortGuid" Version="2.0.0" />
     <PackageVersion Include="CsvHelper" Version="15.0.5" />
@@ -25,9 +26,13 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageVersion>
+    <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="8.2.0" />
+    <PackageVersion Include="Microsoft.Orleans.Runtime" Version="8.2.0" />
+    <PackageVersion Include="Microsoft.Orleans.Serialization.Abstractions" Version="8.2.0" />
+    <PackageVersion Include="OpenTelemetry" Version="1.9.0" />
     <PackageVersion Include="System.Collections.Immutable" Version="8.0.0" />
     <PackageVersion Include="System.Text.Encodings.Web" Version="8.0.0" />
-    <PackageVersion Include="System.Text.Json" Version="8.0.3" />
+    <PackageVersion Include="System.Text.Json" Version="8.0.4" />
     <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0-beta1.24219.2" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.8.0" />
@@ -46,11 +51,12 @@
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="8.0.0" />
-    <PackageVersion Include="Microsoft.Orleans.Core" Version="8.0.0" />
-    <PackageVersion Include="Microsoft.Orleans.Sdk" Version="8.0.0" />
-    <PackageVersion Include="Microsoft.Orleans.Serialization.SystemTextJson" Version="8.0.0" />
-    <PackageVersion Include="Microsoft.Orleans.Server" Version="8.0.0" />
-    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Orleans.Core" Version="8.2.0" />
+    <PackageVersion Include="Microsoft.Orleans.Sdk" Version="8.2.0" />
+    <PackageVersion Include="Microsoft.Orleans.Serialization.SystemTextJson" Version="8.2.0" />
+    <PackageVersion Include="Microsoft.Orleans.Client" Version="8.2.0" />
+    <PackageVersion Include="Microsoft.Orleans.Server" Version="8.2.0" />
+    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="8.2.0" />
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.8.1" />
     <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.8.1" />
@@ -66,14 +72,19 @@
     <PackageVersion Include="Roslynator.CodeAnalysis.Analyzers" Version="4.12.1" />
     <PackageVersion Include="Roslynator.Refactorings" Version="4.12.1" />
     <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="8.0.7" />
-    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components" Version="4.7.2 " />
+    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components" Version="4.7.2" />
     <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components.Icons" Version="4.7.2" />
     <PackageVersion Include="System.Xml.XmlSerializer" Version="4.3.0" />
     <PackageVersion Include="Aspire.StackExchange.Redis.OutputCaching" Version="8.0.0" />
     <PackageVersion Include="Aspire.Hosting.Redis" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Orleans.Clustering.Redis" Version="8.2.0" />
     <PackageVersion Include="Microsoft.Orleans.Persistence.Redis" Version="8.2.0" />
+    <PackageVersion Include="Microsoft.Orleans.Clustering.AzureStorage" Version="8.2.0" />
+    <PackageVersion Include="Microsoft.Orleans.Persistence.AzureStorage" Version="8.2.0" />
     <PackageVersion Include="Aspire.StackExchange.Redis" Version="8.1.0" />
-
+    <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="8.1.0" />
+    <PackageVersion Include="Aspire.Hosting.Azure.CognitiveServices" Version="8.1.0" />
+    <PackageVersion Include="Aspire.Azure.Data.Tables" Version="8.1.0" />
+    <PackageVersion Include="Aspire.Azure.Data.Blobs" Version="8.1.0" />
   </ItemGroup>
 </Project>

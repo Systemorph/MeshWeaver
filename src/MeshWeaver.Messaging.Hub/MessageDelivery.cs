@@ -8,7 +8,10 @@ namespace MeshWeaver.Messaging;
 public abstract record MessageDelivery(object Sender, object Target) : IMessageDelivery
 {
     public string Id { get; init; } = Guid.NewGuid().AsString();
-    public ImmutableDictionary<string, object> Properties { get; init; } = ImmutableDictionary<string, object>.Empty;
+
+    private ImmutableDictionary<string, object> PropertiesImpl { get; init; } =
+        ImmutableDictionary<string, object>.Empty;
+    public IReadOnlyDictionary<string, object> Properties { get => PropertiesImpl; init => PropertiesImpl = value.ToImmutableDictionary(); }
     public string State { get; init; } = MessageDeliveryState.Submitted;
 
     object IMessageDelivery.Message => GetMessage();
@@ -26,14 +29,14 @@ public abstract record MessageDelivery(object Sender, object Target) : IMessageD
 
     IMessageDelivery IMessageDelivery.SetProperty(string name, object value)
     {
-        return this with { Properties = Properties.SetItem(name, value) };
+        return this with { Properties = PropertiesImpl.SetItem(name, value) };
     }
 
     public IMessageDelivery ForwardTo(object target)
         => this with { Target = target, State = MessageDeliveryState.Submitted };
 
     public IMessageDelivery WithProperty(string name, object value)
-        => this with { Properties = Properties.SetItem(name, value) };
+        => this with { Properties = PropertiesImpl.SetItem(name, value) };
 
     private ImmutableHashSet<object> ForwardedTo { get; init; } = ImmutableHashSet<object>.Empty;
 
@@ -42,11 +45,11 @@ public abstract record MessageDelivery(object Sender, object Target) : IMessageD
 
 
 
-    IMessageDelivery IMessageDelivery.WithRoutedSender(object address)
+    IMessageDelivery IMessageDelivery.WithSender(object address)
     {
         return this with { Sender = address };
     }
-    IMessageDelivery IMessageDelivery.WithRoutedTarget(object address)
+    IMessageDelivery IMessageDelivery.WithTarget(object address)
     {
         return this with { Target = address };
     }

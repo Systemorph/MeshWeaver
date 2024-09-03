@@ -2,6 +2,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.DataCubes\MeshWeaver.DataCubes.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Data\MeshWeaver.Data.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Import\MeshWeaver.Import.csproj" />
@@ -11,6 +12,7 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Reporting\MeshWeaver.Reporting.csproj" />
     <ProjectReference Include="..\MeshWeaver.Demo.ViewModel\MeshWeaver.Demo.ViewModel.csproj" />
     <ProjectReference Include="..\MeshWeaver.Northwind.Domain\MeshWeaver.Northwind.Domain.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Northwind.Model\MeshWeaver.Northwind.Model.csproj" />
   </ItemGroup>
   <ItemGroup>
       <Folder Include="Markdown\" />
