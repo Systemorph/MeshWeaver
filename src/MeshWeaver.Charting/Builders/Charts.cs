@@ -10,7 +10,8 @@ public static class Charts
 {
     public static BarChart Bar(IReadOnlyCollection<BarDataSet> dataSets) => new(dataSets);
     public static DoughnutChart Doughnut(IReadOnlyCollection<DoughnutDataSet> dataSets) => new(dataSets);
-    public static LineChart Line(IReadOnlyCollection<LineDataSet> dataSets) => new(dataSets);
+    public static Models.Chart Line(IReadOnlyCollection<LineDataSet> dataSets)
+        => new Models.Chart(dataSets, ChartType.Line).AsArrayChart();
     public static Models.Chart Pie(IReadOnlyCollection<PieDataSet> dataSets)
         => new Models.Chart(dataSets, ChartType.Pie).AsArrayChart();
     public static Models.Chart PolarArea(IReadOnlyCollection<PolarDataSet> dataSets)
