@@ -90,10 +90,11 @@ public static class NorthwindDashboardArea
                         builder => builder
                             .WithOptions(o => o.OrderByValueDescending())
                             .WithChartBuilder(o =>
-                                (BarChart)o.WithDataLabels(d =>
+                                o.WithDataLabels(d =>
                                     d.WithAnchor(DataLabelsAnchor.End)
-                                        .WithAlign(DataLabelsAlign.End))
+                                        .WithAlign(DataLabelsAlign.End)
                                 )
+                            )
                     )
             );
     }
@@ -109,7 +110,7 @@ public static class NorthwindDashboardArea
                     .ToBarChart(builder => builder
                         .WithOptions(o => o.OrderByValueDescending().TopValues(5))
                         .WithChartBuilder(o =>
-                            (BarChart)o.AsHorizontal()
+                            o.AsHorizontal()
                                 .WithDataLabels()
                         )
                     )

@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Charting.Builders.Chart;
+﻿using MeshWeaver.Charting.Builders;
+using MeshWeaver.Charting.Builders.Chart;
 using MeshWeaver.Charting.Builders.DataSetBuilders;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
@@ -30,7 +31,7 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
     )
         : base(pivotBuilder)
     {
-        Chart = new BarChart([]);
+        Chart = Charts.Bar([]);
     }
 
     public new IPivotBarChartBuilder WithOptions(Func<PivotChartModel, PivotChartModel> postProcessor)
@@ -39,9 +40,9 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
         return this;
     }
 
-    public IPivotBarChartBuilder WithChartBuilder(Func<BarChart, BarChart> builder)
+    public IPivotBarChartBuilder WithChartBuilder(Func<Chart, Chart> builder)
     {
-        return this with { Chart = builder((BarChart)Chart) };
+        return this with { Chart = builder(Chart), };
     }
 
     public IPivotBarChartBuilder AsStackedWithScatterTotals()
