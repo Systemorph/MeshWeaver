@@ -55,7 +55,7 @@ namespace MeshWeaver.Charting.Models
             return Data.Labels;
         }
 
-        private Chart WithAutoUpdatedLabels() => this with { Data = Data with { Labels = GetUpdatedLabels(), } };
+        internal Chart WithAutoUpdatedLabels() => this with { Data = Data with { Labels = GetUpdatedLabels(), } };
 
         private ChartOptions GetAutoLegendOptions()
         {
