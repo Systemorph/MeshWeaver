@@ -187,8 +187,7 @@ public class ChartTests
         string[] labels = { "Jan", "Feb", "Mar", "Apr", "May", "June" };
 
         var chart3 = Charts
-            .Bar([])
-            .ToWaterfallChart(deltas, o => o
+            .Waterfall(deltas, o => o
                 .WithLegendItems("Increments", "Decrements", "Total")
                 .WithConnectors()
                 .WithLabels(labels)
@@ -206,8 +205,7 @@ public class ChartTests
         string[] labels = { "Jan", "Feb", "Mar", "Apr", "May", "June" };
 
         var chart3 = Charts
-            .Bar([])
-            .ToHorizontalWaterfallChart(deltas, o => o
+            .HorizontalWaterfall(deltas, o => o
                 .WithLegendItems("Increments", "Decrements", "Total")
                 .WithConnectors()
                 .WithLabels(labels)
@@ -225,8 +223,7 @@ public class ChartTests
         string[] labels = { "Jan", "Feb", "Mar", "Apr", "May", "June", "Total" };
 
         var chart3 = Charts
-            .Bar([])
-            .ToWaterfallChart(deltas, o => o
+            .Waterfall(deltas, o => o
                 .WithLegendItems("Increments", "Decrements", "Total")
                 .WithConnectors()
                 .WithLastAsTotal()
@@ -255,8 +252,7 @@ public class ChartTests
         };
 
         var chart3 = Charts
-            .Bar([])
-            .ToWaterfallChart(deltas, o => o
+            .Waterfall(deltas, o => o
                 .WithTotalsAtPositions(0, 3, 7)
                 .WithLegendItems("Increments", "Decrements", "Total")
                 .WithConnectors(b => b.ThinLine())
@@ -285,8 +281,7 @@ public class ChartTests
         };
 
         var chart3 = Charts
-            .Bar([])
-            .ToHorizontalWaterfallChart(deltas, o => o
+            .HorizontalWaterfall(deltas, o => o
                 .WithTotalsAtPositions(0, 3, 7)
                 .WithLegendItems("Increments", "Decrements", "Total")
                 .WithConnectors()
@@ -315,8 +310,7 @@ public class ChartTests
         };
 
         var chart3 = Charts
-            .Bar([])
-            .ToWaterfallChart(deltas, o => o
+            .Waterfall(deltas, o => o
                 .WithBarDataSetOptions(b => b.WithBarPercentage(1).WithCategoryPercentage(1))
                 .WithTotalsAtPositions(0, 3, 7)
                 .WithLegendItems("Increments", "Decrements", "Total")
@@ -336,8 +330,7 @@ public class ChartTests
         string[] labels = { "Jan", "Feb", "Mar", "Apr", "May", "June", "Total" };
 
         var chart3 = Charts
-            .Bar([])
-            .ToHorizontalWaterfallChart(deltas, o => o
+            .HorizontalWaterfall(deltas, o => o
                 .WithLastAsTotal()
                 .WithLegendItems("Increments", "Decrements", "Total")
                 .WithConnectors()
