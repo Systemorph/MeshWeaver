@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Charting.Builders.Chart;
+﻿using MeshWeaver.Charting.Builders;
 using MeshWeaver.Charting.Builders.DataSetBuilders;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
@@ -15,9 +15,8 @@ record PivotLineChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotB
     public PivotLineChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder)
     {
-        Chart = new LineChart([]);
+        Chart = Charts.Line([]);
     }
-
 
     protected override PivotChartModel CreatePivotModel(PivotModel pivotModel)
     {
@@ -26,7 +25,7 @@ record PivotLineChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotB
 
     public IPivotLineChartBuilder WithRangeOptionsBuilder(Func<ChartOptions, ChartOptions> func)
     {
-        Chart = (LineChart)Chart.WithOptions(func);
+        Chart = Chart.WithOptions(func);
         return this;
     }
 }
