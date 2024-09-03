@@ -12,7 +12,8 @@ public static class Charts
     public static DoughnutChart Doughnut(IReadOnlyCollection<DoughnutDataSet> dataSets) => new(dataSets);
     public static LineChart Line(IReadOnlyCollection<LineDataSet> dataSets) => new(dataSets);
     public static PieChart Pie(IReadOnlyCollection<PieDataSet> dataSets) => new(dataSets);
-    public static PolarAreaChart PolarArea(IReadOnlyCollection<PolarDataSet> dataSets) => new(dataSets);
+    public static Models.Chart PolarArea(IReadOnlyCollection<PolarDataSet> dataSets)
+        => new Models.Chart(dataSets, ChartType.PolarArea).AsArrayChart();
     public static Models.Chart Radar(IReadOnlyCollection<RadarDataSet> dataSets)
         => new Models.Chart(dataSets, ChartType.Radar).AsArrayChart();
     public static Models.Chart FloatingBar(IReadOnlyCollection<FloatingBarDataSet> dataSets) => new(dataSets, ChartType.Bar);
