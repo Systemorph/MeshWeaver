@@ -23,7 +23,7 @@ public  static class BlazorHostingExtensions
     }
 
     public static void MapStaticContent(this IEndpointRouteBuilder app, IMeshCatalog meshCatalog)
-        => app.MapGet("/static/{application}/{environment}/{fileName}", async (string application, string environment, string fileName) =>
+        => app.MapGet("/static/{application}/{environment}/{*fileName}", async (string application, string environment, string fileName) =>
     {
         var address = new ApplicationAddress(application, environment);
         var storageInfo = await meshCatalog.GetNodeAsync(address.ToString());
