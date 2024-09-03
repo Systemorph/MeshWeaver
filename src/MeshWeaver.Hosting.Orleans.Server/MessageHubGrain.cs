@@ -32,7 +32,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub parent
         }
 
         var pathToAssembly = Path.Combine(startupInfo.BaseDirectory, startupInfo.AssemblyLocation);
-        loadContext = new();
+        loadContext = new(startupInfo.BaseDirectory);
         var loaded = loadContext.LoadFromAssemblyPath(pathToAssembly);
         var startupAttribute = loaded.GetCustomAttributes<MeshNodeAttribute>()
             .FirstOrDefault(a => a.Node.Id == startupInfo.NodeId);

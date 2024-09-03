@@ -13,7 +13,6 @@ public static  class OrleansServerRegistryExtensions
         Action<ISiloBuilder> siloConfiguration = null)
     where TBuilder:MeshWeaverApplicationBuilder<TBuilder>
     {
-        builder.AddOrleansMeshInternal();
         
         builder.Host.UseOrleans(silo =>
         {
@@ -41,18 +40,9 @@ public static  class OrleansServerRegistryExtensions
                 );
             });
         });
+        builder.AddOrleansMeshInternal();
 
-        builder.Host.Services.AddSingleton<IHostedService, ServerInitializationHostedService>();
         return builder;
     }
 }
 
-public class ServerInitializationHostedService(IMessageHub hub) : ClientInitializationHostedService(hub)
-{
-    private readonly IMeshCatalog catalog = hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-    public override async Task StartAsync(CancellationToken cancellationToken)
-    {
-        await base.StartAsync(cancellationToken);
-        await catalog.InitializeAsync(cancellationToken);
-    }
-}

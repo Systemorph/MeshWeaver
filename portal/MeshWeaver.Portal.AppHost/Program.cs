@@ -12,7 +12,7 @@ var orleans = builder.AddOrleans("default")
 
 builder.AddProject<Projects.MeshWeaver_Portal_Orleans>("silo")
        .WithReference(orleans)
-       .WithReplicas(3);
+       .WithReplicas(1);
 
 builder.AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
     .WithExternalHttpEndpoints()
