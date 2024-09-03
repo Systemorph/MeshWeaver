@@ -9,10 +9,14 @@ public record TextBoxControl(object Data)
 
     public object Autocomplete { get; init; }
 
+    public object Size { get; init; }
+
     public TextBoxControl WithIconStart(object icon) => this with { IconStart = icon };
 
     public TextBoxControl WithIconEnd(object icon) => this with { IconEnd = icon };
 
     public TextBoxControl WithAutocomplete(object autocomplete) => this with { Autocomplete = autocomplete };
+
+    public TextBoxControl WithSize(object size) => this with { Size = size };
 }
 

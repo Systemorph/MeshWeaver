@@ -1,4 +1,4 @@
-@inherits InputBase<TextBoxControl, SearchView, string>
+@inherits InputBase<SearchControl, SearchView, string>
 
 <FluentSearch
     @bind-Value="Data"
@@ -6,6 +6,25 @@
     Label="@Label"
     Disabled="@Disabled"
     Autofocus="@AutoFocus"
-    Immediate="true"
-    ImmediateDelay="200"
-/>
+    Size="@Size"
+    Immediate="@Immediate"
+    ImmediateDelay="@ImmediateDelay" />
+
+@code
+{
+    private int Size { get; set; }
+    private int MaxLength { get; set; }
+    private int MinLength { get; set; }
+
+    protected override void BindData()
+    {
+        base.BindData();
+
+        if (ViewModel != null)
+        {
+            DataBind(ViewModel.MaxLength, x => x.MaxLength);
+            DataBind(ViewModel.MinLength, x => x.MinLength);
+            DataBind(ViewModel.Size, x => x.Size);
+        }
+    }
+}

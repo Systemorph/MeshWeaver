@@ -64,6 +64,12 @@ public record InstanceCollection
             Instances = Instances.SetItem(id, instance)
         };
 
+    public InstanceCollection Update<T>(object id, Func<T, T> update) =>
+        this with
+        {
+            Instances = Instances.SetItem(id, update.Invoke(Get<T>(id)))
+        };
+
     public InstanceCollection Update(
         ImmutableDictionary<object, object> entities,
         bool snapshot = false

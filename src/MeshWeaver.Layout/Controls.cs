@@ -24,6 +24,7 @@ public static class Controls
     public static ComboboxControl Combobox(object item) => new(item);
 
     public static TextBoxControl TextBox(object data) => new(data);
+    public static SearchControl Search(object data) => new(data);
 
     public static NumberControl Number(object data) => new(data);
 
