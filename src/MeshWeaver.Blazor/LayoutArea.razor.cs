@@ -5,13 +5,15 @@ using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
+using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor;
 
 public partial class LayoutArea
 {
-    [Inject]
-    private IMessageHub Hub { get; set; }
+    [Inject] private IMessageHub Hub { get; set; }
+
+    [Inject] protected IJSRuntime JsRuntime { get; set; }
 
     private IWorkspace Workspace => Hub.GetWorkspace();
 
@@ -27,11 +29,15 @@ public partial class LayoutArea
     public override async Task SetParametersAsync(ParameterView parameters)
     {
         await base.SetParametersAsync(parameters);
-        BindStream();
         BindViewModel();
     }
 
-
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        if (!IsPreRender)
+            BindStream();
+    }
 
 
     private void BindViewModel()
@@ -64,5 +70,7 @@ public partial class LayoutArea
         Logger.LogDebug("Acquiring stream for {Owner} and {Reference}", ViewModel.Address, ViewModel.Reference);
         AreaStream = Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(ViewModel.Address, ViewModel.Reference);
     }
+
+    protected bool IsPreRender => !(bool)JsRuntime.GetType().GetProperty("IsInitialized")!.GetValue(JsRuntime)!;
 
 }

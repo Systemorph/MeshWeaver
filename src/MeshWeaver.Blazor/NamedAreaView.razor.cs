@@ -25,7 +25,7 @@ public partial class NamedAreaView
         base.BindData();
         DataBind(ViewModel.DisplayArea, x => x.DisplayArea);
         DataBind(ViewModel.ShowProgress, x => x.ShowProgress);
-        if (AreaToBeRendered != null)
+        if (AreaToBeRendered != null && Stream != null)
             AddBinding(Stream.GetControlStream(AreaToBeRendered)
                 .Subscribe(x =>
                 {
