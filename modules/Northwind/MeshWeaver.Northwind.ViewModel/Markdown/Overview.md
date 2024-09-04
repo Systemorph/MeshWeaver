@@ -1,3 +1,5 @@
+[comment]: <> { "keywords": [ "Northwind", "Overview", "Landing page"]}
+
 # Northwind
 
 This is a model for the [Northwind Database](https://github.com/microsoft/sql-server-samples/blob/master/samples/databases/northwind-pubs/readme.md). 
