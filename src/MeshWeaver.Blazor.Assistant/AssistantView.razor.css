@@ -1,0 +1,101 @@
+﻿.messages-scroller {
+    /* Make the scrollbar default to being at the end, instead of the start */
+    display: flex;
+    flex-direction: column-reverse;
+    overflow-y: auto;
+    flex-grow: 1;
+}
+
+.messages {
+    display: flex;
+    flex-direction: column;
+    padding: 1rem 1.5rem 0 0.75rem;
+    gap: 1rem;
+    align-items: flex-start;
+    margin-bottom: auto;
+}
+
+.suggestions {
+    padding: 0.5rem;
+    padding-right: 0;
+    font-size: 0.85rem;
+    width: 100%;
+}
+
+    .suggestions p {
+        opacity: 0.8;
+        font-size: 0.85rem;
+    }
+
+    .suggestions a svg {
+        width: 1rem;
+        color: var(--accent-fill-rest);
+        flex-shrink: 0;
+        flex-grow: 0;
+        margin-top: 0.15rem;
+    }
+
+    .suggestions a {
+        display: flex;
+        flex-direction: row;
+        align-items: flex-start;
+        gap: 0.5rem;
+        background-color: var(--neutral-layer-floating);
+        border: 1px solid var(--neutral-stroke-input-active);
+        margin-top: 0.75rem;
+        padding: 0.75rem;
+        border-radius: 0.5rem;
+        text-decoration: none;
+        color: #404040;
+    }
+
+        .suggestions a:hover {
+            border-color: var(--accent-fill-rest) !important;
+        }
+
+html.dark-mode .suggestions a {
+    background-color: var(--neutral-stroke-focus);
+    border: 1px solid var(--neutral-stroke-hover);
+    color: var(--neutral-foreground-rest);
+}
+
+::deep .stop-responding {
+    flex-shrink: 0;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity, transform;
+    transition-duration: 0.3s;
+    transition-timing-function: ease-out;
+    transition-delay: 0.5s;
+    transform: translateY(0.25rem);
+}
+
+.write-message.in-progress ::deep .stop-responding {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+
+.write-message {
+    height: 160px;
+    flex-shrink: 0;
+    padding: 0.5rem 1rem 1.5rem 1rem;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+::deep fluent-text-area {
+    --control-corner-radius: 20;
+    /* We can't display the blue highlight at the bottom because it can't draw large on a large border radius */
+    /* Notice that in real Copilot UIs it also doesn't use the blue highlight on this textarea */
+    --focus-stroke-width: 0;
+}
+
+    ::deep fluent-text-area::part(control) {
+        flex-grow: 1;
+        padding: 1rem;
+        border: 1px solid var(--neutral-stroke-rest);
+    }

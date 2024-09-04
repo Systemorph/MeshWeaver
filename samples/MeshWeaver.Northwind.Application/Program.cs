@@ -1,7 +1,10 @@
 ﻿using System.Diagnostics;
 using MeshWeaver.Application;
+using MeshWeaver.Assistant;
 using MeshWeaver.Blazor.AgGrid;
+using MeshWeaver.Blazor.Assistant;
 using MeshWeaver.Blazor.ChartJs;
+using MeshWeaver.Catalog.ViewModel;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Blazor;
 using Microsoft.Extensions.Logging.Console;
@@ -31,14 +34,17 @@ builder.UseMeshWeaver(
     new UiAddress(),
     config => config
         .ConfigureMesh(mesh => mesh.InstallAssemblies(typeof(NorthwindApplicationAttribute).Assembly.Location))
+        .ConfigureMesh(mesh => mesh.InstallAssemblies(typeof(CatalogApplicationAttribute).Assembly.Location))
         .AddBlazor(x =>
             x
                 .AddChartJs()
                 .AddAgGrid()
+                .AddAssistant()
         )
         .AddMonolithMesh()
 );
 
+builder.AddAssistantService();
 
 if (!builder.Environment.IsDevelopment())
 {

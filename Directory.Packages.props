@@ -86,5 +86,6 @@
     <PackageVersion Include="Aspire.Hosting.Azure.CognitiveServices" Version="8.1.0" />
     <PackageVersion Include="Aspire.Azure.Data.Tables" Version="8.1.0" />
     <PackageVersion Include="Aspire.Azure.Data.Blobs" Version="8.1.0" />
+    <PackageVersion Include="Azure.AI.OpenAI" Version="2.0.0-beta.5" />
   </ItemGroup>
 </Project>
