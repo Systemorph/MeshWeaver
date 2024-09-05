@@ -3,7 +3,6 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using MeshWeaver.Messaging.Serialization;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Messaging;
 
@@ -17,8 +16,11 @@ public static class SerializationExtensions
     }
 
     public static MessageHubConfiguration WithTypes(this MessageHubConfiguration configuration, IEnumerable<Type> types)
-        => configuration.WithInitialization(hub =>
-            hub.ServiceProvider.GetRequiredService<ITypeRegistry>().WithTypes(types));
+    {
+        configuration.TypeRegistry.WithTypes(types);
+        return configuration;
+    }
+
     public static MessageHubConfiguration WithTypes(this MessageHubConfiguration configuration, params Type[] types)
         => configuration.WithTypes((IEnumerable<Type>)types);
 

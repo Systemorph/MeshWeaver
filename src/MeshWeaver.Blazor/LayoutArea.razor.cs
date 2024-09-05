@@ -9,6 +9,7 @@ using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor;
 
+[StreamRendering]
 public partial class LayoutArea
 {
     [Inject] private IMessageHub Hub { get; set; }
@@ -35,8 +36,7 @@ public partial class LayoutArea
     protected override void OnInitialized()
     {
         base.OnInitialized();
-        if (!IsPreRender)
-            BindStream();
+        BindStream();
     }
 
 

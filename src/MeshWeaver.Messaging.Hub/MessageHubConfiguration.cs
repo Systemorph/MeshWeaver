@@ -27,8 +27,8 @@ public record MessageHubConfiguration
     {
         Address = address;
         ParentServiceProvider = parentServiceProvider;
+        TypeRegistry  = new TypeRegistry(ParentServiceProvider.GetService<ITypeRegistry>()).WithType(address.GetType());
     }
-
 
     internal Func<IServiceCollection, IServiceCollection> Services { get; init; } = x => x;
 
@@ -94,18 +94,20 @@ public record MessageHubConfiguration
         }));
 
 
+    public ITypeRegistry TypeRegistry { get; }
     protected virtual ServiceCollection ConfigureServices(IMessageHub parent)
     {
         var services = new ServiceCollection();
         services.Replace(ServiceDescriptor.Singleton<IMessageHub>(sp => new MessageHub(sp, sp.GetRequiredService<HostedHubsCollection>(), this, parent)));
         services.Replace(ServiceDescriptor.Singleton<HostedHubsCollection, HostedHubsCollection>());
-        services.Replace(ServiceDescriptor.Singleton(typeof(ITypeRegistry),
-            _ => new TypeRegistry(ParentServiceProvider.GetService<ITypeRegistry>()).WithType(Address.GetType())));
+        services.Replace(ServiceDescriptor.Singleton(typeof(ITypeRegistry), _ => TypeRegistry));
         services.Replace(ServiceDescriptor.Singleton<IMessageService>(sp => new MessageService(Address,sp.GetRequiredService<ILogger<MessageService>>())));
         services.Replace(ServiceDescriptor.Singleton(sp => new ParentMessageHub(sp.GetRequiredService<IMessageHub>())));
         Services.Invoke(services);
         return services;
     }
+
+
 
     private record ParentMessageHub(IMessageHub Value);
 
