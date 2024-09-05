@@ -5,6 +5,7 @@ using MeshWeaver.Disposables;
 using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.Reflection;
 using MeshWeaver.ServiceProvider;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
 
@@ -25,10 +26,11 @@ public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
         Hub = hub;
         Address = hub.Address;
     }
-
+    protected ILogger Logger { get; }
     protected internal MessageHubBase(IServiceProvider serviceProvider)
     {
         serviceProvider.Buildup(this);
+        Logger = serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(GetType());
         MessageService = serviceProvider.GetRequiredService<IMessageService>();
         TypeRegistry = serviceProvider.GetRequiredService<ITypeRegistry>();
         InitializeTypes(this);
@@ -45,7 +47,7 @@ public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
         )
         {
             if (registry.Action != null)
-                Register(registry.Action, d => registry.Type.IsAssignableFrom(d.Message.GetType()));
+                Register(registry.Action, d => registry.Type.IsInstanceOfType(d.Message));
 
             registeredTypes.Add(registry.Type);
             WithTypeAndRelatedTypesFor(registry.Type);
@@ -159,7 +161,10 @@ public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
         if (!Filter(delivery) || !Rules.Any())
             return delivery;
 
-        return await DeliverMessageAsync(delivery.Submitted(), Rules.First, cancellationToken);
+        Logger.LogDebug("Starting processing of {Delivery}", delivery);
+        var ret = await DeliverMessageAsync(delivery.Submitted(), Rules.First, cancellationToken);
+        Logger.LogDebug("Finished processing of {Delivery}", delivery);
+        return ret;
     }
 
     public virtual bool IsDeferred(IMessageDelivery delivery)
@@ -177,7 +182,10 @@ public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
         delivery = await node.Value.Invoke(delivery, cancellationToken);
 
         if (node.Next == null)
-            return delivery;
+        {
+            Logger.LogDebug("No handler found for {Delivery}", delivery);
+            return delivery.Ignored();
+        }
 
         return await DeliverMessageAsync(delivery, node.Next, cancellationToken);
     }
