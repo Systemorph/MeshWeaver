@@ -66,15 +66,14 @@ public sealed class MessageHub
         var serializationConfig = configurations
             .Aggregate(CreateSerializationConfiguration(), (c, f) => f.Invoke(c));
         var serializationOptions = serializationConfig.Options;
-        var typeRegistry = serviceProvider.GetRequiredService<ITypeRegistry>();
         var deserializationOptions = new JsonSerializerOptions(serializationOptions);
         serializationOptions.Converters.Add(new JsonNodeConverter());
         serializationOptions.Converters.Add(new ImmutableDictionaryOfStringObjectConverter());
-        serializationOptions.Converters.Add(new TypedObjectSerializeConverter(typeRegistry, null));
+        serializationOptions.Converters.Add(new TypedObjectSerializeConverter(TypeRegistry, null));
         serializationOptions.Converters.Add(new MessageDeliveryConverter());
         serializationOptions.Converters.Add(new RawJsonConverter());
         deserializationOptions.Converters.Add(new ImmutableDictionaryOfStringObjectConverter());
-        deserializationOptions.Converters.Add(new TypedObjectDeserializeConverter(typeRegistry, serializationConfig));
+        deserializationOptions.Converters.Add(new TypedObjectDeserializeConverter(TypeRegistry, serializationConfig));
         deserializationOptions.Converters.Add(new RawJsonConverter());
 
         JsonSerializerOptions = new JsonSerializerOptions();

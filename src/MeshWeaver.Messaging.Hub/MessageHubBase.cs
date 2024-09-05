@@ -11,7 +11,7 @@ namespace MeshWeaver.Messaging;
 
 public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
 {
-    protected ITypeRegistry TypeRegistry;
+    protected ITypeRegistry TypeRegistry { get; }
     public virtual object Address { get; }
     protected readonly LinkedList<AsyncDelivery> Rules = new();
     private readonly HashSet<Type> registeredTypes = new();

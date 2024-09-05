@@ -1,4 +1,6 @@
-﻿namespace MeshWeaver.Messaging;
+﻿using MeshWeaver.Messaging.Serialization;
+
+namespace MeshWeaver.Messaging;
 
 public class MessageHubPlugin : 
     MessageHubBase,
