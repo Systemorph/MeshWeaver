@@ -44,7 +44,7 @@ builder.UseMeshWeaver(
         .AddMonolithMesh()
 );
 
-builder.AddAssistantService();
+builder.AddChatService();
 
 if (!builder.Environment.IsDevelopment())
 {

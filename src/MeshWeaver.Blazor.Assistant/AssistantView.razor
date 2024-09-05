@@ -1,6 +1,11 @@
+@using Azure.AI.OpenAI
+@using Azure.AI.OpenAI.Chat
+@using MeshWeaver.Collections
+@using OpenAI.Chat
+@using AssistantChatMessage = MeshWeaver.Assistant.AssistantChatMessage
 @inherits BlazorView<AssistantControl, AssistantView>;
 @inject IJSRuntime JsRuntime;
-@inject AssistantService AssistantService;
+@inject ChatService ChatService;
 
 <div class="messages-scroller">
     <div class="messages">
@@ -56,8 +61,8 @@
     string? userMessageText;
     
     string[] suggestions = [
-        "hotel close to the ocean", 
-        "room service"
+        "Can you recommend a few hotels near the ocean with beach access and good views",
+        "Hotels with best SPA services"
     ];
 
     bool ReplyInProgress => currentReplyCancellationTokenSource?.IsCancellationRequested == false;
@@ -87,7 +92,7 @@
             // Add the user's message to the UI
             messages.Add(
                 new MessageState(
-                    new() { Text = userMessageText }, 
+                    new() { Text = userMessageText },
                     null, 
                     CancellationToken.None)
                 );
@@ -99,13 +104,20 @@
 
             var cancellationToken = currentReplyCancellationTokenSource.Token;
 
-            var request = new AssistantChatRequest(messages.Select(m => m.Message).ToList());
-
-            var responseItems = 
-                AssistantService.GetReplyAsync(request, cancellationToken);
-
+            var request = new ChatRequest(
+                new AssistantChatMessage(){ Text = SystemMessage }
+                    .RepeatOnce()
+                    .Concat(
+                        messages.Where(m => !string.IsNullOrEmpty(m.Message.Text))
+                            .Select(m => m.Message))
+                    .ToArray()
+            );
+            
+            var responseItems =
+                ChatService.GetReplyAsync(request, GetChatCompletionOptions(), cancellationToken);
+            
             // Add the assistant's reply to the UI
-            var reply = new AssistantChatRequestMessage { IsAssistant = true, Text = string.Empty };
+            var reply = new AssistantChatMessage() { Text = string.Empty, IsAssistant = true };
 
             messages.Add(new MessageState(reply, responseItems, cancellationToken));
         }
@@ -120,7 +132,7 @@
 
         // If it was cancelled before the response started, remove the message entirely
         // But if there was some text already, keep it
-        if (string.IsNullOrEmpty(state.Message.Text))
+        if (string.IsNullOrEmpty(state.Message.Text) && state.RequestException is null)
         {
             messages.Remove(state);
         }
@@ -138,7 +150,46 @@
     }
 
     public record MessageState(
-        AssistantChatRequestMessage Message,
-        IAsyncEnumerable<AssistantChatReplyItem>? ResponseItems, 
-        CancellationToken CancellationToken);
+        AssistantChatMessage Message,
+        IAsyncEnumerable<ChatReply>? ResponseItems,
+        CancellationToken? CancellationToken)
+    {
+        public Exception RequestException { get; set; }
+    }
+
+    // TODO V10: move to parameters (05.09.2024, Alexander Kravets)
+
+    private const string SystemMessage = @"
+You are a helpful assistant which helps people to find hotels.
+";
+
+    private static ChatCompletionOptions GetChatCompletionOptions()
+    {
+        var searchEndpoint = Environment.GetEnvironmentVariable("AZURE_AI_SEARCH_ENDPOINT");
+        var searchKey = Environment.GetEnvironmentVariable("AZURE_AI_SEARCH_API_KEY");
+        var searchIndex = Environment.GetEnvironmentVariable("AZURE_AI_SEARCH_INDEX");
+
+        var options = new ChatCompletionOptions();
+
+#pragma warning disable AOAI001
+        options.AddDataSource(new AzureSearchChatDataSource()
+        {
+            Endpoint = new Uri(searchEndpoint),
+            IndexName = searchIndex,
+            Authentication = DataSourceAuthentication.FromApiKey(searchKey),
+            OutputContextFlags = DataSourceOutputContextFlags.Citations,
+            FieldMappings = new DataSourceFieldMappings()
+            {
+                TitleFieldName = "HotelName",
+                ContentFieldNames = { "Description" },
+                UrlFieldName = "HotelId",
+            },
+            TopNDocuments = 5,
+            InScope = true,
+        });
+#pragma warning restore AOAI001
+
+        return options;
+    }
+
 }
