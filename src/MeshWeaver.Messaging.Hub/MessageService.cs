@@ -126,6 +126,7 @@ public class MessageService : IMessageService
 
     public IMessageDelivery Post<TMessage>(TMessage message, PostOptions opt)
     {
+        logger.LogDebug("Posting message {Message} from {Sender} to {Target}", message, Address, opt.Target);
         return PostImpl(message, opt);
     }
 
