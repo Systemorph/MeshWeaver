@@ -24,7 +24,7 @@ public static class ChatServiceAppBuilderExtensions
                 new AzureKeyCredential(azureOpenAiKey)).GetChatClient(deploymentName)
         );
 
-        builder.Services.AddScoped<ChatService>();
+        builder.Services.AddScoped<OpenAiChatService>();
 
         return builder;
     }

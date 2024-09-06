@@ -1,20 +1,20 @@
 ﻿using System.Runtime.CompilerServices;
 using Azure.AI.OpenAI;
+using Azure.AI.OpenAI.Chat;
 using OpenAI.Chat;
 
 namespace MeshWeaver.Assistant;
 
 #pragma warning disable AOAI001
 
-public class ChatService(ChatClient chatClient)
+public class OpenAiChatService(ChatClient chatClient)
 {
-    public async IAsyncEnumerable<ChatReply> GetReplyAsync(
-        ChatRequest request, 
+    public async IAsyncEnumerable<ChatReplyChunk> GetReplyAsync(
+        IEnumerable<ChatHistoryItem> chatHistory, 
         ChatCompletionOptions options,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var messages =
-            request.Messages.Select(m =>
+        var messages = chatHistory.Select(m =>
                 (ChatMessage)(m.IsAssistant ? new OpenAI.Chat.AssistantChatMessage(m.Text) : new UserChatMessage(m.Text)));
 
         var chatUpdates = 
@@ -24,11 +24,14 @@ public class ChatService(ChatClient chatClient)
         {
             var context = chatUpdate.GetAzureMessageContext();
 
-            yield return new ChatReply()
-            {
-                Text = string.Join("", chatUpdate.ContentUpdate.Select(contentPart => contentPart.Text)),
-                Citations = context?.Citations
-            };
+            yield return new ChatReplyChunk(
+                string.Join("", chatUpdate.ContentUpdate.Select(contentPart => contentPart.Text)),
+                context?.Citations
+            );
         }
     }
 }
+
+public record ChatHistoryItem(string Text, bool IsAssistant);
+
+public record ChatReplyChunk(string Text, IReadOnlyCollection<AzureChatCitation> Citations);

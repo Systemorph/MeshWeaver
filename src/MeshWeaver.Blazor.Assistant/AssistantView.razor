@@ -1,15 +1,13 @@
 @using Azure.AI.OpenAI
 @using Azure.AI.OpenAI.Chat
-@using MeshWeaver.Collections
 @using OpenAI.Chat
-@using AssistantChatMessage = MeshWeaver.Assistant.AssistantChatMessage
 @inherits BlazorView<AssistantControl, AssistantView>;
 @inject IJSRuntime JsRuntime;
-@inject ChatService ChatService;
+@inject OpenAiChatService OpenAiChatService;
 
 <div class="messages-scroller">
     <div class="messages">
-        @if (messages.Count == 0)
+        @if (messages.Count == 0 && ViewModel.Suggestions?.Count > 0)
         {
             <div class="suggestions">
                 <p>Tell me what you are looking for, or pick a suggestion to get started.</p>
@@ -37,8 +35,18 @@
 </div>
 
 <form class="write-message @(ReplyInProgress ? "in-progress" : "")" @ref="@writeMessageElement" @onsubmit="@SendMessage">
-    <FluentButton Class="stop-responding" @onclick="@StopResponding" Appearance="Appearance.Outline">Stop responding</FluentButton>
-    <FluentTextArea @bind-Value="@userMessageText" Placeholder="Ask the AI assistant&hellip;" style="width: 100%; height: 100%;" />
+    <FluentButton
+        Class="stop-responding"
+        @onclick="@StopResponding"
+        Appearance="Appearance.Outline"
+        >
+        Stop responding
+    </FluentButton>
+    <FluentTextArea 
+        @bind-Value="@userMessageText" 
+        Placeholder="Ask the AI assistant&hellip;" 
+        style="width: 100%; height: 100%;" 
+    />
 </form>
 
 @code
@@ -54,15 +62,12 @@
         }
     }
 
-    CancellationTokenSource? currentReplyCancellationTokenSource;
-
     readonly List<MessageState> messages = new();
-    
-    ElementReference writeMessageElement;
-    
-    string? userMessageText;
+    string userMessageText;
 
+    CancellationTokenSource currentReplyCancellationTokenSource;
     bool ReplyInProgress => currentReplyCancellationTokenSource?.IsCancellationRequested == false;
+    ElementReference writeMessageElement;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -84,60 +89,49 @@
     {
         if (!string.IsNullOrWhiteSpace(userMessageText))
         {
-            StopResponding();
+            if (ReplyInProgress)
+            {
+                StopResponding();
+            }
 
             // Add the user's message to the UI
-            messages.Add(
-                new MessageState(
-                    new() { Text = userMessageText },
-                    null, 
-                    CancellationToken.None)
-                );
+            messages.Add(new MessageState {Text = userMessageText});
 
             userMessageText = null;
 
-            // Submit request to backend
+            // Submit request to ai service
             currentReplyCancellationTokenSource = new CancellationTokenSource();
 
             var cancellationToken = currentReplyCancellationTokenSource.Token;
 
-            var request = new ChatRequest(
-                new AssistantChatMessage(){ Text = SystemMessage }
-                    .RepeatOnce()
-                    .Concat(
-                        messages.Where(m => !string.IsNullOrEmpty(m.Message.Text))
-                            .Select(m => m.Message))
-                    .ToArray()
-            );
-            
             var responseItems =
-                ChatService.GetReplyAsync(request, GetChatCompletionOptions(), cancellationToken);
+                OpenAiChatService.GetReplyAsync(GetChatHistory(), GetChatCompletionOptions(), cancellationToken);
             
             // Add the assistant's reply to the UI
-            var reply = new AssistantChatMessage() { Text = string.Empty, IsAssistant = true };
-
-            messages.Add(new MessageState(reply, responseItems, cancellationToken));
+            messages.Add(new MessageState
+                {
+                    IsAssistant = true,
+                    ResponseItems = responseItems,
+                    CancellationToken = cancellationToken
+                });
         }
     }
 
     private void HandleResponseCompleted(MessageState state)
     {
-        if (messages.LastOrDefault() == state)
-        {
-            currentReplyCancellationTokenSource = null;
-        }
-
-        // If it was cancelled before the response started, remove the message entirely
-        // But if there was some text already, keep it
-        if (string.IsNullOrEmpty(state.Message.Text) && state.RequestException is null)
-        {
-            messages.Remove(state);
-        }
+        currentReplyCancellationTokenSource = null;
     }
 
     private void StopResponding()
     {
-        currentReplyCancellationTokenSource?.Cancel();
+        currentReplyCancellationTokenSource.Cancel();
+        
+        var lastMessage = messages.Last();
+
+        if (lastMessage.IsEmpty)
+        {
+            messages.Remove(lastMessage);
+        }
     }
 
     private void ApplySuggestion(string suggestion)
@@ -146,19 +140,19 @@
         SendMessage();
     }
 
-    public record MessageState(
-        AssistantChatMessage Message,
-        IAsyncEnumerable<ChatReply>? ResponseItems,
-        CancellationToken? CancellationToken)
+    private IEnumerable<ChatHistoryItem> GetChatHistory()
     {
-        public Exception RequestException { get; set; }
+        var chatHistory = 
+            messages.Where(m => !string.IsNullOrEmpty(m.Text))
+                .Select(m => new ChatHistoryItem(m.Text, m.IsAssistant));
 
-        public MessageState SetMessage(Func<AssistantChatMessage, AssistantChatMessage> update)
-            => this with {Message = update(Message)};
-
-        public MessageState SetException(Exception e) 
-            => this with {RequestException = e};
+        return !string.IsNullOrWhiteSpace(SystemMessage) ? 
+            chatHistory.Prepend(new(SystemMessage, false)) 
+            : chatHistory;
     }
+
+
+
 
     // TODO V10: move to parameters (05.09.2024, Alexander Kravets)
 
@@ -171,7 +165,7 @@
         var options = new ChatCompletionOptions();
 
 #pragma warning disable AOAI001
-        options.AddDataSource(new AzureSearchChatDataSource()
+        options.AddDataSource(new AzureSearchChatDataSource
         {
             Endpoint = new Uri(searchEndpoint),
             IndexName = searchIndex,
