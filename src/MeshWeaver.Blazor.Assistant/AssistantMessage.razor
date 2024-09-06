@@ -31,14 +31,26 @@ else
             {
                 <div class="message-text">@(string.IsNullOrEmpty(State.Message.Text) ? "..." : State.Message.Text)</div>
 
+                @if (State.Message.References.Any())
+                {
+                    <div class="message-citations">
+                        <ul>
+                            @foreach (var reference in State.Message.References)
+                            {
+                                <li>
+                                    <a href="@reference.Url" class="reference-link" target="_blank">
+                                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
+                                        </svg>
+                                        <span class="ref-text">@reference.Title</span>
+                                    </a>
+                                </li>
+                            }
+                        </ul>
+                    </div>
+                }
                 @if (!string.IsNullOrEmpty(citationUrl))
                 {
-                    <a href="@citationUrl" class="reference-link" target="_blank">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
-                        </svg>
-                        <span class="ref-text">@(string.IsNullOrWhiteSpace(citationQuote) ? "Reference" : citationQuote)</span>
-                    </a>
                 }
 
             }
@@ -80,28 +92,20 @@ else
                 visible = true;
                 StateHasChanged();
 
-                await foreach (var item in State.ResponseItems)
+                await foreach (var chatReply in State.ResponseItems)
                 {
-                    State.Message.Text += item.Text;
+                    State.Message.Text += chatReply.Text;
 
-                    await module.InvokeVoidAsync("addAnswerChunk", messageContentElement, item.Text);
+                    if (chatReply.Citations is not null)
+                    {
+                        State.Message.References.AddRange(
+                            chatReply.Citations.Select(c => new ReferenceItem(c.Title, c.Url)));
+                    }
+
+                    await module.InvokeVoidAsync("addAnswerChunk", messageContentElement, chatReply.Text);
                 }
 
                 State.Message.Text = State.Message.Text.Trim();
-                //.SetMessage(message => message.SetText(text => text.Trim()));
-
-                // Check if there's a citation to show
-                // var citeMatches = Regex.Matches(State.Message.Text, "<cite searchResultId=['\"]?(\\d+)['\"]?>(.*?)</cite>");
-                // if (citeMatches.FirstOrDefault() is { } match
-                //     && int.TryParse(match.Groups[1].Value, out var searchResultId)
-                //     && searchResults.FirstOrDefault(s => s.SearchResultId == searchResultId) is { } searchResult)
-                // {
-                //     citationQuote = match.Groups[2].Value;
-                //     citationQuote = citationQuote.Trim('.', ',', ' ', '\n', '\r', '\t', '"', '\'');
-                //     citationUrl = $"manual.html?file={searchResult.SearchResultProductId}.pdf&page={searchResult.SearchResultPageNumber}&search={HttpUtility.UrlEncode(citationQuote)}";
-                //     State.Message.Text = State.Message.Text[0..match.Index] + State.Message.Text[(match.Index + match.Length)..];
-                // }
-
             }
             catch (TaskCanceledException)
             {
