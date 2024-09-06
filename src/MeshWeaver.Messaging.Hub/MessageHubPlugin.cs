@@ -8,16 +8,12 @@ public class MessageHubPlugin :
 {
 
 
-    protected MessageHubPlugin(IMessageHub hub)
-    : base(hub)
+    protected MessageHubPlugin(IServiceProvider serviceProvider)
+    : base(serviceProvider)
     {
     }
 
 
-    public virtual Task StartAsync(CancellationToken cancellationToken)
-    {
-        return Task.CompletedTask;
-    }
     public virtual Task Initialized => Task.CompletedTask;
 }
 
@@ -43,8 +39,7 @@ public class MessageHubPlugin<TState> : MessageHubPlugin
     private readonly TaskCompletionSource initializedTaskCompletionSource = new();
 
 
-    protected MessageHubPlugin(IMessageHub hub) : base(hub)
+    protected MessageHubPlugin(IServiceProvider serviceProvider) : base(serviceProvider)
     {
     }
-
 }

@@ -7,7 +7,7 @@ public static class MessageHubReactiveExtensions
 {
     public static Subject<IMessageDelivery> AddObservable(this IMessageHub hub)
     {
-        var plugin = new ObservablePlugin(hub);
+        var plugin = new ObservablePlugin(hub.ServiceProvider);
         hub.AddPlugin(plugin);
         return plugin.Out;
     }
@@ -16,7 +16,7 @@ public class ObservablePlugin : MessageHubPlugin
 {
     public Subject<IMessageDelivery> Out { get; } = new();
 
-    public ObservablePlugin(IMessageHub hub) : base(hub)
+    public ObservablePlugin(IServiceProvider serviceProvider) : base(serviceProvider)
     {
         Register(FeedOut);
     }

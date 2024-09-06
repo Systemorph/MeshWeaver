@@ -1,19 +1,18 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
 
-public class DataPlugin(IMessageHub hub)
-    : MessageHubPlugin<WorkspaceState>(hub),
+public class DataPlugin(IServiceProvider serviceProvider)
+    : MessageHubPlugin<WorkspaceState>(serviceProvider),
         IMessageHandler<UpdateDataRequest>,
         IMessageHandler<DeleteDataRequest>,
         IMessageHandler<SubscribeRequest>,
         IMessageHandler<UnsubscribeDataRequest>
 {
     private IWorkspace Workspace { get; set; } =
-        hub.ServiceProvider.GetRequiredService<IWorkspace>();
+        serviceProvider.GetRequiredService<IWorkspace>();
 
     public override Task Initialized => Workspace.Initialized;
 
@@ -48,9 +47,7 @@ public class DataPlugin(IMessageHub hub)
         IMessageDelivery<SubscribeRequest> request
     ) => Subscribe(request);
 
-    private readonly ILogger<DataPlugin> logger = hub.ServiceProvider.GetRequiredService<
-        ILogger<DataPlugin>
-    >();
+    private readonly ILogger<DataPlugin> logger = serviceProvider.GetRequiredService<ILogger<DataPlugin>>();
 
     private IMessageDelivery Subscribe(IMessageDelivery<SubscribeRequest> request)
     {

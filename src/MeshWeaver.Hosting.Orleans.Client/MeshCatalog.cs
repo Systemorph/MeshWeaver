@@ -49,6 +49,13 @@ namespace MeshWeaver.Hosting.Orleans.Client
                              .Select(a => a.Node))
                 {
                     logger.LogInformation("Initializing {Node}", node);
+                    /*
+                     * 1. Index all sources
+                     * 2. Index xml docs
+                     * 3. Lucene for articles ==> standard keywords such as ID, Title, Description (use AI to create short summary), user settings as specified in comments of article.
+                     *    Idea for indexing: Create record entry by deserializing Markdown Tag and then complete with standard info such as Id, Title, etc.
+                     * 4. Vector store for articles ==> use blazor rendering to create html (wait for layout areas to be injected) and index resulting html in vector store.
+                     */
                     await grainFactory.GetGrain<IMeshNodeGrain>(node.Id).Update(node);
                 }
                 loadContext.Unload();
