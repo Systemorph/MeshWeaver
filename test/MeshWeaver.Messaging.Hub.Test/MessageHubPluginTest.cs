@@ -18,15 +18,16 @@ public class MessageHubPluginTest : TestBase
     class MyPlugin : MessageHubPlugin, IMessageHandler<GetEvents>
     {
         [Inject] private ILogger<MyPlugin> logger;
-        public MyPlugin(IMessageHub hub) : base(hub)
+        public MyPlugin(IServiceProvider serviceProvider) : base(serviceProvider)
         {
             Register(HandleMessage);
         }
 
         public ImmutableList<object> Events { get; private set; }  = ImmutableList<object>.Empty;
 
-        public override async Task StartAsync(CancellationToken cancellationToken)
+        public override async Task StartAsync(IMessageHub hub, CancellationToken cancellationToken)
         {
+            await base.StartAsync(hub, cancellationToken);
             logger.LogInformation("Starting");
             Events = Events.Add("Starting");
             await Task.Delay(1000, cancellationToken);

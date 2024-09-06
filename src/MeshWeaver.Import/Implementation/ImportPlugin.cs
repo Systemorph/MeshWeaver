@@ -14,27 +14,16 @@ public static class ActivityCategory
     public const string Import = nameof(Import);
 }
 
-public class ImportPlugin : MessageHubPlugin, IMessageHandlerAsync<ImportRequest>
+public class ImportPlugin(IServiceProvider serviceProvider, Func<ImportConfiguration, ImportConfiguration> importConfiguration) : MessageHubPlugin(serviceProvider), IMessageHandlerAsync<ImportRequest>
 {
     private ImportManager importManager;
-    private readonly IWorkspace workspace;
-    private readonly IActivityService activityService;
     private readonly Func<ImportConfiguration, ImportConfiguration> importConfiguration;
 
-    public ImportPlugin(
-        IMessageHub hub,
-        Func<ImportConfiguration, ImportConfiguration> importConfiguration
-    )
-        : base(hub)
+    private readonly IWorkspace workspace = serviceProvider.GetRequiredService<IWorkspace>();
+    private readonly IActivityService activityService = serviceProvider.GetRequiredService<IActivityService>();
+    public override async Task StartAsync(IMessageHub hub, CancellationToken cancellationToken)
     {
-        workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
-        activityService = hub.ServiceProvider.GetRequiredService<IActivityService>();
-        this.importConfiguration = importConfiguration;
-    }
-
-    public override async Task StartAsync(CancellationToken cancellationToken)
-    {
-        await base.StartAsync(cancellationToken);
+        await base.StartAsync(hub, cancellationToken);
         initializeTask = InitializeAsync();
     }
 

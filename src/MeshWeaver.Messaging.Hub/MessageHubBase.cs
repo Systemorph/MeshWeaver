@@ -12,19 +12,18 @@ namespace MeshWeaver.Messaging;
 public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
 {
     protected ITypeRegistry TypeRegistry { get; }
-    public virtual object Address { get; }
+    public virtual object Address => Hub.Address;
     protected readonly LinkedList<AsyncDelivery> Rules = new();
     private readonly HashSet<Type> registeredTypes = new();
 
     protected readonly IMessageService MessageService;
 
-    public virtual IMessageHub Hub { get; }
+    public virtual IMessageHub Hub { get; private set; }
 
-    protected MessageHubBase(IMessageHub hub)
-        : this(hub.ServiceProvider)
+    public virtual Task StartAsync(IMessageHub hub, CancellationToken cancellationToken)
     {
         Hub = hub;
-        Address = hub.Address;
+        return Task.CompletedTask;
     }
     protected ILogger Logger { get; }
     protected internal MessageHubBase(IServiceProvider serviceProvider)
@@ -169,7 +168,7 @@ public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
 
     public virtual bool IsDeferred(IMessageDelivery delivery)
     {
-        return (Hub.Address.Equals(delivery.Target) || delivery.Target == null)
+        return (Hub != null && Hub.Address.Equals(delivery.Target) || delivery.Target == null)
             && registeredTypes.Any(type => type.IsInstanceOfType(delivery.Message));
     }
 

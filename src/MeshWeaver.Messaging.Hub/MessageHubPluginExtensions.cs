@@ -4,18 +4,6 @@ using MeshWeaver.Reflection;
 
 namespace MeshWeaver.Messaging;
 
-public record PluginOptions<TPlugin>(IMessageHub Hub)
-    where TPlugin : IMessageHubPlugin
-{
-    internal Func<TPlugin> Factory { get; init; } =
-        () => Hub.ServiceProvider.GetRequiredService<TPlugin>();
-
-    public PluginOptions<TPlugin> WithFactory(Func<TPlugin> factory) =>
-        this with
-        {
-            Factory = factory
-        };
-}
 
 public static class MessageHubPluginExtensions
 {
@@ -30,8 +18,7 @@ public static class MessageHubPluginExtensions
 
     public static MessageHubConfiguration AddPlugin<TPlugin>(
         this MessageHubConfiguration configuration,
-        Func<PluginOptions<TPlugin>, PluginOptions<TPlugin>> options
-    )
+        Func<IMessageHub, TPlugin> factory = null)
         where TPlugin : class, IMessageHubPlugin
     {
         if (configuration.PluginFactories.Any(x => x.Type == typeof(TPlugin)))
@@ -39,13 +26,9 @@ public static class MessageHubPluginExtensions
         return configuration.WithServices(services => services.AddScoped<TPlugin>()) with
         {
             PluginFactories = configuration.PluginFactories.Add(
-                (typeof(TPlugin), h => options.Invoke(new(h)).Factory())
+                (typeof(TPlugin), factory ?? (hub => hub.ServiceProvider.GetRequiredService<TPlugin>()))
             )
         };
     }
 
-    public static MessageHubConfiguration AddPlugin<TPlugin>(
-        this MessageHubConfiguration configuration
-    )
-        where TPlugin : class, IMessageHubPlugin => AddPlugin<TPlugin>(configuration, x => x);
 }

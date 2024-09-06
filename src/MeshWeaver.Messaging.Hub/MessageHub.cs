@@ -81,7 +81,6 @@ public sealed class MessageHub
             new SerializationConverter(serializationOptions, deserializationOptions)
         );
 
-        MessageService.Initialize(DeliverMessageAsync, deserializationOptions);
 
         disposeActions.AddRange(configuration.DisposeActions);
 
@@ -89,7 +88,7 @@ public sealed class MessageHub
             new RouteConfiguration(this)
         );
 
-        AddPlugin(new RoutePlugin(this, forwardConfig, parentHub));
+        AddPlugin(new RoutePlugin(forwardConfig, parentHub, ServiceProvider));
 
         Register(HandleCallbacks);
         Register(ExecuteRequest);
@@ -99,8 +98,11 @@ public sealed class MessageHub
                 messageHandler.MessageType,
                 (d, c) => messageHandler.AsyncDelivery.Invoke(this, d, c)
             );
+        foreach (var (_, factory) in Configuration.PluginFactories)
+            AddPlugin(factory.Invoke(this));
 
-        InvokeAsync(StartAsync);
+        MessageService.Initialize(DeliverMessageAsync, () => StartAsync(default), deserializationOptions);
+
         logger.LogInformation("Message hub {address} initialized", Address);
     }
 
@@ -135,8 +137,6 @@ public sealed class MessageHub
 
     private async Task StartAsync(CancellationToken cancellationToken)
     {
-        foreach (var (_, factory) in Configuration.PluginFactories)
-            AddPlugin(factory.Invoke(this));
 
         var actions = Configuration.BuildupActions;
         foreach (var buildup in actions)
@@ -436,7 +436,7 @@ public sealed class MessageHub
                 plugin.GetType(),
                 Address
             );
-            await plugin.StartAsync(c);
+            await plugin.StartAsync(this, c);
 #pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
             plugin.Initialized.ContinueWith(
                 _ =>
