@@ -16,8 +16,12 @@ namespace MeshWeaver.Hosting.Orleans.Server
             var target = delivery.Target;
             var targetId = SerializationExtensions.GetId(target);
             var streamInfo = await GrainFactory.GetGrain<IAddressRegistryGrain>(targetId).Register(target);
-            if(streamInfo.StreamProvider is StreamProviders.Mesh)
+            if (streamInfo.StreamProvider is StreamProviders.Mesh)
+            {
+                logger.LogDebug("Forwarding Message {Message} from {Sender} to {Target}", delivery.Message, delivery.Sender, delivery.Target);
                 return await GrainFactory.GetGrain<IMessageHubGrain>(targetId).DeliverMessage(delivery);
+            }
+            logger.LogDebug("Forwarding Message {Message} from {Sender} to {Target} to {StreamProvider}: {Namespace} {Target}", delivery.Message, delivery.Sender, delivery.Target, streamInfo.StreamProvider, streamInfo.Namespace, targetId);
             var stream = this.GetStreamProvider(streamInfo.StreamProvider).GetStream<IMessageDelivery>(streamInfo.Namespace, targetId);
             await stream.OnNextAsync(delivery);
             return delivery.Forwarded([target]);

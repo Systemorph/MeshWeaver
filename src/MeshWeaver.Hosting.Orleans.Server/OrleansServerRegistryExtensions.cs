@@ -11,19 +11,12 @@ public static  class OrleansServerRegistryExtensions
 {
     public static TBuilder AddOrleansMeshServer<TBuilder>(this TBuilder builder, 
         Action<ISiloBuilder> siloConfiguration = null)
-    where TBuilder:MeshWeaverApplicationBuilder<TBuilder>
+    where TBuilder:MeshWeaverHostBuilder
     {
-        builder.AddOrleansMeshInternal();
         
         builder.Host.UseOrleans(silo =>
         {
-
-            if(siloConfiguration != null)
-                siloConfiguration.Invoke(silo);
-            if (builder.Host.Environment.IsDevelopment())
-            {
-                silo.ConfigureEndpoints(Random.Shared.Next(10_000, 50_000), Random.Shared.Next(10_000, 50_000));
-            }
+            siloConfiguration?.Invoke(silo);
             silo.AddMemoryStreams(StreamProviders.Memory)
                 .AddMemoryStreams(StreamProviders.Mesh)
                 .AddMemoryGrainStorage("PubSubStore");
@@ -41,18 +34,10 @@ public static  class OrleansServerRegistryExtensions
                 );
             });
         });
+        builder.ConfigureHub(conf => conf.WithTypes(typeof(StreamActivity)));
+        builder.AddOrleansMeshInternal();
 
-        builder.Host.Services.AddSingleton<IHostedService, ServerInitializationHostedService>();
         return builder;
     }
 }
 
-public class ServerInitializationHostedService(IMessageHub hub) : ClientInitializationHostedService(hub)
-{
-    private readonly IMeshCatalog catalog = hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-    public override async Task StartAsync(CancellationToken cancellationToken)
-    {
-        await base.StartAsync(cancellationToken);
-        await catalog.InitializeAsync(cancellationToken);
-    }
-}

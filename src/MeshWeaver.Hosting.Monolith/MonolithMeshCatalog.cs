@@ -17,6 +17,7 @@ public class MonolithMeshCatalog(IMessageHub hub) : IMeshCatalog
     public Task UpdateAsync(MeshNode node)
     {
         meshNodes[node.Id] = node;
+        // TODO V10: Delegate indexing to IMeshIndexService running on its own hub. (06.09.2024, Roland Bürgi)
         return Task.CompletedTask;
     }
 

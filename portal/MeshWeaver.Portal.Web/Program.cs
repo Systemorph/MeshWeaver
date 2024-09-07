@@ -63,6 +63,7 @@ app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseRouting();
 
+app.MapStaticContent(app.Services.GetRequiredService<IMeshCatalog>());
 app.MapBlazorHub();
 app.MapFallbackToPage("/_Host");
 

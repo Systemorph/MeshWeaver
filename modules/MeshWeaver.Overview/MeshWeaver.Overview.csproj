@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <HasMeshNodes>true</HasMeshNodes>
+        <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    </PropertyGroup>
+    <ItemGroup>
+        <Folder Include="Content\" />
+        <EmbeddedResource Include="Content\**\*" />
+        <Content Include="wwwroot\images\SplashScreen.jpg">
+            <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
+  </ItemGroup>
+
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.Application.Contract\MeshWeaver.Application.Contract.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -13,7 +13,6 @@ using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
-using MeshWeaver.Messaging.Serialization;
 
 namespace MeshWeaver.Layout;
 
