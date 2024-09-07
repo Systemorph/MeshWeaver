@@ -9,7 +9,7 @@ public class RoutePlugin : MessageHubPlugin<RouteConfiguration>
 
     [Inject] private ILogger<RoutePlugin> logger;
 
-    public RoutePlugin(RouteConfiguration routeConfiguration, IMessageHub parentHub, IServiceProvider serviceProvider) : base(serviceProvider)
+    public RoutePlugin(RouteConfiguration routeConfiguration, IMessageHub parentHub, IMessageHub hub) : base(hub)
     {
         this.parentHub = parentHub;
         InitializeState(routeConfiguration);

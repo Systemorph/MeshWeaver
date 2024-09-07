@@ -60,7 +60,7 @@ public static class DataPluginExtensions
                 typeof(SubscribeRequest),
                 typeof(UnsubscribeDataRequest)
             )
-            .AddPlugin<DataPlugin>();
+            .AddPlugin<DataPlugin>(h => new DataPlugin(h));
 
         return ret;
     }
