@@ -32,9 +32,10 @@ namespace MeshWeaver.Northwind.ViewModel
                         .AddOrdersSummary()
                         .AddCustomerSummary()
                         .AddSupplierSummary()
-                        //.WithNavMenu((menu, _) => menu
-                        //    .AddTypesCatalogs()
-                        //)
+                        .WithDomainViews()
+                        .WithNavMenu((menu, host, _) => host
+                            .AddTypesCatalogs(menu)
+                        )
 
                 )
                 ;

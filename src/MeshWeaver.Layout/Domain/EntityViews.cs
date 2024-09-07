@@ -13,11 +13,6 @@ public static class EntityViews
 
     public const string Type = nameof(Type);
 
-
-
-
-
-
     public static object Catalog(LayoutAreaHost area, RenderingContext ctx)
     {
         if (area.Stream.Reference.Id is not string collection)
@@ -48,6 +43,28 @@ public static class EntityViews
             ;
     }
 
+    public static NavMenuControl AddTypesCatalogs(this LayoutAreaHost host, NavMenuControl menu)
+        => host
+            .Workspace
+            .DataContext
+            .TypeSources
+            .Values
+
+            .OrderBy(x => x.Order ?? int.MaxValue)
+            .GroupBy(x => x.GroupName)
+
+            .Aggregate(
+                menu,
+                (m, types) => m.WithNavGroup(
+                    types.Aggregate(
+                        Controls.NavGroup(types.Key ?? "Types")
+                            .WithSkin(skin => skin.Expand()),
+                        (ng, t) => ng.WithLink(t.DisplayName,
+                            new LayoutAreaReference(nameof(Catalog)) { Id = t.CollectionName }
+                                .ToAppHref(host.Hub.Address))
+                    )
+                )
+            );
 
 
 }
