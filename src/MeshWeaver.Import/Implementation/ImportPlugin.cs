@@ -17,7 +17,6 @@ public static class ActivityCategory
 public class ImportPlugin(IMessageHub hub, Func<ImportConfiguration, ImportConfiguration> importConfiguration) : MessageHubPlugin(hub), IMessageHandlerAsync<ImportRequest>
 {
     private ImportManager importManager;
-    private readonly Func<ImportConfiguration, ImportConfiguration> importConfiguration;
 
     private readonly IWorkspace workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
     private readonly IActivityService activityService = hub.ServiceProvider.GetRequiredService<IActivityService>();

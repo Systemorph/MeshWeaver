@@ -31,13 +31,13 @@ public partial class LayoutArea
     {
         await base.SetParametersAsync(parameters);
         BindViewModel();
-    }
-
-    protected override void OnInitialized()
-    {
-        base.OnInitialized();
         if (IsNotPreRender)
             BindStream();
+        else
+        {
+            AreaStream?.Dispose();
+            AreaStream = null;
+        }
     }
 
 
@@ -63,8 +63,6 @@ public partial class LayoutArea
     {
         if (AreaStream != null)
         {
-            if (ViewModel.Address.Equals(AreaStream.Owner) && ViewModel.Reference.Equals(AreaStream.Reference))
-                return;
             Logger.LogDebug("Disposing old stream for {Owner} and {Reference}", AreaStream.Owner, AreaStream.Reference);
             AreaStream.Dispose();
         }

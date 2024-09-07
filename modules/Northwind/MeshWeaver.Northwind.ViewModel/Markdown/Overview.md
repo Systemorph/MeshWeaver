@@ -1,4 +1,4 @@
-[comment]: <> { "keywords": [ "Northwind", "Overview", "Landing page"]}
+<!-- { "keywords": [ "Northwind", "Overview", "Landing page"]} -->
 
 # Northwind
 
