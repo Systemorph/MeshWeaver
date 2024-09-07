@@ -76,12 +76,12 @@ public sealed class MessageHub
                 (d, c) => messageHandler.AsyncDelivery.Invoke(this, d, c)
             );
 
-        MessageService.Start(StartAsync);
+        MessageService.Start(this);
 
     }
 
 
-    public override async Task<IMessageDelivery> DeliverMessageAsync(
+    async Task<IMessageDelivery> IMessageHub.DeliverMessageAsync(
         IMessageDelivery delivery,
         CancellationToken cancellationToken
     )
@@ -104,13 +104,12 @@ public sealed class MessageHub
     private readonly TaskCompletionSource hasStarted = new();
     public Task HasStarted => hasStarted.Task;
 
-    private async Task StartAsync(CancellationToken cancellationToken)
+    async Task IMessageHub.StartAsync(CancellationToken cancellationToken)
     {
         var plugins = Configuration.PluginFactories.Select(f => f.Factory.Invoke(this))
             .Select(p => (p, AddPlugin(p)))
             .ToArray();
         Hub = this;
-        MessageService.Initialize(DeliverMessageAsync, JsonSerializerOptions);
         logger.LogInformation("Message hub {address} initialized", Address);
 
 
@@ -136,6 +135,7 @@ public sealed class MessageHub
 
         deferral.Dispose();
         RunLevel = MessageHubRunLevel.Started;
+
         hasStarted.SetResult();
     }
 

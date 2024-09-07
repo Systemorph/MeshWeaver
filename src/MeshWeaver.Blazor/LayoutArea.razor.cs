@@ -36,7 +36,8 @@ public partial class LayoutArea
     protected override void OnInitialized()
     {
         base.OnInitialized();
-        BindStream();
+        if (IsNotPreRender)
+            BindStream();
     }
 
 
@@ -71,6 +72,6 @@ public partial class LayoutArea
         AreaStream = Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(ViewModel.Address, ViewModel.Reference);
     }
 
-    protected bool IsPreRender => !(bool)JsRuntime.GetType().GetProperty("IsInitialized")!.GetValue(JsRuntime)!;
+    protected bool IsNotPreRender => (bool)JsRuntime.GetType().GetProperty("IsInitialized")!.GetValue(JsRuntime)!;
 
 }
