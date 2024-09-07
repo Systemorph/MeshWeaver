@@ -18,7 +18,7 @@ public static class MessageHubPluginExtensions
 
     public static MessageHubConfiguration AddPlugin<TPlugin>(
         this MessageHubConfiguration configuration,
-        Func<IMessageHub, TPlugin> factory = null)
+        Func<IMessageHub, TPlugin> factory)
         where TPlugin : class, IMessageHubPlugin
     {
         if (configuration.PluginFactories.Any(x => x.Type == typeof(TPlugin)))
@@ -26,7 +26,7 @@ public static class MessageHubPluginExtensions
         return configuration.WithServices(services => services.AddScoped<TPlugin>()) with
         {
             PluginFactories = configuration.PluginFactories.Add(
-                (typeof(TPlugin), factory ?? (hub => hub.ServiceProvider.GetRequiredService<TPlugin>()))
+                (typeof(TPlugin), factory)
             )
         };
     }

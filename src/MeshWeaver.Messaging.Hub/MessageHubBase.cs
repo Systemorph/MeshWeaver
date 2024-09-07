@@ -18,7 +18,7 @@ public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
 
     protected readonly IMessageService MessageService;
 
-    public virtual IMessageHub Hub { get; private set; }
+    public IMessageHub Hub { get; protected set; }
 
     public virtual Task StartAsync(IMessageHub hub, CancellationToken cancellationToken)
     {
@@ -160,15 +160,13 @@ public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
         if (!Filter(delivery) || !Rules.Any())
             return delivery;
 
-        Logger.LogDebug("Starting processing of {Delivery}", delivery);
         var ret = await DeliverMessageAsync(delivery.Submitted(), Rules.First, cancellationToken);
-        Logger.LogDebug("Finished processing of {Delivery}", delivery);
         return ret;
     }
 
     public virtual bool IsDeferred(IMessageDelivery delivery)
     {
-        return (Hub != null && Hub.Address.Equals(delivery.Target) || delivery.Target == null)
+        return (Hub.Address.Equals(delivery.Target) || delivery.Target == null)
             && registeredTypes.Any(type => type.IsInstanceOfType(delivery.Message));
     }
 

@@ -21,7 +21,7 @@ public static class ImportExtensions
         configuration
             .WithServices(services => services.AddSingleton<IActivityService, ActivityService>())
             .AddActivities()
-            .AddPlugin<ImportPlugin>(hub => new(hub.ServiceProvider, importConfiguration))
+            .AddPlugin<ImportPlugin>(hub => new(hub, importConfiguration))
         ;
 
     /// <summary>

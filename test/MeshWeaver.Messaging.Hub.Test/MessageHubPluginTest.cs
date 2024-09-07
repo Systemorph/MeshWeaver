@@ -18,7 +18,7 @@ public class MessageHubPluginTest : TestBase
     class MyPlugin : MessageHubPlugin, IMessageHandler<GetEvents>
     {
         [Inject] private ILogger<MyPlugin> logger;
-        public MyPlugin(IServiceProvider serviceProvider) : base(serviceProvider)
+        public MyPlugin(IMessageHub hub) : base(hub)
         {
             Register(HandleMessage);
         }
@@ -57,7 +57,7 @@ public class MessageHubPluginTest : TestBase
     public MessageHubPluginTest(ITestOutputHelper output) : base(output)
     {
         Services.AddSingleton<IMessageHub>(sp => sp.CreateMessageHub(new Address(), 
-            conf => conf.AddPlugin<MyPlugin>()));
+            conf => conf.AddPlugin<MyPlugin>(h => new MyPlugin(h))));
     }
 
     [Fact(Skip = "HANGING!")]

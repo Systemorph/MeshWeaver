@@ -8,8 +8,8 @@ public class MessageHubPlugin :
 {
 
 
-    protected MessageHubPlugin(IServiceProvider serviceProvider)
-    : base(serviceProvider)
+    protected MessageHubPlugin(IMessageHub hub)
+    : base(hub.ServiceProvider)
     {
     }
 
@@ -39,7 +39,8 @@ public class MessageHubPlugin<TState> : MessageHubPlugin
     private readonly TaskCompletionSource initializedTaskCompletionSource = new();
 
 
-    protected MessageHubPlugin(IServiceProvider serviceProvider) : base(serviceProvider)
+    protected MessageHubPlugin(IMessageHub hub) : base(hub)
     {
+        Hub = hub;
     }
 }

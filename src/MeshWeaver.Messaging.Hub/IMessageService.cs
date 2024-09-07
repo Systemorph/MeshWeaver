@@ -11,4 +11,5 @@ public interface IMessageService : IAsyncDisposable
 
     void Initialize(AsyncDelivery messageHandler, JsonSerializerOptions deserializationOptions);
 
+    void Start(Func<CancellationToken,Task> startAsync);
 }
