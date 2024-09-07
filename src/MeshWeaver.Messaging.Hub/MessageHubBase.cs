@@ -179,10 +179,7 @@ public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
         delivery = await node.Value.Invoke(delivery, cancellationToken);
 
         if (node.Next == null)
-        {
-            Logger.LogDebug("No handler found for {Delivery}", delivery);
             return delivery.Ignored();
-        }
 
         return await DeliverMessageAsync(delivery, node.Next, cancellationToken);
     }

@@ -11,6 +11,7 @@ public class MessageHubPlugin :
     protected MessageHubPlugin(IMessageHub hub)
     : base(hub.ServiceProvider)
     {
+        Hub = hub;
     }
 
 
@@ -41,6 +42,5 @@ public class MessageHubPlugin<TState> : MessageHubPlugin
 
     protected MessageHubPlugin(IMessageHub hub) : base(hub)
     {
-        Hub = hub;
     }
 }

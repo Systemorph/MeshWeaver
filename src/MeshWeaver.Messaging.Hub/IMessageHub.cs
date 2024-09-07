@@ -68,6 +68,12 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
     Task HasStarted { get; }
     IDisposable Defer(Predicate<IMessageDelivery> deferredFilter);
 
+    internal Task StartAsync(CancellationToken cancellationToken);
+
+    internal Task<IMessageDelivery> DeliverMessageAsync(
+        IMessageDelivery delivery,
+        CancellationToken cancellationToken
+    );
 }
 
 

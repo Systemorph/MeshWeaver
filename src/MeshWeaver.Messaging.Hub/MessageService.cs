@@ -8,20 +8,13 @@ namespace MeshWeaver.Messaging;
 
 public class MessageService : IMessageService
 {
-    private JsonSerializerOptions deserializeOptions;
     private readonly ILogger<MessageService> logger;
     private bool isDisposing;
     private readonly BufferBlock<(IMessageDelivery Delivery, CancellationToken Token)> buffer = new();
     private readonly ActionBlock<(IMessageDelivery Delivery, CancellationToken Token)> deliveryAction;
     private readonly BufferBlock<Func<CancellationToken,Task>> executionBuffer = new();
     private readonly ActionBlock<Func<CancellationToken,Task>> executionBlock = new(f => f.Invoke(default));
-    private AsyncDelivery MessageHandler { get; set; }
 
-    public void Initialize(AsyncDelivery messageHandler, JsonSerializerOptions deserializationOptions)
-    {
-        MessageHandler = messageHandler;
-        deserializeOptions = deserializationOptions;
-    }
 
 
     private readonly DeferralContainer deferralContainer;
@@ -43,10 +36,16 @@ public class MessageService : IMessageService
 
     }
 
-    public void Start(Func<CancellationToken, Task> startAsync)
+    private IMessageHub hub;
+    void IMessageService.Start(IMessageHub hub1)
     {
-        executionBuffer.Post(startAsync);
-        buffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = true });
+        this.hub = hub1;
+        executionBuffer.Post(async ct =>
+        {
+            await hub.StartAsync(ct);
+
+            buffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = true });
+        });
     }
 
     private IMessageDelivery ReportFailure(IMessageDelivery delivery)
@@ -76,7 +75,7 @@ public class MessageService : IMessageService
             return delivery.Failed("Hub disposing");
 
         if (delivery.Target is JsonNode node)
-            delivery = delivery.WithTarget(node.Deserialize<object>(deserializeOptions));
+            delivery = delivery.WithTarget(node.Deserialize<object>(hub.JsonSerializerOptions));
 
         if (Address.Equals(delivery.Target))
             delivery = UnpackIfNecessary(delivery);
@@ -111,7 +110,7 @@ public class MessageService : IMessageService
         if (delivery.Message is not RawJson rawJson)
             return delivery;
         logger.LogDebug("Deserializing message {id} from sender {sender} to target {target}", delivery.Id, delivery.Sender, delivery.Target);
-        var deserializedMessage = JsonSerializer.Deserialize(rawJson.Content, typeof(object), deserializeOptions);
+        var deserializedMessage = JsonSerializer.Deserialize(rawJson.Content, typeof(object), hub.JsonSerializerOptions);
         return delivery.WithMessage(deserializedMessage);
     }
 
@@ -124,7 +123,7 @@ public class MessageService : IMessageService
                 Address);
             try
             {
-                delivery = await MessageHandler.Invoke(delivery, cancellationToken);
+                delivery = await hub.DeliverMessageAsync(delivery, cancellationToken);
             }
             catch (Exception e)
             {
