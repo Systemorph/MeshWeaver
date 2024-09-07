@@ -21,9 +21,8 @@ public static class ImportExtensions
         configuration
             .WithServices(services => services.AddSingleton<IActivityService, ActivityService>())
             .AddActivities()
-            .AddPlugin<ImportPlugin>(plugin =>
-                plugin.WithFactory(() => new(plugin.Hub, importConfiguration))
-            );
+            .AddPlugin<ImportPlugin>(hub => new(hub, importConfiguration))
+        ;
 
     /// <summary>
     /// Describes an embedded resource.

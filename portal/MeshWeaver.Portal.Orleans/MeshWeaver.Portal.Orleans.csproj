@@ -3,14 +3,27 @@
         <OutputType>Exe</OutputType>
     </PropertyGroup>
     <ItemGroup>
+      <None Remove="appsettings.Development.json" />
+      <None Remove="appsettings.json" />
+    </ItemGroup>
+    <ItemGroup>
       <_WebToolingArtifacts Remove="properties\launchSettings.json" />
     </ItemGroup>
     <ItemGroup>
+      <Content Include="appsettings.Development.json">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </Content>
+      <Content Include="appsettings.json">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </Content>
       <Content Include="properties\launchSettings.json" />
     </ItemGroup>
     <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Orleans.Server\MeshWeaver.Hosting.Orleans.Server.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Overview\MeshWeaver.Overview.csproj" />
     <ProjectReference Include="..\MeshWeaver.Portal.ServiceDefaults\MeshWeaver.Portal.ServiceDefaults.csproj" />
   </ItemGroup>
     <ItemGroup>

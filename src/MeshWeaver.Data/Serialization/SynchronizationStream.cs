@@ -126,12 +126,13 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
             switch (InitializationMode)
             {
                 case InitializationMode.Automatic:
-                    initialized.SetResult(value.Value);
+                    if(value != null)
+                        initialized.SetResult(value.Value);
                     break;
                 default:
                     return;
             }
-        if(!isDisposed)
+        if(!isDisposed && value != null)
             Store.OnNext(value);
     }
 

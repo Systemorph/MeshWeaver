@@ -14,7 +14,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub parent
     : Grain<StreamActivity>, IMessageHubGrain
 {
 
-    private CollectibleAssemblyLoadContext loadContext;
+    private ModulesAssemblyLoadContext loadContext;
 
 
     private IMessageHub Hub { get; set; }
@@ -32,10 +32,13 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub parent
         }
 
         var pathToAssembly = Path.Combine(startupInfo.BaseDirectory, startupInfo.AssemblyLocation);
-        loadContext = new();
-        var loaded = loadContext.LoadFromAssemblyPath(pathToAssembly);
+        loadContext = new(startupInfo.BaseDirectory);
+        var loaded = Assembly.LoadFrom(pathToAssembly);
+
+
         var startupAttribute = loaded.GetCustomAttributes<MeshNodeAttribute>()
             .FirstOrDefault(a => a.Node.Id == startupInfo.NodeId);
+
         if (startupAttribute == null)
             throw new InvalidOperationException($"No HubStartupAttribute found for {startupInfo.NodeId}");
 

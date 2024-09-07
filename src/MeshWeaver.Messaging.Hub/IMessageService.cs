@@ -8,7 +8,5 @@ public interface IMessageService : IAsyncDisposable
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter);
     IMessageDelivery IncomingMessage(IMessageDelivery message);
     IMessageDelivery Post<TMessage>(TMessage message, PostOptions opt);
-
-    void Initialize(AsyncDelivery messageHandler, JsonSerializerOptions deserializationOptions);
-
+    internal void Start(IMessageHub hub);
 }

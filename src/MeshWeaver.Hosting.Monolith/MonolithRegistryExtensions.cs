@@ -5,8 +5,7 @@ namespace MeshWeaver.Hosting.Monolith;
 
 public static class MonolithRegistryExtensions
 {
-    public static TBuilder AddMonolithMesh<TBuilder>(this TBuilder builder)
-        where TBuilder:MeshWeaverApplicationBuilder<TBuilder>
+    public static MeshWeaverHostBuilder AddMonolithMesh(this MeshWeaverHostBuilder builder)
     {
         builder.Host.Services.AddSingleton<IMeshCatalog, MonolithMeshCatalog>();
         builder.Host.Services.AddSingleton<IRoutingService, MonolithRoutingService>();

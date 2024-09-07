@@ -5,30 +5,31 @@ using MeshWeaver.Disposables;
 using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.Reflection;
 using MeshWeaver.ServiceProvider;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
 
 public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
 {
-    protected ITypeRegistry TypeRegistry;
-    public virtual object Address { get; }
+    protected ITypeRegistry TypeRegistry { get; }
+    public virtual object Address => Hub.Address;
     protected readonly LinkedList<AsyncDelivery> Rules = new();
     private readonly HashSet<Type> registeredTypes = new();
 
     protected readonly IMessageService MessageService;
 
-    public virtual IMessageHub Hub { get; }
+    public IMessageHub Hub { get; protected set; }
 
-    protected MessageHubBase(IMessageHub hub)
-        : this(hub.ServiceProvider)
+    public virtual Task StartAsync(IMessageHub hub, CancellationToken cancellationToken)
     {
         Hub = hub;
-        Address = hub.Address;
+        return Task.CompletedTask;
     }
-
+    protected ILogger Logger { get; }
     protected internal MessageHubBase(IServiceProvider serviceProvider)
     {
         serviceProvider.Buildup(this);
+        Logger = serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(GetType());
         MessageService = serviceProvider.GetRequiredService<IMessageService>();
         TypeRegistry = serviceProvider.GetRequiredService<ITypeRegistry>();
         InitializeTypes(this);
@@ -45,7 +46,7 @@ public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
         )
         {
             if (registry.Action != null)
-                Register(registry.Action, d => registry.Type.IsAssignableFrom(d.Message.GetType()));
+                Register(registry.Action, d => registry.Type.IsInstanceOfType(d.Message));
 
             registeredTypes.Add(registry.Type);
             WithTypeAndRelatedTypesFor(registry.Type);
@@ -159,7 +160,8 @@ public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
         if (!Filter(delivery) || !Rules.Any())
             return delivery;
 
-        return await DeliverMessageAsync(delivery.Submitted(), Rules.First, cancellationToken);
+        var ret = await DeliverMessageAsync(delivery.Submitted(), Rules.First, cancellationToken);
+        return ret;
     }
 
     public virtual bool IsDeferred(IMessageDelivery delivery)
@@ -177,7 +179,7 @@ public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
         delivery = await node.Value.Invoke(delivery, cancellationToken);
 
         if (node.Next == null)
-            return delivery;
+            return delivery.Ignored();
 
         return await DeliverMessageAsync(delivery, node.Next, cancellationToken);
     }

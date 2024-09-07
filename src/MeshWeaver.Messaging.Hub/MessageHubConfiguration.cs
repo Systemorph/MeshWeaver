@@ -27,8 +27,8 @@ public record MessageHubConfiguration
     {
         Address = address;
         ParentServiceProvider = parentServiceProvider;
+        TypeRegistry  = new TypeRegistry(ParentServiceProvider.GetService<ITypeRegistry>()).WithType(address.GetType());
     }
-
 
     internal Func<IServiceCollection, IServiceCollection> Services { get; init; } = x => x;
 
@@ -44,7 +44,6 @@ public record MessageHubConfiguration
 
     protected internal ImmutableList<Func<IMessageHub, CancellationToken, Task>> BuildupActions { get; init; } = ImmutableList<Func<IMessageHub, CancellationToken, Task>>.Empty;
 
-    internal ImmutableList<DeliveryFilter> Deferrals { get; init; } = ImmutableList<DeliveryFilter>.Empty;
 
     internal IMessageHub HubInstance { get; set; }
 
@@ -95,18 +94,20 @@ public record MessageHubConfiguration
         }));
 
 
+    public ITypeRegistry TypeRegistry { get; }
     protected virtual ServiceCollection ConfigureServices(IMessageHub parent)
     {
         var services = new ServiceCollection();
         services.Replace(ServiceDescriptor.Singleton<IMessageHub>(sp => new MessageHub(sp, sp.GetRequiredService<HostedHubsCollection>(), this, parent)));
         services.Replace(ServiceDescriptor.Singleton<HostedHubsCollection, HostedHubsCollection>());
-        services.Replace(ServiceDescriptor.Singleton(typeof(ITypeRegistry),
-            _ => new TypeRegistry(ParentServiceProvider.GetService<ITypeRegistry>()).WithType(Address.GetType())));
+        services.Replace(ServiceDescriptor.Singleton(typeof(ITypeRegistry), _ => TypeRegistry));
         services.Replace(ServiceDescriptor.Singleton<IMessageService>(sp => new MessageService(Address,sp.GetRequiredService<ILogger<MessageService>>())));
         services.Replace(ServiceDescriptor.Singleton(sp => new ParentMessageHub(sp.GetRequiredService<IMessageHub>())));
         Services.Invoke(services);
         return services;
     }
+
+
 
     private record ParentMessageHub(IMessageHub Value);
 
@@ -128,8 +129,6 @@ public record MessageHubConfiguration
     public MessageHubConfiguration WithInitialization(Func<IMessageHub, CancellationToken, Task> action) => this with { BuildupActions = BuildupActions.Add(action) };
 
 
-    public MessageHubConfiguration WithDeferral(DeliveryFilter deferral)
-        => this with { Deferrals = Deferrals.Add(deferral) };
 
     protected void CreateServiceProvider(IMessageHub parent)
     {

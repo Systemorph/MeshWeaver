@@ -1,11 +1,7 @@
 ﻿using System.Collections.Concurrent;
-using System.Collections.Immutable;
 using System.Text.Json;
-using System.Text.Json.Serialization;
-using Json.More;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using MeshWeaver.Messaging.Serialization;
 
 namespace MeshWeaver.Messaging;
 
@@ -57,40 +53,19 @@ public sealed class MessageHub
         ServiceProvider = serviceProvider;
         logger = serviceProvider.GetRequiredService<ILogger<MessageHub>>();
 
-        Configuration = configuration;
-        var configurations =
-            Configuration.Get<
-                ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>
-            >()
-            ?? ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>.Empty;
-        var serializationConfig = configurations
-            .Aggregate(CreateSerializationConfiguration(), (c, f) => f.Invoke(c));
-        var serializationOptions = serializationConfig.Options;
-        var typeRegistry = serviceProvider.GetRequiredService<ITypeRegistry>();
-        var deserializationOptions = new JsonSerializerOptions(serializationOptions);
-        serializationOptions.Converters.Add(new JsonNodeConverter());
-        serializationOptions.Converters.Add(new ImmutableDictionaryOfStringObjectConverter());
-        serializationOptions.Converters.Add(new TypedObjectSerializeConverter(typeRegistry, null));
-        serializationOptions.Converters.Add(new MessageDeliveryConverter());
-        serializationOptions.Converters.Add(new RawJsonConverter());
-        deserializationOptions.Converters.Add(new ImmutableDictionaryOfStringObjectConverter());
-        deserializationOptions.Converters.Add(new TypedObjectDeserializeConverter(typeRegistry, serializationConfig));
-        deserializationOptions.Converters.Add(new RawJsonConverter());
+        Configuration = configuration
+            .AddPlugin(hub =>
+            {
+                var forwardConfig = (configuration.ForwardConfigurationBuilder ?? (x => x)).Invoke(
+                    new RouteConfiguration(this)
+                );
 
-        JsonSerializerOptions = new JsonSerializerOptions();
-        JsonSerializerOptions.Converters.Add(
-            new SerializationConverter(serializationOptions, deserializationOptions)
-        );
-
-        MessageService.Initialize(DeliverMessageAsync, deserializationOptions);
-
+                return new RoutePlugin(forwardConfig, parentHub, hub);
+                
+            });
         disposeActions.AddRange(configuration.DisposeActions);
 
-        var forwardConfig = (configuration.ForwardConfigurationBuilder ?? (x => x)).Invoke(
-            new RouteConfiguration(this)
-        );
-
-        AddPlugin(new RoutePlugin(this, forwardConfig, parentHub));
+        JsonSerializerOptions = this.CreateJsonSerializationOptions();
 
         Register(HandleCallbacks);
         Register(ExecuteRequest);
@@ -101,27 +76,22 @@ public sealed class MessageHub
                 (d, c) => messageHandler.AsyncDelivery.Invoke(this, d, c)
             );
 
-        InvokeAsync(StartAsync);
-        logger.LogInformation("Message hub {address} initialized", Address);
+        MessageService.Start(this);
+
     }
 
-    private SerializationConfiguration CreateSerializationConfiguration()
-    {
-        return new SerializationConfiguration(this).WithOptions(o =>
-        {
-            o.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
-            o.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault;
-            o.Converters.Add(new EnumMemberJsonStringEnumConverter());
-        });
-    }
 
-    public override async Task<IMessageDelivery> DeliverMessageAsync(
+    async Task<IMessageDelivery> IMessageHub.DeliverMessageAsync(
         IMessageDelivery delivery,
         CancellationToken cancellationToken
     )
     {
-        ++Version;
+        ++Version; 
+        
+        Logger.LogDebug("Starting processing of {Delivery} in {Address}", delivery, Address);
         delivery = await base.DeliverMessageAsync(delivery, cancellationToken);
+        Logger.LogDebug("Finished processing of {Delivery} in {Address}", delivery, Address);
+
         return FinishDelivery(delivery);
     }
 
@@ -134,17 +104,38 @@ public sealed class MessageHub
     private readonly TaskCompletionSource hasStarted = new();
     public Task HasStarted => hasStarted.Task;
 
-    private async Task StartAsync(CancellationToken cancellationToken)
+    async Task IMessageHub.StartAsync(CancellationToken cancellationToken)
     {
-        foreach (var (_, factory) in Configuration.PluginFactories)
-            AddPlugin(factory.Invoke(this));
+        var plugins = Configuration.PluginFactories.Select(f => f.Factory.Invoke(this))
+            .Select(p => (p, AddPlugin(p)))
+            .ToArray();
+        Hub = this;
+        logger.LogInformation("Message hub {address} initialized", Address);
+
 
         var actions = Configuration.BuildupActions;
         foreach (var buildup in actions)
             await buildup(this, cancellationToken);
 
+        foreach (var (plugin, def) in plugins)
+        {
+            logger.LogDebug(
+                "Initializing plugin {plugin} in Address {address}",
+                plugin.GetType(),
+                Address
+            );
+            await plugin.StartAsync(this, cancellationToken);
+            logger.LogDebug(
+                "Finished initializing plugin {plugin} in Address {address}",
+                plugin.GetType(),
+                Address
+            );
+            def.Dispose();
+        }
+
         deferral.Dispose();
         RunLevel = MessageHubRunLevel.Started;
+
         hasStarted.SetResult();
     }
 
@@ -417,7 +408,7 @@ public sealed class MessageHub
         return (T)ret;
     }
 
-    public void AddPlugin(IMessageHubPlugin plugin)
+    public IDisposable AddPlugin(IMessageHubPlugin plugin)
     {
         logger.LogDebug("Adding plugin {plugin} in Address {address}", plugin.GetType(), Address);
 
@@ -430,63 +421,7 @@ public sealed class MessageHub
             }
         );
         WithDisposeAction(_ => plugin.DisposeAsync());
-        InvokeAsync(async c =>
-        {
-            logger.LogDebug(
-                "Initializing plugin {plugin} in Address {address}",
-                plugin.GetType(),
-                Address
-            );
-            await plugin.StartAsync(c);
-#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
-            plugin.Initialized.ContinueWith(
-                _ =>
-                {
-                    logger.LogDebug(
-                        "Finished initializing plugin {plugin} in Address {address}",
-                        plugin.GetType(),
-                        Address
-                    );
-                    def.Dispose();
-                },
-                c
-            );
-#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
-        });
+        return def;
     }
 
-    #region combined serialization/deserialization converter
-
-    private class SerializationConverter(
-        JsonSerializerOptions serializationOptions,
-        JsonSerializerOptions deserializationOptions
-    ) : JsonConverter<object>
-    {
-        public override bool CanConvert(Type typeToConvert) => true; // TODO V10: this might be a bit problematic in case none of the sub-converters has a support for this type (2023/09/27, Dmitry Kalabin)
-
-        public override object Read(
-            ref Utf8JsonReader reader,
-            Type typeToConvert,
-            JsonSerializerOptions options
-        )
-        {
-            using var doc = JsonDocument.ParseValue(ref reader);
-            var node = doc.RootElement.AsNode();
-            return node.Deserialize(typeToConvert, deserializationOptions);
-        }
-
-        public override void Write(
-            Utf8JsonWriter writer,
-            object value,
-            JsonSerializerOptions options
-        )
-        {
-            var node = JsonSerializer.SerializeToNode(value, serializationOptions);
-            node?.WriteTo(writer);
-        }
-    }
-
-    #endregion combined serialization/deserialization converter
-
-    public ILogger Logger => logger;
 }
