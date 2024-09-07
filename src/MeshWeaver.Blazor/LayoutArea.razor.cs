@@ -18,9 +18,6 @@ public partial class LayoutArea
 
     private IWorkspace Workspace => Hub.GetWorkspace();
 
-
-
-
     private LayoutAreaProperties Properties { get; set; }
     public string DisplayArea { get; set; }
 

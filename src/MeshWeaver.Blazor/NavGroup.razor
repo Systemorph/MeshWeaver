@@ -1,6 +1,6 @@
 @inherits SkinnedView<NavGroupControl, NavGroupSkin, NavGroup>
 
-<FluentNavGroup Href="@Href" Icon="@Icon?.ToFluentIcon()" Title="@Title">
+<FluentNavGroup Href="@Href" Icon="@Icon?.ToFluentIcon()" Title="@Title" Class="@Class" Style="@Style" Expanded="@Expanded">
     
     <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
 
@@ -11,6 +11,7 @@
     protected string Title { get; set; }
     protected string Href { get; set; }
     protected Application.Styles.Icon Icon { get; set; }
+    private bool Expanded { get; set; }
 
     protected override void BindData()
     {
@@ -21,6 +22,7 @@
             DataBind(Skin.Title, x => x.Title);
             DataBind(Skin.Href, x => x.Href);
             DataBind(Skin.Icon, x => x.Icon);
+            DataBind(Skin.Expanded, x => x.Expanded);
         }
     }
 

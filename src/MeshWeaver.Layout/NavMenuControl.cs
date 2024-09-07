@@ -54,4 +54,10 @@ public record NavGroupControl(object Title, object Icon, object Href) : Containe
 public record NavGroupSkin(object Title, object Icon, object Href) : Skin<NavGroupSkin>
 {
     public NavGroupSkin WithTitle(object title) => this with { Title = title };
+    public NavGroupSkin WithIcon(object icon) => this with { Icon = icon };
+    public NavGroupSkin WithHref(object href) => this with { Href = href };
+    
+    public object Expanded { get; set; }
+
+    public NavGroupSkin Expand(bool expanded = true) => this with { Expanded = expanded };
 }
