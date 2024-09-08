@@ -40,7 +40,7 @@ public abstract record PropertyColumnControl() : UiControl<PropertyColumnControl
     public abstract Type GetPropertyType();
 }
 
-public record PropertyColumn<TProperty> : PropertyColumnControl
+public record PropertyColumnControl<TProperty> : PropertyColumnControl
 {
     public override Type GetPropertyType() => typeof(TProperty);
 }

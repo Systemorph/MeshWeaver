@@ -24,7 +24,7 @@
         DataBind(ViewModel.Tooltip, x => x.Tooltip);
     }
 
-    private Expression<Func<JsonObject, T>> GetPropertyExpression<T>(PropertyColumn<T> column)
+    private Expression<Func<JsonObject, T>> GetPropertyExpression<T>(PropertyColumnControl<T> columnControl)
     {
         return e => e.ContainsKey(Property) ? e[Property].Deserialize<T>(Stream.Hub.JsonSerializerOptions) : default;
     }
