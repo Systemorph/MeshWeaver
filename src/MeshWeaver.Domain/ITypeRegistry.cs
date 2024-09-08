@@ -17,7 +17,7 @@ public interface ITypeRegistry
     ITypeRegistry WithTypes(IEnumerable<Type> select);
     string GetOrAddType(Type valueType);
     ITypeRegistry WithKeyFunctionProvider(Func<Type, KeyFunction> key);
-    ITypeDefinition GetTypeDefinition(Type type);
+    ITypeDefinition GetTypeDefinition(Type type, bool create = true);
     ITypeDefinition GetTypeDefinition(string collection);
 }
 public record KeyFunction(Func<object, object> Function, Type KeyType);

@@ -143,17 +143,20 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
         return this;
     }
 
-    public ITypeDefinition GetTypeDefinition(Type type)
+    public ITypeDefinition GetTypeDefinition(Type type, bool create)
     {
         if (nameByType.TryGetValue(type, out var name))
             return typeByName.GetValueOrDefault(name);
-        var ret = parent?.GetTypeDefinition(type);
+        var ret = parent?.GetTypeDefinition(type, false);
         if (ret != null)
             return ret;
 
-        ret = new TypeDefinition(type, FormatType(type), keyFunctionBuilder);
-        typeByName[ret.CollectionName] = (TypeDefinition)ret;
-        nameByType[type] = ret.CollectionName;
+        if (create)
+        {
+            ret = new TypeDefinition(type, FormatType(type), keyFunctionBuilder);
+            typeByName[ret.CollectionName] = (TypeDefinition)ret;
+            nameByType[type] = ret.CollectionName;
+        }
         return ret;
     }
 

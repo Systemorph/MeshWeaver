@@ -13,7 +13,7 @@ public record  PropertyColumnBuilder(ITypeDefinition TypeDefinition, DataGridCon
     private static PropertyColumnControl CreateControl(PropertyInfo property)
     {
         return (PropertyColumnControl)
-            Activator.CreateInstance(typeof(PropertyColumn<>).MakeGenericType(property.PropertyType));
+            Activator.CreateInstance(typeof(PropertyColumnControl<>).MakeGenericType(property.PropertyType));
     }
 
 
