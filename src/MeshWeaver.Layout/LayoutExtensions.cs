@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
@@ -77,7 +78,7 @@ public static class LayoutExtensions
             )
             .WithTypes(
                 typeof(LayoutAreaReference),
-                typeof(DataGridColumn<>), // this is not a control
+                typeof(PropertyColumn<>), // this is not a control
                 typeof(Option), // this is not a control
                 typeof(Option<>), // this is not a control
                 typeof(Icon)

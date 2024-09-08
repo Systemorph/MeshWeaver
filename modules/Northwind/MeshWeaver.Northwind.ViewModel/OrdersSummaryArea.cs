@@ -84,8 +84,8 @@ public static class OrdersSummaryArea
                                         order.OrderDate
                                     ))
                                     .ToArray(),
-                                conf =>
-                                    conf.WithColumn(o => o.Customer)
+                                config =>
+                                    config.WithColumn(o => o.Customer)
                                         .WithColumn(o => o.Products)
                                         .WithColumn(
                                             o => o.Purchased,

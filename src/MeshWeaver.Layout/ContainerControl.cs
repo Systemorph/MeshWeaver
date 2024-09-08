@@ -145,10 +145,6 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
             { Areas = Areas.Select(a => a with { Area = $"{context.Area}/{a.Id}" }).ToImmutableList() };
     }
 
-    protected static RenderingContext GetContextForArea(RenderingContext context, string area)
-    {
-        return context with { Area = $"{context.Area}/{area}", Parent = context };
-    }
 
     public virtual bool Equals(TControl other)
     {

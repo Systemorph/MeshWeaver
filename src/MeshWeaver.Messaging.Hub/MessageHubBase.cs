@@ -2,6 +2,7 @@
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Disposables;
+using MeshWeaver.Domain;
 using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.Reflection;
 using MeshWeaver.ServiceProvider;

@@ -1,7 +1,9 @@
 ﻿using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Layout.Domain;
 
@@ -17,27 +19,19 @@ public static class EntityViews
     {
         if (area.Stream.Reference.Id is not string collection)
             throw new InvalidOperationException("No type specified for catalog.");
-        var typeSource = area.Workspace.DataContext.GetTypeSource(collection);
-        if (typeSource == null)
+        var typeDefinition = area.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetTypeDefinition(collection);
+        if (typeDefinition == null)
             throw new DataSourceConfigurationException(
                 $"Collection {collection} is not mapped in Address {area.Hub.Address}.");
-        return
-            Controls.Stack
-                .WithView(Controls.Title(typeSource.DisplayName, 1))
-                .WithView(Controls.Html(typeSource.Description))
+        return Controls.Stack
+                .WithView(Controls.Title(typeDefinition.DisplayName, 1))
+                .WithView(Controls.Html(typeDefinition.Description))
                 .WithView((a,_) => a
                     .Workspace
                     .Stream
                     .Reduce(new CollectionReference(collection), area.Stream.Subscriber)
                     .Select(changeItem =>
-                        area.ToDataGrid(
-                            changeItem
-                                .Value
-                                .Instances
-                                .Values,
-                            typeSource.ElementType,
-                            x => x.AutoMapColumns()
-                        )
+                        typeDefinition.ToDataGrid(changeItem.Value.Instances.Values)
                     )
                 )
             ;
@@ -50,8 +44,8 @@ public static class EntityViews
             .TypeSources
             .Values
 
-            .OrderBy(x => x.Order ?? int.MaxValue)
-            .GroupBy(x => x.GroupName)
+            .OrderBy(x => x.TypeDefinition.Order ?? int.MaxValue)
+            .GroupBy(x => x.TypeDefinition.GroupName)
 
             .Aggregate(
                 menu,
@@ -59,7 +53,7 @@ public static class EntityViews
                     types.Aggregate(
                         Controls.NavGroup(types.Key ?? "Types")
                             .WithSkin(skin => skin.Expand()),
-                        (ng, t) => ng.WithLink(t.DisplayName,
+                        (ng, t) => ng.WithLink(t.TypeDefinition.DisplayName,
                             new LayoutAreaReference(nameof(Catalog)) { Id = t.CollectionName }
                                 .ToAppHref(host.Hub.Address))
                     )

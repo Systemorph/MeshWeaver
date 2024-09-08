@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using MeshWeaver.Domain;
 
 namespace MeshWeaver.Messaging.Serialization;
 
@@ -29,11 +30,10 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
         typeof(RawJson)
     ];
 
-    private readonly ConcurrentDictionary<string, Type> typeByName =
-        new(BasicTypes.Select(t => new KeyValuePair<string, Type>(t.Name, t)));
+    private readonly ConcurrentDictionary<string, TypeDefinition> typeByName =
+        new(BasicTypes.Select(t => new KeyValuePair<string, TypeDefinition>(t.Name, new TypeDefinition(t,t.Name, null))));
     private readonly ConcurrentDictionary<Type, string> nameByType =
         new(BasicTypes.Select(t => new KeyValuePair<Type, string>(t, t.Name)));
-    private readonly ConcurrentDictionary<string, KeyFunction> keysByType = new();
 
     private readonly KeyFunctionBuilder keyFunctionBuilder = new();
 
@@ -41,14 +41,14 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
 
     public ITypeRegistry WithType(Type type, string typeName)
     {
-        typeByName[typeName] = type;
+        var typeDefinition = new TypeDefinition(type, typeName, keyFunctionBuilder);
+        typeByName[typeName] = typeDefinition;
         nameByType[type] = typeName;
-        keysByType[typeName] = keyFunctionBuilder.GetKeyFunction(type);
         return this;
     }
 
     public KeyFunction GetKeyFunction(string collection) =>
-        keysByType.GetValueOrDefault(collection);
+        typeByName.GetValueOrDefault(collection)?.Key.Value;
 
     public KeyFunction GetKeyFunction(Type type)
     {
@@ -58,14 +58,15 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
                ?? keyFunctionBuilder.GetKeyFunction(type); 
     }
 
-    public bool TryGetType(string name, out Type type)
+    public bool TryGetType(string name, out ITypeDefinition typeDefinition)
     {
-        if (typeByName.TryGetValue(name, out type))
+        typeDefinition = typeByName.GetValueOrDefault(name);
+        if (typeDefinition != null)
             return true;
         if (name.Contains('[') && name.EndsWith(']'))
         {
             var typeName = name.Substring(0, name.IndexOf('['));
-            var baseType = typeByName.GetValueOrDefault(typeName);
+            var baseType = typeByName.GetValueOrDefault(typeName)?.Type;
 
             if (baseType == null)
                 return false;
@@ -81,19 +82,24 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
             {
                 if (TryGetType(genericArgs[i].Trim(), out var genericTypeArg))
                 {
-                    genericTypeArgs[i] = genericTypeArg;
+                    genericTypeArgs[i] = genericTypeArg.Type;
                 }
                 else
                 {
-                    baseType = null;
                     return false;
                 }
             }
-            type = baseType.MakeGenericType(genericTypeArgs);
+            var type = baseType.MakeGenericType(genericTypeArgs);
+            if (nameByType.TryGetValue(type, out typeName))
+            {
+                typeDefinition = typeByName[typeName];
+                return true;
+            }
+            typeDefinition = new TypeDefinition(type, FormatType(type), keyFunctionBuilder);
             return true;
         }
-        return parent?.TryGetType(name, out type) 
-               ?? (type = Type.GetType(name)) != null;
+        return parent?.TryGetType(name, out typeDefinition) 
+               ?? typeDefinition != null;
     }
 
     public bool TryGetTypeName(Type type, out string typeName)
@@ -109,10 +115,7 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
             for (var i = 0; i < genericArguments.Length; i++)
             {
                 if (!TryGetTypeName(genericArguments[i], out var genericTypeArgument))
-                {
-                    typeName = null;
                     return false;
-                }
                 genericTypeArguments[i] = genericTypeArgument;
             }
             typeName =
@@ -120,17 +123,16 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
             return true;
         }
 
-        typeName = null;
-        return false;
+        return parent?.TryGetTypeName(type, out typeName) ?? false;
     }
 
-    public string GetOrAddTypeName(Type type)
+    public string GetOrAddType(Type type)
     {
         if (nameByType.TryGetValue(type, out var typeName))
             return typeName;
 
         typeName = FormatType(type);
-        typeByName[typeName] = type;
+        typeByName[typeName] = new(type,typeName, keyFunctionBuilder);
         return nameByType[type] = typeName;
     }
 
@@ -140,10 +142,35 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
         keyFunctionBuilder.WithKeyFunction(key);
         return this;
     }
-    public ITypeRegistry WithKeyFunction(string collection, KeyFunction keyFunction)
+
+    public ITypeDefinition GetTypeDefinition(Type type)
     {
-        keysByType[collection] = keyFunction;
-        return this;
+        if (nameByType.TryGetValue(type, out var name))
+            return typeByName.GetValueOrDefault(name);
+        var ret = parent?.GetTypeDefinition(type);
+        if (ret != null)
+            return ret;
+
+        ret = new TypeDefinition(type, FormatType(type), keyFunctionBuilder);
+        typeByName[ret.CollectionName] = (TypeDefinition)ret;
+        nameByType[type] = ret.CollectionName;
+        return ret;
+    }
+
+    public ITypeDefinition GetTypeDefinition(string typeName)
+    {
+        var ret = typeByName.GetValueOrDefault(typeName);
+        if (ret != null)
+            return ret;
+        return parent?.GetTypeDefinition(typeName);
+    }
+
+    public ITypeDefinition WithKeyFunction(string collection, KeyFunction keyFunction)
+    {
+        var typeDefinition = typeByName.GetValueOrDefault(collection);
+        if(typeDefinition == null)
+            throw new ArgumentException($"Type {collection} not found");
+        return typeByName[collection] = typeDefinition with{Key = new(() => keyFunction)};
     }
 
     public ITypeRegistry WithTypesFromAssembly(Type type, Func<Type, bool> filter) =>
@@ -167,7 +194,7 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
             return FormatType(mainType.GetGenericArguments()[0]) + "?";
 
         var text =
-            $"{GetOrAddTypeName(typeDefinition)}[{string.Join(',', mainType.GetGenericArguments().Select(GetOrAddTypeName))}]";
+            $"{GetOrAddType(typeDefinition)}[{string.Join(',', mainType.GetGenericArguments().Select(GetOrAddType))}]";
         return text;
     }
 }

@@ -1,2 +1,5 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Domain\MeshWeaver.Domain.csproj" />
+  </ItemGroup>
 </Project>

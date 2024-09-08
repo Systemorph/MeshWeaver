@@ -1,11 +1,11 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
 using System.Reflection;
+using MeshWeaver.Domain;
 using MeshWeaver.Reflection;
 
 namespace MeshWeaver.Messaging.Serialization;
 
-public record KeyFunction(Func<object, object> Function, Type KeyType);
 
 public class KeyFunctionBuilder
 {

@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Activities;
 using MeshWeaver.Data.Persistence;
 using MeshWeaver.Data.Serialization;
+using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
 

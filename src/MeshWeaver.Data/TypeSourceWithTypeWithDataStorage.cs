@@ -1,7 +1,5 @@
 ﻿using System.Collections.Immutable;
 using MeshWeaver.Collections;
-using MeshWeaver.Data.Serialization;
-using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
 
@@ -58,9 +56,9 @@ public record TypeSourceWithTypeWithDataStorage<T>
             Instances = (
                 await Storage
                     .Query<T>()
-                    .ToDictionaryAsync(GetKey, x => (object)x, cancellationToken)
+                    .ToDictionaryAsync(TypeDefinition.GetKey, x => (object)x, cancellationToken)
             ).ToImmutableDictionary(),
-            GetKey = GetKey
+            GetKey = TypeDefinition.GetKey
         };
     }
 

@@ -1,59 +1,60 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Linq.Expressions;
 using System.Reflection;
-using MeshWeaver.Data;
-using MeshWeaver.Layout.Composition;
+using MeshWeaver.Domain;
+using MeshWeaver.Reflection;
 using MeshWeaver.Utils;
 
 namespace MeshWeaver.Layout.DataGrid;
 
-public record PropertyColumnBuilder(Type PropertyType, string Name)
+public record  PropertyColumnBuilder(ITypeDefinition TypeDefinition, DataGridControl Grid)
 {
-    public DataGridColumn Column { get; init; } =
-        (
-            (DataGridColumn)
-                Activator.CreateInstance(typeof(DataGridColumn<>).MakeGenericType(PropertyType))
-        ) with
-        {
-            Property = Name,
-            Title = Name.Wordify(),
-        };
+    private static PropertyColumnControl CreateControl(PropertyInfo property)
+    {
+        return (PropertyColumnControl)
+            Activator.CreateInstance(typeof(PropertyColumn<>).MakeGenericType(property.PropertyType));
+    }
 
-    public PropertyColumnBuilder(ITypeSource typeSource, PropertyInfo property)
-        : this(property.PropertyType, property.Name.ToCamelCase())
+
+    public PropertyColumnBuilder AddColumn(PropertyInfo property)
+        => AddColumn(property, x => x);
+
+    public PropertyColumnBuilder AddColumn(PropertyInfo property, Func<PropertyColumnControl, PropertyColumnControl> config)
     {
         var displayAttribute = property.GetCustomAttribute<DisplayAttribute>();
         var displayFormat = property.GetCustomAttribute<DisplayFormatAttribute>();
-        var description = typeSource?.GetDescription(property.Name);
-        Column = Column with
+        var description = TypeDefinition.GetDescription(property.Name);
+        var ret = CreateControl(property);
+        return this with
         {
-            Title = displayAttribute?.Name ?? property.Name.Wordify(),
-            Format = displayFormat?.DataFormatString ?? Column.Format,
-            Tooltip = description != null,
-            TooltipText = description,
+            Grid = Grid.WithView(config.Invoke(ret with
+                {
+                    Property = property.Name.ToCamelCase(),
+                    Title = displayAttribute?.Name ?? property.Name.Wordify(),
+                    Format = displayFormat?.DataFormatString ?? ret.Format,
+                    Tooltip = description == null ? null : true,
+                    TooltipText = description,
+                })
+            )
         };
     }
+    public PropertyColumnBuilder AutoMapColumns() =>
+        TypeDefinition.Type
+            .GetProperties()
+            .Where(x =>
+                !x.HasAttribute<NotVisibleAttribute>()
+                && x.GetCustomAttribute<BrowsableAttribute>() is not { Browsable: false }
+            )
+            .Aggregate(new PropertyColumnBuilder(TypeDefinition, Grid), (g, c) => g.AddColumn(c))
+    ;
 
-    public PropertyColumnBuilder WithProperty(string property) =>
-        this with
-        {
-            Column = Column with { Property = property }
-        };
+}
 
-    public PropertyColumnBuilder IsSortable(bool sortable = true) =>
-        this with
-        {
-            Column = Column with { Sortable = sortable }
-        };
-
-    public PropertyColumnBuilder WithFormat(string format) =>
-        this with
-        {
-            Column = Column with { Format = format }
-        };
-
-    public PropertyColumnBuilder WithTitle(string title) =>
-        this with
-        {
-            Column = Column with { Title = title }
-        };
+public record PropertyColumnBuilder<T>(ITypeDefinition TypeDefinition,DataGridControl Grid) : PropertyColumnBuilder(TypeDefinition, Grid)
+{
+    public PropertyColumnBuilder<T> WithColumn<TProp>(Expression<Func<T, TProp>> propertySelector)
+        => (PropertyColumnBuilder<T>)AddColumn(propertySelector.GetProperty());
+    public PropertyColumnBuilder<T> WithColumn<TProp>(Expression<Func<T, TProp>> propertySelector, Func<PropertyColumnControl,PropertyColumnControl> configuration)
+        => (PropertyColumnBuilder<T>)AddColumn(propertySelector.GetProperty(), configuration);
 }

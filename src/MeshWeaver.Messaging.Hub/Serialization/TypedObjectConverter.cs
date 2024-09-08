@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Json.More;
+using MeshWeaver.Domain;
 
 namespace MeshWeaver.Messaging.Serialization;
 
@@ -45,8 +46,11 @@ public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry, Seriali
             if (jObject.TryGetPropertyValue(TypeProperty, out var tn))
             {
                 var typeName = tn!.ToString();
-                if (!typeRegistry.TryGetType(typeName, out var type) && !configuration.StrictTypeResolution)
-                    type = GetTypeByName(typeName);
+                var type = 
+                    typeRegistry.TryGetType(typeName, out var typeDefinition) && !configuration.StrictTypeResolution
+                    ? typeDefinition.Type
+                    : GetTypeByName(typeName)
+                    ;
 
                 if (type == null)
                     return node.DeepClone();
@@ -124,7 +128,7 @@ public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry, Type excl
         );
         var serialized = JsonSerializer.SerializeToNode(value, value.GetType(), clonedOptions);
         if (serialized is JsonObject obj && value is not IDictionary && !obj.ContainsKey(TypeProperty))
-            obj[TypeProperty] = typeRegistry.GetOrAddTypeName(value.GetType());
+            obj[TypeProperty] = typeRegistry.GetOrAddType(value.GetType());
         ;
 
         serialized!.WriteTo(writer);

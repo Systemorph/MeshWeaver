@@ -117,6 +117,11 @@ public abstract record UiControl : IUiControl
         => Render(host, context, store);
 
     protected abstract EntityStoreAndUpdates Render(LayoutAreaHost host, RenderingContext context, EntityStore store);
+    protected static RenderingContext GetContextForArea(RenderingContext context, string area)
+    {
+        return context with { Area = $"{context.Area}/{area}", Parent = context };
+    }
+
 }
 
 public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)

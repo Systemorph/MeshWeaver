@@ -318,8 +318,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     private object DataGrid(LayoutAreaHost area, RenderingContext ctx)
     {
         var data = new DataRecord[] { new("1", "1"), new("2", "2") };
-        return area.ToDataGrid(data,grid =>
-            grid.WithColumn(x => x.SystemName).WithColumn(x => x.DisplayName)
+        return area.ToDataGrid(data,grid => grid
+            .WithColumn(x => x.SystemName)
+            .WithColumn(x => x.DisplayName)
         );
     }
 
@@ -338,19 +339,26 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .GetControlStream(reference.Area)
             .Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => x != null);
-        content
+
+        var areas = content
             .Should()
             .BeOfType<DataGridControl>()
-            .Which.Columns.Should()
+            .Which.Areas.Should()
             .HaveCount(2)
-            .And.BeEquivalentTo(
+            .And.Subject;
+;
+
+        var controls = areas
+                .Select(na => stream.GetControl($"{reference.Area}/{na.Id}"))
+            .ToArray();
+        controls.Should().BeEquivalentTo(
                 [
-                    new DataGridColumn<string>
+                    new PropertyColumn<string>
                     {
                         Property = nameof(DataRecord.SystemName).ToCamelCase(),
                         Title = nameof(DataRecord.SystemName).Wordify()
                     },
-                    new DataGridColumn<string>
+                    new PropertyColumn<string>
                     {
                         Property = nameof(DataRecord.DisplayName).ToCamelCase(),
                         Title = nameof(DataRecord.DisplayName).Wordify()
@@ -497,23 +505,25 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Which;
 
         grid.DataContext.Should().Be(LayoutAreaReference.GetDataPointer(nameof(CatalogView)));
-        grid.Columns.Should()
-            .HaveCount(2)
-            .And.BeEquivalentTo(
-                [
-                    new DataGridColumn<string>
-                    {
-                        Property = nameof(DataRecord.SystemName).ToCamelCase(),
-                        Title = nameof(DataRecord.SystemName).Wordify()
-                    },
-                    new DataGridColumn<string>
-                    {
-                        Property = nameof(DataRecord.DisplayName).ToCamelCase(),
-                        Title = nameof(DataRecord.DisplayName).Wordify()
-                    }
-                ]
-            );
+        var benchmarks = new[]
+        {
+            new PropertyColumn<string>
+            {
+                Property = nameof(DataRecord.SystemName).ToCamelCase(),
+                Title = nameof(DataRecord.SystemName).Wordify()
+            },
+            new PropertyColumn<string>
+            {
+                Property = nameof(DataRecord.DisplayName).ToCamelCase(),
+                Title = nameof(DataRecord.DisplayName).Wordify()
+            }
+        };
+        grid.Areas.Should()
+            .HaveCount(benchmarks.Length)
+            .And.Subject.Select(na => na.Area).Should().BeEquivalentTo(Enumerable.Range(1,2).Select(i => $"{reference.Area}/{i}"));
 
+        var controls = grid.Areas.Select(na => stream.GetControl($"{reference.Area}/{na.Id}")).ToArray();
+        controls.Should().BeEquivalentTo(benchmarks);
     }
 
     // TODO V10: Need to rewrite realistic test for disposing views. (29.07.2024, Roland Bürgi)
