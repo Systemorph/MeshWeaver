@@ -47,7 +47,6 @@ public static class BlazorClientRegistry
             NavLinkControl link => StandardView<NavLinkControl,NavLink>(link, stream, area),
             MenuItemControl menu => StandardView<MenuItemControl, MenuItemView>(menu, stream, area),
             IContainerControl container => StandardView<IContainerControl, ContainerView>(container, stream, area),
-            DataGridControl gc => StandardView<DataGridControl, DataGridView>(gc, stream, area),
             TextBoxControl textbox => StandardView<TextBoxControl, Textbox>(textbox, stream, area),
             ComboboxControl combobox => StandardView<ComboboxControl, Combobox>(combobox, stream, area),
             ListboxControl listbox => StandardView<ListboxControl, Listbox>(listbox, stream, area),
@@ -70,6 +69,7 @@ public static class BlazorClientRegistry
         return skin switch
         {
             LayoutSkin layout => StandardSkinnedView<LayoutView>(layout, stream, area, control),
+            DataGridSkin dataGrid => StandardSkinnedView<DataGridView>(dataGrid, stream, area, control),
             LayoutGridSkin grid => StandardSkinnedView<LayoutGridView>(grid, stream, area, control),
             NavGroupSkin group => StandardSkinnedView<NavGroup>(group, stream, area, control),
             NavMenuSkin navMenu => StandardSkinnedView<NavMenuView>(navMenu, stream, area, control),
@@ -83,8 +83,8 @@ public static class BlazorClientRegistry
             BodyContentSkin bodyContent => StandardSkinnedView<BodyContentView>(bodyContent, stream, area, control),
             TabSkin tab => StandardSkinnedView<TabView>(tab, stream, area, control),
             TabsSkin tabs => StandardSkinnedView<TabsView>(tabs, stream, area, control),
-            SplitterPaneSkin splitter
-                => StandardSkinnedView<SplitterPane>(splitter, stream, area, control),
+            TemplateColumnSkin tabs => StandardSkinnedView<TemplateColumnView>(tabs, stream, area, control),
+            SplitterPaneSkin splitter => StandardSkinnedView<SplitterPane>(splitter, stream, area, control),
             _ => throw new NotSupportedException($"Skin {skin.GetType().Name} is not supported.")
         };
     }

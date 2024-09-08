@@ -29,13 +29,6 @@
             throw new NotSupportedException("Please use method with partition");
         }
 
-        private string GetCollectionName()
-        {
-            if (TypeSources.Count != 1)
-                throw new NotSupportedException("Only one type is supported");
-
-            return TypeSources.Values.First().CollectionName;
-        }
 
         public PartitionedHubDataSource InitializingPartitions(IEnumerable<object> partitions) =>
             this with

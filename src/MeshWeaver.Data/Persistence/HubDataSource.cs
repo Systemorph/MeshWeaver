@@ -1,21 +1,12 @@
 ﻿using System.Text.Json;
-using Microsoft.Extensions.DependencyInjection;
-using MeshWeaver.Messaging;
-using MeshWeaver.Messaging.Serialization;
 
 namespace MeshWeaver.Data.Persistence;
 
-public abstract record HubDataSourceBase<TDataSource> : DataSource<TDataSource>
+public abstract record HubDataSourceBase<TDataSource>(object Id, IWorkspace Workspace)
+    : DataSource<TDataSource>(Id, Workspace)
     where TDataSource : HubDataSourceBase<TDataSource>
 {
-    private readonly ITypeRegistry typeRegistry;
     protected JsonSerializerOptions Options => Hub.JsonSerializerOptions;
-
-    protected HubDataSourceBase(object Id, IWorkspace Workspace)
-        : base(Id, Workspace)
-    {
-        typeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
-    }
 }
 
 public record HubDataSource : HubDataSourceBase<HubDataSource>

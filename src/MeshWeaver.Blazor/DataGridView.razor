@@ -1,38 +1,17 @@
 @using System.Text.Json.Nodes
 @using MeshWeaver.Layout.DataGrid
-@inherits BlazorView<DataGridControl, DataGridView>
+@inherits SkinnedView<DataGridControl, DataGridSkin, DataGridView>
 
 <div style="display: table; table-layout: fixed; width: 100%;">
     <div style="overflow-x: auto;">
         <FluentDataGrid Items="@QueryableData" 
-                        Virtualize="@ViewModel.Virtualize" 
-                        ItemSize="@ViewModel.ItemSize" 
+                        Virtualize="@Virtualize" 
+                        ItemSize="@ItemSize" 
+                        ResizableColumns="@ResizableColumns"
                         GenerateHeader="GenerateHeaderOption.Sticky"
-                        ResizableColumns="@ViewModel.ResizableColumns"
                         Pagination="@Pagination"
                         Style="@Style">
-            @foreach (DataGridColumn column in ViewModel.Columns)
-            {
-
-                @((RenderFragment) (builder =>
-                {
-                    builder.OpenComponent(0, typeof(PropertyColumn<,>).MakeGenericType(typeof(JsonObject), column.GetPropertyType()));
-                    var index = 0;
-                    builder.AddComponentParameter(++index, nameof(PropertyColumn<object,object>.Property), GetPropertyExpression((dynamic)column));
-                    builder.AddAttribute(++index, "Title", column.Title);
-                    if (!string.IsNullOrEmpty(column.Format))
-                        builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Format), column.Format);
-                    if (column.Sortable)
-                        builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Sortable), column.Sortable);
-                    if(column.Tooltip)
-                        builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Tooltip), column.Tooltip);
-                    if (column.TooltipText != null)
-                        builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.TooltipText), (Func<JsonObject,string>)(_ => column.TooltipText));
-
-                    builder.CloseComponent();
-                }))
-
-            }
+            <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"  />
         </FluentDataGrid>
     </div>
 </div>

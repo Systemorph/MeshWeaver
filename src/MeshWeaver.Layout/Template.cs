@@ -38,6 +38,7 @@ public static class Template{
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
 
+
         return new ItemTemplateControl(view, data);
     }
     private static readonly MethodInfo ItemTemplateMethodNonGeneric = ReflectionHelper.GetStaticMethodGeneric(
@@ -177,6 +178,12 @@ public record ItemTemplateControl(UiControl View, object Data) :
     public ItemTemplateControl WithOrientation(Orientation orientation) => this with { Orientation = orientation };
 
     public ItemTemplateControl WithWrap(bool wrap) => this with { Wrap = wrap };
+    protected override EntityStoreAndUpdates Render(LayoutAreaHost host, RenderingContext context, EntityStore store)
+    {
+        var ret = base.Render(host, context, store);
+        var renderedView = host.RenderArea(GetContextForArea(context, ItemTemplateControl.ViewArea), View, ret.Store);
+        return renderedView with { Changes = ret.Changes.Concat(renderedView.Changes) };
+    }
 
     public virtual bool Equals(ItemTemplateControl other)
     {

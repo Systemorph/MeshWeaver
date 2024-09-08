@@ -130,7 +130,7 @@ public record WorkspaceState(
             yield return (
                 dataSource.Id,
                 dataSource.Reference,
-                e.ToImmutableDictionary(x => ts.GetKey(x)),
+                e.ToImmutableDictionary(x => ts.TypeDefinition.GetKey(x)),
                 GetCollectionName(type),
                 ts
             );
@@ -139,7 +139,7 @@ public record WorkspaceState(
                 yield return (
                     partition.Key,
                     new PartitionedCollectionsReference(partition.Key,dataSource.Reference),
-                    partition.ToImmutableDictionary(x => ts.GetKey(x)),
+                    partition.ToImmutableDictionary(x => ts.TypeDefinition.GetKey(x)),
                     GetCollectionName(type),
                     ts
                 );
@@ -196,9 +196,9 @@ public record WorkspaceState(
         var typeSource = TypeSources.GetValueOrDefault(collection);
         if (typeSource == null)
             throw new DataSourceConfigurationException($"Collection {collection} not found");
-        var dataSource = DataContext.GetDataSourceByType(typeSource.ElementType);
+        var dataSource = DataContext.GetDataSourceByType(typeSource.TypeDefinition.Type);
         if (dataSource == null)
-            throw new DataSourceConfigurationException($"Type {typeSource.ElementType} not found");
+            throw new DataSourceConfigurationException($"Type {typeSource.TypeDefinition.Type} not found");
         return dataSource;
     }
 

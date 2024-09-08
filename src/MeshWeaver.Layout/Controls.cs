@@ -1,4 +1,6 @@
 ﻿using MeshWeaver.Application.Styles;
+using MeshWeaver.Domain;
+using MeshWeaver.Layout.DataGrid;
 
 namespace MeshWeaver.Layout;
 
@@ -93,4 +95,6 @@ public static class Controls
     public static SpacerControl Spacer => new();
     public static MarkdownControl Markdown(object data) => new MarkdownControl(data);
 
+    public static DataGridControl DataGrid(object elements)
+    => new(elements);
 }

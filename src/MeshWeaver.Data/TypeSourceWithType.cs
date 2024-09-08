@@ -1,5 +1,4 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using MeshWeaver.Messaging.Serialization;
+﻿using MeshWeaver.Domain;
 
 namespace MeshWeaver.Data;
 
@@ -40,28 +39,18 @@ public record TypeSourceWithType<T>(IWorkspace Workspace, object DataSource)
 
     public TypeSourceWithType<T> WithInitialData(IEnumerable<T> initialData) =>
         WithInitialData((_, _) => Task.FromResult(initialData.Cast<object>()));
+
 }
 
-public abstract record TypeSourceWithType<T, TTypeSource> : TypeSource<TTypeSource>
+public abstract record TypeSourceWithType<T, TTypeSource>(IWorkspace Workspace, object DataSource)
+    : TypeSource<TTypeSource>(Workspace, DataSource, typeof(T))
     where TTypeSource : TypeSourceWithType<T, TTypeSource>
 {
-    private readonly ITypeRegistry typeRegistry;
-
-    protected TypeSourceWithType(IWorkspace workspace, object DataSource)
-        : base(workspace, typeof(T), DataSource)
-    {
-        typeRegistry = workspace.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
-        typeRegistry.WithType(typeof(T));
-    }
-
-    public TTypeSource WithKey<TKey>(Func<T, TKey> key)
-    {
-        var ret = new KeyFunction(o => key.Invoke((T)o), typeof(TKey));
-        typeRegistry.WithKeyFunctionProvider(type =>ret);
-        return This with { Key = ret };
-    }
-
     public TTypeSource WithQuery(Func<string, T> query) => This with { QueryFunction = query };
 
     protected Func<string, T> QueryFunction { get; init; }
+
+    public TTypeSource WithKey<TProp>(Func<T, TProp> keyFunc)
+        => WithKey(new KeyFunction(o => keyFunc.Invoke((T)o), typeof(TProp)));
+
 }

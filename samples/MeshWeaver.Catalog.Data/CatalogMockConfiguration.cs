@@ -15,7 +15,8 @@ public static class CatalogMockConfiguration
                 dataSource =>
                     dataSource
                         .WithType<MeshDocument>(type => type
-                            .WithKey(instance => instance.Id).WithInitialData(MeshDocuments))
+                            .WithKey(instance => instance.Id)
+                            .WithInitialData(MeshDocuments))
                         .WithType<MeshNode>(type => type.WithKey(x => x.Id).WithInitialData(MeshNodes))
                         .WithType<User>(type => type.WithKey(x => x.Id).WithInitialData(Users))
             )

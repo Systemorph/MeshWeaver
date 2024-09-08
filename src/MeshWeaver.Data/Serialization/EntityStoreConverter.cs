@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Json.More;
+using MeshWeaver.Domain;
 using MeshWeaver.Messaging.Serialization;
 
 namespace MeshWeaver.Data.Serialization;
@@ -44,7 +45,7 @@ public class EntityStoreConverter(ITypeRegistry typeRegistry) : JsonConverter<En
             new EntityStore()
             {
                 Collections = obj.Where(kvp => kvp.Key != "$type").Select(kvp => DeserializeCollection(kvp.Key, kvp.Value, options)).ToImmutableDictionary(),
-                GetCollectionName = typeRegistry.GetOrAddTypeName
+                GetCollectionName = typeRegistry.GetOrAddType
             };
 
         return newStore;

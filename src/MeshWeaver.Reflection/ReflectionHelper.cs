@@ -296,7 +296,7 @@ namespace MeshWeaver.Reflection
         /// allow better support for renaming and refactoring.
         /// </remarks>
         /// <exception cref="ArgumentException">Thrown, if the selector expression does not evaluate to a property</exception>
-        public static PropertyInfo GetProperty<T>(Expression<Func<T, object>> selector)
+        public static PropertyInfo GetProperty<T>(this Expression<Func<T, object>> selector)
         {
             return GetPropertyInner(selector, typeof(T));
         }
@@ -316,7 +316,7 @@ namespace MeshWeaver.Reflection
         /// allow better support for renaming and refactoring.
         /// </remarks>
         /// <exception cref="ArgumentException">Thrown, if the selector expression does not evaluate to a property</exception>
-        public static PropertyInfo GetProperty<T, TProperty>(Expression<Func<T, TProperty>> selector)
+        public static PropertyInfo GetProperty<T, TProperty>(this Expression<Func<T, TProperty>> selector)
         {
             return GetPropertyInner(selector, typeof(T));
         }
@@ -527,5 +527,10 @@ namespace MeshWeaver.Reflection
         {
             return type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IDictionary<,>);
         }
+
+
+
     }
+
+
 }

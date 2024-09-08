@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Catalog.Layout;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Messaging.Serialization;
 using Microsoft.Extensions.DependencyInjection;
