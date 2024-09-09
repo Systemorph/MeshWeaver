@@ -4,8 +4,8 @@
         <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     </PropertyGroup>
     <ItemGroup>
-        <Folder Include="Content\" />
         <EmbeddedResource Include="Content\**\*" />
+        <None Remove="Content\SalesbyCategoryExample.md" />
         <Content Include="wwwroot\images\SplashScreen.jpg">
             <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
