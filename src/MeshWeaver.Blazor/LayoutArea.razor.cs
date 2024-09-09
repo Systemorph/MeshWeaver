@@ -1,18 +1,20 @@
 ﻿using System.Text.Json;
-using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
+using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor;
 
+[StreamRendering]
 public partial class LayoutArea
 {
-    [Inject]
-    private IMessageHub Hub { get; set; }
+    [Inject] private IMessageHub Hub { get; set; }
+
+    [Inject] protected IJSRuntime JsRuntime { get; set; }
 
     private IWorkspace Workspace => Hub.GetWorkspace();
 
@@ -28,11 +30,15 @@ public partial class LayoutArea
     public override async Task SetParametersAsync(ParameterView parameters)
     {
         await base.SetParametersAsync(parameters);
-        BindStream();
         BindViewModel();
+        if (IsNotPreRender)
+            BindStream();
+        else
+        {
+            AreaStream?.Dispose();
+            AreaStream = null;
+        }
     }
-
-
 
 
     private void BindViewModel()
@@ -53,26 +59,17 @@ public partial class LayoutArea
         base.Dispose();
     }
     private string RenderingArea { get; set; }
-    private object Address { get; set; }
     private void BindStream()
     {
         if (AreaStream != null)
         {
-            if (ViewModel.Address.Equals(AreaStream.Owner) && ViewModel.Reference.Equals(AreaStream.Reference))
-                return;
             Logger.LogDebug("Disposing old stream for {Owner} and {Reference}", AreaStream.Owner, AreaStream.Reference);
             AreaStream.Dispose();
         }
         Logger.LogDebug("Acquiring stream for {Owner} and {Reference}", ViewModel.Address, ViewModel.Reference);
-        if(ViewModel.Address is JsonObject obj)
-            Address = obj.Deserialize<object>(Hub.JsonSerializerOptions);
-        else
-            Address = ViewModel.Address;
-    
-        AreaStream = Address.Equals(Hub.Address)
-            ? Workspace.Stream.Reduce<JsonElement, LayoutAreaReference>(ViewModel.Reference, Address)
-            : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address, ViewModel.Reference);
-
+        AreaStream = Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(ViewModel.Address, ViewModel.Reference);
     }
+
+    protected bool IsNotPreRender => (bool)JsRuntime.GetType().GetProperty("IsInitialized")!.GetValue(JsRuntime)!;
 
 }

@@ -10,6 +10,7 @@ using MeshWeaver.Data.Serialization;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
+using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor;
 
@@ -19,6 +20,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
 {
     [Inject] private IMessageHub Hub { get; set; }
     [Inject] protected ILogger<TView> Logger { get; set; }
+
 
     [Parameter]
     public TViewModel ViewModel { get; set; }
@@ -30,28 +32,21 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
 
     protected string Style { get; set; }
 
-    protected TViewModel RenderedViewModel { get; private set; }
-    private ISynchronizationStream<JsonElement, LayoutAreaReference> stream;
-
     protected override void OnParametersSet()
     {
         base.OnParametersSet();
         BindDataAfterParameterReset();
     }
 
-    protected virtual  void BindDataAfterParameterReset()
+
+    protected virtual void BindDataAfterParameterReset()
     {
-        if (IsUpToDate())
-            return;
-        RenderedViewModel = ViewModel;
-        stream = Stream;
         Logger.LogDebug("Preparing data bindings for area {Area}", Area);
         DisposeBindings();
         BindData();
         Logger.LogDebug("Finished data bindings for area {Area}", Area);
     }
 
-    protected bool IsUpToDate() => RenderedViewModel != null && RenderedViewModel.Equals(ViewModel) && Equals(stream, Stream);
 
     protected string Label { get; set; }
 

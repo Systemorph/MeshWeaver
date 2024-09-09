@@ -58,7 +58,6 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
 
     void Set<T>(T obj, string context = "");
     T Get<T>(string context = "");
-    void AddPlugin(IMessageHubPlugin plugin);
     IMessageHub GetHostedHub<TAddress1>(TAddress1 address, Func<MessageHubConfiguration, MessageHubConfiguration> config);
     IMessageHub GetHostedHub<TAddress1>(TAddress1 address)
         => GetHostedHub(address, x => x);
@@ -67,6 +66,14 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
     IMessageHub WithDisposeAction(Func<IMessageHub, Task> disposeAction);
     JsonSerializerOptions JsonSerializerOptions { get; }
     Task HasStarted { get; }
+    IDisposable Defer(Predicate<IMessageDelivery> deferredFilter);
+
+    internal Task StartAsync(CancellationToken cancellationToken);
+
+    internal Task<IMessageDelivery> DeliverMessageAsync(
+        IMessageDelivery delivery,
+        CancellationToken cancellationToken
+    );
 }
 
 

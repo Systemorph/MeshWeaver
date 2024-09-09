@@ -4,18 +4,18 @@ namespace MeshWeaver.Mesh.Contract
 {
     public static class MeshExtensions
     {
-        private static Func<MeshConfiguration, MeshConfiguration> GetLambda(
+        private static IReadOnlyCollection<Func<MeshConfiguration, MeshConfiguration>> GetMeshConfigurations(
             this MessageHubConfiguration config
         )
         {
-            return config.Get<Func<MeshConfiguration, MeshConfiguration>>()
-                   ?? (x => x);
+            return config.Get<IReadOnlyCollection<Func<MeshConfiguration, MeshConfiguration>>>()
+                   ?? [];
         }
 
         public static MeshConfiguration GetMeshContext(this MessageHubConfiguration config)
         {
-            var meshConf= config.GetLambda();
-            return meshConf.Invoke(new());
+            var meshConf= config.GetMeshConfigurations();
+            return meshConf.Aggregate(new MeshConfiguration(), (x,y) =>y.Invoke(x));
         }
 
     }
