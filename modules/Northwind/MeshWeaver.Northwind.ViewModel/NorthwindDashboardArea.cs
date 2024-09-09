@@ -34,6 +34,14 @@ public static class NorthwindDashboardArea
             );
 
     /// <summary>
+    /// Adds the Sales by Category view to the specified layout.
+    /// </summary>
+    /// <param name="layout">The layout definition to which the dashboard view will be added.</param>
+    /// <returns>The updated layout definition including the SalesByCategory view.</returns>
+    public static LayoutDefinition AddSalesByCategory(this LayoutDefinition layout)
+        => layout.WithView(nameof(SalesByCategory), Controls.Stack.WithView(SalesByCategory));
+
+    /// <summary>
     /// Generates the main dashboard view for a given layout area and rendering context.
     /// </summary>
     /// <param name="layoutArea">The layout area host where the dashboard view will be displayed.</param>
@@ -76,7 +84,7 @@ public static class NorthwindDashboardArea
             );
     }
 
-    private static IObservable<object> SalesByCategory(this LayoutAreaHost layoutArea, RenderingContext context)
+    public static IObservable<object> SalesByCategory(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         return layoutArea.GetDataCube()
             .Select(cube =>
