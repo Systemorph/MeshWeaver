@@ -2,7 +2,7 @@
 
 Knowing which categories are the most popular can help in designing targeted promotional strategies. Using the Sales by Category chart, you can define types of products with high daily consumption rates.
 
-@("OrderSummary"){ Layout = "Documentation" }
+@("SalesByCategory"){ Layout = "Documentation" }
 
 From this chart, you see that beverages are consumed at a rate of 500,000 items per month. This indicates a strong customer preference for these items. Less popular items like condiments have a lower consumption rate of 212,000 items per month.
 
