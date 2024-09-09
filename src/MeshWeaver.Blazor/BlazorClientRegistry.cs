@@ -45,6 +45,7 @@ public static class BlazorClientRegistry
             HtmlControl html => StandardView<HtmlControl, HtmlView>(html, stream, area),
             LabelControl label => StandardView<LabelControl, Label>(label, stream, area),
             NavLinkControl link => StandardView<NavLinkControl,NavLink>(link, stream, area),
+            PropertyColumnControl property => StandardView<PropertyColumnControl, PropertyColumnView>(property, stream, area),
             MenuItemControl menu => StandardView<MenuItemControl, MenuItemView>(menu, stream, area),
             IContainerControl container => StandardView<IContainerControl, ContainerView>(container, stream, area),
             TextBoxControl textbox => StandardView<TextBoxControl, Textbox>(textbox, stream, area),
