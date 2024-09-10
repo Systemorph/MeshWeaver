@@ -56,7 +56,8 @@ public static class SalesOverviewArea
                     .ToBarChart(builder => builder
                         .WithOptions(o => o.OrderByValueDescending().TopValues(5))
                         .WithChartBuilder(o =>
-                            o.AsHorizontalBar()
+                            o
+                                //.AsHorizontalBar()
                                 .WithDataLabels()
                         )
                     )
