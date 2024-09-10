@@ -19,8 +19,8 @@ public partial class DataGridView
     protected override void BindData()
     {
         base.BindData();
-        DataBind(Skin.Virtualize, x => x.Virtualize);
-        DataBind(Skin.ItemSize, x => x.ItemSize);
+        DataBind(ViewModel.Virtualize, x => x.Virtualize);
+        DataBind(ViewModel.ItemSize, x => x.ItemSize);
         DataBind(
             ViewModel.Data,
             x => x.QueryableData,

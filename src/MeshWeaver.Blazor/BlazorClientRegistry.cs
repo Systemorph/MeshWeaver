@@ -47,6 +47,7 @@ public static class BlazorClientRegistry
             NavLinkControl link => StandardView<NavLinkControl,NavLink>(link, stream, area),
             PropertyColumnControl property => StandardView<PropertyColumnControl, PropertyColumnView>(property, stream, area),
             MenuItemControl menu => StandardView<MenuItemControl, MenuItemView>(menu, stream, area),
+            DataGridControl dataGrid => StandardView<DataGridControl, DataGridView>(dataGrid, stream, area),
             IContainerControl container => StandardView<IContainerControl, ContainerView>(container, stream, area),
             TextBoxControl textbox => StandardView<TextBoxControl, Textbox>(textbox, stream, area),
             ComboboxControl combobox => StandardView<ComboboxControl, Combobox>(combobox, stream, area),
@@ -70,7 +71,6 @@ public static class BlazorClientRegistry
         return skin switch
         {
             LayoutSkin layout => StandardSkinnedView<LayoutView>(layout, stream, area, control),
-            DataGridSkin dataGrid => StandardSkinnedView<DataGridView>(dataGrid, stream, area, control),
             LayoutGridSkin grid => StandardSkinnedView<LayoutGridView>(grid, stream, area, control),
             NavGroupSkin group => StandardSkinnedView<NavGroup>(group, stream, area, control),
             NavMenuSkin navMenu => StandardSkinnedView<NavMenuView>(navMenu, stream, area, control),

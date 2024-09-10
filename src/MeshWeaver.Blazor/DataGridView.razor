@@ -1,17 +1,31 @@
 @using System.Text.Json.Nodes
 @using MeshWeaver.Layout.DataGrid
-@inherits SkinnedView<DataGridControl, DataGridSkin, DataGridView>
+@inherits BlazorView<DataGridControl, DataGridView>
 
 <div style="display: table; table-layout: fixed; width: 100%;">
     <div style="overflow-x: auto;">
-        <FluentDataGrid Items="@QueryableData" 
-                        Virtualize="@Virtualize" 
-                        ItemSize="@ItemSize" 
+        <FluentDataGrid Items="@QueryableData"
+                        Virtualize="@Virtualize"
+                        ItemSize="@ItemSize"
                         ResizableColumns="@ResizableColumns"
                         GenerateHeader="GenerateHeaderOption.Sticky"
                         Pagination="@Pagination"
                         Style="@Style">
-            <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"  />
+            @foreach (var column in ViewModel.Columns)
+            {
+                if(column is PropertyColumnControl propertyColumn)
+                {
+                    <PropertyColumnView ViewModel="@propertyColumn" Stream="@Stream" Area="@Area" />
+                }
+                else if(column is TemplateColumnControl templateColumn)
+                {
+                    <TemplateColumnView ViewModel="@templateColumn" Stream="@Stream" Area="@Area" />
+                }
+                else
+                {
+                    throw new NotImplementedException();
+                }
+            }
         </FluentDataGrid>
     </div>
 </div>
