@@ -1,4 +1,6 @@
-﻿namespace MeshWeaver.Messaging;
+﻿using MeshWeaver.Messaging.Serialization;
+
+namespace MeshWeaver.Messaging;
 
 public class MessageHubPlugin : 
     MessageHubBase,
@@ -7,15 +9,12 @@ public class MessageHubPlugin :
 
 
     protected MessageHubPlugin(IMessageHub hub)
-    : base(hub)
+    : base(hub.ServiceProvider)
     {
+        Hub = hub;
     }
 
 
-    public virtual Task StartAsync(CancellationToken cancellationToken)
-    {
-        return Task.CompletedTask;
-    }
     public virtual Task Initialized => Task.CompletedTask;
 }
 
@@ -44,5 +43,4 @@ public class MessageHubPlugin<TState> : MessageHubPlugin
     protected MessageHubPlugin(IMessageHub hub) : base(hub)
     {
     }
-
 }

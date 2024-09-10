@@ -25,8 +25,9 @@ public class MessageHubPluginTest : TestBase
 
         public ImmutableList<object> Events { get; private set; }  = ImmutableList<object>.Empty;
 
-        public override async Task StartAsync(CancellationToken cancellationToken)
+        public override async Task StartAsync(IMessageHub hub, CancellationToken cancellationToken)
         {
+            await base.StartAsync(hub, cancellationToken);
             logger.LogInformation("Starting");
             Events = Events.Add("Starting");
             await Task.Delay(1000, cancellationToken);
@@ -56,7 +57,7 @@ public class MessageHubPluginTest : TestBase
     public MessageHubPluginTest(ITestOutputHelper output) : base(output)
     {
         Services.AddSingleton<IMessageHub>(sp => sp.CreateMessageHub(new Address(), 
-            conf => conf.AddPlugin<MyPlugin>()));
+            conf => conf.AddPlugin<MyPlugin>(h => new MyPlugin(h))));
     }
 
     [Fact(Skip = "HANGING!")]

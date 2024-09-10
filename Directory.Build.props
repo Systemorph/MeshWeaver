@@ -1,21 +1,15 @@
 <Project>
- <PropertyGroup>
+  <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <LangVersion>12.0</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
-    <WarnOnPackingNonPackableProject>false</WarnOnPackingNonPackableProject>
+    <DeployPath>$(SolutionDir)deploy</DeployPath> 
   </PropertyGroup>
   <PropertyGroup>
     <NoWarn>649;CA2255;$(NoWarn)</NoWarn>
     <DefineConstants Condition=" '$(CIRun)' == 'true' ">$(DefineConstants);CIRun</DefineConstants>
   </PropertyGroup>
-  <ItemGroup>
-    <filesToDelete Include="bin\**\*.*" /> 
-  </ItemGroup>
-  <Target Name="CleanAllBins" AfterTargets="Clean">
-    <Delete Files="@(filesToDelete)" />
-  </Target>
   <ItemGroup>
     <PackageReference Include="Roslynator.Analyzers"  />
     <PackageReference Include="Roslynator.Formatting.Analyzers"  />
@@ -23,4 +17,13 @@
     <PackageReference Include="Roslynator.CodeAnalysis.Analyzers"  />
     <PackageReference Include="Roslynator.Refactorings"  />
   </ItemGroup>
+  
+  <Target Name="CopyOutputToNuget" AfterTargets="Build" Condition="$(HasMeshNodes) == 'true'">
+    <ItemGroup>
+      <Dlls Include="$(OutputPath)*.dll" />
+      <WwwRoot Include="$(OutputPath)wwwroot\**\*.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(Dlls)" DestinationFolder="$(DeployPath)\$(MSBuildProjectName)" />
+    <Copy SourceFiles="@(WwwRoot)" DestinationFolder="$(DeployPath)\$(MSBuildProjectName)\wwwroot\%(RecursiveDir)" />
+  </Target>
 </Project>

@@ -2,17 +2,11 @@
 
 namespace MeshWeaver.Messaging;
 
-public class HostedHubsCollection : IAsyncDisposable
+public class HostedHubsCollection(IServiceProvider serviceProvider) : IAsyncDisposable
 {
-    private readonly IServiceProvider serviceProvider;
     public IEnumerable<IMessageHub> Hubs => messageHubs.Values;
 
     private readonly ConcurrentDictionary<object, IMessageHub> messageHubs = new();
-
-    public HostedHubsCollection(IServiceProvider serviceProvider)
-    {
-        this.serviceProvider = serviceProvider;
-    }
 
     public IMessageHub GetHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
     {
