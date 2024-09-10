@@ -8,19 +8,14 @@ namespace MeshWeaver.Messaging;
 
 public class MessageService : IMessageService
 {
-    private JsonSerializerOptions deserializeOptions;
     private readonly ILogger<MessageService> logger;
     private bool isDisposing;
-    private readonly BufferBlock<(IMessageDelivery Delivery, CancellationToken CancellationToken)> buffer = new();
-    private readonly ActionBlock<(IMessageDelivery Delivery, CancellationToken CancellationToken)> deliveryAction;
+    private readonly BufferBlock<(IMessageDelivery Delivery, CancellationToken Token)> buffer = new();
+    private readonly ActionBlock<(IMessageDelivery Delivery, CancellationToken Token)> deliveryAction;
+    private readonly BufferBlock<Func<CancellationToken,Task>> executionBuffer = new();
+    private readonly ActionBlock<Func<CancellationToken,Task>> executionBlock = new(f => f.Invoke(default));
 
-    private AsyncDelivery MessageHandler { get; set; }
 
-    public void Initialize(AsyncDelivery messageHandler, JsonSerializerOptions deserializationOptions)
-    {
-        MessageHandler = messageHandler;
-        deserializeOptions = deserializationOptions;
-    }
 
     private readonly DeferralContainer deferralContainer;
 
@@ -30,23 +25,27 @@ public class MessageService : IMessageService
         Address = address;
         this.logger = logger;
 
-        deferralContainer = new DeferralContainer(NotifyAsync, ReportFailure);
-
-        deliveryAction = new(async x =>
+        deferralContainer = new DeferralContainer((d, c) =>
         {
-            try
-            {
-                var ret = await deferralContainer.DeliverAsync(x.Delivery, x.CancellationToken);
-                if(ret?.State == MessageDeliveryState.Failed)
-                    Post(new DeliveryFailure(x.Delivery), new PostOptions(Address).ResponseFor(x.Delivery));
-            }
-            catch (Exception e)
-            {
-                ReportFailure(x.Delivery.Failed(e.ToString()));
-            }
-        });
-        buffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = true });
+            NotifyAsync(d, c);
+            return Task.FromResult(d.Submitted());
+        }, ReportFailure);
+        deliveryAction = new(x => deferralContainer.DeliverAsync(x.Delivery, x.Token)); 
 
+        executionBuffer.LinkTo(executionBlock, new DataflowLinkOptions { PropagateCompletion = true });
+
+    }
+
+    private IMessageHub hub;
+    void IMessageService.Start(IMessageHub hub1)
+    {
+        this.hub = hub1;
+        executionBuffer.Post(async ct =>
+        {
+            await hub.StartAsync(ct);
+
+            buffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = true });
+        });
     }
 
     private IMessageDelivery ReportFailure(IMessageDelivery delivery)
@@ -76,7 +75,7 @@ public class MessageService : IMessageService
             return delivery.Failed("Hub disposing");
 
         if (delivery.Target is JsonNode node)
-            delivery = delivery.WithTarget(node.Deserialize<object>(deserializeOptions));
+            delivery = delivery.WithTarget(node.Deserialize<object>(hub.JsonSerializerOptions));
 
         if (Address.Equals(delivery.Target))
             delivery = UnpackIfNecessary(delivery);
@@ -111,21 +110,36 @@ public class MessageService : IMessageService
         if (delivery.Message is not RawJson rawJson)
             return delivery;
         logger.LogDebug("Deserializing message {id} from sender {sender} to target {target}", delivery.Id, delivery.Sender, delivery.Target);
-        var deserializedMessage = JsonSerializer.Deserialize(rawJson.Content, typeof(object), deserializeOptions);
+        var deserializedMessage = JsonSerializer.Deserialize(rawJson.Content, typeof(object), hub.JsonSerializerOptions);
         return delivery.WithMessage(deserializedMessage);
     }
 
 
-    private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
+    private void NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
-        logger.LogDebug("Start processing {message} from {sender} in {address}", delivery.Message, delivery.Sender, Address);
-        delivery = await MessageHandler.Invoke(delivery, cancellationToken);
-        logger.LogDebug("Finished processing {message} from {sender} in {address}", delivery.Message, delivery.Sender, Address);
-        return delivery;
+        executionBuffer.Post(async _ =>
+        {
+            logger.LogDebug("Start processing {message} from {sender} in {address}", delivery.Message, delivery.Sender,
+                Address);
+            try
+            {
+                delivery = await hub.DeliverMessageAsync(delivery, cancellationToken);
+            }
+            catch (Exception e)
+            {
+                ReportFailure(delivery.Failed(e.ToString()));
+            }
+
+            logger.LogDebug("Finished processing {message} from {sender} in {address}", delivery.Message,
+                delivery.Sender, Address); 
+
+        });
+
     }
 
     public IMessageDelivery Post<TMessage>(TMessage message, PostOptions opt)
     {
+        logger.LogDebug("Posting message {Message} from {Sender} to {Target}", message, Address, opt.Target);
         return PostImpl(message, opt);
     }
 
