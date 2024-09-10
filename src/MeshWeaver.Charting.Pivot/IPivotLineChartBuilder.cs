@@ -1,8 +1,8 @@
-﻿using MeshWeaver.Charting.Builders.OptionsBuilders;
+﻿using MeshWeaver.Charting.Models.Options;
 
 namespace MeshWeaver.Charting.Pivot;
 
 public interface IPivotLineChartBuilder : IPivotArrayChartBuilder
 {
-    IPivotLineChartBuilder WithRangeOptionsBuilder(Func<LineOptionsBuilder, LineOptionsBuilder> func);
+    IPivotLineChartBuilder WithRangeOptionsBuilder(Func<ChartOptions, ChartOptions> func);
 }
