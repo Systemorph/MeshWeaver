@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Application.Styles;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
