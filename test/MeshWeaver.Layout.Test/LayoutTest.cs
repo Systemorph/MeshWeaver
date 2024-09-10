@@ -340,17 +340,14 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => x != null);
 
-        var areas = content
+        var controls = content
             .Should()
             .BeOfType<DataGridControl>()
-            .Which.Areas.Should()
+            .Which.Columns.Should()
             .HaveCount(2)
             .And.Subject;
 ;
 
-        var controls = areas
-                .Select(na => stream.GetControl($"{reference.Area}/{na.Id}"))
-            .ToArray();
         controls.Should().BeEquivalentTo(
                 [
                     new PropertyColumnControl<string>
@@ -518,12 +515,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 Title = nameof(DataRecord.DisplayName).Wordify()
             }
         };
-        grid.Areas.Should()
-            .HaveCount(benchmarks.Length)
-            .And.Subject.Select(na => na.Area).Should().BeEquivalentTo(Enumerable.Range(1,2).Select(i => $"{reference.Area}/{i}"));
+        grid.Columns.Should()
+            .HaveCount(benchmarks.Length);
 
-        var controls = grid.Areas.Select(na => stream.GetControl($"{reference.Area}/{na.Id}")).ToArray();
-        controls.Should().BeEquivalentTo(benchmarks);
+        grid.Columns.Should().BeEquivalentTo(benchmarks);
     }
 
     // TODO V10: Need to rewrite realistic test for disposing views. (29.07.2024, Roland Bürgi)

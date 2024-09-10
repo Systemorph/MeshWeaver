@@ -1,42 +1,48 @@
-﻿
-using MeshWeaver.Data;
-using System.Reflection;
+﻿using System.Collections.Immutable;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.Domain;
 
 namespace MeshWeaver.Layout.DataGrid;
 
 public record DataGridControl(object Data)
-    : ContainerControl<DataGridControl, DataGridSkin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new())
+    : UiControl<DataGridControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
+    public ImmutableList<object> Columns { get; init; } = [];
+
     protected override DataGridControl PrepareRendering(RenderingContext context)
     => base.PrepareRendering(context) with
     {
-        Style = Style ?? $"min-width: {Areas.Count * 120}px"
+        Style = Style ?? $"min-width: {Columns.Count * 120}px"
     };
 
-}
-public record DataGridSkin : Skin<DataGridSkin>
-{
+    public DataGridControl WithColumn<TColumn>(params DataGridColumn<TColumn>[] columns)
+        where TColumn : DataGridColumn<TColumn> => This with { Columns = Columns.AddRange(columns) };
+
     public object Virtualize { get; init; }
     public object ItemSize { get; init; } = 50;
     public object ResizableColumns { get; init; } = true;
-    public DataGridSkin WithVirtualize(object virtualize) => This with { Virtualize = virtualize };
-    public DataGridSkin WithItemSize(object itemSize) => This with { ItemSize = itemSize };
-    public DataGridSkin Resizable(object resizable = null) => This with { ResizableColumns = resizable ?? true };
+    public DataGridControl WithVirtualize(object virtualize) => This with { Virtualize = virtualize };
+    public DataGridControl WithItemSize(object itemSize) => This with { ItemSize = itemSize };
+    public DataGridControl Resizable(object resizable = null) => This with { ResizableColumns = resizable ?? true };
 }
-public abstract record PropertyColumnControl() : UiControl<PropertyColumnControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
+
+
+public abstract record DataGridColumn<TColumn>() : UiControl<TColumn>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
+    where TColumn : DataGridColumn<TColumn>
+{
+    public object Title { get; init; }
+    public object TooltipText { get; init; }
+    public TColumn WithTitle(object title) => This with { Title = title };
+    public TColumn WithTooltip(object tooltip) => This with { Tooltip = tooltip };
+    public TColumn WithTooltipText(object tooltipText) => This with { TooltipText = tooltipText };
+
+}
+public abstract record PropertyColumnControl() : DataGridColumn<PropertyColumnControl> 
 {
     public object Property { get; init; }
     public object Sortable { get; init; } = true;
     public object Format { get; init; }
 
     public PropertyColumnControl WithFormat(object format) => this with { Format = format };
-    public object Title { get; init; }
-    public PropertyColumnControl WithTitle(object title) => this with { Title = title };
-    public PropertyColumnControl WithTooltip(object tooltip) => this with { Tooltip = tooltip };
-    public object TooltipText { get; init; }
-    public PropertyColumnControl WithTooltipText(object tooltipText) => this with { TooltipText = tooltipText };
     public abstract Type GetPropertyType();
 }
 

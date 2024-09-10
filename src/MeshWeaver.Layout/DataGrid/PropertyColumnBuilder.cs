@@ -28,7 +28,7 @@ public record  PropertyColumnBuilder(ITypeDefinition TypeDefinition, DataGridCon
         var ret = CreateControl(property);
         return this with
         {
-            Grid = Grid.WithView(config.Invoke(ret with
+            Grid = Grid.WithColumn(config.Invoke(ret with
                 {
                     Property = property.Name.ToCamelCase(),
                     Title = displayAttribute?.Name ?? property.Name.Wordify(),
