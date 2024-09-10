@@ -36,17 +36,17 @@ public abstract record DataGridColumn<TColumn>() : UiControl<TColumn>(ModuleSetu
     public TColumn WithTooltipText(object tooltipText) => This with { TooltipText = tooltipText };
 
 }
-public abstract record PropertyColumnControl() : DataGridColumn<PropertyColumnControl> 
+public abstract record PropertyControl() : DataGridColumn<PropertyControl> 
 {
     public object Property { get; init; }
     public object Sortable { get; init; } = true;
     public object Format { get; init; }
 
-    public PropertyColumnControl WithFormat(object format) => this with { Format = format };
+    public PropertyControl WithFormat(object format) => this with { Format = format };
     public abstract Type GetPropertyType();
 }
 
-public record PropertyColumnControl<TProperty> : PropertyColumnControl
+public record PropertyControl<TProperty> : PropertyControl
 {
     public override Type GetPropertyType() => typeof(TProperty);
 }

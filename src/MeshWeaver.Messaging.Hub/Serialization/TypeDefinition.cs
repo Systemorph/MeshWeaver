@@ -71,6 +71,10 @@ namespace MeshWeaver.Messaging.Serialization
             ?? throw new InvalidOperationException(
                 "No key mapping is defined. Please specify in the configuration of the data sources source.");
 
+        public Type GetKeyType() =>
+            Key.Value?.KeyType
+            ?? throw new InvalidOperationException(
+                "No key mapping is defined. Please specify in the configuration of the data sources source.");
         internal Lazy<KeyFunction> Key { get; init; }
     }
 }

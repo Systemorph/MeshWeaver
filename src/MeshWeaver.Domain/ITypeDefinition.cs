@@ -12,6 +12,7 @@ public interface ITypeDefinition
     string Description { get; }
     string GroupName { get; }
     string GetDescription(string memberName);
+    Type GetKeyType();
 
 }
 
