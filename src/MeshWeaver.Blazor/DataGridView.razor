@@ -13,7 +13,7 @@
                         Style="@Style">
             @foreach (var column in ViewModel.Columns)
             {
-                if(column is PropertyColumnControl propertyColumn)
+                if(column is PropertyControl propertyColumn)
                 {
                     <PropertyColumnView ViewModel="@propertyColumn" Stream="@Stream" Area="@Area" />
                 }

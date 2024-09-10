@@ -3,7 +3,7 @@
 @using System.Text.Json.Nodes
 @using MeshWeaver.Layout.DataGrid
 @using Microsoft.AspNetCore.Components.Rendering
-@inherits BlazorView<PropertyColumnControl, PropertyColumnView>
+@inherits BlazorView<PropertyControl, PropertyColumnView>
 
 @((RenderFragment)RenderPropertyColumn)
 
@@ -24,7 +24,7 @@
         DataBind(ViewModel.Tooltip, x => x.Tooltip);
     }
 
-    private Expression<Func<JsonObject, T>> GetPropertyExpression<T>(PropertyColumnControl<T> columnControl)
+    private Expression<Func<JsonObject, T>> GetPropertyExpression<T>(PropertyControl<T> control)
     {
         return e => e.ContainsKey(Property) ? e[Property].Deserialize<T>(Stream.Hub.JsonSerializerOptions) : default;
     }
