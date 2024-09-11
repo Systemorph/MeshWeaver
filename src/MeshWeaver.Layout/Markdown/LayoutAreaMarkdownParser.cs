@@ -18,6 +18,7 @@ public class LayoutAreaMarkdownParser : BlockParser
         fieldMappings = new()
         {
             { nameof(LayoutAreaComponentInfo.Id), (a, foundValue) => a.Id = foundValue },
+            { nameof(LayoutAreaComponentInfo.QueryString), (a, foundValue) => a.QueryString = foundValue },
             { nameof(LayoutAreaComponentInfo.Layout), (a, foundValue) => a.Layout = foundValue },
             { nameof(LayoutAreaComponentInfo.DivId), (a, foundValue) => a.DivId = foundValue },
             {
@@ -134,6 +135,8 @@ public class LayoutAreaMarkdownParser : BlockParser
             if (!isInsideQuote && EndTokenChars.Contains(c))
             {
                 slice.NextChar();
+                if (token.Length == 0)
+                    continue;
                 return token.ToString();
             }
 
