@@ -2,3 +2,7 @@
 # Revenue
 
 @("RevenueSummary")
+
+# Discounts
+
+@("DiscountSummary")

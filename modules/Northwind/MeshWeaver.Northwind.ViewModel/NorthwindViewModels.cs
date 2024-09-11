@@ -33,6 +33,7 @@ namespace MeshWeaver.Northwind.ViewModel
                         .AddSupplierSummary()
                         .AddSalesOverview()
                         .AddRevenue()
+                        .AddDiscountSummary()
                         //.WithNavMenu((menu, _) => menu
                         //    .AddTypesCatalogs()
                         //)
