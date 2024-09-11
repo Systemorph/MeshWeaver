@@ -13,3 +13,5 @@ The shop can optimize the layout by placing high-demand items like beverages and
 
 ## Financial Planning
 By understanding which categories drive the most sales, management can make more informed financial decisions. They can allocate budget more effectively, investing in high-performing categories while managing costs in lower-performing ones.
+
+@("TopProducts"){ Layout = "Documentation" }
