@@ -22,6 +22,7 @@ namespace MeshWeaver.Northwind.ViewModel
             Customer = order.CustomerId;
             Employee = order.EmployeeId;
             OrderDate = order.OrderDate;
+            OrderMonth = order.OrderDate.ToString("yy-MM");
             RequiredDate = order.RequiredDate;
             ShippedDate = order.ShippedDate;
             ShipVia = order.ShipVia;
@@ -86,7 +87,14 @@ namespace MeshWeaver.Northwind.ViewModel
         /// </summary>
         [NotVisible]
         public DateTime OrderDate { get; init; }
-    
+
+        /// <summary>
+        /// Gets the month when the order was placed.
+        /// </summary>
+        [NotVisible]
+        [Dimension(typeof(string), nameof(OrderMonth))]
+        public string OrderMonth { get; init; }
+
         /// <summary>
         /// Gets the date by which the order is required.
         /// </summary>
