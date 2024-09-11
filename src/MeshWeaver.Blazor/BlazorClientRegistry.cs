@@ -61,6 +61,7 @@ public static class BlazorClientRegistry
             MarkdownControl markdown => StandardView<MarkdownControl, MarkdownView>(markdown, stream, area),
             NamedAreaControl namedView => StandardView<NamedAreaControl, NamedAreaView>(namedView, stream, area),
             SpacerControl spacer => StandardView<SpacerControl, SpacerView>(spacer, stream, area),
+            TemplateColumnControl template => StandardView<TemplateColumnControl, TemplateColumnView>(template, stream, area),
             _ => DelegateToDotnetInteractive(instance, stream, area),
         };
     }
@@ -84,7 +85,6 @@ public static class BlazorClientRegistry
             BodyContentSkin bodyContent => StandardSkinnedView<BodyContentView>(bodyContent, stream, area, control),
             TabSkin tab => StandardSkinnedView<TabView>(tab, stream, area, control),
             TabsSkin tabs => StandardSkinnedView<TabsView>(tabs, stream, area, control),
-            TemplateColumnSkin tabs => StandardSkinnedView<TemplateColumnView>(tabs, stream, area, control),
             SplitterPaneSkin splitter => StandardSkinnedView<SplitterPane>(splitter, stream, area, control),
             _ => throw new NotSupportedException($"Skin {skin.GetType().Name} is not supported.")
         };

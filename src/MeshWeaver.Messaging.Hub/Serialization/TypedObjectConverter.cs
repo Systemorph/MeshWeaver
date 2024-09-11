@@ -11,7 +11,6 @@ namespace MeshWeaver.Messaging.Serialization;
 
 public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry, SerializationConfiguration configuration) : JsonConverter<object>
 {
-    public const string TypeProperty = "$type";
 
     public override bool CanConvert(Type typeToConvert) => !typeof(IEnumerable).IsAssignableFrom(typeToConvert) && (typeToConvert == typeof(object) || typeToConvert.IsAbstract);
 
@@ -43,7 +42,7 @@ public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry, Seriali
     {
         if (node is JsonObject jObject)
         {
-            if (jObject.TryGetPropertyValue(TypeProperty, out var tn))
+            if (jObject.TryGetPropertyValue(EntitySerializationExtensions.TypeProperty, out var tn))
             {
                 var typeName = tn!.ToString();
                 var type = 
@@ -94,9 +93,7 @@ public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry, Seriali
 
 public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry, Type exclude)
     : JsonConverter<object>
-{
-    private const string TypeProperty = "$type";
-
+{ 
     public override bool CanConvert(Type typeToConvert) =>
         typeToConvert != exclude
         && !typeof(IEnumerable).IsAssignableFrom(typeToConvert)
@@ -127,8 +124,8 @@ public class TypedObjectSerializeConverter(ITypeRegistry typeRegistry, Type excl
             new TypedObjectSerializeConverter(typeRegistry, value.GetType())
         );
         var serialized = JsonSerializer.SerializeToNode(value, value.GetType(), clonedOptions);
-        if (serialized is JsonObject obj && value is not IDictionary && !obj.ContainsKey(TypeProperty))
-            obj[TypeProperty] = typeRegistry.GetOrAddType(value.GetType());
+        if (serialized is JsonObject obj && value is not IDictionary && !obj.ContainsKey(EntitySerializationExtensions.TypeProperty))
+            obj[EntitySerializationExtensions.TypeProperty] = typeRegistry.GetOrAddType(value.GetType());
         ;
 
         serialized!.WriteTo(writer);

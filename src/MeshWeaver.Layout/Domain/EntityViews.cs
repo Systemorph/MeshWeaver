@@ -4,6 +4,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
+using MeshWeaver.Messaging.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Layout.Domain;
@@ -42,7 +43,7 @@ public static class EntityViews
                 .WithView((host, _) =>
                     host.Workspace
                         .GetStreamFor(new EntityReference(type, id), area.Stream.Subscriber)
-                        .Select(o => DetailsLayout(host, o, idString, typeDefinition)));
+                        .Select(o => typeDefinition.DetailsLayout(o, idString)));
         }
         catch (Exception e)
         {
@@ -50,7 +51,7 @@ public static class EntityViews
         }
     }
 
-    public static object DetailsLayout(this LayoutAreaHost host, object o, string idString, ITypeDefinition typeDefinition)
+    public static object DetailsLayout(this ITypeDefinition typeDefinition, object o, string idString)
     {
         return Template.Bind(o,
             typeDefinition.GetKey(o).ToString(),
@@ -89,7 +90,8 @@ public static class EntityViews
                     .Stream
                     .Reduce(new CollectionReference(collection), area.Stream.Subscriber)
                     .Select(changeItem =>
-                        typeDefinition.ToDataGrid(changeItem.Value.Instances.Values)
+                        typeDefinition.ToDataGrid(changeItem.Value.Instances.Values.Select(o => typeDefinition.SerializeEntityAndId(o, area.Hub.JsonSerializerOptions)))
+                            .WithColumn(new TemplateColumnControl(new InfoButtonControl(typeDefinition.CollectionName, new JsonPointerReference(EntitySerializationExtensions.IdProperty))))
                     )
                 )
             ;
@@ -118,6 +120,7 @@ public static class EntityViews
                 )
             );
 }
+
 
 public static class FileSource
 {
