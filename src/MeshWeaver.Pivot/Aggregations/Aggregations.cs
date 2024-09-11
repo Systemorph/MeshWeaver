@@ -110,6 +110,16 @@ namespace MeshWeaver.Pivot.Aggregations
             };
         }
 
+        public static Aggregations<TTransformed, double> Sum<TTransformed, TAggregate>(this Aggregations<TTransformed, TAggregate, TAggregate> _, Func<TTransformed, double> selector)
+        {
+            return new Aggregations<TTransformed, double>
+            {
+                Name = "Sum",
+                Aggregation = enumerable => enumerable.Sum(selector),
+                AggregationOfAggregates = sums => sums.Sum(),
+            };
+        }
+
         #endregion
 
         #region Average
