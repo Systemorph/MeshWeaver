@@ -11,6 +11,9 @@ public partial class LayoutAreaPage
 {
     private LayoutAreaControl ViewModel { get; set; }
 
+    [Inject]
+    private NavigationManager Navigation { get; set; }
+
     [Parameter]
     public string Application { get; set; }
     [Parameter]
@@ -39,6 +42,7 @@ public partial class LayoutAreaPage
         Reference = new((string)LayoutExtensions.Decode(Area))
         {
             Id = (string)LayoutExtensions.Decode(Id),
+            QueryString = Navigation.ToAbsoluteUri(Navigation.Uri).Query,
             Layout = StandardPageLayout.Page,
         };
 

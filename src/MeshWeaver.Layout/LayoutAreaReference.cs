@@ -7,6 +7,7 @@ namespace MeshWeaver.Layout;
 public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
 {
     public object Id { get; init; }
+    public string QueryString { get; init; }
     public string Layout { get; init; }
 
     public const string Data = "data";
@@ -34,6 +35,10 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
         var ret = $"app/{address}/{LayoutExtensions.Encode(Area)}";
         if (Id?.ToString() is { } s)
             ret = $"{ret}/{LayoutExtensions.Encode(s)}";
+        if (QueryString is not null)
+        {
+            ret += $"?{QueryString}";
+        }
         return ret;
     }
 
