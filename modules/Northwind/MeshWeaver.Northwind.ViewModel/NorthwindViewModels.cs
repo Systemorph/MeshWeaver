@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Documentation;
-using MeshWeaver.Layout;
+﻿using MeshWeaver.Layout;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Messaging;
 
@@ -33,6 +32,7 @@ namespace MeshWeaver.Northwind.ViewModel
                         .AddCustomerSummary()
                         .AddSupplierSummary()
                         .AddSalesOverview()
+                        .AddRevenue()
                         //.WithNavMenu((menu, _) => menu
                         //    .AddTypesCatalogs()
                         //)
