@@ -28,7 +28,7 @@ public static class SerializationExtensions
         => configuration.WithTypes((IEnumerable<Type>)types);
 
     public static string GetTypeName(object instance)
-    => instance is JsonObject obj && obj.TryGetPropertyValue(TypedObjectDeserializeConverter.TypeProperty, out var type)
+    => instance is JsonObject obj && obj.TryGetPropertyValue(EntitySerializationExtensions.TypeProperty, out var type)
         ? type!.ToString()
         : instance.GetType().FullName;
     internal static JsonSerializerOptions CloneAndRemove(this JsonSerializerOptions options, JsonConverter toBeRemoved)
@@ -38,7 +38,7 @@ public static class SerializationExtensions
         return clonedOptions;
     }
     public static string GetId(object instance)
-        => instance is JsonObject obj && obj.TryGetPropertyValue(MessageDeliveryConverter.IdProperty, out var id)
+        => instance is JsonObject obj && obj.TryGetPropertyValue(EntitySerializationExtensions.IdProperty, out var id)
             ? id!.ToString()
             : instance.ToString();
 

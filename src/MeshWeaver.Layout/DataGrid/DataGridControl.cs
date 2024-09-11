@@ -14,8 +14,8 @@ public record DataGridControl(object Data)
         Style = Style ?? $"min-width: {Columns.Count * 120}px"
     };
 
-    public DataGridControl WithColumn<TColumn>(params DataGridColumn<TColumn>[] columns)
-        where TColumn : DataGridColumn<TColumn> => This with { Columns = Columns.AddRange(columns) };
+    public DataGridControl WithColumn<TColumn>(params DataColumnControl<TColumn>[] columns)
+        where TColumn : DataColumnControl<TColumn> => This with { Columns = Columns.AddRange(columns) };
 
     public object Virtualize { get; init; }
     public object ItemSize { get; init; } = 50;
@@ -26,8 +26,8 @@ public record DataGridControl(object Data)
 }
 
 
-public abstract record DataGridColumn<TColumn>() : UiControl<TColumn>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
-    where TColumn : DataGridColumn<TColumn>
+public abstract record DataColumnControl<TColumn>() : UiControl<TColumn>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
+    where TColumn : DataColumnControl<TColumn>
 {
     public object Title { get; init; }
     public object TooltipText { get; init; }
@@ -36,7 +36,7 @@ public abstract record DataGridColumn<TColumn>() : UiControl<TColumn>(ModuleSetu
     public TColumn WithTooltipText(object tooltipText) => This with { TooltipText = tooltipText };
 
 }
-public abstract record PropertyControl() : DataGridColumn<PropertyControl> 
+public abstract record PropertyControl() : DataColumnControl<PropertyControl> 
 {
     public object Property { get; init; }
     public object Sortable { get; init; } = true;
@@ -52,13 +52,12 @@ public record PropertyControl<TProperty> : PropertyControl
 }
 
 
-public record TemplateColumnControl()
-    : ContainerControl<TemplateColumnControl, TemplateColumnSkin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new())
+public record TemplateColumnControl(params UiControl[] Data)
+    : DataColumnControl<TemplateColumnControl>
 {
-}
-
-public record TemplateColumnSkin : Skin<TemplateColumnSkin>
-{
-    public object Title { get; set; }
     public object Align { get; set; }
 }
+
+public record InfoButtonControl(object EntityType, object EntityId) : UiControl<InfoButtonControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion);
+public record EditButtonControl(object EntityType, object EntityId) : UiControl<InfoButtonControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion);
+public record DeleteButtonControl(object EntityType, object EntityId) : UiControl<InfoButtonControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion);
