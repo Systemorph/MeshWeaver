@@ -39,10 +39,15 @@ public partial class LayoutAreaPage
     protected override async Task OnParametersSetAsync()
     {
         await base.OnParametersSetAsync();
+
+        var id = (string)LayoutExtensions.Decode(Id);
+        var query = Navigation.ToAbsoluteUri(Navigation.Uri).Query;
+        if (!string.IsNullOrEmpty(query))
+            id += "?" + query;
+        
         Reference = new((string)LayoutExtensions.Decode(Area))
         {
-            Id = (string)LayoutExtensions.Decode(Id),
-            QueryString = Navigation.ToAbsoluteUri(Navigation.Uri).Query,
+            Id = id,
             Layout = StandardPageLayout.Page,
         };
 
@@ -66,7 +71,7 @@ public partial class LayoutAreaPage
         if (Reference.Id is null)
             return null;
 
-        return Reference.Id.ToString()!.Split("/").Last();
+        return Reference.Id.ToString()!.Split("?").First().Split("/").Last();
     }
 
 

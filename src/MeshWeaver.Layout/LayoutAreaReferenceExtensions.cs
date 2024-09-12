@@ -3,7 +3,7 @@
 public static class LayoutAreaReferenceExtensions
 {
     public static IReadOnlyDictionary<string, string> GetQueryStringParams(this LayoutAreaReference layoutAreaReference)
-        => ParseQueryString(layoutAreaReference.QueryString);
+        => ParseQueryString((string)layoutAreaReference.Id);
 
     private static Dictionary<string, string> ParseQueryString(string queryString)
     {
@@ -11,7 +11,7 @@ public static class LayoutAreaReferenceExtensions
 
         if (queryString is not null)
         {
-            queryString = queryString.TrimStart('?');
+            queryString = queryString.Split('?').Last();
             foreach (var pair in queryString.Split('&'))
             {
                 var keyValue = pair.Split('=');
