@@ -35,6 +35,7 @@ namespace MeshWeaver.Northwind.ViewModel
                         .AddRevenue()
                         .AddDiscountSummary()
                         .AddEmployeesOverview()
+                        .AddClientsOverview()
                         //.WithNavMenu((menu, _) => menu
                         //    .AddTypesCatalogs()
                         //)
