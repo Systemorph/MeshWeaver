@@ -2,7 +2,7 @@
 
 Knowing which categories are the most popular can help in designing targeted promotional strategies. Using the Sales by Category chart, you can define types of products with high daily consumption rates.
 
-@("SalesByCategory"){ QueryString = "Year=1998" }
+@("SalesByCategory"){ Id = "?Year=1998" }
 
 From this chart, you see that beverages are consumed at a rate of 500,000 items per month. This indicates a strong customer preference for these items. Less popular items like condiments have a lower consumption rate of 212,000 items per month.
 
@@ -14,4 +14,4 @@ The shop can optimize the layout by placing high-demand items like beverages and
 ## Financial Planning
 By understanding which categories drive the most sales, management can make more informed financial decisions. They can allocate budget more effectively, investing in high-performing categories while managing costs in lower-performing ones.
 
-@("TopProducts"){ QueryString = "Year=1998" }
+@("TopProducts"){ Id = "?Year=1998" }
