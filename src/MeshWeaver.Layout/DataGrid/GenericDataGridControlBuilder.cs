@@ -71,8 +71,8 @@ where TBuilder : DataGridControlBuilder<TBuilder>
 {
     public TBuilder This => (TBuilder)this;
 
-    public ImmutableList<PropertyControl> Columns { get; init; } =
-        ImmutableList<PropertyControl>.Empty;
+    public ImmutableList<PropertyColumnControl> Columns { get; init; } =
+        ImmutableList<PropertyColumnControl>.Empty;
 
 
     public DataGridControl Build() => Columns.Aggregate(new DataGridControl(Elements), (g,c) => g.WithColumn(c));

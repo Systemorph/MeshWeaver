@@ -78,7 +78,7 @@ public static class LayoutExtensions
             )
             .WithTypes(
                 typeof(LayoutAreaReference),
-                typeof(PropertyControl<>), // this is not a control
+                typeof(PropertyColumnControl<>), // this is not a control
                 typeof(Option), // this is not a control
                 typeof(Option<>), // this is not a control
                 typeof(Icon)

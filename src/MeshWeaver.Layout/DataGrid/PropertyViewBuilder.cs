@@ -11,10 +11,10 @@ namespace MeshWeaver.Layout.DataGrid;
 
 public record  PropertyViewBuilder(ITypeDefinition TypeDefinition)
 {
-    private static PropertyControl CreateControl(PropertyInfo property)
+    private static PropertyColumnControl CreateControl(PropertyInfo property)
     {
-        return (PropertyControl)
-            Activator.CreateInstance(typeof(PropertyControl<>).MakeGenericType(property.PropertyType));
+        return (PropertyColumnControl)
+            Activator.CreateInstance(typeof(PropertyColumnControl<>).MakeGenericType(property.PropertyType));
     }
 
 
@@ -22,9 +22,9 @@ public record  PropertyViewBuilder(ITypeDefinition TypeDefinition)
         => AddColumn(property, x => x);
 
 
-    public ImmutableList<PropertyControl> Properties { get; init; } = [];
+    public ImmutableList<PropertyColumnControl> Properties { get; init; } = [];
 
-    public PropertyViewBuilder AddColumn(PropertyInfo property, Func<PropertyControl, PropertyControl> config)
+    public PropertyViewBuilder AddColumn(PropertyInfo property, Func<PropertyColumnControl, PropertyColumnControl> config)
     {
         var displayAttribute = property.GetCustomAttribute<DisplayAttribute>();
         var displayFormat = property.GetCustomAttribute<DisplayFormatAttribute>();
@@ -59,6 +59,6 @@ public record PropertyViewBuilder<T>(ITypeDefinition TypeDefinition) : PropertyV
 {
     public PropertyViewBuilder<T> WithColumn<TProp>(Expression<Func<T, TProp>> propertySelector)
         => (PropertyViewBuilder<T>)AddColumn(propertySelector.GetProperty());
-    public PropertyViewBuilder<T> WithColumn<TProp>(Expression<Func<T, TProp>> propertySelector, Func<PropertyControl,PropertyControl> configuration)
+    public PropertyViewBuilder<T> WithColumn<TProp>(Expression<Func<T, TProp>> propertySelector, Func<PropertyColumnControl,PropertyColumnControl> configuration)
         => (PropertyViewBuilder<T>)AddColumn(propertySelector.GetProperty(), configuration);
 }

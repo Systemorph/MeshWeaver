@@ -36,17 +36,17 @@ public abstract record DataColumnControl<TColumn>() : UiControl<TColumn>(ModuleS
     public TColumn WithTooltipText(object tooltipText) => This with { TooltipText = tooltipText };
 
 }
-public abstract record PropertyControl() : DataColumnControl<PropertyControl> 
+public abstract record PropertyColumnControl() : DataColumnControl<PropertyColumnControl> 
 {
-    public object Property { get; init; }
+    public string Property { get; init; }
     public object Sortable { get; init; } = true;
     public object Format { get; init; }
 
-    public PropertyControl WithFormat(object format) => this with { Format = format };
+    public PropertyColumnControl WithFormat(object format) => this with { Format = format };
     public abstract Type GetPropertyType();
 }
 
-public record PropertyControl<TProperty> : PropertyControl
+public record PropertyColumnControl<TProperty> : PropertyColumnControl
 {
     public override Type GetPropertyType() => typeof(TProperty);
 }
