@@ -1,10 +1,14 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
+using System.Reflection;
 using System.Text.Json;
+using Json.More;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging.Serialization;
+using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Layout.Domain;
@@ -43,7 +47,7 @@ public static class EntityViews
                 .WithView((host, _) =>
                     host.Workspace
                         .GetStreamFor(new EntityReference(type, id), area.Stream.Subscriber)
-                        .Select(o => typeDefinition.DetailsLayout(o, idString)));
+                        .Select(changeItem => host.DetailsLayout(typeDefinition, changeItem.Value, idString)));
         }
         catch (Exception e)
         {
@@ -51,25 +55,60 @@ public static class EntityViews
         }
     }
 
-    public static object DetailsLayout(this ITypeDefinition typeDefinition, object o, string idString)
+    public static object DetailsLayout(this LayoutAreaHost host, ITypeDefinition typeDefinition, object o, string idString)
     {
         return Template.Bind(o,
             typeDefinition.GetKey(o).ToString(),
-            oo => new PropertyViewBuilder(typeDefinition).AutoMapProperties().Properties.Aggregate(Controls.LayoutGrid,
-                (g, p) => g
-                    .WithView(
-                        Controls.Stack
-                        .WithOrientation(Orientation.Horizontal).WithView(Controls.Label(p.Title))
-                        .WithView(GetDisplay(idString,p))
-                    )
-            )
+            oo =>
+                typeDefinition.Type.GetProperties()
+                    .Aggregate(Controls.LayoutGrid, host.MapToControl)
         );
     }
 
-    private static object GetDisplay(string id, PropertyControl propertyControl)
+    private static LayoutGridControl MapToControl(this LayoutAreaHost host, LayoutGridControl grid, PropertyInfo propertyInfo)
     {
-        return LayoutAreaReference.GetDataPointer(id, propertyControl.Property.ToString());
+        var dimensionAttribute = propertyInfo.GetCustomAttribute<DimensionAttribute>();
+        var jsonPointerReference = GetJsonPointerReference(propertyInfo);
+        var label = propertyInfo.GetCustomAttribute<DisplayAttribute>()?.Name ?? propertyInfo.Name.Wordify();
+
+        if (dimensionAttribute != null)
+        {
+            var dimension = host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttribute.Type);
+            return grid.WithView(host.Workspace
+                .GetStreamFor(new CollectionReference(host.Workspace.DataContext.GetCollectionName(dimensionAttribute.Type)), host.Stream.Subscriber)
+                .Select(changeItem =>
+                    Controls.Select(jsonPointerReference)
+                        .WithOptions(ConvertToOptions(changeItem.Value, dimension))))
+                        .WithLabel(label);
+
+        }
+
+        if (propertyInfo.PropertyType.IsNumber())
+            return grid.WithView(Controls.Number(jsonPointerReference).WithLabel(label));
+        if (propertyInfo.PropertyType == typeof(string))
+            return grid.WithView(Controls.TextBox(jsonPointerReference).WithLabel(label));
+
+        return grid.WithView(Controls.Html($"<p>{label}: {propertyInfo.GetValue(host)}</p>"));
     }
+
+    private static JsonPointerReference GetJsonPointerReference(PropertyInfo propertyInfo)
+    {
+        return new JsonPointerReference($"/{propertyInfo.Name.ToCamelCase()}");
+    }
+
+    private static IReadOnlyCollection<Option> ConvertToOptions(InstanceCollection instances, ITypeDefinition dimensionType)
+    {
+        var displayNameSelector =
+            typeof(INamed).IsAssignableFrom(dimensionType.Type)
+                ? (Func<object, string>)(x => ((INamed)x).DisplayName)
+                : o => o.ToString();
+
+        var keyType = dimensionType.GetKeyType();
+        var optionType = typeof(Option<>).MakeGenericType(keyType);
+        return instances.Instances
+            .Select(kvp => (Option)Activator.CreateInstance(optionType, [kvp.Key, kvp.Value])).ToArray();
+    }
+
 
 
     private static MarkdownControl Error(string message) => new($"[!CAUTION]\n{message}\n");

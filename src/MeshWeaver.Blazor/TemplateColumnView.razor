@@ -1,21 +1,4 @@
 @using System.Text.Json.Nodes
 @using MeshWeaver.Messaging.Serialization
 @inherits BlazorView<MeshWeaver.Layout.DataGrid.TemplateColumnControl, TemplateColumnView>
-@inject NavigationManager NavigationManager
 
-<TemplateColumn TGridItem="JsonObject">
-    <FluentButton aria-label="Details" IconEnd="@(new Icons.Regular.Size16.Info())" OnClick="@(() => NavigateToUrl(context, Info))" />
-    <FluentButton aria-label="Edit" IconEnd="@(new Icons.Regular.Size16.Edit())" OnClick="(() => NavigateToUrl(context, Edit))" />
-    <FluentButton aria-label="Delete" IconEnd="@(new Icons.Regular.Size16.Delete())" OnClick="@(() => NavigateToUrl(context, Delete))" />
-
-</TemplateColumn>
-@code {
-    private const string Info = nameof(Info);
-    private const string Edit = nameof(Edit);
-    private const string Delete = nameof(Delete);
-    private void NavigateToUrl(JsonObject obj, string area)
-    {
-        var reference = new LayoutAreaReference(area) { Id = $"{obj[EntitySerializationExtensions.TypeProperty]}/{obj[EntitySerializationExtensions.IdProperty]}" };
-        NavigationManager.NavigateTo(reference.ToAppHref(Stream.Owner));
-    }
-}

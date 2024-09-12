@@ -350,12 +350,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         controls.Should().BeEquivalentTo(
                 [
-                    new PropertyControl<string>
+                    new PropertyColumnControl<string>
                     {
                         Property = nameof(DataRecord.SystemName).ToCamelCase(),
                         Title = nameof(DataRecord.SystemName).Wordify()
                     },
-                    new PropertyControl<string>
+                    new PropertyColumnControl<string>
                     {
                         Property = nameof(DataRecord.DisplayName).ToCamelCase(),
                         Title = nameof(DataRecord.DisplayName).Wordify()
@@ -504,12 +504,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         grid.DataContext.Should().Be(LayoutAreaReference.GetDataPointer(nameof(CatalogView)));
         var benchmarks = new[]
         {
-            new PropertyControl<string>
+            new PropertyColumnControl<string>
             {
                 Property = nameof(DataRecord.SystemName).ToCamelCase(),
                 Title = nameof(DataRecord.SystemName).Wordify()
             },
-            new PropertyControl<string>
+            new PropertyColumnControl<string>
             {
                 Property = nameof(DataRecord.DisplayName).ToCamelCase(),
                 Title = nameof(DataRecord.DisplayName).Wordify()

@@ -1,6 +1,8 @@
 @using System.Text.Json.Nodes
 @using MeshWeaver.Layout.DataGrid
+@using MeshWeaver.Messaging.Serialization
 @inherits BlazorView<DataGridControl, DataGridView>
+@inject NavigationManager NavigationManager
 
 <div style="display: table; table-layout: fixed; width: 100%;">
     <div style="overflow-x: auto;">
@@ -13,13 +15,18 @@
                         Style="@Style">
             @foreach (var column in ViewModel.Columns)
             {
-                if(column is PropertyControl propertyColumn)
+                if(column is PropertyColumnControl propertyColumn)
                 {
-                    <PropertyColumnView ViewModel="@propertyColumn" Stream="@Stream" Area="@Area" />
+                    @((RenderFragment)(builder => RenderPropertyColumn(builder, propertyColumn)))
                 }
                 else if(column is TemplateColumnControl templateColumn)
                 {
-                    <TemplateColumnView ViewModel="@templateColumn" Stream="@Stream" Area="@Area" />
+                    <TemplateColumn TGridItem="JsonObject">
+                        <FluentButton aria-label="Details" IconEnd="@(new Icons.Regular.Size16.Info())" OnClick="@(() => NavigateToUrl(context, Details))" />
+                        <FluentButton aria-label="Edit" IconEnd="@(new Icons.Regular.Size16.Edit())" OnClick="(() => NavigateToUrl(context, Edit))" />
+                        <FluentButton aria-label="Delete" IconEnd="@(new Icons.Regular.Size16.Delete())" OnClick="@(() => NavigateToUrl(context, Delete))" />
+
+                    </TemplateColumn>
                 }
                 else
                 {
@@ -36,4 +43,5 @@
         <FluentPaginator State="@Pagination"/>
     }
 </div>
+
 

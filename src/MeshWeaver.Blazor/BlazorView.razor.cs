@@ -110,9 +110,29 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
         return Observable.Return(ConvertSingle(value, conversion));
     }
 
-    private IObservable<T> DataBind<T>(JsonPointerReference reference, Func<object, T> conversion) => 
+    private IObservable<T> DataBind<T>(JsonPointerReference reference, Func<object, T> conversion) =>
         Stream.GetStream<object>(JsonPointer.Parse(reference.Pointer))
             .Select(conversion ?? (x => (T)x));
+
+
+    protected T GetDataBoundValue<T>(object value)
+    {
+        if (value is JsonPointerReference reference)
+            return GetDataBoundValue<T>(reference);
+
+        if (value is string stringValue && typeof(T).IsEnum)
+            return (T)Enum.Parse(typeof(T), stringValue);
+
+        // Use Convert.ChangeType for flexible conversion
+        return (T)System.Convert.ChangeType(value, typeof(T));
+    }
+    private T GetDataBoundValue<T>(JsonPointerReference reference)
+    {
+        var ret = JsonPointer.Parse(reference.Pointer).Evaluate(Stream.Current.Value);
+        if (ret == null)
+            return default;
+        return ret.Value.Deserialize<T>(Stream.Hub.JsonSerializerOptions);
+    }
 
     protected string SubArea(string area)
         => $"{Area}/{area}";
