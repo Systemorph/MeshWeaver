@@ -32,21 +32,20 @@ public static class NorthwindDataCubeLayoutAreaExtensions
                             )
                             .Select(data => new NorthwindDataCube(data.order, data.detail, data.product))
                     )
-            )
-            .Select(data => 
-                data.ApplyFilter(area.Stream.Reference.GetQueryStringParams()));
+            );
 
-    private static IEnumerable<NorthwindDataCube> ApplyFilter(
-        this IEnumerable<NorthwindDataCube> data, 
-        IReadOnlyDictionary<string, string> queryParams)
+    public static IObservable<IEnumerable<NorthwindDataCube>> YearlyNorthwindData(this LayoutAreaHost host)
     {
-        if (queryParams is not null 
-            && queryParams.TryGetValue("Year", out var yearString) 
-            && int.TryParse(yearString, out var year))
+        var data = host.GetNorthwindDataCubeData();
+
+        var yearString = host.GetQueryStringParamValue("Year");
+
+        if (!string.IsNullOrEmpty(yearString) && int.TryParse(yearString, out var year))
         {
-            data = data.Where(d => d.OrderDate.Year == year);
+            data = data.Select(d => d.Where(x => x.OrderDate.Year == year));
         }
 
         return data;
     }
+
 }
