@@ -96,6 +96,16 @@ namespace MeshWeaver.Pivot.Aggregations
             };
         }
 
+        public static Aggregations<TTransformed, int> CountDistinctBy<TTransformed, TAggregate, TKey>(this Aggregations<TTransformed, TAggregate, TAggregate> _, Func<TTransformed, TKey> keySelector)
+        {
+            return new Aggregations<TTransformed, int>
+            {
+                Name = "CountDistinctBy",
+                Aggregation = enumerable => enumerable.DistinctBy(keySelector).Count(),
+                AggregationOfAggregates = counts => counts.Sum()
+            };
+        }
+
         #endregion
 
         #region Sum
