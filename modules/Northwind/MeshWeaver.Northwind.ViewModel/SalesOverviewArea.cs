@@ -12,8 +12,6 @@ namespace MeshWeaver.Northwind.ViewModel;
 
 public static class SalesOverviewArea
 {
-    private const string SalesOverviewDataCube = nameof(SalesOverviewDataCube);
-
     /// <summary>
     /// Adds the Sales by Category view to the specified layout.
     /// </summary>
@@ -28,7 +26,7 @@ public static class SalesOverviewArea
 
     public static IObservable<object> SalesByCategory(this LayoutAreaHost layoutArea, RenderingContext context)
     {
-        return layoutArea.GetNorthwindDataCubeData()
+        return layoutArea.YearlyNorthwindData()
             .Select(data =>
                 layoutArea.Workspace
                     .State
@@ -48,7 +46,7 @@ public static class SalesOverviewArea
 
     public static IObservable<object> TopProducts(this LayoutAreaHost layoutArea, RenderingContext context)
     {
-        return layoutArea.GetNorthwindDataCubeData()
+        return layoutArea.YearlyNorthwindData()
             .Select(data =>
                 layoutArea.Workspace
                     .State

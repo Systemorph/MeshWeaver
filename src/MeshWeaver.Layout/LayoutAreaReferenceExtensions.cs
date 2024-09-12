@@ -1,13 +1,27 @@
-﻿namespace MeshWeaver.Layout;
+﻿using MeshWeaver.Layout.Composition;
 
-public static class LayoutAreaReferenceExtensions
+namespace MeshWeaver.Layout;
+
+public static class LayoutAreaQueryString
 {
-    public static IReadOnlyDictionary<string, string> GetQueryStringParams(this LayoutAreaReference layoutAreaReference)
-        => ParseQueryString((string)layoutAreaReference.Id);
+    private const string QueryStringParams = nameof(QueryStringParams);
 
-    private static Dictionary<string, string> ParseQueryString(string queryString)
+    public static IReadOnlyCollection<KeyValuePair<string, string>> GetQueryStringParams(this LayoutAreaHost layoutArea)
+        => layoutArea.GetOrAddVariable(QueryStringParams, () => Parse((string)layoutArea.Stream.Reference.Id));
+
+    public static string GetQueryStringParamValue(this LayoutAreaHost layoutArea, string key)
+        => layoutArea.GetQueryStringParams()
+            .FirstOrDefault(x => x.Key == key).Value;
+    
+    public static IReadOnlyCollection<string> GetQueryStringParamValues(this LayoutAreaHost layoutArea, string key)
+        => layoutArea.GetQueryStringParams()
+            .Where(x => x.Key == key)
+            .Select(x => x.Value)
+            .ToArray();
+
+    public static IReadOnlyCollection<KeyValuePair<string, string>> Parse(string queryString)
     {
-        var queryParameters = new Dictionary<string, string>();
+        var values = new List<KeyValuePair<string, string>>();
 
         if (queryString is not null)
         {
@@ -20,11 +34,12 @@ public static class LayoutAreaReferenceExtensions
                 {
                     var key = Uri.UnescapeDataString(keyValue[0]);
                     var value = Uri.UnescapeDataString(keyValue[1]);
-                    queryParameters[key] = value;
+                    
+                    values.Add(new (key, value));
                 }
             }
         }
 
-        return queryParameters;
+        return values;
     }
 }
