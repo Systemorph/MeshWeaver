@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using MeshWeaver.Charting;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Pivot;
@@ -9,6 +10,8 @@ using MeshWeaver.Northwind.Domain;
 using MeshWeaver.Pivot.Builder;
 
 namespace MeshWeaver.Northwind.ViewModel;
+
+public record ProductsToolbar(int Category);
 
 public static class SalesOverviewArea
 {
@@ -41,52 +44,81 @@ public static class SalesOverviewArea
                                         .WithAlign(DataLabelsAlign.End))
                                 )
                     )
+                    .WithClass("chart sales-by-category-chart")
             );
     }
-
-    record ProductsToolbar(int Category);
 
     public static LayoutStackControl TopProducts(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         return Controls.Stack
-            .WithView(Controls.H3("Top products"))
-            .WithView(Controls.Toolbar.WithView(
+                .WithView(ProductsToolbar)
+                // .WithView((area, context) => area.GetDataStream<ProductsToolbar>(nameof(ProductsToolbar)))
+                .WithView(TopProductsChart)
+            ;
+    }
+
+    private static object ProductsToolbar(this LayoutAreaHost layoutArea, RenderingContext context)
+        => Controls.Toolbar.WithView((_, _) =>
+                layoutArea.GetProductCategories()
+                    .Select(categories =>
                     Template.Bind(new ProductsToolbar(0), nameof(ProductsToolbar),
                         tb =>
                             Controls.Select(tb.Category)
-                                .WithOptions(new Option[]
-                                {
-                                    new Option<int>(0, "All"),
-                                })
+                                .WithOptions(
+                                    categories.Select(c => new Option<int>(c.CategoryId, c.CategoryName))
+                                        .Prepend(new Option<int>(0, "All"))
+                                        .Cast<Option>()
+                                        .ToArray()
+                                )
                     )
                 )
-            )
-            .WithView((area, _) =>
-                area.GetProductsDataCube()
-                .Select(d =>
-                    area.Workspace
-                        .State
-                        .Pivot(d)
-                        .SliceColumnsBy(nameof(Product))
-                        .ToBarChart(builder => builder
-                            .WithOptions(o => o.OrderByValueDescending().TopValues(5))
-                            .WithChartBuilder(o =>
-                                o
-                                    .AsHorizontal()
-                                    .WithDataLabels()
-                            )
-                        )
-                ));
-    }
+                )
+        ;
 
-    private static IObservable<IDataCube<NorthwindDataCube>> GetProductsDataCube(this LayoutAreaHost layoutArea)
+    private static IObservable<IEnumerable<Category>> GetProductCategories(this LayoutAreaHost layoutArea)
+        => layoutArea.Workspace.ReduceToTypes(typeof(Category))
+            .DistinctUntilChanged()
+            .CombineLatest(layoutArea.GetDataCube()
+                    .Select(dataCube => dataCube.GetSlices(nameof(Category))
+                        .SelectMany(d => d.Tuple)
+                        .Select(tuple => tuple.Value)
+                        .Distinct()
+                    ),
+                (changeItem, values) => (changeItem, values))
+            .Select(tp => tp.changeItem.Value.GetData<Category>()
+                .Where(c => tp.values.Contains(c.CategoryId))
+                .OrderBy(c => c.CategoryName)
+            );
+
+    public static IObservable<object> TopProductsChart(this LayoutAreaHost layoutArea, RenderingContext context)
+        => layoutArea.GetProductsFilteredDataCube()
+            .Select(d => 
+                layoutArea.Workspace
+                    .State
+                    .Pivot(d)
+                    .SliceColumnsBy(nameof(Product))
+                    .ToBarChart(builder => builder
+                        .WithOptions(o => o.OrderByValueDescending().TopValues(5))
+                        .WithChartBuilder(o =>
+                            o
+                                .AsHorizontal()
+                                .WithDataLabels()
+                        )
+                    )
+                    .WithClass("chart top-products-chart")
+            );
+
+    private static IObservable<IDataCube<NorthwindDataCube>> GetDataCube(this LayoutAreaHost layoutArea)
+        => layoutArea.YearlyNorthwindData()
+            .Select(data => data.ToDataCube());
+
+    private static IObservable<IDataCube<NorthwindDataCube>> GetProductsFilteredDataCube(this LayoutAreaHost layoutArea)
         => layoutArea.YearlyNorthwindData()
             .CombineLatest(
-                layoutArea.GetDataStream<ProductsToolbar>(nameof(ProductsToolbar)).DistinctUntilChanged(),
+                layoutArea.GetDataStream<ProductsToolbar>(nameof(ProductsToolbar)),
                 (data, tb) => (data, tb))
-            .Select(x => x.data.ToDataCube()
-                .Filter(d => x.tb.Category == 0 || d.Category == x.tb.Category)
-            )
-            ;
+            .Select(x => x.data.Where(d => d.Category == x.tb.Category || x.tb.Category == 0)
+                .ToDataCube())
+    ;
 
 }
