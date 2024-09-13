@@ -1,4 +1,11 @@
-# Analytical Report on Annual Financial Performance of Product Categories
+# Analytical Report on Annual Financial Performance of Product Categories 2023
+
+<style>
+    .chart {
+        max-width: 650px;
+        max-height: 300px;
+    }
+</style>
 
 The annual financial report for the shop reveals insightful data on the sales performance of various product categories. The total sales for the year amounted to €2,531,586.09, distributed across eight product categories. Below is a detailed analysis of each category’s performance:
 
@@ -45,5 +52,7 @@ o	Analysis: Meat and poultry products account for a significant share of the sal
     - **Analysis:** Seafood holds a notable share of the sales, suggesting a healthy demand. The shop could explore opportunities to further boost this category through promotions and expanding the variety of seafood offered.
 
 The financial analysis reveals that beverages and dairy products are the leading categories, together accounting for nearly 40% of the total sales. Confections and meat/poultry also show strong performance, indicating their importance in the product lineup. While grains/cereals and produce have lower sales percentages, they present opportunities for growth through strategic initiatives. Overall, the diverse product mix contributes to a balanced revenue stream, with potential for further optimization and expansion in specific categories. The following chart shows the top products within selected categories.
+
+## Top Products by Sales Volume
 
 @("TopProducts"){ Id = "?Year=1998" }

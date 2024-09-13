@@ -1,4 +1,4 @@
-using MeshWeaver.Application.Styles;
+﻿using MeshWeaver.Application.Styles;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
@@ -63,7 +63,7 @@ public static class NorthwindDashboardArea
             .WithView(
                 Controls.Stack
                     .WithView(Controls.PaneHeader("Top products"))
-                    .WithView((area, ctx) => area.TopProducts(ctx)),
+                    .WithView(SalesOverviewArea.TopProducts),
                 skin => skin.WithXs(12).WithSm(6)
             );
     }
