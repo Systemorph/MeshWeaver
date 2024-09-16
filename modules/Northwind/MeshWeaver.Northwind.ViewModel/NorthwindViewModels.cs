@@ -24,6 +24,7 @@ namespace MeshWeaver.Northwind.ViewModel
         {
             return configuration
                     .AddNorthwindDocumentation()
+                    .WithDomainViews()
                     .AddLayout(layout =>
                     layout
                         .WithPageLayout()
@@ -32,7 +33,6 @@ namespace MeshWeaver.Northwind.ViewModel
                         .AddOrdersSummary()
                         .AddCustomerSummary()
                         .AddSupplierSummary()
-                        .WithDomainViews()
                         .WithNavMenu((menu, host, _) => host
                             .AddTypesCatalogs(menu)
                         )

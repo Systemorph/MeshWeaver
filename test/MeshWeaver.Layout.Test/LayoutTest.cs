@@ -172,7 +172,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Get toolbar and change value.
         var toolbarArea = $"{reference.Area}/Toolbar";
-        var yearTextBox = (TextBoxControl)await stream
+        var yearTextBox = (TextFieldControl)await stream
             .GetControlStream(toolbarArea)
             .Timeout(3.Seconds())
             .FirstAsync(x => x is not null);
@@ -257,7 +257,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var view = itemTemplate.View;
         var pointer = view.Should()
-            .BeOfType<TextBoxControl>()
+            .BeOfType<TextFieldControl>()
             .Which.Data.Should()
             .BeOfType<JsonPointerReference>()
             .Subject;

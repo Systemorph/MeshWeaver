@@ -3,7 +3,7 @@ using MeshWeaver.Domain;
 
 namespace MeshWeaver.Messaging.Serialization;
 
-public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
+internal class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
 {
     private static readonly Type[] BasicTypes =
     [
@@ -101,6 +101,8 @@ public class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
         return parent?.TryGetType(name, out typeDefinition) 
                ?? typeDefinition != null;
     }
+
+    public Type GetType(string name) => TryGetType(name, out var td) ? td.Type : null;
 
     public bool TryGetTypeName(Type type, out string typeName)
     {
