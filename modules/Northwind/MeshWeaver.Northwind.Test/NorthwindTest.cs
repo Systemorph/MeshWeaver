@@ -205,4 +205,29 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             }
         }
     }
+
+    [Fact]
+    public async Task TopProductsChart()
+    {
+        var workspace = GetHost().GetWorkspace();
+        await workspace.Initialized;
+
+        const string ViewName = nameof(SupplierSummaryArea.SupplierSummary);
+        var controlName = $"{ViewName}/1/{nameof(SupplierSummaryArea.SupplierSummaryGrid)}"; // TODO V10: we need a better way to address sub-areas (2024/08/12, Dmitry Kalabin)
+        var stream = workspace.GetStreamFor(new LayoutAreaReference(ViewName), new HostAddress());
+
+        var control = await stream.GetControlAsync(controlName);
+        var grid = control.Should().BeOfType<GridControl>().Subject;
+        grid.Data.Should()
+            .BeOfType<GridOptions>()
+            .Which.RowData.Should()
+            .BeOfType<List<object>>()
+            .Which.Should()
+            .HaveCountGreaterThan(2)
+            .And.Subject.First()
+            .Should()
+            .BeOfType<GridRow>()
+            .Which.RowGroup.DisplayName.Should()
+            .MatchRegex(@"[^0-9]+"); // should contain at least one non-numeric character, i.e. dimsnsion is matched.
+    }
 }
