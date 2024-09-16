@@ -63,7 +63,7 @@ public static class NorthwindDashboardArea
             .WithView(
                 Controls.Stack
                     .WithView(Controls.PaneHeader("Top products"))
-                    .WithView(ProductsOverviewArea.TopProductsChart),
+                    .WithView(ProductOverviewArea.ProductOverview),
                 skin => skin.WithXs(12).WithSm(6)
             );
     }
