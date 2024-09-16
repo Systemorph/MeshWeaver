@@ -30,7 +30,7 @@ namespace MeshWeaver.Northwind.ViewModel
             ShipCountry = order.ShipCountry;
             Product = product.ProductId;
             ProductName = product.ProductName;
-            UnitPrice = details.UnitPrice;
+            UnitPrice = product.UnitPrice;
             Quantity = details.Quantity;
             Discount = details.Discount;
             Region = order.ShipRegion;
@@ -42,7 +42,7 @@ namespace MeshWeaver.Northwind.ViewModel
             UnitsOnOrder = product.UnitsOnOrder;
             ReorderLevel = product.ReorderLevel;
             Discontinued = product.Discontinued;
-            Amount = details.UnitPrice * details.Quantity * (1 - details.Discount);
+            Amount = product.UnitPrice * details.Quantity * (1 - details.Discount);
         }
     
         /// <summary>
