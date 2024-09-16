@@ -48,4 +48,17 @@ public static class NorthwindDataCubeLayoutAreaExtensions
         return data;
     }
 
+    public static IObservable<IEnumerable<NorthwindDataCube>> WithPrevYearNorthwindData(this LayoutAreaHost host)
+    {
+        var data = host.GetNorthwindDataCubeData();
+
+        var yearString = host.GetQueryStringParamValue("Year");
+
+        if (!string.IsNullOrEmpty(yearString) && int.TryParse(yearString, out var year))
+        {
+            data = data.Select(d => d.Where(x => x.OrderDate.Year == year || x.OrderDate.Year == year - 1));
+        }
+
+        return data;
+    }
 }

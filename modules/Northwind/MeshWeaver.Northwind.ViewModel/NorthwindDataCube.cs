@@ -23,6 +23,7 @@ namespace MeshWeaver.Northwind.ViewModel
             Employee = order.EmployeeId;
             OrderDate = order.OrderDate;
             OrderMonth = order.OrderDate.ToString("yy-MM");
+            OrderYear = order.OrderDate.ToString("yyyy");
             RequiredDate = order.RequiredDate;
             ShippedDate = order.ShippedDate;
             ShipVia = order.ShipVia;
@@ -94,6 +95,13 @@ namespace MeshWeaver.Northwind.ViewModel
         [NotVisible]
         [Dimension(typeof(string), nameof(OrderMonth))]
         public string OrderMonth { get; init; }
+
+        /// <summary>
+        /// Gets the year when the order was placed.
+        /// </summary>
+        [NotVisible]
+        [Dimension(typeof(string), nameof(OrderYear))]
+        public string OrderYear { get; init; }
 
         /// <summary>
         /// Gets the date by which the order is required.
