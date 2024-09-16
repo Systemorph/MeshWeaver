@@ -29,7 +29,7 @@ namespace MeshWeaver.Northwind.Domain
         int SupplierId,
         int CategoryId,
         string QuantityPerUnit,
-        decimal UnitPrice,
+        double UnitPrice,
         short UnitsInStock,
         short UnitsOnOrder,
         short ReorderLevel,

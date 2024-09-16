@@ -1,17 +1,15 @@
 ﻿using System.Reactive.Linq;
-using MeshWeaver.Charting.Models;
-using MeshWeaver.Charting.Pivot;
-using MeshWeaver.DataCubes;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Northwind.Domain;
-using MeshWeaver.Pivot.Builder;
 
 namespace MeshWeaver.Northwind.ViewModel;
 
 public static class ProductOverviewArea
 {
-    public static LayoutDefinition AddProductsOverview(this LayoutDefinition layout)
+    public static LayoutDefinition AddProductOverview(this LayoutDefinition layout)
         => 
             layout
                 .WithView(nameof(ProductOverview), ProductOverview)
@@ -20,22 +18,36 @@ public static class ProductOverviewArea
     public static object ProductOverview(this LayoutAreaHost layoutArea, RenderingContext context) =>
         Controls.Stack
             .WithView(ProductOverviewToolbarArea.ProductOverviewToolbar)
-            .WithView((area, ctx) => layoutArea.YearlyDataBySelectedCategory()
-                .Select(d =>
-                    layoutArea.Workspace
-                        .State
-                        .Pivot(d.ToDataCube())
-                        .SliceColumnsBy(nameof(Product))
-                        .ToBarChart(builder => builder
-                            .WithOptions(o => o.OrderByValueDescending().TopValues(5))
-                            .WithChartBuilder(o =>
-                                o
-                                    .AsHorizontal()
-                                    .WithDataLabels()
-                            )
-                        )
-                        .WithClass("chart top-products-chart")
-                ));
+            .WithView(ProductGrid);
+
+    private static IObservable<object> ProductGrid(this LayoutAreaHost layoutArea, RenderingContext context)
+        => layoutArea.ProductOverviewData()
+            // .Select(data => data.ToMarkdown())
+            .Select(data => 
+                layoutArea.ToDataGrid(data.ToArray(),
+                    config => config.AutoMapColumns()
+                    )
+                )
+        ;
+
+    private static IObservable<IEnumerable<ProductOverviewItem>> ProductOverviewData(this LayoutAreaHost layoutArea)
+        => layoutArea.YearlyDataBySelectedCategory()
+            .CombineLatest(layoutArea.Workspace.ReduceToTypes(typeof(Category)),
+                (data, changeItem) => (data, changeItem))
+            .Select(tuple =>
+                tuple.data.GroupBy(data => data.Product)
+                .Select(g => new ProductOverviewItem
+                {
+                    ProductId = g.Key,
+                    ProductName = g.Select(x => x.ProductName).FirstOrDefault(),
+                    CategoryName = layoutArea.Workspace.GetData<Category>(g.Select(x => x.Category).FirstOrDefault())?.CategoryName,
+                    UnitPrice = g.Select(x => x.UnitPrice).FirstOrDefault(),
+                    UnitsSold = g.Sum(x => x.Quantity),
+                    DiscountGiven = g.Sum(x => x.UnitPrice * x.Quantity * x.Discount),
+                    TotalAmount = g.Sum(x => x.Amount),
+                })
+                .OrderByDescending(x => x.TotalAmount)
+            );
 
     private static IObservable<IEnumerable<NorthwindDataCube>> YearlyDataBySelectedCategory(this LayoutAreaHost layoutArea)
         => layoutArea.YearlyNorthwindData()
