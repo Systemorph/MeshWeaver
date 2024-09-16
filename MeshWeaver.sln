@@ -201,6 +201,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Portal", "monoli
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Overview", "modules\MeshWeaver.Overview\MeshWeaver.Overview.csproj", "{9E11B94D-DC0F-4208-878C-616C6367B70A}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Northwind.Test", "modules\Northwind\MeshWeaver.Northwind.Test\MeshWeaver.Northwind.Test.csproj", "{884BA2C1-AD25-44B7-8421-644E42807087}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -555,6 +557,10 @@ Global
 		{9E11B94D-DC0F-4208-878C-616C6367B70A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{9E11B94D-DC0F-4208-878C-616C6367B70A}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{9E11B94D-DC0F-4208-878C-616C6367B70A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{884BA2C1-AD25-44B7-8421-644E42807087}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{884BA2C1-AD25-44B7-8421-644E42807087}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{884BA2C1-AD25-44B7-8421-644E42807087}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{884BA2C1-AD25-44B7-8421-644E42807087}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -596,6 +602,7 @@ Global
 		{E245F8BD-8341-41DD-9D0E-2569208958F8} = {80489276-45B5-4FCF-ADDF-980A56D4D2E9}
 		{1471FB82-912E-411A-9141-096E0AECAAAE} = {4E1A12BB-5348-4DA4-B05F-F831DC16F7DE}
 		{9E11B94D-DC0F-4208-878C-616C6367B70A} = {BFCF5E5D-1964-434B-BB7E-97F24C884FBC}
+		{884BA2C1-AD25-44B7-8421-644E42807087} = {80489276-45B5-4FCF-ADDF-980A56D4D2E9}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {331ADDC7-02A4-4F0E-8C47-2060003082F2}
