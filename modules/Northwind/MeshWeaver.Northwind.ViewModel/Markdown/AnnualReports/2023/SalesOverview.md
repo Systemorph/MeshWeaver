@@ -56,3 +56,8 @@ o	Analysis: Meat and poultry products account for a significant share of the sal
     - **Analysis:** Seafood holds a notable share of the sales, suggesting a healthy demand. The shop could explore opportunities to further boost this category through promotions and expanding the variety of seafood offered.
 
 The financial analysis reveals that beverages and dairy products are the leading categories, together accounting for nearly 40% of the total sales. Confections and meat/poultry also show strong performance, indicating their importance in the product lineup. While grains/cereals and produce have lower sales percentages, they present opportunities for growth through strategic initiatives. Overall, the diverse product mix contributes to a balanced revenue stream, with potential for further optimization and expansion in specific categories.
+
+
+# Sales by Category comparison with Previous year
+
+@("SalesByCategoryWithPrevYear"){ Id = "?Year=1998" }
