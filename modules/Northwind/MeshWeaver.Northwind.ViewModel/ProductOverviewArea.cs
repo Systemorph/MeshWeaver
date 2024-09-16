@@ -27,6 +27,7 @@ public static class ProductOverviewArea
                 layoutArea.ToDataGrid(data.ToArray(),
                     config => config.AutoMapColumns()
                     )
+                    .WithClass("product-overview")
                 )
         ;
 
