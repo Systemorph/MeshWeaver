@@ -19,7 +19,7 @@ public static class ProductOverviewToolbarArea
                             Controls.Select(tb.Category)
                                 .WithOptions(
                                     Enumerable.Select<Category, Option<int>>(categories, c => new Option<int>(c.CategoryId, c.CategoryName))
-                                        .Prepend(new Option<int>(0, "All"))
+                                        .Prepend(new Option<int>(0, "All Categories"))
                                         .Cast<Option>()
                                         .ToArray()
                                 )

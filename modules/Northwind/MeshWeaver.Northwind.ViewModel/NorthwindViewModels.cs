@@ -32,7 +32,7 @@ namespace MeshWeaver.Northwind.ViewModel
                         .AddCustomerSummary()
                         .AddSupplierSummary()
                         .AddSalesOverview()
-                        .AddProductsOverview()
+                        .AddProductOverview()
                         .AddRevenue()
                         .AddDiscountSummary()
                         .AddEmployeesOverview()
