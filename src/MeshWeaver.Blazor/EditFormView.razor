@@ -1,0 +1,16 @@
+@using System.Text.Json.Nodes
+@using Microsoft.AspNetCore.Components.Forms
+@inherits SkinnedView<EditFormControl, EditFormSkin, EditFormView>
+
+<EditForm Model="@Model">
+    <DispatchView ViewModel="@ViewModel" Area="@Area" Stream="@Stream"></DispatchView>
+</EditForm>
+
+@code
+{
+    private JsonObject Model { get; set; }
+    protected override void BindData()
+    {
+        DataBind(new JsonPointerReference(ViewModel.DataContext), x => x.Model);
+    }
+}

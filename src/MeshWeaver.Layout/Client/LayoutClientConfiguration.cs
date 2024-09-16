@@ -50,6 +50,21 @@ public record LayoutClientConfiguration(IMessageHub Hub)
                 { nameof(Area), area }
             }
         );
+    public static ViewDescriptor StandardView<TViewModel>(
+        TViewModel instance,
+        Type viewType,
+        ISynchronizationStream<JsonElement, LayoutAreaReference> stream,
+        string area
+    ) =>
+        new(
+            viewType,
+            new Dictionary<string, object>
+            {
+                { ViewModel, instance },
+                { nameof(Stream), stream },
+                { nameof(Area), area }
+            }
+        );
     public static ViewDescriptor StandardSkinnedView<TView>(Skin skin, ISynchronizationStream<JsonElement, LayoutAreaReference> stream, string area, UiControl control)
     {
         var ret = StandardView<UiControl, TView>(control, stream, area);

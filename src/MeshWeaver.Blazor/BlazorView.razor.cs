@@ -10,7 +10,6 @@ using MeshWeaver.Data.Serialization;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
-using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor;
 
@@ -100,7 +99,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
     {
         StateHasChanged();
     }
-    protected IObservable<T> Convert<T>(object value,  Func<object, T> conversion = null)
+    protected IObservable<T> Convert<T>(object value, Func<object, T> conversion = null)
     {
         if (value is JsonPointerReference reference)
         {
@@ -112,7 +111,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
 
     private IObservable<T> DataBind<T>(JsonPointerReference reference, Func<object, T> conversion) =>
         Stream.GetStream<object>(JsonPointer.Parse(reference.Pointer))
-            .Select(conversion ?? (x => (T)x));
+            .Select(conversion ?? (x => ConvertSingle<T>(x, null)));
 
 
     protected T GetDataBoundValue<T>(object value)
@@ -139,7 +138,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
 
     private T ConvertSingle<T>(object value, Func<object, T> conversion)
     {
-        if(conversion != null)
+        if (conversion != null)
             return conversion.Invoke(value);
         return value switch
         {
@@ -203,9 +202,9 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
         var pointer = JsonPointer.Parse(ViewModel.DataContext + reference.Pointer);
 
         var existing = pointer.Evaluate(current);
-        if (value == null) 
-            return existing == null 
-                ? null 
+        if (value == null)
+            return existing == null
+                ? null
                 : new JsonPatch(PatchOperation.Remove(pointer));
 
         var valueSerialized = JsonSerializer.SerializeToNode(value, Hub.JsonSerializerOptions);

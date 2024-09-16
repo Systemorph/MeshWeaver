@@ -9,6 +9,7 @@ public interface ITypeRegistry
     KeyFunction GetKeyFunction(Type type);
     ITypeDefinition WithKeyFunction(string collection, KeyFunction keyFunction);
     bool TryGetType(string name, out ITypeDefinition type);
+    Type GetType(string name);
     bool TryGetTypeName(Type type, out string typeName);
     public ITypeRegistry WithTypesFromAssembly<T>(Func<Type, bool> filter)
         => WithTypesFromAssembly(typeof(T), filter);
