@@ -10,14 +10,14 @@ public record ProductOverviewItem
     
     public string CategoryName { get; init; }
 
-    [DisplayFormat(DataFormatString = "C")]
+    [DisplayFormat(DataFormatString = "N2")]
     public double UnitPrice { get; init; }
 
     public int UnitsSold { get; init; }
 
-    [DisplayFormat(DataFormatString = "C")]
+    [DisplayFormat(DataFormatString = "N2")]
     public double DiscountGiven { get; init; }
 
-    [DisplayFormat(DataFormatString = "C")]
+    [DisplayFormat(DataFormatString = "N2")]
     public double TotalAmount { get; init; }
 }
