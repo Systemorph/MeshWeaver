@@ -9,11 +9,25 @@ using MeshWeaver.Pivot.Builder;
 
 namespace MeshWeaver.Northwind.ViewModel;
 
+/// <summary>
+/// Provides methods to add and manage discount summary areas in the layout.
+/// </summary>
 public static class DiscountSummaryArea
 {
+    /// <summary>
+    /// Adds a discount summary view to the specified layout.
+    /// </summary>
+    /// <param name="layout">The layout definition to which the discount summary view will be added.</param>
+    /// <returns>The updated layout definition with the discount summary view.</returns>
     public static LayoutDefinition AddDiscountSummary(this LayoutDefinition layout)
         => layout.WithView(nameof(DiscountSummary), Controls.Stack.WithView(DiscountSummary));
 
+    /// <summary>
+    /// Generates a discount summary view for the specified layout area and rendering context.
+    /// </summary>
+    /// <param name="layoutArea">The layout area host.</param>
+    /// <param name="context">The rendering context.</param>
+    /// <returns>An observable sequence of objects representing the discount summary view.</returns>
     public static IObservable<object> DiscountSummary(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
             .Select(data =>
