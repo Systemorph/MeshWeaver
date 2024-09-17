@@ -26,22 +26,15 @@ namespace MeshWeaver.Northwind.ViewModel
                     .AddLayout(layout =>
                     layout
                         .WithPageLayout()
+                        .AddAnnualReport()
                         .AddDashboard()
                         .AddProductsSummary()
                         .AddOrdersSummary()
                         .AddCustomerSummary()
                         .AddSupplierSummary()
-                        .AddSalesOverview()
-                        .AddSalesComparison()
-                        .AddProductOverview()
-                        .AddRevenue()
-                        .AddDiscountSummary()
-                        .AddEmployeesOverview()
-                        .AddClientsOverview()
-                        .AddOrdersOverview()
-                        //.WithNavMenu((menu, _) => menu
-                        //    .AddTypesCatalogs()
-                        //)
+                //.WithNavMenu((menu, _) => menu
+                //    .AddTypesCatalogs()
+                //)
 
                 )
                 ;
