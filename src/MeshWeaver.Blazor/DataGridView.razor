@@ -22,10 +22,9 @@
                 else if(column is TemplateColumnControl templateColumn)
                 {
                     <TemplateColumn TGridItem="JsonObject">
-                        <FluentButton aria-label="Details" IconEnd="@(new Icons.Regular.Size16.Info())" OnClick="@(() => NavigateToUrl(context, Details))" />
-                        <FluentButton aria-label="Edit" IconEnd="@(new Icons.Regular.Size16.Edit())" OnClick="(() => NavigateToUrl(context, Edit))" />
-                        <FluentButton aria-label="Delete" IconEnd="@(new Icons.Regular.Size16.Delete())" OnClick="@(() => NavigateToUrl(context, Delete))" />
-
+                        <FluentButton aria-label="Details" IconEnd="@(new Icons.Regular.Size16.Edit())" OnClick="@(() => NavigateToUrl(context, Details))" />
+@*                         <FluentButton aria-label="Delete" IconEnd="@(new Icons.Regular.Size16.Delete())" OnClick="@(() => NavigateToUrl(context, Delete))" />
+ *@
                     </TemplateColumn>
                 }
                 else

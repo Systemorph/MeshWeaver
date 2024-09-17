@@ -28,7 +28,6 @@ public record  PropertyViewBuilder(ITypeDefinition TypeDefinition)
     {
         var displayAttribute = property.GetCustomAttribute<DisplayAttribute>();
         var displayFormat = property.GetCustomAttribute<DisplayFormatAttribute>();
-        var description = TypeDefinition.GetDescription(property.Name);
         var ret = CreateControl(property);
         return this with
         {
@@ -37,8 +36,6 @@ public record  PropertyViewBuilder(ITypeDefinition TypeDefinition)
                     Property = property.Name.ToCamelCase(),
                     Title = displayAttribute?.Name ?? property.Name.Wordify(),
                     Format = displayFormat?.DataFormatString ?? ret.Format,
-                    Tooltip = description == null ? null : true,
-                    TooltipText = description,
                 })
             )
         };

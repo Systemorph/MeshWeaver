@@ -67,7 +67,6 @@ public static class BlazorClientRegistry
             MarkdownControl markdown => StandardView<MarkdownControl, MarkdownView>(markdown, stream, area),
             NamedAreaControl namedView => StandardView<NamedAreaControl, NamedAreaView>(namedView, stream, area),
             SpacerControl spacer => StandardView<SpacerControl, SpacerView>(spacer, stream, area),
-            TemplateColumnControl template => StandardView<TemplateColumnControl, TemplateColumnView>(template, stream, area),
             _ => DelegateToDotnetInteractive(instance, stream, area),
         };
     }
