@@ -17,5 +17,7 @@ public static class FluentIcons
     public static Icon Save => new (Provider, "Save");
     public static Icon Cancel => new(Provider, "Cancel");
     public static Icon Code => new(Provider, "Code");
+    public static Icon Document => new(Provider, "Document");
+    public static Icon Folder => new(Provider, "Folder");
 
 }
