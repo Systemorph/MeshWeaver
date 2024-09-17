@@ -9,9 +9,7 @@ public interface ITypeDefinition
     object Icon { get; }
     object GetKey(object instance);
     int? Order { get; }
-    string Description { get; }
     string GroupName { get; }
-    string GetDescription(string memberName);
     Type GetKeyType();
 
 }

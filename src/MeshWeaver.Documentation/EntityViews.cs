@@ -1,12 +1,9 @@
-﻿using System.Reactive.Linq;
-using System.Text.Json;
+﻿using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Domain.Layout.Documentation;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
-using MeshWeaver.Messaging.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Domain.Layout;
@@ -20,7 +17,7 @@ public static class EntityViews
             .WithView(nameof(Catalog), Catalog)
             .WithView(nameof(Details), Details)
             )
-            .WithServices(services => services.AddSingleton<IDomainLayoutService>(sp => new DomainLayoutService((configuration ?? (x => x)).Invoke(new(sp.GetRequiredService<IDocumentationService>())))));
+            .WithServices(services => services.AddSingleton<IDomainLayoutService>(sp => new DomainLayoutService((configuration ?? (x => x)).Invoke(new(sp.GetRequiredService<IMessageHub>())))));
 
 
     public const string Type = nameof(Type);
@@ -65,19 +62,10 @@ public static class EntityViews
         if (typeDefinition == null)
             throw new DataSourceConfigurationException(
                 $"Collection {collection} is not mapped in Address {area.Hub.Address}.");
-        return Controls.Stack
-                .WithView(Controls.Title(typeDefinition.DisplayName, 1))
-                .WithView(Controls.Html(typeDefinition.Description))
-                .WithView((a, _) => a
-                    .Workspace
-                    .Stream
-                    .Reduce(new CollectionReference(collection), area.Stream.Subscriber)
-                    .Select(changeItem =>
-                        typeDefinition.ToDataGrid(changeItem.Value.Instances.Values.Select(o => typeDefinition.SerializeEntityAndId(o, area.Hub.JsonSerializerOptions)))
-                            .WithColumn(new TemplateColumnControl(new InfoButtonControl(typeDefinition.CollectionName, new JsonPointerReference(EntitySerializationExtensions.IdProperty))))
-                    )
-                )
-            ;
+
+        var context = new EntityRenderingContext(area, typeDefinition, null, null);
+        return area.Hub.ServiceProvider.GetRequiredService<IDomainLayoutService>().GetCatalog(context);
+
     }
 
     public static NavMenuControl AddTypesCatalogs(this LayoutAreaHost host, NavMenuControl menu)

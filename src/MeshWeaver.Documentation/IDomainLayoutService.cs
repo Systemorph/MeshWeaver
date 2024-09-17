@@ -7,7 +7,11 @@ using MeshWeaver.Data;
 using MeshWeaver.Domain.Layout.Documentation;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.DataGrid;
+using MeshWeaver.Messaging;
+using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.Utils;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Domain.Layout;
 
@@ -15,6 +19,7 @@ public interface IDomainLayoutService
 {
     object Render(EntityRenderingContext context);
 
+    object GetCatalog(EntityRenderingContext context);
 }
 
 public class DomainLayoutService(DomainViewConfiguration configuration) : IDomainLayoutService
@@ -23,24 +28,61 @@ public class DomainLayoutService(DomainViewConfiguration configuration) : IDomai
         configuration.ViewBuilders
             .Select(x => x.Invoke(context))
             .FirstOrDefault(x => x != null);
+
+    public object GetCatalog(EntityRenderingContext context)
+    {
+        return configuration.GetCatalog(context);
+
+    }
 }
 public record DomainViewConfiguration
 {
-    private readonly IDocumentationService documentationService;
+    public readonly IMessageHub Hub;
+    public readonly IDocumentationService DocumentationService;
 
-    public DomainViewConfiguration(IDocumentationService documentationService)
+    public DomainViewConfiguration(IMessageHub hub)
     {
-        this.documentationService = documentationService;
+        this.Hub = hub;
+        DocumentationService = hub.ServiceProvider.GetRequiredService<IDocumentationService>();
         ViewBuilders = [DefaultViewBuilder];
         PropertyViewBuilders = [MapToControl];
+        CatalogBuilders = [DefaultCatalog];
     }
+
+    private object DefaultCatalog(EntityRenderingContext context)
+    {
+        var typeDefinition = context.TypeDefinition;
+        var ret = Controls.Stack
+            .WithView(Controls.Title(typeDefinition.DisplayName, 2));
+        var description = DocumentationService.GetDocumentation(typeDefinition.Type)?.Summary?.Text;
+        if(!string.IsNullOrWhiteSpace(description))
+            ret = ret.WithView(Controls.Html($"<p>{description}</p>"));
+        return ret
+                .WithView((a, _) => a
+                    .Workspace
+                    .Stream
+                    .Reduce(new CollectionReference(typeDefinition.CollectionName), context.Host.Stream.Subscriber)
+                    .Select(changeItem =>
+                        typeDefinition.ToDataGrid(changeItem.Value.Instances.Values.Select(o => typeDefinition.SerializeEntityAndId(o, context.Host.Hub.JsonSerializerOptions)))
+                            .WithColumn(new TemplateColumnControl(new InfoButtonControl(typeDefinition.CollectionName, new JsonPointerReference(EntitySerializationExtensions.IdProperty))))
+                    )
+                )
+            ;
+
+    }
+
     internal ImmutableList<Func<EntityRenderingContext, object>> ViewBuilders { get; init; }
+    internal ImmutableList<Func<EditFormControl, PropertyRenderingContext, EditFormControl>> PropertyViewBuilders { get; init; } = [];
+    internal ImmutableList<Func<EntityRenderingContext, object>> CatalogBuilders { get; init; } = [];
 
     private object DefaultViewBuilder(EntityRenderingContext context)
     {
-        return new LayoutStackControl()
-            .WithView(Controls.Title(context.TypeDefinition.DisplayName, 1))
-            .WithView(Controls.Html(context.TypeDefinition.Description))
+        var ret = new LayoutStackControl()
+            .WithView(Controls.Title(context.TypeDefinition.DisplayName, 1));
+        var description = DocumentationService.GetDocumentation(context.TypeDefinition.Type)?.Summary?.Text;
+        if(!string.IsNullOrWhiteSpace(description))
+            ret = ret.WithView(Controls.Html($"<p>{description}</p>"));
+        return ret
             .WithView((host, _) =>
                 host.Workspace
                     .GetStreamFor(new EntityReference(context.TypeDefinition.CollectionName, context.Id), host.Stream.Subscriber)
@@ -49,7 +91,6 @@ public record DomainViewConfiguration
     }
 
 
-    internal ImmutableList<Func<EditFormControl, PropertyRenderingContext, EditFormControl>> PropertyViewBuilders { get; init; } = [];
 
     public DomainViewConfiguration WithView(Func<EntityRenderingContext, object> viewBuilder)
         => this with { ViewBuilders = ViewBuilders.Add(viewBuilder) };
@@ -78,7 +119,7 @@ public record DomainViewConfiguration
         var dimensionAttribute = propertyInfo.GetCustomAttribute<DimensionAttribute>();
         var jsonPointerReference = GetJsonPointerReference(propertyInfo);
         var label = propertyInfo.GetCustomAttribute<DisplayAttribute>()?.Name ?? propertyInfo.Name.Wordify();
-        var description = "asdf";//documentationService.GetSource()
+        var description = DocumentationService.GetDocumentation(context.Property)?.Summary?.Text;
 
         Func<EditFormItemSkin, EditFormItemSkin> skinConfiguration = skin => skin with{Name = propertyInfo.Name.ToCamelCase(), Description = description, Label = label};
         if (dimensionAttribute != null)
@@ -140,6 +181,11 @@ public record DomainViewConfiguration
             .Select(kvp => (Option)Activator.CreateInstance(optionType, [kvp.Key, kvp.Value])).ToArray();
     }
 
+
+    public object GetCatalog(EntityRenderingContext context) =>
+        CatalogBuilders
+            .Select(x => x.Invoke(context))
+            .FirstOrDefault(x => x != null);
 }
 
 public record EntityRenderingContext(LayoutAreaHost Host, ITypeDefinition TypeDefinition, string IdString, object Id)
