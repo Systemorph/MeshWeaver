@@ -2,30 +2,30 @@
 using System.Reflection;
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Documentation;
+namespace MeshWeaver.Domain.Layout.Documentation;
 
 public record DocumentationContext(IMessageHub Hub)
 {
-    public ImmutableDictionary<(string Type, string Id), DocumentationSource> Sources { get;  private set; } = ImmutableDictionary<(string Type, string Id), DocumentationSource>.Empty;
+    public ImmutableDictionary<(string Type, string Id), DocumentationSource> Sources { get; private set; } = ImmutableDictionary<(string Type, string Id), DocumentationSource>.Empty;
 
     public DocumentationSource GetSource(string type, string id)
     {
-        var key = (type,id);
-        if(Sources.TryGetValue(key, out var source))
+        var key = (type, id);
+        if (Sources.TryGetValue(key, out var source))
             return source;
-        var ret = TryCreateSource(type,id);
+        var ret = TryCreateSource(type, id);
         Sources = Sources.Add(key, ret);
         return ret;
     }
 
 
 
-    private DocumentationSource TryCreateSource(string type, string id) => 
+    private DocumentationSource TryCreateSource(string type, string id) =>
         Factories
             .Select(x => x.Invoke(type, id))
             .FirstOrDefault(x => x != null);
 
-    private ImmutableList<Func<string,string,DocumentationSource>> Factories { get; init; }
+    private ImmutableList<Func<string, string, DocumentationSource>> Factories { get; init; }
     = [
         (type, id) =>
             type == PdbDocumentationSource.Pdb ? new PdbDocumentationSource(id): null,
@@ -53,7 +53,7 @@ public abstract record DocumentationSource<TSource>(string Id) : DocumentationSo
     where TSource : DocumentationSource<TSource>
 {
     public TSource This => (TSource)this;
-    
+
     public TSource WithXmlComments(string xmlCommentPath = null)
         => This with { XmlComments = XmlComments.Add(xmlCommentPath ?? $"{Id}.xml") };
 

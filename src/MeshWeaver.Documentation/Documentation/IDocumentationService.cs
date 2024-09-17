@@ -1,6 +1,6 @@
 ﻿using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Documentation;
+namespace MeshWeaver.Domain.Layout.Documentation;
 
 public interface IDocumentationService
 {

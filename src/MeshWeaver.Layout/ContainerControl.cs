@@ -230,6 +230,6 @@ public abstract record ContainerControlWithItemSkin<TControl,TSkin, TItemSkin>(s
         return ret;
     }
 
-    protected abstract TItemSkin CreateItemSkin(NamedAreaControl ret);
+    protected abstract TItemSkin CreateItemSkin(NamedAreaControl namedArea);
 }
 

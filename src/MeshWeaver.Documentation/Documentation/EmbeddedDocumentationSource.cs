@@ -1,12 +1,12 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
 
-namespace MeshWeaver.Documentation;
+namespace MeshWeaver.Domain.Layout.Documentation;
 
 public record EmbeddedDocumentationSource :
     DocumentationSource<EmbeddedDocumentationSource>
 {
-    private Assembly Assembly { get; } 
+    private Assembly Assembly { get; }
 
     public override Stream GetStream(string name)
         => Assembly.GetManifestResourceStream(DocumentPaths.GetValueOrDefault(name) ?? name);
@@ -17,7 +17,7 @@ public record EmbeddedDocumentationSource :
 
     public EmbeddedDocumentationSource(string id) : base(id)
     {
-        Assembly =  Assembly.Load(Id);
+        Assembly = Assembly.Load(Id);
         DocumentPaths = Assembly.GetManifestResourceNames()
             .ToImmutableDictionary(ExtractName);
     }
@@ -25,7 +25,7 @@ public record EmbeddedDocumentationSource :
     private static string ExtractName(string resourceName)
     {
         var split = resourceName.Split('.');
-        if(split.Length<2)
+        if (split.Length < 2)
             return resourceName;
         return $"{split[^2]}.{split[^1]}";
     }

@@ -1,23 +1,26 @@
 ﻿using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
-using MeshWeaver.Domain;
+using MeshWeaver.Domain.Layout.Documentation;
+using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace MeshWeaver.Layout.Domain;
+namespace MeshWeaver.Domain.Layout;
 
 public static class EntityViews
 {
-    public static MessageHubConfiguration WithDomainViews(this MessageHubConfiguration config, Func<DomainViewConfiguration, DomainViewConfiguration> configuration = null)
-        => config.AddLayout(layout => layout
+    public static MessageHubConfiguration AddDomainViews(this MessageHubConfiguration config, Func<DomainViewConfiguration, DomainViewConfiguration> configuration = null)
+        => config
+            .AddDocumentation()
+            .AddLayout(layout => layout
             .WithView(nameof(Catalog), Catalog)
             .WithView(nameof(Details), Details)
             )
-            .WithServices(services => services.AddSingleton<IDomainLayoutService>(_ => new DomainLayoutService((configuration ?? (x => x)).Invoke(new()))));
+            .WithServices(services => services.AddSingleton<IDomainLayoutService>(sp => new DomainLayoutService((configuration ?? (x => x)).Invoke(new(sp.GetRequiredService<IDocumentationService>())))));
 
 
     public const string Type = nameof(Type);
@@ -29,11 +32,11 @@ public static class EntityViews
 
         // Extract type and Id from typeAndId
         var parts = typeAndId.Split('/');
-        if(parts.Length != 2)
+        if (parts.Length != 2)
             return Error("Url has to be in form of Details/Type/Id");
         var type = parts[0];
         var typeSource = area.Workspace.DataContext.TypeSources.GetValueOrDefault(type);
-        if(typeSource == null)
+        if (typeSource == null)
             return Error($"Unknown type: {type}");
 
         try

@@ -1,6 +1,6 @@
 using System.Xml.Serialization;
 
-namespace MeshWeaver.Documentation.Model;
+namespace MeshWeaver.Domain.Layout.Documentation.Model;
 
 public class Member
 {

@@ -147,7 +147,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         return Controls
             .Stack
             .WithView( (_, _) =>
-                Template.Bind(toolbar, nameof(toolbar), tb => Controls.TextBox(tb.Year)), "Toolbar")
+                Template.Bind(toolbar, nameof(toolbar), tb => Controls.Text(tb.Year)), "Toolbar")
             .WithView((area, _) =>
                 area.GetDataStream<Toolbar>(nameof(toolbar))
                     .Select(tb => Controls.Html($"Report for year {tb.Year}")), "Content");
@@ -224,7 +224,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         Template.Bind(
             data,
             nameof(ItemTemplate),
-            record => Controls.TextBox(record.DisplayName).WithId(record.SystemName)
+            record => Controls.Text(record.DisplayName).WithId(record.SystemName)
         );
 
     [HubFact]

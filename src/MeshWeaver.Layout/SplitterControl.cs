@@ -4,7 +4,7 @@
         ContainerControlWithItemSkin<SplitterControl, SplitterSkin, SplitterPaneSkin>
         (ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new SplitterSkin())
     {
-        protected override SplitterPaneSkin CreateItemSkin(NamedAreaControl ret)
+        protected override SplitterPaneSkin CreateItemSkin(NamedAreaControl namedArea)
             => new();
     }
 
