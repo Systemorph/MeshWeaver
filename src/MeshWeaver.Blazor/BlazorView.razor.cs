@@ -30,7 +30,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
     [Parameter]
     public string Area { get; set; }
 
-    [CascadingParameter]
+    [CascadingParameter(Name = nameof(Model))]
     public JsonElement? Model { get; set; }
 
     protected string Style { get; set; }
@@ -81,18 +81,24 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
             throw new ArgumentException("Expression needs to point to a property.");
 
         if (value is JsonPointerReference reference)
-            bindings.Add(DataBind(reference, conversion)
-                .Subscribe(v =>
-                    {
-                        Logger.LogTrace("Binding property {property} of {area}", property.Name, Area);
-                        InvokeAsync(() =>
+        {
+            if (Model is not null)
+                property.SetValue(this, ConvertSingle(GetValueFromModel(reference), conversion));
+            else
+                bindings.Add(DataBind(reference, conversion)
+                    .Subscribe(v =>
                         {
-                            property.SetValue(this, v);
-                            RequestStateChange();
-                        });
-                    }
-                )
-            );
+                            Logger.LogTrace("Binding property {property} of {area}", property.Name, Area);
+                            InvokeAsync(() =>
+                            {
+                                property.SetValue(this, v);
+                                RequestStateChange();
+                            });
+                        }
+                    )
+                );
+
+        }
         else
         {
             property.SetValue(this, ConvertSingle(value, conversion));
