@@ -10,14 +10,13 @@ This financial report provides an analysis of the top sales by category based on
 
 @("ProductOverview"){ Id = "?Year=1998" }
 
-| **Top 5 Products by Sales Amount**    | **Key Insights** |
-|------------------------|---|--------------------------------------------------------|
-|  **Chocolade**: €134,648.50           |       - **Chocolade** is the highest-grossing product by a significant margin, indicating a strong demand for confectionery items.         |
-| **Thüringer Rostbratwurst**: €67,366.52       |      - **Thüringer Rostbratwurst** and **Camembert Pierrot** also show high sales, suggesting a preference for premium meat and dairy products.         |
-| **Camembert Pierrot**: €34,590.24    |        - The **Beverages** category has a diverse range of products with moderate sales, indicating steady demand.         |
-| **Ravioli Angelo**: €31,985.84   |       - **Bakery Products** have lower sales compared to other categories, which might suggest a need for marketing efforts to boost this segment.         |
-| **Alice Mutton**: €16,263.00       |                      
-
+| **Financial Summary**    | **Key Insights** |
+|------------------------|-----------------------------------------------------------|
+| **Total Revenue:** EUR 1,010,027.85           |  - **Beverages** lead with the highest units sold at 7,388.       |
+| **Total Units Sold:** 34,494      | - **Seafood** and **Dairy Products** also have significant sales, with 5,432 and 5,378 units sold respectively.         |
+| **Average Unit Price:** EUR 28.96    | - **Confections** follow closely with 4,824 units sold.         |
+| **Total Discount Given:** EUR 88,027.85   | - **Condiments** and **Grains/Cereals** have moderate sales, with 2,882 and 2,754 units sold respectively.        |
+                      
 
 #### **Sales Breakdown by Category**
 - **Meat and Seafood**:
