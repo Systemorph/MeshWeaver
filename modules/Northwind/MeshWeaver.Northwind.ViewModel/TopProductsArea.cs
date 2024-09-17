@@ -32,7 +32,6 @@ namespace MeshWeaver.Northwind.ViewModel
                                     .WithDataLabels()
                             )
                         )
-                        .WithClass("chart top-products-chart")
                 );
     }
 }
