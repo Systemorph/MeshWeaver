@@ -52,34 +52,79 @@ This financial report provides an analysis of the top sales by category based on
 
 ## **Sales Breakdown by Category**
 
-- **Meat and Seafood**:
-  - **Alice Mutton**: €16,263.00
-  - **Boston Crab Meat**: €10,635.20
-  - **Carnarvon Tigers**: €16,993.75
-  - **Ikura**: €18,004.80
-  - **Mishi Kobe Niku**: €9,136.00
+**Beverages**
+1. **Guaraná Fantástica** - 1092 units sold, Total Amount: €4635.00
+2. **Rhönbräu Klosterbier** - 810 units sold, Total Amount: €5907.05
+3. **Chai** - 798 units sold, Total Amount: €12591.00
+4. **Chang** - 792 units sold, Total Amount: €12598.90
+5. **Lakkalikööri** - 776 units sold, Total Amount: €12670.20
 
-- **Dairy Products**:
-  - **Camembert Pierrot**: €34,590.24
-  - **Gorgonzola Telino**: €7,834.00
-  - **Mascarpone Fabioli**: €8,392.00
-  - **Mozzarella di Giovanni**: €13,050.00
+**Condiments**
+1. **Original Frankfurter grüne Soße** - 592 units sold, Total Amount: €7510.10
+2. **Sirop d'érable** - 414 units sold, Total Amount: €10522.20
+3. **Grandma's Boysenberry Spread** - 330 units sold, Total Amount: €7834.00
+4. **Chef Anton's Gumbo Mix** - 300 units sold, Total Amount: €6084.75
+5. **Northwoods Cranberry Sauce** - 236 units sold, Total Amount: €9184.00
 
-- **Beverages**:
-  - **Chartreuse verte**: €8,521.20
-  - **Guaraná Fantástica**: €9,280.80
-  - **Laughing Lumberjack Lager**: €12,670.20
-  - **Outback Lager**: €7,510.10
+**Confections**
+1. **Tarte au sucre** - 702 units sold, Total Amount: €31985.84
+2. **Gumbär Gummibärchen** - 422 units sold, Total Amount: €12089.13
+3. **Pavlova** - 670 units sold, Total Amount: €10848.32
+4. **Sir Rodney's Marmalade** - 222 units sold, Total Amount: €17408.52
+5. **Schoggi Schokolade** - 130 units sold, Total Amount: €5707.00
 
-- **Confectionery**:
-  - **Chocolade**: €134,648.50
-  - **Gumbär Gummibärchen**: €12,089.13
-  - **Maxilaku**: €9,184.00
-  - **Schoggi Schokolade**: €6,482.00
+**Dairy Products**
+1. **Raclette Courdavault** - 1026 units sold, Total Amount: €52690.00Beverages
+2. **Guaraná Fantástica** - 1092 units sold, Total Amount: €4635.00
+3. **Rhönbräu Klosterbier** - 810 units sold, Total Amount: €5907.05
+4. **Chai** - 798 units sold, Total Amount: €12591.00
+5. **Chang** - 792 units sold, Total Amount: €12598.90
 
-- **Bakery Products**:
-  - **Scottish Longbreads**: €6,830.00
-  - **Sir Rodney's Scones**: €9,264.60
-  - **Tarte au sucre**: €3,634.56
-  - **Teatime Chocolate Biscuits**: €3,948.64
+**Condiments**
+1. **Original Frankfurter grüne Soße** - 592 units sold, Total Amount: €7510.10
+2. **Sirop d'érable** - 414 units sold, Total Amount: €10522.20
+3. **Grandma's Boysenberry Spread** - 330 units sold, Total Amount: €7834.00
+4. **Chef Anton's Gumbo Mix** - 300 units sold, Total Amount: €6084.75
+5. **Northwoods Cranberry Sauce** - 236 units sold, Total Amount: €9184.00
 
+**Confections**
+1. **Tarte au sucre** - 702 units sold, Total Amount: €31985.84
+2. **Gumbär Gummibärchen** - 422 units sold, Total Amount: €12089.13
+3. **Pavlova** - 670 units sold, Total Amount: €10848.32
+4. **Sir Rodney's Marmalade** - 222 units sold, Total Amount: €17408.52
+5. **Schoggi Schokolade** - 130 units sold, Total Amount: €5707.00
+
+**Dairy Products**
+1. **Raclette Courdavault** - 1026 units sold, Total Amount: €52690.00
+2. **Camembert Pierrot** - 1084 units sold, Total Amount: €34590.24
+3. **Flotemysost** - 684 units sold, Total Amount: €13727.75
+4. **Mozzarella di Giovanni** - 386 units sold, Total Amount: €13050.00
+5. **Queso Cabrales** - 444 units sold, Total Amount: €8767.50
+
+**Grains/Cereals**
+1. **Wimmers gute Semmelknödel** - 670 units sold, Total Amount: €21392.39
+2. **Gnocchi di nonna Alice** - 392 units sold, Total Amount: €14451.40
+3. **Singaporean Hokkien Fried Mee** - 418 units sold, Total Amount: €5577.60
+4. **Ravioli Angelo** - 354 units sold, Total Amount: €6883.50
+5. **Tunnbröd** - 376 units sold, Total Amount: €3114.00
+
+**Meat/Poultry**
+1. **Thüringer Rostbratwurst** - 636 units sold, Total Amount: €67366.52
+2. **Alice Mutton** - 434 units sold, Total Amount: €16263.00
+3. **Pâté chinois** - 512 units sold, Total Amount: €11320.80
+4. **Perth Pasties** - 318 units sold, Total Amount: €9616.96
+5. **Mishi Kobe Niku** - 6 units sold, Total Amount: €582.00
+
+**Produce**
+1. **Uncle Bob's Organic Dried Pears** - 828 units sold, Total Amount: €24612.00
+2. **Manjimup Dried Apples** - 444 units sold, Total Amount: €22180.50
+3. **Rössle Sauerkraut** - 322 units sold, Total Amount: €13980.96
+4. **Longlife Tofu** - 80 units sold, Total Amount: €800.00
+5. **Tofu** - 42 units sold, Total Amount: €742.61
+
+**Seafood**
+1. **Konbu** - 1318 units sold, Total Amount: €7450.20
+2. **Jack's New England Clam Chowder** - 636 units sold, Total Amount: €5831.50
+3. **Ikura** - 622 units sold, Total Amount: €18004.80
+4. **Boston Crab Meat** - 606 units sold, Total Amount: €10635.20
+5. **Inlagd Sill** - 468 units sold, Total Amount: €7875.50
