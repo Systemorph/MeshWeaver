@@ -3,6 +3,7 @@ using MeshWeaver.Application.Styles;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
+using MeshWeaver.Domain.Layout;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;

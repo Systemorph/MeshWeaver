@@ -2,6 +2,7 @@
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Json.Patch;
 using Json.Pointer;
 using Microsoft.AspNetCore.Components;
@@ -28,6 +29,9 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
     public ISynchronizationStream<JsonElement, LayoutAreaReference> Stream { get; set; }
     [Parameter]
     public string Area { get; set; }
+
+    [CascadingParameter]
+    public JsonElement? Model { get; set; }
 
     protected string Style { get; set; }
 
@@ -103,10 +107,18 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
     {
         if (value is JsonPointerReference reference)
         {
+            if(Model.HasValue)
+                return Observable.Return(ConvertSingle(GetValueFromModel(reference), conversion));
             return DataBind(reference, conversion);
         }
 
         return Observable.Return(ConvertSingle(value, conversion));
+    }
+
+    private object GetValueFromModel(JsonPointerReference reference)
+    {
+        var pointer = JsonPointer.Parse(reference.Pointer);
+        return pointer.Evaluate(Model!.Value);
     }
 
     private IObservable<T> DataBind<T>(JsonPointerReference reference, Func<object, T> conversion) =>
@@ -144,6 +156,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
         {
             null => default,
             JsonElement element => ConvertJson(element, conversion),
+            JsonObject obj => ConvertJson<T>(obj, conversion),
             T t => t,
             string s => ConvertString<T>(s),
             _ => throw new InvalidOperationException($"Cannot convert {value} to {typeof(T)}")
@@ -178,23 +191,41 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
             return conversion(JsonSerializer.Deserialize<object>(value.Value.GetRawText(), Hub.JsonSerializerOptions));
         return JsonSerializer.Deserialize<T>(value.Value.GetRawText(), Hub.JsonSerializerOptions);
     }
+    private T ConvertJson<T>(JsonObject value, Func<object, T> conversion)
+    {
+        if (value == null)
+            return default;
+        if (conversion != null)
+            return conversion(value.Deserialize<object>(Hub.JsonSerializerOptions));
+        return value.Deserialize<T>(Hub.JsonSerializerOptions);
+    }
 
     protected void UpdatePointer<T>(T value, JsonPointerReference reference)
     {
         if (reference != null)
-            Stream.Update(ci =>
+        {
+            if (Model.HasValue)
             {
-                var patch = GetPatch(value, reference, ci);
+                var patch = GetPatch(value, reference, Model.Value);
+                Model = patch?.Apply(Model.Value) ?? Model;
+            }
 
-                return new ChangeItem<JsonElement>(
-                    Stream.Owner,
-                    Stream.Reference,
-                    patch?.Apply(ci) ?? ci,
-                    Hub.Address,
-                    new(() => patch),
-                    Hub.Version
-                );
-            });
+            else
+                Stream.Update(ci =>
+                {
+                    var patch = GetPatch(value, reference, ci);
+
+                    return new ChangeItem<JsonElement>(
+                        Stream.Owner,
+                        Stream.Reference,
+                        patch?.Apply(ci) ?? ci,
+                        Hub.Address,
+                        new(() => patch),
+                        Hub.Version
+                    );
+                });
+
+        }
     }
 
     private JsonPatch GetPatch<T>(T value, JsonPointerReference reference, JsonElement current)

@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Hub.Fixture\MeshWeaver.Hub.Fixture.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Domain.Layout.csproj" />
   </ItemGroup>
     <ItemGroup>
         <!-- Include all files in the Markdown folder as embedded resources -->

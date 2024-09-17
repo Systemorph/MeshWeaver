@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Data;
+using MeshWeaver.Domain.Layout;
 using MeshWeaver.Layout.Composition;
 using static MeshWeaver.Layout.Controls;
 
@@ -108,7 +109,7 @@ public static class StandardPageLayout
                h.ConfigBasedRenderer(
                     c,
                     store,
-                    StandardPageLayout.NavMenu,
+                    NavMenu,
                     () => new(),
                     config)
             );
@@ -119,7 +120,7 @@ public static class StandardPageLayout
                 h.ConfigBasedRenderer(
                     c,
                     store,
-                    StandardPageLayout.ContentHeading,
+                    ContentHeading,
                     () => new(),
                     config)
             );
@@ -136,7 +137,7 @@ public static class StandardPageLayout
                 h.ConfigBasedRenderer(
                     c,
                     store,
-                    StandardPageLayout.Toolbar,
+                    Toolbar,
                     () => new(),
                     config)
             );

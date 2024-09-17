@@ -6,7 +6,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Documentation;
+namespace MeshWeaver.Domain.Layout.Documentation;
 
 public static class DocumentationExtensions
 {
@@ -37,13 +37,12 @@ public static class DocumentationExtensions
         ?? new(hub);
 
     public static string DocumentationPath(this LayoutDefinition layout, Assembly assembly, string name)
-        => new LayoutAreaControl(layout.Hub.Address,new LayoutAreaReference(nameof(DocumentationLayout.Doc))
+        => new LayoutAreaControl(layout.Hub.Address, new LayoutAreaReference(nameof(DocumentationLayout.Doc))
         {
             Id = $"{EmbeddedDocumentationSource.Embedded}/{assembly.GetName().Name}/{name}"
         }).ToString();
 
-    public static LayoutDefinition AddDocumentationMenuForAssemblies(this LayoutDefinition layout,
-        params Assembly[] assemblies)
+    public static LayoutDefinition AddDocumentationMenuForAssemblies(this LayoutDefinition layout, params Assembly[] assemblies)
         => layout.WithNavMenu
         (
             (menu, _, _) => assemblies.Aggregate

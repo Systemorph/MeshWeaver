@@ -1,0 +1,26 @@
+@inherits SkinnedView<EditFormItemSkin, EditFormItemView>
+
+<dt>
+    <label for="@Skin.Name">@Label</label>
+</dt>
+<dd>
+    @if (!string.IsNullOrWhiteSpace(Description))
+    {
+        <p>
+            @((MarkupString)(Description))
+        </p>
+    }
+    <DispatchView ViewModel="@ViewModel" Area="@Area" Stream="@Stream"/>
+</dd>
+
+
+@code
+{
+    private string Description { get; set; }
+    protected override void BindData()
+    {
+        base.BindData();
+        DataBind(Skin.Label, x => x.Label);
+        DataBind(Skin.Description, x => x.Description);
+    }
+}

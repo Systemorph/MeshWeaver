@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Documentation;
+﻿using MeshWeaver.Domain.Layout.Documentation;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 
@@ -7,7 +7,7 @@ namespace MeshWeaver.Northwind.ViewModel
     /// <summary>
     /// Provides configuration options for the Northwind documentation.
     /// </summary>
-     public static class NorthwindDocumentationConfiguration
+    public static class NorthwindDocumentationConfiguration
     {
         private const string Overview = nameof(Overview);
 
@@ -24,7 +24,6 @@ namespace MeshWeaver.Northwind.ViewModel
         public static MessageHubConfiguration AddNorthwindDocumentation(
             this MessageHubConfiguration configuration
         ) => configuration
-            .AddDocumentation()
             .AddLayout(layout => layout.AddDocumentationMenuForAssemblies(typeof(NorthwindDocumentationConfiguration).Assembly))
             ;
     }

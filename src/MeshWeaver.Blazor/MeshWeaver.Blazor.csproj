@@ -7,12 +7,12 @@
         <RazorLangVersion>3.0</RazorLangVersion>
     </PropertyGroup>
 
+
+
     <ItemGroup>
       <ViteBuildInputs Remove="MarkdownView.razor.cs" />
     </ItemGroup>
 
-
-    
 
     <ItemGroup>
         <SupportedPlatform Include="browser" />
@@ -28,6 +28,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\MeshWeaver.Application.Contract\MeshWeaver.Application.Contract.csproj" />
+        <ProjectReference Include="..\MeshWeaver.Documentation\MeshWeaver.Domain.Layout.csproj" />
         <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
     </ItemGroup>
 

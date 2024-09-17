@@ -1,8 +1,7 @@
 ﻿namespace MeshWeaver.Layout;
 
-public interface IInputControl : IUiControl
+public interface IInputControl : IFormComponent
 {
-    object Data { get; init; }
     object Placeholder { get; init; }
     object AutoFocus { get; init; }
     object Disabled { get; init; }

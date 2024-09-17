@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Documentation;
+﻿using MeshWeaver.Domain.Layout;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Messaging;
@@ -24,7 +24,7 @@ namespace MeshWeaver.Northwind.ViewModel
         {
             return configuration
                     .AddNorthwindDocumentation()
-                    .WithDomainViews()
+                    .AddDomainViews()
                     .AddLayout(layout =>
                     layout
                         .WithPageLayout()

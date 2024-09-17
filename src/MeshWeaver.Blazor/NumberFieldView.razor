@@ -1,7 +1,7 @@
-@inherits BlazorView<NumberFieldControl, NumberFieldView<TValue>>
+@inherits FormComponentBase<NumberFieldControl, NumberFieldView<TValue>, TValue>
 
 @typeparam TValue
 
 
-<FluentNumberField @bind-Value="Number">@Label</FluentNumberField>
+<FluentNumberField @bind-Value="Number" Min="@Min" Max="@Max" Appearance="@Appearance" HideStep="@HideStep" Step="@Step"/>
 

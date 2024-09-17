@@ -4,11 +4,12 @@ using System.Reactive.Linq;
 using System.Reflection;
 using Json.More;
 using MeshWeaver.Data;
-using MeshWeaver.Domain;
+using MeshWeaver.Domain.Layout.Documentation;
+using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Utils;
 
-namespace MeshWeaver.Layout.Domain;
+namespace MeshWeaver.Domain.Layout;
 
 public interface IDomainLayoutService
 {
@@ -25,8 +26,11 @@ public class DomainLayoutService(DomainViewConfiguration configuration) : IDomai
 }
 public record DomainViewConfiguration
 {
-    public DomainViewConfiguration()
+    private readonly IDocumentationService documentationService;
+
+    public DomainViewConfiguration(IDocumentationService documentationService)
     {
+        this.documentationService = documentationService;
         ViewBuilders = [DefaultViewBuilder];
         PropertyViewBuilders = [MapToControl];
     }
@@ -40,7 +44,7 @@ public record DomainViewConfiguration
             .WithView((host, _) =>
                 host.Workspace
                     .GetStreamFor(new EntityReference(context.TypeDefinition.CollectionName, context.Id), host.Stream.Subscriber)
-                    .Select(changeItem => DetailsLayout(context with {Instance = changeItem.Value})));
+                    .Select(changeItem => DetailsLayout(context with { Instance = changeItem.Value })));
 
     }
 
@@ -59,7 +63,7 @@ public record DomainViewConfiguration
             context.IdString,
             oo =>
                 context.TypeDefinition.Type.GetProperties()
-                    .Aggregate(Controls.EditForm, (grid, property) => 
+                    .Aggregate(Controls.EditForm, (grid, property) =>
                         PropertyViewBuilders
                         .Select(b => b.Invoke(grid, new PropertyRenderingContext(context, property)))
                         .FirstOrDefault(x => x != null)
@@ -67,32 +71,55 @@ public record DomainViewConfiguration
         );
     }
 
-    private static EditFormControl MapToControl(EditFormControl grid, PropertyRenderingContext context)
+    private EditFormControl MapToControl(EditFormControl grid, PropertyRenderingContext context)
     {
         var propertyInfo = context.Property;
         var host = context.EntityContext.Host;
         var dimensionAttribute = propertyInfo.GetCustomAttribute<DimensionAttribute>();
         var jsonPointerReference = GetJsonPointerReference(propertyInfo);
         var label = propertyInfo.GetCustomAttribute<DisplayAttribute>()?.Name ?? propertyInfo.Name.Wordify();
+        var description = "asdf";//documentationService.GetSource()
 
+        Func<EditFormItemSkin, EditFormItemSkin> skinConfiguration = skin => skin with{Name = propertyInfo.Name.ToCamelCase(), Description = description, Label = label};
         if (dimensionAttribute != null)
         {
             var dimension = host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttribute.Type);
             return grid.WithView(host.Workspace
-                .GetStreamFor(new CollectionReference(host.Workspace.DataContext.GetCollectionName(dimensionAttribute.Type)), host.Stream.Subscriber)
-                .Select(changeItem =>
-                    Controls.Select(jsonPointerReference)
-                        .WithOptions(ConvertToOptions(changeItem.Value, dimension))))
-                        .WithLabel(label);
+                        .GetStreamFor(
+                            new CollectionReference(
+                                host.Workspace.DataContext.GetCollectionName(dimensionAttribute.Type)),
+                            host.Stream.Subscriber)
+                        .Select(changeItem =>
+                            Controls.Select(jsonPointerReference)
+                                .WithOptions(ConvertToOptions(changeItem.Value, dimension))), skinConfiguration)
+                ;
 
         }
 
         if (propertyInfo.PropertyType.IsNumber())
-            return grid.WithView(Controls.Number(jsonPointerReference, host.Workspace.DataContext.TypeRegistry.GetOrAddType(propertyInfo.PropertyType)).WithLabel(label));
+            return grid.WithView(RenderNumber(jsonPointerReference, host, propertyInfo), skinConfiguration);
         if (propertyInfo.PropertyType == typeof(string))
-            return grid.WithView(Controls.TextBox(jsonPointerReference).WithLabel(label));
+            return grid.WithView(RenderText(jsonPointerReference), skinConfiguration);
+        if (propertyInfo.PropertyType == typeof(DateTime) || propertyInfo.PropertyType == typeof(DateTime?))
+            return grid.WithView(RenderDateTime(jsonPointerReference), skinConfiguration);
+        return grid.WithView(propertyInfo.GetValue(context.EntityContext.Instance),skinConfiguration);
+    }
 
-        return grid.WithView(Controls.Html($"<p>{label}: {propertyInfo.GetValue(host)}</p>"));
+    private DateTimeControl RenderDateTime(JsonPointerReference jsonPointerReference)
+    {
+        return Controls.DateTime(jsonPointerReference);
+    }
+
+    private static TextFieldControl RenderText(JsonPointerReference jsonPointerReference)
+    {
+        // TODO V10: Add validations. (17.09.2024, Roland Bürgi)
+        return Controls.Text(jsonPointerReference);
+    }
+
+    private static NumberFieldControl RenderNumber(JsonPointerReference jsonPointerReference, LayoutAreaHost host, PropertyInfo propertyInfo)
+    {
+        // TODO V10: Add range validation, etc. (17.09.2024, Roland Bürgi)
+        return Controls.Number(jsonPointerReference, host.Workspace.DataContext.TypeRegistry.GetOrAddType(propertyInfo.PropertyType));
     }
 
     private static JsonPointerReference GetJsonPointerReference(PropertyInfo propertyInfo)

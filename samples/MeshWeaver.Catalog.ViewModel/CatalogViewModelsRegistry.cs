@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Catalog.Layout;
+using MeshWeaver.Domain.Layout;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Messaging;

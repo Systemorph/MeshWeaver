@@ -149,7 +149,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Blazor.ChartJs",
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Blazor.AgGrid", "src\MeshWeaver.Blazor.AgGrid\MeshWeaver.Blazor.AgGrid.csproj", "{03014EA4-3DE8-4161-A7DD-86AB96132B4E}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Documentation", "src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj", "{06A5C4F3-421F-4BA9-9B1D-8A66454C42E4}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Domain.Layout", "src\MeshWeaver.Documentation\MeshWeaver.Domain.Layout.csproj", "{06A5C4F3-421F-4BA9-9B1D-8A66454C42E4}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Documentation.Test", "test\MeshWeaver.Documentation.Test\MeshWeaver.Documentation.Test.csproj", "{8B907340-5972-462B-898F-CD833242C3AE}"
 EndProject

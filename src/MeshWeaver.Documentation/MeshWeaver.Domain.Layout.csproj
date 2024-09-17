@@ -11,7 +11,4 @@
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
   </ItemGroup>
-  <ItemGroup>
-    <Folder Include="Domain\" />
-  </ItemGroup>
 </Project>

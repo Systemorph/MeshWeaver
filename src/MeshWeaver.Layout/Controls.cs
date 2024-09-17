@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Domain;
+﻿using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout.DataGrid;
 
 namespace MeshWeaver.Layout;
@@ -24,7 +25,7 @@ public static class Controls
     public static ListboxControl Listbox(object item) => new(item);
     public static ComboboxControl Combobox(object item) => new(item);
 
-    public static TextFieldControl TextBox(object data) => new(data);
+    public static TextFieldControl Text(object data) => new(data);
 
     public static NumberFieldControl Number(object data, string type) => new(data, type);
 
@@ -92,4 +93,7 @@ public static class Controls
 
     public static DataGridControl DataGrid(object elements)
     => new(elements);
+
+    public static DateTimeControl DateTime(object data)
+    => new(data);
 }
