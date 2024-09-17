@@ -13,7 +13,7 @@
 
 The annual financial report for the shop reveals insightful data on the sales performance of various product categories. The total sales for the year amounted to €2,531,586.09, distributed across eight product categories. Below is a detailed analysis of each category’s performance:
 
-@("SalesByCategory"){ Id = "?Year=1998" }
+@("SalesByCategory"){ Id = "?Year=2023" }
 
 1. **Beverages:**
    - **Total Sales:** €535,736.36
@@ -60,4 +60,4 @@ The financial analysis reveals that beverages and dairy products are the leading
 
 # Sales by Category comparison with Previous year
 
-@("SalesByCategoryWithPrevYear"){ Id = "?Year=1998" }
+@("SalesByCategoryWithPrevYear"){ Id = "?Year=2023" }
