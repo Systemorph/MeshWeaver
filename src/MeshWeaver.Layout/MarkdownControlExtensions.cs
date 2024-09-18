@@ -1,9 +1,8 @@
 ﻿using System.Reflection;
 using System.Text;
-using MeshWeaver.Layout;
 using MeshWeaver.Utils;
 
-namespace MeshWeaver.Blazor;
+namespace MeshWeaver.Layout;
 
 public static class MarkdownControlExtensions {
 
