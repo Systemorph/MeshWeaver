@@ -24,5 +24,5 @@ public static class RevenueSummaryArea
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
         => area.GetNorthwindDataCubeData()
-            .Select(d => d.Where(x => x.OrderDate >= new DateTime(1997, 6, 1)));
+            .Select(d => d.Where(x => x.OrderDate >= new DateTime(2023, 1, 1)));
 }
