@@ -9,6 +9,9 @@ using MeshWeaver.Pivot.Builder;
 
 namespace MeshWeaver.Northwind.ViewModel;
 
+/// <summary>
+/// Provides methods to add sales overview views to a layout.
+/// </summary>
 public static class SalesOverviewArea
 {
     /// <summary>
@@ -22,6 +25,12 @@ public static class SalesOverviewArea
                 .WithView(nameof(SalesByCategory), Controls.Stack.WithView(SalesByCategory))
     ;
 
+    /// <summary>
+    /// Generates a bar chart view of sales by category.
+    /// </summary>
+    /// <param name="layoutArea">The layout area host.</param>
+    /// <param name="context">The rendering context.</param>
+    /// <returns>An observable sequence containing the bar chart view.</returns>
     public static IObservable<object> SalesByCategory(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         return layoutArea.YearlyNorthwindData()

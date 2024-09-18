@@ -7,8 +7,16 @@ using MeshWeaver.Utils;
 
 namespace MeshWeaver.Northwind.ViewModel;
 
+/// <summary>
+/// Provides configuration methods for the annual report layout.
+/// </summary>
 public static class AnnualReportConfiguration
 {
+    /// <summary>
+    /// Adds the annual report sections to the layout.
+    /// </summary>
+    /// <param name="layout">The layout definition to which the annual report sections will be added.</param>
+    /// <returns>The updated layout definition with the annual report sections.</returns>
     public static LayoutDefinition AddAnnualReport(
         this LayoutDefinition layout
     ) => layout

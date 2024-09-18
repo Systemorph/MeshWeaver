@@ -15,6 +15,12 @@ public static class ProductOverviewArea
                 .WithView(nameof(ProductOverview), ProductOverview)
     ;
 
+    /// <summary>
+    /// Generates the product overview layout.
+    /// </summary>
+    /// <param name="layoutArea">The layout area host.</param>
+    /// <param name="context">The rendering context.</param>
+    /// <returns>An object representing the product overview layout.</returns>
     public static object ProductOverview(this LayoutAreaHost layoutArea, RenderingContext context) =>
         Controls.Stack
             .WithView(ProductOverviewToolbarArea.ProductOverviewToolbar)
