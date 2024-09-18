@@ -9,8 +9,16 @@ using MeshWeaver.Pivot.Builder;
 
 namespace MeshWeaver.Northwind.ViewModel
 {
+    /// <summary>
+    /// Provides extension methods for adding top products to a layout definition.
+    /// </summary>
     public static class TopProductsArea
     {
+        /// <summary>
+        /// Adds the top products view to the layout definition.
+        /// </summary>
+        /// <param name="layout">The layout definition to which the top products view will be added.</param>
+        /// <returns>The updated layout definition with the top products view.</returns>
         public static LayoutDefinition AddTopProducts(this LayoutDefinition layout)
             =>
                 layout
