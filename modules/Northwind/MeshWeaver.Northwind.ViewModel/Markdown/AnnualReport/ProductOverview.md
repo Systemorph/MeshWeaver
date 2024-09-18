@@ -43,88 +43,71 @@ This financial report provides an analysis of the top sales by category based on
 
 | **Financial Summary**    | **Key Insights** |
 |------------------------|-----------------------------------------------------------|
-| **Total Revenue:** EUR 1,010,027.85           |  **Beverages** lead with the highest units sold at 7,388.       |
-| **Total Units Sold:** 34,494      | **Seafood** and **Dairy Products** also have significant sales, with 5,432 and 5,378 units sold respectively.         |
-| **Average Unit Price:** EUR 28.96    | **Confections** follow closely with 4,824 units sold.         |
-| **Total Discount Given:** EUR 88,027.85   | **Condiments** and **Grains/Cereals** have moderate sales, with 2,882 and 2,754 units sold respectively.        |
+| **Total Revenue:** €1,552,117.45           |  **Beverages** is the leading category with the highest total sales amount of €317,160.55 and the highest units sold at 11,532 units.
+| **Total Units Sold:** 59,444 units      | **Dairy Products** follows closely with total sales of €288,959.44 and 9,852 units sold.      |
+| **Average Unit Price:** €28.83    |     Categories such as **Meat/Poultry** and **Confections** show moderate sales, suggesting a balanced demand.   |
+| **Total Discount Given:** €104,845.75   | **Grains/Cereals** has the lowest total sales amount of €117,340.13 and 5,420 units sold.       |
  
  </div>                     
 
 ## **Sales Breakdown by Category**
 
-**Beverages**
-1. **Guaraná Fantástica** - 1092 units sold, Total Amount: €4635.00
-2. **Rhönbräu Klosterbier** - 810 units sold, Total Amount: €5907.05
-3. **Chai** - 798 units sold, Total Amount: €12591.00
-4. **Chang** - 792 units sold, Total Amount: €12598.90
-5. **Lakkalikööri** - 776 units sold, Total Amount: €12670.20
+Here's an analytical report on the top 5 products sold by category, including units sold and total amount in EUR:
 
-**Condiments**
-1. **Original Frankfurter grüne Soße** - 592 units sold, Total Amount: €7510.10
-2. **Sirop d'érable** - 414 units sold, Total Amount: €10522.20
-3. **Grandma's Boysenberry Spread** - 330 units sold, Total Amount: €7834.00
-4. **Chef Anton's Gumbo Mix** - 300 units sold, Total Amount: €6084.75
-5. **Northwoods Cranberry Sauce** - 236 units sold, Total Amount: €9184.00
+### Beverages
+1. **Rhönbräu Klosterbier**: 1,438 units sold, €10,485.75
+2. **Guaraná Fantástica**: 1,398 units sold, €5,901.75
+3. **Chang**: 1,288 units sold, €21,348.40
+4. **Lakkalikööri**: 1,254 units sold, €21,020.40
+5. **Chai**: 1,192 units sold, €19,197.00
 
-**Confections**
-1. **Tarte au sucre** - 702 units sold, Total Amount: €31985.84
-2. **Gumbär Gummibärchen** - 422 units sold, Total Amount: €12089.13
-3. **Pavlova** - 670 units sold, Total Amount: €10848.32
-4. **Sir Rodney's Marmalade** - 222 units sold, Total Amount: €17408.52
-5. **Schoggi Schokolade** - 130 units sold, Total Amount: €5707.00
+### Condiments
+1. **Original Frankfurter grüne Soße**: 1,066 units sold, €13,042.90
+2. **Sirop d'érable**: 804 units sold, €19,585.20
+3. **Louisiana Fiery Hot Pepper Sauce**: 734 units sold, €14,596.07
+4. **Grandma's Boysenberry Spread**: 530 units sold, €12,834.00
+5. **Vegie-spread**: 460 units sold, €19,772.56
 
-**Dairy Products**
-1. **Raclette Courdavault** - 1026 units sold, Total Amount: €52690.00Beverages
-2. **Guaraná Fantástica** - 1092 units sold, Total Amount: €4635.00
-3. **Rhönbräu Klosterbier** - 810 units sold, Total Amount: €5907.05
-4. **Chai** - 798 units sold, Total Amount: €12591.00
-5. **Chang** - 792 units sold, Total Amount: €12598.90
+### Confections
+1. **Tarte au sucre**: 1,250 units sold, €57,498.59
+2. **Sir Rodney's Marmalade**: 306 units sold, €23,532.12
+3. **Gumbär Gummibärchen**: 800 units sold, €22,932.19
+4. **Pavlova**: 1,202 units sold, €19,512.24
+5. **Schoggi Schokolade**: 310 units sold, €13,609.00
 
-**Condiments**
-1. **Original Frankfurter grüne Soße** - 592 units sold, Total Amount: €7510.10
-2. **Sirop d'érable** - 414 units sold, Total Amount: €10522.20
-3. **Grandma's Boysenberry Spread** - 330 units sold, Total Amount: €7834.00
-4. **Chef Anton's Gumbo Mix** - 300 units sold, Total Amount: €6084.75
-5. **Northwoods Cranberry Sauce** - 236 units sold, Total Amount: €9184.00
+### Dairy Products
+1. **Raclette Courdavault**: 1,758 units sold, €91,102.00
+2. **Camembert Pierrot**: 1,844 units sold, €59,869.24
+3. **Gudbrandsdalsost**: 964 units sold, €30,301.20
+4. **Mozzarella di Giovanni**: 724 units sold, €24,499.20
+5. **Flotemysost**: 1,236 units sold, €24,443.35
 
-**Confections**
-1. **Tarte au sucre** - 702 units sold, Total Amount: €31985.84
-2. **Gumbär Gummibärchen** - 422 units sold, Total Amount: €12089.13
-3. **Pavlova** - 670 units sold, Total Amount: €10848.32
-4. **Sir Rodney's Marmalade** - 222 units sold, Total Amount: €17408.52
-5. **Schoggi Schokolade** - 130 units sold, Total Amount: €5707.00
+### Meat/Poultry
+1. **Thüringer Rostbratwurst**: 1,028 units sold, €114,084.86
+2. **Alice Mutton**: 1,060 units sold, €38,110.80
+3. **Perth Pasties**: 658 units sold, €20,677.12
+4. **Pâté chinois**: 792 units sold, €17,080.80
+5. **Mishi Kobe Niku**: 118 units sold, €9,021.00
 
-**Dairy Products**
-1. **Raclette Courdavault** - 1026 units sold, Total Amount: €52690.00
-2. **Camembert Pierrot** - 1084 units sold, Total Amount: €34590.24
-3. **Flotemysost** - 684 units sold, Total Amount: €13727.75
-4. **Mozzarella di Giovanni** - 386 units sold, Total Amount: €13050.00
-5. **Queso Cabrales** - 444 units sold, Total Amount: €8767.50
+### Produce
+1. **Uncle Bob's Organic Dried Pears**: 1,264 units sold, €37,665.00
+2. **Manjimup Dried Apples**: 1,060 units sold, €53,026.50
+3. **Rössle Sauerkraut**: 630 units sold, €27,045.36
+4. **Tofu**: 228 units sold, €4,878.78
+5. **Longlife Tofu**: 190 units sold, €1,825.00
 
-**Grains/Cereals**
-1. **Wimmers gute Semmelknödel** - 670 units sold, Total Amount: €21392.39
-2. **Gnocchi di nonna Alice** - 392 units sold, Total Amount: €14451.40
-3. **Singaporean Hokkien Fried Mee** - 418 units sold, Total Amount: €5577.60
-4. **Ravioli Angelo** - 354 units sold, Total Amount: €6883.50
-5. **Tunnbröd** - 376 units sold, Total Amount: €3114.00
+### Seafood
+1. **Carnarvon Tigers**: 720 units sold, €41,168.75
+2. **Ikura**: 1,160 units sold, €34,069.00
+3. **Boston Crab Meat**: 1,298 units sold, €22,771.84
+4. **Jack's New England Clam Chowder**: 1,322 units sold, €12,325.95
+5. **Inlagd Sill**: 924 units sold, €16,131.00
 
-**Meat/Poultry**
-1. **Thüringer Rostbratwurst** - 636 units sold, Total Amount: €67366.52
-2. **Alice Mutton** - 434 units sold, Total Amount: €16263.00
-3. **Pâté chinois** - 512 units sold, Total Amount: €11320.80
-4. **Perth Pasties** - 318 units sold, Total Amount: €9616.96
-5. **Mishi Kobe Niku** - 6 units sold, Total Amount: €582.00
+### Grains/Cereals
+1. **Gnocchi di nonna Alice**: 1,290 units sold, €46,059.80
+2. **Wimmers gute Semmelknödel**: 892 units sold, €28,208.63
+3. **Singaporean Hokkien Fried Mee**: 944 units sold, €11,930.80
+4. **Ravioli Angelo**: 502 units sold, €9,633.00
+5. **Tunnbröd**: 558 units sold, €4,752.00
 
-**Produce**
-1. **Uncle Bob's Organic Dried Pears** - 828 units sold, Total Amount: €24612.00
-2. **Manjimup Dried Apples** - 444 units sold, Total Amount: €22180.50
-3. **Rössle Sauerkraut** - 322 units sold, Total Amount: €13980.96
-4. **Longlife Tofu** - 80 units sold, Total Amount: €800.00
-5. **Tofu** - 42 units sold, Total Amount: €742.61
-
-**Seafood**
-1. **Konbu** - 1318 units sold, Total Amount: €7450.20
-2. **Jack's New England Clam Chowder** - 636 units sold, Total Amount: €5831.50
-3. **Ikura** - 622 units sold, Total Amount: €18004.80
-4. **Boston Crab Meat** - 606 units sold, Total Amount: €10635.20
-5. **Inlagd Sill** - 468 units sold, Total Amount: €7875.50
+The analysis of the sales data reveals that **Beverages** is the top-performing category, generating the highest revenue of €317,160.55 with 11,532 units sold. **Dairy Products** follows closely, contributing €288,959.44 in sales from 9,852 units. On the other hand, **Grains/Cereals** ranks lowest in terms of sales, with a total revenue of €117,340.13 and 5,420 units sold. The overall financial performance shows a total sales amount of approximately €1.55 million, with 59,444 units sold across all categories. The average unit price stands at €28.83, and the total discounts given amount to €104,845.75. These insights highlight the strong demand for beverages and dairy products, while also indicating potential areas for growth in categories like grains and cereals. The data provides a comprehensive overview of the sales distribution, helping to identify key revenue drivers and areas needing strategic focus.
