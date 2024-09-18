@@ -56,5 +56,7 @@ public record NavGroupSkin(object Title, object Icon, object Href) : Skin<NavGro
 
     public NavGroupSkin WithTitle(object title) => this with { Title = title };
 
+    public NavGroupSkin WithHref(object href) => this with { Href = href };
+
     public NavGroupSkin WithExpanded(object expanded) => this with { Expanded = expanded };
 }

@@ -19,5 +19,6 @@ public static class FluentIcons
     public static Icon Code => new(Provider, "Code");
     public static Icon Document => new(Provider, "Document");
     public static Icon Folder => new(Provider, "Folder");
+    public static Icon WalletCreditCard => new(Provider, "WalletCreditCard");
 
 }
