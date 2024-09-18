@@ -1,4 +1,5 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Domain;
 
@@ -26,8 +27,8 @@ namespace MeshWeaver.Northwind.Domain
     public record Product(
         [property: Key] int ProductId,
         string ProductName,
-        int SupplierId,
-        int CategoryId,
+        [property:DisplayName("Supplier")][property: Dimension(typeof(Supplier))] int SupplierId,
+        [property: DisplayName("Category")][property: Dimension(typeof(Category))] int CategoryId,
         string QuantityPerUnit,
         decimal UnitPrice,
         short UnitsInStock,

@@ -115,7 +115,6 @@ public record DomainViewConfiguration
     private EditFormControl MapToControl(EditFormControl grid, PropertyRenderingContext context)
     {
         var propertyInfo = context.Property;
-        var host = context.EntityContext.Host;
         var dimensionAttribute = propertyInfo.GetCustomAttribute<DimensionAttribute>();
         var jsonPointerReference = GetJsonPointerReference(propertyInfo);
         var label = propertyInfo.GetCustomAttribute<DisplayAttribute>()?.Name ?? propertyInfo.Name.Wordify();
@@ -124,21 +123,20 @@ public record DomainViewConfiguration
         Func<EditFormItemSkin, EditFormItemSkin> skinConfiguration = skin => skin with{Name = propertyInfo.Name.ToCamelCase(), Description = description, Label = label};
         if (dimensionAttribute != null)
         {
-            var dimension = host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttribute.Type);
-            return grid.WithView(host.Workspace
+            return grid.WithView((host,_) => host.Workspace
                         .GetStreamFor(
                             new CollectionReference(
                                 host.Workspace.DataContext.GetCollectionName(dimensionAttribute.Type)),
                             host.Stream.Subscriber)
                         .Select(changeItem =>
                             Controls.Select(jsonPointerReference)
-                                .WithOptions(ConvertToOptions(changeItem.Value, dimension))), skinConfiguration)
+                                .WithOptions(ConvertToOptions(changeItem.Value, host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttribute.Type)))), skinConfiguration)
                 ;
 
         }
 
         if (propertyInfo.PropertyType.IsNumber())
-            return grid.WithView(RenderNumber(jsonPointerReference, host, propertyInfo), skinConfiguration);
+            return grid.WithView(RenderNumber(jsonPointerReference, context.EntityContext.Host, propertyInfo), skinConfiguration);
         if (propertyInfo.PropertyType == typeof(string))
             return grid.WithView(RenderText(jsonPointerReference), skinConfiguration);
         if (propertyInfo.PropertyType == typeof(DateTime) || propertyInfo.PropertyType == typeof(DateTime?))
@@ -178,7 +176,7 @@ public record DomainViewConfiguration
         var keyType = dimensionType.GetKeyType();
         var optionType = typeof(Option<>).MakeGenericType(keyType);
         return instances.Instances
-            .Select(kvp => (Option)Activator.CreateInstance(optionType, [kvp.Key, kvp.Value])).ToArray();
+            .Select(kvp => (Option)Activator.CreateInstance(optionType, [kvp.Key, displayNameSelector(kvp.Value)])).ToArray();
     }
 
 
