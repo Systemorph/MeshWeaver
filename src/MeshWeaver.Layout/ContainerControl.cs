@@ -207,9 +207,6 @@ public abstract record ContainerControlWithItemSkin<TControl,TSkin, TItemSkin>(s
 
 
 
-    public TControl WithView<T>(IObservable<T> viewDefinition, Func<TItemSkin, TItemSkin> options)
-        => base.WithView(viewDefinition, x => x.AddSkin(options.Invoke(CreateItemSkin(x))));
-
     public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, EntityStore, T> viewDefinition, Func<TItemSkin, TItemSkin> options)
         => base.WithView((h, c, s) => viewDefinition.Invoke(h, c, s), x => x with { Skins = Skins.Add(options.Invoke(CreateItemSkin(x))) });
     public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, EntityStore, IObservable<T>> viewDefinition, Func<TItemSkin, TItemSkin> options)
