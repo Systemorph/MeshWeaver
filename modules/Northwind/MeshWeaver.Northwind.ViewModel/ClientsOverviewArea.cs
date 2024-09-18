@@ -51,5 +51,5 @@ public static class ClientsOverviewArea
     /// <returns>An observable sequence of Northwind data cubes.</returns>
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
         => area.GetNorthwindDataCubeData()
-            .Select(dc => dc.Where(x => x.OrderDate >= new DateTime(1997, 12, 1) && x.OrderDate < new DateTime(1998, 1, 1)));
+            .Select(dc => dc.Where(x => x.OrderDate >= new DateTime(1997, 12, 1) && x.OrderDate < new DateTime(2023, 1, 1)));
 }
