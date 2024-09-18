@@ -32,12 +32,6 @@ public record CheckBoxControl(object Data)
 public record ProgressControl(object Message, object Progress)
     : UiControl<ProgressControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion);
 
-public record IconControl(Icon Icon, string Color)
-    : UiControl<IconControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
-{
-    public string Size { get; init; }
-};
-
 public record SliderControl(int Min, int Max, int Step)
     : UiControl<SliderControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion);
 

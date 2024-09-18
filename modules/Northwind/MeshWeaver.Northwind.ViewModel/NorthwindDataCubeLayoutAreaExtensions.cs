@@ -39,6 +39,8 @@ public static class NorthwindDataCubeLayoutAreaExtensions
                                 (od, product) => (od.order, od.detail, product)
                             )
                             .Select(data => new NorthwindDataCube(data.order, data.detail, data.product))
+                            // TODO V10: fix duplicate data loading (18.09.2024, Alexander Kravets)
+                            .DistinctBy(d => new {d.OrderId, d.Product})
                     )
             );
 
@@ -79,4 +81,5 @@ public static class NorthwindDataCubeLayoutAreaExtensions
 
         return data;
     }
+
 }

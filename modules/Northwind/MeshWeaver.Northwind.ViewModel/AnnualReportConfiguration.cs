@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Application.Styles;
+using MeshWeaver.Collections;
 using MeshWeaver.Documentation;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -20,6 +21,7 @@ public static class AnnualReportConfiguration
     public static LayoutDefinition AddAnnualReport(
         this LayoutDefinition layout
     ) => layout
+        .AddAnnualReportSummary()
         .AddSalesOverview()
         .AddSalesComparison()
         .AddProductOverview()
@@ -38,18 +40,25 @@ public static class AnnualReportConfiguration
             (menu, _, _) => menu
                 .WithNavGroup(
                     AnnualReportDocuments.Aggregate(
-                        Controls.NavGroup("Annual Report 2023", FluentIcons.Folder)
-                            .WithSkin(skin => skin.WithExpanded(true)), 
+                        Controls.NavGroup("Financial Report 2023", FluentIcons.Folder)
+                            .WithSkin(skin => 
+                                skin.WithHref(layout.DocumentHref(SummaryDocument))
+                                .WithExpanded(true)), 
                             (navGroup, documentName) => navGroup.WithNavLink(Path.GetFileNameWithoutExtension(documentName).Wordify(), 
                                 layout.DocumentationPath(ThisAssembly, documentName), FluentIcons.Document))
                 )
         );
 
+    private const string SummaryDocument = "AnnualReportSummary.md";
+
+    private static string DocumentHref(this LayoutDefinition layout, string documentName) =>
+        layout.DocumentationPath(ThisAssembly, documentName);
 
     private static IEnumerable<string> AnnualReportDocuments =>
         ThisAssembly.GetManifestResourceNames()
             .Where(r => r.StartsWith(DocumentFolder))
             .Select(filePath => filePath.Substring(DocumentFolder.Length + 1))
+            .Except(SummaryDocument.RepeatOnce())
             .OrderBy(x => x);
 
     private static string DocumentFolder =>
