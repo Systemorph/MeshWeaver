@@ -4,24 +4,61 @@ using MeshWeaver.Data;
 using MeshWeaver.Layout.Composition;
 
 namespace MeshWeaver.Layout;
+/// <summary>
+/// Represents a container control that can hold multiple named area controls.
+/// </summary>
+/// <remarks>
+/// For more information, visit the 
+/// <a href="https://www.fluentui-blazor.net/container">Fluent UI Blazor Container documentation</a>.
+/// </remarks>
 
 public interface IContainerControl : IUiControl
 {
+    /// <summary>
+    /// Gets the collection of named area controls within the container.
+    /// </summary>
     IReadOnlyCollection<NamedAreaControl> Areas { get; }
 }
+/// <summary>
+/// Abstract base class for container controls.
+/// </summary>
+/// <typeparam name="TControl">The type of the container control.</typeparam>
+/// <param name="ModuleName">The name of the module.</param>
+/// <param name="ApiVersion">The API version.</param>
 public abstract record ContainerControl<TControl>(string ModuleName, string ApiVersion)
     : UiControl<TControl>(ModuleName, ApiVersion), IContainerControl
     where TControl : ContainerControl<TControl>
 {
     internal const string Root = "";
+    /// <summary>
+    /// Gets the list of renderers for the container control.
+    /// </summary>
     protected ImmutableList<Renderer> Renderers { get; init; } = ImmutableList<Renderer>.Empty;
+    /// <summary>
+    /// Generates an automatic name for a new area control.
+    /// </summary>
+    /// <returns>A string representing the automatic name.</returns>
     protected string GetAutoName() => $"{Renderers.Count + 1}";
     IReadOnlyCollection<NamedAreaControl> IContainerControl.Areas => Areas;
+    /// <summary>
+    /// Gets the collection of named area controls within the container.
+    /// </summary>
     public ImmutableList<NamedAreaControl> Areas { get; init; } = ImmutableList<NamedAreaControl>.Empty;
+    /// <summary>
+    /// Gets a named area control with the specified options.
+    /// </summary>
+    /// <param name="options">A function to configure the named area control.</param>
+    /// <returns>A configured <see cref="NamedAreaControl"/> instance.</returns>
     protected virtual NamedAreaControl GetNamedArea(Func<NamedAreaControl, NamedAreaControl> options)
     {
         return options.Invoke(new(null) { Id = GetAutoName() });
     }
+     /// <summary>
+    /// Adds a view to the container control with the specified options.
+    /// </summary>
+    /// <param name="view">The view to add.</param>
+    /// <param name="options">A function to configure the named area control.</param>
+    /// <returns>A new <typeparamref name="TControl"/> instance with the specified view and options.</returns>
     public TControl WithView(object view, Func<NamedAreaControl, NamedAreaControl> options)
     {
         var area = GetNamedArea(options);
