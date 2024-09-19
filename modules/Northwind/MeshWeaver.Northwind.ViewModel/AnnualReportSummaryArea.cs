@@ -2,6 +2,7 @@
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using static MeshWeaver.Northwind.ViewModel.LayoutTemplates;
 
 namespace MeshWeaver.Northwind.ViewModel;
 
@@ -13,7 +14,14 @@ public static class AnnualReportSummaryArea
                 .WithView(nameof(AnnualReportSummary), Controls.Layout.WithView(AnnualReportSummary))
     ;
 
-    public static IObservable<object> AnnualReportSummary(this LayoutAreaHost layoutArea, RenderingContext context)
+    public static object AnnualReportSummary(this LayoutAreaHost layoutArea, RenderingContext context)
+        => Controls.LayoutGrid
+            .WithView(ValueBoxes, skin => skin.WithXs(12))
+            .WithView(SummaryCharts, skin => skin.WithXs(12))
+            .WithSkin(skin => skin.WithSpacing(5))
+        ;
+
+    private static IObservable<object> ValueBoxes(LayoutAreaHost layoutArea, RenderingContext context)
     {
         var currentYear = layoutArea.Year();
         var previousYear = currentYear - 1;
@@ -34,6 +42,18 @@ public static class AnnualReportSummaryArea
                 })
             ;
     }
+
+    public static object SummaryCharts(LayoutAreaHost layoutArea, RenderingContext context)
+        => Controls.LayoutGrid
+            .WithView(
+                Controls.Stack.WithView(Controls.H2("Sales by category")).WithView("Coming soon...")
+                    .WithVerticalGap(10),
+                skin => skin.WithXs(12).WithSm(6))
+            .WithView(
+                Controls.Stack.WithView(Controls.H2("Top products")).WithView(TopProductsArea.TopProducts)
+                    .WithVerticalGap(10),
+                skin => skin.WithXs(12).WithSm(6))
+            ;
 
     private static IObservable<IReadOnlyCollection<SummaryItem>> SummaryItems(this LayoutAreaHost layoutArea)
         => layoutArea.GetNorthwindDataCubeData()
@@ -83,26 +103,6 @@ public static class AnnualReportSummaryArea
             previous is not null ? GrowthPercentage(current.Orders, previous.Orders) : null
         );
 
-    private static object ValueBox(string title, Icon icon, string value, object growth) =>
-        Controls.Stack
-            .WithSkin(skin => skin.WithOrientation(Orientation.Horizontal))
-            .WithHorizontalGap(10)
-            .WithView(Controls.Icon(icon).WithWidth("48px"))
-            .WithView(Controls.Stack
-                .WithVerticalGap(10)
-                .WithView(Controls.Stack.WithView(Controls.H3(title)).WithView(growth)
-                    .WithOrientation(Orientation.Horizontal).WithHorizontalGap(5))
-                .WithView(Controls.H2(value))
-            );
-
-    private static object GrowthPercentage(double current, double previous)
-    {
-        var delta = current - previous;
-        var percentage = delta / previous;
-        var sign = delta >= 0 ? "+" : "-";
-        var color = delta >= 0 ? "green" : "red";
-        return Controls.Html($"<span style='color:{color}'>{sign}{percentage:P0}</span>");
-    }
 }
 
 public record SummaryItem
