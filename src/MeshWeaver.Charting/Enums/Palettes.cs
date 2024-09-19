@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics.CodeAnalysis;
-using Newtonsoft.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace MeshWeaver.Charting.Enums;
 
@@ -512,13 +513,13 @@ public sealed class Palettes
 
 public class PaletteJsonConverter : JsonConverter<Palettes>
 {
-    public override void WriteJson(JsonWriter writer, Palettes value, JsonSerializer serializer)
+    public override Palettes Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        writer.WriteValue(value.Palette);
+        return Palettes.FromColor(reader.GetString());
     }
 
-    public override Palettes ReadJson(JsonReader reader, Type objectType, Palettes existingValue, bool hasExistingValue, JsonSerializer serializer)
+    public override void Write(Utf8JsonWriter writer, Palettes value, JsonSerializerOptions options)
     {
-        return Palettes.FromColor(reader.ReadAsString());
+        writer.WriteStringValue(value.Palette);
     }
 }
