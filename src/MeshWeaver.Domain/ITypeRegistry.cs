@@ -10,7 +10,8 @@ public interface ITypeRegistry
     ITypeDefinition WithKeyFunction(string collection, KeyFunction keyFunction);
     bool TryGetType(string name, out ITypeDefinition type);
     Type GetType(string name);
-    bool TryGetTypeName(Type type, out string typeName);
+    bool TryGetCollectionName(Type type, out string typeName);
+    string GetCollectionName(Type type) => TryGetCollectionName(type, out var typeName) ? typeName : null;
     public ITypeRegistry WithTypesFromAssembly<T>(Func<Type, bool> filter)
         => WithTypesFromAssembly(typeof(T), filter);
 
