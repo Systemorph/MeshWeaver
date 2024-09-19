@@ -26,7 +26,7 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
         await host.HasStarted;
 
         var typeRegistry = host.ServiceProvider.GetRequiredService<ITypeRegistry>();
-        var canMap = typeRegistry.TryGetTypeName(typeof(GenericRequest<int>), out var typeName);
+        var canMap = typeRegistry.TryGetCollectionName(typeof(GenericRequest<int>), out var typeName);
         canMap.Should().BeTrue();
         typeName.Should().Be("MeshWeaver.Messaging.Hub.Test.TypeRegistryTest.GenericRequest`1[Int32]");
 

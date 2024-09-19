@@ -52,7 +52,7 @@ internal class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
 
     public KeyFunction GetKeyFunction(Type type)
     {
-        return (TryGetTypeName(type, out var typeName)
+        return (TryGetCollectionName(type, out var typeName)
                    ? GetKeyFunction(typeName)
                    : null)
                ?? keyFunctionBuilder.GetKeyFunction(type); 
@@ -104,7 +104,7 @@ internal class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
 
     public Type GetType(string name) => TryGetType(name, out var td) ? td.Type : null;
 
-    public bool TryGetTypeName(Type type, out string typeName)
+    public bool TryGetCollectionName(Type type, out string typeName)
     {
         if (nameByType.TryGetValue(type, out typeName))
             return true;
@@ -116,7 +116,7 @@ internal class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
             var genericTypeArguments = new string[genericArguments.Length];
             for (var i = 0; i < genericArguments.Length; i++)
             {
-                if (!TryGetTypeName(genericArguments[i], out var genericTypeArgument))
+                if (!TryGetCollectionName(genericArguments[i], out var genericTypeArgument))
                     return false;
                 genericTypeArguments[i] = genericTypeArgument;
             }
@@ -125,7 +125,7 @@ internal class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
             return true;
         }
 
-        return parent?.TryGetTypeName(type, out typeName) ?? false;
+        return parent?.TryGetCollectionName(type, out typeName) ?? false;
     }
 
     public string GetOrAddType(Type type)

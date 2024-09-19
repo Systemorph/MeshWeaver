@@ -294,7 +294,7 @@ public class Workspace : IWorkspace
             new CollectionsReference(
                 types
                     .Select(t =>
-                        DataContext.TypeRegistry.TryGetTypeName(t, out var name)
+                        DataContext.TypeRegistry.TryGetCollectionName(t, out var name)
                             ? name
                             : throw new ArgumentException($"Type {t.FullName} is unknown.")
                     )

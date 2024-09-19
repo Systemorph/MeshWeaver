@@ -206,15 +206,14 @@ public static class LayoutExtensions
 
     public static MessageHubConfiguration AddLayoutClient(
         this MessageHubConfiguration config,
-        Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration
+        Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration = null
     )
     {
         return config
-            //.AddData(data => data.Configure(c => c.AddWorkspaceReferenceStream<LayoutAreaReference, EntityStore>((parent,reduced) => parent.Select(e => e.SetValue(e.Value.StoresByStream.GetValueOrDefault(reduced.StreamReference))))
             .AddData()
             .AddLayoutTypes()
             .WithServices(services => services.AddScoped<ILayoutClient, LayoutClient>())
-            .Set(config.GetConfigurationFunctions().Add(configuration))
+            .Set(config.GetConfigurationFunctions().Add(configuration ?? (x => x)))
             .WithSerialization(serialization => serialization);
     }
 

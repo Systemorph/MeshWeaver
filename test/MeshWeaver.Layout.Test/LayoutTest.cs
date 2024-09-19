@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Reactive.Linq;
 using System.Text.Json;
 using FluentAssertions;
@@ -21,7 +22,6 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 {
     private const string StaticView = nameof(StaticView);
 
-    public record DataRecord([property: Key] string SystemName, string DisplayName);
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
@@ -34,7 +34,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     "Local",
                     ds =>
                         ds.WithType<DataRecord>(t =>
-                            t.WithInitialData([new("Hello", "Hello"), new("World", "World")])
+                            t.WithInitialData(DataRecord.InitialData)
                         )
                 )
             )
@@ -559,6 +559,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         subArea.Should().BeNull();
         stopwatch.ElapsedMilliseconds.Should().BeLessThan(3000);
     }
+
 }
 
 public static class TestAreas
@@ -569,3 +570,8 @@ public static class TestAreas
 }
 public record FilterEntity(List<LabelAndBool> Data);
 public record LabelAndBool(string Label, bool Value);
+
+public record DataRecord([property: Key] string SystemName, string DisplayName)
+{
+    public static readonly DataRecord[] InitialData = [new("Hello", "Hello"), new("World", "World")];
+}

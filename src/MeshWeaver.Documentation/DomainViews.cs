@@ -8,7 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Domain.Layout;
 
-public static class EntityViews
+public static class DomainViews
 {
     public static MessageHubConfiguration AddDomainViews(this MessageHubConfiguration config, Func<DomainViewConfiguration, DomainViewConfiguration> configuration = null)
         => config
@@ -90,6 +90,20 @@ public static class EntityViews
                     )
                 )
             );
+
+    public static string GetDetailsUri(this IMessageHub hub, Type type, object id) =>
+        GetDetailsReference(hub, type, id)?.ToAppHref(hub.Address);
+
+    public static LayoutAreaReference GetDetailsReference(this IMessageHub hub, Type type, object id)
+    {
+        var collection = hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetCollectionName(type);
+        if (collection == null)
+            return null;
+        return hub.GetDetailsReference(collection, id);
+    }
+
+    public static LayoutAreaReference GetDetailsReference(this IMessageHub hub, string collection, object id) => 
+        new(nameof(Details)) { Id = $"{collection}/{JsonSerializer.Serialize(id, hub.JsonSerializerOptions)}" };
 }
 
 

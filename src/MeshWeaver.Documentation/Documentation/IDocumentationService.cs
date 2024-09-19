@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reflection;
 using System.Xml.Serialization;
 using MeshWeaver.Domain.Layout.Documentation.Model;
@@ -57,11 +58,16 @@ public class DocumentationService(IMessageHub hub) : IDocumentationService
     {
         var assemblyName = assembly.GetName().Name;
         var source = GetSource(EmbeddedDocumentationSource.Embedded, assemblyName);
-        return Deserialize(source.GetStream($"{assemblyName}.xml"))?.Members?.ToDictionary(m => m.Name);
+        var stream = source.GetStream($"{assemblyName}.xml");
+        return Deserialize(stream)?.Members?.ToDictionary(m => m.Name) ?? 
+               (IReadOnlyDictionary<string, Member>)ImmutableDictionary<string, Member>.Empty;
     }
 
     private Doc Deserialize(Stream stream)
     {
+        if (stream == null)
+            return null;
+
         var serializer = new XmlSerializer(typeof(Doc));
         return (Doc)serializer.Deserialize(stream);
     }
