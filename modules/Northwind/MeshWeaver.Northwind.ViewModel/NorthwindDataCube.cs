@@ -45,7 +45,37 @@ namespace MeshWeaver.Northwind.ViewModel
             Discontinued = product.Discontinued;
             Amount = product.UnitPrice * details.Quantity * (1 - details.Discount);
         }
-    
+
+        protected NorthwindDataCube(NorthwindDataCube original)
+        {
+            OrderId = original.OrderId;
+            Customer = original.Customer;
+            Employee = original.Employee;
+            OrderDate = original.OrderDate;
+            OrderMonth = original.OrderMonth;
+            OrderYear = original.OrderYear;
+            RequiredDate = original.RequiredDate;
+            ShippedDate = original.ShippedDate;
+            ShipVia = original.ShipVia;
+            Freight = original.Freight;
+            ShipCountry = original.ShipCountry;
+            Product = original.Product;
+            ProductName = original.ProductName;
+            UnitPrice = original.UnitPrice;
+            Quantity = original.Quantity;
+            Discount = original.Discount;
+            Region = original.Region;
+            Supplier = original.Supplier;
+            ShipCountry = original.ShipCountry;
+            Category = original.Category;
+            QuantityPerUnit = original.QuantityPerUnit;
+            UnitsInStock = original.UnitsInStock;
+            UnitsOnOrder = original.UnitsOnOrder;
+            ReorderLevel = original.ReorderLevel;
+            Discontinued = original.Discontinued;
+            Amount = original.Amount;
+        }
+
         /// <summary>
         /// Gets the unique identifier for the order.
         /// </summary>
@@ -197,5 +227,19 @@ namespace MeshWeaver.Northwind.ViewModel
         /// </summary>
         [NotVisible]
         public string Discontinued { get; init; }
+    }
+
+    public record LabeledNorthwindDataCube : NorthwindDataCube
+    {
+        public LabeledNorthwindDataCube(string label, NorthwindDataCube original) : base(original)
+        {
+            Label = label;
+        }
+
+        public LabeledNorthwindDataCube() { }
+
+        [NotVisible]
+        [Dimension(typeof(string), nameof(Label))]
+        public string Label { get; init; }
     }
 }
