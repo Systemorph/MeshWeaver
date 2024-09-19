@@ -17,7 +17,6 @@
     <ProjectReference Include="..\MeshWeaver.Northwind.Model\MeshWeaver.Northwind.Model.csproj" />
   </ItemGroup>
   <ItemGroup>
-      <Folder Include="Markdown\" />
       <!-- Include all Markdown files in the Markdown folder as embedded resources -->
       <EmbeddedResource Include="Markdown\**\*.md" />
   </ItemGroup>

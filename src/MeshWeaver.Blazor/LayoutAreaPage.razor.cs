@@ -11,6 +11,9 @@ public partial class LayoutAreaPage
 {
     private LayoutAreaControl ViewModel { get; set; }
 
+    [Inject]
+    private NavigationManager Navigation { get; set; }
+
     [Parameter]
     public string Application { get; set; }
     [Parameter]
@@ -36,9 +39,15 @@ public partial class LayoutAreaPage
     protected override async Task OnParametersSetAsync()
     {
         await base.OnParametersSetAsync();
+
+        var id = (string)LayoutExtensions.Decode(Id);
+        var query = Navigation.ToAbsoluteUri(Navigation.Uri).Query;
+        if (!string.IsNullOrEmpty(query))
+            id += "?" + query;
+        
         Reference = new((string)LayoutExtensions.Decode(Area))
         {
-            Id = (string)LayoutExtensions.Decode(Id),
+            Id = id,
             Layout = StandardPageLayout.Page,
         };
 
@@ -62,7 +71,7 @@ public partial class LayoutAreaPage
         if (Reference.Id is null)
             return null;
 
-        return Reference.Id.ToString()!.Split("/").Last();
+        return Reference.Id.ToString()!.Split("?").First().Split("/").Last();
     }
 
 

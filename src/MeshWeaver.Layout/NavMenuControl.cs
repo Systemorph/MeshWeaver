@@ -44,14 +44,19 @@ public record NavLinkControl(object Title, object Icon, object Href) : UiControl
 
 public record NavGroupControl(object Title, object Icon, object Href) : ContainerControl<NavGroupControl, NavGroupSkin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new(Title, Icon, Href))
 {
-
-    public NavGroupControl WithLink(object title, object href) =>
+    public NavGroupControl WithNavLink(object title, object href) =>
         WithView(new NavLinkControl(title, null, href));
+    public NavGroupControl WithNavLink(object title, object href, object icon) =>
+        WithView(new NavLinkControl(title, icon, href));
     public NavGroupControl WithGroup(NavGroupControl @group) => WithView(group);
-
-
 }
 public record NavGroupSkin(object Title, object Icon, object Href) : Skin<NavGroupSkin>
 {
+    public object Expanded { get; init; }
+
     public NavGroupSkin WithTitle(object title) => this with { Title = title };
+
+    public NavGroupSkin WithHref(object href) => this with { Href = href };
+
+    public NavGroupSkin WithExpanded(object expanded) => this with { Expanded = expanded };
 }

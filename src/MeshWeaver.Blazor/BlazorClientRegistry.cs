@@ -54,6 +54,7 @@ public static class BlazorClientRegistry
             ListboxControl listbox => StandardView<ListboxControl, Listbox>(listbox, stream, area),
             SelectControl select => StandardView<SelectControl, Select>(select, stream, area),
             ButtonControl button => StandardView<ButtonControl, ButtonView>(button, stream, area),
+            IconControl icon => StandardView<IconControl, IconView>(icon, stream, area),
             BadgeControl badge => StandardView<BadgeControl, BadgeView>(badge, stream, area),
             CheckBoxControl checkbox => StandardView<CheckBoxControl, Checkbox>(checkbox, stream, area),
             ItemTemplateControl itemTemplate

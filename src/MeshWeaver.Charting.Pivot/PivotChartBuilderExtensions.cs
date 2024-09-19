@@ -22,15 +22,56 @@ public static class PivotChartBuilderExtensions
             TAggregate,
             TPivotBuilder
         >
+        => pivotBuilder.ToChart(b => b.ToBarChartPivotBuilder(), builder);
+
+    public static ChartControl ToLineChart<
+            T,
+            TTransformed,
+            TIntermediate,
+            TAggregate,
+            TPivotBuilder
+        >(
+        this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
+        Func<IPivotLineChartBuilder, IPivotLineChartBuilder> builder = null
+        )
+        where TPivotBuilder : PivotBuilderBase<
+            T,
+            TTransformed,
+            TIntermediate,
+            TAggregate,
+            TPivotBuilder
+        >
+        => pivotBuilder.ToChart(b => b.ToLineChart(), builder);
+
+    private static ChartControl ToChart<
+            T,
+            TTransformed,
+            TIntermediate,
+            TAggregate,
+            TPivotBuilder,
+            TPivotChartBuilder
+        >(
+        this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
+        Func<PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>, TPivotChartBuilder> pivotChartFactory,
+        Func<TPivotChartBuilder, TPivotChartBuilder> builder = null
+        )
+        where TPivotBuilder : PivotBuilderBase<
+            T,
+            TTransformed,
+            TIntermediate,
+            TAggregate,
+            TPivotBuilder
+        >
+        where TPivotChartBuilder : IPivotChartBuilder
     {
-        var pivotBarChartBuilder = pivotBuilder.ToBarChartPivotBuilder();
+        var pivotChartBuilder = pivotChartFactory(pivotBuilder);
 
         if (builder is not null)
         {
-            pivotBarChartBuilder = builder(pivotBarChartBuilder);
+            pivotChartBuilder = builder(pivotChartBuilder);
         }
 
-        var chartModel = pivotBarChartBuilder.Execute();
+        var chartModel = pivotChartBuilder.Execute();
 
         return new(chartModel);
     }

@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Application.Styles;
+﻿using System.ComponentModel.DataAnnotations;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Domain;
 
 namespace MeshWeaver.Northwind.Domain;
@@ -18,17 +19,10 @@ namespace MeshWeaver.Northwind.Domain;
 /// <seealso cref="NotVisibleAttribute"/>
 [Icon(FluentIcons.Provider, "Album")]
 public record OrderDetails(
+    [property: Key] int Id,
     int OrderId,
     [property: Dimension(typeof(Product))] int ProductId,
     double UnitPrice,
     int Quantity,
     double Discount
-)
-{
-    /// <summary>
-    /// Ids should be generated depending on data storage (e.g. auto-numbering long), string, Guid, etc. No semantic meaning can be given to the ID.
-    /// </summary>
-    [NotVisible]
-    public Guid Id { get; init; } = Guid.NewGuid();
-
-}
+);

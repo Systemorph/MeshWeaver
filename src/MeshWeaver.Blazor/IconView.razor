@@ -1,0 +1,23 @@
+@using Icon = MeshWeaver.Application.Styles.Icon
+@inherits BlazorView<IconControl, IconView>
+
+<FluentIcon 
+    Value="@Icon?.ToFluentIcon()"
+    Width="@Width"
+    />
+    
+@code
+{
+    private Icon Icon { get; set; }
+    private string Width { get; set; }
+
+    protected override void BindData()
+    {
+        base.BindData();
+        if (ViewModel != null)
+        {
+            DataBind(ViewModel.Data, x => x.Icon);
+            DataBind(ViewModel.Width, x => x.Width);
+        }
+    }
+}

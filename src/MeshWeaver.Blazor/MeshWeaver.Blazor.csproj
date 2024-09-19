@@ -8,10 +8,6 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <ViteBuildInputs Remove="MarkdownView.razor.cs" />
-    </ItemGroup>
-
-    <ItemGroup>
         <SupportedPlatform Include="browser" />
         <Content Update="StaticAssets\**" Pack="false" />
     </ItemGroup>

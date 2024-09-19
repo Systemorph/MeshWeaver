@@ -2,7 +2,7 @@
 @using MeshWeaver.Layout.DataGrid
 @inherits BlazorView<DataGridControl, DataGridView>
 
-<div style="display: table; table-layout: fixed; width: 100%;">
+<div style="display: table; table-layout: fixed; width: 100%;" class="@Class">
     <div style="overflow-x: auto;">
         <FluentDataGrid Items="@QueryableData" 
                         Virtualize="@ViewModel.Virtualize" 

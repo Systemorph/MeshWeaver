@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Documentation;
-using MeshWeaver.Layout;
+﻿using MeshWeaver.Layout;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Messaging;
 
@@ -27,15 +26,15 @@ namespace MeshWeaver.Northwind.ViewModel
                     .AddLayout(layout =>
                     layout
                         .WithPageLayout()
+                        .AddAnnualReport()
                         .AddDashboard()
                         .AddProductsSummary()
                         .AddOrdersSummary()
                         .AddCustomerSummary()
                         .AddSupplierSummary()
-                        .AddSalesByCategory()
-                        //.WithNavMenu((menu, _) => menu
-                        //    .AddTypesCatalogs()
-                        //)
+                //.WithNavMenu((menu, _) => menu
+                //    .AddTypesCatalogs()
+                //)
 
                 )
                 ;

@@ -69,7 +69,7 @@ public static class Controls
 
     public static BadgeControl Badge(object data) => new(data);
 
-    public static IconControl Icon(Icon icon, string color) => new(icon, color);
+    public static IconControl Icon(object icon) => new(icon);
 
     public static CheckBoxControl CheckBox(object label, object isChecked) =>
         new(isChecked) { Label = label };
