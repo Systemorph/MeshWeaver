@@ -21,46 +21,18 @@ public static class AnnualReportSummaryArea
         return layoutArea.SummaryItems()
                 .Select(items => items.ToDictionary(x => x.Year))
                 .Select(items =>
-                    Controls.LayoutGrid
-                        .WithView(
-                            Customers(items[currentYear],
-                                items.TryGetValue(previousYear, out var item) ? item : null),
-                            skin => skin.WithXs(6).WithSm(3))
-                        .WithView(ValueBox("Sales", FluentIcons.WalletCreditCard, items[currentYear].Sales,
-                                items.TryGetValue(previousYear, out var prev) ? prev.Sales : null, "C"),
-                            skin => skin.WithXs(6).WithSm(3)
-                        )
-                )
+                {
+                    var current = items[currentYear];
+                    var previous = items.TryGetValue(previousYear, out var item) ? item : null;
+
+                    return Controls.LayoutGrid
+                        .WithView(Sales(current, previous), skin => skin.WithXs(6).WithSm(3))
+                        .WithView(Products(current, previous), skin => skin.WithXs(6).WithSm(3))
+                        .WithView(Orders(current, previous), skin => skin.WithXs(6).WithSm(3))
+                        .WithView(Customers(current, previous), skin => skin.WithXs(6).WithSm(3))
+                        ;
+                })
             ;
-    }
-
-    private static object Customers(SummaryItem current, SummaryItem previous) =>
-        Controls.Stack
-            .WithSkin(skin => skin.WithOrientation(Orientation.Horizontal))
-            .WithView(Controls.Icon(FluentIcons.Person).WithWidth("48px"))
-            .WithView(Controls.Stack
-                .WithView(Controls.H3("Customers"))
-                .WithView(Controls.H1(current.Customers))
-                .WithView(previous is not null ? Growth(current.Customers, previous.Customers) : null)
-            );
-
-    private static object ValueBox(string title, Icon icon, double current, double? previous, string format) =>
-        Controls.Stack
-            .WithSkin(skin => skin.WithOrientation(Orientation.Horizontal))
-            .WithView(Controls.Icon(icon).WithWidth("48px"))
-            .WithView(Controls.Stack
-                .WithView(Controls.H3(title))
-                .WithView(Controls.H1(current.ToString(format)))
-                .WithView(previous is not null ? Growth(current, previous.Value) : null)
-            );
-
-    private static object Growth(double current, double previous)
-    {
-        var delta = current - previous;
-        var percentage = delta / previous;
-        var sign = delta >= 0 ? "+" : "-";
-        var color = delta >= 0 ? "green" : "red";
-        return Controls.Html($"<h5 style='color:{color}'>{sign}{percentage:P}</h5>");
     }
 
     private static IObservable<IReadOnlyCollection<SummaryItem>> SummaryItems(this LayoutAreaHost layoutArea)
@@ -78,6 +50,59 @@ public static class AnnualReportSummaryArea
                     .ToArray()
             )
         ;
+
+    private static object Customers(SummaryItem current, SummaryItem previous) =>
+        ValueBox(
+            "Customers",
+            FluentIcons.Person,
+            current.Customers.ToSuffixFormat(),
+            previous is not null ? GrowthPercentage(current.Customers, previous.Customers) : null
+        );
+
+    private static object Sales(SummaryItem current, SummaryItem previous) =>
+        ValueBox(
+            "Sales",
+            FluentIcons.WalletCreditCard,
+            "$" + current.Sales.ToSuffixFormat(),
+            previous is not null ? GrowthPercentage(current.Sales, previous.Sales) : null
+        );
+
+    private static object Products(SummaryItem current, SummaryItem previous) =>
+        ValueBox(
+            "Products",
+            FluentIcons.Box,
+            current.Products.ToSuffixFormat(),
+            previous is not null ? GrowthPercentage(current.Products, previous.Products) : null
+        );
+
+    private static object Orders(SummaryItem current, SummaryItem previous) =>
+        ValueBox(
+            "Orders",
+            FluentIcons.Checkmark,
+            current.Orders.ToSuffixFormat(),
+            previous is not null ? GrowthPercentage(current.Orders, previous.Orders) : null
+        );
+
+    private static object ValueBox(string title, Icon icon, string value, object growth) =>
+        Controls.Stack
+            .WithSkin(skin => skin.WithOrientation(Orientation.Horizontal))
+            .WithHorizontalGap(10)
+            .WithView(Controls.Icon(icon).WithWidth("48px"))
+            .WithView(Controls.Stack
+                .WithVerticalGap(10)
+                .WithView(Controls.Stack.WithView(Controls.H3(title)).WithView(growth)
+                    .WithOrientation(Orientation.Horizontal).WithHorizontalGap(5))
+                .WithView(Controls.H2(value))
+            );
+
+    private static object GrowthPercentage(double current, double previous)
+    {
+        var delta = current - previous;
+        var percentage = delta / previous;
+        var sign = delta >= 0 ? "+" : "-";
+        var color = delta >= 0 ? "green" : "red";
+        return Controls.Html($"<span style='color:{color}'>{sign}{percentage:P0}</span>");
+    }
 }
 
 public record SummaryItem
