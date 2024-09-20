@@ -125,12 +125,12 @@ public sealed class MessageHub
                 Address
             );
             await plugin.StartAsync(this, cancellationToken);
+            plugin.Initialized.ContinueWith(_ => def.Dispose());
             logger.LogDebug(
                 "Finished initializing plugin {plugin} in Address {address}",
                 plugin.GetType(),
                 Address
             );
-            def.Dispose();
         }
 
         deferral.Dispose();
