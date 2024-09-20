@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json;
+using Json.More;
 using Json.Patch;
 using Json.Pointer;
 using MeshWeaver.Data.Serialization;
@@ -14,72 +15,81 @@ namespace MeshWeaver.Data
         {
             return new ReduceManager<WorkspaceState>(hub)
                 .AddWorkspaceReference<StreamReference, EntityStore>(
-                    (ws, reference) => ws.ReduceImpl(reference)
+                    (ws, reference) => ws.ReduceImpl(reference),
+                    (ws, change, reference) => ws.Update(reference, change.Value)
                 )
                 .AddWorkspaceReference<EntityReference, object>(
-                    (ws, reference) => ws.ReduceImpl(reference)
+                    (ws, reference) => ws.ReduceImpl(reference),
+                    (ws, change, reference) => ws.Update(ws.GetStreamReference(change.Value, reference.Collection), store => store.Update(reference.Collection, c => c.Update(reference.Id, change.Value)))
                 )
                 .AddWorkspaceReference<CollectionReference, InstanceCollection>(
-                    (ws, reference) => ws.ReduceImpl(reference)
+                    (ws, reference) => ws.ReduceImpl(reference),
+                    (ws, change, reference) => ws.Update(new(){Collections = ImmutableDictionary<string, InstanceCollection>.Empty.Add(reference.Name, change.Value) })
                 )
                 .AddWorkspaceReference<CollectionsReference, EntityStore>(
-                    (ws, reference) => ws.ReduceImpl(reference)
+                    (ws, reference) => ws.ReduceImpl(reference),
+                    (ws, change, reference) => ws.Update(change.Value)
                 )
                 .AddWorkspaceReference<PartitionedCollectionsReference, EntityStore>(
-                    (ws, reference) => ws.ReduceImpl(reference)
+                    (ws, reference) => ws.ReduceImpl(reference),
+                    (ws, change, reference) => ws.Update(change.Value)
                 )
                 .AddWorkspaceReference<WorkspaceStoreReference, EntityStore>(
-                    (ws, _) => ws.StoresByStream.Values.Aggregate((a, b) => a.Merge(b))
+                    (ws, _) => ws.StoresByStream.Values.Aggregate((a, b) => a.Merge(b)),
+                    (ws, change, _) => ws.Update(change.Value)
                 )
-                .AddWorkspaceReference<WorkspaceStateReference, WorkspaceState>((ws, _) => ws)
-                .AddBackTransformation<EntityStore>(
-                    (ws, _, update) =>
-                        update.SetValue(ws.Update(update.Value))
-                )
-                .AddBackTransformation<WorkspaceState>(
-                    (ws, _, update) => update.SetValue(ws.Merge(update.Value))
-                )
-                .AddBackTransformation<JsonElement>(
-                    (current, stream, change) =>
-                        PatchWorkspace(stream.StreamReference, current, change, hub.JsonSerializerOptions)
-                    )
+                .AddWorkspaceReference<WorkspaceStateReference, WorkspaceState>((ws, _) => ws, (ws,change, _) => change.Value)
                 .ForReducedStream<EntityStore>(reduced =>
                     reduced
                         .AddWorkspaceReference<StreamReference, EntityStore>(
-                            (ws, _) => ws
+                            (ws, _) => ws,
+                            (ws, change, reference) => change.Value
                         )
                         .AddWorkspaceReference<EntityReference, object>(
-                            (ws, reference) => ws.ReduceImpl(reference)
+                            (ws, reference) => ws.ReduceImpl(reference),
+                            (ws, change, reference) => ws.Update(reference.Collection, c => c.Update(reference.Id, change.Value))
                         )
                         .AddWorkspaceReference<CollectionReference, InstanceCollection>(
-                            (ws, reference) => ws.ReduceImpl(reference)
+                            (ws, reference) => ws.ReduceImpl(reference),
+                            (ws,change, reference) => ws.Update(reference.Name, c => c.Merge(change.Value))
                         )
                         .AddWorkspaceReference<CollectionsReference, EntityStore>(
-                            (ws, reference) => ws.ReduceImpl(reference)
-                        )
-                        .AddWorkspaceReference<StreamReference, EntityStore>(
-                            (ws, reference) => ws.ReduceImpl(reference)
-                        )
-                        .AddWorkspaceReference<CollectionsReference, EntityStore>(
-                            (ws, reference) => ws.ReduceImpl(reference)
+                            (ws, reference) => ws.ReduceImpl(reference),
+                            (ws, change, reference) => ws with{ Collections = change.Value.Collections.SetItems(change.Value.Collections) }
                         )
                         .AddWorkspaceReference<PartitionedCollectionsReference, EntityStore>(
-                            (ws, reference) => ws.ReduceImpl(reference)
+                            (ws, reference) => ws.ReduceImpl(reference),
+                            (ws, change, reference) => ws with{ Collections = change.Value.Collections.SetItems(change.Value.Collections) }
                         )
-                        .AddWorkspaceReference<WorkspaceStoreReference, EntityStore>((ws, _) => ws)
-                        .AddBackTransformation<JsonElement>(
-                            (current, _, change) =>
+                        .AddWorkspaceReference<JsonElementReference, JsonElement>(
+                            (ws, reference) => JsonSerializer.SerializeToElement(ws, hub.JsonSerializerOptions),
+                            (current, change, _) =>
                                 PatchEntityStore(current, change, hub.JsonSerializerOptions)
                         )
                 )
                 .ForReducedStream<InstanceCollection>(reduced =>
                     reduced.AddWorkspaceReference<EntityReference, object>(
-                        (ws, reference) => ws.Instances.GetValueOrDefault(reference.Id)
+                        (ws, reference) => ws.GetData(reference.Id),
+                        (ws, change, reference) => ws.Update(reference.Id, change.Value))
                     )
-                )
+                
                 .ForReducedStream<JsonElement>(conf =>
-                    conf.AddWorkspaceReference<JsonPointerReference, JsonElement?>(ReduceJsonPointer)
+                    conf.AddWorkspaceReference<JsonPointerReference, JsonElement?>(
+                        ReduceJsonPointer, 
+                        UpdateJsonPointer)
                 );
+        }
+
+        private static JsonElement UpdateJsonPointer(JsonElement element, ChangeItem<JsonElement?> change, JsonPointerReference reference)
+        {
+            var pointer = JsonPointer.Parse(reference.Pointer);
+            var patch = new JsonPatch(change.Value.HasValue
+                    ? pointer.Evaluate(element).HasValue 
+                        ? PatchOperation.Replace(pointer, change.Value.Value.AsNode())
+                        : PatchOperation.Add(pointer, change.Value.Value.AsNode())
+                    : PatchOperation.Remove(pointer));
+ 
+            return patch.Apply(element);
         }
 
 
@@ -91,7 +101,7 @@ namespace MeshWeaver.Data
         }
 
 
-        private static ChangeItem<EntityStore> PatchEntityStore(
+        private static EntityStore PatchEntityStore(
             EntityStore current,
             ChangeItem<JsonElement> changeItem,
             JsonSerializerOptions options
@@ -122,7 +132,7 @@ namespace MeshWeaver.Data
             else 
                 current = changeItem.Value.Deserialize<EntityStore>(options);
 
-            return changeItem.SetValue(current);
+            return current;
         }
 
         private static EntityStore UpdateInstance(
@@ -186,21 +196,6 @@ namespace MeshWeaver.Data
                 default:
                     throw new NotSupportedException();
             }
-        }
-        private static ChangeItem<WorkspaceState> PatchWorkspace(
-            StreamReference streamReference,
-            WorkspaceState current,
-            ChangeItem<JsonElement> changeItem,
-            JsonSerializerOptions options)
-        {
-            var entityStore = current.StoresByStream.GetValueOrDefault(streamReference);
-            return changeItem.SetValue(current.Update(streamReference,
-
-                changeItem.Patch == null || entityStore == null ?
-                changeItem.Value.Deserialize<EntityStore>(options)
-                :
-                PatchEntityStore(entityStore, changeItem, options).Value
-                ));
         }
 
     }

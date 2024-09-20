@@ -83,10 +83,7 @@ public record DomainViewConfiguration
         if(!string.IsNullOrWhiteSpace(description))
             ret = ret.WithView(Controls.Html($"<p>{description}</p>"));
         return ret
-            .WithView((host, _) =>
-                host.Workspace
-                    .GetStreamFor(new EntityReference(context.TypeDefinition.CollectionName, context.Id), host.Stream.Subscriber)
-                    .Select(changeItem => DetailsLayout(context with { Instance = changeItem.Value })));
+            .WithView((h, ctx) => DetailsLayout(h,ctx,context));
 
     }
 
@@ -98,10 +95,13 @@ public record DomainViewConfiguration
         => this with { PropertyViewBuilders = PropertyViewBuilders.Add(viewBuilder) };
 
 
-    public object DetailsLayout(EntityRenderingContext context)
+    public object DetailsLayout(LayoutAreaHost host, RenderingContext ctx, EntityRenderingContext context)
     {
-        var ret = Template.Bind(context.Instance,
-            context.IdString,
+            
+
+        var ret = 
+            
+            Template.Bind(context.IdString,
             oo =>
                 context.TypeDefinition.Type.GetProperties()
                     .Aggregate(Controls.EditForm, (grid, property) =>
@@ -111,25 +111,31 @@ public record DomainViewConfiguration
                         )
         );
 
-        var host = context.Host;
+        var stream = host.Workspace
+            .GetStreamFor(new EntityReference(context.TypeDefinition.CollectionName, context.Id), host.Stream.Subscriber);
+
+        object current = null;
+        var forwardSubscription = stream.Subscribe(changeItem =>
+        {
+            if (changeItem.ChangedBy.Equals(host.Stream.Subscriber) || Equals(changeItem.Value, current))
+                return;
+            current = changeItem.Value;
+            host.Stream.SetData(context.IdString, changeItem.SetValue(current));
+        });
         var subscription = host.Stream.Subscribe(changeItem =>
         {
             if(changeItem.Patch?.Value is null)
                 return;
             if (changeItem.ChangedBy.Equals(host.Stream.Subscriber) &&changeItem.Patch.Value.Operations.Any(x => x.Path.ToString().StartsWith(ret.DataContext)))
             {
-                var instance = changeItem.Value.Collections.GetValueOrDefault(LayoutAreaReference.Data)?.Instances.GetValueOrDefault(context.IdString);
-                if(instance != null)
-                    host.Workspace.Update(instance);
-                else
-                {
-                    // TODO V10: Should we delete here? How would we end up here? (20.09.2024, Roland Bürgi)
-                }
+                var instance = changeItem.Value.GetCollection(LayoutAreaReference.Data)?.Instances
+                    .GetValueOrDefault(context.IdString);
+                if(instance is not null)
+                    stream.Update(i => changeItem.SetValue(instance));
             }
         });
 
         host.AddDisposable(context.RenderingContext.Area, subscription);
-
         return ret;
     }
 
@@ -162,7 +168,9 @@ public record DomainViewConfiguration
             return grid.WithView(RenderText(jsonPointerReference), skinConfiguration);
         if (propertyInfo.PropertyType == typeof(DateTime) || propertyInfo.PropertyType == typeof(DateTime?))
             return grid.WithView(RenderDateTime(jsonPointerReference), skinConfiguration);
-        return grid.WithView(propertyInfo.GetValue(context.EntityContext.Instance),skinConfiguration);
+
+        // TODO V10: Need so see if we can at least return some readonly display (20.09.2024, Roland Bürgi)
+        return grid;
     }
 
     private DateTimeControl RenderDateTime(JsonPointerReference jsonPointerReference)
@@ -207,10 +215,12 @@ public record DomainViewConfiguration
             .FirstOrDefault(x => x != null);
 }
 
-public record EntityRenderingContext(LayoutAreaHost Host, ITypeDefinition TypeDefinition, string IdString, object Id, RenderingContext RenderingContext)
-{
-    public object Instance { get; init; }
-}
+public record EntityRenderingContext(
+    LayoutAreaHost Host,
+    ITypeDefinition TypeDefinition,
+    string IdString,
+    object Id,
+    RenderingContext RenderingContext);
 
 public record PropertyRenderingContext(EntityRenderingContext EntityContext, PropertyInfo Property);
 

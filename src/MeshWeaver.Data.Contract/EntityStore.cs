@@ -87,7 +87,7 @@ public record EntityStore
     }
 
     public IEnumerable<T> GetData<T>()
-    =>  GetCollection(GetCollectionName.Invoke(typeof(T))).Get<T>();
+        => GetCollection(GetCollectionName?.Invoke(typeof(T))?? typeof(T).FullName).Get<T>();
     public object Reduce(WorkspaceReference reference) => ReduceImpl((dynamic)reference);
 
     public TReference Reduce<TReference>(WorkspaceReference<TReference> reference) =>

@@ -37,32 +37,19 @@ public record ReduceManager<TStream>
     public ReduceManager(IMessageHub hub)
     {
         this.hub = hub;
-        ChangeItem<TStream> PatchFromJson(
-            TStream current,
-            ISynchronizationStream<TStream> stream,
-            ChangeItem<JsonElement> change
-        ) => change.SetValue(change.Value.Deserialize<TStream>(hub.JsonSerializerOptions));
-
-        PatchFunctions = PatchFunctions.SetItem(
-            typeof(JsonElement),
-            [
-                (
-                    (PatchFunctionFilter)((_, _) => true),
-                    (PatchFunction<TStream, JsonElement>)PatchFromJson
-                )
-            ]
-        );
 
         ReduceStreams = ReduceStreams.Add(
             (ReduceStream<TStream, JsonElementReference>)(
                 (parent, reference, subscriber) =>
                     (ISynchronizationStream<JsonElement, JsonElementReference>)
-                        CreateReducedStream(parent, reference, subscriber, JsonElementReducer)
+                        CreateReducedStream(parent, reference, subscriber, JsonElementReducer, 
+                            (_,change,_) => change.Value.Deserialize<TStream>(hub.JsonSerializerOptions))
             )
         );
 
         AddWorkspaceReference<JsonElementReference, JsonElement>(
-            (x, _) => JsonSerializer.SerializeToElement(x, hub.JsonSerializerOptions)
+            (x, _) => JsonSerializer.SerializeToElement(x, hub.JsonSerializerOptions),
+            (_, change, _) => change.Value.Deserialize<TStream>(hub.JsonSerializerOptions)
         );
     }
 
@@ -83,7 +70,8 @@ public record ReduceManager<TStream>
         };
 
     public ReduceManager<TStream> AddWorkspaceReference<TReference, TReduced>(
-        ReduceFunction<TStream, TReference, TReduced> reducer
+        ReduceFunction<TStream, TReference, TReduced> reducer,
+        Func<TStream, ChangeItem<TReduced>, TReference, TStream> backTransform
     )
         where TReference : WorkspaceReference<TReduced>
     {
@@ -94,7 +82,7 @@ public record ReduceManager<TStream>
         return AddWorkspaceReferenceStream<TReference, TReduced>(
             (parent, reference, subscriber) =>
                 (ISynchronizationStream<TReduced, TReference>)
-                    CreateReducedStream(parent, reference, subscriber, reducer)
+                    CreateReducedStream(parent, reference, subscriber, reducer, backTransform)
         );
     }
 
@@ -117,31 +105,13 @@ public record ReduceManager<TStream>
         };
     }
 
-    public ReduceManager<TStream> AddBackTransformation<TReduced>(
-        PatchFunction<TStream, TReduced> patchFunction
-    ) => AddBackTransformation(patchFunction, (_, _) => true);
-
-    public ReduceManager<TStream> AddBackTransformation<TReduced>(
-        PatchFunction<TStream, TReduced> patchFunction,
-        PatchFunctionFilter patchFunctionFilter
-    ) =>
-        this with
-        {
-            PatchFunctions = PatchFunctions.SetItem(
-                typeof(TReduced),
-                (
-                    PatchFunctions.GetValueOrDefault(typeof(TReduced))
-                    ?? ImmutableList<(Delegate Filter, Delegate Function)>.Empty
-                ).Insert(0, (patchFunctionFilter, patchFunction))
-            )
-        };
 
     protected static ISynchronizationStream CreateReducedStream<TReference, TReduced>(
         ISynchronizationStream<TStream> stream,
         TReference reference,
         object subscriber,
-        ReduceFunction<TStream, TReference, TReduced> reducer
-    )
+        ReduceFunction<TStream, TReference, TReduced> reducer,
+        Func<TStream, ChangeItem<TReduced>, TReference, TStream> backTransform)
         where TReference : WorkspaceReference<TReduced>
     {
         var reducedStream = new SynchronizationStream<TReduced, TReference>(
@@ -166,7 +136,8 @@ public record ReduceManager<TStream>
             stream,
             reference,
             value =>
-                reducedStream.Subscriber != null && reducedStream.Subscriber.Equals(value.ChangedBy)
+                reducedStream.Subscriber != null && reducedStream.Subscriber.Equals(value.ChangedBy),
+            backTransform
         );
         return reducedStream;
     }
