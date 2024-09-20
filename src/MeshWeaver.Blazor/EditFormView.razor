@@ -1,22 +1,32 @@
 @using System.Text.Json
+@using Json.Patch
+@using MeshWeaver.Data.Serialization
 @using Microsoft.AspNetCore.Components.Forms
 @inherits SkinnedView<EditFormControl, EditFormSkin, EditFormView>
 
-<EditForm Model="@Data">
+<EditForm Model="@Data" OnValidSubmit="Submit">
     <div>
         <dl class="form-group">
             <CascadingValue Name="Model" Value="@Data">
                 <DispatchView ViewModel="@ViewModel" Area="@Area" Stream="@Stream"></DispatchView>
             </CascadingValue>
         </dl>
+        <ValidationSummary />
+        <button type="submit" class="btn btn-primary">Update</button>
     </div>
 </EditForm>
 
 @code
 {
-    private JsonElement Data { get; set; }
+    private ModelParameter Data { get; set; }
     protected override void BindData()
     {
-        DataBind(new JsonPointerReference(ViewModel.DataContext), x => x.Data);
+        DataBind(new JsonPointerReference(ViewModel.DataContext), x => x.Data, x => new((JsonElement)x));
+    }
+
+    private void Submit(EditContext context)
+    {
+        var patch = Model.GetPatch();
+        Stream.Update(state => new ChangeItem<JsonElement>(Stream.Owner, Stream.Reference, patch.Apply(state), Stream.Subscriber,new(() => patch), Stream.Hub.Version));
     }
 }

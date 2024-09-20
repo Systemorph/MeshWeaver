@@ -287,11 +287,13 @@ public class ModelParameter(JsonElement? element)
 {
     public JsonElement? Element { get; private set; } = element;
 
-    internal List<JsonPatch> Patches { get; init; } = [];
+    public JsonElement? Persisted { get; private set; } = element;
 
     public void Update(JsonPatch patch)
     {
         Element = patch.Apply(Element);
-        Patches.Add(patch);
     }
+
+    public JsonPatch GetPatch() => Persisted.CreatePatch(Element);
+    public void Confirm(JsonElement persisted) => Persisted = persisted;
 }

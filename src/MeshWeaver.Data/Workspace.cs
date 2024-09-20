@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
@@ -321,7 +322,16 @@ public class Workspace : IWorkspace
 
     public DataChangeResponse RequestChange(DataChangedRequest change, WorkspaceReference reference)
     {
-        var log = new ActivityLog(ActivityCategory.DataUpdate);
+        activityService.Start(ActivityCategory.DataUpdate);
+
+        var (isValid, results) = Validate(change.Elements);
+        if (!isValid)
+        {
+            foreach (var validationResult in results.Where(r => r != ValidationResult.Success))
+                activityService.LogError("{members} invalid: {error}", validationResult.MemberNames, validationResult.ErrorMessage);
+            return new DataChangeResponse(Hub.Version, DataChangeStatus.Failed, activityService.Finish());
+        }
+
         Current = new ChangeItem<WorkspaceState>(
             Hub.Address,
             reference ?? Reference,
@@ -333,7 +343,20 @@ public class Workspace : IWorkspace
             null,
             Hub.Version
         );
-        return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, log.Finish());
+        return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, activityService.Finish());
+    }
+
+    private (bool IsValid, List<ValidationResult> Results) Validate(IReadOnlyCollection<object> instances)
+    {
+        var validationResults = new List<ValidationResult>();
+        var isValid = true;
+        foreach (var instance in instances)
+        {
+
+            var context = new ValidationContext(instance);
+            isValid = isValid && Validator.TryValidateObject(instance, context, validationResults);
+        }
+        return(isValid, validationResults);
     }
 
     ISynchronizationStream<WorkspaceState> IWorkspace.Stream => stream;

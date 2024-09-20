@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -10,7 +11,7 @@ using Xunit.Abstractions;
 
 namespace MeshWeaver.Data.Test;
 
-public record MyData(string Id, string Text)
+public record MyData(string Id, [property:Required]string Text)
 {
     public static MyData[] InitialData = [new("1", "A"), new("2", "B")];
 
@@ -181,5 +182,26 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     {
         storage = instanceCollection.Instances;
         return instanceCollection;
+    }
+    [Fact]
+    public async Task ValidationFailure()
+    {
+        // arrange
+        var client = GetClient();
+        var updateItems = new object[] { new MyData("5", null) };
+
+        // act
+        var updateResponse = await client.AwaitResponse(
+            new UpdateDataRequest(updateItems),
+            o => o.WithTarget(new ClientAddress())
+        );
+
+        // asserts
+        var response = updateResponse.Message.Should().BeOfType<DataChangeResponse>().Which;
+        response.Status.Should().Be(DataChangeStatus.Failed);
+        var log = response.Log;
+        log.Status.Should().Be(ActivityLogStatus.Failed);
+        var members = log.Messages.Should().ContainSingle().Which.Scopes.FirstOrDefault(s => s.Key == "members");
+        members.Value.Should().BeOfType<string[]>().Which.Single().Should().Be("Text");
     }
 }
