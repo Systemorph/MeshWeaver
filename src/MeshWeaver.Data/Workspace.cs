@@ -224,7 +224,6 @@ public class Workspace : IWorkspace
                 fromWorkspace.Where(x => Hub.Address.Equals(x.ChangedBy)).Subscribe(ret)
             );
 
-        ret.AddUpdateOfParent(stream, reference, value => !Hub.Address.Equals(value.ChangedBy));
 
         var json =
             ret as ISynchronizationStream<JsonElement>

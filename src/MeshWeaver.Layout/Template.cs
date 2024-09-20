@@ -11,10 +11,21 @@ namespace MeshWeaver.Layout;
 public static class Template{
 
     /// <summary>
+    /// This is a generic template method which can be used if streams are connected to synchronize with Workspace.
+    /// </summary>
+    /// <typeparam name="TView"></typeparam>
+    /// <param name="id">Id to be referenced in the data binding</param>
+    /// <param name="dataTemplate">View Template.</param>
+    /// <returns></returns>
+    public static TView Bind<TView>(string id, Expression<Func<object, TView>> dataTemplate)
+        where TView : UiControl => BindObject(null, id, dataTemplate);
+
+
+    /// <summary>
     /// Takes expression tree of data template and replaces all property getters by binding instances and sets data context property
     /// </summary>
     [ReplaceBindMethod]
-    public static UiControl Bind<T, TView>(
+    public static TView Bind<T, TView>(
         T data,
         string id,
         Expression<Func<T, TView>> dataTemplate
@@ -81,7 +92,7 @@ public static class Template{
         () => BindObject<object, UiControl>(null, default, null)
     );
 
-    internal static UiControl BindObject<T, TView>(
+    internal static TView BindObject<T, TView>(
         object data,
         string id,
         Expression<Func<T, TView>> dataTemplate
@@ -92,7 +103,9 @@ public static class Template{
         var view = dataTemplate.Build(topLevel, out var _);
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
-        return view.WithUpdates(store => store.UpdateData(id, data));
+        if(data != null)
+            view = (TView)view.WithUpdates(store => store.UpdateData(id, data));
+        return view;
     }
 
     private static string UpdateData(object data, string id)

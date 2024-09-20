@@ -6,7 +6,6 @@ using Json.Patch;
 using Json.Path;
 using Json.Pointer;
 using Microsoft.Extensions.DependencyInjection;
-using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
@@ -32,10 +31,6 @@ public static class LayoutExtensions
                             (stream, reference, subscriber) =>
                                 new LayoutAreaHost(stream, reference, stream.Hub.GetLayoutDefinition(), subscriber)
                                     .RenderLayoutArea()
-                        )
-                        .AddBackTransformation<EntityStore>(
-                            BackTransformLayoutArea,
-                            (_, reference) => reference is LayoutAreaReference
                         )
                 )
             )
@@ -177,6 +172,11 @@ public static class LayoutExtensions
         this ISynchronizationStream<EntityStore> stream,
         string id
     ) => (T)stream.Current.Value.Reduce(new EntityReference(LayoutAreaReference.Data, id));
+    public static void SetData(
+        this ISynchronizationStream<EntityStore> stream,
+        string id,
+        ChangeItem<object> changeItem
+    ) => stream.Update(s => changeItem.SetValue(s.Update(LayoutAreaReference.Data, c => c.SetItem(id, changeItem.Value))));
 
     public static TControl GetControl<TControl>(this EntityStore store, string area)
         where TControl : UiControl =>

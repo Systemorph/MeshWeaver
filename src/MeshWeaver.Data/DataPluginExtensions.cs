@@ -7,7 +7,6 @@ using MeshWeaver.Data.Persistence;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
-using MeshWeaver.Messaging.Serialization;
 
 namespace MeshWeaver.Data;
 
@@ -113,38 +112,41 @@ public static class DataPluginExtensions
             hub => configuration.Invoke(new GenericDataSource(address, dataContext.Workspace))
         );
 
-    public static void AddUpdateOfParent<TStream, TReduced>(
+    internal static void AddUpdateOfParent<TStream, TReference, TReduced>(
         this ISynchronizationStream<TReduced> ret,
         ISynchronizationStream<TStream> stream,
-        WorkspaceReference reference,
-        Func<ChangeItem<TReduced>, bool> filter
-    )
+        TReference reference,
+        Func<ChangeItem<TReduced>, bool> filter,
+        Func<TStream, ChangeItem<TReduced>, TReference, TStream> backTransform
+    ) where TReference : WorkspaceReference
     {
-        var backTransform = stream.ReduceManager.GetPatchFunction<TReduced>(stream, reference);
+        //var backTransform = stream.ReduceManager.GetPatchFunction<TReduced>(stream, reference);
 
         if (backTransform != null)
         {
             ret.AddDisposable(
-                ret.Where(filter).Subscribe(x => UpdateParent(stream, x, backTransform))
+                ret.Where(filter).Subscribe(x => UpdateParent(stream, reference, x, backTransform))
             );
         }
     }
 
-    internal static void UpdateParent<TStream, TReduced>(
+
+    internal static void UpdateParent<TStream, TReference, TReduced>(
         ISynchronizationStream<TStream> parent,
-        ChangeItem<TReduced> value,
-        PatchFunction<TStream, TReduced> backTransform
-    )
+        TReference reference,
+        ChangeItem<TReduced> change,
+        Func<TStream, ChangeItem<TReduced>, TReference, TStream> backTransform
+    ) where TReference : WorkspaceReference
     {
         // if the parent is initialized, we will update the parent
         if (parent.Initialized.IsCompleted)
         {
-            parent.Update(state => backTransform(state, parent, value));
+            parent.Update(state => change.SetValue(backTransform(state, change, reference)));
         }
         // if we are in automatic mode, we will initialize the parent
         else if (parent.InitializationMode == InitializationMode.Automatic)
         {
-            parent.Initialize(backTransform(Activator.CreateInstance<TStream>(), parent, value));
+            parent.Initialize(change.SetValue(backTransform(Activator.CreateInstance<TStream>(),  change, reference)));
         }
     }
 }

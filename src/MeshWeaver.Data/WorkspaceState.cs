@@ -59,6 +59,8 @@ public record WorkspaceState(
 
     public WorkspaceState Update(StreamReference reference, EntityStore store) =>
         this with { StoresByStream = StoresByStream.SetItem(reference, store) };
+    public WorkspaceState Update(StreamReference reference, Func<EntityStore, EntityStore> update) =>
+        this with { StoresByStream = StoresByStream.SetItem(reference, update.Invoke(StoresByStream.GetValueOrDefault(reference) ?? new())) };
 
     public WorkspaceState Change(DataChangedRequest request)
     {
@@ -77,6 +79,14 @@ public record WorkspaceState(
             StoresByStream = StoresByStream.SetItems(MergeDelete((DeleteDataRequest)request)),
             Version = Hub.Version
         };
+    }
+
+    public StreamReference GetStreamReference(object obj, string collection)
+        => GetStreamReference(obj, DataContext.TypeRegistry.GetType(collection));
+    public StreamReference GetStreamReference(object obj, Type type)
+    {
+         var e = MapToIdAndAddress([obj], type).Single();
+         return new StreamReference(e.Id, e.Reference);
     }
 
     private IEnumerable<KeyValuePair<StreamReference, EntityStore>> MergeUpdate(
@@ -221,7 +231,7 @@ public record WorkspaceState(
             .Where(x => x != null)
             .Aggregate((x, y) => x.Merge(y, UpdateOptions.Default));
     internal EntityStore ReduceImpl(StreamReference reference) =>
-StoresByStream.GetValueOrDefault(reference);
+        StoresByStream.GetValueOrDefault(reference);
 
     public WorkspaceState Merge(WorkspaceState that) =>
         this with
