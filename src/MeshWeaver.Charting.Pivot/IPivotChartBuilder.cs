@@ -7,7 +7,7 @@ namespace MeshWeaver.Charting.Pivot;
 
 public interface IPivotChartBuilder
 {
-    IPivotChartBuilder WithLegend(Func<Legend, Legend> legendModifier);
+    IPivotChartBuilder WithLegend(Func<Legend, Legend> legendModifier = null);
     IPivotChartBuilder WithTitle(string title, Func<Title, Title> titleModifier = null);
     IPivotChartBuilder WithSubTitle(string title, Func<Title, Title> titleModifier = null);
     IPivotChartBuilder WithColorScheme(string[] scheme);
