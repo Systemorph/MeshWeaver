@@ -2,6 +2,10 @@
 
 @("DiscountVsRevenue")
 
+# Discount Percentage
+
+@("DiscountPercentage")
+
 # Revenue
 
 @("RevenueSummary")

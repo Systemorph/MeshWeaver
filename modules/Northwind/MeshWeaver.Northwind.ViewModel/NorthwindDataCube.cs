@@ -196,6 +196,7 @@ namespace MeshWeaver.Northwind.ViewModel
         /// Gets the discount applied to the order.
         /// </summary>
         [NotVisible]
+        [Dimension(typeof(double), nameof(Discount))]
         public double Discount { get; init; }
     
         /// <summary>
