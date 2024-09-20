@@ -41,7 +41,7 @@ public static class DomainViews
             var typeDefinition = typeSource.TypeDefinition;
             var idString = parts[1];
             var id = JsonSerializer.Deserialize(idString, typeDefinition.GetKeyType());
-            return area.Hub.ServiceProvider.GetRequiredService<IDomainLayoutService>().Render(new(area, typeDefinition, idString, id));
+            return area.Hub.ServiceProvider.GetRequiredService<IDomainLayoutService>().Render(new(area, typeDefinition, idString, id, ctx));
         }
         catch (Exception e)
         {
@@ -63,7 +63,7 @@ public static class DomainViews
             throw new DataSourceConfigurationException(
                 $"Collection {collection} is not mapped in Address {area.Hub.Address}.");
 
-        var context = new EntityRenderingContext(area, typeDefinition, null, null);
+        var context = new EntityRenderingContext(area, typeDefinition, null, null, ctx);
         return area.Hub.ServiceProvider.GetRequiredService<IDomainLayoutService>().GetCatalog(context);
 
     }
