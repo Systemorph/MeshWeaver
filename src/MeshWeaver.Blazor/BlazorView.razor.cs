@@ -31,7 +31,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
     public string Area { get; set; }
 
     [CascadingParameter(Name = nameof(Model))]
-    public JsonElement? Model { get; set; }
+    public ModelParameter Model { get; set; }
 
     protected string Style { get; set; }
 
@@ -113,7 +113,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
     {
         if (value is JsonPointerReference reference)
         {
-            if(Model.HasValue)
+            if(Model.Element.HasValue)
                 return Observable.Return(ConvertSingle(GetValueFromModel(reference), conversion));
             return DataBind(reference, conversion);
         }
@@ -124,7 +124,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
     private object GetValueFromModel(JsonPointerReference reference)
     {
         var pointer = JsonPointer.Parse(reference.Pointer);
-        return pointer.Evaluate(Model!.Value);
+        return pointer.Evaluate(Model.Element!.Value);
     }
 
     private IObservable<T> DataBind<T>(JsonPointerReference reference, Func<object, T> conversion) =>
@@ -210,10 +210,11 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
     {
         if (reference != null)
         {
-            if (Model.HasValue)
+            if (Model.Element.HasValue)
             {
-                var patch = GetPatch(value, reference, Model.Value);
-                Model = patch?.Apply(Model.Value) ?? Model;
+                var patch = GetPatch(value, reference, Model.Element.Value);
+                if(patch != null)
+                    Model.Update(patch);
             }
 
             else
@@ -280,4 +281,17 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
 
 
 
+}
+
+public class ModelParameter(JsonElement? element)
+{
+    public JsonElement? Element { get; private set; } = element;
+
+    internal List<JsonPatch> Patches { get; init; } = [];
+
+    public void Update(JsonPatch patch)
+    {
+        Element = patch.Apply(Element);
+        Patches.Add(patch);
+    }
 }

@@ -11,7 +11,7 @@ namespace MeshWeaver.Data.Serialization;
 public class InstancesInCollectionConverter(ITypeRegistry typeRegistry)
     : JsonConverter<InstanceCollection>
 {
-    public const string CollectionProperty = "$collection";
+    public const string CollectionProperty = "$type";
 
     private JsonNode Serialize(InstanceCollection instances, JsonSerializerOptions options)
     {
@@ -40,7 +40,7 @@ public class InstancesInCollectionConverter(ITypeRegistry typeRegistry)
               ?? typeof(object);
         return new InstanceCollection
         {
-            Instances = obj.Where(i => i.Key != CollectionProperty)
+            Instances = obj.Where(i => i.Key != CollectionProperty )
                 .Select(i => new KeyValuePair<object, object>(
                     JsonSerializer.Deserialize(i.Key, type, options),
                     i.Value.Deserialize<object>(options)

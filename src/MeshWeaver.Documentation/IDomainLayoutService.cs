@@ -100,7 +100,7 @@ public record DomainViewConfiguration
 
     public object DetailsLayout(EntityRenderingContext context)
     {
-        return Template.Bind(context.Instance,
+        var ret = Template.Bind(context.Instance,
             context.IdString,
             oo =>
                 context.TypeDefinition.Type.GetProperties()
@@ -110,6 +110,27 @@ public record DomainViewConfiguration
                         .FirstOrDefault(x => x != null)
                         )
         );
+
+        var host = context.Host;
+        var subscription = host.Stream.Subscribe(changeItem =>
+        {
+            if(changeItem.Patch?.Value is null)
+                return;
+            if (changeItem.ChangedBy.Equals(host.Stream.Subscriber) &&changeItem.Patch.Value.Operations.Any(x => x.Path.ToString().StartsWith(ret.DataContext)))
+            {
+                var instance = changeItem.Value.Collections.GetValueOrDefault(LayoutAreaReference.Data)?.Instances.GetValueOrDefault(context.IdString);
+                if(instance != null)
+                    host.Workspace.Update(instance);
+                else
+                {
+                    // TODO V10: Should we delete here? How would we end up here? (20.09.2024, Roland Bürgi)
+                }
+            }
+        });
+
+        host.AddDisposable(context.RenderingContext.Area, subscription);
+
+        return ret;
     }
 
     private EditFormControl MapToControl(EditFormControl grid, PropertyRenderingContext context)
@@ -186,7 +207,7 @@ public record DomainViewConfiguration
             .FirstOrDefault(x => x != null);
 }
 
-public record EntityRenderingContext(LayoutAreaHost Host, ITypeDefinition TypeDefinition, string IdString, object Id)
+public record EntityRenderingContext(LayoutAreaHost Host, ITypeDefinition TypeDefinition, string IdString, object Id, RenderingContext RenderingContext)
 {
     public object Instance { get; init; }
 }
