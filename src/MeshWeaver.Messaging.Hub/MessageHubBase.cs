@@ -180,7 +180,7 @@ public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
         delivery = await node.Value.Invoke(delivery, cancellationToken);
 
         if (node.Next == null)
-            return delivery.Ignored();
+            return delivery;
 
         return await DeliverMessageAsync(delivery, node.Next, cancellationToken);
     }
