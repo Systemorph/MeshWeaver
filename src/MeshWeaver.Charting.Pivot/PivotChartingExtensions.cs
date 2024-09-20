@@ -115,4 +115,20 @@ public static class PivotChartingExtensions
             TPivotBuilder
         >(pivotBuilder);
     }
+
+    public static IPivotChartBuilder ToPieChart<
+        T,
+        TTransformed,
+        TIntermediate,
+        TAggregate,
+        TPivotBuilder
+    >(this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
+        where TPivotBuilder : PivotBuilderBase<
+                T,
+                TTransformed,
+                TIntermediate,
+                TAggregate,
+                TPivotBuilder
+            >
+        => new PivotPieChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>(pivotBuilder);
 }

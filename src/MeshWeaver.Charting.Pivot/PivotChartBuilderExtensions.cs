@@ -43,6 +43,25 @@ public static class PivotChartBuilderExtensions
         >
         => pivotBuilder.ToChart(b => b.ToLineChart(), builder);
 
+    public static ChartControl ToPieChart<
+            T,
+            TTransformed,
+            TIntermediate,
+            TAggregate,
+            TPivotBuilder
+        >(
+        this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
+        Func<IPivotChartBuilder, IPivotChartBuilder> builder = null
+        )
+        where TPivotBuilder : PivotBuilderBase<
+            T,
+            TTransformed,
+            TIntermediate,
+            TAggregate,
+            TPivotBuilder
+        >
+        => pivotBuilder.ToChart(b => b.ToPieChart(), builder);
+
     private static ChartControl ToChart<
             T,
             TTransformed,
