@@ -11,6 +11,7 @@ using MeshWeaver.Data.Serialization;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
+using System.Runtime.InteropServices.JavaScript;
 
 namespace MeshWeaver.Blazor;
 
@@ -113,7 +114,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
     {
         if (value is JsonPointerReference reference)
         {
-            if(Model.Element.HasValue)
+            if(Model != null)
                 return Observable.Return(ConvertSingle(GetValueFromModel(reference), conversion));
             return DataBind(reference, conversion);
         }
@@ -124,7 +125,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
     private object GetValueFromModel(JsonPointerReference reference)
     {
         var pointer = JsonPointer.Parse(reference.Pointer);
-        return pointer.Evaluate(Model.Element!.Value);
+        return pointer.Evaluate(Model.Element);
     }
 
     private IObservable<T> DataBind<T>(JsonPointerReference reference, Func<object, T> conversion) =>
@@ -210,9 +211,9 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
     {
         if (reference != null)
         {
-            if (Model.Element.HasValue)
+            if (Model != null)
             {
-                var patch = GetPatch(value, reference, Model.Element.Value);
+                var patch = GetPatch(value, reference, Model.Element);
                 if(patch != null)
                     Model.Update(patch);
             }
@@ -281,19 +282,4 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
 
 
 
-}
-
-public class ModelParameter(JsonElement? element)
-{
-    public JsonElement? Element { get; private set; } = element;
-
-    public JsonElement? Persisted { get; private set; } = element;
-
-    public void Update(JsonPatch patch)
-    {
-        Element = patch.Apply(Element);
-    }
-
-    public JsonPatch GetPatch() => Persisted.CreatePatch(Element);
-    public void Confirm(JsonElement persisted) => Persisted = persisted;
 }

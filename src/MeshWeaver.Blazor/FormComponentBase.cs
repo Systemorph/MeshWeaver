@@ -19,7 +19,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
             var needsUpdate = NeedsUpdate(value);
             this.value = value;
             if (needsUpdate)
-                UpdatePointer(ConvertToData, Pointer);
+                UpdatePointer(ConvertToData(value), Pointer);
         }
     }
 
