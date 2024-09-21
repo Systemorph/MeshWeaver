@@ -9,12 +9,13 @@ using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain.Layout;
 using MeshWeaver.Hub.Fixture;
+using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 using Xunit.Abstractions;
 
 namespace MeshWeaver.Layout.Test;
 
-public class EntityLayoutTest(ITestOutputHelper output) : HubTestBase(output)
+public class DomainLayoutTest(ITestOutputHelper output) : HubTestBase(output)
 {
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
@@ -78,5 +79,30 @@ public class EntityLayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var loadedInstance = (JsonObject)dataStream.Value.Instances.GetValueOrDefault("Hello");
         loadedInstance["displayName"].Should().Be("Universe");
+    }
+
+    [HubFact]
+    public async Task TestCatalog()
+    {
+        var host = GetHost();
+        var reference = host.GetCatalogReference(typeof(DataRecord).FullName);
+        var client = GetClient();
+        var workspace = client.GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            reference
+        );
+        var content = await stream.GetControlStream(reference.Area)
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x != null);
+        var stack = content
+            .Should()
+            .BeOfType<LayoutStackControl>()
+            .Which;
+
+        var control = await stream.GetControlAsync(stack.Areas.Last().Area.ToString());
+        var dataGrid = control.Should().BeOfType<DataGridControl>().Which;
+        dataGrid.Data.Should().BeAssignableTo<IEnumerable<object>>().Which.Should().HaveCount(2);
+
     }
 }
