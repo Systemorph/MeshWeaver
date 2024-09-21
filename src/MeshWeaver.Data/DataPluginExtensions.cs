@@ -112,41 +112,6 @@ public static class DataPluginExtensions
             hub => configuration.Invoke(new GenericDataSource(address, dataContext.Workspace))
         );
 
-    internal static void AddUpdateOfParent<TStream, TReference, TReduced>(
-        this ISynchronizationStream<TReduced> ret,
-        ISynchronizationStream<TStream> stream,
-        TReference reference,
-        Func<ChangeItem<TReduced>, bool> filter,
-        Func<TStream, ChangeItem<TReduced>, TReference, TStream> backTransform
-    ) where TReference : WorkspaceReference
-    {
-        //var backTransform = stream.ReduceManager.GetPatchFunction<TReduced>(stream, reference);
-
-        if (backTransform != null)
-        {
-            ret.AddDisposable(
-                ret.Where(filter).Subscribe(x => UpdateParent(stream, reference, x, backTransform))
-            );
-        }
-    }
 
 
-    internal static void UpdateParent<TStream, TReference, TReduced>(
-        ISynchronizationStream<TStream> parent,
-        TReference reference,
-        ChangeItem<TReduced> change,
-        Func<TStream, ChangeItem<TReduced>, TReference, TStream> backTransform
-    ) where TReference : WorkspaceReference
-    {
-        // if the parent is initialized, we will update the parent
-        if (parent.Initialized.IsCompleted)
-        {
-            parent.Update(state => change.SetValue(backTransform(state, change, reference)));
-        }
-        // if we are in automatic mode, we will initialize the parent
-        else if (parent.InitializationMode == InitializationMode.Automatic)
-        {
-            parent.Initialize(change.SetValue(backTransform(Activator.CreateInstance<TStream>(),  change, reference)));
-        }
-    }
 }

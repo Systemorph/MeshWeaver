@@ -188,20 +188,20 @@ public class Workspace : IWorkspace
             )
         );
         json.AddDisposable(
-            json.ToDataChangedStream(reference)
-                .Where(x => !json.Subscriber.Equals(x.ChangedBy))
+            json.ToDataChangedHost(reference)
                 .Subscribe(e =>
                 {
                     logger.LogDebug("Owner {owner} sending change notification to subscriber {subscriber}", json.Owner, json.Subscriber);
                     Hub.Post(e, o => o.WithTarget(json.Subscriber));
                 })
-        );
+            );
         json.AddDisposable(
             new AnonymousDisposable(() => subscriptions.Remove(new(subscriber, reference), out _))
         );
 
         return ret;
     }
+
 
     private ISynchronizationStream CreateExternalClient<TReduced, TReference>(
         object owner,
@@ -254,7 +254,7 @@ public class Workspace : IWorkspace
 
         json.AddDisposable(
             // this is the "client" ==> never needs to submit full state
-            json.ToDataChangedStream(reference)
+            json.ToDataChangedClient(reference)
                 .Where(x => json.Hub.Address.Equals(x.ChangedBy))
                 .Subscribe(e =>
                 {
