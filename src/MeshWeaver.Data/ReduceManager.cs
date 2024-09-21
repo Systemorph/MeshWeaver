@@ -124,22 +124,46 @@ public record ReduceManager<TStream>
         );
 
         stream.AddDisposable(reducedStream);
-        stream
-            .Where(x =>
-                reducedStream.Subscriber == null || !reducedStream.Subscriber.Equals(x.ChangedBy)
-            )
-            .Select(x => x.SetValue(reducer.Invoke(x.Value, reducedStream.Reference)))
-            .DistinctUntilChanged()
-            .Subscribe(reducedStream);
-
-        reducedStream.AddUpdateOfParent(
-            stream,
-            reference,
-            value =>
-                reducedStream.Subscriber != null && reducedStream.Subscriber.Equals(value.ChangedBy),
-            backTransform
+        reducedStream.AddDisposable(
+            stream
+                .Take(1)
+                .Concat(stream.Skip(1)
+                    .Where(x => !Equals(x.ChangedBy, subscriber))
+                )
+                .Select(x => x.SetValue(reducer.Invoke(x.Value, reducedStream.Reference)))
+                .DistinctUntilChanged()
+                .Subscribe(reducedStream)
         );
+
+        if (backTransform != null)
+        {
+            reducedStream.AddDisposable(
+                reducedStream.Where(value =>
+                        reducedStream.Subscriber != null && reducedStream.Subscriber.Equals(value.ChangedBy)
+                ).Subscribe(x => UpdateParent(stream, reference, x, backTransform))
+            );
+        }
+
+
         return reducedStream;
+    }
+    internal static void UpdateParent<TStream, TReference, TReduced>(
+        ISynchronizationStream<TStream> parent,
+        TReference reference,
+        ChangeItem<TReduced> change,
+        Func<TStream, ChangeItem<TReduced>, TReference, TStream> backTransform
+    ) where TReference : WorkspaceReference
+    {
+        // if the parent is initialized, we will update the parent
+        if (parent.Initialized.IsCompleted)
+        {
+            parent.Update(state => change.SetValue(backTransform(state, change, reference)));
+        }
+        // if we are in automatic mode, we will initialize the parent
+        else if (parent.InitializationMode == InitializationMode.Automatic)
+        {
+            parent.Initialize(change.SetValue(backTransform(Activator.CreateInstance<TStream>(), change, reference)));
+        }
     }
 
     private static object ReduceApplyRules<TReference, TReduced>(
