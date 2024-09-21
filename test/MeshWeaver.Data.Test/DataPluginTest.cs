@@ -204,4 +204,16 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var members = log.Messages.Should().ContainSingle().Which.Scopes.FirstOrDefault(s => s.Key == "members");
         members.Value.Should().BeOfType<string[]>().Which.Single().Should().Be("Text");
     }
+
+    [Fact]
+    public async Task ReduceCollectionReference()
+    {
+        var host = GetHost();
+        var collection = await host.GetWorkspace().Stream.Reduce(new CollectionReference(typeof(MyData).FullName), null)
+            .Select(c => c.Value.Instances.Values)
+            .FirstAsync();
+
+        collection.Should().BeEquivalentTo(MyData.InitialData);
+    }
+
 }
