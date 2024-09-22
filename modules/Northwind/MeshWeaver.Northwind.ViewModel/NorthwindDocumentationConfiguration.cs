@@ -24,7 +24,7 @@ namespace MeshWeaver.Northwind.ViewModel
         public static MessageHubConfiguration AddNorthwindDocumentation(
             this MessageHubConfiguration configuration
         ) => configuration
-            .AddLayout(layout => layout.AddDocumentationMenuForAssemblies(typeof(NorthwindDocumentationConfiguration).Assembly))
+            // .AddLayout(layout => layout.AddDocumentationMenuForAssemblies(typeof(NorthwindDocumentationConfiguration).Assembly))
             ;
     }
 }

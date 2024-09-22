@@ -1,14 +1,8 @@
-﻿using System.Reactive.Linq;
-using MeshWeaver.Application.Styles;
-using MeshWeaver.Charting.Models.Options;
-using MeshWeaver.Charting.Pivot;
-using MeshWeaver.DataCubes;
+﻿using MeshWeaver.Application.Styles;
 using MeshWeaver.Domain.Layout;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
-using MeshWeaver.Northwind.Domain;
-using MeshWeaver.Pivot.Builder;
 
 namespace MeshWeaver.Northwind.ViewModel;
 
@@ -17,8 +11,6 @@ namespace MeshWeaver.Northwind.ViewModel;
 /// </summary>
 public static class NorthwindDashboardArea
 {
-    internal const string DashboardDataCube = nameof(DashboardDataCube);
-
     /// <summary>
     /// Adds the Northwind Dashboard view to the specified layout.
     /// </summary>
@@ -72,72 +64,8 @@ public static class NorthwindDashboardArea
             .WithView(
                 Controls.Stack
                     .WithView(Controls.PaneHeader("Top products"))
-                    .WithView((area, ctx) => area.TopProducts(ctx)),
+                    .WithView(ProductOverviewArea.ProductOverview),
                 skin => skin.WithXs(12).WithSm(6)
             );
     }
-
-    private static IObservable<object> SalesByCategory(this LayoutAreaHost layoutArea, RenderingContext context)
-    {
-        return layoutArea.GetDataCube()
-            .Select(cube =>
-                layoutArea.Workspace
-                    .State
-                    .Pivot(cube)
-                    .SliceColumnsBy(nameof(Category))
-                    .ToBarChart(
-                        builder => builder
-                            .WithOptions(o => o.OrderByValueDescending())
-                            .WithChartBuilder(o => 
-                                o.WithDataLabels(d => 
-                                    d.WithAnchor(DataLabelsAnchor.End)
-                                        .WithAlign(DataLabelsAlign.End))
-                                )
-                    )
-            );
-    }
-
-    private static IObservable<object> TopProducts(this LayoutAreaHost layoutArea, RenderingContext context)
-    {
-        return layoutArea.GetDataCube()
-            .Select(cube =>
-                layoutArea.Workspace
-                    .State
-                    .Pivot(cube)
-                    .SliceColumnsBy(nameof(Product))
-                    .ToBarChart(builder => builder
-                        .WithOptions(o => o.OrderByValueDescending().TopValues(5))
-                        .WithChartBuilder(o =>
-                            o.AsHorizontalBar()
-                                .WithDataLabels()
-                        )
-                    )
-            );
-    }
-
-    private static IObservable<IDataCube<NorthwindDataCube>> GetDataCube(
-        this LayoutAreaHost area
-    ) => area.GetOrAddVariable(DashboardDataCube,
-        () => area
-            .Workspace.ReduceToTypes(typeof(Order), typeof(OrderDetails), typeof(Product))
-            .DistinctUntilChanged()
-            .Select(x =>
-                x.Value.GetData<Order>()
-                    .Join(
-                        x.Value.GetData<OrderDetails>(),
-                        o => o.OrderId,
-                        d => d.OrderId,
-                        (order, detail) => (order, detail)
-                    )
-                    .Join(
-                        x.Value.GetData<Product>(),
-                        od => od.detail.ProductId,
-                        p => p.ProductId,
-                        (od, product) => (od.order, od.detail, product)
-                    )
-                    .Select(data => new NorthwindDataCube(data.order, data.detail, data.product))
-                    .ToDataCube()
-            )
-    );
-
 }

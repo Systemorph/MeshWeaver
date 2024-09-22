@@ -17,7 +17,7 @@ public static class DataGridControlExtensions
         return ToDataGrid(area, elements, typeof(T), x => x.AutoMapProperties());
     }
     [ReplaceToDataGrid]
-    public static DataGridControl ToDataGrid<T>(this LayoutAreaHost area, IReadOnlyCollection<T> elements, Func<PropertyViewBuilder<T>, PropertyViewBuilder<T>> configuration)
+    public static DataGridControl ToDataGrid<T>(this LayoutAreaHost area, IReadOnlyCollection<T> elements, Func<PropertyViewBuilder<T>, PropertyViewBuilder> configuration)
     {
         return ToDataGrid(area, elements, typeof(T), configuration == null ? null : c => configuration.Invoke((PropertyViewBuilder<T>)c));
     }

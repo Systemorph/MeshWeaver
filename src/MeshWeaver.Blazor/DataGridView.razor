@@ -4,7 +4,7 @@
 @inherits BlazorView<DataGridControl, DataGridView>
 @inject NavigationManager NavigationManager
 
-<div style="display: table; table-layout: fixed; width: 100%;">
+<div style="display: table; table-layout: fixed; width: 100%;" class="@Class">
     <div style="overflow-x: auto;">
         <FluentDataGrid Items="@QueryableData"
                         Virtualize="@Virtualize"
