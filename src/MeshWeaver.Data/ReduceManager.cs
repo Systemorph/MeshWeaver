@@ -131,6 +131,7 @@ public record ReduceManager<TStream>
         reducedStream.AddDisposable(
             selected
                 .Where(x => x is { Value: not null })
+                .Select(x => x with{ChangedBy = null})
                 .Take(1)
                 .Concat(selected
                     .Where(x => x is { Value: not null })

@@ -71,7 +71,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
 
 
         stream.Dispose();
-        (stream,data) = await GetDataInstance(workspace, reference);
+        (_,data) = await GetDataInstance(workspace, reference);
         prop = innerPointer.Evaluate(data);
         prop.ToString().Should().Be("Universe");
     }
@@ -95,9 +95,11 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         dataContext.Should().NotBeNullOrWhiteSpace();
 
         var pointer = JsonPointer.Parse(dataContext);
-        var data = pointer.Evaluate(stream.Current.Value);
+        var data = await stream.Reduce(new JsonPointerReference(dataContext), stream.Subscriber)
+            .Timeout(3.Seconds())
+            .FirstAsync();
         data.Should().NotBeNull();
-        return (stream,data!.Value);
+        return (stream,data.Value!.Value);
     }
 
     [HubFact]
