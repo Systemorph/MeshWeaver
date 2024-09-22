@@ -131,4 +131,20 @@ public static class PivotChartingExtensions
                 TPivotBuilder
             >
         => new PivotPieChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>(pivotBuilder);
+
+    public static IPivotChartBuilder ToDoughnutChart<
+        T,
+        TTransformed,
+        TIntermediate,
+        TAggregate,
+        TPivotBuilder
+    >(this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
+        where TPivotBuilder : PivotBuilderBase<
+                T,
+                TTransformed,
+                TIntermediate,
+                TAggregate,
+                TPivotBuilder
+            >
+        => new PivotDoughnutChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>(pivotBuilder);
 }
