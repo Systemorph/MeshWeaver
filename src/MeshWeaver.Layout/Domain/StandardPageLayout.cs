@@ -58,8 +58,8 @@ public static class StandardPageLayout
                             )
                             .WithSkin(skin => skin
                                 .WithOrientation(Orientation.Horizontal)
-                                .WithClass("main")
                             )
+                            .AddSkin(new MainSkin())
                     )
                     .WithView(NamedArea(Footer).AddSkin(Skins.Footer))
                 , store
