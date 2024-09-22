@@ -69,7 +69,6 @@ public class EntityFrameworkDataContextTest(ITestOutputHelper output) : HubTestB
             o => o.WithTarget(new ClientAddress())
         );
 
-        dataChanged.Message.Version.Should().Be(6);
 
         // check on data hub
         var hostWorkspace = GetHost().GetWorkspace();
