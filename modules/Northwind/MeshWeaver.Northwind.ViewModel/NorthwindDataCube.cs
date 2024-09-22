@@ -22,6 +22,8 @@ namespace MeshWeaver.Northwind.ViewModel
             Customer = order.CustomerId;
             Employee = order.EmployeeId;
             OrderDate = order.OrderDate;
+            OrderMonth = order.OrderDate.ToString("yy-MM");
+            OrderYear = order.OrderDate.Year;
             RequiredDate = order.RequiredDate;
             ShippedDate = order.ShippedDate;
             ShipVia = order.ShipVia;
@@ -29,7 +31,7 @@ namespace MeshWeaver.Northwind.ViewModel
             ShipCountry = order.ShipCountry;
             Product = product.ProductId;
             ProductName = product.ProductName;
-            UnitPrice = details.UnitPrice;
+            UnitPrice = product.UnitPrice;
             Quantity = details.Quantity;
             Discount = details.Discount;
             Region = order.ShipRegion;
@@ -41,9 +43,39 @@ namespace MeshWeaver.Northwind.ViewModel
             UnitsOnOrder = product.UnitsOnOrder;
             ReorderLevel = product.ReorderLevel;
             Discontinued = product.Discontinued;
-            Amount = details.UnitPrice * details.Quantity * (1 - details.Discount);
+            Amount = product.UnitPrice * details.Quantity * (1 - details.Discount);
         }
-    
+
+        protected NorthwindDataCube(NorthwindDataCube original)
+        {
+            OrderId = original.OrderId;
+            Customer = original.Customer;
+            Employee = original.Employee;
+            OrderDate = original.OrderDate;
+            OrderMonth = original.OrderMonth;
+            OrderYear = original.OrderYear;
+            RequiredDate = original.RequiredDate;
+            ShippedDate = original.ShippedDate;
+            ShipVia = original.ShipVia;
+            Freight = original.Freight;
+            ShipCountry = original.ShipCountry;
+            Product = original.Product;
+            ProductName = original.ProductName;
+            UnitPrice = original.UnitPrice;
+            Quantity = original.Quantity;
+            Discount = original.Discount;
+            Region = original.Region;
+            Supplier = original.Supplier;
+            ShipCountry = original.ShipCountry;
+            Category = original.Category;
+            QuantityPerUnit = original.QuantityPerUnit;
+            UnitsInStock = original.UnitsInStock;
+            UnitsOnOrder = original.UnitsOnOrder;
+            ReorderLevel = original.ReorderLevel;
+            Discontinued = original.Discontinued;
+            Amount = original.Amount;
+        }
+
         /// <summary>
         /// Gets the unique identifier for the order.
         /// </summary>
@@ -86,7 +118,21 @@ namespace MeshWeaver.Northwind.ViewModel
         /// </summary>
         [NotVisible]
         public DateTime OrderDate { get; init; }
-    
+
+        /// <summary>
+        /// Gets the month when the order was placed.
+        /// </summary>
+        [NotVisible]
+        [Dimension(typeof(string), nameof(OrderMonth))]
+        public string OrderMonth { get; init; }
+
+        /// <summary>
+        /// Gets the year when the order was placed.
+        /// </summary>
+        [NotVisible]
+        [Dimension(typeof(int), nameof(OrderYear))]
+        public int OrderYear { get; init; }
+
         /// <summary>
         /// Gets the date by which the order is required.
         /// </summary>
@@ -181,5 +227,19 @@ namespace MeshWeaver.Northwind.ViewModel
         /// </summary>
         [NotVisible]
         public string Discontinued { get; init; }
+    }
+
+    public record LabeledNorthwindDataCube : NorthwindDataCube
+    {
+        public LabeledNorthwindDataCube(string label, NorthwindDataCube original) : base(original)
+        {
+            Label = label;
+        }
+
+        public LabeledNorthwindDataCube() { }
+
+        [NotVisible]
+        [Dimension(typeof(string), nameof(Label))]
+        public string Label { get; init; }
     }
 }

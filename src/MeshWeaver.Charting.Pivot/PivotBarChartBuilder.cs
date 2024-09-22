@@ -1,6 +1,6 @@
-﻿using MeshWeaver.Charting.Builders.ChartBuilders;
+﻿using MeshWeaver.Charting.Builders;
+using MeshWeaver.Charting.Builders.Chart;
 using MeshWeaver.Charting.Builders.DataSetBuilders;
-using MeshWeaver.Charting.Builders.OptionsBuilders;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Models.Options.Scales;
@@ -15,11 +15,7 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
         TTransformed,
         TIntermediate,
         TAggregate,
-        TPivotBuilder,
-        BarChartBuilder,
-        BarDataSet,
-        BarOptionsBuilder,
-        BarDataSetBuilder
+        TPivotBuilder
     >,
         IPivotBarChartBuilder
     where TPivotBuilder : PivotBuilderBase<
@@ -35,7 +31,7 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
     )
         : base(pivotBuilder)
     {
-        ChartBuilder = new BarChartBuilder();
+        Chart = Charts.Bar([]);
     }
 
     public new IPivotBarChartBuilder WithOptions(Func<PivotChartModel, PivotChartModel> postProcessor)
@@ -44,9 +40,9 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
         return this;
     }
 
-    public IPivotBarChartBuilder WithChartBuilder(Func<BarChartBuilder, BarChartBuilder> builder)
+    public IPivotBarChartBuilder WithChartBuilder(Func<Chart, Chart> builder)
     {
-        return this with { ChartBuilder = builder(ChartBuilder) };
+        return this with { Chart = builder(Chart), };
     }
 
     public IPivotBarChartBuilder AsStackedWithScatterTotals()
@@ -138,25 +134,25 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
             {
                 case ChartType.Bar when row.Stack != null:
                 {
-                    ChartBuilder.WithDataSet(builder =>
-                        builder
-                            .WithData(values)
-                            .SetType(ChartType.Bar)
-                            .WithXAxis(PivotChartConst.XBarAxis)
-                            .WithLabel(row.Descriptor.DisplayName)
-                            .WithStack(row.Stack)
+                    Chart = Chart.WithDataSet(new BarDataSetBuilder()
+                        .WithData(values)
+                        .SetType(ChartType.Bar)
+                        .WithXAxis(PivotChartConst.XBarAxis)
+                        .WithLabel(row.Descriptor.DisplayName)
+                        .WithStack(row.Stack)
+                        .Build()
                     );
                     break;
                 }
 
                 case ChartType.Bar:
                 {
-                    ChartBuilder.WithDataSet(builder =>
-                        builder
-                            .WithData(values)
-                            .SetType(ChartType.Bar)
-                            .WithXAxis(PivotChartConst.XBarAxis)
-                            .WithLabel(row.Descriptor.DisplayName)
+                    Chart = Chart.WithDataSet(new BarDataSetBuilder()
+                        .WithData(values)
+                        .SetType(ChartType.Bar)
+                        .WithXAxis(PivotChartConst.XBarAxis)
+                        .WithLabel(row.Descriptor.DisplayName)
+                        .Build()
                     );
                     break;
                 }
@@ -164,16 +160,17 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
                 case ChartType.Scatter:
                 {
                     var shift = -0.4 + (0.4 / totalNbStackPoints) * (2 * countStackPoints + 1) + 1; // fix this! plus one was added just to have correct numbers in one example
-                    var dataSet = values.Select((value, i) => (i + shift, value ?? 0))
+                    var dataPairs = values.Select((value, i) => (i + shift, value ?? 0))
                         .ToList();
-                    ChartBuilder.WithDataSet<LineScatterDataSetBuilder, LineScatterDataSet>(
-                        builder =>
-                            builder
-                                .WithDataPoint(dataSet)
-                                .WithXAxis(PivotChartConst.XScatterAxis)
-                                .WithLabel(row.Descriptor.DisplayName + ", total")
-                                .WithPointStyle(Shapes.Rectangle)
-                                .WithPointRadius(4)
+                    Chart = Chart.WithDataSet(
+                        new LineScatterDataSetBuilder()
+                            .WithDataPoint(dataPairs)
+                            .WithXAxis(PivotChartConst.XScatterAxis)
+                            .WithLabel(row.Descriptor.DisplayName + ", total")
+                            .WithPointStyle(Shapes.Rectangle)
+                            .WithPointRadius(4)
+                            .SetType(ChartType.Scatter)
+                            .Build()
                     );
                     countStackPoints++;
                     break;
@@ -181,12 +178,12 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
 
                 case ChartType.Line:
                 {
-                    ChartBuilder.WithDataSet(builder =>
-                        builder
-                            .WithData(values)
-                            .SetType(ChartType.Line)
-                            .WithXAxis(PivotChartConst.XBarAxis)
-                            .WithLabel(row.Descriptor.DisplayName)
+                    Chart = Chart.WithDataSet(new BarDataSetBuilder()
+                        .WithData(values)
+                        .SetType(ChartType.Line)
+                        .WithXAxis(PivotChartConst.XBarAxis)
+                        .WithLabel(row.Descriptor.DisplayName)
+                        .Build()
                     );
                     break;
                 }
@@ -221,7 +218,7 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
             {
                 case ChartType.Bar: // do we have to make sure this axis goes first?
                     scales.Add(
-                        ChartBuilder.IsHorizontal ? PivotChartConst.YAxis : PivotChartConst.XBarAxis,
+                        Chart.IsHorizontal() ? PivotChartConst.YAxis : PivotChartConst.XBarAxis,
                         new CartesianCategoryScale
                         {
                             Stacked = barStacked,
@@ -253,11 +250,11 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
             }
         }
 
-        if (!ChartBuilder.IsHorizontal)
+        if (!Chart.IsHorizontal())
         {
             scales.Add(PivotChartConst.YAxis, new Scale {Stacked = barStacked});
         }
 
-        ChartBuilder = ChartBuilder.WithOptions(o => o.WithScales(scales).Responsive());
+        Chart = Chart.WithOptions(o => o.WithScales(scales).WithResponsive());
     }
 }

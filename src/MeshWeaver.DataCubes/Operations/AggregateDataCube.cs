@@ -29,7 +29,7 @@ namespace MeshWeaver.DataCubes.Operations
 
         public override IDataCube<T> Filter(Func<T, bool> filter)
         {
-            return cubes.Select(c => c.Filter(filter)).Aggregate();;
+            return cubes.Select(c => c.Filter(filter)).Aggregate();
         }
 
         public override IEnumerable<DataSlice<T>> GetSlices(params string[] dimensions)

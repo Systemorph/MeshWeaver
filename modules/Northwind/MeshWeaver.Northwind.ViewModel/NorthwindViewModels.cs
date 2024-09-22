@@ -28,6 +28,7 @@ namespace MeshWeaver.Northwind.ViewModel
                     .AddLayout(layout =>
                     layout
                         .WithPageLayout()
+                        .AddAnnualReport()
                         .AddDashboard()
                         .AddProductsSummary()
                         .AddOrdersSummary()

@@ -1,5 +1,4 @@
-﻿using System.Collections.Immutable;
-using Markdig.Parsers;
+﻿using Markdig.Parsers;
 using Markdig.Syntax;
 
 namespace MeshWeaver.Layout.Markdown;
@@ -16,7 +15,7 @@ public class LayoutAreaComponentInfo(string area, BlockParser blockParser)
     public object Id { get; set; }
 
     public LayoutAreaReference Reference =>
-        new (Area) { Id = Id,  Layout = Layout };
+        new (Area) { Id = Id, Layout = Layout };
 }
 
 public record SourceInfo(string Type, string Reference, string Address);

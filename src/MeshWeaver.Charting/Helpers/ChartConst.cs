@@ -2,5 +2,5 @@
 
 internal static class ChartConst
 {
-    internal static string Hidden = "hidden";
+    internal const string Hidden = "hidden";
 }

@@ -96,4 +96,6 @@ public static class Controls
 
     public static DateTimeControl DateTime(object data)
     => new(data);
+
+    public static IconControl Icon(object data) => new(data);
 }

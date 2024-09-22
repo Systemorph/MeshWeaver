@@ -134,6 +134,8 @@ public class LayoutAreaMarkdownParser : BlockParser
             if (!isInsideQuote && EndTokenChars.Contains(c))
             {
                 slice.NextChar();
+                if (token.Length == 0)
+                    continue;
                 return token.ToString();
             }
 

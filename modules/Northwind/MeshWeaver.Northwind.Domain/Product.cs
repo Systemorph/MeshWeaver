@@ -30,7 +30,7 @@ namespace MeshWeaver.Northwind.Domain
         [property:DisplayName("Supplier")][property: Dimension(typeof(Supplier))] int SupplierId,
         [property: DisplayName("Category")][property: Dimension(typeof(Category))] int CategoryId,
         string QuantityPerUnit,
-        decimal UnitPrice,
+        double UnitPrice,
         short UnitsInStock,
         short UnitsOnOrder,
         short ReorderLevel,
