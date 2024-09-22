@@ -124,13 +124,19 @@ public record ReduceManager<TStream>
         );
 
         stream.AddDisposable(reducedStream);
+
+        var selected = stream
+            .Select(x => x.SetValue(reducer.Invoke(x.Value, reducedStream.Reference)))                .Where(x => x != null)
+;
         reducedStream.AddDisposable(
-            stream
+            selected
+                .Where(x => x is { Value: not null })
                 .Take(1)
-                .Concat(stream.Skip(1)
+                .Concat(selected
+                    .Where(x => x is { Value: not null })
+                    .Skip(1)
                     .Where(x => !Equals(x.ChangedBy, subscriber))
                 )
-                .Select(x => x.SetValue(reducer.Invoke(x.Value, reducedStream.Reference)))
                 .DistinctUntilChanged()
                 .Subscribe(reducedStream)
         );

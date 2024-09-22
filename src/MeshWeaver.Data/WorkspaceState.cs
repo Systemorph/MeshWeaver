@@ -45,13 +45,11 @@ public record WorkspaceState(
                         DataSource = GetDataSource(x.Key), Collection = x.Key, Instances = x.Value
                     })
                     .GroupBy(x => x.DataSource)
-                    .Select(x => new KeyValuePair<
-                        StreamReference,
-                        EntityStore
-                    >(
-                        new(x.Key.Id, x.Key.Reference),
-                        new EntityStore(x.ToDictionary(y => y.Collection, y => y.Instances))
-                    ))
+                    .Select(x =>
+                        new KeyValuePair<StreamReference, EntityStore>(
+                            new(x.Key.Id, x.Key.Reference),
+                            new EntityStore(x.ToDictionary(y => y.Collection, y => y.Instances))
+                        ))
             ),
             Version = Hub.Version
         };
@@ -193,7 +191,7 @@ public record WorkspaceState(
     }
 
     private EntityStore GetStore(IDataSource dataSource) =>
-        dataSource.Streams.Select(s => 
+        dataSource?.Streams.Select(s => 
             StoresByStream.GetValueOrDefault(s.StreamReference))
             .Where(x => x != null)
             .DefaultIfEmpty()
@@ -205,10 +203,12 @@ public record WorkspaceState(
     {
         var typeSource = TypeSources.GetValueOrDefault(collection);
         if (typeSource == null)
-            throw new DataSourceConfigurationException($"Collection {collection} not found");
+            return null;
+            //throw new DataSourceConfigurationException($"Collection {collection} not found");
         var dataSource = DataContext.GetDataSourceByType(typeSource.TypeDefinition.Type);
         if (dataSource == null)
-            throw new DataSourceConfigurationException($"Type {typeSource.TypeDefinition.Type} not found");
+            return null;
+            //throw new DataSourceConfigurationException($"Type {typeSource.TypeDefinition.Type} not found");
         return dataSource;
     }
 
