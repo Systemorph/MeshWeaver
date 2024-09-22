@@ -117,25 +117,25 @@ public record DomainViewConfiguration
         object current = null;
         var forwardSubscription = stream.Subscribe(changeItem =>
         {
-            if (changeItem.ChangedBy.Equals(host.Stream.Subscriber) || Equals(changeItem.Value, current))
+            if (Equals(changeItem.Value, current))
                 return;
             current = changeItem.Value;
             host.Stream.SetData(context.IdString, changeItem.SetValue(current));
         });
-        var subscription = host.Stream.Subscribe(changeItem =>
-        {
-            if(changeItem.Patch?.Value is null)
-                return;
-            if (changeItem.ChangedBy.Equals(host.Stream.Subscriber) &&changeItem.Patch.Value.Operations.Any(x => x.Path.ToString().StartsWith(ret.DataContext)))
-            {
-                var instance = changeItem.Value.GetCollection(LayoutAreaReference.Data)?.Instances
-                    .GetValueOrDefault(context.IdString);
-                if(instance is not null)
-                    stream.Update(i => changeItem.SetValue(instance));
-            }
-        });
+        //var subscription = host.Stream.Subscribe(changeItem =>
+        //{
+        //    if(changeItem.Patch?.Value is null)
+        //        return;
+        //    if (changeItem.ChangedBy.Equals(host.Stream.Subscriber) &&changeItem.Patch.Value.Operations.Any(x => x.Path.ToString().StartsWith(ret.DataContext)))
+        //    {
+        //        var instance = changeItem.Value.GetCollection(LayoutAreaReference.Data)?.Instances
+        //            .GetValueOrDefault(context.IdString);
+        //        if(instance is not null)
+        //            stream.Update(i => changeItem.SetValue(instance));
+        //    }
+        //});
 
-        host.AddDisposable(context.RenderingContext.Area, subscription);
+        host.AddDisposable(context.RenderingContext.Area, forwardSubscription);
         return ret;
     }
 
