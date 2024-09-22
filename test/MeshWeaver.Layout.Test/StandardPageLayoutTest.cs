@@ -59,7 +59,7 @@ public class StandardPageLayoutTest(ITestOutputHelper output) : HubTestBase(outp
                 ;
 
             var page = await stream.GetControlAsync(StandardPageLayout.Page);
-            var stack = page.Should().BeOfType<LayoutStackControl>().Which;
+            var stack = page.Should().BeOfType<LayoutControl>().Which;
                 stack.Areas.Should().HaveCountGreaterThan(0)
                 .And.Subject.Should().BeEquivalentTo(Enumerable.Range(1, stack.Areas.Count).Select(i => new NamedAreaControl($"{StandardPageLayout.Page}/{i}"){Id = i.ToString()}))
                 ;
