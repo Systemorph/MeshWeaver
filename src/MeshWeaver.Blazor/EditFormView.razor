@@ -1,5 +1,7 @@
 @using System.Text.Json.Nodes
+@using MeshWeaver.Activities
 @using Microsoft.AspNetCore.Components.Forms
+@using Appearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
 @inherits SkinnedView<EditFormControl, EditFormSkin, EditFormView>
 @inject IToastService ToastService;
 
@@ -16,9 +18,22 @@ else
                     <DispatchView ViewModel="@ViewModel" Area="@Area" Stream="@Stream"></DispatchView>
                 </CascadingValue>
             </dl>
-            <ValidationSummary />
-            <button type="submit" class="btn btn-primary" disabled="@Data.HasChanges">Update</button>
-            <button type="reset" class="btn btn-secondary" @onclick="Reset" disabled="@Data.HasChanges">Reset</button>
+            @if(Log != null)
+            {
+                <div class="validation-errors">
+                    <h5>Validation failed</h5>
+                    <ul>
+                        @foreach (var logMessage in Log.Messages)
+                        {
+                            <li>@logMessage</li>
+                    
+                        }
+
+                    </ul>
+                </div>
+            }
+            <FluentButton Appearance="Appearance.Accent" type="@ButtonType.Submit" class="btn btn-primary" disabled="@Data.HasChanges">Update</FluentButton>
+            <FluentButton Appearance="Appearance.Lightweight" type="@ButtonType.Reset" class="btn btn-secondary" @onclick="Reset" disabled="@Data.HasChanges">Reset</FluentButton>
         </div>
     </EditForm>
 }
@@ -26,6 +41,7 @@ else
 @code
 {
     private ModelParameter Data { get; set; }
+    private ActivityLog Log { get; set; }
     protected override void BindData()
     {
         DataBind(new JsonPointerReference(ViewModel.DataContext), x => x.Data, jsonObject => Convert((JsonObject)jsonObject));
@@ -38,10 +54,11 @@ else
         {
             Data.Confirm();
             ShowSuccess();
+            Log = null;
         }
         else
         {
-            Reset();
+            Log = response.Message.Log;
         }
     }
 
