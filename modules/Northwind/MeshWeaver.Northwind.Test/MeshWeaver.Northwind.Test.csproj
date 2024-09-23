@@ -5,6 +5,5 @@
     <ProjectReference Include="..\..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
     <ProjectReference Include="..\..\..\test\MeshWeaver.Data.TestDomain\MeshWeaver.Data.TestDomain.csproj" />
     <ProjectReference Include="..\..\..\test\MeshWeaver.Hub.Fixture\MeshWeaver.Hub.Fixture.csproj" />
-    <ProjectReference Include="..\..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
   </ItemGroup>
 </Project>
