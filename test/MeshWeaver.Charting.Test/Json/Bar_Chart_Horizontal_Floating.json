@@ -58,9 +58,7 @@
         "text": "Horizontal floating"
       },
       "colorschemes": {
-        "scheme": {
-          "palette": "brewer.PastelOne9"
-        }
+        "scheme": "brewer.PastelOne9"
       }
     },
     "indexAxis": "y"
