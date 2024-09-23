@@ -1,12 +1,10 @@
-﻿using Microsoft.AspNetCore.Components;
-using Microsoft.FluentUI.AspNetCore.Components;
+﻿using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor
 {
     public partial class NumberFieldView<TValue>
         where TValue:new()
     {
-        private TValue Number { get; set; }
 
 
         /// <summary>
@@ -58,7 +56,7 @@ namespace MeshWeaver.Blazor
         public string Min { get; set; }
 
         /// <summary>
-        /// Gets or sets the <see cref="AspNetCore.Components.Appearance" />.
+        /// Gets or sets the <see cref="FluentInputAppearance" />.
         /// </summary>
 
         public FluentInputAppearance Appearance { get; set; } = FluentInputAppearance.Outline;
@@ -74,7 +72,7 @@ namespace MeshWeaver.Blazor
         protected override void BindData()
         {
             base.BindData();
-            DataBind(ViewModel.Data, x => x.Number);
+            DataBind(ViewModel.Data, x => x.Value);
             DataBind(ViewModel.HideStep, x => x.HideStep);
             DataBind(ViewModel.DataList, x => x.DataList);
             DataBind(ViewModel.MaxLength, x => x.MaxLength);

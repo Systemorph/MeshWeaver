@@ -40,7 +40,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
 
     protected virtual  bool NeedsUpdate(TValue v)
     {
-        return Equals(this.value, v);
+        return !Equals(this.value, v);
     }
 
     protected JsonPointerReference Pointer { get; set; }

@@ -1,11 +1,13 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Nodes;
+using Autofac.Core.Lifetime;
 using Json.Patch;
 
 namespace MeshWeaver.Blazor
 {
     public class ModelParameter
     {
+        public event EventHandler<JsonElement> ElementChanged; 
         public ModelParameter(JsonNode jsonObject)
         {
             Element = JsonDocument.Parse(jsonObject.ToJsonString()).RootElement;
@@ -20,16 +22,20 @@ namespace MeshWeaver.Blazor
         public void Update(JsonPatch patch)
         {
             Element = patch.Apply(Element);
+            if (ElementChanged != null)
+            {
+                ElementChanged(this, Element);
+            }
         }
 
         public JsonElement Submit()
         {
-            toBePersisted.Enqueue(Element);
+            toBePersisted.Enqueue(LastSubmitted);
             LastSubmitted = Element;
             return Element;
         }
 
-        public bool HasChanges => !Element.Equals(LastSubmitted);
+        public bool IsUpToDate => Element.Equals(LastSubmitted);
 
         public void Confirm()
         {
@@ -38,8 +44,9 @@ namespace MeshWeaver.Blazor
 
         public void Reset()
         {
-            if(toBePersisted.TryDequeue(out var state))
-                Element = state;
+           Element = LastSubmitted;
+           if (toBePersisted.TryDequeue(out var lastPersisted))
+               LastSubmitted = lastPersisted;
         }
 
     }
