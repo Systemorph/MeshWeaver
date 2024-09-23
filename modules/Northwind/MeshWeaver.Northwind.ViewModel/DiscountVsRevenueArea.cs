@@ -45,8 +45,8 @@ public static class DiscountVsRevenueArea
                             )
                             .WithChartBuilder(o =>
                                 o.WithDataLabels(d =>
-                                    d.WithAnchor(DataLabelsAnchor.End)
-                                        .WithAlign(DataLabelsAlign.End)
+                                    d.WithAnchor(DataLabelsAnchor.Center)
+                                        .WithAlign(DataLabelsAlign.Center)
                                 )
                             )
                     )

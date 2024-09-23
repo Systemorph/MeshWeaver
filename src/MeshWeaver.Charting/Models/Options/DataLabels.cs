@@ -63,9 +63,9 @@ public enum DataLabelsAnchor
 {
     [EnumMember(Value = "center")]
     Center,
-    [EnumMember(Value = "start")] 
+    [EnumMember(Value = "start")]
     Start,
-    [EnumMember(Value = "end")] 
+    [EnumMember(Value = "end")]
     End
 }
 
