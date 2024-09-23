@@ -34,9 +34,7 @@
         "text": "Doughnut Chart"
       },
       "colorschemes": {
-        "scheme": {
-          "palette": "brewer.PastelOne9"
-        }
+        "scheme": "brewer.PastelOne9"
       }
     }
   }

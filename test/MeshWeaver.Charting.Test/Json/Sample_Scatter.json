@@ -62,9 +62,7 @@
         "text": "Scatter Chart"
       },
       "colorschemes": {
-        "scheme": {
-          "palette": "brewer.DarkTwo8"
-        }
+        "scheme": "brewer.DarkTwo8"
       }
     }
   }
