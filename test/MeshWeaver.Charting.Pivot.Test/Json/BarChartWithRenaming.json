@@ -71,10 +71,7 @@
         "$type": "MeshWeaver.Charting.Models.Options.Legend"
       },
       "colorschemes": {
-        "scheme": {
-          "palette": "brewer.Blues3",
-          "$type": "MeshWeaver.Charting.Enums.Palettes"
-        },
+        "scheme": "brewer.Blues3",
         "$type": "MeshWeaver.Charting.Models.Options.ColorSchemes"
       },
       "$type": "MeshWeaver.Charting.Models.Options.Plugins"

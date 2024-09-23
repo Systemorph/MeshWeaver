@@ -64,10 +64,7 @@
     },
     "plugins": {
       "colorschemes": {
-        "scheme": {
-          "palette": "brewer.PastelOne9",
-          "$type": "MeshWeaver.Charting.Enums.Palettes"
-        },
+        "scheme": "brewer.PastelOne9",
         "$type": "MeshWeaver.Charting.Models.Options.ColorSchemes"
       },
       "$type": "MeshWeaver.Charting.Models.Options.Plugins"
