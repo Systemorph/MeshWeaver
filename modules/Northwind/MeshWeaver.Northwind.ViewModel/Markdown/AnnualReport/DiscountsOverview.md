@@ -51,7 +51,15 @@ This financial report provides a detailed analysis of the revenue and discounts 
 - **Revenue Trends:** The highest revenue was recorded in October (€123,798.68), while the lowest was in November (€18,333.63). There was a general upward trend in revenue from January to October, with a significant drop in November.
 - **Discount Trends:** The highest discount was given in October (€10,831.88), and the lowest in November (€1,565.03). The percentage of discounts given relative to revenue varied, with October having the highest discount percentage.
 
-This report provides a comprehensive overview of financial performance in 2023, highlighting key trends in revenue and discounts. 
 # Discount Percentage
 
+This financial report provides a comprehensive analysis of the sales amounts versus the discounts given over the past year. The data, expressed in Euros, highlights the impact of various discount rates on the overall sales volume. By examining the total sales, total discounts given, and the average discount percentage, this report aims to offer valuable insights into the effectiveness of discount strategies and their influence on sales performance.
+
 @("DiscountPercentage")
+
+- The majority of sales (€471,390.77) were made without any discount.
+- The highest sales volume with a discount was at a 5% discount rate, amounting to €103,672.08.
+- Significant sales volumes were also observed at 10%, 15%, and 25% discount rates.
+This report provides a clear overview of how discounts impacted sales volumes throughout the year.
+
+In summary, the discount strategies employed over the past year have been effective in enhancing sales performance while preserving revenue. The judicious use of discounts has allowed for significant sales volumes without compromising profitability, demonstrating a well-executed approach to pricing and promotions. Moving forward, continuing to monitor and adjust discount strategies based on sales performance and market conditions will be crucial for sustained success.
