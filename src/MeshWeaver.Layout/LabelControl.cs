@@ -31,7 +31,7 @@ public record LabelControl(object Data)
     /// Gets or initializes the weight of the label.
     /// </summary>
     public object Weight { get; init; }
- /// <summary>
+    /// <summary>
     /// Sets the alignment of the label.
     /// </summary>
     /// <param name="alignment">The alignment to set.</param>
