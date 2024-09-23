@@ -2,6 +2,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Data.Serialization;
+using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
 
@@ -42,6 +43,21 @@ public record LayoutClientConfiguration(IMessageHub Hub)
     ) =>
         new(
             typeof(TView),
+            new Dictionary<string, object>
+            {
+                { ViewModel, instance },
+                { nameof(Stream), stream },
+                { nameof(Area), area }
+            }
+        );
+    public static ViewDescriptor StandardView<TViewModel>(
+        TViewModel instance,
+        Type viewType,
+        ISynchronizationStream<JsonElement, LayoutAreaReference> stream,
+        string area
+    ) =>
+        new(
+            viewType,
             new Dictionary<string, object>
             {
                 { ViewModel, instance },

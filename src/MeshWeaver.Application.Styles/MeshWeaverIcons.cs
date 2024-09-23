@@ -1,4 +1,6 @@
-﻿namespace MeshWeaver.Application.Styles;
+﻿using MeshWeaver.Domain;
+
+namespace MeshWeaver.Application.Styles;
 
 public class MeshWeaverIcons
 {

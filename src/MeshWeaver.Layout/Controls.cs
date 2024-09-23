@@ -1,4 +1,6 @@
-﻿using MeshWeaver.Application.Styles;
+﻿using MeshWeaver.Data;
+using MeshWeaver.Domain;
+using MeshWeaver.Layout.DataGrid;
 
 namespace MeshWeaver.Layout;
 
@@ -23,9 +25,9 @@ public static class Controls
     public static ListboxControl Listbox(object item) => new(item);
     public static ComboboxControl Combobox(object item) => new(item);
 
-    public static TextBoxControl TextBox(object data) => new(data);
+    public static TextFieldControl Text(object data) => new(data);
 
-    public static NumberControl Number(object data) => new(data);
+    public static NumberFieldControl Number(object data, string type) => new(data, type);
 
     public static DateControl Date(object data) => new(data);
 
@@ -68,7 +70,6 @@ public static class Controls
 
     public static BadgeControl Badge(object data) => new(data);
 
-    public static IconControl Icon(object icon) => new(icon);
 
     public static CheckBoxControl CheckBox(object label, object isChecked) =>
         new(isChecked) { Label = label };
@@ -84,13 +85,17 @@ public static class Controls
     public static ProgressControl Progress(object message, object progress) =>
         new(message, progress);
 
-    public static RedirectControl Redirect(object message, object address, object area) =>
-        new(message, address, area);
-
-    public static RedirectControl Redirect(LayoutAreaReference message, object address) =>
-        new(message, address, message.Area);
 
     public static SpacerControl Spacer => new();
+    public static EditFormControl EditForm => new();
+
     public static MarkdownControl Markdown(object data) => new MarkdownControl(data);
 
+    public static DataGridControl DataGrid(object elements)
+    => new(elements);
+
+    public static DateTimeControl DateTime(object data)
+    => new(data);
+
+    public static IconControl Icon(object data) => new(data);
 }

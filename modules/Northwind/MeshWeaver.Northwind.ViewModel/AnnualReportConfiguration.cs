@@ -1,6 +1,6 @@
 ﻿using MeshWeaver.Application.Styles;
 using MeshWeaver.Collections;
-using MeshWeaver.Documentation;
+using MeshWeaver.Domain.Layout.Documentation;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
@@ -46,7 +46,7 @@ public static class AnnualReportConfiguration
                             .WithSkin(skin => 
                                 skin.WithHref(layout.DocumentHref(SummaryDocument))
                                 .WithExpanded(true)), 
-                            (navGroup, documentName) => navGroup.WithNavLink(Path.GetFileNameWithoutExtension(documentName).Wordify(), 
+                            (navGroup, documentName) => navGroup.WithLink(Path.GetFileNameWithoutExtension(documentName).Wordify(), 
                                 layout.DocumentationPath(ThisAssembly, documentName), FluentIcons.Document))
                 )
         );

@@ -102,7 +102,8 @@ namespace MeshWeaver.Activities
             if (currentActivity == null)
                 return;
             var item = new LogMessage(state.ToString(), logLevel);
-
+            if(state is IReadOnlyCollection<KeyValuePair<string, object>> list)
+                item = item with { Scopes = list };
             currentActivity = currentActivity with
             {
                 Messages = currentActivity.Messages.Add(item)

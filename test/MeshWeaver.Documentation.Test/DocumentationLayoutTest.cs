@@ -3,6 +3,7 @@ using System.Text.Json;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
+using MeshWeaver.Domain.Layout.Documentation;
 using MeshWeaver.Hub.Fixture;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;

@@ -3,10 +3,9 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.Domain;
 using static MeshWeaver.Layout.Controls;
 
-namespace MeshWeaver.Documentation;
+namespace MeshWeaver.Domain.Layout.Documentation;
 
 public static class DocumentationLayout
 {
@@ -19,7 +18,7 @@ public static class DocumentationLayout
         => layout
             .WithDocumentation(
                 _ => true,
-                (tabs,host,ctx)=>tabs.WithView(NamedArea(host.Stream.Reference.Area), ctx.DisplayName)
+                (tabs, host, ctx) => tabs.WithView(NamedArea(host.Stream.Reference.Area), ctx.DisplayName)
                 )
             .WithView(nameof(Doc), (Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<object>>)Doc);
 
@@ -56,21 +55,24 @@ public static class DocumentationLayout
         var sources = types
             .Select(t => t.Assembly)
             .Distinct()
-            .Select(a => new {
-                    Assembly = a,
-                    Source = documentationService.GetSource(PdbDocumentationSource.Pdb, a.GetName().Name)
+            .Select(a => new
+            {
+                Assembly = a,
+                Source = documentationService.GetSource(PdbDocumentationSource.Pdb, a.GetName().Name)
                         as PdbDocumentationSource
-                }
+            }
             )
             .Where(a => a.Source != null)
             .ToDictionary(a => a.Assembly, a => a.Source);
-        
-        
+
+
         return layout.WithDocumentation(contextFilter,
-            (tabs, _, _) => 
+            (tabs, _, _) =>
                 types
                 .Select(type => sources.TryGetValue(type.Assembly, out var source)
-                ? new{ Control =
+                ? new
+                {
+                    Control =
                         new LayoutAreaControl(layout.Hub.Address,
                     new(nameof(Doc)) { Id = source.GetPath(type.FullName) })
                     ,
@@ -157,6 +159,6 @@ public static class DocumentationLayout
             .Add("java", "java")
             .Add("cpp", "cpp")
             .Add("ts", "typescript");
-    private static MarkdownControl FileNotFound(string path) => 
+    private static MarkdownControl FileNotFound(string path) =>
         new($":x: **File not found**: {path}");
 }

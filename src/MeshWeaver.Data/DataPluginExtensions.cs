@@ -5,8 +5,8 @@ using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Activities;
 using MeshWeaver.Data.Persistence;
 using MeshWeaver.Data.Serialization;
+using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
-using MeshWeaver.Messaging.Serialization;
 
 namespace MeshWeaver.Data;
 
@@ -112,38 +112,6 @@ public static class DataPluginExtensions
             hub => configuration.Invoke(new GenericDataSource(address, dataContext.Workspace))
         );
 
-    public static void AddUpdateOfParent<TStream, TReduced>(
-        this ISynchronizationStream<TReduced> ret,
-        ISynchronizationStream<TStream> stream,
-        WorkspaceReference reference,
-        Func<ChangeItem<TReduced>, bool> filter
-    )
-    {
-        var backTransform = stream.ReduceManager.GetPatchFunction<TReduced>(stream, reference);
 
-        if (backTransform != null)
-        {
-            ret.AddDisposable(
-                ret.Where(filter).Subscribe(x => UpdateParent(stream, x, backTransform))
-            );
-        }
-    }
 
-    internal static void UpdateParent<TStream, TReduced>(
-        ISynchronizationStream<TStream> parent,
-        ChangeItem<TReduced> value,
-        PatchFunction<TStream, TReduced> backTransform
-    )
-    {
-        // if the parent is initialized, we will update the parent
-        if (parent.Initialized.IsCompleted)
-        {
-            parent.Update(state => backTransform(state, parent, value));
-        }
-        // if we are in automatic mode, we will initialize the parent
-        else if (parent.InitializationMode == InitializationMode.Automatic)
-        {
-            parent.Initialize(backTransform(Activator.CreateInstance<TStream>(), parent, value));
-        }
-    }
 }

@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Layout;
+﻿using MeshWeaver.Domain.Layout;
+using MeshWeaver.Layout;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Messaging;
 
@@ -23,6 +24,7 @@ namespace MeshWeaver.Northwind.ViewModel
         {
             return configuration
                     .AddNorthwindDocumentation()
+                    .AddDomainViews()
                     .AddLayout(layout =>
                     layout
                         .WithPageLayout()
@@ -32,9 +34,9 @@ namespace MeshWeaver.Northwind.ViewModel
                         .AddOrdersSummary()
                         .AddCustomerSummary()
                         .AddSupplierSummary()
-                //.WithNavMenu((menu, _) => menu
-                //    .AddTypesCatalogs()
-                //)
+                        .WithNavMenu((menu, host, _) => host
+                            .AddTypesCatalogs(menu)
+                        )
 
                 )
                 ;

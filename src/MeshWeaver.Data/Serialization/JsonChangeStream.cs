@@ -1,6 +1,7 @@
 ﻿using System.Reactive.Linq;
 using System.Text.Json;
 using Json.Patch;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data.Serialization;
 
@@ -8,29 +9,18 @@ public static class JsonSynchronizationStream
 {
     public record ChangeItemJsonTuple<TStream>(ChangeItem<TStream> Current, JsonElement Json);
 
-    public static IObservable<DataChangedEvent> ToDataChangedStream(
+    public static IObservable<DataChangedEvent> ToDataChangedClient(
         this ISynchronizationStream<JsonElement> stream, object reference)
     {
         JsonElement? currentSync = null;
         return stream
-            .Take(1).Select(x =>
-                new DataChangedEvent
-                (
-                    stream.Owner,
-                    reference,
-                    x.Version,
-                    new((currentSync = x.Value).ToString()),
-                    ChangeType.Full,
-                    x.ChangedBy)
-            )
-            .Concat(stream.Skip(1)
-                .Select(x =>
-                {
+        .Select(x =>
+        {
                     JsonPatch patch;
                     if (x.Patch != null)
                     {
                         patch = x.Patch.Value;
-                        currentSync = patch.Apply(currentSync, stream.Hub.JsonSerializerOptions);
+                currentSync = patch.Apply(currentSync, stream.Hub.JsonSerializerOptions);
                     }
                     else
                     {
@@ -50,8 +40,54 @@ public static class JsonSynchronizationStream
                         ChangeType.Patch,
                         x.ChangedBy
                     ); ;
-                }))
+                })
             .Where(x => x != null);
+
+    }
+
+    public static IObservable<DataChangedEvent> ToDataChangedHost(
+        this ISynchronizationStream<JsonElement> stream, object reference)
+    {
+        JsonElement? currentSync = null;
+        return stream
+            .Take(1)
+            .Select(x => new DataChangedEvent(
+                stream.Owner,
+                reference,
+                stream.Hub.Version,
+                new RawJson((currentSync=x.Value).ToString()),
+                ChangeType.Full,
+                x.ChangedBy
+                ))
+            .Concat(stream.Skip(1)
+            .Select(x =>
+            {
+                JsonPatch patch;
+                if (x.Patch != null)
+                {
+                    patch = x.Patch.Value;
+                    currentSync = patch.Apply(currentSync, stream.Hub.JsonSerializerOptions);
+                }
+                else
+                {
+                    patch =
+                        currentSync.CreatePatch(x.Value);
+
+                    currentSync = x.Value;
+                }
+
+                if (patch.Operations.Count == 0)
+                    return null;
+
+                return new DataChangedEvent(
+                    stream.Owner,
+                    reference,
+                    stream.Hub.Version,
+                    new(JsonSerializer.Serialize(patch, stream.Hub.JsonSerializerOptions)),
+                    ChangeType.Patch,
+                    x.ChangedBy
+                );
+            })).Where(x => x != null);
     }
 
 

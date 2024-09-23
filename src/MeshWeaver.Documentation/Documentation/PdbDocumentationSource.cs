@@ -5,7 +5,7 @@ using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Text;
 
-namespace MeshWeaver.Documentation;
+namespace MeshWeaver.Domain.Layout.Documentation;
 
 public record PdbDocumentationSource
 : DocumentationSource<PdbDocumentationSource>
@@ -14,9 +14,9 @@ public record PdbDocumentationSource
     public override string Type => Pdb;
 
 
-    public Func<string, Stream> Sources { get;  }
+    public Func<string, Stream> Sources { get; }
 
-    public IReadOnlyDictionary<string,string> FilesByType { get;  }
+    public IReadOnlyDictionary<string, string> FilesByType { get; }
 
     public string GetFileNameForType(string typeName)
         => FilesByType.GetValueOrDefault(typeName);
@@ -114,9 +114,9 @@ public record PdbDocumentationSource
     private static Stream GetEmbeddedSource(MetadataReader reader, DocumentHandle document)
     {
         var bytes = (from handle in reader.GetCustomDebugInformation(document)
-            let cdi = reader.GetCustomDebugInformation(handle)
-            where reader.GetGuid(cdi.Kind) == EmbeddedSource
-            select reader.GetBlobBytes(cdi.Value)).SingleOrDefault();
+                     let cdi = reader.GetCustomDebugInformation(handle)
+                     where reader.GetGuid(cdi.Kind) == EmbeddedSource
+                     select reader.GetBlobBytes(cdi.Value)).SingleOrDefault();
 
         if (bytes == null)
         {
@@ -165,8 +165,9 @@ public record PdbDocumentationSource
 
         return decodedStream;
     }
-    private ImmutableList<Func<(DocumentHandle Handle, Document Doc, string TypeName, string Namespace, string DocName), bool>> 
-        Exclusions { get; init; }
+    private ImmutableList<Func<(DocumentHandle Handle, Document Doc, string TypeName, string Namespace, string DocName), bool>>
+        Exclusions
+    { get; init; }
             =
             [
                 x => x.TypeName.StartsWith("<"),

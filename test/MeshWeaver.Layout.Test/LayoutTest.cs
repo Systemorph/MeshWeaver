@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Reactive.Linq;
 using System.Text.Json;
 using FluentAssertions;
@@ -21,7 +22,6 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 {
     private const string StaticView = nameof(StaticView);
 
-    public record DataRecord([property: Key] string SystemName, string DisplayName);
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
@@ -34,7 +34,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     "Local",
                     ds =>
                         ds.WithType<DataRecord>(t =>
-                            t.WithInitialData([new("Hello", "Hello"), new("World", "World")])
+                            t.WithInitialData(DataRecord.InitialData)
                         )
                 )
             )
@@ -147,7 +147,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         return Controls
             .Stack
             .WithView( (_, _) =>
-                Template.Bind(toolbar, nameof(toolbar), tb => Controls.TextBox(tb.Year)), "Toolbar")
+                Template.Bind(toolbar, nameof(toolbar), tb => Controls.Text(tb.Year)), "Toolbar")
             .WithView((area, _) =>
                 area.GetDataStream<Toolbar>(nameof(toolbar))
                     .Select(tb => Controls.Html($"Report for year {tb.Year}")), "Content");
@@ -172,7 +172,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Get toolbar and change value.
         var toolbarArea = $"{reference.Area}/Toolbar";
-        var yearTextBox = (TextBoxControl)await stream
+        var yearTextBox = (TextFieldControl)await stream
             .GetControlStream(toolbarArea)
             .Timeout(3.Seconds())
             .FirstAsync(x => x is not null);
@@ -224,7 +224,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         Template.Bind(
             data,
             nameof(ItemTemplate),
-            record => Controls.TextBox(record.DisplayName).WithId(record.SystemName)
+            record => Controls.Text(record.DisplayName).WithId(record.SystemName)
         );
 
     [HubFact]
@@ -257,7 +257,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var view = itemTemplate.View;
         var pointer = view.Should()
-            .BeOfType<TextBoxControl>()
+            .BeOfType<TextFieldControl>()
             .Which.Data.Should()
             .BeOfType<JsonPointerReference>()
             .Subject;
@@ -318,8 +318,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     private object DataGrid(LayoutAreaHost area, RenderingContext ctx)
     {
         var data = new DataRecord[] { new("1", "1"), new("2", "2") };
-        return area.ToDataGrid(data,grid =>
-            grid.WithColumn(x => x.SystemName).WithColumn(x => x.DisplayName)
+        return area.ToDataGrid(data,grid => grid
+            .WithColumn(x => x.SystemName)
+            .WithColumn(x => x.DisplayName)
         );
     }
 
@@ -338,19 +339,23 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .GetControlStream(reference.Area)
             .Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => x != null);
-        content
+
+        var controls = content
             .Should()
             .BeOfType<DataGridControl>()
             .Which.Columns.Should()
             .HaveCount(2)
-            .And.BeEquivalentTo(
+            .And.Subject;
+;
+
+        controls.Should().BeEquivalentTo(
                 [
-                    new DataGridColumn<string>
+                    new PropertyColumnControl<string>
                     {
                         Property = nameof(DataRecord.SystemName).ToCamelCase(),
                         Title = nameof(DataRecord.SystemName).Wordify()
                     },
-                    new DataGridColumn<string>
+                    new PropertyColumnControl<string>
                     {
                         Property = nameof(DataRecord.DisplayName).ToCamelCase(),
                         Title = nameof(DataRecord.DisplayName).Wordify()
@@ -497,23 +502,23 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Which;
 
         grid.DataContext.Should().Be(LayoutAreaReference.GetDataPointer(nameof(CatalogView)));
+        var benchmarks = new[]
+        {
+            new PropertyColumnControl<string>
+            {
+                Property = nameof(DataRecord.SystemName).ToCamelCase(),
+                Title = nameof(DataRecord.SystemName).Wordify()
+            },
+            new PropertyColumnControl<string>
+            {
+                Property = nameof(DataRecord.DisplayName).ToCamelCase(),
+                Title = nameof(DataRecord.DisplayName).Wordify()
+            }
+        };
         grid.Columns.Should()
-            .HaveCount(2)
-            .And.BeEquivalentTo(
-                [
-                    new DataGridColumn<string>
-                    {
-                        Property = nameof(DataRecord.SystemName).ToCamelCase(),
-                        Title = nameof(DataRecord.SystemName).Wordify()
-                    },
-                    new DataGridColumn<string>
-                    {
-                        Property = nameof(DataRecord.DisplayName).ToCamelCase(),
-                        Title = nameof(DataRecord.DisplayName).Wordify()
-                    }
-                ]
-            );
+            .HaveCount(benchmarks.Length);
 
+        grid.Columns.Should().BeEquivalentTo(benchmarks);
     }
 
     // TODO V10: Need to rewrite realistic test for disposing views. (29.07.2024, Roland Bürgi)
@@ -554,6 +559,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         subArea.Should().BeNull();
         stopwatch.ElapsedMilliseconds.Should().BeLessThan(3000);
     }
+
 }
 
 public static class TestAreas
@@ -564,3 +570,8 @@ public static class TestAreas
 }
 public record FilterEntity(List<LabelAndBool> Data);
 public record LabelAndBool(string Label, bool Value);
+
+public record DataRecord([property: Key] string SystemName, string DisplayName)
+{
+    public static readonly DataRecord[] InitialData = [new("Hello", "Hello"), new("World", "World")];
+}

@@ -1,12 +1,12 @@
-﻿using MeshWeaver.Layout.Domain;
+﻿
+using MeshWeaver.Domain.Layout;
 
 namespace MeshWeaver.Layout;
 
 public record ListboxControl(object Data) : ListControlBase<ListboxControl>(Data), IListControl;
 
-public interface IListControl : IUiControl
+public interface IListControl : IFormComponent
 {
-    object Data { get; init; }    
     IReadOnlyCollection<Option> Options { get; init; }
 }
 

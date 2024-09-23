@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
@@ -187,20 +188,20 @@ public class Workspace : IWorkspace
             )
         );
         json.AddDisposable(
-            json.ToDataChangedStream(reference)
-                .Where(x => !json.Subscriber.Equals(x.ChangedBy))
+            json.ToDataChangedHost(reference)
                 .Subscribe(e =>
                 {
                     logger.LogDebug("Owner {owner} sending change notification to subscriber {subscriber}", json.Owner, json.Subscriber);
                     Hub.Post(e, o => o.WithTarget(json.Subscriber));
                 })
-        );
+            );
         json.AddDisposable(
             new AnonymousDisposable(() => subscriptions.Remove(new(subscriber, reference), out _))
         );
 
         return ret;
     }
+
 
     private ISynchronizationStream CreateExternalClient<TReduced, TReference>(
         object owner,
@@ -224,7 +225,6 @@ public class Workspace : IWorkspace
                 fromWorkspace.Where(x => Hub.Address.Equals(x.ChangedBy)).Subscribe(ret)
             );
 
-        ret.AddUpdateOfParent(stream, reference, value => !Hub.Address.Equals(value.ChangedBy));
 
         var json =
             ret as ISynchronizationStream<JsonElement>
@@ -254,7 +254,7 @@ public class Workspace : IWorkspace
 
         json.AddDisposable(
             // this is the "client" ==> never needs to submit full state
-            json.ToDataChangedStream(reference)
+            json.ToDataChangedClient(reference)
                 .Where(x => json.Hub.Address.Equals(x.ChangedBy))
                 .Subscribe(e =>
                 {
@@ -294,7 +294,7 @@ public class Workspace : IWorkspace
             new CollectionsReference(
                 types
                     .Select(t =>
-                        DataContext.TypeRegistry.TryGetTypeName(t, out var name)
+                        DataContext.TypeRegistry.TryGetCollectionName(t, out var name)
                             ? name
                             : throw new ArgumentException($"Type {t.FullName} is unknown.")
                     )
@@ -322,7 +322,16 @@ public class Workspace : IWorkspace
 
     public DataChangeResponse RequestChange(DataChangedRequest change, WorkspaceReference reference)
     {
-        var log = new ActivityLog(ActivityCategory.DataUpdate);
+        activityService.Start(ActivityCategory.DataUpdate);
+
+        var (isValid, results) = Validate(change.Elements);
+        if (!isValid)
+        {
+            foreach (var validationResult in results.Where(r => r != ValidationResult.Success))
+                activityService.LogError("{members} invalid: {error}", validationResult.MemberNames, validationResult.ErrorMessage);
+            return new DataChangeResponse(Hub.Version, DataChangeStatus.Failed, activityService.Finish());
+        }
+
         Current = new ChangeItem<WorkspaceState>(
             Hub.Address,
             reference ?? Reference,
@@ -334,7 +343,20 @@ public class Workspace : IWorkspace
             null,
             Hub.Version
         );
-        return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, log.Finish());
+        return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, activityService.Finish());
+    }
+
+    private (bool IsValid, List<ValidationResult> Results) Validate(IReadOnlyCollection<object> instances)
+    {
+        var validationResults = new List<ValidationResult>();
+        var isValid = true;
+        foreach (var instance in instances)
+        {
+
+            var context = new ValidationContext(instance);
+            isValid = isValid && Validator.TryValidateObject(instance, context, validationResults);
+        }
+        return(isValid, validationResults);
     }
 
     ISynchronizationStream<WorkspaceState> IWorkspace.Stream => stream;

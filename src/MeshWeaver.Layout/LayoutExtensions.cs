@@ -6,9 +6,9 @@ using Json.Patch;
 using Json.Path;
 using Json.Pointer;
 using Microsoft.Extensions.DependencyInjection;
-using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
@@ -31,10 +31,6 @@ public static class LayoutExtensions
                             (stream, reference, subscriber) =>
                                 new LayoutAreaHost(stream, reference, stream.Hub.GetLayoutDefinition(), subscriber)
                                     .RenderLayoutArea()
-                        )
-                        .AddBackTransformation<EntityStore>(
-                            BackTransformLayoutArea,
-                            (_, reference) => reference is LayoutAreaReference
                         )
                 )
             )
@@ -77,7 +73,7 @@ public static class LayoutExtensions
             )
             .WithTypes(
                 typeof(LayoutAreaReference),
-                typeof(DataGridColumn<>), // this is not a control
+                typeof(PropertyColumnControl<>), // this is not a control
                 typeof(Option), // this is not a control
                 typeof(Option<>), // this is not a control
                 typeof(Icon)
@@ -176,6 +172,11 @@ public static class LayoutExtensions
         this ISynchronizationStream<EntityStore> stream,
         string id
     ) => (T)stream.Current.Value.Reduce(new EntityReference(LayoutAreaReference.Data, id));
+    public static void SetData(
+        this ISynchronizationStream<EntityStore> stream,
+        string id,
+        ChangeItem<object> changeItem
+    ) => stream.Update(s => changeItem.SetValue(s.Update(LayoutAreaReference.Data, c => c.SetItem(id, changeItem.Value))));
 
     public static TControl GetControl<TControl>(this EntityStore store, string area)
         where TControl : UiControl =>
@@ -205,15 +206,14 @@ public static class LayoutExtensions
 
     public static MessageHubConfiguration AddLayoutClient(
         this MessageHubConfiguration config,
-        Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration
+        Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration = null
     )
     {
         return config
-            //.AddData(data => data.Configure(c => c.AddWorkspaceReferenceStream<LayoutAreaReference, EntityStore>((parent,reduced) => parent.Select(e => e.SetValue(e.Value.StoresByStream.GetValueOrDefault(reduced.StreamReference))))
             .AddData()
             .AddLayoutTypes()
             .WithServices(services => services.AddScoped<ILayoutClient, LayoutClient>())
-            .Set(config.GetConfigurationFunctions().Add(configuration))
+            .Set(config.GetConfigurationFunctions().Add(configuration ?? (x => x)))
             .WithSerialization(serialization => serialization);
     }
 

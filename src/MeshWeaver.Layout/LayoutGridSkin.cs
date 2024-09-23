@@ -3,7 +3,7 @@
 
 public record LayoutGridControl() : ContainerControlWithItemSkin<LayoutGridControl, LayoutGridSkin, LayoutGridItemSkin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new())
 {
-    protected override LayoutGridItemSkin CreateItemSkin(NamedAreaControl ret)
+    protected override LayoutGridItemSkin CreateItemSkin(NamedAreaControl namedArea)
     {
         return new();
     }

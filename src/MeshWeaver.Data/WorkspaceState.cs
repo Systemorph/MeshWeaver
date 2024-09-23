@@ -45,13 +45,11 @@ public record WorkspaceState(
                         DataSource = GetDataSource(x.Key), Collection = x.Key, Instances = x.Value
                     })
                     .GroupBy(x => x.DataSource)
-                    .Select(x => new KeyValuePair<
-                        StreamReference,
-                        EntityStore
-                    >(
-                        new(x.Key.Id, x.Key.Reference),
-                        new EntityStore(x.ToDictionary(y => y.Collection, y => y.Instances))
-                    ))
+                    .Select(x =>
+                        new KeyValuePair<StreamReference, EntityStore>(
+                            new(x.Key.Id, x.Key.Reference),
+                            new EntityStore(x.ToDictionary(y => y.Collection, y => y.Instances))
+                        ))
             ),
             Version = Hub.Version
         };
@@ -59,6 +57,8 @@ public record WorkspaceState(
 
     public WorkspaceState Update(StreamReference reference, EntityStore store) =>
         this with { StoresByStream = StoresByStream.SetItem(reference, store) };
+    public WorkspaceState Update(StreamReference reference, Func<EntityStore, EntityStore> update) =>
+        this with { StoresByStream = StoresByStream.SetItem(reference, update.Invoke(StoresByStream.GetValueOrDefault(reference) ?? new())) };
 
     public WorkspaceState Change(DataChangedRequest request)
     {
@@ -77,6 +77,14 @@ public record WorkspaceState(
             StoresByStream = StoresByStream.SetItems(MergeDelete((DeleteDataRequest)request)),
             Version = Hub.Version
         };
+    }
+
+    public StreamReference GetStreamReference(object obj, string collection)
+        => GetStreamReference(obj, DataContext.TypeRegistry.GetType(collection));
+    public StreamReference GetStreamReference(object obj, Type type)
+    {
+         var e = MapToIdAndAddress([obj], type).Single();
+         return new StreamReference(e.Id, e.Reference);
     }
 
     private IEnumerable<KeyValuePair<StreamReference, EntityStore>> MergeUpdate(
@@ -130,7 +138,7 @@ public record WorkspaceState(
             yield return (
                 dataSource.Id,
                 dataSource.Reference,
-                e.ToImmutableDictionary(x => ts.GetKey(x)),
+                e.ToImmutableDictionary(x => ts.TypeDefinition.GetKey(x)),
                 GetCollectionName(type),
                 ts
             );
@@ -139,7 +147,7 @@ public record WorkspaceState(
                 yield return (
                     partition.Key,
                     new PartitionedCollectionsReference(partition.Key,dataSource.Reference),
-                    partition.ToImmutableDictionary(x => ts.GetKey(x)),
+                    partition.ToImmutableDictionary(x => ts.TypeDefinition.GetKey(x)),
                     GetCollectionName(type),
                     ts
                 );
@@ -183,7 +191,7 @@ public record WorkspaceState(
     }
 
     private EntityStore GetStore(IDataSource dataSource) =>
-        dataSource.Streams.Select(s => 
+        dataSource?.Streams.Select(s => 
             StoresByStream.GetValueOrDefault(s.StreamReference))
             .Where(x => x != null)
             .DefaultIfEmpty()
@@ -195,10 +203,12 @@ public record WorkspaceState(
     {
         var typeSource = TypeSources.GetValueOrDefault(collection);
         if (typeSource == null)
-            throw new DataSourceConfigurationException($"Collection {collection} not found");
-        var dataSource = DataContext.GetDataSourceByType(typeSource.ElementType);
+            return null;
+            //throw new DataSourceConfigurationException($"Collection {collection} not found");
+        var dataSource = DataContext.GetDataSourceByType(typeSource.TypeDefinition.Type);
         if (dataSource == null)
-            throw new DataSourceConfigurationException($"Type {typeSource.ElementType} not found");
+            return null;
+            //throw new DataSourceConfigurationException($"Type {typeSource.TypeDefinition.Type} not found");
         return dataSource;
     }
 
@@ -221,7 +231,7 @@ public record WorkspaceState(
             .Where(x => x != null)
             .Aggregate((x, y) => x.Merge(y, UpdateOptions.Default));
     internal EntityStore ReduceImpl(StreamReference reference) =>
-StoresByStream.GetValueOrDefault(reference);
+        StoresByStream.GetValueOrDefault(reference);
 
     public WorkspaceState Merge(WorkspaceState that) =>
         this with

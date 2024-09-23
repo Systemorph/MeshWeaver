@@ -2,6 +2,7 @@
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Disposables;
+using MeshWeaver.Domain;
 using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.Reflection;
 using MeshWeaver.ServiceProvider;
@@ -179,7 +180,7 @@ public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
         delivery = await node.Value.Invoke(delivery, cancellationToken);
 
         if (node.Next == null)
-            return delivery.Ignored();
+            return delivery;
 
         return await DeliverMessageAsync(delivery, node.Next, cancellationToken);
     }

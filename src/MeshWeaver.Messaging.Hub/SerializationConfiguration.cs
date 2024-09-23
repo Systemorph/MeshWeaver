@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using MeshWeaver.Domain;
 using MeshWeaver.Messaging.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 

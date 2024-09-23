@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Application.Styles;
+﻿using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 
 namespace MeshWeaver.Northwind.ViewModel;

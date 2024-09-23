@@ -1,5 +1,6 @@
 ﻿using FluentAssertions;
 using Markdig;
+using MeshWeaver.Domain.Layout.Documentation;
 using MeshWeaver.Hub.Fixture;
 using MeshWeaver.Layout.Markdown;
 using MeshWeaver.Messaging;

@@ -5,7 +5,7 @@ using System.Text.Json;
 using System.Xml.Serialization;
 using FluentAssertions;
 using MeshWeaver.Data;
-using MeshWeaver.Documentation.Model;
+using MeshWeaver.Domain.Layout.Documentation.Model;
 using MeshWeaver.GridModel;
 using MeshWeaver.Hub.Fixture;
 using MeshWeaver.Layout;
