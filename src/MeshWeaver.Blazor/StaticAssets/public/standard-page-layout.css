@@ -99,6 +99,9 @@ footer {
     color: var(--neutral-foreground-rest);
     align-items: center;
     padding: 10px 10px;
+    position: fixed;
+    bottom: 0;
+    width: 100%;
 }
 
     footer a {
