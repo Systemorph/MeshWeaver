@@ -24,9 +24,7 @@
         "display": true
       },
       "colorschemes": {
-        "scheme": {
-          "palette": "brewer.YlGn8"
-        }
+        "scheme": "brewer.YlGn8"
       }
     }
   }

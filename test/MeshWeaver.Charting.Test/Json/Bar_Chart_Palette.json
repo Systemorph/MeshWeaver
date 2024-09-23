@@ -31,9 +31,7 @@
         "text": "My First Chart"
       },
       "colorschemes": {
-        "scheme": {
-          "palette": "brewer.Paired10"
-        }
+        "scheme": "brewer.Paired10"
       }
     }
   }
