@@ -31,7 +31,7 @@ public static class ProductOverviewArea
             // .Select(data => data.ToMarkdown())
             .Select(data => 
                 layoutArea.ToDataGrid(data.ToArray(),
-                    config => config.AutoMapColumns()
+                    config => config.AutoMapProperties()
                     )
                 )
         ;

@@ -1,37 +1,36 @@
 @using System.Text.Json.Nodes
 @using MeshWeaver.Layout.DataGrid
+@using MeshWeaver.Messaging.Serialization
 @inherits BlazorView<DataGridControl, DataGridView>
+@inject NavigationManager NavigationManager
 
 <div style="display: table; table-layout: fixed; width: 100%;" class="@Class">
     <div style="overflow-x: auto;">
-        <FluentDataGrid Items="@QueryableData" 
-                        Virtualize="@ViewModel.Virtualize" 
-                        ItemSize="@ViewModel.ItemSize" 
+        <FluentDataGrid Items="@QueryableData"
+                        Virtualize="@Virtualize"
+                        ItemSize="@ItemSize"
+                        ResizableColumns="@ResizableColumns"
                         GenerateHeader="GenerateHeaderOption.Sticky"
-                        ResizableColumns="@ViewModel.ResizableColumns"
                         Pagination="@Pagination"
                         Style="@Style">
-            @foreach (DataGridColumn column in ViewModel.Columns)
+            @foreach (var column in ViewModel.Columns)
             {
-
-                @((RenderFragment) (builder =>
+                if(column is PropertyColumnControl propertyColumn)
                 {
-                    builder.OpenComponent(0, typeof(PropertyColumn<,>).MakeGenericType(typeof(JsonObject), column.GetPropertyType()));
-                    var index = 0;
-                    builder.AddComponentParameter(++index, nameof(PropertyColumn<object,object>.Property), GetPropertyExpression((dynamic)column));
-                    builder.AddAttribute(++index, "Title", column.Title);
-                    if (!string.IsNullOrEmpty(column.Format))
-                        builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Format), column.Format);
-                    if (column.Sortable)
-                        builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Sortable), column.Sortable);
-                    if(column.Tooltip)
-                        builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Tooltip), column.Tooltip);
-                    if (column.TooltipText != null)
-                        builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.TooltipText), (Func<JsonObject,string>)(_ => column.TooltipText));
-
-                    builder.CloseComponent();
-                }))
-
+                    @((RenderFragment)(builder => RenderPropertyColumn(builder, propertyColumn)))
+                }
+                else if(column is TemplateColumnControl templateColumn)
+                {
+                    <TemplateColumn TGridItem="JsonObject">
+                        <FluentButton aria-label="Details" IconEnd="@(new Icons.Regular.Size16.Edit())" OnClick="@(() => NavigateToUrl(context, Details))" />
+@*                         <FluentButton aria-label="Delete" IconEnd="@(new Icons.Regular.Size16.Delete())" OnClick="@(() => NavigateToUrl(context, Delete))" />
+ *@
+                    </TemplateColumn>
+                }
+                else
+                {
+                    throw new NotImplementedException();
+                }
             }
         </FluentDataGrid>
     </div>
@@ -43,4 +42,5 @@
         <FluentPaginator State="@Pagination"/>
     }
 </div>
+
 

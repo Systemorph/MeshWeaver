@@ -7,12 +7,11 @@
 /// <a href="https://www.fluentui-blazor.net/input">Fluent UI Blazor Input documentation</a>.
 /// </remarks>
 
-public interface IInputControl : IUiControl
+public interface IInputControl : IFormComponent
 {
     /// <summary>
     /// Gets or initializes the data associated with the input control.
     /// </summary>
-    object Data { get; init; }
     /// <summary>
     /// Gets or initializes the placeholder text for the input control.
     /// </summary>

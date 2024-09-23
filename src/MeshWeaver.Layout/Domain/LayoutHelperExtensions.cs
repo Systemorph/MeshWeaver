@@ -1,10 +1,11 @@
 ﻿using MeshWeaver.Data;
+using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 
-namespace MeshWeaver.Layout.Domain;
+namespace MeshWeaver.Domain.Layout;
 
 public static class LayoutHelperExtensions
-{ 
+{
     public static EntityStoreAndUpdates ConfigBasedRenderer<TControl>(this LayoutAreaHost host,
         RenderingContext context,
         EntityStore store,

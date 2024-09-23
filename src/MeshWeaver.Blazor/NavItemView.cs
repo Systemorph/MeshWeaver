@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Layout;
+﻿using MeshWeaver.Domain;
+using MeshWeaver.Layout;
 
 namespace MeshWeaver.Blazor;
 
@@ -10,7 +11,7 @@ public abstract class NavItemView<TViewModel, TView> : BlazorView<TViewModel, TV
 {
     protected string Href { get; set; }
     protected string Title { get; set; }
-    protected Application.Styles.Icon Icon { get; set; }
+    protected Icon Icon { get; set; }
 
     protected override void BindData()
     {

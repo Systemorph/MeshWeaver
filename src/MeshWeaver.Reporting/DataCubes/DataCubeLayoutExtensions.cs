@@ -2,6 +2,7 @@
 using System.Reactive.Linq;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Domain;
+using MeshWeaver.Domain.Layout;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
@@ -88,7 +89,7 @@ public static class DataCubeLayoutExtensions
                         .WithView(Stack
                             .WithClass("dimension-values")
                             .WithView(
-                                TextBox(f.Search)
+                                Text(f.Search)
                                     .WithPlaceholder("Search...")
                                 // TODO V10: this throws an "access violation" exception, figure out why (08.07.2024, Alexander Kravets)
                                 // .WithImmediate(true)

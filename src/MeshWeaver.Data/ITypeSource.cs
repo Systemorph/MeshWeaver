@@ -1,20 +1,12 @@
 ﻿using System.Security.Cryptography;
 using MeshWeaver.Data.Serialization;
+using MeshWeaver.Domain;
 
 namespace MeshWeaver.Data;
 
-public interface ITypeSource : IDisposable
+public interface ITypeSource 
 {
-    Type ElementType { get; }
-    string DisplayName { get; }
-    string CollectionName { get; }
-    object Icon { get; }
-    object GetKey(object instance);
-    int? Order { get; }
-    string Description { get; }
-    string GroupName { get; }
-
-    string GetDescription(string memberName);
+    ITypeDefinition TypeDefinition { get; }
     ITypeSource WithInitialData(
         Func<
             WorkspaceReference<InstanceCollection>,
@@ -34,7 +26,9 @@ public interface ITypeSource : IDisposable
         WorkspaceReference<InstanceCollection> reference,
         CancellationToken cancellationToken
     );
-    InstanceCollection Update(ChangeItem<EntityStore> workspace);
+    InstanceCollection Update(ChangeItem<EntityStore> changeItem);
+
+    string CollectionName { get; }
 }
 
 public interface IPartitionedTypeSource : ITypeSource

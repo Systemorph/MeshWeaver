@@ -1,6 +1,7 @@
+@using Icon = MeshWeaver.Domain.Icon
 @inherits SkinnedView<NavGroupControl, NavGroupSkin, NavGroup>
 
-<FluentNavGroup Href="@Href" Icon="@Icon?.ToFluentIcon()" Title="@Title" Expanded="@Expanded">
+<FluentNavGroup Href="@Href" Icon="@Icon?.ToFluentIcon()" Title="@Title" Class="@Class" Style="@Style" Expanded="@Expanded">
     
     <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
 
@@ -10,8 +11,8 @@
 
     protected string Title { get; set; }
     protected string Href { get; set; }
-    protected Application.Styles.Icon Icon { get; set; }
-    protected bool Expanded { get; set; }
+    protected Icon Icon { get; set; }
+    private bool Expanded { get; set; }
 
     protected override void BindData()
     {

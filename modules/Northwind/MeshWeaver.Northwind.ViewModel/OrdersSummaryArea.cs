@@ -1,7 +1,8 @@
 ﻿using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
-using MeshWeaver.Documentation;
+using MeshWeaver.Domain.Layout;
+using MeshWeaver.Domain.Layout.Documentation;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
@@ -84,8 +85,8 @@ public static class OrdersSummaryArea
                                         order.OrderDate
                                     ))
                                     .ToArray(),
-                                conf =>
-                                    conf.WithColumn(o => o.Customer)
+                                config =>
+                                    config.WithColumn(o => o.Customer)
                                         .WithColumn(o => o.Products)
                                         .WithColumn(
                                             o => o.Purchased,

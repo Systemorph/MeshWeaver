@@ -182,12 +182,8 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
             { Areas = Areas.Select(a => a with { Area = $"{context.Area}/{a.Id}" }).ToImmutableList() };
     }
 
-    protected static RenderingContext GetContextForArea(RenderingContext context, string area)
-    {
-        return context with { Area = $"{context.Area}/{area}", Parent = context };
-    }
 
-    public virtual bool Equals(TControl other)
+    public virtual bool Equals(ContainerControl<TControl> other)
     {
         if (other is null) return false;
         if (ReferenceEquals(this, other))
@@ -197,6 +193,7 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
                Areas.SequenceEqual(other.Areas);
 
     }
+
 
     public override int GetHashCode()
     {
@@ -248,9 +245,6 @@ public abstract record ContainerControlWithItemSkin<TControl,TSkin, TItemSkin>(s
 
 
 
-    public TControl WithView<T>(IObservable<T> viewDefinition, Func<TItemSkin, TItemSkin> options)
-        => base.WithView(viewDefinition, x => x.AddSkin(options.Invoke(CreateItemSkin(x))));
-
     public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, EntityStore, T> viewDefinition, Func<TItemSkin, TItemSkin> options)
         => base.WithView((h, c, s) => viewDefinition.Invoke(h, c, s), x => x with { Skins = Skins.Add(options.Invoke(CreateItemSkin(x))) });
     public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, EntityStore, IObservable<T>> viewDefinition, Func<TItemSkin, TItemSkin> options)
@@ -272,6 +266,6 @@ public abstract record ContainerControlWithItemSkin<TControl,TSkin, TItemSkin>(s
         return ret;
     }
 
-    protected abstract TItemSkin CreateItemSkin(NamedAreaControl ret);
+    protected abstract TItemSkin CreateItemSkin(NamedAreaControl namedArea);
 }
 

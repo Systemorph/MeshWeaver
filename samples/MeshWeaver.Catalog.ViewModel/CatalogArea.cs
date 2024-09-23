@@ -2,9 +2,10 @@
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.Domain;
 using MeshWeaver.Catalog.Domain;
 using MeshWeaver.Catalog.Layout;
+using MeshWeaver.Domain.Layout;
+using MeshWeaver.Layout.Domain;
 
 namespace MeshWeaver.Catalog.ViewModel;
 

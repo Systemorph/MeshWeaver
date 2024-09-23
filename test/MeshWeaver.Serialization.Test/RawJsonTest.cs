@@ -1,51 +1,18 @@
 ﻿using System.Text.Json;
 using FluentAssertions;
 using FluentAssertions.Json;
-using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Data;
-using MeshWeaver.Fixture;
+using MeshWeaver.Hub.Fixture;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
-using MeshWeaver.ServiceProvider;
 using Xunit.Abstractions;
 
 namespace MeshWeaver.Serialization.Test;
 
-public class RawJsonTest : TestBase
+public class RawJsonTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    record RouterAddress;
-
-    record HostAddress;
-
-    record ClientAddress;
-
-    [Inject]
-    private IMessageHub Client { get; set; }
-
-    [Inject]
-    private IMessageHub Router { get; set; }
-
-    public RawJsonTest(ITestOutputHelper output, IMessageHub client) : base(output)
-    {
-        Client = client;
-        Services.AddSingleton(sp => sp.CreateMessageHub(new ClientAddress(), ConfigureClient));
-        Services.AddMessageHubs(
-            new RouterAddress(),
-            hubConf =>
-                hubConf
-                    .WithTypes(typeof(ClientAddress), typeof(HostAddress))
-                    .WithSerialization(serialization =>
-                        serialization.WithOptions(options =>
-                        {
-                            if (!options.Converters.Any(c => c is RawJsonConverter))
-                                options.Converters.Insert(0, new RawJsonConverter());
-                        })
-                    )
-        );
-    }
-
-    private static MessageHubConfiguration ConfigureClient(MessageHubConfiguration c)
-        => c
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+        => base.ConfigureClient(configuration)
             .WithTypes(typeof(RawJson), typeof(MessageDelivery<>))
             .WithSerialization(serialization =>
                 serialization.WithOptions(options =>
@@ -55,11 +22,13 @@ public class RawJsonTest : TestBase
                 })
             );
 
+
     [Fact]
     public void WayForward_DeserializeToRawJson()
     {
+        var client = GetClient();
         // arrange
-        var postOptions = new PostOptions(Client.Address)
+        var postOptions = new PostOptions(client.Address)
             .WithTarget(new HostAddress())
             .WithProperties(
                 new Dictionary<string, object>
@@ -73,7 +42,7 @@ public class RawJsonTest : TestBase
         var delivery = new MessageDelivery<SubscribeRequest>(subscribeRequest, postOptions);
 
         // act
-        var serialized = JsonSerializer.Serialize(delivery, Client.JsonSerializerOptions);
+        var serialized = JsonSerializer.Serialize(delivery, client.JsonSerializerOptions);
 
         // assert
         var actual = serialized.Should().NotBeNull().And.BeValidJson().Which;
@@ -98,8 +67,9 @@ public class RawJsonTest : TestBase
     [Fact]
     public void WayBack()
     {
+        var client = GetClient();
         // arrange
-        var postOptions = new PostOptions(Client.Address)
+        var postOptions = new PostOptions(client.Address)
             .WithTarget(new HostAddress())
             .WithProperties(
                 new Dictionary<string, object>
@@ -124,7 +94,7 @@ public class RawJsonTest : TestBase
         actualMessage.Should().HaveElement("$type").Which.Should().HaveValue(typeof(DataChangedEvent).FullName);
 
         // act
-        var deserialized = JsonSerializer.Deserialize<IMessageDelivery>(serialized, Client.JsonSerializerOptions);
+        var deserialized = JsonSerializer.Deserialize<IMessageDelivery>(serialized, client.JsonSerializerOptions);
 
         // assert
         deserialized.Should().NotBeNull()

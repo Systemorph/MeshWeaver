@@ -40,7 +40,7 @@ public abstract record UiControl : IUiControl
     public object IsReadonly { get; init; } //TODO add concept of registering conventions for properties to distinguish if it is editable!!! have some defaults, no setter=> iseditable to false, or some attribute to mark as not editable, or checking if it has setter, so on... or BProcess open
 
     public object Label { get; init; }
-    public ImmutableList<Skin> Skins { get; init; }
+    public ImmutableList<Skin> Skins { get; init; } = [];
     public object Class { get; init; }
 
 
@@ -56,7 +56,7 @@ public abstract record UiControl : IUiControl
 
     public UiControl PopSkin(out object skin)
     {
-        if (Skins == null || Skins.Count == 0)
+        if (Skins.Count == 0)
         {
             skin = null;
             return this;
@@ -117,6 +117,11 @@ public abstract record UiControl : IUiControl
         => Render(host, context, store);
 
     protected abstract EntityStoreAndUpdates Render(LayoutAreaHost host, RenderingContext context, EntityStore store);
+    protected static RenderingContext GetContextForArea(RenderingContext context, string area)
+    {
+        return context with { Area = $"{context.Area}/{area}", Parent = context };
+    }
+
 }
 
 public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)

@@ -178,7 +178,7 @@ public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorksp
             .AggregateAsync(
                 new EntityStore()
                 {
-                    GetCollectionName = Workspace.DataContext.TypeRegistry.GetOrAddTypeName
+                    GetCollectionName = Workspace.DataContext.TypeRegistry.GetOrAddType
                 },
                 (store, selected) => store.Update(selected.Reference, selected.Initialized),
                 cancellationToken: cancellationToken

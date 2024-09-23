@@ -2,6 +2,7 @@
 using MeshWeaver.Layout;
 using Microsoft.AspNetCore.Components;
 using System.Collections.Immutable;
+using MeshWeaver.Domain.Layout;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Utils;
 

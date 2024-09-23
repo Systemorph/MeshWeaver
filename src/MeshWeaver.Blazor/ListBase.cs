@@ -1,27 +1,15 @@
-﻿using MeshWeaver.Data;
-using MeshWeaver.Layout;
+﻿using MeshWeaver.Layout;
 
 namespace MeshWeaver.Blazor;
 
-public abstract class ListBase<TViewModel, TView> : BlazorView<TViewModel, TView>
+public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel, TView, ListBase<TViewModel,TView>.Option>
     where TViewModel : UiControl, IListControl
     where TView : ListBase<TViewModel, TView>
 {
-    protected record Option(object Item, string Text, string ItemString);
+    public record Option(object Item, string Text, string ItemString);
 
     protected IReadOnlyCollection<Option> Options { get; set; } = [];
 
-    protected Option Selected
-    {
-        get => selected;
-        set
-        {
-            var needsUpdate = selected != null && selected.ItemString != value?.ItemString;
-            selected = value;
-            if (needsUpdate)
-                UpdatePointer(selected?.Item, Pointer);
-        }
-    }
 
     protected override void BindData()
     {
@@ -34,14 +22,15 @@ public abstract class ListBase<TViewModel, TView> : BlazorView<TViewModel, TView
                     new Option(option.GetItem(), option.Text, MapToString(option.GetItem())))
                 .ToArray()
         );
-        DataBind(ViewModel.Data, x => x.Selected, o =>
+    }
+
+    protected override Func<object, Option> ConversionToValue =>
+        value =>
         {
-            var mapToString = MapToString(o);
+            var mapToString = MapToString(value);
             return Options.FirstOrDefault(x =>
                 x.ItemString == mapToString);
-        });
-        Pointer = ViewModel.Data as JsonPointerReference;
-    }
+        };
 
 
     private static string MapToString(object instance) =>
@@ -50,7 +39,9 @@ public abstract class ListBase<TViewModel, TView> : BlazorView<TViewModel, TView
             : instance.ToString();
     private static bool IsDefault<T>(T instance) => instance.Equals(default(T));
 
-    private JsonPointerReference Pointer { get; set; }
-
-    private Option selected;
+    protected override object ConvertToData(Option value) => value?.Item;
+    protected override bool NeedsUpdate(Option value)
+    {
+        return Value != null && Value.ItemString != value?.ItemString;
+    }
 }

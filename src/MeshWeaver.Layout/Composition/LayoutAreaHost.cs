@@ -257,11 +257,12 @@ public record LayoutAreaHost : IDisposable
     internal EntityStoreAndUpdates 
         RenderArea<T>(RenderingContext context, ViewStream<T> generator, EntityStore store)
     {
+        var ret = DisposeExistingAreas(store, context);
         AddDisposable(context.Parent?.Area ?? context.Area,
-            generator.Invoke(this, context, store)
+            generator.Invoke(this, context, ret.Store)
                 .Subscribe(c => InvokeAsync(() => UpdateArea(context, c)))
         );
-        return DisposeExistingAreas(store, context);
+        return ret;
     }
 
     public void UpdateProgress(string area, ProgressControl progress)

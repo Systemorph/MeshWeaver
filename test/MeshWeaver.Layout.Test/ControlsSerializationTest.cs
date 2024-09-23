@@ -20,7 +20,7 @@ public class ControlsSerializationTest(ITestOutputHelper output) : HubTestBase(o
     }
 
     private const string benchmark =
-        "{\"data\":\"Hello World\",\"moduleName\":\"" + ModuleSetup.ModuleName +"\",\"apiVersion\":\"" + ModuleSetup.ApiVersion + "\",\"$type\":\"MeshWeaver.Layout.HtmlControl\"}";
+        "{\"data\":\"Hello World\",\"moduleName\":\"" + ModuleSetup.ModuleName +"\",\"apiVersion\":\"" + ModuleSetup.ApiVersion + "\",\"skins\":[],\"$type\":\"MeshWeaver.Layout.HtmlControl\"}";
 
     [HubFact]
     public  void BasicSerialization()

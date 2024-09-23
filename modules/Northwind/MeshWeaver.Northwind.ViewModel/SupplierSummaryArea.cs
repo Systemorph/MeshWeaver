@@ -1,9 +1,7 @@
 ﻿using System.Reactive.Linq;
-using MeshWeaver.Application.Styles;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.Domain;
 using MeshWeaver.Northwind.Domain;
 using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Reporting.DataCubes;
