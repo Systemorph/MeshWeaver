@@ -3,6 +3,7 @@ using MeshWeaver.Layout.Markdown;
 using MeshWeaver.Layout;
 using Microsoft.AspNetCore.Components;
 using Microsoft.JSInterop;
+using Markdig.Syntax;
 
 namespace MeshWeaver.Blazor;
 
@@ -26,21 +27,13 @@ public partial class MarkdownView
         AddBinding(Convert<string>(ViewModel.Data).Subscribe(
             markdown => InvokeAsync(() =>
             {
-                var layoutAreaExtension = new LayoutAreaMarkdownExtension(Stream.Hub);
-                var pipeline = new MarkdownPipelineBuilder()
-                    .UseAdvancedExtensions()
-                    .UseEmojiAndSmiley()
-                    .UseYamlFrontMatter()
-                    .Use(layoutAreaExtension)
-                    .Use(new ImgPathMarkdownExtension(path => ToStaticHref(path, Stream.Owner)))
-                    .Build();
-                var newHtml = Markdown.ToHtml(markdown, pipeline);
+                var pipeline = Layout.Markdown.MarkdownExtensions.CreateMarkdownPipeline(Stream.Owner);
+                var document = Markdown.Parse(markdown, pipeline);
                 var newLayoutComponents =
-                    layoutAreaExtension
-                        .MarkdownParser
-                        .Areas
+                    document.Descendants<LayoutAreaComponentInfo>()
                         .Select(component => new LayoutAreaControl(Stream.Owner, component.Reference) { Id = component.DivId })
                         .ToArray();
+                var newHtml = document.ToHtml(pipeline);
                 if (newHtml == Html && LayoutAreaComponents.SequenceEqual(newLayoutComponents))
                     return;
                 Html = newHtml;
@@ -51,8 +44,7 @@ public partial class MarkdownView
         );
     }
 
-    public string ToStaticHref(string url,  object address)
-        => $"static/{address}/{url}";
+
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {

@@ -1,8 +1,6 @@
 ﻿using System.Text;
-using System.Text.Json;
 using Markdig.Helpers;
 using Markdig.Parsers;
-using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Layout.Markdown;
 
@@ -11,7 +9,7 @@ public class LayoutAreaMarkdownParser : BlockParser
     private readonly Dictionary<string, Action<LayoutAreaComponentInfo, string>> fieldMappings;
     public readonly List<LayoutAreaComponentInfo> Areas = new();
 
-    public LayoutAreaMarkdownParser(IMessageHub hub)
+    public LayoutAreaMarkdownParser()
     {
         OpeningCharacters = ['@'];
 
@@ -22,7 +20,7 @@ public class LayoutAreaMarkdownParser : BlockParser
             { nameof(LayoutAreaComponentInfo.DivId), (a, foundValue) => a.DivId = foundValue },
             {
                 nameof(LayoutAreaComponentInfo.Address), (a, foundValue) =>
-                    a.Address = JsonSerializer.Deserialize<object>(foundValue, hub.JsonSerializerOptions)
+                    a.Address = foundValue
             },
         };
     }

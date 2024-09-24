@@ -4,7 +4,6 @@ using Markdig;
 using Markdig.Syntax;
 using MeshWeaver.Layout.Markdown;
 using MeshWeaver.Messaging;
-using Microsoft.DotNet.Interactive.Formatting;
 
 namespace MeshWeaver.Ai.Index;
 
@@ -12,7 +11,7 @@ public static class MarkdownIndexer
 {
     public static List<string> SplitMarkdownParagraphs(this IMessageHub hub, string markdownText, int maxChunkSize)
     {
-        var pipeline = new MarkdownPipelineBuilder().Use(new LayoutAreaMarkdownExtension(hub)).Build();
+        var pipeline = new MarkdownPipelineBuilder().Use(new LayoutAreaMarkdownExtension()).Build();
 
         var document = Markdown.Parse(markdownText, pipeline);
         var chunks = new List<string>();
@@ -44,7 +43,7 @@ public static class MarkdownIndexer
     private static void CreateIndex(SearchIndexClient searchIndexClient)
     {
         var fieldBuilder = new FieldBuilder();
-        var searchFields = fieldBuilder.Build(typeof(MeshArticle));
+        var searchFields = fieldBuilder.Build(typeof(MeshArticleIndex));
 
         var definition = new SearchIndex(IndexName)
         {

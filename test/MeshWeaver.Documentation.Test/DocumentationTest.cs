@@ -44,7 +44,7 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // Define a sample markdown string
         var markdown = "@(\"MyArea\")";
-        var extension = new LayoutAreaMarkdownExtension(GetHost());
+        var extension = new LayoutAreaMarkdownExtension();
         var html = RenderMarkdown(extension, markdown);
 
         extension.MarkdownParser.Areas.Should().HaveCount(1);
@@ -64,7 +64,7 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
         const string Doc = nameof(Doc);
         // Define a sample markdown string
         var markdown = $"@(\"MyArea\"){{ Layout = \"{Doc}\"}}";
-        var extension = new LayoutAreaMarkdownExtension(GetHost());
+        var extension = new LayoutAreaMarkdownExtension();
         var html = RenderMarkdown(extension, markdown);
 
         extension.MarkdownParser.Areas.Should().HaveCount(1);
@@ -94,7 +94,7 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // Define a sample markdown string
         var markdown = "@(\"Area1\")\n@(\"Area2\")";
-        var extension = new LayoutAreaMarkdownExtension(GetHost());
+        var extension = new LayoutAreaMarkdownExtension();
         var html = RenderMarkdown(extension, markdown);
 
         extension.MarkdownParser.Areas.Should().HaveCount(2);

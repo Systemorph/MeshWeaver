@@ -11,7 +11,7 @@ public class LayoutAreaComponentInfo(string area, BlockParser blockParser)
     public string DivId { get; set; } = Guid.NewGuid().ToString();
 
     public string Layout { get; set; }
-    public object Address { get; set; }
+    public string Address { get; set; }
     public object Id { get; set; }
 
     public LayoutAreaReference Reference =>
