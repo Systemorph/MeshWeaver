@@ -13,11 +13,11 @@
 
 This financial report provides a detailed analysis of the revenue and discounts given throughout the year 2023. The data has been meticulously compiled to offer insights into the financial performance, highlighting key trends and significant variations in both revenue and discounts over the months. This report aims to assist in understanding the financial health and operational efficiency of the business during the specified period.
 
-**Total Revenue:** €776,058.73  
-**Total Discount Given:** €52,422.87
+**Total Revenue:** $776,058.73  
+**Total Discount Given:** $52,422.87
 
-**Average Monthly Revenue:** €70,550.79  
-**Average Monthly Discount:** €4,765.72
+**Average Monthly Revenue:** $70,550.79  
+**Average Monthly Discount:** $4,765.72
 
 **Percentage of Discount Given from Total Revenue:** 6.76%
 
@@ -25,42 +25,42 @@ This financial report provides a detailed analysis of the revenue and discounts 
 
 #### Monthly Breakdown
 - **January:**
-  - Revenue: €50,961.48
-  - Discount: €4,440.95
+  - Revenue: $50,961.48
+  - Discount: $4,440.95
 - **February:**
-  - Revenue: €47,287.67
-  - Discount: €2,694.02
+  - Revenue: $47,287.67
+  - Discount: $2,694.02
 - **March:**
-  - Revenue: €55,504.24
-  - Discount: €4,103.78
+  - Revenue: $55,504.24
+  - Discount: $4,103.78
 - **April:**
-  - Revenue: €66,749.23
-  - Discount: €3,579.27
+  - Revenue: $66,749.23
+  - Discount: $3,579.27
 - **May:**
-  - Revenue: €43,533.81
-  - Discount: €2,379.55
+  - Revenue: $43,533.81
+  - Discount: $2,379.55
 - **June:**
-  - Revenue: €71,398.43
-  - Discount: €6,077.83
+  - Revenue: $71,398.43
+  - Discount: $6,077.83
 - **July:**
-  - Revenue: €94,222.11
-  - Discount: €6,632.61
+  - Revenue: $94,222.11
+  - Discount: $6,632.61
 - **August:**
-  - Revenue: €99,415.29
-  - Discount: €5,146.66
+  - Revenue: $99,415.29
+  - Discount: $5,146.66
 - **September:**
-  - Revenue: €104,854.16
-  - Discount: €4,971.29
+  - Revenue: $104,854.16
+  - Discount: $4,971.29
 - **October:**
-  - Revenue: €123,798.68
-  - Discount: €10,831.88
+  - Revenue: $123,798.68
+  - Discount: $10,831.88
 - **November:**
-  - Revenue: €18,333.63
-  - Discount: €1,565.03
+  - Revenue: $18,333.63
+  - Discount: $1,565.03
 
 ### Analysis
-- **Revenue Trends:** The highest revenue was recorded in October (€123,798.68), while the lowest was in November (€18,333.63). There was a general upward trend in revenue from January to October, with a significant drop in November.
-- **Discount Trends:** The highest discount was given in October (€10,831.88), and the lowest in November (€1,565.03). The percentage of discounts given relative to revenue varied, with October having the highest discount percentage.
+- **Revenue Trends:** The highest revenue was recorded in October ($123,798.68), while the lowest was in November ($18,333.63). There was a general upward trend in revenue from January to October, with a significant drop in November.
+- **Discount Trends:** The highest discount was given in October ($10,831.88), and the lowest in November ($1,565.03). The percentage of discounts given relative to revenue varied, with October having the highest discount percentage.
 
 # Discount Percentage
 
@@ -72,8 +72,8 @@ This financial report provides a comprehensive analysis of the sales amounts ver
 
 </div>
 
-- The majority of sales (€471,390.77) were made without any discount.
-- The highest sales volume with a discount was at a 5% discount rate, amounting to €103,672.08.
+- The majority of sales ($471,390.77) were made without any discount.
+- The highest sales volume with a discount was at a 5% discount rate, amounting to $103,672.08.
 - Significant sales volumes were also observed at 10%, 15%, and 25% discount rates.
 This report provides a clear overview of how discounts impacted sales volumes throughout the year.
 
