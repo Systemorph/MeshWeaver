@@ -1,5 +1,4 @@
-# Analytical Report on Annual Financial Performance of Product Categories 2023
-
+# Financial Report Comparing Sales by Category of Products in 2022 and 2023
 <style>
     .sales-by-category-comparison-chart {
         float: right;
@@ -11,52 +10,36 @@
     }
 </style>
 
-The annual financial report for the shop reveals insightful data on the sales performance of various product categories. The total sales for the year amounted to €1,552,117.45, distributed across eight product categories. Below is a detailed analysis of each category’s performance:
-
+This report provides a detailed comparison of sales across various product categories between the years 2022 and 2023. The analysis highlights the growth in sales for each category, showcasing the overall performance and trends within the market. The data reveals significant increases in sales across all categories, with some experiencing remarkable growth rates. 
 <div class="sales-by-category-comparison-chart">
 
 @("SalesByCategoryWithPrevYear"){ Id = "?Year=2023" }
 
 </div>
 
-1. **Beverages:**
-    - **Total Sales:** €317,160.55
-    - **Percentage of Total Sales:** 20.44%
-    - **Analysis:** Beverages emerged as the top-performing category, contributing over one-fifth of the total sales. This indicates a strong consumer preference and high demand for beverages, making it a crucial segment for the shop’s revenue.
+### Summary
+- **Beverages**: Sales increased by $28,465.90, a 21.88% rise.
+- **Condiments**: Sales grew by $10,474.93, a 20.30% increase.
+- **Confections**: Sales went up by $14,039.23, a 16.93% rise.
+- **Dairy Products**: Sales saw a significant increase of $37,811.84, a 35.46% rise.
+- **Grains/Cereals**: Sales increased by $15,693.19, a 36.51% rise.
+- **Meat/Poultry**: Sales grew by $29,125.25, a 40.04% increase.
+- **Produce**: Sales went up by $18,694.93, a 42.95% rise.
+- **Seafood**: Sales saw the highest increase of $44,409.58, a 94.91% rise.
 
-2. **Condiments:**
-    - **Total Sales:** €124,167.12
-    - **Percentage of Total Sales:** 8.00%
-    - **Analysis:** Condiments, while not the largest contributor, still hold a significant share. The sales figures suggest a steady demand, which could be attributed to their essential role in enhancing the flavor of various dishes.
+Below is a breakdown of the sales figures, differences, and percentage changes for each category.
 
-3. **Confections:**
-    - **Total Sales:** €193,902.87
-    - **Percentage of Total Sales:** 12.49%
-    - **Analysis:** Confections represent a substantial portion of the sales, reflecting a strong consumer inclination towards sweet products. This category’s performance underscores the importance of maintaining a diverse and appealing range of confectionery items.
+| Category         | Sales 2022 (USD) | Sales 2023 (USD) | Difference (USD) | Percentage Change (%) |
+|------------------|------------------|------------------|------------------|-----------------------|
+| Beverages        | 130,114.38       | 158,580.28       | 28,465.90        | 21.88                 |
+| Condiments       | 51,608.63        | 62,083.56        | 10,474.93        | 20.30                 |
+| Confections      | 82,912.21        | 96,951.44        | 14,039.23        | 16.93                 |
+| Dairy Products   | 106,667.88       | 144,479.72       | 37,811.84        | 35.46                 |
+| Grains/Cereals   | 42,976.88        | 58,670.07        | 15,693.19        | 36.51                 |
+| Meat/Poultry     | 72,748.65        | 101,873.90       | 29,125.25        | 40.04                 |
+| Produce          | 43,525.39        | 62,220.32        | 18,694.93        | 42.95                 |
+| Seafood          | 46,789.86        | 91,199.44        | 44,409.58        | 94.91                 |
 
-4. **Dairy Products:**
-    - **Total Sales:** €288,959.44
-    - **Percentage of Total Sales:** 18.62%
-    - **Analysis:** Dairy products are a major revenue driver. The high sales figures highlight the essential nature of dairy items in daily consumption, suggesting a stable and reliable source of income for the shop.
-
-5. **Grains/Cereals:**
-    - **Total Sales:** €117,340.14
-    - **Percentage of Total Sales:** 7.56%
-    - **Analysis:** Grains and cereals, while contributing the least to total sales, still play a vital role in the product mix. Their lower percentage indicates potential areas for growth, possibly through targeted promotions or expanding the product range.
-
-6. **Meat/Poultry:**
-    - **Total Sales:** €203,747.80
-    - **Percentage of Total Sales:** 13.13%
-    - **Analysis:** Meat and poultry products account for a significant share of the sales, reflecting their importance in the consumer diet. This category’s performance suggests a consistent demand, which can be leveraged for future growth.
-
-7. **Produce:**
-    - **Total Sales:** €124,440.64
-    - **Percentage of Total Sales:** 8.02%
-    - **Analysis:** Produce sales indicate a moderate contribution to the overall revenue. Fresh produce is essential for a balanced diet, and its performance could be enhanced through better sourcing and marketing strategies.
-
-8. **Seafood:**
-    - **Total Sales:** €182,398.89
-    - **Percentage of Total Sales:** 11.75%
-    - **Analysis:** Seafood holds a notable share of the sales, suggesting a healthy demand. The shop could explore opportunities to further boost this category through promotions and expanding the variety of seafood offered.
+Overall, all categories experienced growth in sales from 2022 to 2023, with **Seafood** showing the most significant increase.
 
 The financial analysis reveals that beverages and dairy products are the leading categories, together accounting for nearly 40% of the total sales. Confections and meat/poultry also show strong performance, indicating their importance in the product lineup. While grains/cereals and produce have lower sales percentages, they present opportunities for growth through strategic initiatives. Overall, the diverse product mix contributes to a balanced revenue stream, with potential for further optimization and expansion in specific categories.
