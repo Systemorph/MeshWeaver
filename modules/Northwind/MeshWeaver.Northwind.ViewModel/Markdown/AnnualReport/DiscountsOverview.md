@@ -1,5 +1,16 @@
 # Discounts vs Revenue
 
+<style>
+    .discount-percentage-chart {
+        float: right;
+        width: 50%;
+        min-width: 650px;
+        max-width: 650px;
+        max-height: 300px;
+        margin: 10px;
+    }
+</style>
+
 This financial report provides a detailed analysis of the revenue and discounts given throughout the year 2023. The data has been meticulously compiled to offer insights into the financial performance, highlighting key trends and significant variations in both revenue and discounts over the months. This report aims to assist in understanding the financial health and operational efficiency of the business during the specified period.
 
 **Total Revenue:** €776,058.73  
@@ -55,7 +66,11 @@ This financial report provides a detailed analysis of the revenue and discounts 
 
 This financial report provides a comprehensive analysis of the sales amounts versus the discounts given over the past year. The data, expressed in Euros, highlights the impact of various discount rates on the overall sales volume. By examining the total sales, total discounts given, and the average discount percentage, this report aims to offer valuable insights into the effectiveness of discount strategies and their influence on sales performance.
 
+<div class="discount-percentage-chart">
+
 @("DiscountPercentage")
+
+</div>
 
 - The majority of sales (€471,390.77) were made without any discount.
 - The highest sales volume with a discount was at a 5% discount rate, amounting to €103,672.08.
