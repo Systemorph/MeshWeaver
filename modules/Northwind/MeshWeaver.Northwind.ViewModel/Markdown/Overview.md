@@ -1,4 +1,15 @@
-<!-- { "keywords": [ "Northwind", "Overview", "Landing page"]} -->
+---
+Name: "Northwind Overview"
+Description: "This is a sample description of the article."
+Thumbnail: "images/thumbnail.jpg"
+Published: "2024-09-24"
+Authors:
+  - "Roland Bürgi"
+  - "Anna Kuleshova"
+Tags:
+  - "Northwind"
+  - "Conceptual"
+---
 
 # Northwind
 

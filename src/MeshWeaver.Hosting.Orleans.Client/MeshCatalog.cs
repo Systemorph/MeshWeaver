@@ -64,11 +64,11 @@ namespace MeshWeaver.Hosting.Orleans.Client
             deferral.Dispose();
         }
 
-        public Task<ArticleEntry> GetArticleAsync(string id)
+        public Task<MeshArticle> GetArticleAsync(string id)
             => grainFactory.GetGrain<IArticleGrain>(id).Get();
 
-        public Task UpdateArticleAsync(ArticleEntry article)
-            => grainFactory.GetGrain<IArticleGrain>(article.Id).Update(article);
+        public Task UpdateArticleAsync(MeshArticle meshArticle)
+            => grainFactory.GetGrain<IArticleGrain>(meshArticle.Url).Update(meshArticle);
     }
 
     public class ModulesAssemblyLoadContext(string basePath) : AssemblyLoadContext(true){

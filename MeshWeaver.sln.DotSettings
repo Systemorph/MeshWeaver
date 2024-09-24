@@ -55,5 +55,6 @@ public void $Name$ ()&#xD;
 	<s:String x:Key="/Default/PatternsAndTemplates/LiveTemplates/Template/=39959A26D1FBAB4FAA9132FF0FA0BA8F/Text/@EntryValue">// TODO V10: $END$ ($DATE$, $USER$)</s:String>
 	<s:Boolean x:Key="/Default/UserDictionary/Words/=Arithmetics/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/UserDictionary/Words/=Cashflows/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/UserDictionary/Words/=Chunker/@EntryIndexedValue">True</s:Boolean>
 
 </wpf:ResourceDictionary>

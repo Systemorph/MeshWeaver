@@ -30,6 +30,7 @@ public partial class MarkdownView
                 var pipeline = new MarkdownPipelineBuilder()
                     .UseAdvancedExtensions()
                     .UseEmojiAndSmiley()
+                    .UseYamlFrontMatter()
                     .Use(layoutAreaExtension)
                     .Use(new ImgPathMarkdownExtension(path => ToStaticHref(path, Stream.Owner)))
                     .Build();

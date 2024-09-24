@@ -11,8 +11,8 @@ public interface IMeshCatalog
     Task UpdateAsync(MeshNode node);
     Task InitializeAsync(CancellationToken cancellationToken);
 
-    Task<ArticleEntry> GetArticleAsync(string id);
-    Task UpdateArticleAsync(ArticleEntry article);
+    Task<MeshArticle> GetArticleAsync(string id);
+    Task UpdateArticleAsync(MeshArticle meshArticle);
 }
 
 [GenerateSerializer]
