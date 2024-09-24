@@ -8,7 +8,7 @@ namespace MeshWeaver.Hosting.Monolith;
 public class MonolithMeshCatalog(IMessageHub hub) : IMeshCatalog
 {
     private readonly ConcurrentDictionary<string, MeshNode> meshNodes = new();
-    private readonly ConcurrentDictionary<string, ArticleEntry> articles = new();
+    private readonly ConcurrentDictionary<string, MeshArticle> articles = new();
     private MeshConfiguration Configuration { get; } = hub.Configuration.GetMeshContext();
 
 
@@ -32,12 +32,12 @@ public class MonolithMeshCatalog(IMessageHub hub) : IMeshCatalog
         return Task.CompletedTask;
     }
 
-    public Task<ArticleEntry> GetArticleAsync(string id)
+    public Task<MeshArticle> GetArticleAsync(string id)
     => Task.FromResult(articles.GetValueOrDefault(id));
 
-    public Task UpdateArticleAsync(ArticleEntry article)
+    public Task UpdateArticleAsync(MeshArticle meshArticle)
     {
-        articles[article.Id] = article;
+        articles[meshArticle.Url] = meshArticle;
         return Task.CompletedTask;
     }
 }

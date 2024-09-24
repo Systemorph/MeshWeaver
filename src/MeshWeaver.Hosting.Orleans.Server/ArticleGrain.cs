@@ -6,15 +6,15 @@ using Orleans.Providers;
 namespace MeshWeaver.Hosting.Orleans.Server;
 
 [StorageProvider(ProviderName = StorageProviders.MeshCatalog)]
-public class ArticleGrain(ILogger<ArticleGrain> logger) : Grain<ArticleEntry>, IArticleGrain
+public class ArticleGrain(ILogger<ArticleGrain> logger) : Grain<MeshArticle>, IArticleGrain
 {
-    public Task<ArticleEntry> Get()
+    public Task<MeshArticle> Get()
     {
         logger.LogDebug("Retrieving Article Entry {Article}", this.GetPrimaryKeyString());
         return Task.FromResult(State);
     }
 
-    public async Task Update(ArticleEntry entry)
+    public async Task Update(MeshArticle entry)
     {
         logger.LogDebug("Updating Article to {entry}", entry);
         State = entry;
