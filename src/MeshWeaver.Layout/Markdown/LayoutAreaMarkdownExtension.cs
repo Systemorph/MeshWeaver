@@ -1,12 +1,11 @@
 ﻿using Markdig;
 using Markdig.Renderers;
-using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Layout.Markdown;
 
-public class LayoutAreaMarkdownExtension(IMessageHub hub) : IMarkdownExtension
+public class LayoutAreaMarkdownExtension() : IMarkdownExtension
 {
-    public LayoutAreaMarkdownParser MarkdownParser { get; } = new(hub);
+    public LayoutAreaMarkdownParser MarkdownParser { get; } = new();
     private readonly LayoutAreaMarkdownRenderer layoutAreaRenderer = new();
 
     public void Setup(MarkdownPipelineBuilder pipeline)
@@ -19,4 +18,6 @@ public class LayoutAreaMarkdownExtension(IMessageHub hub) : IMarkdownExtension
         if (renderer is HtmlRenderer htmlRenderer)
             htmlRenderer.ObjectRenderers.AddIfNotAlready(layoutAreaRenderer);
     }
+
+
 }

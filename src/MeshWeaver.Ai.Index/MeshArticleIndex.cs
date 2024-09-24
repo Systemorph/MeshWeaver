@@ -4,7 +4,7 @@ using Azure.Search.Documents.Indexes.Models;
 
 namespace MeshWeaver.Ai.Index
 {
-    public record MeshArticle(
+    public record MeshArticleIndex(
         [property: Key][property: SimpleField(IsKey = true)] string Url,
         [property: SearchableField(IsFilterable = true, IsSortable = true)] string Name,
         [property: SearchableField(IsFilterable = true, IsSortable = true)] string Description,
