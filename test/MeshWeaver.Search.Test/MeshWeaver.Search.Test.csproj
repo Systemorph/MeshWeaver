@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <Content Include="wwwroot\**">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Azure.Provisioning.Storage" />
+    <PackageReference Include="Azure.Storage.Blobs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.Search\MeshWeaver.Search.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Hub.Fixture\MeshWeaver.Hub.Fixture.csproj" />
+  </ItemGroup>
+</Project>

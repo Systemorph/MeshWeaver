@@ -203,7 +203,9 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Overview", "modu
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Northwind.Test", "modules\Northwind\MeshWeaver.Northwind.Test\MeshWeaver.Northwind.Test.csproj", "{884BA2C1-AD25-44B7-8421-644E42807087}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Ai.Index", "src\MeshWeaver.Ai.Index\MeshWeaver.Ai.Index.csproj", "{9D223DB3-75A8-439F-8954-D7408E901C3E}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Search", "src\MeshWeaver.Search\MeshWeaver.Search.csproj", "{1AE5D074-0340-42B4-979B-A0495414B174}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Search.Test", "test\MeshWeaver.Search.Test\MeshWeaver.Search.Test.csproj", "{BDEC6D93-F212-456F-BEEE-DE2BADAE2A56}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -563,10 +565,14 @@ Global
 		{884BA2C1-AD25-44B7-8421-644E42807087}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{884BA2C1-AD25-44B7-8421-644E42807087}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{884BA2C1-AD25-44B7-8421-644E42807087}.Release|Any CPU.Build.0 = Release|Any CPU
-		{9D223DB3-75A8-439F-8954-D7408E901C3E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{9D223DB3-75A8-439F-8954-D7408E901C3E}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{9D223DB3-75A8-439F-8954-D7408E901C3E}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{9D223DB3-75A8-439F-8954-D7408E901C3E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1AE5D074-0340-42B4-979B-A0495414B174}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1AE5D074-0340-42B4-979B-A0495414B174}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1AE5D074-0340-42B4-979B-A0495414B174}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1AE5D074-0340-42B4-979B-A0495414B174}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BDEC6D93-F212-456F-BEEE-DE2BADAE2A56}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BDEC6D93-F212-456F-BEEE-DE2BADAE2A56}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BDEC6D93-F212-456F-BEEE-DE2BADAE2A56}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BDEC6D93-F212-456F-BEEE-DE2BADAE2A56}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -609,6 +615,7 @@ Global
 		{1471FB82-912E-411A-9141-096E0AECAAAE} = {4E1A12BB-5348-4DA4-B05F-F831DC16F7DE}
 		{9E11B94D-DC0F-4208-878C-616C6367B70A} = {BFCF5E5D-1964-434B-BB7E-97F24C884FBC}
 		{884BA2C1-AD25-44B7-8421-644E42807087} = {80489276-45B5-4FCF-ADDF-980A56D4D2E9}
+		{BDEC6D93-F212-456F-BEEE-DE2BADAE2A56} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {331ADDC7-02A4-4F0E-8C47-2060003082F2}
