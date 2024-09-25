@@ -1,3 +1,22 @@
+---
+Name: "Northwind Overview"
+Description: "This document provides a comprehensive financial report comparing sales by category of products for the years 2022 and 2023. It highlights the growth in sales across various categories, showcasing overall performance and market trends. The financial analysis underscores the leading categories, such as beverages and dairy products, which together account for nearly 40% of total sales. It also identifies opportunities for growth in grains/cereals and produce through strategic initiatives."
+Thumbnail: "images/thumbnail.jpg"
+Published: "2024-09-24"
+Authors:
+  - "Roland B�rgi"
+  - "Anna Kuleshova"
+Tags:
+  - "Financial Report
+  - "Sales Analysis"
+  - "2022"
+  - "2023"
+  - "Product Categories"
+  - "Market Trends"
+  - "Revenue Growth"
+  - "Business Insights"
+---
+
 # Financial Report Comparing Sales by Category of Products in 2022 and 2023
 <style>
     .sales-by-category-comparison-chart {
