@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Layout;
+﻿using MeshWeaver.Catalog.Data;
+using MeshWeaver.Layout;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Messaging;
 
@@ -10,9 +11,11 @@ public static class CatalogViewModels
         this MessageHubConfiguration configuration
     )
         => configuration
+            .AddCatalogData()
             .AddLayout(layout => layout
                 .WithPageLayout()
                 .AddCatalogAssistant()
+                .AddCatalog()
             )
             ;
 }

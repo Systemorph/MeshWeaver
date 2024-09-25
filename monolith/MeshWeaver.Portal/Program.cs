@@ -5,6 +5,7 @@ using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.Assistant;
 using MeshWeaver.Blazor.ChartJs;
 using MeshWeaver.Catalog.ViewModel;
+using MeshWeaver.Catalog.Views;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Blazor;
 using Microsoft.Extensions.Logging.Console;
@@ -41,6 +42,8 @@ builder.UseMeshWeaver(
                 .AddChartJs()
                 .AddAgGrid()
                 .AddAssistant()
+                // TODO V10: to be un-hardcoded (25.09.2024, Alexander Kravets)
+                .AddCatalogViews()
         )
         .AddMonolithMesh()
 );
