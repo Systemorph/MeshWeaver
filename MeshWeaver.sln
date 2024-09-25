@@ -184,6 +184,9 @@ EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Hosting.Monolith", "src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj", "{EABBF29A-4DD9-4618-AF31-41FB705A6828}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "modules", "modules", "{BFCF5E5D-1964-434B-BB7E-97F24C884FBC}"
+	ProjectSection(SolutionItems) = preProject
+		modules\Directory.Build.props = modules\Directory.Build.props
+	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Northwind", "Northwind", "{80489276-45B5-4FCF-ADDF-980A56D4D2E9}"
 EndProject
