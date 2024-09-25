@@ -88,9 +88,9 @@
     <PackageVersion Include="Microsoft.Orleans.Clustering.AzureStorage" Version="8.2.0" />
     <PackageVersion Include="Microsoft.Orleans.Persistence.AzureStorage" Version="8.2.0" />
     <PackageVersion Include="Aspire.StackExchange.Redis" Version="8.2.0" />
-    <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="8.1.0" />
+    <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="8.2.0" />
     <PackageVersion Include="Aspire.Hosting.Azure.CognitiveServices" Version="8.1.0" />
-    <PackageVersion Include="Aspire.Azure.Data.Tables" Version="8.1.0" />
+    <PackageVersion Include="Aspire.Azure.Data.Tables" Version="8.2.0" />
     <PackageVersion Include="Aspire.Azure.Data.Blobs" Version="8.1.0" />
   </ItemGroup>
 </Project>
