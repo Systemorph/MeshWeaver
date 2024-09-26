@@ -1,5 +1,6 @@
 ﻿using System.Reactive.Linq;
 using MeshWeaver.Charting.Models;
+using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
@@ -38,8 +39,10 @@ public static class ClientsOverviewArea
                     .ToBarChart(builder => builder
                         .WithOptions(o => o.OrderByValueDescending().TopValues(5))
                         .WithChartBuilder(o => o
-                            .AsHorizontal()
-                            .WithDataLabels()
+                            .WithDataLabels(d =>
+                                d.WithAnchor(DataLabelsAnchor.Start)
+                                    .WithAlign(DataLabelsAlign.End)
+                            )
                         )
                     )
             );
