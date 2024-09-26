@@ -1,7 +1,21 @@
 # Top Employees of the Month Based on Amounts Earned
+<style>
+    .top-employees-chart {
+        float: right;
+        width: 50%;
+        min-width: 650px;
+        max-width: 650px;
+        max-height: 300px;
+        margin: 10px;
+    }
+</style>
+
 This report highlights the top-performing employees of the month based on the amounts earned. The data is used to recognize and reward hard-working employees with bonuses, acknowledging their dedication and contribution to the company's success.
+<div class="top-employees-chart">
 
 @("TopEmployees")
+
+</div>
 
 Here is the breakdown on the amounts earned by top five employees in this month.
 
