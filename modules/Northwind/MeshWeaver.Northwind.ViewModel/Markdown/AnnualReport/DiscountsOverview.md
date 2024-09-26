@@ -1,3 +1,28 @@
+---
+Name: "Discounts vs Revenue"
+Description: "The report meticulously compiles data to offer insights into the financial performance of the business, highlighting key trends and significant variations in both revenue and discounts over the months. It aims to assist in understanding the financial health and operational efficiency during the specified period. This detailed analysis provides valuable insights into the effectiveness of discount strategies and their influence on sales performance."
+Thumbnail: "images/thumbnail.jpg"
+Published: "2024-09-24"
+Authors:
+  - "Roland B�rgi"
+  - "Anna Kuleshova"
+Tags:
+  - "Financial Analysis"
+  - "Revenue Trends"
+  - "Discount Strategies"
+  - "Monthly Breakdown"
+  - "Sales Performance"
+  - "Operational Efficiency"
+  - "2023 Financial Report"
+  - "Revenue vs Discounts"
+  - "Business Insights"
+  - "Financial Health"
+  - "Discount Impact"
+  - "Sales Volume"
+  - "Pricing Strategies"
+  - "Profitability"
+---
+
 # Discounts vs Revenue
 
 <style>
