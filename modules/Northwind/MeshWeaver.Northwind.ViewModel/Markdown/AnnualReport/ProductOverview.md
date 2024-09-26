@@ -1,3 +1,28 @@
+---
+Name: "Product Overview 2023"
+Description: "This comprehensive financial report provides an in-depth analysis of the top sales by category for the year 2023. It highlights the highest-grossing products and offers a detailed breakdown of sales across various categories, including Meat and Seafood, Dairy Products, Beverages, Confectionery, and Bakery Products. The report presents all financial amounts in USD ($)."
+Thumbnail: "images/thumbnail.jpg"
+Published: "2024-09-24"
+Authors:
+  - "Roland B�rgi"
+  - "Anna Kuleshova"
+Tags:
+  - "Financial Analysis"
+  - "Sales Report"
+  - "2023 Overview"
+  - "Top Sales Categories"
+  - "Revenue Insights"
+  - "Product Performance"
+  - "Sales Breakdown"
+  - "Key Financial Insights"
+  - "High-Value Products"
+  - "Sales Volume"
+  - "Discount Strategies"
+  - "Marketing Recommendations"
+  - "Product Diversification"
+ 
+---
+
 <style>
     .product-overview-table {
         margin-bottom: 20px;
