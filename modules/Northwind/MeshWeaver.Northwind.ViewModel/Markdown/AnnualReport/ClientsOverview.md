@@ -1,8 +1,21 @@
 # Top 5 Clients by Amount per Month
+<style>
+    .top-clients-chart {
+        float: right;
+        width: 50%;
+        min-width: 650px;
+        max-width: 650px;
+        max-height: 300px;
+        margin: 10px;
+    }
+</style>
 
 This report provides an analysis of the top 5 clients based on their total purchase amounts. By identifying these key clients, we can develop targeted strategies to reward their loyalty and encourage continued business. The following sections outline the top clients and suggest various reward programs to enhance customer satisfaction and retention.
+<div class="top-clients-chart">
 
 @("TopClients")
+
+</div>
 
 #### Top 5 Clients by Amount:
 1. **QUICK-Stop**: $47,201.37
