@@ -1,30 +1,95 @@
-﻿using MeshWeaver.Data;
-using MeshWeaver.Domain;
-using MeshWeaver.Layout.DataGrid;
-
-namespace MeshWeaver.Layout;
-
-public static class Controls
-{
-    public static SplitterControl Splitter => new();
-    public static LayoutControl Layout => new();
-    public static LayoutGridControl LayoutGrid => new();
-
-    public static NavGroupControl NavGroup(string title, object icon=null, object href=null) => new(title, icon, href);
-    public static TabsControl Tabs => new();
-    public static NavMenuControl NavMenu => new();
-
-    public static NavLinkControl NavLink(object title, object href) => new(title, null, href);
-    public static NavLinkControl NavLink(object title, Icon icon, object href) => new(title, icon, href);
-
-    public static LayoutStackControl Stack => new();
-
-    public static ToolbarControl Toolbar => new ToolbarControl();
-
-    public static SelectControl Select(object item) => new(item);
-    public static ListboxControl Listbox(object item) => new(item);
-    public static ComboboxControl Combobox(object item) => new(item);
-
+﻿    using MeshWeaver.Data;
+    using MeshWeaver.Domain;
+    using MeshWeaver.Layout.DataGrid;
+    
+    namespace MeshWeaver.Layout;
+    
+    /// <summary>
+    /// Provides static methods to create various UI controls.
+    /// </summary>
+    public static class Controls
+    {
+        /// <summary>
+        /// Gets a new instance of <see cref="SplitterControl"/>.
+        /// </summary>
+        public static SplitterControl Splitter => new();
+    
+        /// <summary>
+        /// Gets a new instance of <see cref="LayoutControl"/>.
+        /// </summary>
+        public static LayoutControl Layout => new();
+    
+        /// <summary>
+        /// Gets a new instance of <see cref="LayoutGridControl"/>.
+        /// </summary>
+        public static LayoutGridControl LayoutGrid => new();
+    
+        /// <summary>
+        /// Creates a new instance of <see cref="NavGroupControl"/> with the specified title, icon, and href.
+        /// </summary>
+        /// <param name="title">The title of the navigation group.</param>
+        /// <param name="icon">The icon of the navigation group.</param>
+        /// <param name="href">The href of the navigation group.</param>
+        /// <returns>A new instance of <see cref="NavGroupControl"/>.</returns>
+        public static NavGroupControl NavGroup(string title, object icon = null, object href = null) => new(title, icon, href);
+    
+        /// <summary>
+        /// Gets a new instance of <see cref="TabsControl"/>.
+        /// </summary>
+        public static TabsControl Tabs => new();
+    
+        /// <summary>
+        /// Gets a new instance of <see cref="NavMenuControl"/>.
+        /// </summary>
+        public static NavMenuControl NavMenu => new();
+    
+        /// <summary>
+        /// Creates a new instance of <see cref="NavLinkControl"/> with the specified title and href.
+        /// </summary>
+        /// <param name="title">The title of the navigation link.</param>
+        /// <param name="href">The href of the navigation link.</param>
+        /// <returns>A new instance of <see cref="NavLinkControl"/>.</returns>
+        public static NavLinkControl NavLink(object title, object href) => new(title, null, href);
+    
+        /// <summary>
+        /// Creates a new instance of <see cref="NavLinkControl"/> with the specified title, icon, and href.
+        /// </summary>
+        /// <param name="title">The title of the navigation link.</param>
+        /// <param name="icon">The icon of the navigation link.</param>
+        /// <param name="href">The href of the navigation link.</param>
+        /// <returns>A new instance of <see cref="NavLinkControl"/>.</returns>
+        public static NavLinkControl NavLink(object title, Icon icon, object href) => new(title, icon, href);
+    
+        /// <summary>
+        /// Gets a new instance of <see cref="LayoutStackControl"/>.
+        /// </summary>
+        public static LayoutStackControl Stack => new();
+    
+        /// <summary>
+        /// Gets a new instance of <see cref="ToolbarControl"/>.
+        /// </summary>
+        public static ToolbarControl Toolbar => new ToolbarControl();
+    
+        /// <summary>
+        /// Creates a new instance of <see cref="SelectControl"/> with the specified item.
+        /// </summary>
+        /// <param name="item">The item to select.</param>
+        /// <returns>A new instance of <see cref="SelectControl"/>.</returns>
+        public static SelectControl Select(object item) => new(item);
+    
+        /// <summary>
+        /// Creates a new instance of <see cref="ListboxControl"/> with the specified item.
+        /// </summary>
+        /// <param name="item">The item to list.</param>
+        /// <returns>A new instance of <see cref="ListboxControl"/>.</returns>
+        public static ListboxControl Listbox(object item) => new(item);
+    
+        /// <summary>
+        /// Creates a new instance of <see cref="ComboboxControl"/> with the specified item.
+        /// </summary>
+        /// <param name="item">The item to combobox.</param>
+        /// <returns>A new instance of <see cref="ComboboxControl"/>.</returns>
+        public static ComboboxControl Combobox(object item) => new(item);
     public static TextFieldControl Text(object data) => new(data);
 
     public static NumberFieldControl Number(object data, string type) => new(data, type);
