@@ -1,3 +1,28 @@
+---
+Name: "Financial Analytical Report on the Number of Orders per Month in 2023"
+Description: "This report provides a detailed analysis of the monthly order volumes for the year 2023. The report is essential for understanding the business’s performance trends and identifying areas for improvement."
+Thumbnail: "images/thumbnail.jpg"
+Published: "2024-09-24"
+Authors:
+  - "Roland B�rgi"
+  - "Anna Kuleshova"
+Tags:
+  - "2023 Orders Analysis"
+  - "Monthly Order Trends"
+  - "Financial Report"
+  - "Business Performance"
+  - "Order Volume"
+  - "Seasonal Trends"
+  - "Capacity Planning"
+  - "Sales Data"
+  - "Order Value Analysis"
+  - "Business Insights"
+  - "Monthly Breakdown"
+  - "Sales Recommendations"
+  - "Order Statistics"
+  - "Performance Analysis"
+---
+
 ### Financial Analytical Report on the Number of Orders per Month in 2023
 
 This report provides a comprehensive analysis of the number of orders received each month in the year 2023. The data, extracted from the provided spreadsheet, highlights the trends and patterns in order volumes over the year. By examining these trends, we can gain insights into the business's performance and identify areas for improvement.
