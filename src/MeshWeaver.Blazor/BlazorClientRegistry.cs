@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using MeshWeaver.Application;
 using MeshWeaver.Data;
 using Microsoft.DotNet.Interactive.Formatting;
 using MeshWeaver.Data.Serialization;
@@ -23,7 +24,7 @@ public static class BlazorClientRegistry
     ) => config
         .AddData()
         .AddLayoutClient(c => (configuration ?? (x => x)).Invoke(c.WithView(DefaultFormatting)))
-
+        .WithTypes(typeof(ApplicationAddress))
     ;
     #region Standard Formatting
     private static ViewDescriptor DefaultFormatting(
