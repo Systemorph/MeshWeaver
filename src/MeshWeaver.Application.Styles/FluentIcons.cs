@@ -25,4 +25,6 @@ public static class FluentIcons
     public static Icon SquareMultiple => new(Provider, "SquareMultiple");
     public static Icon WalletCreditCard => new(Provider, "WalletCreditCard");
 
-}
+    <FluentIcon Value="@(new Icons.Regular.Size20.CreditCardPerson())" />
+
+    }
