@@ -20,7 +20,7 @@ public static class DocumentationLayout
                 _ => true,
                 (tabs, host, ctx) => tabs.WithView(NamedArea(host.Stream.Reference.Area), ctx.DisplayName)
                 )
-            .WithView(nameof(Doc), (Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<object>>)Doc);
+            .WithView(nameof(Doc), Doc);
 
 
 
@@ -106,8 +106,7 @@ public static class DocumentationLayout
 
     private const string ReadPattern = @"^(?<sourceType>[^@]+)/(?<sourceId>[^@]+)/(?<documentId>[^@]+)$";
 
-    public static async Task<object> Doc(LayoutAreaHost area, RenderingContext context,
-        CancellationToken cancellationToken)
+    public static async Task<object> Doc(LayoutAreaHost area, RenderingContext context, CancellationToken cancellationToken)
     {
         if (area.Stream.Reference.Id is not string path)
             throw new InvalidOperationException("No file name specified.");
@@ -127,7 +126,7 @@ public static class DocumentationLayout
         {
             var extension = documentId.Split('.').Last();
             using var reader = new StreamReader(stream);
-            return new MarkdownControl(Format(await reader.ReadToEndAsync(cancellationToken), extension));
+            return new MarkdownControl(Format(await reader.ReadToEndAsync(), extension));
         }
 
         // Resource not found, return a warning control/message instead

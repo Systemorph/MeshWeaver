@@ -281,8 +281,10 @@ public record LayoutAreaHost : IDisposable
         });
         return DisposeExistingAreas(store, context);
     }
-    internal EntityStoreAndUpdates RenderArea(RenderingContext context, 
-        IObservable<ViewDefinition> generator, EntityStore store)
+    internal EntityStoreAndUpdates RenderArea(
+        RenderingContext context, 
+        IObservable<ViewDefinition> generator, 
+        EntityStore store)
     {
         AddDisposable(context.Area, generator.Subscribe(vd =>
                 InvokeAsync(async ct =>

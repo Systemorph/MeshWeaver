@@ -148,10 +148,6 @@ public record EntityStore
         .Select(x => x.GetHashCode())
         .Aggregate((x, y) => x ^ y);
 
-    public EntityStoreAndUpdates UpdateControl(string mainContent, MeshWeaver.Layout.NamedAreaControl namedAreaControl)
-    {
-        throw new NotImplementedException();
-    }
 }
 public record EntityStoreAndUpdates(IEnumerable<EntityStoreUpdate> Changes, EntityStore Store);
 
