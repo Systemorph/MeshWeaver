@@ -17,7 +17,7 @@ namespace MeshWeaver.Blazor
         /// Allows associating a <see href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/datalist">datalist</see> to the element by <see href="https://developer.mozilla.org/en-US/docs/Web/API/Element/id">id</see>.
         /// </summary>
 
-        public string? DataList { get; set; }
+        public string DataList { get; set; }
 
         /// <summary>
         /// Gets or sets the maximum length.
