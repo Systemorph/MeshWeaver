@@ -3,6 +3,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Activities;
 using MeshWeaver.Data.Serialization;
@@ -210,7 +211,8 @@ public class Workspace : IWorkspace
         where TReference : WorkspaceReference
     {
         // link to deserialized world. Will also potentially link to workspace.
-
+        if(owner is JsonObject obj)
+            owner = obj.Deserialize<object>(Hub.JsonSerializerOptions);
         var ret = new SynchronizationStream<TReduced, TReference>(
             owner,
             owner,
