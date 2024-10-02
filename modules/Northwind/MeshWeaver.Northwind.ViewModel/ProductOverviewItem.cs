@@ -3,7 +3,8 @@
 namespace MeshWeaver.Northwind.ViewModel;
 
 /// <summary>
-/// Represents an overview item for a product.
+/// Gets the unit price formatted as a numeric value with two decimal places.
+/// /// Represents an overview item for a product.
 /// </summary>
 public record ProductOverviewItem
 {
@@ -22,10 +23,10 @@ public record ProductOverviewItem
     /// </summary>
     public string CategoryName { get; init; }
 
-    [DisplayFormat(DataFormatString = "N2")]
     /// <summary>
     /// Gets the unit price.
     /// </summary>
+    [DisplayFormat(DataFormatString = "N2")]
     public double UnitPrice { get; init; }
 
     /// <summary>
@@ -39,6 +40,9 @@ public record ProductOverviewItem
     [DisplayFormat(DataFormatString = "N2")]
     public double DiscountGiven { get; init; }
 
+    /// <summary>
+    /// Gets the total amount.
+    /// </summary>
     [DisplayFormat(DataFormatString = "N2")]
-    public double TotalAmount { get; init; }
+       public double TotalAmount { get; init; }
 }
