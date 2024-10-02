@@ -5,69 +5,55 @@ namespace MeshWeaver.Blazor
     public partial class NumberFieldView<TValue>
         where TValue:new()
     {
-
-
         /// <summary>
         /// When true, spin buttons will not be rendered.
         /// </summary>
-
         public bool HideStep { get; set; }
 
         /// <summary>
         /// Allows associating a <see href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/datalist">datalist</see> to the element by <see href="https://developer.mozilla.org/en-US/docs/Web/API/Element/id">id</see>.
         /// </summary>
-
-        public string? DataList { get; set; }
+        public string DataList { get; set; }
 
         /// <summary>
         /// Gets or sets the maximum length.
         /// </summary>
-
         public int MaxLength { get; set; } = 14;
 
         /// <summary>
         /// Gets or sets the minimum length.
         /// </summary>
-
         public int MinLength { get; set; } = 1;
 
         /// <summary>
         /// Gets or sets the size.
         /// </summary>
-
         public int Size { get; set; } = 20;
 
         /// <summary>
         /// Gets or sets the amount to increase/decrease the number with. Only use whole number when TValue is int or long. 
         /// </summary>
-
         public string Step { get; set; }
 
         /// <summary>
         /// Gets or sets the maximum value.
         /// </summary>
-
         public string Max { get; set; }
 
         /// <summary>
         /// Gets or sets the minimum value.
         /// </summary>
-
         public string Min { get; set; }
 
         /// <summary>
         /// Gets or sets the <see cref="FluentInputAppearance" />.
         /// </summary>
-
         public FluentInputAppearance Appearance { get; set; } = FluentInputAppearance.Outline;
 
         /// <summary>
         /// Gets or sets the error message to show when the field can not be parsed.
         /// </summary>
-
         public string ParsingErrorMessage { get; set; } = "The {0} field must be a number.";
-
-
 
         protected override void BindData()
         {
@@ -83,8 +69,6 @@ namespace MeshWeaver.Blazor
             DataBind(ViewModel.Min, x => x.Min);
             DataBind(ViewModel.Appearance, x => x.Appearance);
             DataBind(ViewModel.ParsingErrorMessage, x => x.ParsingErrorMessage);
-
         }
-
     }
 }
