@@ -1,6 +1,5 @@
 ﻿using MeshWeaver.Charting.Builders.DataSetBuilders;
 using MeshWeaver.Charting.Models;
-using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Pivot.Builder;
 
 namespace MeshWeaver.Charting.Pivot;
@@ -14,12 +13,6 @@ public abstract record PivotArrayChartBuilderBase<T, TTransformed, TIntermediate
     protected PivotArrayChartBuilderBase(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder)
     {
-    }
-
-    public IPivotArrayChartBuilder WithLegend(Func<Legend, Legend> func)
-    {
-        Chart = Chart.WithLegend(func);
-        return this;
     }
 
     public virtual IPivotArrayChartBuilder WithSmoothedLines(params string[] linesToSmooth)
