@@ -46,6 +46,10 @@ namespace MeshWeaver.Northwind.ViewModel
             Amount = product.UnitPrice * details.Quantity * (1 - details.Discount);
         }
 
+        /// <summary>
+        /// Initializes a new instance of the NorthwindDataCube with values taken from another existed NorthwindDataCube instance.
+        /// </summary>
+        /// <param name="original">Original NorthwindDataCube instance to copy the values from.</param>
         protected NorthwindDataCube(NorthwindDataCube original)
         {
             OrderId = original.OrderId;
