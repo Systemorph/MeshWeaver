@@ -1,5 +1,6 @@
 ﻿using MeshWeaver.Application.Styles;
 using MeshWeaver.Collections;
+using MeshWeaver.Domain;
 using MeshWeaver.Domain.Layout.Documentation;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -43,11 +44,11 @@ public static class AnnualReportConfiguration
                 .WithNavGroup(
                     AnnualReportDocuments.Aggregate(
                         Controls.NavGroup("Financial Report 2023", FluentIcons.Folder)
-                            .WithSkin(skin => 
+                            .WithSkin(skin =>
                                 skin.WithHref(layout.DocumentHref(SummaryDocument))
-                                .WithExpanded(true)), 
-                            (navGroup, documentName) => navGroup.WithLink(Path.GetFileNameWithoutExtension(documentName).Wordify(), 
-                                layout.DocumentationPath(ThisAssembly, documentName), FluentIcons.Document))
+                                .WithExpanded(true)),
+                            (navGroup, documentName) => navGroup.WithLink(Path.GetFileNameWithoutExtension(documentName).Wordify(),
+                                layout.DocumentationPath(ThisAssembly, documentName), GetIcon(documentName)))
                 )
         );
 
@@ -66,6 +67,19 @@ public static class AnnualReportConfiguration
     private static string DocumentFolder =>
         $"{ThisAssembly.GetName().Name}.Markdown.AnnualReport";
 
-    private static System.Reflection.Assembly ThisAssembly 
+    private static readonly IReadOnlyDictionary<string, Icon> DocumentIcons = new Dictionary<string, Icon>()
+    {
+        { "ClientsOverview.md", FluentIcons.CreditCardPerson },
+        { "DiscountsOverview.md", FluentIcons.ShoppingBagPercent },
+        { "EmployeesOverview.md", FluentIcons.Person5 },
+        { "OrdersOverview.md", FluentIcons.BoxCheckmark },
+        { "ProductOverview.md", FluentIcons.ShoppingBag },
+        { "SalesOverview.md", FluentIcons.Money },
+    };
+
+    private static Icon GetIcon(string documentName)
+        => DocumentIcons.TryGetValue(documentName, out var icon) ? icon : FluentIcons.Document;
+
+    private static System.Reflection.Assembly ThisAssembly
         => typeof(AnnualReportConfiguration).Assembly;
 }
