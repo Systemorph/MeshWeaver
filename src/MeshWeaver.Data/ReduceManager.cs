@@ -154,7 +154,7 @@ public record ReduceManager<TStream>
 
         return reducedStream;
     }
-    internal static void UpdateParent<TStream, TReference, TReduced>(
+    internal static void UpdateParent<TReference, TReduced>(
         ISynchronizationStream<TStream> parent,
         TReference reference,
         ChangeItem<TReduced> change,
