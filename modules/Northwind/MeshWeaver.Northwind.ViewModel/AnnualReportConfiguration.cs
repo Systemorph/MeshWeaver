@@ -43,7 +43,7 @@ public static class AnnualReportConfiguration
             (menu, _, _) => menu
                 .WithNavGroup(
                     AnnualReportDocuments.Aggregate(
-                        Controls.NavGroup("Financial Report 2023", FluentIcons.Folder)
+                        Controls.NavGroup("Sales Dashboard 2023", FluentIcons.Folder)
                             .WithSkin(skin =>
                                 skin.WithHref(layout.DocumentHref(SummaryDocument))
                                 .WithExpanded(true)),
