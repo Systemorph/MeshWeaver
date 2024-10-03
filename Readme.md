@@ -10,9 +10,9 @@ MeshWeaver is a comprehensive solution for managing and visualizing data layouts
 - **Annual Report Summary**: Components for generating and displaying annual report summaries.
 - **Product Overview**: Detailed product overview with data grids and summary charts.
 
-# How to Start Guide for the Northwind Project
+# How to Start Guide the Project
 
-By following the steps from this guide, you should be able to set up and start working on the Northwind project efficiently.
+By following the steps from this guide, you should be able to set up and start working with MeshWeaver project efficiently.
 
 > Prerequisites
 > - **.NET SDK**: Ensure you have the .NET SDK installed. You can download it from the [official .NET website](https://dotnet.microsoft.com/download).
@@ -22,7 +22,7 @@ By following the steps from this guide, you should be able to set up and start w
 
 1. **Clone the Repository**
     ```sh
-    git clone https://github.com/yourusername/northwind.git
+    git clone https://github.com/Systemorph/MeshWeaver.git
     cd northwind
     ```
 
