@@ -24,7 +24,8 @@ namespace MeshWeaver.Northwind.ViewModel
                 layout
                     .WithView(nameof(TopProducts), TopProducts)
         ;
-/// <summary>
+
+        /// <summary>
         /// Renders the top products view.
         /// </summary>
         /// <param name="layoutArea">The layout area host.</param>

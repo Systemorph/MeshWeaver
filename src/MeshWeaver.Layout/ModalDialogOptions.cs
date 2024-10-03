@@ -1,39 +1,38 @@
-﻿namespace MeshWeaver.Layout
+﻿namespace MeshWeaver.Layout;
+
+/// <summary>
+/// Represents the options for a modal dialog.
+/// </summary>
+/// <param name="Size">The size of the modal dialog.</param>
+/// <param name="IsClosable">Indicates whether the modal dialog is closable.</param>
+public record ModalDialogOptions(string Size, bool IsClosable)
 {
     /// <summary>
-    /// Represents the options for a modal dialog.
+    /// Initializes a new instance of the <see cref="ModalDialogOptions"/> class with default values.
     /// </summary>
-    /// <param name="Size">The size of the modal dialog.</param>
-    /// <param name="IsClosable">Indicates whether the modal dialog is closable.</param>
-    public record ModalDialogOptions(string Size, bool IsClosable)
+    public ModalDialogOptions()
+        : this(Sizes.Medium, false)
+    {
+    }
+
+    /// <summary>
+    /// Provides constants for different modal dialog sizes.
+    /// </summary>
+    public static class Sizes
     {
         /// <summary>
-        /// Initializes a new instance of the <see cref="ModalDialogOptions"/> class with default values.
+        /// Represents a medium-sized modal dialog.
         /// </summary>
-        public ModalDialogOptions()
-            : this(Sizes.Medium, false)
-        {
-        }
+        public const string Medium = "M";
 
         /// <summary>
-        /// Provides constants for different modal dialog sizes.
+        /// Represents a large-sized modal dialog.
         /// </summary>
-        public static class Sizes
-        {
-            /// <summary>
-            /// Represents a medium-sized modal dialog.
-            /// </summary>
-            public const string Medium = "M";
+        public const string Large = "L";
 
-            /// <summary>
-            /// Represents a large-sized modal dialog.
-            /// </summary>
-            public const string Large = "L";
-
-            /// <summary>
-            /// Represents a small-sized modal dialog.
-            /// </summary>
-            public const string Small = "S";
-        }
+        /// <summary>
+        /// Represents a small-sized modal dialog.
+        /// </summary>
+        public const string Small = "S";
     }
 }

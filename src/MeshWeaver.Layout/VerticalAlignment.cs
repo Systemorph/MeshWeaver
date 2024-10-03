@@ -1,23 +1,22 @@
-﻿namespace MeshWeaver.Layout
+﻿namespace MeshWeaver.Layout;
+
+/// <summary>
+/// Specifies the vertical alignment options for a control.
+/// </summary>
+public enum VerticalAlignment
 {
     /// <summary>
-    /// Specifies the vertical alignment options for a control.
+    /// Aligns the control at the top.
     /// </summary>
-    public enum VerticalAlignment
-    {
-        /// <summary>
-        /// Aligns the control at the top.
-        /// </summary>
-        Top,
+    Top,
 
-        /// <summary>
-        /// Aligns the control in the center.
-        /// </summary>
-        Center,
+    /// <summary>
+    /// Aligns the control in the center.
+    /// </summary>
+    Center,
 
-        /// <summary>
-        /// Aligns the control at the bottom.
-        /// </summary>
-        Bottom
-    }
+    /// <summary>
+    /// Aligns the control at the bottom.
+    /// </summary>
+    Bottom
 }

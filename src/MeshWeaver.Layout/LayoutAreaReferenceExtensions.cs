@@ -57,7 +57,10 @@ public static class LayoutAreaQueryString
 
                 if (keyValue.Length == 2)
                 {
-                    values.Add(new KeyValuePair<string, string>(keyValue[0], keyValue[1]));
+                    var key = Uri.UnescapeDataString(keyValue[0]);
+                    var value = Uri.UnescapeDataString(keyValue[1]);
+
+                    values.Add(new (key, value));
                 }
             }
         }

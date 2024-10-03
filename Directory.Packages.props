@@ -81,7 +81,6 @@
     <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components" Version="4.7.2" />
     <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components.Icons" Version="4.7.2" />
     <PackageVersion Include="System.Xml.XmlSerializer" Version="4.3.0" />
-    <PackageVersion Include="Aspire.StackExchange.Redis.OutputCaching" Version="8.0.0" />
     <PackageVersion Include="Aspire.Hosting.Redis" Version="8.2.0" />
     <PackageVersion Include="Microsoft.Orleans.Clustering.Redis" Version="8.2.0" />
     <PackageVersion Include="Microsoft.Orleans.Persistence.Redis" Version="8.2.0" />
@@ -89,8 +88,6 @@
     <PackageVersion Include="Microsoft.Orleans.Persistence.AzureStorage" Version="8.2.0" />
     <PackageVersion Include="Aspire.StackExchange.Redis" Version="8.2.0" />
     <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="8.2.0" />
-    <PackageVersion Include="Aspire.Hosting.Azure.CognitiveServices" Version="8.1.0" />
     <PackageVersion Include="Aspire.Azure.Data.Tables" Version="8.2.0" />
-    <PackageVersion Include="Aspire.Azure.Data.Blobs" Version="8.1.0" />
   </ItemGroup>
 </Project>

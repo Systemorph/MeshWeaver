@@ -22,7 +22,8 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
     /// The constant string for properties.
     /// </summary>
     public const string Properties = "properties";
-/// <summary>
+
+    /// <summary>
     /// Gets the data pointer for the specified ID and extra segments.
     /// </summary>
     /// <param name="id">The ID for the data pointer.</param>
@@ -37,14 +38,15 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
         )
         .ToString();
 
-/// <summary>
+    /// <summary>
     /// Gets the control pointer for the specified area.
     /// </summary>
     /// <param name="area">The area for the control pointer.</param>
     /// <returns>A string representing the control pointer.</returns>
     public static string GetControlPointer(string area) =>
         JsonPointer.Create(Areas, JsonSerializer.Serialize(area)).ToString();
-/// <summary>
+
+    /// <summary>
     /// Gets the properties pointer for the specified ID.
     /// </summary>
     /// <param name="id">The ID for the properties pointer.</param>
@@ -52,8 +54,7 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
     public static string GetPropertiesPointer(string id) =>
         JsonPointer.Create(Properties, id).ToString();
 
-
-/// <summary>
+    /// <summary>
     /// Converts the layout area reference to an application href.
     /// </summary>
     /// <param name="address">The address for the href.</param>
@@ -65,7 +66,4 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
             ret = $"{ret}/{LayoutExtensions.Encode(s)}";
         return ret;
     }
-
-
-
 }
