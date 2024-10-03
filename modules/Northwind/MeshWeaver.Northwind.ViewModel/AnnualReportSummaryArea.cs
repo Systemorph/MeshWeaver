@@ -72,7 +72,7 @@ public static class AnnualReportSummaryArea
     public static object SummaryCharts(LayoutAreaHost layoutArea, RenderingContext context)
         => Controls.LayoutGrid
             .WithView(
-                Controls.Stack.WithView(Controls.H2("Sales by category")).WithView("Coming soon...")
+                Controls.Stack.WithView(Controls.H2("Top Clients")).WithView(ClientsOverviewArea.TopClients)
                     .WithVerticalGap(10),
                 skin => skin.WithXs(12).WithSm(6))
             .WithView(
