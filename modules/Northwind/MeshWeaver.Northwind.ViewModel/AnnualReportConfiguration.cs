@@ -69,12 +69,12 @@ public static class AnnualReportConfiguration
 
     private static readonly IReadOnlyDictionary<string, Icon> DocumentIcons = new Dictionary<string, Icon>()
     {
-        { "ClientsOverview.md", FluentIcons.CreditCardPerson },
-        { "DiscountsOverview.md", FluentIcons.ShoppingBagPercent },
-        { "EmployeesOverview.md", FluentIcons.Person5 },
-        { "OrdersOverview.md", FluentIcons.BoxCheckmark },
-        { "ProductOverview.md", FluentIcons.ShoppingBag },
-        { "SalesOverview.md", FluentIcons.Money },
+        { "TopClientsOverview.md", FluentIcons.CreditCardPerson },
+        { "DiscountsAnalysis.md", FluentIcons.ShoppingBagPercent },
+        { "TopSalesRepresentatives.md", FluentIcons.PersonAccounts },
+        { "OrdersReview.md", FluentIcons.BoxCheckmark },
+        { "TopProductsOverview.md", FluentIcons.ShoppingBag },
+        { "SalesAnalysis.md", FluentIcons.Money },
     };
 
     private static Icon GetIcon(string documentName)
