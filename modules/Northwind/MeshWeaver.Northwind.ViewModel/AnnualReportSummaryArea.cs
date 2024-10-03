@@ -63,6 +63,12 @@ public static class AnnualReportSummaryArea
             ;
     }
 
+    /// <summary>
+    /// Renders the summary charts for the annual report.
+    /// </summary>
+    /// <param name="layoutArea">The layout area host.</param>
+    /// <param name="context">The rendering context.</param>
+    /// <returns>An object representing the rendered summary charts.</returns>
     public static object SummaryCharts(LayoutAreaHost layoutArea, RenderingContext context)
         => Controls.LayoutGrid
             .WithView(
@@ -122,14 +128,31 @@ public static class AnnualReportSummaryArea
             current.Orders.ToSuffixFormat(),
             previous is not null ? GrowthPercentage(current.Orders, previous.Orders) : null
         );
-
 }
 
+/// <summary>
+/// Represents a summary item for the annual report.
+/// </summary>
 public record SummaryItem
 {
+    /// <summary>
+    /// Gets the year of the summary item.
+    /// </summary>
     public int Year { get; init; }
+     /// <summary>
+    /// Gets the number of customers in the summary item.
+    /// </summary>
     public int Customers { get; init; }
+    /// <summary>
+    /// Gets the number of products in the summary item.
+    /// </summary>
     public int Products { get; init; }
+    /// <summary>
+    /// Gets the total sales in the summary item.
+    /// </summary>
     public double Sales { get; init; }
+    /// <summary>
+    /// Gets the number of orders in the summary item.
+    /// </summary>
     public int Orders { get; init; }
 }
