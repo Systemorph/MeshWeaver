@@ -20,7 +20,7 @@ public static class DocumentationLayout
                 _ => true,
                 (tabs, host, ctx) => tabs.WithView(NamedArea(host.Stream.Reference.Area), ctx.DisplayName)
                 )
-            .WithView(nameof(Doc), Doc);
+            .WithView(nameof(Doc), (Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<object>>)Doc);
 
 
 
