@@ -25,6 +25,12 @@ namespace MeshWeaver.Northwind.ViewModel
                     .WithView(nameof(TopProducts), TopProducts)
         ;
 
+        /// <summary>
+        /// Renders the top products view.
+        /// </summary>
+        /// <param name="layoutArea">The layout area host.</param>
+        /// <param name="context">The rendering context.</param>
+        /// <returns>An observable sequence of objects representing the rendered top products view.</returns>
         public static IObservable<object> TopProducts(this LayoutAreaHost layoutArea, RenderingContext context)
             => layoutArea.YearlyNorthwindData()
                 .Select(d =>

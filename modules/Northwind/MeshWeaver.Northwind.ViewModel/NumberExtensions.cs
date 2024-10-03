@@ -2,8 +2,17 @@
 
 namespace MeshWeaver.Northwind.ViewModel
 {
+    /// <summary>
+    /// Provides extension methods for formatting numbers with suffixes.
+    /// </summary>
     public static class NumberExtensions
     {
+        /// <summary>
+        /// Converts a double to a string with a suffix format (e.g., K for thousands, M for millions, B for billions).
+        /// </summary>
+        /// <param name="num">The number to format.</param>
+        /// <param name="format">The format string to use if no suffix is applied. Default is "0.##".</param>
+        /// <returns>A string representing the formatted number with the appropriate suffix.</returns>
         public static string ToSuffixFormat(this double num, string format = "0.##")
         {
             switch (num)
@@ -22,6 +31,11 @@ namespace MeshWeaver.Northwind.ViewModel
             }
         }
 
+        /// <summary>
+        /// Converts an integer to a string with a suffix format (e.g., K for thousands, M for millions, B for billions).
+        /// </summary>
+        /// <param name="num">The number to format.</param>
+        /// <returns>A string representing the formatted number with the appropriate suffix.</returns>
         public static string ToSuffixFormat(this int num) =>
             ((double)num).ToSuffixFormat("0");
     }

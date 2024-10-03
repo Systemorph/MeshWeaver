@@ -230,15 +230,27 @@ namespace MeshWeaver.Northwind.ViewModel
         public string Discontinued { get; init; }
     }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="LabeledNorthwindDataCube"/> class with the specified label and original data cube.
+    /// </summary>
     public record LabeledNorthwindDataCube : NorthwindDataCube
     {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="LabeledNorthwindDataCube"/> class.
+        /// </summary>
         public LabeledNorthwindDataCube(string label, NorthwindDataCube original) : base(original)
         {
             Label = label;
         }
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="LabeledNorthwindDataCube"/> class.
+        /// </summary>
         public LabeledNorthwindDataCube() { }
 
+        /// <summary>
+        /// Gets the label for the data cube.
+        /// </summary>
         [NotVisible]
         [Dimension(typeof(string), nameof(Label))]
         public string Label { get; init; }
