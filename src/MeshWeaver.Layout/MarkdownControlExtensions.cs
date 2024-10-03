@@ -4,11 +4,26 @@ using MeshWeaver.Utils;
 
 namespace MeshWeaver.Layout;
 
-public static class MarkdownControlExtensions {
-
+/// <summary>
+/// Provides extension methods for working with <see cref="MarkdownControl"/>.
+/// </summary>
+public static class MarkdownControlExtensions
+{
+    /// <summary>
+    /// Converts the specified items to a markdown table.
+    /// </summary>
+    /// <typeparam name="T">The type of the items.</typeparam>
+    /// <param name="items">The items to convert to a markdown table.</param>
+    /// <returns>A <see cref="MarkdownControl"/> containing the markdown table.</returns>
     public static MarkdownControl ToMarkdown<T>(this IEnumerable<T> items) 
         => Controls.Markdown(FormatAsTable(items));
 
+    /// <summary>
+    /// Formats the specified items as a markdown table.
+    /// </summary>
+    /// <typeparam name="T">The type of the items.</typeparam>
+    /// <param name="items">The items to format as a markdown table.</param>
+    /// <returns>A string containing the markdown table.</returns>
     private static string FormatAsTable<T>(IEnumerable<T> items)
     {
         var itemsArray = items as T[] ?? items.ToArray();
