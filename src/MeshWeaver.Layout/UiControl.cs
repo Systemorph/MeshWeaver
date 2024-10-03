@@ -69,11 +69,10 @@ public abstract record UiControl : IUiControl
     => this with { Skins = (Skins ?? ImmutableList<Skin>.Empty).Add(skin) };
 
 
-    protected ImmutableList<Func<EntityStore, EntityStoreAndUpdates>> Updates { get; init; } =
-        ImmutableList<Func<EntityStore, EntityStoreAndUpdates>>.Empty;
-    public UiControl WithUpdates(Func<EntityStore, EntityStoreAndUpdates> update)
+    protected ImmutableList<Func<LayoutAreaHost, RenderingContext, EntityStore, EntityStoreAndUpdates>> Buildup { get; init; } = [];
+    public UiControl WithBuildup(Func<LayoutAreaHost, RenderingContext, EntityStore, EntityStoreAndUpdates> buildup)
     {
-        return this with { Updates = Updates.Add(update) };
+        return this with { Buildup = Buildup.Add(buildup) };
     }
 
 
@@ -181,10 +180,10 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
 
     protected override EntityStoreAndUpdates Render
         (LayoutAreaHost host, RenderingContext context, EntityStore store) =>
-        Updates
+        Buildup
             .Aggregate(RenderSelf(host, context, store), (r, u) =>
             {
-                var updated = u.Invoke(r.Store);
+                var updated = u.Invoke(host, context, r.Store);
                 return new(r.Changes.Concat(updated.Changes), updated.Store);
             });
     protected virtual EntityStoreAndUpdates RenderSelf(LayoutAreaHost host, RenderingContext context, EntityStore store)

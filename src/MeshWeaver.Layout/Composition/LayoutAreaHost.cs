@@ -254,8 +254,7 @@ public record LayoutAreaHost : IDisposable
     }
 
 
-    internal EntityStoreAndUpdates 
-        RenderArea<T>(RenderingContext context, ViewStream<T> generator, EntityStore store)
+    internal EntityStoreAndUpdates RenderArea<T>(RenderingContext context, ViewStream<T> generator, EntityStore store)
     {
         var ret = DisposeExistingAreas(store, context);
         AddDisposable(context.Parent?.Area ?? context.Area,

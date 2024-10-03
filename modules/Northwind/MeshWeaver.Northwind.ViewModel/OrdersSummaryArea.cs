@@ -47,7 +47,8 @@ public static class OrdersSummaryArea
     )
     {
         var years = layoutArea
-            .Workspace.GetObservable<Order>()
+            .Workspace
+            .GetObservable<Order>()
             .DistinctUntilChanged()
             .Select(x =>
                 x.Select(y => y.OrderDate.Year)
