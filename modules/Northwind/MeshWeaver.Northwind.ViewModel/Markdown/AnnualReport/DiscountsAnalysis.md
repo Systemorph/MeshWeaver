@@ -23,7 +23,7 @@ Tags:
   - "Profitability"
 ---
 
-# Discounts vs Revenue
+# Discounts vs Revenue Analysis
 
 <style>
     .discount-percentage-chart {

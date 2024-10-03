@@ -53,7 +53,7 @@ Tags:
 
 </style>
 
-# Product Overview 2023
+# Top Products Overview 2023
 
 This financial report provides an analysis of the top sales by category based on the provided data. The report highlights the highest-grossing products and offers a breakdown of sales across various categories, including Meat and Seafood, Dairy Products, Beverages, Confectionery, and Bakery Products. All amounts are presented in USD ($).
 
