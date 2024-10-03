@@ -25,4 +25,10 @@ public static class FluentIcons
     public static Icon SquareMultiple => new(Provider, "SquareMultiple");
     public static Icon WalletCreditCard => new(Provider, "WalletCreditCard");
 
+    public static Icon CreditCardPerson => new(Provider, "CreditCardPerson");
+    public static Icon ShoppingBagPercent => new(Provider, "ShoppingBagPercent");
+    public static Icon Person5 => new(Provider, "Person5");
+    public static Icon BoxCheckmark => new(Provider, "BoxCheckmark");
+    public static Icon ShoppingBag => new(Provider, "ShoppingBag");
+    public static Icon Money => new(Provider, "Money");
 }
