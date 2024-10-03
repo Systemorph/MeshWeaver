@@ -149,7 +149,13 @@ public record EntityStore
         .Aggregate((x, y) => x ^ y);
 
 }
-public record EntityStoreAndUpdates(IEnumerable<EntityStoreUpdate> Changes, EntityStore Store);
+
+public record EntityStoreAndUpdates(IEnumerable<EntityStoreUpdate> Changes, EntityStore Store)
+{
+    public EntityStoreAndUpdates(EntityStore Store) : this([], Store)
+    {
+    }
+}
 
 public record EntityStoreUpdate(string Collection, object Id, object Value)
 {

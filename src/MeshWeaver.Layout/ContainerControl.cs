@@ -134,7 +134,7 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
     public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, Task<T>> viewDefinition)
         => WithView((h, c, _) => viewDefinition.Invoke(h, c), x => x);
     public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition)
-        => WithView((h,c,store) => h.RenderArea(c,(hh,cc,_)=>viewDefinition.Invoke(hh,cc), store), x => x);
+        => WithView((h,c,_) => viewDefinition.Invoke(h,c), x => x);
     public TControl WithView<T>(ViewStream<T> viewDefinition)
         => WithView(viewDefinition, x => x);
     public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
