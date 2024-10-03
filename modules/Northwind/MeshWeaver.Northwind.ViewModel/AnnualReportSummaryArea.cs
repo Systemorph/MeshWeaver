@@ -6,14 +6,28 @@ using static MeshWeaver.Northwind.ViewModel.LayoutTemplates;
 
 namespace MeshWeaver.Northwind.ViewModel;
 
+/// <summary>
+/// Provides methods to add and render the annual report summary area.
+/// </summary>
 public static class AnnualReportSummaryArea
 {
+    /// <summary>
+    /// Adds the annual report summary view to the layout definition.
+    /// </summary>
+    /// <param name="layout">The layout definition.</param>
+    /// <returns>The updated layout definition with the annual report summary view.</returns>
     public static LayoutDefinition AddAnnualReportSummary(this LayoutDefinition layout)
         => 
             layout
                 .WithView(nameof(AnnualReportSummary), Controls.Layout.WithView(AnnualReportSummary))
     ;
 
+    /// <summary>
+    /// Renders the annual report summary area.
+    /// </summary>
+    /// <param name="layoutArea">The layout area host.</param>
+    /// <param name="context">The rendering context.</param>
+    /// <returns>An object representing the rendered annual report summary area.</returns>
     public static object AnnualReportSummary(this LayoutAreaHost layoutArea, RenderingContext context)
         => Controls.LayoutGrid
             .WithView(ValueBoxes, skin => skin.WithXs(12))
@@ -21,6 +35,12 @@ public static class AnnualReportSummaryArea
             .WithSkin(skin => skin.WithSpacing(5))
         ;
 
+    /// <summary>
+    /// Creates an observable sequence of value boxes for the annual report summary.
+    /// </summary>
+    /// <param name="layoutArea">The layout area host.</param>
+    /// <param name="context">The rendering context.</param>
+    /// <returns>An observable sequence of value boxes.</returns>
     private static IObservable<object> ValueBoxes(LayoutAreaHost layoutArea, RenderingContext context)
     {
         var currentYear = layoutArea.Year();
