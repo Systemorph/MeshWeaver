@@ -1,61 +1,60 @@
-﻿namespace MeshWeaver.Layout
+﻿namespace MeshWeaver.Layout;
+
+/// <summary>
+/// Represents a number field control with customizable properties.
+/// </summary>
+/// <param name="Data">The data associated with the number field control.</param>
+/// <param name="Type">The type of the number field control.</param>
+public record NumberFieldControl(object Data, string Type)
+    : UiControl<NumberFieldControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion), IFormComponent
 {
     /// <summary>
-    /// Represents a number field control with customizable properties.
+    /// Gets or initializes the state to hide the step value for the number field control.
     /// </summary>
-    /// <param name="Data">The data associated with the number field control.</param>
-    /// <param name="Type">The type of the number field control.</param>
-    public record NumberFieldControl(object Data, string Type)
-        : UiControl<NumberFieldControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion), IFormComponent
-    {
-        /// <summary>
-        /// Gets or initializes the state to hide the step value for the number field control.
-        /// </summary>
-        public object HideStep { get; init; }
+    public object HideStep { get; init; }
 
-        /// <summary>
-        /// Gets or initializes the data list for the number field control.
-        /// </summary>
-        public object DataList { get; init; }
+    /// <summary>
+    /// Gets or initializes the data list for the number field control.
+    /// </summary>
+    public object DataList { get; init; }
 
-        /// <summary>
-        /// Gets or initializes the maximum length for the number field control.
-        /// </summary>
-        public object MaxLength { get; init; }
+    /// <summary>
+    /// Gets or initializes the maximum length for the number field control.
+    /// </summary>
+    public object MaxLength { get; init; }
 
-        /// <summary>
-        /// Gets or initializes the minimum length for the number field control.
-        /// </summary>
-        public object MinLength { get; init; }
+    /// <summary>
+    /// Gets or initializes the minimum length for the number field control.
+    /// </summary>
+    public object MinLength { get; init; }
 
-        /// <summary>
-        /// Gets or initializes the size of the number field control.
-        /// </summary>
-        public object Size { get; init; }
+    /// <summary>
+    /// Gets or initializes the size of the number field control.
+    /// </summary>
+    public object Size { get; init; }
 
-        /// <summary>
-        /// Gets or initializes the step value for the number field control.
-        /// </summary>
-        public object Step { get; init; }
+    /// <summary>
+    /// Gets or initializes the step value for the number field control.
+    /// </summary>
+    public object Step { get; init; }
 
-        /// <summary>
-        /// Gets or initializes the minimum value for the number field control.
-        /// </summary>
-        public object Min { get; init; }
+    /// <summary>
+    /// Gets or initializes the minimum value for the number field control.
+    /// </summary>
+    public object Min { get; init; }
 
-        /// <summary>
-        /// Gets or initializes the maximum value for the number field control.
-        /// </summary>
-        public object Max { get; init; }
+    /// <summary>
+    /// Gets or initializes the maximum value for the number field control.
+    /// </summary>
+    public object Max { get; init; }
 
-        /// <summary>
-        /// Gets or initializes the appearance of the number field control.
-        /// </summary>
-        public object Appearance { get; init; }
+    /// <summary>
+    /// Gets or initializes the appearance of the number field control.
+    /// </summary>
+    public object Appearance { get; init; }
 
-        /// <summary>
-        /// Gets or initializes the parsing error message for the number field control.
-        /// </summary>
-        public object ParsingErrorMessage { get; init; }
-    }
+    /// <summary>
+    /// Gets or initializes the parsing error message for the number field control.
+    /// </summary>
+    public object ParsingErrorMessage { get; init; }
 }

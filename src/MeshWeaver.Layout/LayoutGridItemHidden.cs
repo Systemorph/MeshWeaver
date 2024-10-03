@@ -94,5 +94,10 @@
         /// The item is hidden on extra extra large screens and smaller.
         /// </summary>
         XxlAndDown,
+
+        /// <summary>
+        /// The item is hidden on extra small screens and larger.
+        /// </summary>
+        XsAndUp,
     }
 }

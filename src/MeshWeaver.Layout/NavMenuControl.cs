@@ -1,71 +1,76 @@
 ﻿namespace MeshWeaver.Layout;
+
 /// <summary>
-    /// Represents the skin for a navigation menu with customizable properties.
-    /// </summary>
+/// Represents the skin for a navigation menu with customizable properties.
+/// </summary>
 public record NavMenuSkin : Skin<NavMenuSkin>
 {
-     /// <summary>
-        /// Gets or initializes the width of the navigation menu.
-        /// </summary>
-    public object Width { get; init; }= 250;
     /// <summary>
-        /// Gets or initializes the collapsible state of the navigation menu.
-        /// </summary>
-    public object Collapsible { get; init; } = true;
-    /// <summary>
-        /// Sets the collapsible state of the navigation menu.
-        /// </summary>
-        /// <param name="collapsible">The collapsible state to set.</param>
-        /// <returns>A new <see cref="NavMenuSkin"/> instance with the specified collapsible state.</returns>
-    public NavMenuSkin WithCollapsible(bool collapsible) => this with { Collapsible = collapsible };
-/// <summary>
-        /// Sets the width of the navigation menu.
-        /// </summary>
-        /// <param name="width">The width to set.</param>
-        /// <returns>A new <see cref="NavMenuSkin"/> instance with the specified width.</returns>
-    public NavMenuSkin WithWidth(int width) => this with { Width = width };
-
-}
- /// <summary>
-    /// Represents a navigation menu control with customizable properties.
+    /// Gets or initializes the width of the navigation menu.
     /// </summary>
+    public object Width { get; init; }= 250;
+
+    /// <summary>
+    /// Gets or initializes the collapsible state of the navigation menu.
+    /// </summary>
+    public object Collapsible { get; init; } = true;
+
+    /// <summary>
+    /// Sets the collapsible state of the navigation menu.
+    /// </summary>
+    /// <param name="collapsible">The collapsible state to set.</param>
+    /// <returns>A new <see cref="NavMenuSkin"/> instance with the specified collapsible state.</returns>
+    public NavMenuSkin WithCollapsible(bool collapsible) => this with { Collapsible = collapsible };
+
+    /// <summary>
+    /// Sets the width of the navigation menu.
+    /// </summary>
+    /// <param name="width">The width to set.</param>
+    /// <returns>A new <see cref="NavMenuSkin"/> instance with the specified width.</returns>
+    public NavMenuSkin WithWidth(int width) => this with { Width = width };
+}
+
+/// <summary>
+/// Represents a navigation menu control with customizable properties.
+/// </summary>
 public record NavMenuControl() : ContainerControl<NavMenuControl, NavMenuSkin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new())
 {
     /// <summary>
-        /// Adds a navigation link to the navigation menu.
-        /// </summary>
-        /// <param name="title">The title of the navigation link.</param>
-        /// <param name="href">The href of the navigation link.</param>
-        /// <returns>A new <see cref="NavMenuControl"/> instance with the specified navigation link.</returns>
+    /// Adds a navigation link to the navigation menu.
+    /// </summary>
+    /// <param name="title">The title of the navigation link.</param>
+    /// <param name="href">The href of the navigation link.</param>
+    /// <returns>A new <see cref="NavMenuControl"/> instance with the specified navigation link.</returns>
     public NavMenuControl WithNavLink(object title, object href) =>
         WithView(new NavLinkControl(title, null,href));
-        /// <summary>
-        /// Adds a navigation link with an icon to the navigation menu.
-        /// </summary>
-        /// <param name="title">The title of the navigation link.</param>
-        /// <param name="href">The href of the navigation link.</param>
-        /// <param name="icon">The icon of the navigation link.</param>
-        /// <returns>A new <see cref="NavMenuControl"/> instance with the specified navigation link and icon.</returns>
+
+    /// <summary>
+    /// Adds a navigation link with an icon to the navigation menu.
+    /// </summary>
+    /// <param name="title">The title of the navigation link.</param>
+    /// <param name="href">The href of the navigation link.</param>
+    /// <param name="icon">The icon of the navigation link.</param>
+    /// <returns>A new <see cref="NavMenuControl"/> instance with the specified navigation link and icon.</returns>
     public NavMenuControl WithNavLink(object title, object href, object icon) =>
         WithView(new NavLinkControl(title, icon, href))
         ;
-         /// <summary>
-        /// Adds a navigation link control to the navigation menu.
-        /// </summary>
-        /// <param name="navLink">The navigation link control to add.</param>
-        /// <returns>A new <see cref="NavMenuControl"/> instance with the specified navigation link control.</returns>
-    public NavMenuControl WithNavLink(NavLinkControl navLink) => WithView(navLink);
-/// <summary>
-        /// Adds a navigation group control to the navigation menu.
-        /// </summary>
-        /// <param name="navGroup">The navigation group control to add.</param>
-        /// <returns>A new <see cref="NavMenuControl"/> instance with the specified navigation group control.</returns>
 
+    /// <summary>
+    /// Adds a navigation link control to the navigation menu.
+    /// </summary>
+    /// <param name="navLink">The navigation link control to add.</param>
+    /// <returns>A new <see cref="NavMenuControl"/> instance with the specified navigation link control.</returns>
+    public NavMenuControl WithNavLink(NavLinkControl navLink) => WithView(navLink);
+
+    /// <summary>
+    /// Adds a navigation group control to the navigation menu.
+    /// </summary>
+    /// <param name="navGroup">The navigation group control to add.</param>
+    /// <returns>A new <see cref="NavMenuControl"/> instance with the specified navigation group control.</returns>
     public NavMenuControl WithNavGroup(NavGroupControl navGroup) =>
         WithView(navGroup);
     public NavMenuControl WithNavGroup(object title, object icon = null, object href = null) =>
         WithView(new NavGroupControl(title, icon, href));
-
 }
 
 public interface IMenuItem : IUiControl
@@ -81,8 +86,6 @@ public record NavLinkControl(object Title, object Icon, object Href) : UiControl
     public NavLinkControl WithHref(object href) => This with { Href = href };
 
     public NavLinkControl WithIcon(object icon) => This with { Icon = icon };
-
-
 }
 
 public record NavGroupControl(object Title, object Icon, object Href) : ContainerControl<NavGroupControl, NavGroupSkin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new(Title, Icon, Href))

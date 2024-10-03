@@ -6,18 +6,19 @@ using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Northwind.Domain;
 
 namespace MeshWeaver.Northwind.ViewModel;
- /// <summary>
-    /// Provides methods to add and render the product overview area.
-    /// </summary>
+
+/// <summary>
+/// Provides methods to add and render the product overview area.
+/// </summary>
 public static class ProductOverviewArea
 {
-     /// <summary>
-        /// Adds the product overview view to the layout definition.
-        /// </summary>
-        /// <param name="layout">The layout definition.</param>
-        /// <returns>The updated layout definition with the product overview view.</returns>
+    /// <summary>
+    /// Adds the product overview view to the layout definition.
+    /// </summary>
+    /// <param name="layout">The layout definition.</param>
+    /// <returns>The updated layout definition with the product overview view.</returns>
     public static LayoutDefinition AddProductOverview(this LayoutDefinition layout)
-        => 
+        =>
             layout
                 .WithView(nameof(ProductOverview), ProductOverview)
     ;
@@ -69,5 +70,4 @@ public static class ProductOverviewArea
                 (data, tb) => (data, tb))
             .Select(x => x.data.Where(d => d.Category == x.tb.Category || x.tb.Category == 0))
     ;
-
 }
