@@ -207,6 +207,8 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "monolith", "monolith", "{4E1A12BB-5348-4DA4-B05F-F831DC16F7DE}"
 	ProjectSection(SolutionItems) = preProject
 		monolith\Directory.Build.props = monolith\Directory.Build.props
+		Readme.md = Readme.md
+		MIT License.md = MIT License.md
 	EndProjectSection
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Portal", "monolith\MeshWeaver.Portal\MeshWeaver.Portal.csproj", "{1471FB82-912E-411A-9141-096E0AECAAAE}"
