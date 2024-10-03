@@ -17,7 +17,7 @@ Tags:
   - "Business Insights"
 ---
 
-# Financial Report Comparing Sales by Category of Products in 2022 and 2023
+# Sales Analysis by Category of Products
 <style>
     .sales-by-category-comparison-chart {
         float: right;
@@ -52,14 +52,14 @@ Below is a breakdown of the sales figures, differences, and percentage changes f
 
 | Category         | Sales 2022 (USD) | Sales 2023 (USD) | Difference (USD) | Percentage Change (%) |
 |------------------|------------------|------------------|------------------|-----------------------|
-| Beverages        | 130,114.38       | 158,580.28       | 28,465.90        | 21.88                 |
-| Condiments       | 51,608.63        | 62,083.56        | 10,474.93        | 20.30                 |
-| Confections      | 82,912.21        | 96,951.44        | 14,039.23        | 16.93                 |
-| Dairy Products   | 106,667.88       | 144,479.72       | 37,811.84        | 35.46                 |
-| Grains/Cereals   | 42,976.88        | 58,670.07        | 15,693.19        | 36.51                 |
-| Meat/Poultry     | 72,748.65        | 101,873.90       | 29,125.25        | 40.04                 |
-| Produce          | 43,525.39        | 62,220.32        | 18,694.93        | 42.95                 |
-| Seafood          | 46,789.86        | 91,199.44        | 44,409.58        | 94.91                 |
+| Beverages        | 130,114.38       | 158,580.28       | 28,465.90        | 21.88%                 |
+| Condiments       | 51,608.63        | 62,083.56        | 10,474.93        | 20.30%                 |
+| Confections      | 82,912.21        | 96,951.44        | 14,039.23        | 16.93%                 |
+| Dairy Products   | 106,667.88       | 144,479.72       | 37,811.84        | 35.46%                 |
+| Grains/Cereals   | 42,976.88        | 58,670.07        | 15,693.19        | 36.51%                 |
+| Meat/Poultry     | 72,748.65        | 101,873.90       | 29,125.25        | 40.04%                 |
+| Produce          | 43,525.39        | 62,220.32        | 18,694.93        | 42.95%                 |
+| Seafood          | 46,789.86        | 91,199.44        | 44,409.58        | 94.91%                 |
 
 Overall, all categories experienced growth in sales from 2022 to 2023, with **Seafood** showing the most significant increase.
 

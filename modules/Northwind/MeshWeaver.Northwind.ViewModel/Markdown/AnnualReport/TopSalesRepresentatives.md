@@ -18,7 +18,7 @@ Tags:
   - "Performance Review"
   - "Incentive Programs"
 ---
-# Top Employees of the Month Based on Amounts Earned
+# Top Sales Representatives of the Month
 <style>
     .top-employees-chart {
         float: right;
