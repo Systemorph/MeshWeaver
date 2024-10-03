@@ -30,6 +30,8 @@ Tags:
 </style>
 
 This report provides a detailed comparison of sales across various product categories between the years 2022 and 2023. The analysis highlights the growth in sales for each category, showcasing the overall performance and trends within the market. The data reveals significant increases in sales across all categories, with some experiencing remarkable growth rates. 
+Click the year above the chart to select which information to display.
+
 <div class="sales-by-category-comparison-chart">
 
 @("SalesByCategoryWithPrevYear"){ Id = "?Year=2023" }
