@@ -207,8 +207,8 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "monolith", "monolith", "{4E1A12BB-5348-4DA4-B05F-F831DC16F7DE}"
 	ProjectSection(SolutionItems) = preProject
 		monolith\Directory.Build.props = monolith\Directory.Build.props
-		Readme.md = Readme.md
 		MIT License.md = MIT License.md
+		Readme.md = Readme.md
 	EndProjectSection
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Portal", "monolith\MeshWeaver.Portal\MeshWeaver.Portal.csproj", "{1471FB82-912E-411A-9141-096E0AECAAAE}"
@@ -220,6 +220,8 @@ EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Search", "src\MeshWeaver.Search\MeshWeaver.Search.csproj", "{1AE5D074-0340-42B4-979B-A0495414B174}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Search.Test", "test\MeshWeaver.Search.Test\MeshWeaver.Search.Test.csproj", "{BDEC6D93-F212-456F-BEEE-DE2BADAE2A56}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Azure.Publish", "src\MeshWeaver.Azure.Publish\MeshWeaver.Azure.Publish.csproj", "{844B4566-81A4-4CB2-9761-9B174FB7BCCB}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -587,6 +589,10 @@ Global
 		{BDEC6D93-F212-456F-BEEE-DE2BADAE2A56}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{BDEC6D93-F212-456F-BEEE-DE2BADAE2A56}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{BDEC6D93-F212-456F-BEEE-DE2BADAE2A56}.Release|Any CPU.Build.0 = Release|Any CPU
+		{844B4566-81A4-4CB2-9761-9B174FB7BCCB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{844B4566-81A4-4CB2-9761-9B174FB7BCCB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{844B4566-81A4-4CB2-9761-9B174FB7BCCB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{844B4566-81A4-4CB2-9761-9B174FB7BCCB}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -1,7 +1,6 @@
 ﻿using System.Text;
 using Azure.Provisioning.Storage;
 using Azure.Storage.Blobs;
-using MeshWeaver.Ai.Index;
 using MeshWeaver.Hub.Fixture;
 using Xunit.Abstractions;
 

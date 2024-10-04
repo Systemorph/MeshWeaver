@@ -1,32 +1,48 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
         <HasMeshNodes>true</HasMeshNodes>
         <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     </PropertyGroup>
     <ItemGroup>
-    <ProjectReference Include="..\..\..\src\MeshWeaver.DataCubes\MeshWeaver.DataCubes.csproj" />
-    <ProjectReference Include="..\..\..\src\MeshWeaver.Documentation\MeshWeaver.Domain.Layout.csproj" />
-    <ProjectReference Include="..\..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
-    <ProjectReference Include="..\..\..\src\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
-    <ProjectReference Include="..\..\..\src\MeshWeaver.Data\MeshWeaver.Data.csproj" />
-    <ProjectReference Include="..\..\..\src\MeshWeaver.Import\MeshWeaver.Import.csproj" />
-    <ProjectReference Include="..\..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
-    <ProjectReference Include="..\..\..\src\MeshWeaver.Pivot\MeshWeaver.Pivot.csproj" />
-    <ProjectReference Include="..\..\..\src\MeshWeaver.Charting.Pivot\MeshWeaver.Charting.Pivot.csproj" />
-    <ProjectReference Include="..\..\..\src\MeshWeaver.Reporting\MeshWeaver.Reporting.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Northwind.Model\MeshWeaver.Northwind.Model.csproj" />
-  </ItemGroup>
-  <ItemGroup>
-      <!-- Include all Markdown files in the Markdown folder as embedded resources -->
-      <EmbeddedResource Include="Markdown\**\*.md" />
-  </ItemGroup>
+        <ProjectReference Include="..\..\..\src\MeshWeaver.DataCubes\MeshWeaver.DataCubes.csproj" />
+        <ProjectReference Include="..\..\..\src\MeshWeaver.Documentation\MeshWeaver.Domain.Layout.csproj" />
+        <ProjectReference Include="..\..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+        <ProjectReference Include="..\..\..\src\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
+        <ProjectReference Include="..\..\..\src\MeshWeaver.Data\MeshWeaver.Data.csproj" />
+        <ProjectReference Include="..\..\..\src\MeshWeaver.Import\MeshWeaver.Import.csproj" />
+        <ProjectReference Include="..\..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+        <ProjectReference Include="..\..\..\src\MeshWeaver.Pivot\MeshWeaver.Pivot.csproj" />
+        <ProjectReference Include="..\..\..\src\MeshWeaver.Charting.Pivot\MeshWeaver.Charting.Pivot.csproj" />
+        <ProjectReference Include="..\..\..\src\MeshWeaver.Reporting\MeshWeaver.Reporting.csproj" />
+        <ProjectReference Include="..\MeshWeaver.Northwind.Model\MeshWeaver.Northwind.Model.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- Include all Markdown files in the Markdown folder as embedded resources -->
+        <EmbeddedResource Include="Markdown\**\*.md" />
+    </ItemGroup>
+
+    <UsingTask TaskName="MeshWeaver.BuildTasks.ProcessFilesTask" AssemblyFile="$(TargetDir)MeshWeaver.BuildTasks.dll" />
+
+    <Target Name="ProcessFiles" DependsOnTargets="Build">
+        <!-- Define the input files -->
+        <ItemGroup>
+            <InputFiles Include="Markdown\**\*.md" />
+        </ItemGroup>
+
+        <!-- Execute the custom task -->
+        <ProcessFilesTask InputFiles="@(InputFiles)" BlobStorageConnectionString="YourConnectionString" BlobContainerName="YourContainerName" Address="YourAddress" />
+    </Target>
+
     <PropertyGroup>
-        <!--generate xml comment files -->
+        <!-- Generate XML comment files -->
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <DocumentationFile>bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml</DocumentationFile>
         <!-- Embed source files in the PDB -->
         <EmbedAllSources>true</EmbedAllSources>
     </PropertyGroup>
+
     <ItemGroup>
         <EmbeddedResource Include="bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml">
             <LogicalName>$(AssemblyName).xml</LogicalName>
@@ -34,5 +50,4 @@
             <Embed>true</Embed>
         </EmbeddedResource>
     </ItemGroup>
-
 </Project>

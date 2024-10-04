@@ -1,6 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <ItemGroup>
+    <ItemGroup>
     <PackageReference Include="Azure.Search.Documents" />
     <PackageReference Include="Markdig" />
   </ItemGroup>

@@ -1,0 +1,23 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+      <OutputType>Exe</OutputType>
+      <PackAsTool>true</PackAsTool>
+      <ToolCommandName>meshweaver-azure-publish</ToolCommandName>
+      <PackageVersion>1.0.0</PackageVersion>
+  </PropertyGroup>
+  <ItemGroup>
+      <PackageReference Include="Azure.Storage.Blobs" />
+      <PackageReference Include="System.CommandLine" />
+      <PackageReference Include="System.CommandLine.NamingConventionBinder" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Search\MeshWeaver.Search.csproj" />
+  </ItemGroup>
+  <!--<ItemGroup>
+      <None Update="MeshWeaver.Azure.Publish.runtimeconfig.json">
+          <Pack>true</Pack>
+          <PackagePath>tools/net8.0/any/</PackagePath>
+      </None>
+  </ItemGroup>-->
+</Project>
