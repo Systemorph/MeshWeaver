@@ -5,7 +5,7 @@
     "meshweaver.azure.publish": {
       "version": "1.0.0",
       "commands": [
-        "meshweaver-azure-publish"
+        "MeshWeaver.Azure.Publish"
       ]
     }
   }

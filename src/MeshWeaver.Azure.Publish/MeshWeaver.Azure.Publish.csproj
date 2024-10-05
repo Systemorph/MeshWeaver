@@ -2,11 +2,10 @@
   <PropertyGroup>
       <OutputType>Exe</OutputType>
       <PackAsTool>true</PackAsTool>
-      <ToolCommandName>meshweaver-azure-publish</ToolCommandName>
-      <PackageVersion>1.0.0</PackageVersion>
   </PropertyGroup>
   <ItemGroup>
       <PackageReference Include="Azure.Storage.Blobs" />
+      <PackageReference Include="Microsoft.Extensions.Logging.Console" />
       <PackageReference Include="System.CommandLine" />
       <PackageReference Include="System.CommandLine.NamingConventionBinder" />
   </ItemGroup>
