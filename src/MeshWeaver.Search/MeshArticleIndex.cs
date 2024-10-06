@@ -28,7 +28,7 @@ public class MeshArticleIndex
     public float[] VectorRepresentation { get; set; }
 
 
-    public IDictionary<string, string> ToMetadata() =>
+    public IDictionary<string, string> ToMetadata(string path, string type) =>
         new Dictionary<string, string>()
         {
             { nameof(Url), Url },
@@ -38,7 +38,8 @@ public class MeshArticleIndex
             { nameof(Published), Published.ToString(CultureInfo.InvariantCulture) },
             { nameof(Authors), JsonSerializer.Serialize(Authors) },
             { nameof(Tags), JsonSerializer.Serialize(Tags) },
-            { nameof(Path), Path },
+            { nameof(Path), path },
+            { nameof(Type), type },
         };
 
 
