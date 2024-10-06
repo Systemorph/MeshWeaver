@@ -67,8 +67,9 @@ namespace MeshWeaver.Azure.Publish
                 if(htmlContainer != null)
                     await htmlBlobContainer.CreateIfNotExistsAsync();
 
-                var localFiles = Directory.GetFiles(path).Select(f => Path.Combine(address, Path.GetRelativePath(path, f))).ToHashSet();
-                var blobs = blobContainer.GetBlobs().ToDictionary(b => b.Name);
+
+                var localFiles = Directory.GetFiles(path, "*", SearchOption.AllDirectories).Select(f => Path.Combine(address, Path.GetRelativePath(path, f))).ToHashSet();
+                var blobs = blobContainer.GetBlobs(prefix:address).ToDictionary(b => b.Name);
 
                 // Delete blobs that no longer exist in the local directory
                 foreach (var blob in blobs)
