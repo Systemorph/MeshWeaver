@@ -1,6 +1,7 @@
 ﻿using System.Linq.Expressions;
 using System.Reflection;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataBinding;
@@ -9,16 +10,34 @@ using MeshWeaver.Reflection;
 namespace MeshWeaver.Layout;
 
 public static class Template{
-
     /// <summary>
     /// This is a generic template method which can be used if streams are connected to synchronize with Workspace.
     /// </summary>
-    /// <typeparam name="TView"></typeparam>
+    /// <typeparam name="TView">Type of the view</typeparam>
+    /// <typeparam name="TEntity">The type of the entity to be data bound</typeparam>
     /// <param name="id">Id to be referenced in the data binding</param>
     /// <param name="dataTemplate">View Template.</param>
-    /// <returns></returns>
-    public static TView Bind<TView>(string id, Expression<Func<object, TView>> dataTemplate)
-        where TView : UiControl => BindObject(null, id, dataTemplate);
+    /// <returns>The view template</returns>
+    public static TView Bind<TEntity, TView>(this ISynchronizationStream<TEntity> stream, string id, Expression<Func<TEntity, TView>> dataTemplate)
+        where TView : UiControl
+    {
+        object current = null;
+
+        return (TView)GetTemplateControl(id, dataTemplate)
+            .WithBuildup((host, context, store) =>
+            {
+                var forwardSubscription = stream.Subscribe(changeItem =>
+                {
+                    if (Equals(changeItem.Value, current))
+                        return;
+                    current = changeItem.Value;
+                    host.Stream.SetData(id, changeItem.SetValue(current));
+                });
+                host.AddDisposable(context.Area, forwardSubscription);
+                return new(store);
+            });
+
+    }
 
 
     /// <summary>
@@ -52,6 +71,33 @@ public static class Template{
 
         return new ItemTemplateControl(view, data);
     }
+    /// <summary>
+    /// Takes expression tree of data template and replaces all property getters by binding instances and sets data context property
+    /// </summary>
+    [ReplaceBindMethod]
+    public static TView BindObservable<T, TView>(
+        this IObservable<T> stream,
+        string id,
+        Expression<Func<T, TView>> dataTemplate
+    )
+        where TView : UiControl
+    {
+        object current = null;
+        return (TView)GetTemplateControl(id, dataTemplate)
+            .WithBuildup((host, context, store) =>
+            {
+                var forwardSubscription = stream.Subscribe(val =>
+                {
+                    if (Equals(val, current))
+                        return;
+                    current = val;
+                    host.Stream.SetData(id, new ChangeItem<object>(host.Stream.Owner, host.Stream.Reference, val, host.Stream.Owner, null, host.Hub.Version));
+                });
+                host.AddDisposable(context.Area, forwardSubscription);
+                return new(store);
+            });
+    }
+
     private static readonly MethodInfo ItemTemplateMethodNonGeneric = ReflectionHelper.GetStaticMethodGeneric(
         () => ItemTemplateNonGeneric<object, UiControl>(default(IEnumerable<object>), null)
     );
@@ -99,12 +145,19 @@ public static class Template{
     )
         where TView : UiControl
     {
-        var topLevel = UpdateData(data, id);
+        var view = GetTemplateControl(id, dataTemplate);
+        if(data != null)
+            view = (TView)view.WithBuildup((_,_,store) => store.UpdateData(id, data));
+        return view;
+    }
+
+    private static TView GetTemplateControl<T, TView>(string id, Expression<Func<T, TView>> dataTemplate)
+        where TView : UiControl
+    {
+        var topLevel = LayoutAreaReference.GetDataPointer(id);
         var view = dataTemplate.Build(topLevel, out var _);
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
-        if(data != null)
-            view = (TView)view.WithUpdates(store => store.UpdateData(id, data));
         return view;
     }
 
@@ -170,7 +223,7 @@ public static class Template{
                 {
                     DataContext = dataContext
                 }
-                .WithUpdates(store => store.UpdateData(id, data))
+                .WithBuildup((_,_,store) => store.UpdateData(id, data))
             ;
     }
 

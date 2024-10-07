@@ -97,11 +97,13 @@ public record DomainViewConfiguration
 
     public object DetailsLayout(LayoutAreaHost host, RenderingContext ctx, EntityRenderingContext context)
     {
-            
 
+
+        var stream = host.Workspace
+            .GetStreamFor(new EntityReference(context.TypeDefinition.CollectionName, context.Id), host.Stream.Subscriber);
         var ret = 
             
-            Template.Bind(context.IdString,
+            stream.Bind(context.IdString,
             oo =>
                 context.TypeDefinition.Type.GetProperties()
                     .Aggregate(Controls.EditForm, (grid, property) =>
@@ -111,31 +113,7 @@ public record DomainViewConfiguration
                         )
         );
 
-        var stream = host.Workspace
-            .GetStreamFor(new EntityReference(context.TypeDefinition.CollectionName, context.Id), host.Stream.Subscriber);
 
-        object current = null;
-        var forwardSubscription = stream.Subscribe(changeItem =>
-        {
-            if (Equals(changeItem.Value, current))
-                return;
-            current = changeItem.Value;
-            host.Stream.SetData(context.IdString, changeItem.SetValue(current));
-        });
-        //var subscription = host.Stream.Subscribe(changeItem =>
-        //{
-        //    if(changeItem.Patch?.Value is null)
-        //        return;
-        //    if (changeItem.ChangedBy.Equals(host.Stream.Subscriber) &&changeItem.Patch.Value.Operations.Any(x => x.Path.ToString().StartsWith(ret.DataContext)))
-        //    {
-        //        var instance = changeItem.Value.GetCollection(LayoutAreaReference.Data)?.Instances
-        //            .GetValueOrDefault(context.IdString);
-        //        if(instance is not null)
-        //            stream.Update(i => changeItem.SetValue(instance));
-        //    }
-        //});
-
-        host.AddDisposable(context.RenderingContext.Area, forwardSubscription);
         return ret;
     }
 

@@ -1,7 +1,6 @@
 ﻿using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
-using MeshWeaver.Domain.Layout;
 using MeshWeaver.Domain.Layout.Documentation;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -48,7 +47,8 @@ public static class OrdersSummaryArea
     )
     {
         var years = layoutArea
-            .Workspace.GetObservable<Order>()
+            .Workspace
+            .GetObservable<Order>()
             .DistinctUntilChanged()
             .Select(x =>
                 x.Select(y => y.OrderDate.Year)

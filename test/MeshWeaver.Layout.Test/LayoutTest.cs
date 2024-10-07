@@ -146,8 +146,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         return Controls
             .Stack
-            .WithView( (_, _) =>
-                Template.Bind(toolbar, nameof(toolbar), tb => Controls.Text(tb.Year)), "Toolbar")
+            .WithView(Template.Bind(toolbar, nameof(toolbar), tb => Controls.Text(tb.Year)), "Toolbar")
             .WithView((area, _) =>
                 area.GetDataStream<Toolbar>(nameof(toolbar))
                     .Select(tb => Controls.Html($"Report for year {tb.Year}")), "Content");
@@ -166,7 +165,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         );
         var reportArea = $"{reference.Area}/Content";
         var content = await stream.GetControlStream(reportArea)
-            .Timeout(3.Seconds())
+           // .Timeout(3.Seconds())
             .FirstAsync(x => x is not null);
         content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
 

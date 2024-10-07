@@ -44,5 +44,5 @@ public record ProductOverviewItem
     /// Gets the total amount.
     /// </summary>
     [DisplayFormat(DataFormatString = "N2")]
-    public double TotalAmount { get; init; }
+       public double TotalAmount { get; init; }
 }
