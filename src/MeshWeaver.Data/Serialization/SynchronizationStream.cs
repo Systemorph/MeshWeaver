@@ -146,6 +146,7 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
         current = initial ?? throw new ArgumentNullException(nameof(initial));
         Store.OnNext(initial);
         initialized.SetResult(current.Value);
+        deferral.Dispose();
     }
 
     public void OnCompleted()
@@ -181,8 +182,13 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
     public void Update(Func<TStream, ChangeItem<TStream>> update) => 
         InvokeAsync(() => SetCurrent(update.Invoke(Current is null ? default : Current.Value)));
 
-    public void OnNext(ChangeItem<TStream> value) =>
-        InvokeAsync(() => SetCurrent(value));
+    public void OnNext(ChangeItem<TStream> value)
+    {
+        if(!IsInitialized)
+            Initialize(value);
+        else
+            InvokeAsync(() => SetCurrent(value));
+    }
 
     public virtual DataChangeResponse RequestChange(Func<TStream, ChangeItem<TStream>> update)
     {
@@ -207,6 +213,7 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
         this.Reference = Reference;
         this.InitializationMode = InitializationMode;
         synchronizationStreamHub = Hub.GetHostedHub(new SynchronizationStreamAddress(Hub.Address));
+        deferral = synchronizationStreamHub.Defer(_ => true);
     }
 
 
@@ -226,6 +233,7 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
     }
 
     private readonly IMessageHub synchronizationStreamHub;
+    private readonly IDisposable deferral;
 
     //private void InvokeAsync(Func<CancellationToken, Task> task)
     //    => synchronizationStreamHub.InvokeAsync(task);
