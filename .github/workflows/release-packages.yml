@@ -28,6 +28,6 @@ jobs:
       - name: Create the package
         run: dotnet pack --output nupkg --configuration Release
       - name: Define package source
-        run: dotnet nuget add source --username rbuergi --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text --name github "https://nuget.pkg.github.com/Systemorph/index.json"
+        run: dotnet nuget add source --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text --name github "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
       - name: Publish the packages to GPR   
         run: dotnet nuget push ./nupkg/*.nupkg --source "github" --api-key ${{ secrets.GITHUB_TOKEN }}
