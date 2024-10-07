@@ -54,4 +54,4 @@ jobs:
         </configuration>" > nuget.config
 
     - name: Publish NuGet packages to GitHub Packages
-      run: dotnet nuget push ./nupkgs/*.nupkg --source "github" --api-key ${{ secrets.GITHUB_TOKEN }}
+      run: dotnet nuget push ./nupkgs/*.nupkg --source "github" --api-key ${{ secrets.GH_PAT }}
