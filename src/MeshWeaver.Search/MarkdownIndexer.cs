@@ -3,10 +3,9 @@ using Azure.Search.Documents.Indexes.Models;
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
-using MeshWeaver.Search;
 using Markdown = Markdig.Markdown;
 
-namespace MeshWeaver.Ai.Index;
+namespace MeshWeaver.Search;
 
 public static class MarkdownIndexer
 {

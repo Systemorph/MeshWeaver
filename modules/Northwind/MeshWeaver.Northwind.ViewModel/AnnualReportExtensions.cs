@@ -1,5 +1,6 @@
 ﻿using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using System;
 
 namespace MeshWeaver.Northwind.ViewModel
 {
