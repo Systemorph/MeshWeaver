@@ -18,7 +18,7 @@ jobs:
           dotnet-version: 8.0.x
           source-url: https://nuget.pkg.github.com/Systemorph/index.json
         env:
-          NUGET_AUTH_TOKEN: ${{secrets.GITHUB_TOKEN}}
+          NUGET_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Restore workloads
         run: dotnet workload restore
       - name: Restore dependencies
@@ -27,5 +27,5 @@ jobs:
         run: dotnet build --configuration Release --no-restore -p:CIRun=true
       - name: Create the package
         run: dotnet pack --output nupkgs --configuration Release
-#      - name: Publish the package to GPR
-#        run: dotnet nuget push <my project>/bin/Release/*.nupkg
+      - name: Publish the packages to GPR
+        run: dotnet nuget push nupkgs/*.nupkg -k ${{ secrets.GITHUB_TOKEN }} -s https://nuget.pkg.github.com/Systemorph/index.json
