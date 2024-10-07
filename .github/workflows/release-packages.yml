@@ -24,7 +24,7 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore
       - name: Build
-        run: dotnet build --configuration Release --no-restore -p:CIRun=true <my project>
+        run: dotnet build --configuration Release --no-restore -p:CIRun=true
       - name: Create the package
         run: dotnet pack --output nupkgs --configuration Release
 #      - name: Publish the package to GPR
