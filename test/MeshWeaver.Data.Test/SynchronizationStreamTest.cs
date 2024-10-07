@@ -40,14 +40,19 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
             .Subscribe(tracker.Add);
 
         var count = 0;
-        Enumerable.Range(0, 10).AsParallel().ForEach(_ => stream.Update(state =>
+        Enumerable.Range(0, 10).AsParallel().Select(_ =>
         {
-            var instance = new MyData(Instance, (++count).ToString());
-            var existingInstance = state.Collections.GetValueOrDefault(collectionName)?.Instances.GetValueOrDefault(Instance);
-            return stream.ApplyChanges(
-                (state ?? new()).Update(collectionName, i => i.Update(Instance, instance)),
-                [new(collectionName, Instance, instance){OldValue = existingInstance }]);
-        }));
+            stream.Update(state =>
+            {
+                var instance = new MyData(Instance, (++count).ToString());
+                var existingInstance = state.Collections.GetValueOrDefault(collectionName)?.Instances
+                    .GetValueOrDefault(Instance);
+                return stream.ApplyChanges(
+                    (state ?? new()).Update(collectionName, i => i.Update(Instance, instance)),
+                    [new(collectionName, Instance, instance) { OldValue = existingInstance }]);
+            });
+            return true;
+        }).ToArray();
         await DisposeAsync();
 
         tracker.Should().HaveCount(10)
