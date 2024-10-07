@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
     <DeployPath>$(SolutionDir)deploy</DeployPath> 
+    <RepositoryUrl>https://github.com/Systemorph/MeshWeaver</RepositoryUrl>
   </PropertyGroup>
   <PropertyGroup>
     <NoWarn>649;CA2255;$(NoWarn)</NoWarn>
