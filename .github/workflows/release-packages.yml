@@ -31,21 +31,20 @@ jobs:
     - name: Pack NuGet packages
       run: dotnet pack --configuration Release --no-build --output ./nupkgs /p:PackageVersion=${{ env.VERSION }}
 
+    - name: Create nuget.config
+      run: |
+        echo "<?xml version=\"1.0\" encoding=\"utf-8\"?>
+        <configuration>
+          <packageSources>
+            <add key=\"github\" value=\"https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json\" />
+          </packageSources>
+          <packageSourceCredentials>
+            <github>
+              <add key=\"Username\" value=\"${{ github.actor }}\" />
+              <add key=\"ClearTextPassword\" value=\"${{ secrets.GITHUB_TOKEN }}\" />
+            </github>
+          </packageSourceCredentials>
+        </configuration>" > nuget.config
+
     - name: Publish NuGet packages to GitHub Packages
-      run: dotnet nuget push ./nupkgs/*.nupkg --source "github"
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        nuget.config: |
-          <?xml version="1.0" encoding="utf-8"?>
-          <configuration>
-            <packageSources>
-              <add key="github" value="https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" />
-            </packageSources>
-            <packageSourceCredentials>
-              <github>
-                <add key="Username" value="${{ github.actor }}" />
-                <add key="ClearTextPassword" value="${{ secrets.GITHUB_TOKEN }}" />
-              </github>
-            </packageSourceCredentials>
-          </configuration>
+      run: dotnet nuget push ./nupkgs/*.nupkg --source "github" --api-key ${{ secrets.GITHUB_TOKEN }}
