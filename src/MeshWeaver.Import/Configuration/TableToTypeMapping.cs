@@ -1,7 +1,9 @@
 ﻿using System.Globalization;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
+using System.Xml.Serialization;
 using Autofac.Core.Activators.Reflection;
 using MeshWeaver.Collections;
 using MeshWeaver.DataStructures;
@@ -336,6 +338,22 @@ public record TableToTypeMapping : TableMapping
         () => ConvertValue(null, null)
     );
 
+    private static readonly Dictionary<Type, Func<object, Type, object>> Converters =
+        new()
+        {
+            { typeof(Guid), (value, type) => Guid.TryParse(value.ToString(), out var result) ? result : value.ToString().AsGuid() },
+            { typeof(double), (value, type) => double.TryParse(value.ToString(), out var result) ? result : DefaultConversion(value, type) },
+            { typeof(int), (value, type) => int.TryParse(value.ToString(), out var result) ? result : DefaultConversion(value, type) },
+            { typeof(float), (value, type) => float.TryParse(value.ToString(), out var result) ? result : DefaultConversion(value, type) },
+            { typeof(decimal), (value, type) => decimal.TryParse(value.ToString(), out var result) ? result : DefaultConversion(value, type) },
+            { typeof(long), (value, type) => long.TryParse(value.ToString(), out var result) ? result : DefaultConversion(value, type) },
+            { typeof(short), (value, type) => short.TryParse(value.ToString(), out var result) ? result : DefaultConversion(value, type) },
+            { typeof(byte), (value, type) => byte.TryParse(value.ToString(), out var result) ? result : DefaultConversion(value, type) },
+            { typeof(bool), (value, type) => bool.TryParse(value.ToString(), out var result) ? result : DefaultConversion(value, type) },
+            { typeof(DateTime), (value, type) => DateTime.TryParse(value.ToString(), out var result) ? result : DefaultConversion(value, type) },
+            { typeof(TimeSpan), (value, type) => TimeSpan.TryParse(value.ToString(), out var result) ? result : DefaultConversion(value, type) }
+        };
+
     // ReSharper disable once UnusedMethodReturnValue.Local
     private static object ConvertValue(object value, Type type)
     {
@@ -355,11 +373,15 @@ public record TableToTypeMapping : TableMapping
         if (type.IsEnum)
             return Enum.Parse(type, valueStr);
 
-        if (type == typeof(Guid))
-            return Guid.TryParse(valueStr, out var result) ? result : valueStr.AsGuid();
         //TODO return null if relationship
-        return Convert.ChangeType(value, type, CultureInfo.InvariantCulture);
+        return Converters.TryGetValue(type, out var converter)
+            ? converter(value, type)
+            : DefaultConversion(value, type);
     }
+
+    private static object DefaultConversion(object value, Type type)
+    => Convert.ChangeType(value, type, CultureInfo.InvariantCulture);
+
 
     public const string ParameterExceptionMessage =
         "Constructor for type {0} can not find parameters {1}";
