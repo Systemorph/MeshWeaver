@@ -36,15 +36,15 @@ public static class NorthwindDataConfiguration
         return configuration
             .AddImport()
             .AddData(data =>
-                data.FromEmbeddedResource<Category>(
+                data.FromEmbeddedResource(
                         new EmbeddedResource(MyAssembly, "Files.categories.csv"),
                         config => config.WithType<Category>()
                     )
-                    .FromEmbeddedResource<Region>(
+                    .FromEmbeddedResource(
                         new EmbeddedResource(MyAssembly, "Files.regions.csv"),
                         config => config.WithType<Region>()
                     )
-                    .FromEmbeddedResource<Territory>(
+                    .FromEmbeddedResource(
                         new EmbeddedResource(MyAssembly, "Files.territories.csv"),
                         config => config.WithType<Territory>()
                     )
@@ -68,11 +68,11 @@ public static class NorthwindDataConfiguration
         return configuration
             .AddImport()
             .AddData(data =>
-                data.FromEmbeddedResource<Order>(
+                data.FromEmbeddedResource(
                         new EmbeddedResource(MyAssembly, "Files.orders.csv"),
                         config => config.WithType<Order>()
                     )
-                    .FromEmbeddedResource<OrderDetails>(
+                    .FromEmbeddedResource(
                         new EmbeddedResource(MyAssembly, "Files.orders_details.csv"),
                         conf => conf.WithType<OrderDetails>()
                     )
@@ -86,7 +86,7 @@ public static class NorthwindDataConfiguration
         return configuration
             .AddImport()
             .AddData(data =>
-                data.FromEmbeddedResource<Supplier>(
+                data.FromEmbeddedResource(
                     new EmbeddedResource(MyAssembly, "Files.suppliers.csv"),
                     config => config.WithType<Supplier>()
                 )
@@ -100,7 +100,7 @@ public static class NorthwindDataConfiguration
         return configuration
             .AddImport()
             .AddData(data =>
-                data.FromEmbeddedResource<Employee>(
+                data.FromEmbeddedResource(
                     new EmbeddedResource(MyAssembly, "Files.employees.csv"),
                     config => config.WithType<Employee>()
                 )
@@ -114,7 +114,7 @@ public static class NorthwindDataConfiguration
         return configuration
             .AddImport()
             .AddData(data =>
-                data.FromEmbeddedResource<Product>(
+                data.FromEmbeddedResource(
                     new EmbeddedResource(MyAssembly, "Files.products.csv"),
                     config => config.WithType<Product>()
                 )
@@ -128,7 +128,7 @@ public static class NorthwindDataConfiguration
         return configuration
             .AddImport()
             .AddData(data =>
-                data.FromEmbeddedResource<Customer>(
+                data.FromEmbeddedResource(
                     new EmbeddedResource(MyAssembly, "Files.customers.csv"),
                     config => config.WithType<Customer>()
                 )
