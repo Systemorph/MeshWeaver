@@ -22,7 +22,7 @@ namespace MeshWeaver.Messaging.Serialization
             if (iconAttribute != null)
                 Icon = new Icon(iconAttribute.Provider, iconAttribute.Id);
 
-            Key = new (() => keyFunctionBuilder.GetKeyFunction(Type));
+            Key = new(() => keyFunctionBuilder.GetKeyFunction(Type));
         }
 
         private string GetFromXmlComments(MemberInfo member, Func<string, string> getMemberComment)
@@ -40,7 +40,7 @@ namespace MeshWeaver.Messaging.Serialization
         }
 
         public Type Type { get; init; }
-        public string DisplayName { get; init; } 
+        public string DisplayName { get; init; }
         public string CollectionName { get; init; }
         public object Icon { get; init; }
 
@@ -51,12 +51,12 @@ namespace MeshWeaver.Messaging.Serialization
         public virtual object GetKey(object instance) =>
             Key.Value.Function?.Invoke(instance)
             ?? throw new InvalidOperationException(
-                "No key mapping is defined. Please specify in the configuration of the data sources source.");
+                $"No key mapping is defined for type {CollectionName}. Please specify in the configuration of the data sources source.");
 
         public Type GetKeyType() =>
             Key.Value?.KeyType
             ?? throw new InvalidOperationException(
-                "No key mapping is defined. Please specify in the configuration of the data sources source.");
+                $"No key mapping is defined for type {CollectionName}. Please specify in the configuration of the data sources source.");
         internal Lazy<KeyFunction> Key { get; init; }
     }
 }
