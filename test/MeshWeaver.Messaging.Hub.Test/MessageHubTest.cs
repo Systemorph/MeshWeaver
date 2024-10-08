@@ -1,7 +1,7 @@
 ﻿using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
-using MeshWeaver.Hub.Fixture;
+using MeshWeaver.Fixture;
 using Xunit;
 using Xunit.Abstractions;
 

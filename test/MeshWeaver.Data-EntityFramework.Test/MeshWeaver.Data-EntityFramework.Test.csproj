@@ -16,8 +16,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.DataStorage.EntityFramework\MeshWeaver.DataStorage.EntityFramework.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Data\MeshWeaver.Data.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Hub.Fixture\MeshWeaver.Hub.Fixture.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
   </ItemGroup>
 
 </Project>

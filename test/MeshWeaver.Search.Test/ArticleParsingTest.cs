@@ -1,7 +1,7 @@
 ﻿using System.Text;
 using Azure.Provisioning.Storage;
 using Azure.Storage.Blobs;
-using MeshWeaver.Hub.Fixture;
+using MeshWeaver.Fixture;
 using Xunit.Abstractions;
 
 namespace MeshWeaver.Search.Test;

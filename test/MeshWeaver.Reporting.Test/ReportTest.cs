@@ -1,6 +1,6 @@
 ﻿using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
-using MeshWeaver.Hub.Fixture;
+using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Reporting.Builder;

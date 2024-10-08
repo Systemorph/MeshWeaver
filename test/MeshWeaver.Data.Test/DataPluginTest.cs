@@ -4,7 +4,7 @@ using System.Reactive.Linq;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Activities;
-using MeshWeaver.Hub.Fixture;
+using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
 using Xunit.Abstractions;

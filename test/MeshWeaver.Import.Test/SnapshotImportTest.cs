@@ -3,7 +3,7 @@ using FluentAssertions;
 using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Data.TestDomain;
-using MeshWeaver.Hub.Fixture;
+using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
 using Xunit.Abstractions;

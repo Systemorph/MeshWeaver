@@ -1,8 +1,8 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <ProjectReference Include="..\MeshWeaver.TestDomain\MeshWeaver.TestDomain.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hierarchies\MeshWeaver.Hierarchies.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Hub.Fixture\MeshWeaver.Hub.Fixture.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Update="**\*.json">

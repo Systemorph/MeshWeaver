@@ -7,7 +7,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.DataSetReader.Csv\MeshWeaver.DataSetReader.Csv.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.DataSetReader.Excel\MeshWeaver.DataSetReader.Excel.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
   </ItemGroup>
 
   <ItemGroup>
