@@ -5,7 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Data;
 using MeshWeaver.DataStorage.EntityFramework;
-using MeshWeaver.Hub.Fixture;
+using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
 using Xunit.Abstractions;

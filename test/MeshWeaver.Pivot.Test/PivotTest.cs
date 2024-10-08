@@ -5,7 +5,7 @@ using MeshWeaver.Arithmetics;
 using MeshWeaver.Collections;
 using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
-using MeshWeaver.Hub.Fixture;
+using MeshWeaver.Fixture;
 using MeshWeaver.Json.Assertions;
 using MeshWeaver.Messaging;
 using MeshWeaver.Pivot.Aggregations;

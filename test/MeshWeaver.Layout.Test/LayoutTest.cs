@@ -8,7 +8,7 @@ using FluentAssertions.Extensions;
 using Json.Patch;
 using Json.Pointer;
 using MeshWeaver.Data;
-using MeshWeaver.Hub.Fixture;
+using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;

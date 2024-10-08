@@ -4,7 +4,6 @@ using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
-using MeshWeaver.Hub.Fixture;
 using MeshWeaver.Json.Assertions;
 using MeshWeaver.Messaging;
 using MeshWeaver.Pivot.Builder;
