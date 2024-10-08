@@ -4,7 +4,6 @@ using System.Text.Json.Nodes;
 using FluentAssertions;
 using Newtonsoft.Json.Linq;
 using MeshWeaver.Fixture;
-using MeshWeaver.Hub.Fixture;
 using MeshWeaver.Messaging;
 using MeshWeaver.ServiceProvider;
 using Xunit.Abstractions;

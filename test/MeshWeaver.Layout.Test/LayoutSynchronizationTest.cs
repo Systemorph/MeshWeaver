@@ -1,5 +1,5 @@
 ﻿using FluentAssertions;
-using MeshWeaver.Hub.Fixture;
+using MeshWeaver.Fixture;
 using Xunit;
 using Xunit.Abstractions;
 

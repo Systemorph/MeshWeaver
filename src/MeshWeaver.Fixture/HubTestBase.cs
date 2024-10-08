@@ -1,11 +1,9 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using MeshWeaver.Fixture;
-using MeshWeaver.Messaging;
-using MeshWeaver.Messaging.Serialization;
+﻿using MeshWeaver.Messaging;
 using MeshWeaver.ServiceProvider;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
 
-namespace MeshWeaver.Hub.Fixture;
+namespace MeshWeaver.Fixture;
 
 public class HubTestBase : TestBase
 {

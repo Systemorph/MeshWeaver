@@ -6,10 +6,10 @@
 	</ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.GridModel\MeshWeaver.GridModel.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Reporting\MeshWeaver.Reporting.csproj" />
     <ProjectReference Include="..\MeshWeaver.Data.TestDomain\MeshWeaver.Data.TestDomain.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Hub.Fixture\MeshWeaver.Hub.Fixture.csproj" />
     <ProjectReference Include="..\MeshWeaver.TestDomain\MeshWeaver.TestDomain.csproj" />
   </ItemGroup>
 

@@ -2,7 +2,7 @@
 using FluentAssertions;
 using FluentAssertions.Json;
 using MeshWeaver.Data;
-using MeshWeaver.Hub.Fixture;
+using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
 using Xunit.Abstractions;
