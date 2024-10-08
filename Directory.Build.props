@@ -4,7 +4,11 @@
     <LangVersion>12.0</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
-    <DeployPath>$(SolutionDir)deploy</DeployPath> 
+    <DeployPath>$(SolutionDir)deploy</DeployPath>
+  </PropertyGroup>
+  <PropertyGroup>
+    <Authors>Systemorph</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/Systemorph/MeshWeaver</RepositoryUrl>
   </PropertyGroup>
   <PropertyGroup>
