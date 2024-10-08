@@ -39,8 +39,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Activities.Contr
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.ServiceProvider", "src\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj", "{D8A83A3A-3A07-4D5C-AE9F-D2A0380BD31A}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Fixture", "test\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj", "{32572EC3-8AA2-4474-86DC-7B6E2595533F}"
-EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Pivot", "src\MeshWeaver.Pivot\MeshWeaver.Pivot.csproj", "{2D5F902F-2017-49FB-882B-7E60658B0F86}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Arithmetics", "src\MeshWeaver.Arithmetics\MeshWeaver.Arithmetics.csproj", "{575A24B1-9FDD-409F-9929-D7B4763ED489}"
@@ -60,8 +58,6 @@ EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Hierarchies", "src\MeshWeaver.Hierarchies\MeshWeaver.Hierarchies.csproj", "{8A7B879B-1301-4DD6-A4DD-FF5C351AA43D}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Utils", "src\MeshWeaver.Utils\MeshWeaver.Utils.csproj", "{29B926F4-0502-4575-819C-BE6C00D61EDE}"
-EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Hub.Fixture", "test\MeshWeaver.Hub.Fixture\MeshWeaver.Hub.Fixture.csproj", "{8440C781-A719-4B28-8CD0-9FEB606C2A0B}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Application.Styles", "src\MeshWeaver.Application.Styles\MeshWeaver.Application.Styles.csproj", "{191D7131-B9C9-4D2D-B89A-13F0536875E0}"
 EndProject
@@ -223,6 +219,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Search.Test", "t
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Azure.Publish", "src\MeshWeaver.Azure.Publish\MeshWeaver.Azure.Publish.csproj", "{844B4566-81A4-4CB2-9761-9B174FB7BCCB}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Fixture", "src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj", "{6BBE6A10-FCC6-4A7D-9F3D-8D3FA18B2B3F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -273,10 +271,6 @@ Global
 		{D8A83A3A-3A07-4D5C-AE9F-D2A0380BD31A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D8A83A3A-3A07-4D5C-AE9F-D2A0380BD31A}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{D8A83A3A-3A07-4D5C-AE9F-D2A0380BD31A}.Release|Any CPU.Build.0 = Release|Any CPU
-		{32572EC3-8AA2-4474-86DC-7B6E2595533F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{32572EC3-8AA2-4474-86DC-7B6E2595533F}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{32572EC3-8AA2-4474-86DC-7B6E2595533F}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{32572EC3-8AA2-4474-86DC-7B6E2595533F}.Release|Any CPU.Build.0 = Release|Any CPU
 		{2D5F902F-2017-49FB-882B-7E60658B0F86}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{2D5F902F-2017-49FB-882B-7E60658B0F86}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{2D5F902F-2017-49FB-882B-7E60658B0F86}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -317,10 +311,6 @@ Global
 		{29B926F4-0502-4575-819C-BE6C00D61EDE}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{29B926F4-0502-4575-819C-BE6C00D61EDE}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{29B926F4-0502-4575-819C-BE6C00D61EDE}.Release|Any CPU.Build.0 = Release|Any CPU
-		{8440C781-A719-4B28-8CD0-9FEB606C2A0B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{8440C781-A719-4B28-8CD0-9FEB606C2A0B}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{8440C781-A719-4B28-8CD0-9FEB606C2A0B}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{8440C781-A719-4B28-8CD0-9FEB606C2A0B}.Release|Any CPU.Build.0 = Release|Any CPU
 		{191D7131-B9C9-4D2D-B89A-13F0536875E0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{191D7131-B9C9-4D2D-B89A-13F0536875E0}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{191D7131-B9C9-4D2D-B89A-13F0536875E0}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -593,6 +583,10 @@ Global
 		{844B4566-81A4-4CB2-9761-9B174FB7BCCB}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{844B4566-81A4-4CB2-9761-9B174FB7BCCB}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{844B4566-81A4-4CB2-9761-9B174FB7BCCB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6BBE6A10-FCC6-4A7D-9F3D-8D3FA18B2B3F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6BBE6A10-FCC6-4A7D-9F3D-8D3FA18B2B3F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6BBE6A10-FCC6-4A7D-9F3D-8D3FA18B2B3F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6BBE6A10-FCC6-4A7D-9F3D-8D3FA18B2B3F}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -600,8 +594,6 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{A27C8140-8A38-4BAB-AC7D-BA2A987FF39B} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{6AB262EB-D721-46B6-9987-BF93EDA0FA24} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
-		{32572EC3-8AA2-4474-86DC-7B6E2595533F} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
-		{8440C781-A719-4B28-8CD0-9FEB606C2A0B} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{AF5B3E21-960D-4AEC-8E58-F211652824A5} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{699AF08A-FA0F-4021-B92C-4F83CF8E5B5F} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{15AD99F5-7B41-4DBF-8C4D-0A69CAB557D9} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}

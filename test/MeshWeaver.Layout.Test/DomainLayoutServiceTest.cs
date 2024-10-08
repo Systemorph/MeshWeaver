@@ -8,7 +8,7 @@ using Json.Pointer;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain.Layout;
-using MeshWeaver.Hub.Fixture;
+using MeshWeaver.Fixture;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 using Xunit.Abstractions;

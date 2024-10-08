@@ -1,7 +1,7 @@
 ﻿using FluentAssertions;
 using MeshWeaver.Domain;
+using MeshWeaver.Fixture;
 using Microsoft.Extensions.DependencyInjection;
-using MeshWeaver.Hub.Fixture;
 using Xunit;
 using Xunit.Abstractions;
 

@@ -1,5 +1,6 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using MeshWeaver.Hub.Fixture;
+﻿using FluentAssertions.Common;
+using MeshWeaver.Fixture;
+using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Scopes.Proxy;
 using Xunit.Abstractions;
 

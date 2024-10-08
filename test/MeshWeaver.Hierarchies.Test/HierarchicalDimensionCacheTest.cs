@@ -1,9 +1,8 @@
 ﻿using FluentAssertions;
 using FluentAssertions.Execution;
 using MeshWeaver.Data;
-using MeshWeaver.Hub.Fixture;
+using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
-using MeshWeaver.TestDomain;
 using MeshWeaver.TestDomain.SimpleData;
 using Xunit;
 using Xunit.Abstractions;

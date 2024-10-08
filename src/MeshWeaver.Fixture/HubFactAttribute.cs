@@ -1,6 +1,6 @@
 ﻿using Xunit;
 
-namespace MeshWeaver.Hub.Fixture;
+namespace MeshWeaver.Fixture;
 
 #if DEBUG
 public class HubFactAttribute : FactAttribute;
