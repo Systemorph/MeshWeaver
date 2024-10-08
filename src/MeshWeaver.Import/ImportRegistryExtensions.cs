@@ -35,17 +35,17 @@ public static class ImportExtensions
     public static DataContext FromEmbeddedResource<T>(
         this DataContext dataContext,
         string resource,
-        Func<ImportDataSource, ImportDataSource> configuration
-    )
+        Func<ImportDataSource, ImportDataSource> configuration = null
+    ) where T : class
     {
         var source = new EmbeddedResource(typeof(T).Assembly, resource);
         return dataContext.WithDataSourceBuilder(
             source,
-            hub => ConfigureDataSource(configuration, dataContext.Workspace, source)
+            hub => ConfigureDataSource(configuration, dataContext.Workspace, source).WithType<T>()
         );
     }
 
-    public static DataContext FromEmbeddedResource<T>(
+    public static DataContext FromEmbeddedResource(
         this DataContext dataContext,
         EmbeddedResource resource,
         Func<ImportDataSource, ImportDataSource> configuration
@@ -63,7 +63,9 @@ public static class ImportExtensions
         EmbeddedResource source
     )
     {
-        var ret = configuration.Invoke(new(source, workspace));
+        var ret = new ImportDataSource(source, workspace);
+        if(configuration != null)
+            ret = configuration.Invoke(ret);
 
         var mappedTypes = ret.MappedTypes;
         if (!mappedTypes.Any())
