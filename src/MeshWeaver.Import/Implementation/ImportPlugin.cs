@@ -20,13 +20,10 @@ public class ImportPlugin(IMessageHub hub, Func<ImportConfiguration, ImportConfi
     public override async Task StartAsync(IMessageHub hub, CancellationToken cancellationToken)
     {
         await base.StartAsync(hub, cancellationToken);
-        initializeTask = InitializeAsync();
+        Initialize();
     }
 
-    private Task initializeTask;
-    public override Task Initialized => initializeTask;
-
-    private async Task InitializeAsync()
+    private void  Initialize()
     {
         importManager = new ImportManager(
             importConfiguration.Invoke(new(workspace, workspace.MappedTypes, logger))
@@ -64,8 +61,8 @@ public class ImportPlugin(IMessageHub hub, Func<ImportConfiguration, ImportConfi
             }
 
             activity.LogError(message.ToString());
-            var (_,log) = activity.Finish(null);
-            Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
+            activity.Complete(null);
+            activity.OnCompleted(log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
         }
 
         return request.Processed();

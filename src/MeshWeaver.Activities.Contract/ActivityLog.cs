@@ -8,21 +8,21 @@ namespace MeshWeaver.Activities;
 public record ActivityLog(string Category)
 {
     public DateTime Start { get; init; } = DateTime.UtcNow;
+    public int Version { get; init; }
 
     [property: Key]
     public string Id { get; init; } = Guid.NewGuid().AsString();
     public ImmutableList<LogMessage> Messages { get; init; } = ImmutableList<LogMessage>.Empty;
-    public string Status { get; init; } = ActivityLogStatus.Running;
+    public ActivityStatus Status { get; init; } 
     public DateTime? End { get; init; }
     public UserInfo User { get; init; }
-    public ImmutableList<ActivityLog> SubActivities { get; init; } =
-        ImmutableList<ActivityLog>.Empty;
+    public ImmutableDictionary<string, ActivityLog> SubActivities { get; init; } = ImmutableDictionary<string, ActivityLog>.Empty;
 
     public ActivityLog Fail(string error) =>
         this with
         {
             Messages = Messages.Add(new LogMessage(error, LogLevel.Error)),
-            Status = ActivityLogStatus.Failed,
+            Status = ActivityStatus.Failed,
             End = DateTime.UtcNow,
         };
 
@@ -30,15 +30,10 @@ public record ActivityLog(string Category)
         this with
         {
             Status = Messages.Any(x => x.LogLevel == LogLevel.Error)
-                ? ActivityLogStatus.Failed
-                : ActivityLogStatus.Succeeded,
+                ? ActivityStatus.Failed
+                : ActivityStatus.Succeeded,
             End = DateTime.UtcNow,
         };
 
-    public ActivityLog WithSubLog(ActivityLog subLog) =>
-        this with
-        {
-            SubActivities = SubActivities.Add(subLog),
-        };
 }
 

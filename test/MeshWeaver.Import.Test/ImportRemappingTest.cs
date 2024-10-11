@@ -115,7 +115,7 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
         // assert
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var host = GetHost();
         var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress()))
             .GetWorkspace();

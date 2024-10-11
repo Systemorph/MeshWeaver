@@ -89,7 +89,7 @@ SystemName,FoundationYear,ContractType
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
         );
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Failed);
+        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
         importResponse
             .Message.Log.Messages.OfType<LogMessage>()
             .Where(x => x.LogLevel == LogLevel.Error)
@@ -121,7 +121,7 @@ FR,France";
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
         );
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Failed);
+        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
 
         importResponse
             .Message.Log.Messages.Should()
@@ -148,7 +148,7 @@ DoubleValue,Country
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
         );
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Failed);
+        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
         importResponse
             .Message.Log.Messages.OfType<LogMessage>()
             .Where(x => x.LogLevel == LogLevel.Error)
@@ -180,7 +180,7 @@ A,B";
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
         );
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Failed);
+        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
 
         importResponse
             .Message.Log.Messages.Should()
@@ -217,7 +217,7 @@ Blue,FR";
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
         );
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Failed);
+        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
 
         importResponse
             .Message.Log.Messages.OfType<LogMessage>()

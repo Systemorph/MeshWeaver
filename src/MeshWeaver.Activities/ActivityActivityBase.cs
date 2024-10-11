@@ -1,34 +1,41 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Activities;
 
 public abstract record ActivityBase: IDisposable
 {
+
     protected readonly ILogger Logger;
-    protected ImmutableDictionary<string, ActivityBase> SubActivities { get; init; } 
-        = ImmutableDictionary<string, ActivityBase>.Empty;
-    protected ActivityBase(string category, ILogger logger)
+    protected ActivityBase(string category, IMessageHub hub)
     {
-        this.Logger = logger;
-        ActivityLog = new(category);
+        this.Hub = hub;
+        this.Logger = hub.ServiceProvider.GetRequiredService<ILogger<Activity>>();
+        Log = new(category);
+        SyncHub = hub.GetHostedHub(new object(), x => x);
     }
-    public string Id => ActivityLog.Id;
-    public ActivityLog ActivityLog { get; init; }
+
+    protected readonly IMessageHub SyncHub;
+    public string Id => Log.Id;
+    protected ActivityLog Log { get; init; }
     public bool IsEnabled(LogLevel logLevel) => Logger.IsEnabled(logLevel);
 
     public IDisposable BeginScope<TState>(TState state) => Logger.BeginScope(state);
 
-    public bool HasErrors() => ActivityLog.Errors().Any();
+    public bool HasErrors() => Log.Errors().Any();
 
-    public bool HasWarnings() => ActivityLog.Warnings().Any();
+    public bool HasWarnings() => Log.Warnings().Any();
 
 
     protected readonly ImmutableList<IDisposable> Disposables = [];
-    private bool isDisposed = false;
+    private bool isDisposed;
     private readonly object disposeLock = new();
+    protected readonly IMessageHub Hub;
+
     public void Dispose()
     {
         lock (disposeLock)
@@ -42,23 +49,37 @@ public abstract record ActivityBase: IDisposable
             disposable.Dispose();
     }
 
+
 }
 public abstract record ActivityBase<TActivity> : ActivityBase, ILogger
     where TActivity:ActivityBase<TActivity>
 {
 
-    protected IObservable<TActivity> Stream { get; }
-    protected readonly Subject<Func<TActivity, TActivity>> Updates = new();
+    protected ReplaySubject<TActivity> Stream { get; } = new(1);
 
-    protected ActivityBase(string category, ILogger logger) : base(category, logger)
+
+
+    protected TActivity WithLog(Func<ActivityLog, ActivityLog> update)
     {
-        var current = (TActivity)this;
-        var stream = new ReplaySubject<TActivity>();
-        Stream = stream;
-        Updates.Select(update => current = update.Invoke(current)).Subscribe(stream);
-        Updates.OnNext(x => x);
+        return This with { Log = update.Invoke(Log) };
     }
-    public void Log<TState>(
+    protected ActivityBase(string category, IMessageHub hub) : base(category, hub)
+    {
+        current = (TActivity)this;
+    }
+
+    private TActivity current;
+
+    protected void Update(Func<TActivity, TActivity> update)
+    {
+        SyncHub.InvokeAsync(() =>
+        {
+            current = update.Invoke(current);
+            Stream.OnNext(current);
+        });
+    }
+
+    void ILogger.Log<TState>(
         LogLevel logLevel,
         EventId eventId,
         TState state,
@@ -78,38 +99,54 @@ public abstract record ActivityBase<TActivity> : ActivityBase, ILogger
     protected TActivity This => (TActivity) this;
     protected void LogMessage(LogMessage item)
     {
-        Updates.OnNext(x => x with { ActivityLog = ActivityLog with { Messages = ActivityLog.Messages.Add(item) } });
+        Update(x => x.WithLog(log => log with
+                {
+                    Messages = log.Messages.Add(item), 
+                    Version = log.Version + 1
+                }
+            )
+        );
     }
 
-    public void ChangeStatus(string status)
+    public void ChangeStatus(ActivityStatus status)
     {
-        Updates.OnNext(x => x with { ActivityLog = ActivityLog with { Status = status } });
+        Update(x => x.WithLog(log => log with
+                {
+                    Status = status,
+                    Version = x.Log.Version + 1
+                }
+            )
+        );
     }
 
 
 
 
 
-    public void OnFinished(Action<ActivityLog> func)
+    public void OnCompleted(Action<ActivityLog> completedAction)
     {
-        Stream.Where(x => x.ActivityLog.Status != ActivityLogStatus.Running)
-            .Subscribe(a => func.Invoke(a.ActivityLog));
+        Stream.Where(x => x.Log.Status != ActivityStatus.Running)
+            .Subscribe(a => completedAction.Invoke(a.Log));
     }
 
 
-    public Activity Start(string category, string message)
+    public Activity StartSubActivity(string category)
     {
-        var subActivity = new Activity(category, Logger);
+        var subActivity = new Activity(category, Hub);
         subActivity.Stream.Subscribe(sa =>
-            Updates.OnNext(x => x with { SubActivities = SubActivities.SetItem(sa.Id, sa) })
+            Update(x => x.WithLog(
+                log => log with { SubActivities = log.SubActivities.SetItem(sa.Id, sa.Log), Version = log.Version + 1 })
+            )
         );
         return subActivity;
     }
-    public Activity<TResult> Start<TResult>(string category)
+    public Activity<TResult> StartSubActivity<TResult>(string category)
     {
-        var subActivity = new Activity<TResult>(category, Logger);
+        var subActivity = new Activity<TResult>(category, Hub);
         subActivity.Stream.Subscribe(sa =>
-            Updates.OnNext(x => x with { SubActivities = SubActivities.SetItem(sa.Id, sa) })
+            Update(x => x.WithLog(
+                log => log with { SubActivities = log.SubActivities.SetItem(sa.Id, sa.Log), Version = log.Version + 1 })
+            )
         );
         return subActivity;
     }
@@ -119,23 +156,31 @@ public abstract record ActivityBase<TActivity> : ActivityBase, ILogger
 
 public record Activity : ActivityBase<Activity>
 {
-    public Activity(string category, ILogger logger) : base(category, logger)
+    public Activity(string category, IMessageHub hub) : base(category, hub)
     {
     }
 
 
-    public void Finish()
+
+    public void Complete()
     {
-        Updates.OnNext(a => a with{ActivityLog = a.ActivityLog with {Status = HasErrors() ? ActivityLogStatus.Failed : ActivityLogStatus.Succeeded, End = DateTime.UtcNow}});
+        Update(a =>
+            a.WithLog(log => log with
+            {
+                Status = HasErrors() ? ActivityStatus.Failed : ActivityStatus.Succeeded,
+                End = DateTime.UtcNow,
+                Version = log.Version + 1
+            })
+        );
     }
-    public void FinishOnCompleteSubActivities()
+    public void CompleteOnSubActivities()
     {
-        Stream.Where(x => x.SubActivities.Values.All(y => y.ActivityLog.Status != ActivityLogStatus.Running))
+        Stream.Where(x => x.Log.SubActivities.Values.All(y => y.Status != ActivityStatus.Running))
             .Subscribe(a =>
             {
-                if (ActivityLog.Status == ActivityLogStatus.Running)
+                if (a.Log.Status == ActivityStatus.Running)
                 {
-                    Finish();
+                    Complete();
                 }
             });
     }
@@ -145,29 +190,21 @@ public record Activity : ActivityBase<Activity>
 
 public record Activity<TResult> : ActivityBase<Activity<TResult>>
 {
-    public Activity(string category, ILogger logger) : base(category, logger)
+    public Activity(string category, IMessageHub hub) : base(category, hub)
     {
     }
 
     public void OnCompleted(Action<TResult, ActivityLog> onCompleted)
     {
-        OnFinished(log =>
+        OnCompleted(log =>
         {
             onCompleted(default, log);
         });
     }
 
-    public (TResult Result, ActivityLog Log) Finish(TResult result)
+    public void Complete(TResult result)
     {
-        if (this.ActivityLog == null)
-            return (result, null);
-
-        if (HasErrors())
-            ChangeStatus(ActivityLogStatus.Failed);
-        else
-            ChangeStatus(ActivityLogStatus.Succeeded);
-
-        return (result,ActivityLog with { End = DateTime.UtcNow });
+        ChangeStatus(HasErrors() ? ActivityStatus.Failed : ActivityStatus.Succeeded);
     }
 
 }

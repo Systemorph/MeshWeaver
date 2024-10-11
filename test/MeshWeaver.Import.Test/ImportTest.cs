@@ -57,7 +57,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
         // assert
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var host = GetHost();
         var transactionalItems1 = await GetWorkspace(
                 host.GetHostedHub(new TransactionalDataAddress(2024, "1", new HostAddress()))
@@ -110,7 +110,7 @@ Id,Year,LoB,BusinessUnit,Value
             importRequest,
             o => o.WithTarget(new ImportAddress(2024, new HostAddress()))
         );
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var workspace = GetWorkspace(
             GetHost().GetHostedHub(new ReferenceDataAddress(new HostAddress()), null)
         );
@@ -142,7 +142,7 @@ SystemName,DisplayName
             importRequest,
             o => o.WithTarget(new ImportAddress(2024, new HostAddress()))
         );
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         await Task.Delay(100);
         var workspace = GetWorkspace(
             GetHost().GetHostedHub(new ReferenceDataAddress(new HostAddress()), null)
