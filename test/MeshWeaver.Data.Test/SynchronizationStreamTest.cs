@@ -45,7 +45,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
             stream.Update(state =>
             {
                 var instance = new MyData(Instance, (++count).ToString());
-                var existingInstance = state.Collections.GetValueOrDefault(collectionName)?.Instances
+                var existingInstance = state?.Collections.GetValueOrDefault(collectionName)?.Instances
                     .GetValueOrDefault(Instance);
 
                 return stream.ApplyChanges(
