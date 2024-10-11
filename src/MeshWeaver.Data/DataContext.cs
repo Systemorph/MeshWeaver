@@ -68,7 +68,7 @@ public sealed record DataContext : IAsyncDisposable
 
     public delegate IDataSource DataSourceBuilder(IMessageHub hub);
 
-    public void Initialize()
+    public void Initialize(ISynchronizationStream<EntityStore, WorkspaceStateReference> stream)
     {
         DataSourcesById = DataSourceBuilders.ToImmutableDictionary(
             kvp => kvp.Key,
@@ -78,13 +78,16 @@ public sealed record DataContext : IAsyncDisposable
 
         foreach (var dataSource in DataSourcesById.Values)
             dataSource.Initialize();
-
+        DataSourcesByType = DataSourcesById.Values
+            .SelectMany(ds => ds.MappedTypes.Select(t => new KeyValuePair<Type, IDataSource>(t, ds))).ToDictionary();
         TypeSources = DataSourcesById
             .Values
             .SelectMany(ds => ds.TypeSources.Values)
             .ToDictionary(x => x.CollectionName);
         TypeSourcesByType = DataSourcesById.Values.SelectMany(ds => ds.TypeSources).ToDictionary();
 
+
+        
     }
 
     public IEnumerable<Type> MappedTypes => DataSourcesByType.Keys;
@@ -101,9 +104,6 @@ public sealed record DataContext : IAsyncDisposable
         => TypeSourcesByType.GetValueOrDefault(type)?.CollectionName;
 
 
-
-    private ImmutableDictionary<object, ISynchronizationStream<EntityStore>> Streams { get; set; } =
-        ImmutableDictionary<object, ISynchronizationStream<EntityStore>>.Empty;
 
 
     private IEnumerable<string> GetCollections(ChangeItem<EntityStore> changeItem)

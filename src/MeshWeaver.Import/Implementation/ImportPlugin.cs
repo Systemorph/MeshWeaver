@@ -28,7 +28,6 @@ public class ImportPlugin(IMessageHub hub, Func<ImportConfiguration, ImportConfi
 
     private async Task InitializeAsync()
     {
-        await workspace.Initialized;
         importManager = new ImportManager(
             importConfiguration.Invoke(new(workspace, workspace.MappedTypes, logger))
         );
