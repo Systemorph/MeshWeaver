@@ -22,7 +22,7 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
         activity.LogInformation(nameof(activity));
         subActivity.LogInformation(nameof(subActivity));
 
-        var activityTcs = new TaskCompletionSource(new CancellationTokenSource(3.Seconds()));
+        var activityTcs = new TaskCompletionSource(new CancellationTokenSource(3.Seconds()).Token);
         activity.OnCompleted(log =>
         {
             log.Should().NotBeNull();
@@ -32,7 +32,7 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
             activityTcs.SetResult();
         });
         subActivity.Complete();
-        var subActivityTcs = new TaskCompletionSource(new CancellationTokenSource(3.Seconds()));
+        var subActivityTcs = new TaskCompletionSource(new CancellationTokenSource(3.Seconds()).Token);
         subActivity.OnCompleted(l =>
         {
             l.Status.Should().Be(ActivityStatus.Succeeded);
@@ -54,7 +54,7 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
         activityLog.Should().BeNull();
         subActivity.Complete();
 
-        var tcs = new TaskCompletionSource(new CancellationTokenSource(1.Seconds()));
+        var tcs = new TaskCompletionSource(new CancellationTokenSource(1.Seconds()).Token);
         activity.OnCompleted(log =>
         {
             log.Status.Should().Be(ActivityStatus.Succeeded);
