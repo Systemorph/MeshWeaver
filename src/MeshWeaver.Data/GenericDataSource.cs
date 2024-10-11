@@ -84,7 +84,11 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
         return default;
     }
 
-    public virtual void Initialize() { }
+    public virtual void Initialize()
+    {
+        foreach (var stream in Streams.Values)
+            stream.Subscribe(Workspace.Stream);
+    }
 }
 
 public record GenericDataSource(object Id, IWorkspace Workspace)

@@ -6,7 +6,6 @@ namespace MeshWeaver.Data;
 public interface IWorkspace : IAsyncDisposable
 {
     IMessageHub Hub { get; }
-    Task Initialized { get; }
     DataContext DataContext { get; }
     IReadOnlyCollection<Type> MappedTypes { get; }
     void Update(IEnumerable<object> instances) => Update(instances, new());

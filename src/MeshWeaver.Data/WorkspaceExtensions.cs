@@ -16,13 +16,17 @@ public static class WorkspaceExtensions
         state?.Reduce(new CollectionReference(state.GetCollectionName(type)))?.Instances.Count > 0;
 
     public static IObservable<T> GetObservable<T>(this IWorkspace workspace, object id) =>
-        workspace.Stream.Select(ws => ws.Value.GetData<T>(id));
+        workspace.Stream
+            .Select(ws => ws.Value.GetData<T>(id))
+            .Where(x => x != null);
 
     public static IObservable<IReadOnlyCollection<T>> GetObservable<T>(this IWorkspace workspace)
     {
         var stream = workspace.Stream;
 
-        return stream.Select(ws => ws.Value.GetData<T>().ToArray());
+        return stream.Select(ws => ws.Value.GetData<T>()?.ToArray())
+            .Where(x => x != null)
+            .Select(x => x.ToArray());
     }
 
     public static IWorkspace GetWorkspace(this IMessageHub messageHub) =>

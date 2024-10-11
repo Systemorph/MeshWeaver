@@ -2,6 +2,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Activities;
 using MeshWeaver.Fixture;
@@ -51,8 +52,10 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task InitializeTest()
     {
         var workspace = GetWorkspace(GetHost());
-        await workspace.Initialized;
-        var response = await workspace.GetObservable<MyData>().FirstOrDefaultAsync();
+        var response = await workspace
+            .GetObservable<MyData>()
+            .Timeout(3.Seconds())
+            .FirstOrDefaultAsync();
         response.Should().BeEquivalentTo(MyData.InitialData);
     }
 
@@ -66,11 +69,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
         var updateItems = new object[] { new MyData("1", "AAA"), new MyData("3", "CCC"), };
 
-        var timeout = TimeSpan.FromSeconds(9999);
         var clientWorkspace = GetWorkspace(client);
-        await clientWorkspace.Initialized;
         var data = (
-            await clientWorkspace.GetObservable<MyData>().FirstOrDefaultAsync().Timeout(timeout)
+            await clientWorkspace.GetObservable<MyData>().FirstOrDefaultAsync().Timeout(3.Seconds())
         )
             .OrderBy(a => a.Id)
             .ToArray();
@@ -90,7 +91,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         data = (
             await clientWorkspace
                 .GetObservable<MyData>()
-                .Timeout(timeout)
+                .Timeout(3.Seconds())
                 .FirstOrDefaultAsync(x => x?.Count == 3)
         )
             .OrderBy(a => a.Id)
@@ -101,7 +102,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             await GetHost()
                 .GetWorkspace()
                 .GetObservable<MyData>()
-                .Timeout(timeout)
+                .Timeout(3.Seconds())
                 .FirstOrDefaultAsync(x => x?.Count == 3)
         )
             .OrderBy(a => a.Id)
@@ -118,7 +119,11 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         // arrange
         var client = GetClient();
 
-        var data = await GetHost().GetWorkspace().GetObservable<MyData>().FirstOrDefaultAsync();
+        var data = await GetHost()
+            .GetWorkspace()
+            .GetObservable<MyData>()
+            .Timeout(3.Seconds())
+            .FirstOrDefaultAsync();
         data.Should().BeEquivalentTo(MyData.InitialData);
 
         var toBeDeleted = data.Take(1).ToArray();
@@ -149,8 +154,10 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var client = GetClient();
         var workspace = GetWorkspace(client);
-        await workspace.Initialized;
-        var myInstance = await workspace.GetObservable<MyData>("1").FirstAsync();
+        var myInstance = await workspace
+            .GetObservable<MyData>("1")
+            .Timeout(3.Seconds())
+            .FirstAsync();
         myInstance.Text.Should().NotBe(TextChange);
 
         // act
@@ -164,8 +171,8 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
         var instance = await hostWorkspace
             .GetObservable<MyData>("1")
+            .Timeout(3.Seconds())
             .FirstAsync(i => i?.Text == TextChange)
-            //.Timeout(TimeSpan.FromSeconds(5))
             ;
         instance.Should().NotBeNull();
         await Task.Delay(100);

@@ -8,7 +8,8 @@ namespace MeshWeaver.Activities;
 public abstract record ActivityBase: IDisposable
 {
     protected readonly ILogger Logger;
-    protected ImmutableDictionary<string, ActivityBase> SubActivities { get; init; }
+    protected ImmutableDictionary<string, ActivityBase> SubActivities { get; init; } 
+        = ImmutableDictionary<string, ActivityBase>.Empty;
     protected ActivityBase(string category, ILogger logger)
     {
         this.Logger = logger;

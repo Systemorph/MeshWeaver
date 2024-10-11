@@ -30,7 +30,7 @@ public class Workspace : IWorkspace
             InitializationMode.Manual
         );
         logger.LogDebug("Started initialization of data context of address {address}", Id);
-        DataContext.Initialize();
+        DataContext.Initialize(stream);
 
 
     }
