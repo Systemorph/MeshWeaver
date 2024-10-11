@@ -81,8 +81,8 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var updateResponse = await client.AwaitResponse(
             new UpdateDataRequest(updateItems),
-            o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
+            o => o.WithTarget(new ClientAddress())//,
+            //new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
         );
 
         // asserts
@@ -210,7 +210,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var response = updateResponse.Message.Should().BeOfType<DataChangeResponse>().Which;
         response.Status.Should().Be(DataChangeStatus.Failed);
         var log = response.Log;
-        log.Status.Should().Be(ActivityLogStatus.Failed);
+        log.Status.Should().Be(ActivityStatus.Failed);
         var members = log.Messages.Should().ContainSingle().Which.Scopes.FirstOrDefault(s => s.Key == "members");
         members.Value.Should().BeOfType<string[]>().Which.Single().Should().Be("Text");
     }

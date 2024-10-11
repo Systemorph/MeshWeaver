@@ -53,7 +53,7 @@ B4,B,4
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
         );
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
         var host = GetHost();
         var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress()))
@@ -75,7 +75,7 @@ SystemName,DisplayName
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
         );
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
         await Task.Delay(100);
 
@@ -103,7 +103,7 @@ B4,B,4
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
         );
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var host = GetHost();
         var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress()))
             .GetWorkspace();
@@ -125,7 +125,7 @@ SystemName,DisplayName
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
         );
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
         await Task.Delay(100);
 
@@ -148,7 +148,7 @@ SystemName2,DisplayName2
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
         );
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
         ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
@@ -173,7 +173,7 @@ B4,B,4
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
         );
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
         var host = GetHost();
         var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress()))
@@ -192,7 +192,7 @@ SystemName,DisplayName,Number
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
         );
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
         await Task.Delay(100);
 

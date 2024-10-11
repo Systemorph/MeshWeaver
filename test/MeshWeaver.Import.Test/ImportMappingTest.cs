@@ -59,7 +59,7 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
         );
-        importResponse.Message.Log.Status.Should().Be(ActivityLogStatus.Succeeded);
+        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         return client;
     }
 

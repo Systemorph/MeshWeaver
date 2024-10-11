@@ -17,7 +17,7 @@ public class ImportManager(ImportConfiguration configuration)
         CancellationToken cancellationToken
     )
     {
-        var activity = new Activity<ChangeItem<EntityStore>>(ActivityCategory.Import, Configuration.Logger);
+        var activity = new Activity<ChangeItem<EntityStore>>(ActivityCategory.Import, Configuration.Workspace.Hub);
         try
         {
             var (dataSet, format) = await ReadDataSetAsync(importRequest, cancellationToken);
@@ -27,7 +27,7 @@ public class ImportManager(ImportConfiguration configuration)
             stream.Update(store =>
             {
                 var ret = stream.ApplyChanges(format.Import(importRequest, dataSet, store, activity));
-                activity.Finish(ret);
+                activity.Complete(ret);
                 return ret;
             });
 
@@ -42,7 +42,7 @@ public class ImportManager(ImportConfiguration configuration)
             }
 
             activity.LogError(message.ToString());
-            activity.Finish(null);
+            activity.Complete(null);
         }
         return activity;
     }
