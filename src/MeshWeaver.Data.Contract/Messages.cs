@@ -28,7 +28,7 @@ public record DataChangeResponse(long Version, ActivityLog Log)
     public DataChangeStatus Status { get; init; } =
         Log.Status switch
         {
-            ActivityLogStatus.Succeeded => DataChangeStatus.Committed,
+            ActivityStatus.Succeeded => DataChangeStatus.Committed,
             _ => DataChangeStatus.Failed
         };
 }

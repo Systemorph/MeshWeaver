@@ -3,14 +3,13 @@ using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Activities;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data
 {
     public static class WorkspaceOperations
     {
-        public static Activity<EntityStoreAndUpdates> Change(this IWorkspace workspace, DataChangedRequest dataChange)
+        public static Activity Change(this IWorkspace workspace, DataChangedRequest dataChange)
         {
             if (dataChange.Elements == null)
                 throw new ArgumentException($"No elements provided in the request");
@@ -25,7 +24,7 @@ namespace MeshWeaver.Data
                 );
         }
 
-        public static Activity<EntityStoreAndUpdates> MergeUpdate(
+        public static Activity MergeUpdate(
             this IWorkspace workspace,
             UpdateDataRequest update
         )
@@ -40,49 +39,53 @@ namespace MeshWeaver.Data
                 return activity;
             }
 
-            var tcs = new TaskCompletionSource<EntityStoreAndUpdates>();
-            update
-                .Elements.GroupBy(e => e.GetType())
-                .SelectMany(e => workspace.DataContext.MapToIdAndAddress(e, e.Key))
-                .GroupBy(e => e.Stream)
-                .ForEach(e =>
-                {
-                    var activityPart = activity.Start(ActivityCategory.DataUpdate, $"Updating data in stream {e.Key.Reference}");
-                    e.Key.Update(s =>
-                    {
-                        try{
-                            var entityStore = new EntityStore(
-                                e.Select(y => new KeyValuePair<string, InstanceCollection>(
-                                        y.Collection,
-                                        new(y.Elements)
-                                    ))
-                                    .ToImmutableDictionary()
-                            ) { GetCollectionName = workspace.DataContext.GetCollectionName };
-                            var storesAndUpdates = s.MergeWithUpdates(
-                                entityStore,
-                                update.Options ?? UpdateOptions.Default);
-                            var ret = e.Key.ApplyChanges(storesAndUpdates);
-                            activityPart.Finish();
-                            tcs.SetResult(storesAndUpdates);
+            foreach (var e in update
+                         .Elements.GroupBy(e => e.GetType())
+                         .SelectMany(e =>
+                             workspace.DataContext.MapToIdAndAddress(e, e.Key))
+                         .GroupBy(e => e.Stream)
+                    )
+            {
 
-                            return ret;
-                        }
-                        catch (Exception ex)
-                        {
-                            activityPart.LogError(ex.Message);
-                            activityPart.Finish();
-                            tcs.SetException(ex);
-                            return null;
-                        }
-                    });
+                var activityPart = activity.StartSubActivity(ActivityCategory.DataUpdate);
+                e.Key.Update(s =>
+                {
+                    try
+                    {
+                        var entityStore = new EntityStore(
+                            e.Select(y => new KeyValuePair<string, InstanceCollection>(
+                                    y.Collection,
+                                    new(y.Elements)
+                                ))
+                                .ToImmutableDictionary()
+                        ) { GetCollectionName = workspace.DataContext.GetCollectionName };
+                        var storesAndUpdates = s.MergeWithUpdates(
+                            entityStore,
+                            update.Options ?? UpdateOptions.Default);
+                        var ret = e.Key.ApplyChanges(storesAndUpdates);
+                        activityPart.Complete();
+
+                        return ret;
+                    }
+                    catch (Exception ex)
+                    {
+                        activityPart.LogError(ex.Message);
+                        activityPart.Complete();
+                        return null;
+                    }
+
+
                 });
+            }
+
+            activity.CompleteOnSubActivities();
 
             return activity;
 
         }
 
-        private static Activity<EntityStoreAndUpdates> GetActivity(IMessageHub hub) => 
-            new(ActivityCategory.DataUpdate, hub.ServiceProvider.GetRequiredService<ILogger<Workspace>>());
+        private static Activity GetActivity(IMessageHub hub) => 
+            new(ActivityCategory.DataUpdate, hub);
 
         private static IEnumerable<(ISynchronizationStream<EntityStore> Stream, object Reference, ImmutableDictionary<object, object> Elements, string Collection, ITypeSource TypeSource)> MapToIdAndAddress(this DataContext dataContext, IEnumerable<object> e, Type type)
         {
@@ -116,7 +119,7 @@ namespace MeshWeaver.Data
                 }
         }
 
-        private static Activity<EntityStoreAndUpdates> MergeDelete(
+        private static Activity MergeDelete(
             this IWorkspace workspace,
             DeleteDataRequest deletion
         )
@@ -132,8 +135,7 @@ namespace MeshWeaver.Data
                 .GroupBy(e => e.Stream)
                 .ForEach(e =>
                 {
-                    var activityPart = activity.Start(ActivityCategory.DataUpdate,
-                        $"Updating data in {e.Key.StreamReference}");
+                    var activityPart = activity.StartSubActivity(ActivityCategory.DataUpdate);
                     e.Key.Update(s =>
                     {
                         try
@@ -149,14 +151,14 @@ namespace MeshWeaver.Data
                             var ret = e.Key.ApplyChanges(
                                 entityStoreAndUpdates
                             );
-                            activityPart.Finish();
-                            activity.Finish(entityStoreAndUpdates);
+                            activityPart.Complete();
+                            activity.Complete();
                             return ret;
                         }
                         catch (Exception ex)
                         {
                             activityPart.LogError(ex.Message);
-                            activityPart.Finish();
+                            activityPart.Complete();
                             return null;
                         }
                     });

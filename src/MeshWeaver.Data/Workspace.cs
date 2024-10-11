@@ -162,7 +162,7 @@ public class Workspace : IWorkspace
                             ChangedBy = delivery.Sender
                         }
                     );
-                    activity.OnFinished(log => json.Hub.Post(new DataChangeResponse(Hub.Version, log), o => o.ResponseFor(delivery)));
+                    activity.OnCompleted(log => json.Hub.Post(new DataChangeResponse(Hub.Version, log), o => o.ResponseFor(delivery)));
                     return delivery.Processed();
                 },
                 x => json.Owner.Equals(x.Message.Owner) && x.Message.Reference.Equals(reference)
@@ -304,7 +304,7 @@ public class Workspace : IWorkspace
     {
         var activity = this.Change(change);
         if (request != null)
-            activity.OnFinished(log => Hub.Post(new DataChangeResponse(Hub.Version, log)));
+            activity.OnCompleted(log => Hub.Post(new DataChangeResponse(Hub.Version, log)));
     }
     ISynchronizationStream<EntityStore> IWorkspace.Stream => stream;
 

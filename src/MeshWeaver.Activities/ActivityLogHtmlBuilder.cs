@@ -17,11 +17,11 @@ namespace MeshWeaver.Activities
             var row = document.CreateElement("tr");
 
             var color = "black";
-            if (log.Status == ActivityLogStatus.Failed)
+            if (log.Status == ActivityStatus.Failed)
                 color = "red";
-            if (log.Status == ActivityLogStatus.Succeeded)
+            if (log.Status == ActivityStatus.Succeeded)
                 color = "green";
-            if (log.Status == ActivityLogStatus.Cancelled)
+            if (log.Status == ActivityStatus.Cancelled)
                 color = "grey";
 
             var statusCol2Font = document.CreateElement("font");
