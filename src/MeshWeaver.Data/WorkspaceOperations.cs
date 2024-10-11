@@ -36,6 +36,7 @@ namespace MeshWeaver.Data
             {
                 foreach (var validationResult in results.Where(r => r != ValidationResult.Success))
                     activity.LogError("{members} invalid: {error}", validationResult.MemberNames, validationResult.ErrorMessage);
+                activity.ChangeStatus(ActivityStatus.Failed);
                 return activity;
             }
 
