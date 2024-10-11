@@ -13,7 +13,6 @@ namespace MeshWeaver.Data;
 
 public class Workspace : IWorkspace
 {
-
     public Workspace(IMessageHub hub, ILogger<Workspace> logger)
     {
         Hub = hub;
@@ -273,7 +272,6 @@ public class Workspace : IWorkspace
             new DeleteDataRequest(instances.ToArray()) { ChangedBy = Hub.Address }, null
         );
 
-    public Task Initialized => Task.WhenAll(DataContext.DataSources.Select(x => x.Initialized));
 
     public ISynchronizationStream<EntityStore> ReduceToTypes(object subscriber, params Type[] types)
     {
@@ -304,7 +302,7 @@ public class Workspace : IWorkspace
     {
         var activity = this.Change(change);
         if (request != null)
-            activity.OnCompleted(log => Hub.Post(new DataChangeResponse(Hub.Version, log)));
+            activity.OnCompleted(log => Hub.Post(new DataChangeResponse(Hub.Version, log), o => o.ResponseFor(request)));
     }
     ISynchronizationStream<EntityStore> IWorkspace.Stream => stream;
 
