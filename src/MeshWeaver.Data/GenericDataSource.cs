@@ -25,8 +25,6 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
     protected virtual TDataSource This => (TDataSource)this;
     protected IMessageHub Hub => Workspace.Hub;
 
-    protected ImmutableList<ISynchronizationStream<EntityStore>> Streams { get; set; } = [];
-    IReadOnlyCollection<ISynchronizationStream<EntityStore>> IDataSource.Streams => Streams;
 
     public Task<WorkspaceState> Initialized { get; private set; }
 
