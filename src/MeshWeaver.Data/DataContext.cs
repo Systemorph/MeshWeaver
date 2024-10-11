@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using MeshWeaver.Data.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
@@ -10,6 +11,7 @@ namespace MeshWeaver.Data;
 public sealed record DataContext : IAsyncDisposable
 {
     public ITypeRegistry TypeRegistry { get; }
+
     public DataContext(IWorkspace workspace)
     {
         Hub = workspace.Hub;
@@ -27,6 +29,8 @@ public sealed record DataContext : IAsyncDisposable
 
     private Dictionary<Type, ITypeSource> TypeSourcesByType { get; set; }
 
+    public IEnumerable<IDataSource> DataSources => DataSourcesById.Values;
+
     private ImmutableDictionary<object, IDataSource> DataSourcesById { get; set; } =
         ImmutableDictionary<object, IDataSource>.Empty;
 
@@ -36,56 +40,30 @@ public sealed record DataContext : IAsyncDisposable
     public IReadOnlyDictionary<Type, IDataSource> DataSourcesByType { get; private set; }
 
     public DataContext WithDataSourceBuilder(object id, DataSourceBuilder dataSourceBuilder) =>
-        this with
-        {
-            DataSourceBuilders = DataSourceBuilders.Add(id, dataSourceBuilder),
-        };
+        this with { DataSourceBuilders = DataSourceBuilders.Add(id, dataSourceBuilder), };
 
     public IReadOnlyDictionary<string, ITypeSource> TypeSources { get; private set; }
 
     public ITypeSource GetTypeSource(string collection) =>
         TypeSources.GetValueOrDefault(collection);
+
     public ITypeSource GetTypeSource(Type type) =>
         TypeSourcesByType.GetValueOrDefault(type);
-    public Task<WorkspaceState> Initialized { get; private set; }
 
-    private async Task<WorkspaceState> CreateInitializationTask()
-    {
-        TypeSources = 
-            DataSourcesById
-            .Values
-            .SelectMany(ds => ds.TypeSources.Values)
-            .ToDictionary(x => x.CollectionName);
-        TypeSourcesByType = DataSourcesById.Values.SelectMany(ds => ds.TypeSources).ToDictionary();
-        DataSourcesByType = DataSourcesById.Values
-            .SelectMany(ds => ds.MappedTypes.Select(type => new KeyValuePair<Type, IDataSource>(type, ds)))
-            .ToDictionary();
-        var state = await DataSourcesById
-            .Values.ToAsyncEnumerable()
-            .SelectAwait(async ds => await ds.Initialized)
-            .AggregateAsync(new WorkspaceState(
-                Hub,
-                this,
-                ReduceManager
-            ), (x, y) => x.Merge(y));
-        return state;
-    }
 
     public ImmutableDictionary<object, DataSourceBuilder> DataSourceBuilders { get; set; } =
         ImmutableDictionary<object, DataSourceBuilder>.Empty;
-    internal ReduceManager<WorkspaceState> ReduceManager { get; init; }
+
+    internal ReduceManager<EntityStore> ReduceManager { get; init; }
     internal TimeSpan InitializationTimeout { get; set; } = TimeSpan.FromHours(60);
     public IMessageHub Hub { get; }
     public IWorkspace Workspace { get; }
 
     public DataContext WithInitializationTimeout(TimeSpan timeout) =>
-        this with
-        {
-            InitializationTimeout = timeout
-        };
+        this with { InitializationTimeout = timeout };
 
     public DataContext Configure(
-        Func<ReduceManager<WorkspaceState>, ReduceManager<WorkspaceState>> change
+        Func<ReduceManager<EntityStore>, ReduceManager<EntityStore>> change
     ) => this with { ReduceManager = change.Invoke(ReduceManager) };
 
     public delegate IDataSource DataSourceBuilder(IMessageHub hub);
@@ -97,17 +75,20 @@ public sealed record DataContext : IAsyncDisposable
             kvp => kvp.Value.Invoke(Hub)
         );
 
-        var state = new WorkspaceState(
-            Hub,
-            this,
-            ReduceManager
-        );
 
         foreach (var dataSource in DataSourcesById.Values)
-            dataSource.Initialize(state);
+            dataSource.Initialize();
 
-        Initialized = CreateInitializationTask();
+        TypeSources = DataSourcesById
+            .Values
+            .SelectMany(ds => ds.TypeSources.Values)
+            .ToDictionary(x => x.CollectionName);
+        TypeSourcesByType = DataSourcesById.Values.SelectMany(ds => ds.TypeSources).ToDictionary();
+
     }
+
+    public IEnumerable<Type> MappedTypes => DataSourcesByType.Keys;
+
     public async ValueTask DisposeAsync()
     {
         foreach (var dataSource in DataSourcesById.Values)
@@ -118,4 +99,20 @@ public sealed record DataContext : IAsyncDisposable
 
     public string GetCollectionName(Type type)
         => TypeSourcesByType.GetValueOrDefault(type)?.CollectionName;
+
+
+
+    private ImmutableDictionary<object, ISynchronizationStream<EntityStore>> Streams { get; set; } =
+        ImmutableDictionary<object, ISynchronizationStream<EntityStore>>.Empty;
+
+
+    private IEnumerable<string> GetCollections(ChangeItem<EntityStore> changeItem)
+    {
+        var patch = changeItem.Patch?.Value;
+        return patch != null
+            ? patch.Operations.Select(p => p.Path.Segments.First().ToString()).Distinct()
+            : changeItem.Value.Collections.Keys;
+    }
+
+
 }

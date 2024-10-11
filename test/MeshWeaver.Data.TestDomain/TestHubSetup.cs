@@ -143,7 +143,7 @@ public static class TestHubSetup
         ImportRequest request,
         IDataSet dataSet,
         IWorkspace workspace,
-        WorkspaceState state
+        EntityStore state
     )
     {
         var transactionalData = state.GetData<TransactionalData>();

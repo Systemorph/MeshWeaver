@@ -38,7 +38,7 @@
 
         private object[] InitializePartitions { get; init; } = Array.Empty<object>();
 
-        public override void Initialize(WorkspaceState state)
+        public override void Initialize()
         {
             foreach (var partition in InitializePartitions)
             {
@@ -47,10 +47,11 @@
                     partition,
                     reference
                 );
-                Streams = Streams.Add(Workspace.GetRemoteStream(partition, partitionedReference));
+                var stream = Workspace.GetRemoteStream(partition, partitionedReference);
+                Streams = Streams.Add(stream.StreamReference, stream);
             }
 
-            base.Initialize(state);
+            base.Initialize();
         }
     }
 }

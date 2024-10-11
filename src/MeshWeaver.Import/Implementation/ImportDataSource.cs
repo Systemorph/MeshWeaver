@@ -10,9 +10,6 @@ namespace MeshWeaver.Import.Implementation;
 public record ImportDataSource(Source Source, IWorkspace Workspace)
     : GenericDataSource<ImportDataSource>(Source, Workspace)
 {
-    private readonly ILogger logger = Workspace.Hub.ServiceProvider.GetRequiredService<
-        ILogger<ImportDataSource>
-    >();
     private ImportRequest ImportRequest { get; init; } = new(Source);
 
     public ImportDataSource WithRequest(Func<ImportRequest, ImportRequest> config) =>
@@ -22,11 +19,10 @@ public record ImportDataSource(Source Source, IWorkspace Workspace)
         };
 
     protected override ISynchronizationStream<
-        EntityStore,
-        CollectionsReference
-    > SetupDataSourceStream(WorkspaceState state)
+        EntityStore
+    > SetupDataSourceStream()
     {
-        var ret = base.SetupDataSourceStream(state);
+        var ret = base.SetupDataSourceStream();
         var config = new ImportConfiguration(
             Workspace,
             MappedTypes,
@@ -35,23 +31,14 @@ public record ImportDataSource(Source Source, IWorkspace Workspace)
         config = Configurations.Aggregate(config, (c, f) => f.Invoke(c));
         ImportManager importManager = new(config);
 
+
         Hub.InvokeAsync(async cancellationToken =>
         {
-            var (s, _) = await importManager.ImportAsync(
+            var activity = await importManager.ImportAsync(
                 ImportRequest,
-                state,
-                logger,
                 cancellationToken
             );
-
-            ret.Update(_ => new ChangeItem<EntityStore>(
-                Id,
-                ret.Reference,
-                s.Reduce(ret.Reference),
-                Id,
-                null,
-                Hub.Version
-            ));
+            activity.OnCompleted((ci, _) => ret.Initialize(ci));
         });
         return ret;
     }

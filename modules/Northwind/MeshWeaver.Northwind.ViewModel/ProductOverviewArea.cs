@@ -1,5 +1,4 @@
 ﻿using System.Reactive.Linq;
-using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
@@ -54,7 +53,7 @@ public static class ProductOverviewArea
                 {
                     ProductId = g.Key,
                     ProductName = g.Select(x => x.ProductName).FirstOrDefault(),
-                    CategoryName = layoutArea.Workspace.GetData<Category>(g.Select(x => x.Category).FirstOrDefault())?.CategoryName,
+                    CategoryName = tuple.changeItem.Value.GetData<Category>(g.Select(x => x.Category).FirstOrDefault())?.CategoryName,
                     UnitPrice = g.Select(x => x.UnitPrice).FirstOrDefault(),
                     UnitsSold = g.Sum(x => x.Quantity),
                     DiscountGiven = g.Sum(x => x.UnitPrice * x.Quantity * x.Discount),

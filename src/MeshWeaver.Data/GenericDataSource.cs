@@ -13,10 +13,10 @@ public interface IDataSource : IAsyncDisposable
     IReadOnlyCollection<Type> MappedTypes { get; }
     object Id { get; }
     CollectionsReference Reference { get; }
-    void Initialize(WorkspaceState state);
-    Task<WorkspaceState> Initialized { get; }
+    void Initialize();
 
-    IReadOnlyCollection<ISynchronizationStream<EntityStore>> Streams { get; }
+    IReadOnlyDictionary<StreamReference, ISynchronizationStream<EntityStore>> Streams { get; }
+    Task Initialized { get; }
 }
 
 public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) : IDataSource
@@ -24,9 +24,6 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
 {
     protected virtual TDataSource This => (TDataSource)this;
     protected IMessageHub Hub => Workspace.Hub;
-
-
-    public Task<WorkspaceState> Initialized { get; private set; }
 
     IReadOnlyDictionary<Type, ITypeSource> IDataSource.TypeSources => TypeSources;
 
@@ -64,25 +61,12 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
 
     private IReadOnlyCollection<IDisposable> changesSubscriptions;
 
-    public virtual void Initialize(WorkspaceState state)
-    {
-        Initialized = InitializeStreams(state);
-    }
+ 
+    IReadOnlyDictionary<StreamReference,ISynchronizationStream<EntityStore>> IDataSource.Streams => Streams;
+    public Task Initialized => Task.WhenAll(Streams.Values.Select(s => s.Initialized));
 
-    private async Task<WorkspaceState> InitializeStreams(WorkspaceState state) =>
-        state with
-        {
-            StoresByStream = state.StoresByStream.SetItems(
-                await Streams
-                    .ToAsyncEnumerable()
-                    .SelectAwait(async stream => new
-                    {
-                        stream.StreamReference,
-                        Store = await stream.Initialized
-                    })
-                    .ToDictionaryAsync(x => x.StreamReference, x => x.Store)
-            )
-        };
+    protected ImmutableDictionary<StreamReference, ISynchronizationStream<EntityStore>> Streams { get; set; } =
+        ImmutableDictionary<StreamReference, ISynchronizationStream<EntityStore>>.Empty;
 
     public CollectionsReference Reference => GetReference();
 
@@ -91,7 +75,7 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
 
     public virtual ValueTask DisposeAsync()
     {
-        foreach (var stream in Streams)
+        foreach (var stream in Streams.Values)
             stream.Dispose();
 
         if (changesSubscriptions != null)
@@ -99,6 +83,8 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
                 subscription.Dispose();
         return default;
     }
+
+    public virtual void Initialize() { }
 }
 
 public record GenericDataSource(object Id, IWorkspace Workspace)
@@ -119,25 +105,22 @@ public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorksp
     : DataSource<TDataSource>(Id, Workspace)
     where TDataSource : TypeSourceBasedDataSource<TDataSource>
 {
-    public override void Initialize(WorkspaceState state)
+    public override void Initialize()
     {
-        var stream = SetupDataSourceStream(state);
-        Streams = Streams.Add(stream);
+        var stream = SetupDataSourceStream();
+        Streams = Streams.SetItem(stream.StreamReference, stream);
         Hub.InvokeAsync(cancellationToken => InitializeAsync(stream, cancellationToken));
-        base.Initialize(state);
+        base.Initialize();
     }
 
-    protected virtual ISynchronizationStream<
-        EntityStore,
-        CollectionsReference
-    > SetupDataSourceStream(WorkspaceState state)
+    protected virtual ISynchronizationStream<EntityStore> SetupDataSourceStream()
     {
         var reference = GetReference();
 
         var workspaceSync = Workspace.Stream.Reduce(reference, Id);
 
-        var stream = new SynchronizationStream<EntityStore, CollectionsReference>(
-            Id,
+        var stream = new SynchronizationStream<EntityStore, WorkspaceReference>(
+            new(Id,null),
             Hub.Address,
             Hub,
             reference,
@@ -182,7 +165,7 @@ public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorksp
                 cancellationToken: cancellationToken
             );
 
-        stream.OnNext(
+        stream.Initialize(
             new ChangeItem<EntityStore>(
                 stream.Owner,
                 stream.Reference,

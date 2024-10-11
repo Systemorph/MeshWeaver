@@ -1,5 +1,4 @@
-﻿using System.Data;
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Domain;
 using MeshWeaver.Hierarchies;
@@ -26,13 +25,14 @@ namespace MeshWeaver.Pivot.Grouping
     public class HierarchyLevelDimensionPivotGrouper<T, TDimension, TGroup>(
         string name,
         int level,
-        WorkspaceState state,
-        Func<T, int, object> selector,
-        IHierarchicalDimensionCache hierarchicalDimensionCache
-    ) : DimensionPivotGrouper<T, TDimension, TGroup>(state, selector, name + level)
+        EntityStore store,
+        Func<T, int, object> selector
+    ) : DimensionPivotGrouper<T, TDimension, TGroup>(store, selector, name + level)
         where TGroup : class, IGroup, new()
         where TDimension : class, IHierarchicalDimension
     {
+        private readonly HierarchicalDimensionCache hierarchicalDimensionCache = new(store);
+
         // TODO V10: fix order of groups in the group manager (2022/04/21, Ekaterina Mishina)
         public override IReadOnlyCollection<
             PivotGrouping<TGroup, IReadOnlyCollection<T>>
@@ -89,7 +89,7 @@ namespace MeshWeaver.Pivot.Grouping
         private bool flat;
 
         public HierarchicalDimensionPivotGrouper(
-            WorkspaceState state,
+            EntityStore state,
             IHierarchicalDimensionCache hierarchicalDimensionCache,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions,
             Func<T, object> selector,
@@ -162,9 +162,8 @@ namespace MeshWeaver.Pivot.Grouping
             var grouper = new HierarchyLevelDimensionPivotGrouper<T, TDimension, TGroup>(
                 DimensionDescriptor.SystemName,
                 level,
-                State,
-                Selector,
-                HierarchicalDimensionCache
+                Store,
+                Selector
             );
 
             return new(grouper, subGroup, aggregationFunctions);

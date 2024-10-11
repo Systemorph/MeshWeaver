@@ -1,7 +1,10 @@
 ﻿using System.Reactive.Linq;
 using System.Text.Json;
 using Json.Patch;
+using MeshWeaver.Activities;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data.Serialization;
 
@@ -91,13 +94,19 @@ public static class JsonSynchronizationStream
     }
 
 
-    public static DataChangeResponse RequestChangeFromJson(
+    public static Activity RequestChangeFromJson(
         this ISynchronizationStream<JsonElement> json,
         DataChangedEvent request
     )
     {
-        json.Update(state => json.Parse(state, request));
-        return new DataChangeResponse(json.Hub.Version, DataChangeStatus.Committed, null);
+        var activity = new Activity(ActivityCategory.DataUpdate, json.Hub.ServiceProvider.GetRequiredService<ILogger<ISynchronizationStream>>());
+        json.Update(state =>
+        {
+            var ret = json.Parse(state, request);
+            activity.Finish();
+            return ret;
+        });
+        return activity;
     }
 
     public static void NotifyChange(

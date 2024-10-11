@@ -65,7 +65,7 @@ public static class OrdersSummaryArea
             .WithView(ToolbarArea.Toolbar(years))
             .WithView(
                 (area, _) =>
-                    area.Workspace.ReduceToTypes(typeof(Order))
+                    area.Workspace.ReduceToTypes(typeof(Order), typeof(Customer), typeof(OrderDetails))
                         .CombineLatest(
                             area.GetDataStream<Toolbar>(nameof(Toolbar)),
                             (changeItem, tb) => (changeItem, tb))
@@ -77,10 +77,10 @@ public static class OrdersSummaryArea
                                     .OrderByDescending(y => y.OrderDate)
                                     .Take(5)
                                     .Select(order => new OrderSummaryItem(
-                                        area.Workspace.GetData<Customer>(
+                                        tuple.changeItem.Value.GetData<Customer>(
                                             order.CustomerId
                                         )?.CompanyName,
-                                        area.Workspace.GetData<OrderDetails>()
+                                        tuple.changeItem.Value.GetData<OrderDetails>()
                                             .Count(d => d.OrderId == order.OrderId),
                                         order.OrderDate
                                     ))

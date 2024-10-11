@@ -50,13 +50,6 @@ namespace MeshWeaver.Reporting.Test
                 );
         }
 
-        private async Task<WorkspaceState> GetStateAsync()
-        {
-            var workspace = GetHost().GetWorkspace();
-            await workspace.Initialized;
-            return workspace.State;
-        }
-
         [Theory]
         [MemberData(nameof(ReportCases))]
         public async Task ReportWithGridOptions<T>(
@@ -65,7 +58,7 @@ namespace MeshWeaver.Reporting.Test
             Func<PivotBuilder<T, T, T>, ReportBuilder<T, T, T>> toReportBuilder
         )
         {
-            var initialPivotBuilder = (await GetStateAsync())
+            var initialPivotBuilder = GetHost().GetWorkspace()
                 .Pivot(data)
                 ;
 

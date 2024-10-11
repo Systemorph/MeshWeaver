@@ -10,12 +10,10 @@ namespace MeshWeaver.Data.Serialization;
 public record SynchronizationStream<TStream, TReference> : ISynchronizationStream<TStream, TReference>
     where TReference : WorkspaceReference
 {
-    public StreamReference StreamReference { get; }
-
     /// <summary>
-    /// Owner of the stream, e.g. the Hub Address or Id of datasource.
+    /// The stream reference, i.e. the unique identifier of the stream.
     /// </summary>
-    public object Owner { get; init; }
+    public StreamReference StreamReference { get; }
 
     /// <summary>
     /// The subscriber of the stream, e.g. the Hub Address or Id of the subscriber.
@@ -119,7 +117,7 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
 
     private void SetCurrent(ChangeItem<TStream> value)
     {
-        if (isDisposed)
+        if (isDisposed || value == null)
             return;
         current = value;
         if (!IsInitialized)
@@ -190,15 +188,15 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
             InvokeAsync(() => SetCurrent(value));
     }
 
-    public virtual DataChangeResponse RequestChange(Func<TStream, ChangeItem<TStream>> update)
+    public virtual void RequestChange(Func<TStream, ChangeItem<TStream>> update)
     {
         // TODO V10: Here we need to inject validations (29.07.2024, Roland Bürgi)
         Update(update);
-        return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, null);
     }
 
 
-    public SynchronizationStream(object Owner,
+    public SynchronizationStream(
+        StreamReference StreamReference,
         object Subscriber,
         IMessageHub Hub,
         TReference Reference,
@@ -207,8 +205,7 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
     {
         this.Hub = Hub;
         this.ReduceManager = ReduceManager;
-        StreamReference = new(Owner, Reference);
-        this.Owner = Owner;
+        this.StreamReference = StreamReference;
         this.Subscriber = Subscriber;
         this.Reference = Reference;
         this.InitializationMode = InitializationMode;

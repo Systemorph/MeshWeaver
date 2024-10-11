@@ -70,7 +70,7 @@ A5,A,5
 SystemName,DisplayName
 ";
 
-        importRequest = new ImportRequest(content2) { Snapshot = true };
+        importRequest = new ImportRequest(content2) { UpdateOptions = new() { Snapshot = true } };
         importResponse = await client.AwaitResponse(
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
@@ -120,7 +120,7 @@ SystemName,DisplayName
 ";
 
         //snapshot
-        importRequest = new ImportRequest(content2) { Snapshot = true };
+        importRequest = new ImportRequest(content2) { UpdateOptions = new(){Snapshot = true} };
         importResponse = await client.AwaitResponse(
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
@@ -187,7 +187,7 @@ B4,B,4
 SystemName,DisplayName,Number
 ";
 
-        importRequest = new ImportRequest(content2) { Snapshot = true };
+        importRequest = new ImportRequest(content2) { UpdateOptions = new() { Snapshot = true } };
         importResponse = await client.AwaitResponse(
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))

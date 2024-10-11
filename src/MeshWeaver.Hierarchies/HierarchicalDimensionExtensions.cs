@@ -6,7 +6,7 @@ namespace MeshWeaver.Hierarchies;
 public static class HierarchicalDimensionExtensions
 {
     public static IHierarchicalDimensionCache ToHierarchicalDimensionCache(
-        this WorkspaceState state
+        this EntityStore state
     )
     {
         return new HierarchicalDimensionCache(state);

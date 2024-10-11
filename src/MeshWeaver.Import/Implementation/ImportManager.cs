@@ -1,8 +1,10 @@
-using System.Text;
-using Microsoft.Extensions.Logging;
+﻿using System.Text;
+using MeshWeaver.Activities;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.DataStructures;
 using MeshWeaver.Import.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Import.Implementation;
 
@@ -10,18 +12,25 @@ public class ImportManager(ImportConfiguration configuration)
 {
     public ImportConfiguration Configuration { get; } = configuration;
 
-    public async Task<(WorkspaceState State, bool Error)> ImportAsync(
+    public async Task<Activity<ChangeItem<EntityStore>>> ImportAsync(
         ImportRequest importRequest,
-        WorkspaceState state,
-        ILogger activityLog,
         CancellationToken cancellationToken
     )
     {
+        var activity = new Activity<ChangeItem<EntityStore>>(ActivityCategory.Import, Configuration.Logger);
         try
         {
             var (dataSet, format) = await ReadDataSetAsync(importRequest, cancellationToken);
+            var reference = format.GetWorkspaceReference(dataSet);
+            var stream = Configuration.Workspace.GetStreamFor(reference, Configuration.Workspace.Hub.Address);
 
-            return format.Import(importRequest, dataSet, state);
+            stream.Update(store =>
+            {
+                var ret = stream.ApplyChanges(format.Import(importRequest, dataSet, store, activity));
+                activity.Finish(ret);
+                return ret;
+            });
+
         }
         catch (Exception e)
         {
@@ -32,9 +41,10 @@ public class ImportManager(ImportConfiguration configuration)
                 e = e.InnerException;
             }
 
-            activityLog.LogError(message.ToString());
-            return (state, true);
+            activity.LogError(message.ToString());
+            activity.Finish(null);
         }
+        return activity;
     }
 
     private async Task<(IDataSet dataSet, ImportFormat format)> ReadDataSetAsync(

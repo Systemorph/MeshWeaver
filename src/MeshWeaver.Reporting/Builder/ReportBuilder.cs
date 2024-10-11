@@ -14,7 +14,6 @@ namespace MeshWeaver.Reporting.Builder
         : IPivotBuilder<T, TIntermediate, TAggregate, ReportBuilder<T, TIntermediate, TAggregate>>,
             IReportBuilder<ReportBuilder<T, TIntermediate, TAggregate>>
     {
-        private readonly WorkspaceState state;
 
         private ImmutableList<Func<GridOptions, GridOptions>> PostProcessors { get; init; } =
             ImmutableList<Func<GridOptions, GridOptions>>.Empty;
@@ -22,12 +21,11 @@ namespace MeshWeaver.Reporting.Builder
 
         public ReportBuilder(PivotBuilder<T, TIntermediate, TAggregate> pivotBuilder)
         {
-            state = pivotBuilder.State;
             PivotBuilder = pivotBuilder;
         }
 
-        private ReportBuilder(WorkspaceState state, IEnumerable<T> objects)
-        : this(new PivotBuilder<T, TIntermediate, TAggregate>(state, objects)){}
+        private ReportBuilder(IWorkspace workspace,  IEnumerable<T> objects)
+        : this(new PivotBuilder<T, TIntermediate, TAggregate>(workspace, objects)){}
 
         public ReportBuilder<T, TNewIntermediate, TNewAggregate> WithAggregation<
             TNewIntermediate,
@@ -40,7 +38,7 @@ namespace MeshWeaver.Reporting.Builder
         )
         {
             var builder = new ReportBuilder<T, TNewIntermediate, TNewAggregate>(
-                state,
+                PivotBuilder.Workspace,
                 PivotBuilder.Objects
             );
             return builder with
@@ -61,7 +59,7 @@ namespace MeshWeaver.Reporting.Builder
             > aggregationsFunc
         )
         {
-            var builder = new ReportBuilder<T, TNewAggregate, TNewAggregate>(state, PivotBuilder.Objects);
+            var builder = new ReportBuilder<T, TNewAggregate, TNewAggregate>(PivotBuilder.Workspace, PivotBuilder.Objects);
             return builder with
             {
                 PivotBuilder = builder.PivotBuilder with

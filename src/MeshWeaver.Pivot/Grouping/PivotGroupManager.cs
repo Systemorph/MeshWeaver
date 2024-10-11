@@ -206,7 +206,7 @@ namespace MeshWeaver.Pivot.Grouping
             IReadOnlyCollection<object> parentCoordinates
         )
         {
-            IDictionary<object, object[]> fullCoordinatesBySystemName = GetFullGroupingsCoordinates(
+            var fullCoordinatesBySystemName = GetFullGroupingsCoordinates(
                 groupings,
                 parentCoordinates
             );

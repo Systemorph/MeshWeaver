@@ -45,12 +45,6 @@ public class ReportDataCubeTest : HubTestBase
             );
     }
 
-    private async Task<WorkspaceState>GetWorkspaceStateAsync()
-    {
-        var workspace = GetHost().GetWorkspace();
-        await workspace.Initialized;
-        return workspace.State;
-    }
 
     [Theory]
     [MemberData(nameof(ReportDataCubeCases))]
@@ -63,7 +57,7 @@ public class ReportDataCubeTest : HubTestBase
         > toReportBuilder
     )
     {
-        var initialPivotBuilder = (await GetWorkspaceStateAsync())
+        var initialPivotBuilder = GetHost().GetWorkspace()
             .ForDataCubes(data);
 
         var reportBuilder = toReportBuilder(initialPivotBuilder);

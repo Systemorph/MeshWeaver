@@ -184,7 +184,7 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
             .Aggregate(RenderSelf(host, context, store), (r, u) =>
             {
                 var updated = u.Invoke(host, context, r.Store);
-                return new(r.Changes.Concat(updated.Changes), updated.Store);
+                return new(updated.Store, r.Changes.Concat(updated.Changes));
             });
     protected virtual EntityStoreAndUpdates RenderSelf(LayoutAreaHost host, RenderingContext context, EntityStore store)
         =>store.UpdateControl(context.Area, PrepareRendering(context));

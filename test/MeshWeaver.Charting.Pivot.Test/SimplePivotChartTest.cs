@@ -96,19 +96,13 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     private static readonly IDataCube<RecordWithValues> CubeWithValues =
         RecordsWithValues.ToDataCube();
 
-    private async Task<WorkspaceState> GetStateAsync()
-    {
-        var workspace = GetHost().GetWorkspace();
-        await workspace.Initialized;
-        return workspace.State;
-    }
 
     private JsonSerializerOptions Options => GetHost().JsonSerializerOptions;
 
     [Fact]
     public async Task BarChartAggregatedByCountry()
     {
-        var charSlicedByName = (await GetStateAsync())
+        var charSlicedByName = GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
             
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
@@ -125,7 +119,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task BarChartAggregatedByName()
     {
-        var charSliceByCountry = (await GetStateAsync())
+        var charSliceByCountry = GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
             
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
@@ -141,7 +135,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task StackedBarChartTestLabelSetting()
     {
-        var charStacked = (await GetStateAsync())
+        var charStacked = GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
             
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
@@ -159,7 +153,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task BarChartTestWithOption()
     {
-        var doubleColumnSlice = (await GetStateAsync())
+        var doubleColumnSlice = GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
             
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex), nameof(Country))
@@ -172,7 +166,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task BarChartWithHierarchicalColumns()
     {
-        var doubleColumnSliceTwoRows = (await GetStateAsync())
+        var doubleColumnSliceTwoRows = GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
             
             .SliceColumnsBy(nameof(Country), nameof(RecordWithValues.ValueIndex))
@@ -188,7 +182,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task BarChartWithOneDefaultColumnReport()
     {
-        var noColumnSlice = (await GetStateAsync())
+        var noColumnSlice = GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
             
             .SliceRowsBy(nameof(RecordWithValues.ValueIndex))
@@ -203,7 +197,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task StackedBarChartWithManyColumns()
     {
-        var stackOneOne = (await GetStateAsync())
+        var stackOneOne = GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
             
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
@@ -220,7 +214,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task StackedBarPlotsWithRestrictedColumns()
     {
-        var stackTwoTwo = (await GetStateAsync())
+        var stackTwoTwo = GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
             
             .SliceColumnsBy(nameof(Name))
@@ -237,7 +231,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task BarChartWithRenaming()
     {
-        var charSlicedByName = (await GetStateAsync())
+        var charSlicedByName = GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
             
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
@@ -256,7 +250,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task BarChartWithOptionsAndRenaming()
     {
-        var charSliceByName = (await GetStateAsync())
+        var charSliceByName = GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
             
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
@@ -282,7 +276,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task MixedChart()
     {
-        var mixedPlot1 = (await GetStateAsync())
+        var mixedPlot1 = GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
             
             .SliceRowsBy(nameof(Name))
@@ -296,7 +290,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task LineChart()
     {
-        var linePlot1 = (await GetStateAsync())
+        var linePlot1 = GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
             
             .SliceRowsBy(nameof(Name), nameof(Country))
@@ -313,7 +307,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task SimpleRadarChart()
     {
-        var radarChart = (await GetStateAsync())
+        var radarChart = GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
             
             .SliceRowsBy((nameof(Name)))
@@ -326,7 +320,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     [Fact]
     public async Task RadarChartWithExtraOptions()
     {
-        var radarChart = (await GetStateAsync())
+        var radarChart = GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
             
             .SliceRowsBy(nameof(Name), nameof(Country))
@@ -346,7 +340,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     {
         var filteredCube = CubeWithValues;
         //.Filter(x => x.Country == "RU" && x.Name == "A");
-        var waterfall = (await GetStateAsync())
+        var waterfall = GetHost().GetWorkspace()
             .Pivot(filteredCube)
             
             .SliceColumnsBy(nameof(Country), nameof(Name))
