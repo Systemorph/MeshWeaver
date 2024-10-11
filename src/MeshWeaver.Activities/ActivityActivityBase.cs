@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Data;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Messaging;
@@ -66,6 +67,7 @@ public abstract record ActivityBase<TActivity> : ActivityBase, ILogger
     protected ActivityBase(string category, IMessageHub hub) : base(category, hub)
     {
         current = (TActivity)this;
+        Update(x => x);
     }
 
     private TActivity current;
@@ -176,7 +178,7 @@ public record Activity : ActivityBase<Activity>
     }
     public void Complete()
     {
-        Stream.Where(x => x.Log.SubActivities.Values.All(y => y.Status != ActivityStatus.Running))
+        Stream.Where(x => x.Log.SubActivities.Count == 0 || x.Log.SubActivities.Values.All(y => y.Status != ActivityStatus.Running))
             .Subscribe(a =>
             {
                 if (a.Log.Status == ActivityStatus.Running)
