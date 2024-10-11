@@ -79,7 +79,7 @@ namespace MeshWeaver.Data
                 });
             }
 
-            activity.CompleteOnSubActivities();
+            activity.Complete();
 
             return activity;
 
