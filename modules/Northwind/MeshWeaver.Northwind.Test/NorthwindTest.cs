@@ -125,7 +125,6 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task DashboardView()
     {
         var workspace = GetClient().GetWorkspace();
-        await workspace.Initialized;
 
         var viewName = nameof(NorthwindDashboardArea.Dashboard);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -161,7 +160,6 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task SupplierSummaryReport()
     {
         var workspace = GetHost().GetWorkspace();
-        await workspace.Initialized;
 
         const string ViewName = nameof(SupplierSummaryArea.SupplierSummary);
         var controlName = $"{ViewName}/1/{nameof(SupplierSummaryArea.SupplierSummaryGrid)}"; // TODO V10: we need a better way to address sub-areas (2024/08/12, Dmitry Kalabin)
@@ -210,7 +208,6 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task TopProductsChart()
     {
         var workspace = GetHost().GetWorkspace();
-        await workspace.Initialized;
 
         const string ViewName = nameof(SupplierSummaryArea.SupplierSummary);
         var controlName = $"{ViewName}/1/{nameof(SupplierSummaryArea.SupplierSummaryGrid)}"; // TODO V10: we need a better way to address sub-areas (2024/08/12, Dmitry Kalabin)

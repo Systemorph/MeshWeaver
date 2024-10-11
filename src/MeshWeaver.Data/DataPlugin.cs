@@ -11,8 +11,6 @@ public class DataPlugin(IMessageHub hub)
 {
     private IWorkspace Workspace { get; set; } = hub.GetWorkspace();
 
-    public override Task Initialized => Workspace.Initialized;
-
     IMessageDelivery IMessageHandler<UpdateDataRequest>.HandleMessage(
         IMessageDelivery<UpdateDataRequest> request
     ) => RequestChange(request, request.Message with { ChangedBy = request.Sender });

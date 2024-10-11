@@ -119,18 +119,10 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
     {
         if (isDisposed || value == null)
             return;
+        if(!IsInitialized)
+            initialized.SetResult(value.Value);
         current = value;
-        if (!IsInitialized)
-            switch (InitializationMode)
-            {
-                case InitializationMode.Automatic:
-                    if(value != null)
-                        initialized.SetResult(value.Value);
-                    break;
-                default:
-                    return;
-            }
-        if(!isDisposed && value != null)
+        if (!isDisposed)
             Store.OnNext(value);
     }
 
@@ -139,12 +131,11 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
     public virtual void Initialize(ChangeItem<TStream> initial)
     {
         if (Current is not  null)
-                throw new InvalidOperationException("Already initialized");
+           throw new InvalidOperationException("Already initialized");
 
         current = initial ?? throw new ArgumentNullException(nameof(initial));
         Store.OnNext(initial);
         initialized.SetResult(current.Value);
-        deferral.Dispose();
     }
 
     public void OnCompleted()
@@ -210,7 +201,6 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
         this.Reference = Reference;
         this.InitializationMode = InitializationMode;
         synchronizationStreamHub = Hub.GetHostedHub(new SynchronizationStreamAddress(Hub.Address));
-        deferral = synchronizationStreamHub.Defer(_ => true);
     }
 
 
@@ -230,7 +220,6 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
     }
 
     private readonly IMessageHub synchronizationStreamHub;
-    private readonly IDisposable deferral;
 
     //private void InvokeAsync(Func<CancellationToken, Task> task)
     //    => synchronizationStreamHub.InvokeAsync(task);
