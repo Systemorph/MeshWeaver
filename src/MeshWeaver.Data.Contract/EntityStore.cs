@@ -69,14 +69,11 @@ public record EntityStore
                 => Update(entityReference.Collection, c => c.Update(entityReference.Id, value)),
             CollectionReference collectionReference
                 => Update(collectionReference.Name, _ => (InstanceCollection)value),
-            CollectionsReference 
-                => this with
-                {
-                    Collections = Collections.SetItems(((EntityStore)value).Collections)
-                },
+            CollectionsReference
+                => this with { Collections = Collections.SetItems(((EntityStore)value).Collections) },
             PartitionedCollectionsReference partitioned
                 => Update(partitioned.Reference, value, options),
-            WorkspaceReference<EntityStore> 
+            WorkspaceReference<EntityStore>
                 => Merge((EntityStore)value, options),
 
             _
@@ -86,8 +83,13 @@ public record EntityStore
         };
     }
 
-    public IEnumerable<T> GetData<T>()
-        => GetCollection(GetCollectionName?.Invoke(typeof(T))?? typeof(T).FullName).Get<T>();
+    public IReadOnlyCollection<T> GetData<T>()
+        => GetCollection(GetCollectionName?.Invoke(typeof(T)) ?? typeof(T).FullName).Get<T>().ToArray();
+
+    public T GetData<T>(object id)
+        => (T)GetCollection(GetCollectionName?.Invoke(typeof(T)) ?? typeof(T).FullName)?.Instances
+            .GetValueOrDefault(id);
+
     public object Reduce(WorkspaceReference reference) => ReduceImpl((dynamic)reference);
 
     public TReference Reduce<TReference>(WorkspaceReference<TReference> reference) =>
@@ -119,8 +121,7 @@ public record EntityStore
 
     internal EntityStore ReduceImpl(PartitionedCollectionsReference reference) =>
         ReduceImpl(reference.Reference);
-    internal EntityStore ReduceImpl(StreamReference reference) =>
-        ReduceImpl((dynamic)reference.Reference);
+
 
     public InstanceCollection GetCollection(string collection) =>
         Collections.GetValueOrDefault(collection);
@@ -132,27 +133,68 @@ public record EntityStore
 
     public virtual bool Equals(EntityStore other)
     {
-        if(other is null)
+        if (other is null)
             return false;
 
-        if (ReferenceEquals(other,this))
+        if (ReferenceEquals(other, this))
             return true;
 
         return other.Collections.Count == Collections.Count
-            && other.Collections.All(x => Collections.TryGetValue(x.Key, out var value) 
-                                          && value.Equals(x.Value));
+               && other.Collections.All(x => Collections.TryGetValue(x.Key, out var value)
+                                             && value.Equals(x.Value));
     }
 
     public override int GetHashCode()
-    => Collections.Values
-        .Select(x => x.GetHashCode())
-        .Aggregate((x, y) => x ^ y);
+        => Collections.Values
+            .Select(x => x.GetHashCode())
+            .Aggregate((x, y) => x ^ y);
 
+    public EntityStoreAndUpdates MergeWithUpdates(EntityStore updated, UpdateOptions options)
+    {
+        var store = Merge(updated, options);
+        return new EntityStoreAndUpdates(store, store.Collections.SelectMany(u => ComputeChanges(u.Key, u.Value)));
+    }
+
+    private IEnumerable<EntityStoreUpdate> ComputeChanges(string collection, InstanceCollection updated)
+    {
+        var oldValues = Collections.GetValueOrDefault(collection);
+        if (oldValues == null)
+            yield return new EntityStoreUpdate(collection, null, updated);
+        else
+        {
+            foreach (var u in updated.Instances)
+            {
+                var existing = oldValues.GetData(u.Key);
+                if (!u.Value.Equals(existing))
+                    yield return new EntityStoreUpdate(collection, u.Key, u.Value) { OldValue = existing };
+            }
+
+            foreach (var kvp in oldValues.Instances.Where(i => !updated.Instances.ContainsKey(i.Key)))
+            {
+                yield return new EntityStoreUpdate(collection, kvp.Key, null) { OldValue = kvp.Value };
+            }
+        }
+    }
+
+    public EntityStoreAndUpdates DeleteWithUpdates(EntityStore entityStore)
+    {
+        var store = Remove(entityStore);
+        return new EntityStoreAndUpdates(store, store.Collections.SelectMany(u => ComputeChanges(u.Key, u.Value)));
+    }
+
+    private EntityStore Remove(EntityStore toBeRemoved) =>
+        this with
+        {
+            Collections = Collections
+                .Select(x => toBeRemoved.Collections.TryGetValue(x.Key, out var tbr)
+                    ? new KeyValuePair<string, InstanceCollection>(x.Key, x.Value.Remove(tbr.Instances.Keys))
+                    : x).ToImmutableDictionary()
+        };
 }
 
-public record EntityStoreAndUpdates(IEnumerable<EntityStoreUpdate> Changes, EntityStore Store)
+public record EntityStoreAndUpdates(EntityStore Store, IEnumerable<EntityStoreUpdate> Changes)
 {
-    public EntityStoreAndUpdates(EntityStore Store) : this([], Store)
+    public EntityStoreAndUpdates(EntityStore Store) : this(Store, [])
     {
     }
 }

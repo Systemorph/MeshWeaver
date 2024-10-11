@@ -38,20 +38,16 @@ namespace MeshWeaver.Pivot.Builder
             Array.Empty<DimensionDescriptor>();
         private string[] ManualSliceRowsDimensionDescriptors { get; init; } = Array.Empty<string>();
 
-        public DataCubePivotBuilder(WorkspaceState state, IEnumerable<TCube> cubes)
-            : base(state, cubes)
+        public DataCubePivotBuilder(IWorkspace workspace, IEnumerable<TCube> cubes)
+            : base(workspace, cubes)
         {
             AggregateByDimensionDescriptors = GetAggregationPropertiesDescriptors().ToArray();
             SliceColumns = new SlicePivotGroupingConfigItem<TElement, ColumnGroup>(
                 [],
-                State,
-                HierarchicalDimensionCache,
                 HierarchicalDimensionOptions
             );
             SliceRows = new SlicePivotGroupingConfigItem<TElement, RowGroup>(
                 GetAggregateBySliceRowsDimensionDescriptors(this),
-                State,
-                HierarchicalDimensionCache,
                 HierarchicalDimensionOptions
             );
         }
@@ -78,8 +74,6 @@ namespace MeshWeaver.Pivot.Builder
             {
                 SliceRows = new SlicePivotGroupingConfigItem<TElement, RowGroup>(
                     GetSliceRowsDimensionDescriptors(builder),
-                    builder.State,
-                    HierarchicalDimensionCache,
                     HierarchicalDimensionOptions
                 ),
                 PropertiesToHide = dimensions.ToImmutableList()
@@ -108,14 +102,10 @@ namespace MeshWeaver.Pivot.Builder
                         ?.Dimensions.Select(d => d.Dim)
                         .Union(dimensionDescriptors)
                         .ToArray() ?? dimensionDescriptors,
-                    State,
-                    HierarchicalDimensionCache,
                     HierarchicalDimensionOptions
                 ),
                 SliceRows = new SlicePivotGroupingConfigItem<TElement, RowGroup>(
                     GetSliceRowsDimensionDescriptors(builder),
-                    State,
-                    HierarchicalDimensionCache,
                     HierarchicalDimensionOptions
                 )
             };
@@ -130,9 +120,7 @@ namespace MeshWeaver.Pivot.Builder
                 .Where(x => x.HasAttribute<AggregateByAttribute>())
                 .Select(x =>
                 {
-                    var dimensionAttribute = (
-                        (MemberInfo)x
-                    ).GetCustomAttribute<DimensionAttribute>();
+                    var dimensionAttribute = x.GetCustomAttribute<DimensionAttribute>();
                     if (dimensionAttribute != null)
                         return new DimensionDescriptor(
                             dimensionAttribute.Name,
@@ -240,13 +228,12 @@ namespace MeshWeaver.Pivot.Builder
             );
 
             return new DataCubePivotBuilder<TCube, TElement, TNewIntermediate, TNewAggregate>(
-                State,
+                Workspace,
                 Objects
             )
             {
                 SliceColumns = SliceColumns,
                 SliceRows = SliceRows,
-                State = State,
                 PropertiesToHide = PropertiesToHide,
                 Aggregations = new Aggregations<
                     DataSlice<TElement>,
@@ -279,7 +266,7 @@ namespace MeshWeaver.Pivot.Builder
             );
 
             return new DataCubePivotBuilder<TCube, TElement, TNewAggregate, TNewAggregate>(
-                State,
+                Workspace,
                 Objects
             )
             {
@@ -318,16 +305,12 @@ namespace MeshWeaver.Pivot.Builder
                         SliceRows
                         ?? new SlicePivotGroupingConfigItem<TElement, RowGroup>(
                             GetAggregateBySliceRowsDimensionDescriptors(this),
-                            State,
-                            HierarchicalDimensionCache,
                             HierarchicalDimensionOptions
                         ),
                     SliceColumns =
                         SliceColumns
                         ?? new SlicePivotGroupingConfigItem<TElement, ColumnGroup>(
                             Array.Empty<DimensionDescriptor>(),
-                            State,
-                            HierarchicalDimensionCache,
                             HierarchicalDimensionOptions
                         )
                 }

@@ -59,7 +59,6 @@ public static class SupplierSummaryArea
         return area.GetDataCube()
             .Select(cube =>
                 area.Workspace
-                    .State
                     .Pivot(cube)
                     .SliceRowsBy(nameof(Supplier))
                     .ToGrid()

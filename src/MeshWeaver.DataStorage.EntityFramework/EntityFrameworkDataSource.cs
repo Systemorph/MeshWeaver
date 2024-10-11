@@ -13,10 +13,10 @@ public record EntityFrameworkDataSource(
     EntityFrameworkDataStorage EntityFrameworkDataStorage
 ) : DataSourceWithStorage<EntityFrameworkDataSource>(Id, Workspace, EntityFrameworkDataStorage)
 {
-    public override void Initialize(WorkspaceState state)
+    public override void Initialize()
     {
         EntityFrameworkDataStorage.Initialize(ModelBuilder ?? ConvertDataSourceMappings);
-        base.Initialize(state);
+        base.Initialize();
     }
 
     public EntityFrameworkDataSource WithModel(Action<ModelBuilder> modelBuilder) =>

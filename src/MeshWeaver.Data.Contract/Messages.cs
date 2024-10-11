@@ -23,7 +23,15 @@ public record UpdateDataRequest(IReadOnlyCollection<object> Elements) : DataChan
 public record DeleteDataRequest(IReadOnlyCollection<object> Elements)
     : DataChangedRequest(Elements);
 
-public record DataChangeResponse(long Version, DataChangeStatus Status, ActivityLog Log);
+public record DataChangeResponse(long Version, ActivityLog Log)
+{
+    public DataChangeStatus Status { get; init; } =
+        Log.Status switch
+        {
+            ActivityLogStatus.Succeeded => DataChangeStatus.Committed,
+            _ => DataChangeStatus.Failed
+        };
+}
 
 public enum DataChangeStatus
 {

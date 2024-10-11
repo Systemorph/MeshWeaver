@@ -1,11 +1,9 @@
 ﻿using System.Collections.Concurrent;
-using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
-using MeshWeaver.Activities;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Disposables;
 using MeshWeaver.Messaging;
@@ -15,16 +13,16 @@ namespace MeshWeaver.Data;
 
 public class Workspace : IWorkspace
 {
-    public Workspace(IMessageHub hub, ILogger<Workspace> logger, IActivityService activityService)
+
+    public Workspace(IMessageHub hub, ILogger<Workspace> logger)
     {
         Hub = hub;
-        this.activityService = activityService;
         this.logger = logger;
         logger.LogDebug("Creating data context of address {address}", Id);
         DataContext = this.GetDataConfiguration();
 
-        stream = new SynchronizationStream<WorkspaceState, WorkspaceReference>(
-            Hub.Address,
+        stream = new SynchronizationStream<EntityStore, WorkspaceStateReference>(
+            new(Hub.Address, null),
             Hub.Address,
             Hub,
             new WorkspaceStateReference(),
@@ -34,36 +32,19 @@ public class Workspace : IWorkspace
         logger.LogDebug("Started initialization of data context of address {address}", Id);
         DataContext.Initialize();
 
-        DataContext.Initialized.ContinueWith(task =>
-        {
-            logger.LogDebug("Finished initialization of data context of address {address}", Id);
-            current = new(Hub.Address, Reference, task.Result, Hub.Address, null, Hub.Version);
-            stream.Initialize(current);
-            initialized.SetResult();
-        });
 
     }
 
     private readonly ILogger<Workspace> logger;
 
     public WorkspaceReference Reference { get; } = new WorkspaceStateReference();
-    private ChangeItem<WorkspaceState> current;
     
-    private ChangeItem<WorkspaceState> Current
-    {
-        get { return current; }
-        set
-        {
-            current = value;
-            stream.OnNext(value);
-        }
-    }
 
-    private readonly ISynchronizationStream<WorkspaceState> stream;
+    private readonly ISynchronizationStream<EntityStore, WorkspaceStateReference> stream;
 
-    public IObservable<ChangeItem<WorkspaceState>> Stream => stream;
+    public ISynchronizationStream<EntityStore, WorkspaceStateReference> Stream => stream;
 
-    public IReadOnlyCollection<Type> MappedTypes => Current.Value.MappedTypes.ToArray();
+    public IReadOnlyCollection<Type> MappedTypes => DataContext.MappedTypes.ToArray();
 
     private readonly ConcurrentDictionary<
         (object Subscriber, object Reference),
@@ -74,7 +55,6 @@ public class Workspace : IWorkspace
         ISynchronizationStream
     > remoteStreams = new();
 
-    private readonly IActivityService activityService;
 
     public IObservable<IEnumerable<TCollection>> GetStream<TCollection>()
     {
@@ -176,13 +156,13 @@ public class Workspace : IWorkspace
                 delivery =>
                 {
                     logger.LogDebug("{address} receiving change notification from {sender}", delivery.Target, delivery.Sender);
-                    var response = json.RequestChangeFromJson(
+                    var activity = json.RequestChangeFromJson(
                         delivery.Message with
                         {
                             ChangedBy = delivery.Sender
                         }
                     );
-                    json.Hub.Post(response, o => o.ResponseFor(delivery));
+                    activity.OnFinished(log => json.Hub.Post(new DataChangeResponse(Hub.Version, log), o => o.ResponseFor(delivery)));
                     return delivery.Processed();
                 },
                 x => json.Owner.Equals(x.Message.Owner) && x.Message.Reference.Equals(reference)
@@ -209,12 +189,19 @@ public class Workspace : IWorkspace
         TReference reference
     )
         where TReference : WorkspaceReference
+        => CreateExternalClient<TReduced, TReference>(owner, null, reference);
+    private ISynchronizationStream CreateExternalClient<TReduced, TReference>(
+        object owner,
+        object partition,
+        TReference reference
+    )
+        where TReference : WorkspaceReference
     {
         // link to deserialized world. Will also potentially link to workspace.
-        if(owner is JsonObject obj)
+        if (owner is JsonObject obj)
             owner = obj.Deserialize<object>(Hub.JsonSerializerOptions);
         var ret = new SynchronizationStream<TReduced, TReference>(
-            owner,
+            new(owner,partition),
             owner,
             Hub,
             reference,
@@ -276,18 +263,17 @@ public class Workspace : IWorkspace
             {
                 Options = updateOptions,
                 ChangedBy = Hub.Address
-            },
-            Reference
+            }, null
         );
+
+
 
     public void Delete(IEnumerable<object> instances) =>
         RequestChange(
-            new DeleteDataRequest(instances.ToArray()) { ChangedBy = Hub.Address },
-            Reference
+            new DeleteDataRequest(instances.ToArray()) { ChangedBy = Hub.Address }, null
         );
 
-    private readonly TaskCompletionSource initialized = new();
-    public Task Initialized => initialized.Task;
+    public Task Initialized => Task.WhenAll(DataContext.DataSources.Select(x => x.Initialized));
 
     public ISynchronizationStream<EntityStore> ReduceToTypes(object subscriber, params Type[] types)
     {
@@ -306,62 +292,21 @@ public class Workspace : IWorkspace
         );
     }
 
-    public ReduceManager<WorkspaceState> ReduceManager =>
-        DataContext?.ReduceManager
-        ?? StandardWorkspaceReferenceImplementations.CreateReduceManager(Hub);
+    public ReduceManager<EntityStore> ReduceManager => DataContext.ReduceManager;
 
     public IMessageHub Hub { get; }
     public object Id => Hub.Address;
 
-    WorkspaceState IWorkspace.State => Current.Value;
 
     public DataContext DataContext { get; }
 
-    public void Rollback()
+    public void RequestChange(DataChangedRequest change, IMessageDelivery request)
     {
-        //TODO Roland Bürgi 2024-05-06: Not sure yet how to implement
+        var activity = this.Change(change);
+        if (request != null)
+            activity.OnFinished(log => Hub.Post(new DataChangeResponse(Hub.Version, log)));
     }
-
-    public DataChangeResponse RequestChange(DataChangedRequest change, WorkspaceReference reference)
-    {
-        activityService.Start(ActivityCategory.DataUpdate);
-
-        var (isValid, results) = Validate(change.Elements);
-        if (!isValid)
-        {
-            foreach (var validationResult in results.Where(r => r != ValidationResult.Success))
-                activityService.LogError("{members} invalid: {error}", validationResult.MemberNames, validationResult.ErrorMessage);
-            return new DataChangeResponse(Hub.Version, DataChangeStatus.Failed, activityService.Finish());
-        }
-
-        Current = new ChangeItem<WorkspaceState>(
-            Hub.Address,
-            reference ?? Reference,
-            Current.Value.Change(change) with
-            {
-                Version = Hub.Version
-            },
-            change.ChangedBy,
-            null,
-            Hub.Version
-        );
-        return new DataChangeResponse(Hub.Version, DataChangeStatus.Committed, activityService.Finish());
-    }
-
-    private (bool IsValid, List<ValidationResult> Results) Validate(IReadOnlyCollection<object> instances)
-    {
-        var validationResults = new List<ValidationResult>();
-        var isValid = true;
-        foreach (var instance in instances)
-        {
-
-            var context = new ValidationContext(instance);
-            isValid = isValid && Validator.TryValidateObject(instance, context, validationResults);
-        }
-        return(isValid, validationResults);
-    }
-
-    ISynchronizationStream<WorkspaceState> IWorkspace.Stream => stream;
+    ISynchronizationStream<EntityStore> IWorkspace.Stream => stream;
 
     private bool isDisposing;
 
@@ -415,19 +360,9 @@ public class Workspace : IWorkspace
             existing.Dispose();
     }
 
-    public DataChangeResponse RequestChange(Func<WorkspaceState, ChangeItem<WorkspaceState>> update)
-    {
-        activityService.Start(ActivityCategory.DataUpdate);
-        Current = update(Current.Value);
-        return new DataChangeResponse(
-            Hub.Version,
-            DataChangeStatus.Committed,
-            activityService.Finish()
-        );
-    }
 
-    public void Synchronize(Func<WorkspaceState, ChangeItem<WorkspaceState>> change)
+    public void Synchronize(Func<EntityStore, ChangeItem<EntityStore>> change)
     {
-        Current = change(Current.Value);
+        stream.Update(change);
     }
 }

@@ -1,5 +1,4 @@
-﻿using System.Data;
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
 using MeshWeaver.Data;
@@ -18,8 +17,6 @@ namespace MeshWeaver.Pivot.Grouping
         where TGroup : class, IGroup, new()
     {
         public static IPivotGrouper<TTransformed, TGroup> GetPivotGrouper<TTransformed, TSelected>(
-            WorkspaceState state,
-            IHierarchicalDimensionCache hierarchicalDimensionCache,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions,
             Expression<Func<TTransformed, TSelected>> selector
         )
@@ -45,8 +42,6 @@ namespace MeshWeaver.Pivot.Grouping
                     dimensionAttribute.Type
                 );
                 return GetPivotGrouper(
-                    state,
-                    hierarchicalDimensionCache,
                     hierarchicalDimensionOptions,
                     dimensionDescriptor,
                     compiledSelector
@@ -94,15 +89,11 @@ namespace MeshWeaver.Pivot.Grouping
 
         public static IPivotGrouper<DataSlice<TElement>, TGroup> GetPivotGrouper<TElement>(
             DimensionDescriptor descriptor,
-            WorkspaceState state,
-            IHierarchicalDimensionCache hierarchicalDimensionCache,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions
         )
         {
             if (typeof(INamed).IsAssignableFrom(descriptor.Type))
                 return GetPivotGrouper<DataSlice<TElement>, object>(
-                    state,
-                    hierarchicalDimensionCache,
                     hierarchicalDimensionOptions,
                     descriptor,
                     x => x.Tuple.GetValue(descriptor.SystemName)
@@ -118,8 +109,6 @@ namespace MeshWeaver.Pivot.Grouping
                         null,
                         new[]
                         {
-                            state,
-                            hierarchicalDimensionCache,
                             hierarchicalDimensionOptions,
                             descriptor,
                             convertedLambda
@@ -141,12 +130,10 @@ namespace MeshWeaver.Pivot.Grouping
 
         private static readonly MethodInfo GetReportGrouperMethod =
             ReflectionHelper.GetStaticMethodGeneric(
-                () => GetPivotGrouper<object, object>(null, null, null, null, null)
+                () => GetPivotGrouper<object, object>(null,  null, null)
             );
 
         private static IPivotGrouper<TTransformed, TGroup> GetPivotGrouper<TTransformed, TSelected>(
-            WorkspaceState state,
-            IHierarchicalDimensionCache hierarchicalDimensionCache,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions,
             DimensionDescriptor descriptor,
             Func<TTransformed, TSelected> selector
@@ -162,8 +149,6 @@ namespace MeshWeaver.Pivot.Grouping
                     GetDimensionReportGroupConfigMethod
                         .MakeGenericMethod(typeof(TTransformed), descriptor.Type)
                         .InvokeAsFunction(
-                            state,
-                            hierarchicalDimensionCache,
                             hierarchicalDimensionOptions,
                             selector,
                             new DimensionDescriptor(descriptor.SystemName, descriptor.Type)
@@ -185,7 +170,7 @@ namespace MeshWeaver.Pivot.Grouping
             TTransformed,
             TDimension
         >(
-            WorkspaceState state,
+            EntityStore state,
             IHierarchicalDimensionCache hierarchicalDimensionCache,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions,
             Func<TTransformed, object> selector,
@@ -230,7 +215,7 @@ namespace MeshWeaver.Pivot.Grouping
             TDimension,
             TGroup
         > CreateHierarchicalDimensionPivotGrouper<TTransformed, TDimension>(
-            WorkspaceState state,
+            EntityStore state,
             IHierarchicalDimensionCache hierarchicalDimensionCache,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions,
             Func<TTransformed, object> selector,

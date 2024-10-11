@@ -32,7 +32,6 @@ public static class EmployeesOverviewArea
         => layoutArea.GetDataCube()
             .Select(data =>
                 layoutArea.Workspace
-                    .State
                     .Pivot(data.ToDataCube())
                     .SliceColumnsBy(nameof(Employee))
                     .ToBarChart(builder => builder

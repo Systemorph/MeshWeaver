@@ -34,7 +34,7 @@ public record LayoutAreaHost : IDisposable
     public LayoutDefinition LayoutDefinition { get; }
     private readonly ILogger<LayoutAreaHost> logger;
     public LayoutAreaHost(
-        ISynchronizationStream<WorkspaceState> workspaceStream,
+        ISynchronizationStream<EntityStore> workspaceStream,
         LayoutAreaReference reference,
         LayoutDefinition layoutDefinition,
         object subscriber
@@ -42,7 +42,7 @@ public record LayoutAreaHost : IDisposable
     {
         LayoutDefinition = layoutDefinition;
         Stream = new SynchronizationStream<EntityStore, LayoutAreaReference>(
-            workspaceStream.Owner,
+            new(workspaceStream.Owner, null),
             subscriber,
             workspaceStream.Hub,
             reference,
@@ -95,7 +95,7 @@ public record LayoutAreaHost : IDisposable
     internal EntityStoreAndUpdates RenderArea(RenderingContext context,  object view, EntityStore store)
     {
         if (view == null)
-            return new([], store);
+            return new(store, []);
 
         var control = ConvertToControl(view);
 
@@ -119,8 +119,8 @@ public record LayoutAreaHost : IDisposable
             var changes = DisposeExistingAreas(store, context);
             var updates = RenderArea(context, view, changes.Store);
             return Stream.ApplyChanges(
-                updates.Store,
-                changes.Changes.Concat(updates.Changes)
+                new(updates.Store,
+                changes.Changes.Concat(updates.Changes))
             );
         });
     }
@@ -244,13 +244,11 @@ public record LayoutAreaHost : IDisposable
                 .ToArray();
 
             if(existing == null)
-                return new([],store);
+                return new(store, []);
 
-            return new(
-                existing.Select(i =>
-                    new EntityStoreUpdate(LayoutAreaReference.Areas, contextArea, null) { OldValue = i.Value }),
-                store.Update(LayoutAreaReference.Areas,
-                    i => i with { Instances = i.Instances.RemoveRange(existing.Select(x => x.Key)) }));
+            return new(store.Update(LayoutAreaReference.Areas,
+                i => i with { Instances = i.Instances.RemoveRange(existing.Select(x => x.Key)) }), existing.Select(i =>
+                new EntityStoreUpdate(LayoutAreaReference.Areas, contextArea, null) { OldValue = i.Value }));
     }
 
 
@@ -265,7 +263,7 @@ public record LayoutAreaHost : IDisposable
     }
 
     public void UpdateProgress(string area, ProgressControl progress)
-        => Stream.ApplyChanges(Stream.Current.Value, [new(LayoutAreaReference.Areas, area, progress)]);
+        => Stream.ApplyChanges(new(Stream.Current.Value, [new(LayoutAreaReference.Areas, area, progress)]));
 
     internal EntityStoreAndUpdates RenderArea(RenderingContext context, ViewDefinition generator, EntityStore store)
     {

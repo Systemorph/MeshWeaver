@@ -30,7 +30,6 @@ public static class DiscountPercentageArea
         => layoutArea.GetCombinedDiscountsDataCube()
             .Select(data =>
                 layoutArea.Workspace
-                    .State
                     .Pivot(data.ToDataCube())
                     .SliceColumnsBy(nameof(NorthwindDataCube.Discount))
                     .ToPieChart(

@@ -76,12 +76,6 @@ public class PivotTest : HubTestBase
 
     JsonSerializerOptions Options => GetHost().JsonSerializerOptions;
 
-    private async Task<WorkspaceState> GetStateAsync()
-    {
-        var workspace = GetHost().GetWorkspace();
-        await workspace.Initialized;
-        return workspace.State;
-    }
 
     [Theory]
     [MemberData(nameof(TestCases))]
@@ -91,7 +85,7 @@ public class PivotTest : HubTestBase
         Func<PivotBuilder<T, T, T>, PivotBuilder<T, TAggregate, TAggregate>> builder
     )
     {
-        var initial = (await GetStateAsync()).Pivot(data);
+        var initial = (GetHost().GetWorkspace()).Pivot(data);
 
         var pivotBuilder = builder(initial);
 
@@ -107,7 +101,7 @@ public class PivotTest : HubTestBase
         Func<PivotBuilder<T, T, T>, PivotBuilder<T, int, int>> builder
     )
     {
-        var initial = (await GetStateAsync()).Pivot(data);
+        var initial = (GetHost().GetWorkspace()).Pivot(data);
 
         var pivotBuilder = builder(initial);
 
@@ -191,10 +185,9 @@ public class PivotTest : HubTestBase
     public async Task NullQuerySourceShouldFlatten()
     {
         PivotModel qs = null;
-        var state = (await GetStateAsync()) with { StoresByStream = ImmutableDictionary<StreamReference, EntityStore>.Empty };
         var exception = Record.Exception(
             () =>
-                qs = state
+                qs = GetHost().GetWorkspace()
                     .Pivot(ValueWithHierarchicalDimension.Data.ToDataCube())
                     .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
                     .Execute()
@@ -202,7 +195,7 @@ public class PivotTest : HubTestBase
         Assert.Null(exception);
         Assert.NotNull(qs);
 
-        var flattened = (await GetStateAsync())
+        var flattened = (GetHost().GetWorkspace())
             .Pivot(ValueWithHierarchicalDimension.Data.ToDataCube())
             .WithHierarchicalDimensionOptions(o => o.Flatten<TestHierarchicalDimensionA>())
             .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
@@ -223,7 +216,7 @@ public class PivotTest : HubTestBase
             .ToScopes<IDataCubeScopeWithValueAndDimensionErr>();
 
         async Task Report() =>
-            (await GetStateAsync()).ForDataCubes(scopes).SliceColumnsBy(nameof(Country)).Execute();
+            (GetHost().GetWorkspace()).ForDataCubes(scopes).SliceColumnsBy(nameof(Country)).Execute();
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(Report);
         ex.Message.Should().Be($"Duplicate dimensions: '{nameof(Country)}'");
     }
@@ -236,7 +229,7 @@ public class PivotTest : HubTestBase
             .ForIdentities(storage.Identities, storage)
             .ToScopes<IDataCubeScopeWithValueAndDimensionErr1>();
 
-        async Task Report() => (await GetStateAsync()).ForDataCubes(scopes).SliceColumnsBy("MyCountry").Execute();
+        async Task Report() => (GetHost().GetWorkspace()).ForDataCubes(scopes).SliceColumnsBy("MyCountry").Execute();
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(Report); //.WithMessage<InvalidOperationException>("Duplicate dimensions: 'MyCountry'");
         ex.Message.Should().Be("Duplicate dimensions: 'MyCountry'");
     }
@@ -1096,7 +1089,7 @@ public class PivotTest : HubTestBase
         > builder
     )
     {
-        var initial = (await GetStateAsync()).ForDataCubes(data);
+        var initial = (GetHost().GetWorkspace()).ForDataCubes(data);
 
         var pivotBuilder = builder(initial);
 
@@ -1113,7 +1106,7 @@ public class PivotTest : HubTestBase
         > builder
     )
     {
-        var initial = (await GetStateAsync()).ForDataCubes(data);
+        var initial = (GetHost().GetWorkspace()).ForDataCubes(data);
 
         var pivotBuilder = builder(initial);
 
@@ -1130,7 +1123,7 @@ public class PivotTest : HubTestBase
         > builder
     )
     {
-        var initial = (await GetStateAsync()).ForDataCubes(data);
+        var initial = (GetHost().GetWorkspace()).ForDataCubes(data);
 
         var pivotBuilder = builder(initial);
 

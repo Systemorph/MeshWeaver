@@ -1,4 +1,8 @@
-﻿using MeshWeaver.Data;
+﻿using System.Reactive.Linq;
+using System.Reflection;
+using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
+using MeshWeaver.Domain;
 using MeshWeaver.Hierarchies;
 using MeshWeaver.Pivot.Aggregations;
 using MeshWeaver.Pivot.Builder.Interfaces;
@@ -22,22 +26,28 @@ namespace MeshWeaver.Pivot.Builder
                 TPivotBuilder
             >
     {
-        public WorkspaceState State { get; init; }
-        public IHierarchicalDimensionCache HierarchicalDimensionCache { get; private init; }
         public IHierarchicalDimensionOptions HierarchicalDimensionOptions { get; private init; }
         public IList<T> Objects { get; }
 
         public Aggregations<TTransformed, TIntermediate, TAggregate> Aggregations;
         public Func<IEnumerable<T>, IEnumerable<TTransformed>> Transformation { get; init; }
         protected Type TransposedValue { get; init; }
-
-        protected PivotBuilderBase(WorkspaceState state, IEnumerable<T> objects)
+        public IWorkspace Workspace { get; init; }
+        protected PivotBuilderBase(IWorkspace workspace, IEnumerable<T> objects)
         {
             Objects = objects as IList<T> ?? objects.ToArray();
             Aggregations = new Aggregations<TTransformed, TIntermediate, TAggregate>();
             HierarchicalDimensionOptions = new HierarchicalDimensionOptions();
-            State = state;
-            HierarchicalDimensionCache = new HierarchicalDimensionCache(state);
+            Workspace = workspace;
+            var types = Objects.Select(o => o.GetType()).Distinct().ToArray();
+            var dimensions = types
+                .SelectMany(t => t.GetProperties().Select(p => p.GetCustomAttribute<DimensionAttribute>()?.Type))
+                .Where(x => x != null)
+                .ToArray();
+            var reference = dimensions.Select(Workspace.DataContext.TypeRegistry.GetCollectionName).Where(x => x != null).ToArray();
+            var stream = reference.Any()
+                ? ((IObservable<ChangeItem<EntityStore>>)Workspace.Stream.Reduce(new CollectionsReference(reference))).Select(x => x.Value)
+                : Observable.Return<EntityStore>(new());
         }
 
         public TPivotBuilder WithHierarchicalDimensionOptions(

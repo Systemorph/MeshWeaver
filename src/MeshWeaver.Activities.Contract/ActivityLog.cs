@@ -12,7 +12,7 @@ public record ActivityLog(string Category)
     [property: Key]
     public string Id { get; init; } = Guid.NewGuid().AsString();
     public ImmutableList<LogMessage> Messages { get; init; } = ImmutableList<LogMessage>.Empty;
-    public string Status { get; init; } = ActivityLogStatus.Started;
+    public string Status { get; init; } = ActivityLogStatus.Running;
     public DateTime? End { get; init; }
     public UserInfo User { get; init; }
     public ImmutableList<ActivityLog> SubActivities { get; init; } =

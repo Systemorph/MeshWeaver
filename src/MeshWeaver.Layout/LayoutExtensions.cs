@@ -38,15 +38,6 @@ public static class LayoutExtensions
             .Set(config.GetListOfLambdas().Add(layoutDefinition));
     }
 
-    private static ChangeItem<WorkspaceState> BackTransformLayoutArea(
-        WorkspaceState current,
-        ISynchronizationStream<WorkspaceState> stream,
-        ChangeItem<EntityStore> change
-    )
-    {
-        // TODO V10: Must check if types are mapped in workspace and if yes write back here. (25.06.2024, Roland Bürgi)
-        return change.SetValue(current);
-    }
 
     private static LayoutDefinition GetLayoutDefinition(this IMessageHub hub) =>
         hub

@@ -1,6 +1,4 @@
 ﻿using System.Collections.Immutable;
-using MeshWeaver.Data;
-using MeshWeaver.Hierarchies;
 using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Pivot.Grouping;
 using MeshWeaver.Pivot.Models;
@@ -13,24 +11,19 @@ namespace MeshWeaver.Pivot.Processors
         TIntermediate,
         TAggregate,
         TPivotBuilder
-    >
+    >(TPivotBuilder pivotBuilder)
         where TPivotBuilder : PivotBuilderBase<
-                T,
-                TTransformed,
-                TIntermediate,
-                TAggregate,
-                TPivotBuilder
-            >
+            T,
+            TTransformed,
+            TIntermediate,
+            TAggregate,
+            TPivotBuilder
+        >
     {
         protected internal IPivotConfiguration<TAggregate, ColumnGroup> ColumnConfig { get; init; }
         protected internal IPivotConfiguration<TAggregate, RowGroup> RowConfig { get; init; }
 
-        protected internal TPivotBuilder PivotBuilder { get; set; }
-
-        protected PivotProcessorBase(TPivotBuilder pivotBuilder)
-        {
-            PivotBuilder = pivotBuilder;
-        }
+        protected internal TPivotBuilder PivotBuilder { get; set; } = pivotBuilder;
 
         public virtual PivotModel Execute()
         {

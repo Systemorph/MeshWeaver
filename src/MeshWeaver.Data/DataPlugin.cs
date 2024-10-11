@@ -1,11 +1,9 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using MeshWeaver.Messaging;
+﻿using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
 
 public class DataPlugin(IMessageHub hub)
-    : MessageHubPlugin<WorkspaceState>(hub),
+    : MessageHubPlugin(hub),
         IMessageHandler<UpdateDataRequest>,
         IMessageHandler<DeleteDataRequest>,
         IMessageHandler<SubscribeRequest>,
@@ -25,11 +23,7 @@ public class DataPlugin(IMessageHub hub)
 
     private IMessageDelivery RequestChange(IMessageDelivery request, DataChangedRequest change)
     {
-        var response = Workspace.RequestChange(change, null);
-        if (request != null)
-        {
-            Hub.Post(response, o => o.ResponseFor(request));
-        }
+        Workspace.RequestChange(change, request);
         return request?.Processed();
     }
 
@@ -45,8 +39,6 @@ public class DataPlugin(IMessageHub hub)
     IMessageDelivery IMessageHandler<SubscribeRequest>.HandleMessage(
         IMessageDelivery<SubscribeRequest> request
     ) => Subscribe(request);
-
-    private readonly ILogger<DataPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<DataPlugin>>();
 
     private IMessageDelivery Subscribe(IMessageDelivery<SubscribeRequest> request)
     {

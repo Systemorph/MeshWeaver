@@ -32,7 +32,6 @@ public static class DiscountSummaryArea
         => layoutArea.GetDataCube()
             .Select(data =>
                 layoutArea.Workspace
-                    .State
                     .Pivot(data.ToDataCube())
                     .WithAggregation(a => a.Sum(x => x.UnitPrice * x.Quantity * x.Discount))
                     .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth))

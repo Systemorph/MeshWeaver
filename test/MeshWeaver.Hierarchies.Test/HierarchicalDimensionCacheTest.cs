@@ -1,6 +1,8 @@
-﻿using FluentAssertions;
+﻿using System.Reactive.Linq;
+using FluentAssertions;
 using FluentAssertions.Execution;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using MeshWeaver.TestDomain.SimpleData;
@@ -29,11 +31,22 @@ public class HierarchicalDimensionCacheTest(ITestOutputHelper output) : HubTestB
             );
     }
 
+    private async Task<HierarchicalDimensionCache> GetDimensionCacheAsync()
+    {
+        var workspace = GetHost().GetWorkspace();
+        var stream = workspace.Stream
+            .Reduce(new CollectionsReference(
+                workspace.DataContext.GetCollectionName(typeof(TestHierarchicalDimensionA)),
+                workspace.DataContext.GetCollectionName(typeof(TestHierarchicalDimensionB))));
+
+        var ci = await ((IObservable<ChangeItem<EntityStore>>)stream).FirstAsync();
+        return new(ci.Value);
+    }
+
     [Fact]
     public async Task InitializationTest()
     {
-        var workspace = await GetWorkspace();
-        var hierarchies = workspace.State.ToHierarchicalDimensionCache();
+        var hierarchies = await GetDimensionCacheAsync();
         using (new AssertionScope())
         {
             hierarchies.Get<TestHierarchicalDimensionA>().Should().NotBeNull();
@@ -43,18 +56,11 @@ public class HierarchicalDimensionCacheTest(ITestOutputHelper output) : HubTestB
         }
     }
 
-    private async Task<IWorkspace> GetWorkspace()
-    {
-        var workspace = GetHost().GetWorkspace();
-        await workspace.Initialized;
-        return workspace;
-    }
 
     [Fact]
     public async Task LeafLevelTest()
     {
-        var workspace = await GetWorkspace();
-        var hierarchies = workspace.State.ToHierarchicalDimensionCache();
+        var hierarchies = await GetDimensionCacheAsync();
         using (new AssertionScope())
         {
             hierarchies.Parent<TestHierarchicalDimensionA>("A111").SystemName.Should().Be("A11");
@@ -81,8 +87,7 @@ public class HierarchicalDimensionCacheTest(ITestOutputHelper output) : HubTestB
     [Fact]
     public async Task IntermediateLevelTest()
     {
-        var workspace = await GetWorkspace();
-        var hierarchies = workspace.State.ToHierarchicalDimensionCache();
+        var hierarchies = await GetDimensionCacheAsync();
         using (new AssertionScope())
         {
             hierarchies.Parent<TestHierarchicalDimensionA>("A11").SystemName.Should().Be("A1");
@@ -101,8 +106,7 @@ public class HierarchicalDimensionCacheTest(ITestOutputHelper output) : HubTestB
     [Fact]
     public async Task RootLevelTest()
     {
-        var workspace = await GetWorkspace();
-        var hierarchies = workspace.State.ToHierarchicalDimensionCache();
+        var hierarchies = await GetDimensionCacheAsync();
         using (new AssertionScope())
         {
             hierarchies.Parent<TestHierarchicalDimensionA>("A1").Should().BeNull();
@@ -117,8 +121,7 @@ public class HierarchicalDimensionCacheTest(ITestOutputHelper output) : HubTestB
     [Fact]
     public async Task LevelTest()
     {
-        var workspace = await GetWorkspace();
-        var hierarchies = workspace.State.ToHierarchicalDimensionCache();
+        var hierarchies = await GetDimensionCacheAsync();
         using (new AssertionScope())
         {
             hierarchies.Get<TestHierarchicalDimensionA>("A1").Level.Should().Be(0);
@@ -132,8 +135,7 @@ public class HierarchicalDimensionCacheTest(ITestOutputHelper output) : HubTestB
     [Fact]
     public async Task SeveralDimensionsLevelTest()
     {
-        var workspace = await GetWorkspace();
-        var hierarchies = workspace.State.ToHierarchicalDimensionCache();
+        var hierarchies = await GetDimensionCacheAsync();
         using (new AssertionScope())
         {
             hierarchies.Get<TestHierarchicalDimensionA>("A1").Level.Should().Be(0);
@@ -148,8 +150,7 @@ public class HierarchicalDimensionCacheTest(ITestOutputHelper output) : HubTestB
     [Fact]
     public async Task HierarchyApiTest()
     {
-        var workspace = await GetWorkspace();
-        var hierarchies = workspace.State.ToHierarchicalDimensionCache();
+        var hierarchies = await GetDimensionCacheAsync();
         var hierarchyA = hierarchies.Get<TestHierarchicalDimensionA>();
         hierarchyA.Get("A11").Parent.Should().Be(hierarchyA.Get("A12").Parent);
     }

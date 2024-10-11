@@ -33,7 +33,6 @@ public static class OrdersOverviewArea
         => layoutArea.GetDataCube()
             .Select(data =>
                 layoutArea.Workspace
-                    .State
                     .Pivot(data.ToDataCube())
                     .WithAggregation(a => a.CountDistinctBy(x => x.OrderId))
                     .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth))
@@ -50,7 +49,6 @@ public static class OrdersOverviewArea
         => layoutArea.GetDataCube()
             .Select(data =>
                 layoutArea.Workspace
-                    .State
                     .Pivot(data.ToDataCube())
                     .WithAggregation(a => a
                         .WithAggregation(enumerable =>

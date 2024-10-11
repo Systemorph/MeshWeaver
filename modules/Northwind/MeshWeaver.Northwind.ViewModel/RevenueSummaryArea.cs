@@ -30,7 +30,6 @@ public static class RevenueSummaryArea
         => layoutArea.GetDataCube()
             .Select(data =>
                 layoutArea.Workspace
-                    .State
                     .Pivot(data.ToDataCube())
                     .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth))
                     .ToLineChart(builder => builder)

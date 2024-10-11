@@ -47,9 +47,12 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
                 var instance = new MyData(Instance, (++count).ToString());
                 var existingInstance = state.Collections.GetValueOrDefault(collectionName)?.Instances
                     .GetValueOrDefault(Instance);
+
                 return stream.ApplyChanges(
-                    (state ?? new()).Update(collectionName, i => i.Update(Instance, instance)),
-                    [new(collectionName, Instance, instance) { OldValue = existingInstance }]);
+                    new EntityStoreAndUpdates(
+                        (state ?? new()).Update(collectionName, i => i.Update(Instance, instance)),
+                        [new EntityStoreUpdate(collectionName, Instance, instance) { OldValue = existingInstance }])
+                );
             });
             return true;
         }).ToArray();

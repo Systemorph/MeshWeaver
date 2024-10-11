@@ -1,5 +1,4 @@
 ﻿using System.Reactive.Linq;
-using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
@@ -33,7 +32,6 @@ public static class ClientsOverviewArea
         => layoutArea.GetDataCube()
             .Select(data =>
                 layoutArea.Workspace
-                    .State
                     .Pivot(data.ToDataCube())
                     .SliceColumnsBy(nameof(Customer))
                     .ToBarChart(builder => builder

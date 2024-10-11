@@ -20,7 +20,8 @@ namespace MeshWeaver.Reporting.Builder
             IReportBuilder<DataCubeReportBuilder<TCube, TElement, TIntermediate, TAggregate>>
         where TCube : IDataCube<TElement>
     {
-        public WorkspaceState State { get; }
+        public IWorkspace Workspace { get; }
+        public EntityStore State { get; }
         private readonly IList<Func<GridOptions, GridOptions>> postProcessors = new List<
             Func<GridOptions, GridOptions>
         >()
@@ -34,11 +35,11 @@ namespace MeshWeaver.Reporting.Builder
             TAggregate
         > PivotBuilder { get; init; }
 
-        private DataCubeReportBuilder(WorkspaceState state, IEnumerable<TCube> cubes)
+        private DataCubeReportBuilder(IWorkspace workspace, IEnumerable<TCube> cubes)
         {
-            State = state;
+            Workspace = workspace;
             PivotBuilder = new DataCubePivotBuilder<TCube, TElement, TIntermediate, TAggregate>(
-                State,
+                workspace,
                 cubes
             );
         }
@@ -54,14 +55,15 @@ namespace MeshWeaver.Reporting.Builder
         }
 
         public DataCubeReportBuilder(
-            WorkspaceState state,
+            IWorkspace workspace,
+            EntityStore state,
             IEnumerable<TCube> cubes,
             Aggregations<DataSlice<TElement>, TIntermediate, TAggregate> aggregations
         )
         {
             State = state;
             PivotBuilder = new DataCubePivotBuilder<TCube, TElement, TIntermediate, TAggregate>(
-                state,
+                workspace,
                 cubes
             )
             {
@@ -90,7 +92,7 @@ namespace MeshWeaver.Reporting.Builder
                 TElement,
                 TNewIntermediate,
                 TNewAggregate
-            >(State, PivotBuilder.Objects);
+            >(Workspace, PivotBuilder.Objects);
 
             return builder with
             {
@@ -131,7 +133,7 @@ namespace MeshWeaver.Reporting.Builder
             );
 
             var builder = new DataCubeReportBuilder<TCube, TElement, TNewAggregate, TNewAggregate>(
-                State,
+                Workspace,
                 PivotBuilder.Objects
             );
 

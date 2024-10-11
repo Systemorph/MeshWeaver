@@ -35,8 +35,7 @@ namespace MeshWeaver.Northwind.ViewModel
             => layoutArea.YearlyNorthwindData()
                 .Select(d =>
                     layoutArea.Workspace
-                        .State
-                        .Pivot(DataCubeExtensions.ToDataCube<NorthwindDataCube>(d))
+                        .Pivot(d.ToDataCube())
                         .SliceColumnsBy(nameof(Product))
                         .ToBarChart(builder => builder
                             .WithOptions(o => o.OrderByValueDescending().TopValues(5))

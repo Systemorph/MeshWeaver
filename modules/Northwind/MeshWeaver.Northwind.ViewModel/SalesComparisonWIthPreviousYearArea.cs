@@ -36,7 +36,6 @@ public static class SalesComparisonWIthPreviousYearArea
         return layoutArea.WithPrevYearNorthwindData()
             .Select(data =>
                 layoutArea.Workspace
-                    .State
                     .Pivot(data.ToDataCube())
                     .SliceColumnsBy(nameof(Category))
                     .SliceRowsBy(nameof(NorthwindDataCube.OrderYear))

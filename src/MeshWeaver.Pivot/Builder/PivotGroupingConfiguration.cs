@@ -1,23 +1,20 @@
 ﻿using System.Collections;
 using System.Collections.Immutable;
 using System.Linq.Expressions;
-using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Collections;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
-using MeshWeaver.Hierarchies;
-using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.Pivot.Grouping;
 using MeshWeaver.Pivot.Models;
 using MeshWeaver.Pivot.Models.Interfaces;
 
 namespace MeshWeaver.Pivot.Builder;
 
-public abstract record PivotGroupingConfiguration<T, TGroup>(WorkspaceState State)
+public abstract record PivotGroupingConfiguration<T, TGroup>(IWorkspace Workspace)
     : IEnumerable<PivotGroupingConfigItem<T, TGroup>>
     where TGroup : class, IGroup, new()
 {
-    private readonly ITypeRegistry typeRegistry = State.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
+    private readonly ITypeRegistry typeRegistry = Workspace.DataContext.TypeRegistry;
     internal ImmutableList<PivotGroupingConfigItem<T, TGroup>> ConfigItems { get; init; }
 
     protected PivotGroupingConfigItem<T, TGroup> CreateDefaultAutomaticNumbering()
@@ -39,32 +36,24 @@ public abstract record PivotGroupingConfiguration<T, TGroup>(WorkspaceState Stat
 
 
     public PivotGroupingConfiguration<T, TGroup> GroupBy<TSelected>(
-        WorkspaceState state,
         Expression<Func<T, TSelected>> selector,
-        IHierarchicalDimensionCache hierarchicalDimensionCache,
         IHierarchicalDimensionOptions hierarchicalDimensionOptions
     )
     {
         var reportRowGroupConfig = CreateReportGroupConfig(
-            state,
             selector,
-            hierarchicalDimensionCache,
             hierarchicalDimensionOptions
         );
         return this with { ConfigItems = PrependGrouping(reportRowGroupConfig) };
     }
 
     private PivotGroupingConfigItem<T, TGroup> CreateReportGroupConfig<TSelected>(
-        WorkspaceState state,
         Expression<Func<T, TSelected>> selector,
-        IHierarchicalDimensionCache hierarchicalDimensionCache,
         IHierarchicalDimensionOptions hierarchicalDimensionOptions
     )
     {
         return new(
             PivotGroupingExtensions<TGroup>.GetPivotGrouper(
-                state,
-                hierarchicalDimensionCache,
                 hierarchicalDimensionOptions,
                 selector
             )
@@ -103,7 +92,7 @@ public record PivotRowsGroupingConfiguration<T> : PivotGroupingConfiguration<T, 
             )
         );
 
-    public PivotRowsGroupingConfiguration(WorkspaceState State) : base(State)
+    public PivotRowsGroupingConfiguration(IWorkspace Workspace) : base(Workspace)
     {
         Default = CreateDefaultAutomaticNumbering();
     }
@@ -126,7 +115,7 @@ public record PivotColumnsGroupingConfiguration<T> : PivotGroupingConfiguration<
     private PivotGroupingConfigItem<T, ColumnGroup> DefaultTransposedGrouping =>
         CreateDefaultAutomaticNumbering();
 
-    public PivotColumnsGroupingConfiguration(WorkspaceState state) : base(state)
+    public PivotColumnsGroupingConfiguration(IWorkspace workspace) : base(workspace)
     {
         Default = DefaultColumnGrouping;
     }
