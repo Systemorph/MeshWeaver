@@ -31,7 +31,6 @@ public static class DiscountVsRevenueArea
         => layoutArea.GetCombinedDiscountsDataCube()
             .Select(data =>
                 layoutArea.Workspace
-                    .State
                     .Pivot(data.ToDataCube())
                     .SliceColumnsBy(nameof(LabeledNorthwindDataCube.OrderMonth))
                     .SliceRowsBy(nameof(LabeledNorthwindDataCube.Label))

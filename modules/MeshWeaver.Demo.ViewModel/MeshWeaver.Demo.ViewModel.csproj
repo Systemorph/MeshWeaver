@@ -8,5 +8,4 @@
     <!-- Include all Markdown files in the Markdown folder as embedded resources -->
     <EmbeddedResource Include="Markdown\**\*.md" />
   </ItemGroup>
-  
 </Project>

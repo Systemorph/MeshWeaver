@@ -1,16 +1,11 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
-    <None Remove="Files\categories.csv" />
-    <None Remove="Files\products.csv" />
-    <None Remove="Files\suppliers.csv" />
-  </ItemGroup>
-  <ItemGroup>
-    <EmbeddedResource Include="Files\*.csv" />
-  </ItemGroup>
-  <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Activities\MeshWeaver.Activities.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Import\MeshWeaver.Import.csproj" />
     <ProjectReference Include="..\MeshWeaver.Data.TestDomain\MeshWeaver.Data.TestDomain.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="NewFolder\" />
   </ItemGroup>
 </Project>

@@ -9,8 +9,9 @@ using MeshWeaver.DataSetReader;
 using MeshWeaver.DataSetReader.Csv;
 using MeshWeaver.DataSetReader.Excel;
 using MeshWeaver.Domain;
-using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
+using MeshWeaver.Activities;
+using MeshWeaver.Data.Serialization;
 
 namespace MeshWeaver.Import.Configuration;
 
@@ -140,7 +141,7 @@ public record ImportConfiguration
             Validations = Validations.Add(validation)
         };
 
-    private bool StandardValidations(object instance, ValidationContext validationContext)
+    private bool StandardValidations(object instance, ValidationContext validationContext, Activity<ChangeItem<EntityStore>> activity)
     {
         var ret = true;
         var validationResults = new List<ValidationResult>();
@@ -148,7 +149,7 @@ public record ImportConfiguration
 
         foreach (var validation in validationResults)
         {
-            Logger.LogError(validation.ToString());
+            activity.LogError(validation.ToString());
             ret = false;
         }
         return ret;
@@ -163,7 +164,7 @@ public record ImportConfiguration
         (Type, string, Func<object, string>)[]
     > TypesWithCategoryAttributes = new();
 
-    private bool CategoriesValidation(object instance, ValidationContext validationContext)
+    private bool CategoriesValidation(object instance, ValidationContext validationContext, Activity<ChangeItem<EntityStore>> activity)
     {
         var type = instance.GetType();
         var dimensions = TypesWithCategoryAttributes.GetOrAdd(
@@ -192,7 +193,7 @@ public record ImportConfiguration
         {
             if (!Workspace.DataContext.DataSourcesByType.ContainsKey(dimensionType))
             {
-                Logger.LogError(string.Format(MissingCategoryErrorMessage, dimensionType));
+                activity.LogError(string.Format(MissingCategoryErrorMessage, dimensionType));
                 ret = false;
                 continue;
             }
@@ -206,7 +207,7 @@ public record ImportConfiguration
                         .InvokeAsFunction(this, Workspace, value)
             )
             {
-                Logger.LogError(
+                activity.LogError(
                     string.Format(UnknownValueErrorMessage, propertyName, type.FullName, value)
                 );
                 ret = false;

@@ -18,8 +18,6 @@ namespace MeshWeaver.Pivot.Builder
 
         public SlicePivotGroupingConfigItem(
             DimensionDescriptor[] dimensions,
-            WorkspaceState state,
-            IHierarchicalDimensionCache hierarchicalDimensionCache,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions
         )
             : base(default(IPivotGrouper<DataSlice<TElement>, TGroup>)) =>
@@ -29,8 +27,6 @@ namespace MeshWeaver.Pivot.Builder
                         d,
                         GetGroupingFunction(
                             d,
-                            state,
-                            hierarchicalDimensionCache,
                             hierarchicalDimensionOptions
                         )
                     )
@@ -120,15 +116,11 @@ namespace MeshWeaver.Pivot.Builder
 
         protected IPivotGrouper<DataSlice<TElement>, TGroup> GetGroupingFunction(
             DimensionDescriptor dimension,
-            WorkspaceState state,
-            IHierarchicalDimensionCache hierarchicalDimensionCache,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions
         )
         {
             return PivotGroupingExtensions<TGroup>.GetPivotGrouper<TElement>(
                 dimension,
-                state,
-                hierarchicalDimensionCache,
                 hierarchicalDimensionOptions
             );
         }

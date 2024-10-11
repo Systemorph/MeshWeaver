@@ -36,7 +36,6 @@ public static class SalesOverviewArea
         return layoutArea.YearlyNorthwindData()
             .Select(data =>
                 layoutArea.Workspace
-                    .State
                     .Pivot(data.ToDataCube())
                     .SliceColumnsBy(nameof(Category))
                     .ToBarChart(

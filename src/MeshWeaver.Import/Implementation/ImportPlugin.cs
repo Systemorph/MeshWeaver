@@ -1,9 +1,7 @@
 ﻿using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using MeshWeaver.Activities;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Import.Configuration;
 using MeshWeaver.Messaging;
 
@@ -17,9 +15,8 @@ public static class ActivityCategory
 public class ImportPlugin(IMessageHub hub, Func<ImportConfiguration, ImportConfiguration> importConfiguration) : MessageHubPlugin(hub), IMessageHandlerAsync<ImportRequest>
 {
     private ImportManager importManager;
-
+    private ILogger logger = hub.ServiceProvider.GetRequiredService<ILogger<ImportPlugin>>();
     private readonly IWorkspace workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
-    private readonly IActivityService activityService = hub.ServiceProvider.GetRequiredService<IActivityService>();
     public override async Task StartAsync(IMessageHub hub, CancellationToken cancellationToken)
     {
         await base.StartAsync(hub, cancellationToken);
@@ -33,7 +30,7 @@ public class ImportPlugin(IMessageHub hub, Func<ImportConfiguration, ImportConfi
     {
         await workspace.Initialized;
         importManager = new ImportManager(
-            importConfiguration.Invoke(new(workspace, workspace.MappedTypes, activityService))
+            importConfiguration.Invoke(new(workspace, workspace.MappedTypes, logger))
         );
     }
 
@@ -42,41 +39,21 @@ public class ImportPlugin(IMessageHub hub, Func<ImportConfiguration, ImportConfi
         CancellationToken cancellationToken
     )
     {
-        activityService.Start(ActivityCategory.Import);
-        ActivityLog log;
+
+        var activity = await importManager.ImportAsync(
+            request.Message,
+            cancellationToken
+        );
 
         try
         {
-            var (state, hasError) = await importManager.ImportAsync(
-                request.Message,
-                workspace.State,
-                activityService,
-                cancellationToken
-            );
 
-            if (hasError)
-                activityService.LogError(ImportManager.ImportFailed);
-
-            if (!activityService.HasErrors())
+            activity.OnCompleted((_, log) =>
             {
-                workspace.RequestChange(s => new ChangeItem<WorkspaceState>(
-                    Hub.Address,
-                    workspace.Reference,
-                    s.Merge(state),
-                    Hub.Address,
-                    null,
-                    Hub.Version
-                ));
-            }
+                Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
+            });
 
-            log = activityService.Finish();
 
-            if (request.Message.SaveLog)
-            {
-                workspace.Update(log);
-            }
-
-            //activityService.Finish();
         }
         catch (Exception e)
         {
@@ -87,11 +64,11 @@ public class ImportPlugin(IMessageHub hub, Func<ImportConfiguration, ImportConfi
                 e = e.InnerException;
             }
 
-            activityService.LogError(message.ToString());
-            log = activityService.Finish();
+            activity.LogError(message.ToString());
+            var (_,log) = activity.Finish(null);
+            Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
         }
 
-        Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
         return request.Processed();
     }
 }

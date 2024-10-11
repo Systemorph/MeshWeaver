@@ -1,6 +1,5 @@
 ﻿using System.Data;
 using System.Reflection;
-using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Import.Configuration;
@@ -19,7 +18,6 @@ public static class ImportExtensions
         Func<ImportConfiguration, ImportConfiguration> importConfiguration
     ) =>
         configuration
-            .WithServices(services => services.AddSingleton<IActivityService, ActivityService>())
             .AddActivities()
             .AddPlugin<ImportPlugin>(hub => new(hub, importConfiguration))
         ;
@@ -41,7 +39,7 @@ public static class ImportExtensions
         var source = new EmbeddedResource(typeof(T).Assembly, resource);
         return dataContext.WithDataSourceBuilder(
             source,
-            hub => ConfigureDataSource(configuration, dataContext.Workspace, source).WithType<T>()
+            _ => ConfigureDataSource(configuration, dataContext.Workspace, source).WithType<T>()
         );
     }
 
@@ -53,7 +51,7 @@ public static class ImportExtensions
     {
         return dataContext.WithDataSourceBuilder(
             resource,
-            hub => ConfigureDataSource(configuration, dataContext.Workspace, resource)
+            _ => ConfigureDataSource(configuration, dataContext.Workspace, resource)
         );
     }
 

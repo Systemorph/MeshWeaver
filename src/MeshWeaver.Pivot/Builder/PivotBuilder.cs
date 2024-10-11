@@ -12,12 +12,11 @@ public record PivotBuilder<T, TIntermediate, TAggregate>
     : PivotBuilderBase<T, T, TIntermediate, TAggregate, PivotBuilder<T, TIntermediate, TAggregate>>,
         IPivotBuilder<T, TIntermediate, TAggregate, PivotBuilder<T, TIntermediate, TAggregate>>
 {
-    public PivotBuilder(WorkspaceState state, IEnumerable<T> objects)
-        : base(state, objects)
+    public PivotBuilder(IWorkspace workspace, IEnumerable<T> objects)
+        : base(workspace, objects)
     {
-        this.State = state;
-        ColumnGroupConfig = DefaultColumnGrouping = new PivotColumnsGroupingConfiguration<T>(state);
-        RowGroupConfig = new PivotRowsGroupingConfiguration<T>(state);
+        ColumnGroupConfig = DefaultColumnGrouping = new PivotColumnsGroupingConfiguration<T>(workspace);
+        RowGroupConfig = new PivotRowsGroupingConfiguration<T>(workspace);
     }
 
     public PivotGroupingConfiguration<T, ColumnGroup> ColumnGroupConfig { get; init; }
@@ -30,9 +29,7 @@ public record PivotBuilder<T, TIntermediate, TAggregate>
         return this with
         {
             RowGroupConfig = RowGroupConfig.GroupBy(
-                State,
                 selector,
-                HierarchicalDimensionCache,
                 HierarchicalDimensionOptions
             )
         };
@@ -51,9 +48,7 @@ public record PivotBuilder<T, TIntermediate, TAggregate>
         return ret with
         {
             ColumnGroupConfig = ColumnGroupConfig.GroupBy(
-                State,
                 selector,
-                HierarchicalDimensionCache,
                 HierarchicalDimensionOptions
             )
         };
@@ -91,7 +86,7 @@ public record PivotBuilder<T, TIntermediate, TAggregate>
             Aggregations<T, TNewIntermediate, TNewAggregate>
         > aggregationsFunc
     ) =>
-        new(State, Objects)
+        new(Workspace, Objects)
         {
             Aggregations = aggregationsFunc(new Aggregations<T, TIntermediate, TAggregate>()),
         };
@@ -102,7 +97,7 @@ public record PivotBuilder<T, TIntermediate, TAggregate>
             Aggregations<T, TNewAggregate>
         > aggregationsFunc
     ) =>
-        new(State, Objects)
+        new(Workspace, Objects)
         {
             Aggregations = aggregationsFunc(new Aggregations<T, TIntermediate, TAggregate>()),
         };

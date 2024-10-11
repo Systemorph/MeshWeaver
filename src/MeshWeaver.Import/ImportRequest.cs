@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Activities;
+using MeshWeaver.Data;
 using MeshWeaver.DataSetReader;
 using MeshWeaver.Import.Configuration;
 using MeshWeaver.Messaging;
@@ -12,8 +13,8 @@ namespace MeshWeaver.Import;
 /// <param name="Source">Content of the source to be imported, e.g. a string (shipping the entire content) or a file name (together with StreamType = File)</param>
 public record ImportRequest(Source Source) : IRequest<ImportResponse>
 {
-    public ImportRequest(string Contennt)
-        : this(new StringStream(Contennt)) { }
+    public ImportRequest(string content)
+        : this(new StringStream(content)) { }
 
     public string MimeType { get; init; } =
         MimeTypes.MapFileExtension(
@@ -22,7 +23,7 @@ public record ImportRequest(Source Source) : IRequest<ImportResponse>
 
     public string Format { get; init; } = ImportFormat.Default;
     public object TargetDataSource { get; init; }
-    public bool Snapshot { get; init; }
+    public UpdateOptions UpdateOptions { get; init; } = UpdateOptions.Default;
     public DataSetReaderOptions DataSetReaderOptions { get; init; } = new();
 
     internal Type EntityType { get; init; }

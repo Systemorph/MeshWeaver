@@ -150,7 +150,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
         var workspace = GetWorkspace(client);
         await workspace.Initialized;
-        var myInstance = workspace.GetData<MyData>("1");
+        var myInstance = await workspace.GetObservable<MyData>("1").FirstAsync();
         myInstance.Text.Should().NotBe(TextChange);
 
         // act

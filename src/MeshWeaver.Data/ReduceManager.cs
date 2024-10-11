@@ -115,7 +115,7 @@ public record ReduceManager<TStream>
         where TReference : WorkspaceReference<TReduced>
     {
         var reducedStream = new SynchronizationStream<TReduced, TReference>(
-            stream.Owner,
+            stream.StreamReference,
             subscriber,
             stream.Hub,
             reference,

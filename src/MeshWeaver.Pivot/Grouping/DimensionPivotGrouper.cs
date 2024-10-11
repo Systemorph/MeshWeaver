@@ -8,22 +8,21 @@ using MeshWeaver.Pivot.Models.Interfaces;
 namespace MeshWeaver.Pivot.Grouping
 {
     public class DimensionPivotGrouper<T, TDimension, TGroup>(
-        WorkspaceState state,
+        EntityStore store,
         Func<T, int, object> selector,
-        string Name
-    ) : SelectorPivotGrouper<T, object, TGroup>(selector, Name)
+        string name
+    ) : SelectorPivotGrouper<T, object, TGroup>(selector, name)
         where TGroup : class, IGroup, new()
         where TDimension : class, INamed
     {
-        protected WorkspaceState State { get; } = state;
         public DimensionDescriptor DimensionDescriptor { get; }
-
+        protected EntityStore Store { get; } = store;
         public DimensionPivotGrouper(
-            WorkspaceState state,
+            EntityStore store,
             Func<T, object> selector,
             DimensionDescriptor dimensionDescriptor
         )
-            : this(state, (x, _) => selector(x), dimensionDescriptor.SystemName)
+            : this(store, (x, _) => selector(x), dimensionDescriptor.SystemName)
         {
             this.DimensionDescriptor = dimensionDescriptor;
         }
@@ -71,7 +70,7 @@ namespace MeshWeaver.Pivot.Grouping
                 // TODO: what to return? (2021/05/22, Roland Buergi)
                 return int.MaxValue;
             // ReSharper disable once SuspiciousTypeConversion.Global
-            var ordered = State.GetData<TDimension>(dim) as IOrdered;
+            var ordered = Store.GetData<TDimension>(dim) as IOrdered;
             return ordered?.Order ?? int.MaxValue;
         }
 
@@ -79,7 +78,7 @@ namespace MeshWeaver.Pivot.Grouping
         {
             if (id == null)
                 return IPivotGrouper<T, TGroup>.NullGroup.DisplayName;
-            return State?.GetData<TDimension>(id)?.DisplayName ?? id;
+            return Store?.GetData<TDimension>(id)?.DisplayName ?? id;
         }
     }
 }

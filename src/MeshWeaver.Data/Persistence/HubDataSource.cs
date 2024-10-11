@@ -21,12 +21,13 @@ public record HubDataSource : HubDataSourceBase<HubDataSource>
     public HubDataSource(object Id, IWorkspace Workspace)
         : base(Id, Workspace) { }
 
-    public override void Initialize(WorkspaceState state)
+    public override void Initialize()
     {
         var reference = new CollectionsReference(
             TypeSources.Values.Select(ts => ts.CollectionName).ToArray()
         );
-        Streams = Streams.Add(Workspace.GetRemoteStream(Id, reference));
-        base.Initialize(state);
+        var stream = Workspace.GetRemoteStream(Id, reference);
+        Streams = Streams.Add(stream.StreamReference, stream);
+        base.Initialize();
     }
 }

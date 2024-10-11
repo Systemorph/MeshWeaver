@@ -5,7 +5,7 @@
 /// </summary>
 public static class ActivityLogStatus
 {
-    public const string Started = nameof(Started);
+    public const string Running = nameof(Running);
     public const string Succeeded = nameof(Succeeded);
     public const string Failed = nameof(Failed);
     public const string Cancelled = nameof(Cancelled);

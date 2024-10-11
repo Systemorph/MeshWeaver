@@ -45,7 +45,7 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
                                 .WithFormat(
                                     "Test1",
                                     format =>
-                                        format.WithAutoMappings().WithValidation((_, _) => false)
+                                        format.WithAutoMappings().WithValidation((_, _, _) => false)
                                 )
                                 .WithFormat(
                                     "Test2",
@@ -53,7 +53,7 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
                                         format
                                             .WithAutoMappings()
                                             .WithValidation(
-                                                (instance, _) =>
+                                                (instance, _, activity) =>
                                                 {
                                                     var ret = true;
                                                     if (
@@ -61,8 +61,7 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
                                                         && address.Street == "Red"
                                                     )
                                                     {
-                                                        import
-                                                            .Workspace.Hub.ServiceProvider.GetRequiredService<IActivityService>()
+                                                        activity
                                                             .LogError(StreetCanNotBeRed);
                                                         ret = false;
                                                     }
