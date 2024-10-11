@@ -125,15 +125,16 @@ public abstract record ActivityBase<TActivity> : ActivityBase, ILogger
 
     public void OnCompleted(Action<ActivityLog> completedAction)
     {
-        Stream.Where(x => x.Log.Status != ActivityStatus.Running)
-            .Subscribe(a => completedAction.Invoke(a.Log));
+        SyncHub.InvokeAsync(() => Stream.Where(x => x.Log.Status != ActivityStatus.Running)
+            .Subscribe(a => completedAction.Invoke(a.Log)));
     }
 
 
     public Activity StartSubActivity(string category)
     {
         var subActivity = new Activity(category, Hub);
-        subActivity.Stream.Subscribe(sa =>
+        Update(x => x.WithLog(l => l with{SubActivities = l.SubActivities.SetItem(subActivity.Id, subActivity.Log)}));
+        subActivity.Stream.Skip(1).Subscribe(sa =>
             Update(x => x.WithLog(
                 log => log with { SubActivities = log.SubActivities.SetItem(sa.Id, sa.Log), Version = log.Version + 1 })
             )
@@ -162,7 +163,7 @@ public record Activity : ActivityBase<Activity>
 
 
 
-    public void Complete()
+    private void CompleteMyself()
     {
         Update(a =>
             a.WithLog(log => log with
@@ -173,14 +174,14 @@ public record Activity : ActivityBase<Activity>
             })
         );
     }
-    public void CompleteOnSubActivities()
+    public void Complete()
     {
         Stream.Where(x => x.Log.SubActivities.Values.All(y => y.Status != ActivityStatus.Running))
             .Subscribe(a =>
             {
                 if (a.Log.Status == ActivityStatus.Running)
                 {
-                    Complete();
+                    CompleteMyself();
                 }
             });
     }

@@ -14,7 +14,7 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
     [Inject] private ILogger<ActivityTest> logger;
 
     [Fact]
-    public void TestActivity()
+    public async Task TestActivity()
     {
         var activity = new Activity("MyActivity", GetClient());
         var subActivity = activity.StartSubActivity("gugus");
@@ -22,21 +22,25 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
         activity.LogInformation(nameof(activity));
         subActivity.LogInformation(nameof(subActivity));
 
-        ActivityLog activityLog = null;
-        activity.OnCompleted(log => activityLog = log);
-        activityLog.Should().BeNull();
-
+        var activityTcs = new TaskCompletionSource(new CancellationTokenSource(3.Seconds()));
+        activity.OnCompleted(log =>
+        {
+            log.Should().NotBeNull();
+            log.Status.Should().Be(ActivityStatus.Succeeded);
+            log.SubActivities.Should().HaveCount(1);
+            log.SubActivities.First().Value.Status.Should().Be(ActivityStatus.Succeeded);
+            activityTcs.SetResult();
+        });
         subActivity.Complete();
-        ActivityLog subActivityLog = null;
-        subActivity.OnCompleted(l => subActivityLog = l);
-        subActivityLog.Should().NotBeNull();
-        subActivityLog.Status.Should().Be(ActivityStatus.Succeeded);
-
+        var subActivityTcs = new TaskCompletionSource(new CancellationTokenSource(3.Seconds()));
+        subActivity.OnCompleted(l =>
+        {
+            l.Status.Should().Be(ActivityStatus.Succeeded);
+            subActivityTcs.SetResult();
+        });
         activity.Complete();
-        activityLog.Should().NotBeNull();
-        activityLog.Status.Should().Be(ActivityStatus.Succeeded);
-        activityLog.SubActivities.Should().HaveCount(1);
-        activityLog.SubActivities.First().Value.Status.Should().Be(ActivityStatus.Succeeded);
+        await subActivityTcs.Task;
+        await activityTcs.Task;
     }
 
     [Fact]
@@ -44,7 +48,7 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var activity = new Activity("MyActivity", GetClient());
         var subActivity = activity.StartSubActivity("gugus");
-        activity.CompleteOnSubActivities();
+        activity.Complete();
         ActivityLog activityLog = null;
         activity.OnCompleted(log => activityLog = log);
         activityLog.Should().BeNull();
