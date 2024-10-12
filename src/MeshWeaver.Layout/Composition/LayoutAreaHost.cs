@@ -14,8 +14,8 @@ namespace MeshWeaver.Layout.Composition;
 public record LayoutAreaHost : IDisposable
 {
     public ISynchronizationStream<EntityStore, LayoutAreaReference> Stream { get; }
-    public IMessageHub Hub => Stream.Hub;
-    public IWorkspace Workspace => Hub.GetWorkspace();
+    public IMessageHub Hub => Workspace.Hub;
+    public IWorkspace Workspace { get; }
     private readonly Dictionary<object, object> variables = new ();
 
     public T GetVariable<T>(object key) => (T)variables[key];
@@ -34,19 +34,20 @@ public record LayoutAreaHost : IDisposable
     public LayoutDefinition LayoutDefinition { get; }
     private readonly ILogger<LayoutAreaHost> logger;
     public LayoutAreaHost(
-        ISynchronizationStream<EntityStore> workspaceStream,
+        IWorkspace workspace,
         LayoutAreaReference reference,
         LayoutDefinition layoutDefinition,
         object subscriber
     )
     {
+        Workspace = workspace;
         LayoutDefinition = layoutDefinition;
         Stream = new SynchronizationStream<EntityStore, LayoutAreaReference>(
-            new(workspaceStream.Owner, null),
+            new(workspace.Hub.Address, reference),
             subscriber,
-            workspaceStream.Hub,
+            workspace.Hub,
             reference,
-            workspaceStream.ReduceManager.ReduceTo<EntityStore>()
+            workspace.ReduceManager.ReduceTo<EntityStore>()
         );
         Stream.AddDisposable(this);
         Stream.AddDisposable(

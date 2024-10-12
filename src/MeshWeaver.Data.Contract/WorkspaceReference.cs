@@ -4,6 +4,7 @@ namespace MeshWeaver.Data;
 
 public abstract record WorkspaceReference;
 
+
 public abstract record WorkspaceReference<TReference> : WorkspaceReference;
 
 public record JsonPointerReference(string Pointer) : WorkspaceReference<JsonElement?>
@@ -48,6 +49,8 @@ public record CollectionsReference(IReadOnlyCollection<string> Collections)
 
 public record JsonElementReference : WorkspaceReference<JsonElement>;
 
-public record StreamReference(object Owner, object Partition) : WorkspaceReference<EntityStore>;
+public record CombinedStreamReference(params StreamIdentity[] References) : WorkspaceReference<EntityStore>;
+public record StreamIdentity(object Owner, object Partition) : WorkspaceReference<EntityStore>;
 
 public record PartitionedCollectionsReference(object Partition, CollectionsReference Reference) : WorkspaceReference<EntityStore>;
+public record PartitionedCollectionReference(object Partition, CollectionReference Reference) : WorkspaceReference<InstanceCollection>;

@@ -4,7 +4,6 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Catalog.Domain;
 using MeshWeaver.Catalog.Layout;
-using MeshWeaver.Domain.Layout;
 using MeshWeaver.Layout.Domain;
 
 namespace MeshWeaver.Catalog.ViewModel;
@@ -60,7 +59,7 @@ public static class CatalogArea
 
     private static IObservable<IEnumerable<CatalogItemData>> MeshDocuments(this LayoutAreaHost layoutArea) =>
         layoutArea.GetOrAddVariable(nameof(MeshDocuments), () => layoutArea.Workspace
-            .ReduceToTypes(typeof(MeshDocument), typeof(MeshNode), typeof(User))
+            .GetStreamForTypes(typeof(MeshDocument), typeof(MeshNode), typeof(User))
             .DistinctUntilChanged()
             .Select(x =>
                 x.Value.GetData<MeshDocument>()

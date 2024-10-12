@@ -1,9 +1,11 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
+using System.Reflection;
 using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.DataStructures;
+using MeshWeaver.Domain;
 
 namespace MeshWeaver.Import.Configuration;
 
@@ -25,10 +27,14 @@ public record ImportFormat(
         };
 
 
+    public WorkspaceReference<EntityStore> GetReference(IDataSet dataSet)
+        => WorkspaceReferenceMapping.Invoke(dataSet);
+
     private Func<IDataSet, WorkspaceReference<EntityStore>> WorkspaceReferenceMapping { get; init; }
         = dataSet => new CollectionsReference(dataSet.Tables
             .Select(t => MappedTypes.FirstOrDefault(x => x.Name == t.TableName))
             .Where(x => x != null)
+            .SelectMany(t => new Type[]{t}.Concat(t.GetProperties().Select(p => p.GetCustomAttribute<DimensionAttribute>()?.Type).Where(t => t != null)))
             .Select(x => Workspace.DataContext.TypeRegistry.GetCollectionName(x))
             .Where(x => x != null)
             .ToArray());
@@ -104,8 +110,6 @@ public record ImportFormat(
     internal ImportFormat WithAutoMappingsForTypes(IReadOnlyCollection<Type> types) =>
         WithMappings(x => types.Aggregate(x, (a, b) => a.MapType(b)));
 
-    public WorkspaceReference<EntityStore> GetWorkspaceReference(IDataSet dataSet)
-        => WorkspaceReferenceMapping.Invoke(dataSet);
 }
 
 public delegate bool ValidationFunction(object instance, ValidationContext context, Activity<ChangeItem<EntityStore>> activity);

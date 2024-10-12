@@ -18,11 +18,9 @@ public record ImportDataSource(Source Source, IWorkspace Workspace)
             ImportRequest = config.Invoke(ImportRequest)
         };
 
-    protected override ISynchronizationStream<
-        EntityStore
-    > SetupDataSourceStream()
+
+    protected override Task<EntityStore> GetInitialValue(ISynchronizationStream<EntityStore> stream, CancellationToken cancellationToken)
     {
-        var ret = base.SetupDataSourceStream();
         var config = new ImportConfiguration(
             Workspace,
             MappedTypes,
@@ -31,16 +29,11 @@ public record ImportDataSource(Source Source, IWorkspace Workspace)
         config = Configurations.Aggregate(config, (c, f) => f.Invoke(c));
         ImportManager importManager = new(config);
 
-
-        Hub.InvokeAsync(async cancellationToken =>
-        {
-            var activity = await importManager.ImportAsync(
-                ImportRequest,
-                cancellationToken
-            );
-            activity.OnCompleted((ci, _) => ret.OnNext(ci));
-        });
-        return ret;
+        return importManager.Initialize(
+            ImportRequest,
+            GetReference(),
+            cancellationToken
+        );
     }
 
     private ImmutableList<
