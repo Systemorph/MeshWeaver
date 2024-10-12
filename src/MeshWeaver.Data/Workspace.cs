@@ -25,9 +25,9 @@ public class Workspace : IWorkspace
             Hub.Address,
             Hub,
             new WorkspaceStateReference(),
-            DataContext.ReduceManager,
-            InitializationMode.Manual
+            DataContext.ReduceManager
         );
+        //stream.OnNext(new(stream.Owner, stream.Reference, new(), null, ChangeType.NoUpdate, null, stream.Hub.Version));
         logger.LogDebug("Started initialization of data context of address {address}", Id);
         DataContext.Initialize(stream);
 
@@ -150,25 +150,23 @@ public class Workspace : IWorkspace
             ret as ISynchronizationStream<JsonElement>
             ?? ret.Reduce(new JsonElementReference(), subscriber);
 
+
         json.AddDisposable(
             json.Hub.Register<DataChangedEvent>(
                 delivery =>
                 {
-                    logger.LogDebug("{address} receiving change notification from {sender}", delivery.Target, delivery.Sender);
-                    var activity = json.RequestChangeFromJson(
-                        delivery.Message with
-                        {
-                            ChangedBy = delivery.Sender
-                        }
+                    json.Update(state =>
+                        json.Parse(state, delivery.Message with {ChangedBy = delivery.Sender})
                     );
-                    activity.OnCompleted(log => json.Hub.Post(new DataChangeResponse(Hub.Version, log), o => o.ResponseFor(delivery)));
+
                     return delivery.Processed();
                 },
                 x => json.Owner.Equals(x.Message.Owner) && x.Message.Reference.Equals(reference)
             )
         );
         json.AddDisposable(
-            json.ToDataChangedHost(reference)
+            json.ToDataChanged(reference)
+                .Where(c => !json.Subscriber.Equals(c.ChangedBy))
                 .Subscribe(e =>
                 {
                     logger.LogDebug("Owner {owner} sending change notification to subscriber {subscriber}", json.Owner, json.Subscriber);
@@ -204,8 +202,7 @@ public class Workspace : IWorkspace
             owner,
             Hub,
             reference,
-            ReduceManager.ReduceTo<TReduced>(),
-            InitializationMode.Automatic
+            ReduceManager.ReduceTo<TReduced>()
         );
         var fromWorkspace = stream.Reduce<TReduced, TReference>(reference, owner);
         if (fromWorkspace != null)
@@ -242,7 +239,7 @@ public class Workspace : IWorkspace
 
         json.AddDisposable(
             // this is the "client" ==> never needs to submit full state
-            json.ToDataChangedClient(reference)
+            json.ToDataChanged(reference)
                 .Where(x => json.Hub.Address.Equals(x.ChangedBy))
                 .Subscribe(e =>
                 {

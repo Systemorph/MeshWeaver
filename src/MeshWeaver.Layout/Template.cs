@@ -15,24 +15,20 @@ public static class Template{
     /// </summary>
     /// <typeparam name="TView">Type of the view</typeparam>
     /// <typeparam name="TEntity">The type of the entity to be data bound</typeparam>
+    /// <param name="stream">The stream to which to bind the view</param>
     /// <param name="id">Id to be referenced in the data binding</param>
     /// <param name="dataTemplate">View Template.</param>
     /// <returns>The view template</returns>
     public static TView Bind<TEntity, TView>(this ISynchronizationStream<TEntity> stream, string id, Expression<Func<TEntity, TView>> dataTemplate)
         where TView : UiControl
     {
-        object current = null;
 
         return (TView)GetTemplateControl(id, dataTemplate)
             .WithBuildup((host, context, store) =>
             {
                 var forwardSubscription = stream.Subscribe(changeItem =>
-                {
-                    if (Equals(changeItem.Value, current))
-                        return;
-                    current = changeItem.Value;
-                    host.Stream.SetData(id, changeItem.SetValue(current));
-                });
+                    host.Stream.SetData(id, changeItem.Value)
+                );
                 host.AddDisposable(context.Area, forwardSubscription);
                 return new(store);
             });
@@ -91,7 +87,7 @@ public static class Template{
                     if (Equals(val, current))
                         return;
                     current = val;
-                    host.Stream.SetData(id, new ChangeItem<object>(host.Stream.Owner, host.Stream.Reference, val, host.Stream.Owner, null, host.Hub.Version));
+                    host.Stream.SetData(id, val);
                 });
                 host.AddDisposable(context.Area, forwardSubscription);
                 return new(store);

@@ -1,6 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Diagnostics;
-using System.Diagnostics.Metrics;
 using System.Reactive.Linq;
 using System.Text.Json;
 using FluentAssertions;
@@ -200,6 +199,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 stream.Reference,
                 patch.Apply(ci),
                 hub.Address,
+                ChangeType.Patch,
                 new(() =>patch),
                 hub.Version
             );
@@ -442,6 +442,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 stream.Reference,
                 patch.Apply(ci),
                 hub.Address,
+                ChangeType.Patch,
                 new(()=>patch),
                 hub.Version
             );

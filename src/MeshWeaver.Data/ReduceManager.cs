@@ -119,22 +119,24 @@ public record ReduceManager<TStream>
             subscriber,
             stream.Hub,
             reference,
-            stream.ReduceManager.ReduceTo<TReduced>(),
-            InitializationMode.Automatic
+            stream.ReduceManager.ReduceTo<TReduced>()
         );
 
         stream.AddDisposable(reducedStream);
-
+        TReduced current = default;
         var selected = stream
-            .Select(x => x.SetValue(reducer.Invoke(x.Value, reducedStream.Reference)))                .Where(x => x != null)
-;
+            .Select(change => change.SetValue(
+                reducer.Invoke(change.Value, reducedStream.Reference),
+                ref current,
+                reference,
+                stream.Hub.JsonSerializerOptions
+                ))
+            .Where(x => x != null);
+
         reducedStream.AddDisposable(
             selected
-                .Where(x => x is { Value: not null })
-                .Select(x => x with{ChangedBy = null})
                 .Take(1)
                 .Concat(selected
-                    .Where(x => x is { Value: not null })
                     .Skip(1)
                     .Where(x => !Equals(x.ChangedBy, subscriber))
                 )
@@ -154,6 +156,8 @@ public record ReduceManager<TStream>
 
         return reducedStream;
     }
+
+
     internal static void UpdateParent<TReference, TReduced>(
         ISynchronizationStream<TStream> parent,
         TReference reference,
@@ -161,16 +165,7 @@ public record ReduceManager<TStream>
         Func<TStream, ChangeItem<TReduced>, TReference, TStream> backTransform
     ) where TReference : WorkspaceReference
     {
-        // if the parent is initialized, we will update the parent
-        if (parent.Initialized.IsCompleted)
-        {
-            parent.Update(state => change.SetValue(backTransform(state, change, reference)));
-        }
-        // if we are in automatic mode, we will initialize the parent
-        else if (parent.InitializationMode == InitializationMode.Automatic)
-        {
-            parent.Initialize(change.SetValue(backTransform(Activator.CreateInstance<TStream>(), change, reference)));
-        }
+        parent.Update(state => change.SetValue(backTransform(state, change, reference), ref state, parent.Reference, parent.Hub.JsonSerializerOptions));
     }
 
     private static object ReduceApplyRules<TReference, TReduced>(

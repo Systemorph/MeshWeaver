@@ -43,7 +43,8 @@ public enum ChangeType
 {
     Full,
     Patch,
-    Instance
+    Instance,
+    NoUpdate
 }
 
 public record DataChangedEvent(

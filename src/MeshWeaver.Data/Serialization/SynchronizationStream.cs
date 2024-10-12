@@ -21,6 +21,11 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
     public object Subscriber { get; init; }
 
     /// <summary>
+    /// The owner of the stream. Changes are to be made as update request to the owner.
+    /// </summary>
+    public object Owner => StreamReference.Owner;
+
+    /// <summary>
     /// The projected reference of the stream, e.g. a collection (CollectionReference),
     /// a layout area (LayoutAreaReference), etc.
     /// </summary>
@@ -45,14 +50,6 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
         Func<IMessageDelivery<WorkspaceMessage>, IMessageDelivery> Process
     )>.Empty;
 
-    private readonly TaskCompletionSource<TStream> initialized = new();
-
-
-    public Task<TStream> Initialized => initialized.Task;
-
-    public InitializationMode InitializationMode { get; }
-
-    Task ISynchronizationStream.Initialized => initialized.Task;
 
     object ISynchronizationStream.Reference => Reference;
 
@@ -119,14 +116,11 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
     {
         if (isDisposed || value == null)
             return;
-        if(!IsInitialized)
-            initialized.SetResult(value.Value);
         current = value;
         if (!isDisposed)
             Store.OnNext(value);
     }
 
-    private bool IsInitialized => initialized.Task.IsCompleted;
 
     public virtual void Initialize(ChangeItem<TStream> initial)
     {
@@ -135,7 +129,6 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
 
         current = initial ?? throw new ArgumentNullException(nameof(initial));
         Store.OnNext(initial);
-        initialized.SetResult(current.Value);
     }
 
     public void OnCompleted()
@@ -173,10 +166,7 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
 
     public void OnNext(ChangeItem<TStream> value)
     {
-        if(!IsInitialized)
-            Initialize(value);
-        else
-            InvokeAsync(() => SetCurrent(value));
+        InvokeAsync(() => SetCurrent(value));
     }
 
     public virtual void RequestChange(Func<TStream, ChangeItem<TStream>> update)
@@ -191,15 +181,13 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
         object Subscriber,
         IMessageHub Hub,
         TReference Reference,
-        ReduceManager<TStream> ReduceManager,
-        InitializationMode InitializationMode)
+        ReduceManager<TStream> ReduceManager)
     {
         this.Hub = Hub;
         this.ReduceManager = ReduceManager;
         this.StreamReference = StreamReference;
         this.Subscriber = Subscriber;
         this.Reference = Reference;
-        this.InitializationMode = InitializationMode;
         synchronizationStreamHub = Hub.GetHostedHub(new SynchronizationStreamAddress(Hub.Address));
     }
 
@@ -223,7 +211,7 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
 
     //private void InvokeAsync(Func<CancellationToken, Task> task)
     //    => synchronizationStreamHub.InvokeAsync(task);
-    private void InvokeAsync(Action action)
+    public void InvokeAsync(Action action)
         => synchronizationStreamHub.InvokeAsync(action);
 
 }
