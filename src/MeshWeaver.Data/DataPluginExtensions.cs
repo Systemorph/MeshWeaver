@@ -1,5 +1,4 @@
 ﻿using System.Collections.Immutable;
-using System.Reactive.Linq;
 using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Activities;
@@ -23,7 +22,7 @@ public static class DataPluginExtensions
         var existingLambdas = config.GetListOfLambdas();
         var ret = config
             .AddActivities()
-            .WithServices(sc => sc.AddScoped<IWorkspace, Workspace>().AddScoped<DataPlugin>())
+            .WithServices(sc => sc.AddScoped<IWorkspace, Workspace>())
             .WithSerialization(serialization =>
                 serialization.WithOptions(options =>
                 {
@@ -53,6 +52,7 @@ public static class DataPluginExtensions
                 typeof(WorkspaceStoreReference),
                 typeof(JsonPointerReference),
                 typeof(JsonPatch),
+                typeof(JsonElementReference),
                 typeof(DataChangedEvent),
                 typeof(UpdateDataRequest),
                 typeof(DeleteDataRequest),
@@ -60,7 +60,8 @@ public static class DataPluginExtensions
                 typeof(SubscribeRequest),
                 typeof(UnsubscribeDataRequest)
             )
-            .AddPlugin(h => new DataPlugin(h));
+            .RegisterDataEvents()
+            ;
 
         return ret;
     }
@@ -111,6 +112,28 @@ public static class DataPluginExtensions
             address,
             hub => configuration.Invoke(new GenericDataSource(address, dataContext.Workspace))
         );
+    private static MessageHubConfiguration RegisterDataEvents(this MessageHubConfiguration configuration) =>
+        configuration
+            .WithHandler<UpdateDataRequest>((hub, request) =>
+            {
+                hub.GetWorkspace().RequestChange(request.Message, request);
+                return request.Processed();
+            })
+            .WithHandler<SubscribeRequest>((hub, request) =>
+            {
+                hub.GetWorkspace().SubscribeToClient(request.Sender, (dynamic)request.Message.Reference);
+                return request.Processed();
+            })
+            .WithHandler<UnsubscribeDataRequest>((hub, request) =>
+            {
+                hub.GetWorkspace().Unsubscribe(request.Sender, request.Message.Reference);
+                return request.Processed();
+            })
+            .WithHandler<DataChangedRequest>((hub, request) =>
+            {
+                hub.GetWorkspace().RequestChange(request.Message, request);
+                return request.Processed();
+            });
 
 
 

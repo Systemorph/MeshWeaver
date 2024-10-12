@@ -3,6 +3,7 @@ using System.Text.Json;
 using FluentAssertions;
 using FluentAssertions.Equivalency;
 using FluentAssertions.Execution;
+using FluentAssertions.Extensions;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Activities;
 using MeshWeaver.Data;
@@ -44,7 +45,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // arrange
         var client = GetClient();
-        TimeSpan timeout = TimeSpan.FromSeconds(10);
+        var timeout = 1.Seconds();
         var importRequest = new ImportRequest(VanillaDistributedCsv)
         {
             Format = TestHubSetup.CashflowImportFormat,

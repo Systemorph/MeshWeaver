@@ -38,7 +38,7 @@ public record ImportDataSource(Source Source, IWorkspace Workspace)
                 ImportRequest,
                 cancellationToken
             );
-            activity.OnCompleted((ci, _) => ret.Initialize(ci));
+            activity.OnCompleted((ci, _) => ret.OnNext(ci));
         });
         return ret;
     }

@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Json.More;
+using Json.Patch;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging.Serialization;
 using Microsoft.Extensions.DependencyInjection;
@@ -110,6 +111,7 @@ public static class SerializationExtensions
             node?.WriteTo(writer);
         }
     }
+
 
 
 }

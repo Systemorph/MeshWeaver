@@ -16,8 +16,7 @@ public interface IWorkspace : IAsyncDisposable
     void Delete(object instance) => Delete([instance]);
 
     void Unsubscribe(object address, WorkspaceReference reference);
-    internal void RequestChange(DataChangedRequest change,
-        IMessageDelivery request);
+    internal void RequestChange(DataChangedRequest change, IMessageDelivery request);
 
     ISynchronizationStream<EntityStore> Stream { get; }
     ISynchronizationStream<EntityStore> ReduceToTypes(params Type[] types) =>

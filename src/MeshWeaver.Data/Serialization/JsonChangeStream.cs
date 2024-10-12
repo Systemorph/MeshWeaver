@@ -8,120 +8,44 @@ namespace MeshWeaver.Data.Serialization;
 
 public static class JsonSynchronizationStream
 {
-    public record ChangeItemJsonTuple<TStream>(ChangeItem<TStream> Current, JsonElement Json);
-
-    public static IObservable<DataChangedEvent> ToDataChangedClient(
-        this ISynchronizationStream<JsonElement> stream, object reference)
-    {
-        JsonElement? currentSync = null;
-        return stream
-        .Select(x =>
-        {
-                    JsonPatch patch;
-                    if (x.Patch != null)
-                    {
-                        patch = x.Patch.Value;
-                currentSync = patch.Apply(currentSync, stream.Hub.JsonSerializerOptions);
-                    }
-                    else
-                    {
-                        patch =
-                            currentSync.CreatePatch(x.Value);
-
-                        currentSync = x.Value;
-                    }
-                    if (patch.Operations.Count == 0)
-                        return null;
-
-                    return new DataChangedEvent(
-                        stream.Owner,
-                        reference,
-                        stream.Hub.Version,
-                        new(JsonSerializer.Serialize(patch, stream.Hub.JsonSerializerOptions)),
-                        ChangeType.Patch,
-                        x.ChangedBy
-                    ); ;
-                })
-            .Where(x => x != null);
-
-    }
-
-    public static IObservable<DataChangedEvent> ToDataChangedHost(
-        this ISynchronizationStream<JsonElement> stream, object reference)
-    {
-        JsonElement? currentSync = null;
-        return stream
-            .Take(1)
-            .Select(x => new DataChangedEvent(
-                stream.Owner,
-                reference,
-                stream.Hub.Version,
-                new RawJson((currentSync=x.Value).ToString()),
-                ChangeType.Full,
-                x.ChangedBy
-                ))
-            .Concat(stream.Skip(1)
-            .Select(x =>
-            {
-                JsonPatch patch;
-                if (x.Patch != null)
-                {
-                    patch = x.Patch.Value;
-                    currentSync = patch.Apply(currentSync, stream.Hub.JsonSerializerOptions);
-                }
-                else
-                {
-                    patch =
-                        currentSync.CreatePatch(x.Value);
-
-                    currentSync = x.Value;
-                }
-
-                if (patch.Operations.Count == 0)
-                    return null;
-
-                return new DataChangedEvent(
+    public static IObservable<DataChangedEvent> ToDataChanged(
+        this ISynchronizationStream<JsonElement> stream, object reference) =>
+        stream
+            .Select(x => new DataChangedEvent
+                (
                     stream.Owner,
                     reference,
-                    stream.Hub.Version,
-                    new(JsonSerializer.Serialize(patch, stream.Hub.JsonSerializerOptions)),
-                    ChangeType.Patch,
+                    x.Version,
+                    new RawJson(JsonSerializer.Serialize(x.ChangeType switch
+                    {
+                        ChangeType.Patch => (object)x.Patch.Value,
+                        _ => x.Value
+                    }, stream.Hub.JsonSerializerOptions)),
+                    x.ChangeType,
                     x.ChangedBy
-                );
-            })).Where(x => x != null);
-    }
+                )
+            );
 
 
-    public static Activity RequestChangeFromJson(
-        this ISynchronizationStream<JsonElement> json,
-        DataChangedEvent request
-    )
-    {
-        var activity = new Activity(ActivityCategory.DataUpdate, json.Hub);
-        json.Update(state =>
-        {
-            var ret = json.Parse(state, request);
-            activity.Complete();
-            return ret;
-        });
-        return activity;
-    }
+
 
     public static void NotifyChange(
         this ISynchronizationStream<JsonElement> json,
         DataChangedEvent request
     )
     {
-        json.Update(state => json.Parse(state.ValueKind != JsonValueKind.Undefined ? state : new(), request));
+        json.Update(state => json.Parse(state , request));
     }
 
-    private static ChangeItem<JsonElement> Parse(
+    public static ChangeItem<JsonElement> Parse(
         this ISynchronizationStream<JsonElement> json, 
-        JsonElement state,
+        JsonElement currentState,
         DataChangedEvent request) =>
         request.ChangeType == ChangeType.Full
-            ? new(json.Owner, json.Reference, JsonDocument.Parse(request.Change.Content).RootElement, request.ChangedBy, null, json.Hub.Version)
-            : CreatePatch(json, state, request);
+            ? new(
+                json.Owner, 
+                json.Reference, JsonDocument.Parse(request.Change.Content).RootElement, request.ChangedBy, ChangeType.Full, null, json.Hub.Version)
+            : CreatePatch(json, currentState, request);
 
     private static ChangeItem<JsonElement> CreatePatch(ISynchronizationStream<JsonElement> json, JsonElement state, DataChangedEvent request)
     {
@@ -129,10 +53,15 @@ public static class JsonSynchronizationStream
 
         try
         {
-            return new(json.Owner, json.Reference,
-                patch.Apply(state), request.ChangedBy, new(() =>patch),
-                json.Hub.Version);
-
+            return new(
+                json.Owner,
+                json.Reference,
+                patch.Apply(state),
+                request.ChangedBy,
+                ChangeType.Patch,
+                new(() => patch),
+                json.Hub.Version
+            );
         }
         catch (InvalidOperationException)
         {

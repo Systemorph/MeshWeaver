@@ -46,8 +46,7 @@ public record LayoutAreaHost : IDisposable
             subscriber,
             workspaceStream.Hub,
             reference,
-            workspaceStream.ReduceManager.ReduceTo<EntityStore>(),
-            InitializationMode.Automatic
+            workspaceStream.ReduceManager.ReduceTo<EntityStore>()
         );
         Stream.AddDisposable(this);
         Stream.AddDisposable(
@@ -129,14 +128,7 @@ public record LayoutAreaHost : IDisposable
     public void Update(string collection, Func<InstanceCollection, InstanceCollection> update)
     {
         Stream.Update(ws =>
-            new(
-                Stream.Owner,
-                Stream.Reference,
-                (ws ?? new()).Update(collection, update),
-                Stream.Owner,
-                null, // todo we can fill this in here and use.
-                Stream.Hub.Version
-            )
+            Stream.ApplyChanges(ws.MergeWithUpdates((ws ?? new()).Update(collection, update)))
         );
     }
 
@@ -318,7 +310,7 @@ public record LayoutAreaHost : IDisposable
             logger.LogDebug("Start re-rendering");
             var reference = Stream.Reference;
             var context = new RenderingContext(reference.Area) { Layout = reference.Layout };
-            Stream.Initialize(
+            Stream.OnNext(
                 new(
                     Stream.Owner,
                     Stream.Reference,
@@ -329,6 +321,7 @@ public record LayoutAreaHost : IDisposable
                         )
                         .Store,
                     Stream.Hub.Address,
+                    ChangeType.Full,
                     null,
                     Stream.Hub.Version));
             logger.LogDebug("End re-rendering");

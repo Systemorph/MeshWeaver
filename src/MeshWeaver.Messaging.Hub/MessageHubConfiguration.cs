@@ -112,13 +112,22 @@ public record MessageHubConfiguration
 
     private record ParentMessageHub(IMessageHub Value);
 
-    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery) => WithHandler<TMessage>((h,d,_) => Task.FromResult(delivery.Invoke(h, d)));
-    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, CancellationToken, Task<IMessageDelivery>> delivery) => 
+
+    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery, Func<IMessageHub,IMessageDelivery, bool> filter = null) => 
+        WithHandler<TMessage>((h,d,_) => Task.FromResult(delivery.Invoke(h, d)), filter);
+    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, CancellationToken, Task<IMessageDelivery>> delivery, Func<IMessageHub, IMessageDelivery, bool> filter = null) => 
         this with
         {
-            MessageHandlers = MessageHandlers.Add(new(typeof(TMessage), (h,m,c) => delivery.Invoke(h,(IMessageDelivery<TMessage>)m,c)))
+            MessageHandlers = MessageHandlers.Add(
+                new(typeof(TMessage), 
+                (h,m,c) => 
+                    m is IMessageDelivery<TMessage> mdTyped &&
+                        (filter ?? DefaultFilter).Invoke(h, m) ?
+                        delivery.Invoke(h,mdTyped,c)
+                : Task.FromResult<IMessageDelivery>(m)))
         };
 
+    private static bool DefaultFilter(IMessageHub hub, IMessageDelivery delivery) => delivery.Target == null || delivery.Target.Equals(hub.Address);
 
     public MessageHubConfiguration WithInitialization(Action<IMessageHub> action) => this with
     {
