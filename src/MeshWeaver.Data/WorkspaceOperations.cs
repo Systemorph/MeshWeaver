@@ -129,41 +129,44 @@ namespace MeshWeaver.Data
             var activity = GetActivity(workspace.Hub);
 
             // TODO V10: Add delete validation here (10.10.2024, Roland Bürgi)
+            foreach (var e in deletion
+                         .Elements.GroupBy(e => e.GetType())
+                         .SelectMany(e =>
+                             workspace.DataContext.MapToIdAndAddress(e, e.Key))
+                         .GroupBy(e => e.Stream)
+                    )
+            {
 
-            deletion
-                .Elements.GroupBy(e => e.GetType())
-                .SelectMany(e => workspace.DataContext.MapToIdAndAddress(e, e.Key))
-                .GroupBy(e => e.Stream)
-                .ForEach(e =>
+                var activityPart = activity.StartSubActivity(ActivityCategory.DataUpdate);
+                e.Key.Update(s =>
                 {
-                    var activityPart = activity.StartSubActivity(ActivityCategory.DataUpdate);
-                    e.Key.Update(s =>
+                    try
                     {
-                        try
-                        {
-                            var entityStoreAndUpdates = s.DeleteWithUpdates(
-                                new EntityStore(
-                                    e.Select(y => new KeyValuePair<string, InstanceCollection>(
-                                            y.Collection,
-                                            new(y.Elements)
-                                        ))
-                                        .ToImmutableDictionary()
-                                ) { GetCollectionName = workspace.DataContext.GetCollectionName });
-                            var ret = e.Key.ApplyChanges(
-                                entityStoreAndUpdates
-                            );
-                            activityPart.Complete();
-                            activity.Complete();
-                            return ret;
-                        }
-                        catch (Exception ex)
-                        {
-                            activityPart.LogError(ex.Message);
-                            activityPart.Complete();
-                            return null;
-                        }
-                    });
+                        var entityStore = new EntityStore(
+                                e.Select(y => new KeyValuePair<string, InstanceCollection>(
+                                        y.Collection,
+                                        new(y.Elements)
+                                    ))
+                                    .ToImmutableDictionary()
+                            )
+                            { GetCollectionName = workspace.DataContext.GetCollectionName };
+                        var storesAndUpdates = s.DeleteWithUpdates(entityStore);
+                        var ret = e.Key.ApplyChanges(storesAndUpdates);
+                        activityPart.Complete();
+
+                        return ret;
+                    }
+                    catch (Exception ex)
+                    {
+                        activityPart.LogError(ex.Message);
+                        activityPart.Complete();
+                        return null;
+                    }
+
+
                 });
+            }
+
             return activity;
         }
 
