@@ -163,11 +163,20 @@ public static class LayoutExtensions
         this ISynchronizationStream<EntityStore> stream,
         string id
     ) => (T)stream.Current.Value.Reduce(new EntityReference(LayoutAreaReference.Data, id));
+
     public static void SetData(
         this ISynchronizationStream<EntityStore> stream,
         string id,
-        ChangeItem<object> changeItem
-    ) => stream.Update(s => changeItem.SetValue(s.Update(LayoutAreaReference.Data, c => c.SetItem(id, changeItem.Value))));
+        object value
+    ) => stream.Update(s =>
+        stream.ApplyChanges(
+            s.MergeWithUpdates(
+                s.Update(LayoutAreaReference.Data,
+                    c => c.SetItem(id, value)
+                    )
+            )
+        )
+    );
 
     public static TControl GetControl<TControl>(this EntityStore store, string area)
         where TControl : UiControl =>

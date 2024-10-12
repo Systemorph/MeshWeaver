@@ -16,7 +16,6 @@ public interface IDataSource : IAsyncDisposable
     void Initialize();
 
     IReadOnlyDictionary<StreamReference, ISynchronizationStream<EntityStore>> Streams { get; }
-    Task Initialized { get; }
 }
 
 public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) : IDataSource
@@ -63,8 +62,7 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
 
  
     IReadOnlyDictionary<StreamReference,ISynchronizationStream<EntityStore>> IDataSource.Streams => Streams;
-    public Task Initialized => Task.WhenAll(Streams.Values.Select(s => s.Initialized));
-
+    
     protected ImmutableDictionary<StreamReference, ISynchronizationStream<EntityStore>> Streams { get; set; } =
         ImmutableDictionary<StreamReference, ISynchronizationStream<EntityStore>>.Empty;
 
@@ -128,8 +126,7 @@ public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorksp
             Hub.Address,
             Hub,
             reference,
-            workspaceSync.ReduceManager.ReduceTo<EntityStore>(),
-            InitializationMode.Automatic
+            workspaceSync.ReduceManager.ReduceTo<EntityStore>()
         );
 
         stream.AddDisposable(
@@ -169,12 +166,12 @@ public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorksp
                 cancellationToken: cancellationToken
             );
 
-        stream.Initialize(
-            new ChangeItem<EntityStore>(
+        stream.OnNext(new ChangeItem<EntityStore>(
                 stream.Owner,
                 stream.Reference,
                 initial,
                 Id,
+                ChangeType.Full,
                 null,
                 Hub.Version
             )

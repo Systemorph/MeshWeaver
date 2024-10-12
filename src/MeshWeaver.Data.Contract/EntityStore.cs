@@ -149,8 +149,9 @@ public record EntityStore
             .Select(x => x.GetHashCode())
             .Aggregate((x, y) => x ^ y);
 
-    public EntityStoreAndUpdates MergeWithUpdates(EntityStore updated, UpdateOptions options)
+    public EntityStoreAndUpdates MergeWithUpdates(EntityStore updated, UpdateOptions options = null)
     {
+        options ??= UpdateOptions.Default;
         var store = Merge(updated, options);
         return new EntityStoreAndUpdates(store, store.Collections.SelectMany(u => ComputeChanges(u.Key, u.Value)));
     }

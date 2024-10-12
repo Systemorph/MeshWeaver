@@ -4,14 +4,13 @@ namespace MeshWeaver.Data.Serialization;
 
 public interface ISynchronizationStream : IDisposable
 {
-    object Owner => StreamReference.Owner;
+    object Owner { get; }
     object Reference { get; }
     object Subscriber { get; }
     StreamReference StreamReference { get; }
     internal IMessageDelivery DeliverMessage(IMessageDelivery<WorkspaceMessage> delivery);
     void AddDisposable(IDisposable disposable);
 
-    Task Initialized { get; }
     ISynchronizationStream Reduce(WorkspaceReference reference, object subscriber = null) =>
         Reduce((dynamic)reference, subscriber);
     ISynchronizationStream<TReduced> Reduce<TReduced>(
@@ -39,12 +38,9 @@ public interface ISynchronizationStream<TStream>
     ChangeItem<TStream> Current { get; }
     void Update(Func<TStream, ChangeItem<TStream>> update);
 
-    new Task<TStream> Initialized { get; }
-    void Initialize(ChangeItem<TStream> current);
-
-    InitializationMode InitializationMode { get; }
     ReduceManager<TStream> ReduceManager { get; }
     void RequestChange(Func<TStream, ChangeItem<TStream>> update);
+    void InvokeAsync(Action action);
 }
 
 public interface ISynchronizationStream<TStream, out TReference> : ISynchronizationStream<TStream>

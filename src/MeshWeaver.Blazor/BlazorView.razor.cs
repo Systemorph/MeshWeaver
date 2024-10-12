@@ -228,6 +228,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
                         Stream.Reference,
                         patch?.Apply(ci) ?? ci,
                         Hub.Address,
+                        ChangeType.Patch,
                         new(() => patch),
                         Hub.Version
                     );

@@ -75,8 +75,8 @@ namespace MeshWeaver.Data
         }
 
 
-        private static EntityStore PatchEntityStore(
-            EntityStore current,
+        public static EntityStore PatchEntityStore(
+            this EntityStore current,
             ChangeItem<JsonElement> changeItem,
             JsonSerializerOptions options
         )

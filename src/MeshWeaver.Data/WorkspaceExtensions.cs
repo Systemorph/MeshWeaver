@@ -41,6 +41,7 @@ public static class WorkspaceExtensions
             stream.Reference,
             storeAndUpdates.Store, 
             stream.Hub.Address, 
+            ChangeType.Patch,
             new(() => CreatePatch(storeAndUpdates.Changes, stream.Hub.JsonSerializerOptions)),
             stream.Hub.Version
             );
