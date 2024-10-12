@@ -34,10 +34,10 @@ public class HierarchicalDimensionCacheTest(ITestOutputHelper output) : HubTestB
     private async Task<HierarchicalDimensionCache> GetDimensionCacheAsync()
     {
         var workspace = GetHost().GetWorkspace();
-        var stream = workspace.Stream
-            .Reduce(new CollectionsReference(
-                workspace.DataContext.GetCollectionName(typeof(TestHierarchicalDimensionA)),
-                workspace.DataContext.GetCollectionName(typeof(TestHierarchicalDimensionB))));
+        var stream = workspace.GetStreamForTypes(
+            typeof(TestHierarchicalDimensionA),
+            typeof(TestHierarchicalDimensionB)
+        );
 
         var ci = await ((IObservable<ChangeItem<EntityStore>>)stream).FirstAsync();
         return new(ci.Value);

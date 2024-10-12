@@ -12,6 +12,23 @@ public class ImportManager(ImportConfiguration configuration)
 {
     public ImportConfiguration Configuration { get; } = configuration;
 
+    public async Task<EntityStore> Initialize(ImportRequest importRequest, WorkspaceReference<EntityStore> reference, CancellationToken cancellationToken)
+    {
+        var activity = new Activity<ChangeItem<EntityStore>>(ActivityCategory.Import, Configuration.Workspace.Hub);
+        var (dataSet, format) = await ReadDataSetAsync(importRequest, cancellationToken);
+        var ret = format.Import(importRequest, dataSet, new(), activity);
+        activity.Complete(null);
+        var tcs = new TaskCompletionSource<EntityStore>(cancellationToken);
+        activity.OnCompleted((_, log) =>
+        {
+            if(log.Status == ActivityStatus.Succeeded) 
+                tcs.SetResult(ret.Store); 
+            else tcs.SetException(new ImportException("Import failed"));
+        });
+
+        return await tcs.Task;
+    }
+
     public async Task<Activity<ChangeItem<EntityStore>>> ImportAsync(
         ImportRequest importRequest,
         CancellationToken cancellationToken
@@ -21,9 +38,8 @@ public class ImportManager(ImportConfiguration configuration)
         try
         {
             var (dataSet, format) = await ReadDataSetAsync(importRequest, cancellationToken);
-            var reference = format.GetWorkspaceReference(dataSet);
-            var stream = Configuration.Workspace.GetStreamFor(reference, Configuration.Workspace.Hub.Address);
-
+            var reference = format.GetReference(dataSet);
+            var stream = Configuration.Workspace.GetStream(reference, Configuration.Workspace.Hub.Address);
             stream.Update(store =>
             {
                 var ret = stream.ApplyChanges(format.Import(importRequest, dataSet, store, activity));

@@ -2,7 +2,6 @@
 using FluentAssertions.Extensions;
 using MeshWeaver.Activities;
 using MeshWeaver.Fixture;
-using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.Logging;
 using Xunit;
 using Xunit.Abstractions;
@@ -11,8 +10,6 @@ namespace MeshWeaver.Data.Test;
 
 public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    [Inject] private ILogger<ActivityTest> logger;
-
     [Fact]
     public async Task TestActivity()
     {

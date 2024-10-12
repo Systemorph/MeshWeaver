@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using MeshWeaver.Data.Serialization;
 
 namespace MeshWeaver.Data.Persistence;
 
@@ -9,7 +10,7 @@ public abstract record HubDataSourceBase<TDataSource>(object Id, IWorkspace Work
     protected JsonSerializerOptions Options => Hub.JsonSerializerOptions;
 }
 
-public record HubDataSource : HubDataSourceBase<HubDataSource>
+public record HubDataSource(object Id, IWorkspace Workspace) : HubDataSourceBase<HubDataSource>(Id, Workspace)
 {
     protected override HubDataSource WithType<T>(Func<ITypeSource, ITypeSource> typeSource) =>
         WithType<T>(x => (TypeSourceWithType<T>)typeSource.Invoke(x));
@@ -18,16 +19,6 @@ public record HubDataSource : HubDataSourceBase<HubDataSource>
         Func<TypeSourceWithType<T>, TypeSourceWithType<T>> typeSource
     ) => WithTypeSource(typeof(T), typeSource.Invoke(new TypeSourceWithType<T>(Workspace, Id)));
 
-    public HubDataSource(object Id, IWorkspace Workspace)
-        : base(Id, Workspace) { }
-
-    public override void Initialize()
-    {
-        var reference = new CollectionsReference(
-            TypeSources.Values.Select(ts => ts.CollectionName).ToArray()
-        );
-        var stream = Workspace.GetRemoteStream(Id, reference);
-        Streams = Streams.Add(stream.StreamReference, stream);
-        base.Initialize();
-    }
+    protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity) => 
+        Workspace.GetRemoteStream(Id, GetReference());
 }

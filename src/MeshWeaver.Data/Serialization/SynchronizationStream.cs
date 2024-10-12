@@ -13,7 +13,7 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
     /// <summary>
     /// The stream reference, i.e. the unique identifier of the stream.
     /// </summary>
-    public StreamReference StreamReference { get; }
+    public StreamIdentity StreamIdentity { get; }
 
     /// <summary>
     /// The subscriber of the stream, e.g. the Hub Address or Id of the subscriber.
@@ -23,7 +23,7 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
     /// <summary>
     /// The owner of the stream. Changes are to be made as update request to the owner.
     /// </summary>
-    public object Owner => StreamReference.Owner;
+    public object Owner => StreamIdentity.Owner;
 
     /// <summary>
     /// The projected reference of the stream, e.g. a collection (CollectionReference),
@@ -110,6 +110,22 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
     }
 
     public IMessageHub Hub { get; init; }
+    public void InitializeAsync(Func<CancellationToken, Task<TStream>> initialize)
+    {
+        InvokeAsync(async ct => SetCurrent(
+                new(
+                    Owner,
+                    Reference,
+                    await initialize.Invoke(ct),
+                    null,
+                    ChangeType.Full,
+                    null,
+                    Hub.Version
+                )
+            )
+        );
+    }
+
     public ReduceManager<TStream> ReduceManager { get; init; }
 
     private void SetCurrent(ChangeItem<TStream> value)
@@ -177,7 +193,7 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
 
 
     public SynchronizationStream(
-        StreamReference StreamReference,
+        StreamIdentity StreamIdentity,
         object Subscriber,
         IMessageHub Hub,
         TReference Reference,
@@ -185,7 +201,7 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
     {
         this.Hub = Hub;
         this.ReduceManager = ReduceManager;
-        this.StreamReference = StreamReference;
+        this.StreamIdentity = StreamIdentity;
         this.Subscriber = Subscriber;
         this.Reference = Reference;
         synchronizationStreamHub = Hub.GetHostedHub(new SynchronizationStreamAddress(Hub.Address));
@@ -214,4 +230,6 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
     public void InvokeAsync(Action action)
         => synchronizationStreamHub.InvokeAsync(action);
 
+    public void InvokeAsync(Func<CancellationToken, Task> action)
+        => synchronizationStreamHub.InvokeAsync(action);
 }

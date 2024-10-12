@@ -22,7 +22,7 @@ public static class NorthwindDataCubeLayoutAreaExtensions
         => area
             .GetOrAddVariable(NorthwindDataCube,
                 () => area
-                    .Workspace.ReduceToTypes(typeof(Order), typeof(OrderDetails), typeof(Product))
+                    .Workspace.GetStreamForTypes(typeof(Order), typeof(OrderDetails), typeof(Product))
                     .DistinctUntilChanged()
                     .Select(x =>
                         x.Value.GetData<Order>()
