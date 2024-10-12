@@ -20,16 +20,9 @@ public class Workspace : IWorkspace
         logger.LogDebug("Creating data context of address {address}", Id);
         DataContext = this.GetDataConfiguration();
 
-        stream = new SynchronizationStream<EntityStore, WorkspaceStateReference>(
-            new(Hub.Address, null),
-            Hub.Address,
-            Hub,
-            new WorkspaceStateReference(),
-            DataContext.ReduceManager
-        );
         //stream.OnNext(new(stream.Owner, stream.Reference, new(), null, ChangeType.NoUpdate, null, stream.Hub.Version));
         logger.LogDebug("Started initialization of data context of address {address}", Id);
-        DataContext.Initialize(stream);
+        DataContext.Initialize();
 
 
     }
@@ -39,9 +32,6 @@ public class Workspace : IWorkspace
     public WorkspaceReference Reference { get; } = new WorkspaceStateReference();
     
 
-    private readonly ISynchronizationStream<EntityStore, WorkspaceStateReference> stream;
-
-    public ISynchronizationStream<EntityStore, WorkspaceStateReference> Stream => stream;
 
     public IReadOnlyCollection<Type> MappedTypes => DataContext.MappedTypes.ToArray();
 
@@ -72,6 +62,7 @@ public class Workspace : IWorkspace
             GetSynchronizationStreamMethod
                 .MakeGenericMethod(typeof(TReduced), reference.GetType())
                 .Invoke(this, [id, reference]);
+
 
     private static readonly MethodInfo GetSynchronizationStreamMethod =
         ReflectionHelper.GetMethodGeneric<Workspace>(x =>
@@ -111,7 +102,7 @@ public class Workspace : IWorkspace
         TReference
     >(TReference reference, object subscriber)
         where TReference : WorkspaceReference =>
-        ReduceManager.ReduceStream<TReduced, TReference>(stream, reference, subscriber);
+        ReduceManager.ReduceStream<TReduced, TReference>(this, reference, subscriber);
 
     public ISynchronizationStream<TReduced> GetStreamFor<TReduced>(WorkspaceReference<TReduced> reference,
         object subscriber) =>
@@ -139,7 +130,7 @@ public class Workspace : IWorkspace
         // link to deserialized world. Will also potentially link to workspace.
 
 
-        var fromWorkspace = stream.Reduce<TReduced, TReference>(reference, subscriber);
+        var fromWorkspace = this.ReduceInternal<TReduced, TReference>(reference, subscriber);
         var ret =
             fromWorkspace
             ?? throw new DataSourceConfigurationException(
@@ -204,7 +195,7 @@ public class Workspace : IWorkspace
             reference,
             ReduceManager.ReduceTo<TReduced>()
         );
-        var fromWorkspace = stream.Reduce<TReduced, TReference>(reference, owner);
+        var fromWorkspace = this.ReduceInternal<TReduced, TReference>(reference, owner);
         if (fromWorkspace != null)
             ret.AddDisposable(
                 fromWorkspace.Where(x => Hub.Address.Equals(x.ChangedBy)).Subscribe(ret)
@@ -269,23 +260,30 @@ public class Workspace : IWorkspace
             new DeleteDataRequest(instances.ToArray()) { ChangedBy = Hub.Address }, null
         );
 
-
-    public ISynchronizationStream<EntityStore> ReduceToTypes(object subscriber, params Type[] types)
+    public ISynchronizationStream<TReduced> GetStream<TReduced>(WorkspaceReference<TReduced> reference, object subscriber)
     {
-        return ReduceManager.ReduceStream<EntityStore, CollectionsReference>(
-            stream,
-            new CollectionsReference(
-                types
-                    .Select(t =>
-                        DataContext.TypeRegistry.TryGetCollectionName(t, out var name)
-                            ? name
-                            : throw new ArgumentException($"Type {t.FullName} is unknown.")
-                    )
-                    .ToArray()
-            ),
+        return ReduceInternal((dynamic)reference, subscriber);
+    }
+
+    private ISynchronizationStream<TReduced> ReduceInternal<TReduced, TReference>(TReference reference, object subscriber)
+    where TReference : WorkspaceReference
+    {
+        return ReduceManager.ReduceStream<TReduced, TReference>(
+            this,
+            reference,
             subscriber
         );
     }
+
+    public ISynchronizationStream<EntityStore> GetStreamForTypes(object subscriber, params Type[] types)
+        => ReduceInternal<EntityStore, CollectionsReference>(new CollectionsReference(types
+            .Select(t =>
+                DataContext.TypeRegistry.TryGetCollectionName(t, out var name)
+                    ? name
+                    : throw new ArgumentException($"Type {t.FullName} is unknown.")
+            )
+            .ToArray()
+        ), subscriber);
 
     public ReduceManager<EntityStore> ReduceManager => DataContext.ReduceManager;
 
@@ -301,7 +299,6 @@ public class Workspace : IWorkspace
         if (request != null)
             activity.OnCompleted(log => Hub.Post(new DataChangeResponse(Hub.Version, log), o => o.ResponseFor(request)));
     }
-    ISynchronizationStream<EntityStore> IWorkspace.Stream => stream;
 
     private bool isDisposing;
 
@@ -311,13 +308,22 @@ public class Workspace : IWorkspace
             return;
         isDisposing = true;
 
+        while (disposables.TryTake(out var d))
+            d.Dispose();
+
         foreach (var subscription in remoteStreams.Values.Concat(subscriptions.Values))
             subscription.Dispose();
 
-        stream.Dispose();
 
         await DataContext.DisposeAsync();
     }
+    private readonly ConcurrentBag<IDisposable> disposables = new();
+
+    public void AddDisposable(IDisposable disposable)
+    {
+        disposables.Add(disposable);
+    }
+
 
     protected IMessageDelivery HandleCommitResponse(IMessageDelivery<DataChangeResponse> response)
     {
@@ -334,6 +340,7 @@ public class Workspace : IWorkspace
         s_subscribeToClientMethod
             .MakeGenericMethod(typeof(TReduced), reference.GetType())
             .Invoke(this, [address, reference]);
+
 
     private static readonly MethodInfo s_subscribeToClientMethod =
         ReflectionHelper.GetMethodGeneric<Workspace>(x =>
@@ -356,8 +363,4 @@ public class Workspace : IWorkspace
     }
 
 
-    public void Synchronize(Func<EntityStore, ChangeItem<EntityStore>> change)
-    {
-        stream.Update(change);
-    }
 }

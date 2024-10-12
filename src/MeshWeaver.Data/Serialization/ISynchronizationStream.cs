@@ -7,7 +7,7 @@ public interface ISynchronizationStream : IDisposable
     object Owner { get; }
     object Reference { get; }
     object Subscriber { get; }
-    StreamReference StreamReference { get; }
+    StreamIdentity StreamIdentity { get; }
     internal IMessageDelivery DeliverMessage(IMessageDelivery<WorkspaceMessage> delivery);
     void AddDisposable(IDisposable disposable);
 
@@ -37,10 +37,12 @@ public interface ISynchronizationStream<TStream>
 {
     ChangeItem<TStream> Current { get; }
     void Update(Func<TStream, ChangeItem<TStream>> update);
+    void InitializeAsync(Func<CancellationToken,Task<TStream>> update);
 
     ReduceManager<TStream> ReduceManager { get; }
     void RequestChange(Func<TStream, ChangeItem<TStream>> update);
     void InvokeAsync(Action action);
+    void InvokeAsync(Func<CancellationToken, Task> action);
 }
 
 public interface ISynchronizationStream<TStream, out TReference> : ISynchronizationStream<TStream>

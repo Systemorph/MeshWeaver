@@ -79,11 +79,23 @@ public record ReduceManager<TStream>
             ReduceApplyRules(ws, r, reducer, node);
         Reducers.AddFirst(Lambda);
 
-        return AddWorkspaceReferenceStream<TReference, TReduced>(
+        var ret = AddStreamReducer<TReference, TReduced>(
             (parent, reference, subscriber) =>
                 (ISynchronizationStream<TReduced, TReference>)
-                    CreateReducedStream(parent, reference, subscriber, reducer, backTransform)
+                CreateReducedStream(parent, reference, subscriber, reducer, backTransform)
         );
+        if (typeof(TReduced) == typeof(EntityStore))
+        {
+            ret = ret.AddWorkspaceReferenceStream<TReference>(
+                    (workspace, reference, subscriber) =>
+                        (ISynchronizationStream<EntityStore>)
+                        CreateReducedStream(workspace, reference, subscriber,
+                            (ReduceFunction<TStream, TReference, EntityStore>)((s, r) =>
+                                (EntityStore)(object)reducer.Invoke(s, r)))
+                );
+        }
+
+        return ret;
     }
 
     public TReduced Reduce<TReduced>(TStream value, WorkspaceReference<TReduced> reference)
@@ -91,7 +103,7 @@ public record ReduceManager<TStream>
         return (TReduced)Reduce(value, (WorkspaceReference)reference);
     }
 
-    public ReduceManager<TStream> AddWorkspaceReferenceStream<TReference, TReduced>(
+    public ReduceManager<TStream> AddStreamReducer<TReference, TReduced>(
         ReducedStreamProjection<TStream, TReference, TReduced> reducer
     )
         where TReference : WorkspaceReference<TReduced>
@@ -104,6 +116,22 @@ public record ReduceManager<TStream>
             ),
         };
     }
+    public ReduceManager<TStream> AddWorkspaceReferenceStream<TReference>(
+        ReducedStreamProjection<TReference> reducer
+    )
+        where TReference : WorkspaceReference
+    {
+        return this with
+        {
+            ReduceStreams = ReduceStreams.Insert(
+                0,
+                (ReduceStream<TReference>)(reducer.Invoke)
+            ),
+        };
+    }
+
+
+
 
 
     protected static ISynchronizationStream CreateReducedStream<TReference, TReduced>(
@@ -115,7 +143,7 @@ public record ReduceManager<TStream>
         where TReference : WorkspaceReference<TReduced>
     {
         var reducedStream = new SynchronizationStream<TReduced, TReference>(
-            stream.StreamReference,
+            stream.StreamIdentity,
             subscriber,
             stream.Hub,
             reference,
@@ -130,7 +158,7 @@ public record ReduceManager<TStream>
                 ref current,
                 reference,
                 stream.Hub.JsonSerializerOptions
-                ))
+            ))
             .Where(x => x != null);
 
         reducedStream.AddDisposable(
@@ -148,10 +176,92 @@ public record ReduceManager<TStream>
         {
             reducedStream.AddDisposable(
                 reducedStream.Where(value =>
-                        reducedStream.Subscriber != null && reducedStream.Subscriber.Equals(value.ChangedBy)
+                    reducedStream.Subscriber != null && reducedStream.Subscriber.Equals(value.ChangedBy)
                 ).Subscribe(x => UpdateParent(stream, reference, x, backTransform))
             );
         }
+
+
+        return reducedStream;
+    }
+    protected static ISynchronizationStream CreateReducedStream<TReference>(
+        IWorkspace workspace,
+        TReference reference,
+        object subscriber,
+        ReduceFunction<TStream, TReference, EntityStore> reducer
+)
+        where TReference : WorkspaceReference
+    {
+        var reducedStream = new SynchronizationStream<EntityStore, TReference>(
+            new(workspace, reference),
+            subscriber,
+            workspace.Hub,
+            reference,
+            workspace.ReduceManager
+        );
+
+        workspace.AddDisposable(reducedStream);
+
+        var mapped = reference switch
+        {
+            CollectionsReference collections => collections.Collections.Select(c => (Collection: c,
+                    DataSource: workspace.DataContext.DataSourcesByCollection.GetValueOrDefault(c)))
+                .GroupBy(x => x.DataSource)
+                .Where(x => x.Key != null)
+                .Select(x => x.Key.GetStream(new CollectionsReference(x.Select(y => y.Collection).ToArray()))),
+            PartitionedCollectionsReference partitionedCollections =>
+                partitionedCollections.Reference.Collections
+                    .Select(c => (Collection: c, DataSource:
+                        workspace.DataContext.DataSourcesByCollection.GetValueOrDefault(c)))
+                    .GroupBy(x => x.DataSource)
+                    .Where(x => x.Key != null)
+                    .Select(x => x.Key.GetStream(new PartitionedCollectionsReference(partitionedCollections.Partition,
+                        new CollectionsReference(x.Select(y => y.Collection).ToArray())))),
+            //CollectionReference collection => new[]
+            //{
+            //    workspace.DataContext.DataSourcesByCollection.GetValueOrDefault(collection.Name)
+            //        ?.GetStream(collection),
+            //},
+            //PartitionedCollectionReference partitionedCollection => new[]
+            //{
+            //    workspace.DataContext.DataSourcesByCollection
+            //        .GetValueOrDefault(partitionedCollection.Reference.Name)?.GetStream(partitionedCollection),
+            //},
+            _ => throw new NotSupportedException()
+        };
+
+        var dict = mapped.ToDictionary(x => x.StreamIdentity, x => (ISynchronizationStream<EntityStore>)x);
+
+        reducedStream.InitializeAsync(async ct => await dict
+            .Values
+            .ToAsyncEnumerable()
+            .SelectAwait(async s => await s.Select(x => x.Value).FirstAsync())
+            .AggregateAsync(new EntityStore(), (es,m) => es.Merge(m), cancellationToken: ct));
+
+        foreach (var stream in dict.Values)
+        {
+            reducedStream.AddDisposable(
+                stream
+                    .Take(1)
+                    .Concat(stream
+                        .Skip(1)
+                        .Where(x => !Equals(x.ChangedBy, subscriber))
+                    )
+                    .DistinctUntilChanged()
+                    .Subscribe(reducedStream)
+            );
+
+        }
+
+        //Func<TStream, ChangeItem<TReduced>, TReference, TStream> backTransform
+        //if (backTransform != null)
+        //{
+        //    reducedStream.AddDisposable(
+        //        reducedStream.Where(value =>
+        //            reducedStream.Subscriber != null && reducedStream.Subscriber.Equals(value.ChangedBy)
+        //        ).Subscribe(x => UpdateParent(stream, reference, x, backTransform))
+        //    );
+        //}
 
 
         return reducedStream;
@@ -200,16 +310,34 @@ public record ReduceManager<TStream>
     {
         var reduced =
             (ISynchronizationStream<TReduced, TReference>)
-                ReduceStreams
-                    .OfType<ReduceStream<TStream, TReference>>()
-                    .Select(reduceStream =>
-                        reduceStream.Invoke(
-                            stream,
-                            reference,
-                            subscriber
-                        )
+            ReduceStreams
+                .OfType<ReduceStream<TStream, TReference>>()
+                .Select(reduceStream =>
+                    reduceStream.Invoke(
+                        stream,
+                        reference,
+                        subscriber
                     )
-                    .FirstOrDefault(x => x != null);
+                )
+                .FirstOrDefault(x => x != null);
+
+        return reduced;
+    }
+    public ISynchronizationStream<TReduced, TReference> ReduceStream<TReduced, TReference>(
+        IWorkspace workspace,
+        TReference reference,
+        object subscriber
+    )
+        where TReference : WorkspaceReference
+    {
+        var reduced =
+            (ISynchronizationStream<TReduced, TReference>)
+            ReduceStreams
+                .OfType<ReduceStream<TReference>>()
+                .Select(reduceStream =>
+                    reduceStream.Invoke(workspace, reference, subscriber)
+                )
+                .FirstOrDefault(x => x != null);
 
         return reduced;
     }
@@ -248,6 +376,11 @@ internal delegate ISynchronizationStream ReduceStream<TStream, in TReference>(
     TReference reference,
     object subscriber
 );
+internal delegate ISynchronizationStream ReduceStream<in TReference>(
+    IWorkspace workspace,
+    TReference reference,
+    object subscriber
+);
 
 public delegate ISynchronizationStream<TReduced, TReference> ReducedStreamProjection<
     TStream,
@@ -255,3 +388,8 @@ public delegate ISynchronizationStream<TReduced, TReference> ReducedStreamProjec
     TReduced
 >(ISynchronizationStream<TStream> parentStream, TReference reference, object subscriber)
     where TReference : WorkspaceReference<TReduced>;
+
+
+public delegate ISynchronizationStream<EntityStore> ReducedStreamProjection<in TReference>
+    (IWorkspace workspace, TReference reference, object subscriber)
+    where TReference : WorkspaceReference;

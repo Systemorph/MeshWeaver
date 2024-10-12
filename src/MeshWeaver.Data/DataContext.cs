@@ -38,6 +38,7 @@ public sealed record DataContext : IAsyncDisposable
     public IDataSource GetDataSourceByType(Type type) => DataSourcesByType.GetValueOrDefault(type);
 
     public IReadOnlyDictionary<Type, IDataSource> DataSourcesByType { get; private set; }
+    public IReadOnlyDictionary<string, IDataSource> DataSourcesByCollection { get; private set; }
 
     public DataContext WithDataSourceBuilder(object id, DataSourceBuilder dataSourceBuilder) =>
         this with { DataSourceBuilders = DataSourceBuilders.Add(id, dataSourceBuilder), };
@@ -68,7 +69,7 @@ public sealed record DataContext : IAsyncDisposable
 
     public delegate IDataSource DataSourceBuilder(IMessageHub hub);
 
-    public void Initialize(ISynchronizationStream<EntityStore, WorkspaceStateReference> stream)
+    public void Initialize()
     {
         DataSourcesById = DataSourceBuilders.ToImmutableDictionary(
             kvp => kvp.Key,
@@ -80,6 +81,7 @@ public sealed record DataContext : IAsyncDisposable
             dataSource.Initialize();
         DataSourcesByType = DataSourcesById.Values
             .SelectMany(ds => ds.MappedTypes.Select(t => new KeyValuePair<Type, IDataSource>(t, ds))).ToDictionary();
+        DataSourcesByCollection = DataSourcesByType.Select(kvp => new KeyValuePair<string,IDataSource>(TypeRegistry.GetCollectionName(kvp.Key), kvp.Value)).ToDictionary();
         TypeSources = DataSourcesById
             .Values
             .SelectMany(ds => ds.TypeSources.Values)

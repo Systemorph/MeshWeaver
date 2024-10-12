@@ -31,7 +31,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
         List<MyData> tracker = new();
         var workspace = GetHost().GetWorkspace();
         var collectionName = workspace.DataContext.GetTypeSource(typeof(MyData)).CollectionName;
-        var stream = workspace.GetStreamFor(new CollectionsReference(collectionName), new ClientAddress());
+        var stream = workspace.GetStream(new CollectionsReference(collectionName), new ClientAddress());
         stream.Should().NotBeNull();
         stream.Reduce(new EntityReference(collectionName, Instance), new ClientAddress())
             .Select(i => i.Value)

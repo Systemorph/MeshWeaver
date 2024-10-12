@@ -1,9 +1,7 @@
 ﻿using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
-using MeshWeaver.Hierarchies;
 using MeshWeaver.Pivot.Aggregations;
 using MeshWeaver.Pivot.Builder.Interfaces;
 using MeshWeaver.Pivot.Models;
@@ -46,7 +44,7 @@ namespace MeshWeaver.Pivot.Builder
                 .ToArray();
             var reference = dimensions.Select(Workspace.DataContext.TypeRegistry.GetCollectionName).Where(x => x != null).ToArray();
             var stream = reference.Any()
-                ? ((IObservable<ChangeItem<EntityStore>>)Workspace.Stream.Reduce(new CollectionsReference(reference))).Select(x => x.Value)
+                ? Workspace.GetStream(new CollectionsReference(reference), null).Select(x => x.Value)
                 : Observable.Return<EntityStore>(new());
         }
 

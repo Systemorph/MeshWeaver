@@ -219,7 +219,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task ReduceCollectionReference()
     {
         var host = GetHost();
-        var collection = await host.GetWorkspace().Stream.Reduce(new CollectionReference(typeof(MyData).FullName), null)
+        var collection = await host.GetWorkspace().GetStream(new CollectionReference(typeof(MyData).FullName), null)
             .Select(c => c.Value.Instances.Values)
             .FirstAsync();
 

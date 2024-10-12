@@ -42,7 +42,7 @@ public static class ProductOverviewToolbarArea
     ;
 
     private static IObservable<IEnumerable<Category>> GetProductCategories(this LayoutAreaHost layoutArea)
-        => layoutArea.Workspace.ReduceToTypes(typeof(Category))
+        => layoutArea.Workspace.GetStreamForTypes(typeof(Category))
             .DistinctUntilChanged()
             .CombineLatest(layoutArea.YearlyNorthwindData()
                     .Select(data => data.ToDataCube().GetSlices(nameof(Category))

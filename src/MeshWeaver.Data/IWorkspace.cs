@@ -18,10 +18,9 @@ public interface IWorkspace : IAsyncDisposable
     void Unsubscribe(object address, WorkspaceReference reference);
     internal void RequestChange(DataChangedRequest change, IMessageDelivery request);
 
-    ISynchronizationStream<EntityStore> Stream { get; }
-    ISynchronizationStream<EntityStore> ReduceToTypes(params Type[] types) =>
-        ReduceToTypes(null, types);
-    ISynchronizationStream<EntityStore> ReduceToTypes(object subscriber, params Type[] types);
+    ISynchronizationStream<EntityStore> GetStreamForTypes(params Type[] types) =>
+        GetStreamForTypes(null, types);
+    ISynchronizationStream<EntityStore> GetStreamForTypes(object subscriber, params Type[] types);
     ReduceManager<EntityStore> ReduceManager { get; }
     WorkspaceReference Reference { get; }
 
@@ -29,7 +28,7 @@ public interface IWorkspace : IAsyncDisposable
         object owner,
         WorkspaceReference<TReduced> reference
     );
-    ISynchronizationStream<TReduced> GetStreamFor<TReduced>(WorkspaceReference<TReduced> reference, object subscriber);
+    ISynchronizationStream<TReduced> GetStream<TReduced>(WorkspaceReference<TReduced> reference, object subscriber);
 
     ISynchronizationStream<TReduced, TReference> GetRemoteStream<TReduced, TReference>(
         object address,
@@ -37,8 +36,12 @@ public interface IWorkspace : IAsyncDisposable
     )
         where TReference : WorkspaceReference;
 
+    
+
     internal void SubscribeToClient<TReference>(
         object sender,
         WorkspaceReference<TReference> reference
     );
+
+    void AddDisposable(IDisposable disposable);
 }

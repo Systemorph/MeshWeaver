@@ -1,4 +1,6 @@
-﻿namespace MeshWeaver.Data.Persistence
+﻿using MeshWeaver.Data.Serialization;
+
+namespace MeshWeaver.Data.Persistence
 {
     public record PartitionedHubDataSource(object Id, IWorkspace Workspace)
         : HubDataSourceBase<PartitionedHubDataSource>(Id, Workspace)
@@ -38,20 +40,27 @@
 
         private object[] InitializePartitions { get; init; } = Array.Empty<object>();
 
+
+        protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity)
+        {
+            var partition = identity.Partition;
+            var reference = GetReference();
+            var partitionedReference = new PartitionedCollectionsReference(
+                partition,
+                reference
+            );
+            var stream = Workspace.GetRemoteStream(partition, partitionedReference);
+            return stream;
+        }
+
         public override void Initialize()
         {
             foreach (var partition in InitializePartitions)
             {
-                var reference = GetReference();
-                var partitionedReference = new PartitionedCollectionsReference(
-                    partition,
-                    reference
-                );
-                var stream = Workspace.GetRemoteStream(partition, partitionedReference);
-                Streams = Streams.Add(stream.StreamReference, stream);
+                var stream = GetStream(new PartitionedCollectionsReference(partition, GetReference()));
+                Streams = Streams.Add(stream.StreamIdentity, stream);
             }
-
-            base.Initialize();
         }
+
     }
 }

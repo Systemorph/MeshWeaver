@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
+using System.Runtime.CompilerServices;
 using MeshWeaver.Activities;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
@@ -88,7 +89,10 @@ namespace MeshWeaver.Data
         private static Activity GetActivity(IMessageHub hub) => 
             new(ActivityCategory.DataUpdate, hub);
 
-        private static IEnumerable<(ISynchronizationStream<EntityStore> Stream, object Reference, ImmutableDictionary<object, object> Elements, string Collection, ITypeSource TypeSource)> MapToIdAndAddress(this DataContext dataContext, IEnumerable<object> e, Type type)
+        private static IEnumerable<(ISynchronizationStream<EntityStore> Stream, 
+                object Reference, 
+                ImmutableDictionary<object, object> Elements, string Collection, ITypeSource TypeSource)> 
+            MapToIdAndAddress(this DataContext dataContext, IEnumerable<object> e, Type type)
         {
             if (
                 !dataContext.DataSourcesByType.TryGetValue(type, out var dataSource)
@@ -100,7 +104,7 @@ namespace MeshWeaver.Data
 
             if (ts is not IPartitionedTypeSource partitioned)
                 yield return (
-                    dataSource.Streams.GetValueOrDefault(new StreamReference(dataSource.Id, null)),
+                    dataSource.Streams.GetValueOrDefault(new StreamIdentity(dataSource.Id, null)),
                     dataSource.Reference,
                     e.ToImmutableDictionary(x => ts.TypeDefinition.GetKey(x)),
                     dataContext.GetCollectionName(type),

@@ -13,7 +13,7 @@ namespace MeshWeaver.Data
         internal static ReduceManager<EntityStore> CreateReduceManager(IMessageHub hub)
         {
             return new ReduceManager<EntityStore>(hub)
-                .AddWorkspaceReference<StreamReference, EntityStore>(
+                .AddWorkspaceReference<StreamIdentity, EntityStore>(
                     (ws, _) => ws,
                     (ws, change, _) => ws.Merge(change.Value)
                 )
