@@ -193,7 +193,7 @@ public record ReduceManager<TStream>
         where TReference : WorkspaceReference
     {
         var reducedStream = new SynchronizationStream<EntityStore, TReference>(
-            new(workspace, reference),
+            new(workspace.Hub.Address, reference),
             subscriber,
             workspace.Hub,
             reference,

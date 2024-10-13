@@ -1,6 +1,6 @@
-﻿using System.Collections.Immutable;
+﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reflection;
-using MeshWeaver.Collections;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
@@ -64,8 +64,7 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
  
     IReadOnlyDictionary<StreamIdentity,ISynchronizationStream<EntityStore>> IDataSource.Streams => Streams;
 
-    protected ImmutableDictionary<StreamIdentity, ISynchronizationStream<EntityStore>> Streams { get; set; } =
-        ImmutableDictionary<StreamIdentity, ISynchronizationStream<EntityStore>>.Empty;
+    protected readonly ConcurrentDictionary<StreamIdentity, ISynchronizationStream<EntityStore>> Streams = new();
 
     public CollectionsReference Reference => GetReference();
 
@@ -185,8 +184,8 @@ public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorksp
 
     protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity)
     {
-        var stream = SetupDataSourceStream(identity);
-        Streams = Streams.SetItem(stream.StreamIdentity, stream);
+
+        var stream = Streams.GetOrAdd(identity, _ => SetupDataSourceStream(identity));
         stream.InitializeAsync(cancellationToken => GetInitialValue(stream, cancellationToken));
         return stream;
     }
