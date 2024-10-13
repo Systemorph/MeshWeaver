@@ -89,7 +89,7 @@ public record ReduceManager<TStream>
             ret = ret.AddWorkspaceReferenceStream<TReference>(
                     (workspace, reference, subscriber) =>
                         (ISynchronizationStream<EntityStore>)
-                        CreateReducedStream(workspace, reference, subscriber,
+                        CreateWorkspaceStream(workspace, reference, subscriber,
                             (ReduceFunction<TStream, TReference, EntityStore>)((s, r) =>
                                 (EntityStore)(object)reducer.Invoke(s, r)))
                 );
@@ -184,7 +184,7 @@ public record ReduceManager<TStream>
 
         return reducedStream;
     }
-    protected static ISynchronizationStream CreateReducedStream<TReference>(
+    protected static ISynchronizationStream CreateWorkspaceStream<TReference>(
         IWorkspace workspace,
         TReference reference,
         object subscriber,
@@ -217,42 +217,32 @@ public record ReduceManager<TStream>
                     .Where(x => x.Key != null)
                     .Select(x => x.Key.GetStream(new PartitionedCollectionsReference(partitionedCollections.Partition,
                         new CollectionsReference(x.Select(y => y.Collection).ToArray())))),
-            //CollectionReference collection => new[]
-            //{
-            //    workspace.DataContext.DataSourcesByCollection.GetValueOrDefault(collection.Name)
-            //        ?.GetStream(collection),
-            //},
-            //PartitionedCollectionReference partitionedCollection => new[]
-            //{
-            //    workspace.DataContext.DataSourcesByCollection
-            //        .GetValueOrDefault(partitionedCollection.Reference.Name)?.GetStream(partitionedCollection),
-            //},
             _ => throw new NotSupportedException()
         };
 
-        var dict = mapped.ToDictionary(x => x.StreamIdentity, x => (ISynchronizationStream<EntityStore>)x);
+        var streams = mapped.Select(x => x).ToArray();
 
-        reducedStream.InitializeAsync(async ct => await dict
-            .Values
+        reducedStream.InitializeAsync(async ct => await streams
             .ToAsyncEnumerable()
             .SelectAwait(async s => await s.Select(x => x.Value).FirstAsync())
             .AggregateAsync(new EntityStore(), (es,m) => es.Merge(m), cancellationToken: ct));
 
-        foreach (var stream in dict.Values)
+        
+        
+        foreach (var stream in streams)
         {
             reducedStream.AddDisposable(
                 stream
-                    .Take(1)
-                    .Concat(stream
-                        .Skip(1)
-                        .Where(x => !Equals(x.ChangedBy, subscriber))
-                    )
                     .DistinctUntilChanged()
                     .Subscribe(reducedStream)
             );
-
+            stream.AddDisposable(
+                reducedStream.Reduce((WorkspaceReference<EntityStore>)stream.Reference, stream.Owner)
+                    .DistinctUntilChanged()
+                    .Subscribe(stream)
+                );
         }
-
+        
         //Func<TStream, ChangeItem<TReduced>, TReference, TStream> backTransform
         //if (backTransform != null)
         //{
@@ -266,6 +256,37 @@ public record ReduceManager<TStream>
 
         return reducedStream;
     }
+
+    //private EntityStore BackTransformToWorkspace(
+    //    IWorkspace workspace,
+    //    ChangeItem<EntityStore> change,
+    //    WorkspaceReference<EntityStore> reference)
+    //{
+    //    var collections = change.ChangeType == ChangeType.Patch
+    //        ? change.Patch.Value.Operations.Select(x => x.Path.Segments.First().ToString())
+    //        : change.Value.Collections.Keys;
+
+
+    //    foreach (var group in collections.Select(c =>
+    //                     (Collection: c,
+    //                         DataSource: workspace.DataContext.DataSourcesByCollection.GetValueOrDefault(c)))
+    //                 .GroupBy(x => x.DataSource)
+    //                 .Where(x => x.Key != null))
+    //    {
+    //        group.Key.Update(change.red)
+    //    }
+    //        .Select(x =>
+    //        {
+    //            x.k
+    //        })
+    //        ;
+    //    foreach (var collection in collections)
+    //    {
+    //        if(!workspace.DataContext.DataSourcesByCollection.TryGetValue(collection!, out var ds))
+    //            continue;
+            
+    //    }
+    //}
 
 
     internal static void UpdateParent<TReference, TReduced>(
