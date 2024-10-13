@@ -56,10 +56,7 @@ namespace MeshWeaver.Data.Persistence
         public override void Initialize()
         {
             foreach (var partition in InitializePartitions)
-            {
-                var stream = GetStream(new PartitionedCollectionsReference(partition, GetReference()));
-                Streams = Streams.Add(stream.StreamIdentity, stream);
-            }
+                GetStream(new PartitionedCollectionsReference(partition, GetReference()));
         }
 
     }
