@@ -195,12 +195,6 @@ public class Workspace : IWorkspace
             reference,
             ReduceManager.ReduceTo<TReduced>()
         );
-        var fromWorkspace = this.ReduceInternal<TReduced, TReference>(reference, owner);
-        if (fromWorkspace != null)
-            ret.AddDisposable(
-                fromWorkspace.Where(x => Hub.Address.Equals(x.ChangedBy)).Subscribe(ret)
-            );
-
 
         var json =
             ret as ISynchronizationStream<JsonElement>
