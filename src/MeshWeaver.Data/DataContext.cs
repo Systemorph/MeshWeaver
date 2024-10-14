@@ -33,6 +33,8 @@ public sealed record DataContext : IAsyncDisposable
     private ImmutableDictionary<object, IDataSource> DataSourcesById { get; set; } =
         ImmutableDictionary<object, IDataSource>.Empty;
 
+    public IDataSource GetDataSource(object id) => DataSourcesById.GetValueOrDefault(id);
+
     public IDataSource GetDataSourceById(object id) => DataSourcesById.GetValueOrDefault(id);
     public IDataSource GetDataSourceByType(Type type) => DataSourcesByType.GetValueOrDefault(type);
 
