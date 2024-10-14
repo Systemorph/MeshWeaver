@@ -15,7 +15,7 @@ public static class LayoutAreaQueryString
     /// <param name="layoutArea">The layout area host.</param>
     /// <returns>A read-only collection of key-value pairs representing the query string parameters.</returns>
     public static IReadOnlyCollection<KeyValuePair<string, string>> GetQueryStringParams(this LayoutAreaHost layoutArea)
-        => layoutArea.GetOrAddVariable(QueryStringParams, () => Parse((string)layoutArea.Stream.Reference.Id));
+        => layoutArea.GetOrAddVariable(QueryStringParams, () => Parse((string)layoutArea.Reference.Id));
 
     /// <summary>
     /// Gets the value of the specified query string parameter for the layout area.

@@ -54,3 +54,4 @@ public record StreamIdentity(object Owner, object Partition) : WorkspaceReferenc
 
 public record PartitionedCollectionsReference(object Partition, CollectionsReference Reference) : WorkspaceReference<EntityStore>;
 public record PartitionedCollectionReference(object Partition, CollectionReference Reference) : WorkspaceReference<InstanceCollection>;
+public record PartitionedEntityReference(object Partition, EntityReference Entity) : WorkspaceReference<object>;

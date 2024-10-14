@@ -2,7 +2,6 @@
 using Json.More;
 using Json.Patch;
 using Json.Pointer;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data

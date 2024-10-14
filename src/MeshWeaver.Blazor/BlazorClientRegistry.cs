@@ -4,7 +4,6 @@ using System.Text.Json;
 using MeshWeaver.Application;
 using MeshWeaver.Data;
 using Microsoft.DotNet.Interactive.Formatting;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
@@ -29,7 +28,7 @@ public static class BlazorClientRegistry
     #region Standard Formatting
     private static ViewDescriptor DefaultFormatting(
         object instance,
-        ISynchronizationStream<JsonElement, LayoutAreaReference> stream,
+        ISynchronizationStream<JsonElement> stream,
         string area
     )
     {
@@ -74,7 +73,7 @@ public static class BlazorClientRegistry
     }
 
 
-    private static ViewDescriptor MapSkinnedView(UiControl control, ISynchronizationStream<JsonElement, LayoutAreaReference> stream, string area, object skin)
+    private static ViewDescriptor MapSkinnedView(UiControl control, ISynchronizationStream<JsonElement> stream, string area, object skin)
     {
         return skin switch
         {
@@ -103,7 +102,7 @@ public static class BlazorClientRegistry
 
     private static ViewDescriptor DelegateToDotnetInteractive(
         object instance,
-        ISynchronizationStream<JsonElement, LayoutAreaReference> stream,
+        ISynchronizationStream<JsonElement> stream,
         string area
     )
     {

@@ -18,7 +18,7 @@ public static class DocumentationLayout
         => layout
             .WithDocumentation(
                 _ => true,
-                (tabs, host, ctx) => tabs.WithView(NamedArea(host.Stream.Reference.Area), ctx.DisplayName)
+                (tabs, host, ctx) => tabs.WithView(NamedArea(host.Reference.Area), ctx.DisplayName)
                 )
             .WithView(nameof(Doc), (Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<object>>)Doc);
 
@@ -108,7 +108,7 @@ public static class DocumentationLayout
 
     public static async Task<object> Doc(LayoutAreaHost area, RenderingContext context, CancellationToken cancellationToken)
     {
-        if (area.Stream.Reference.Id is not string path)
+        if (area.Reference.Id is not string path)
             throw new InvalidOperationException("No file name specified.");
 
         var documentationService = area.Hub.GetDocumentationService();

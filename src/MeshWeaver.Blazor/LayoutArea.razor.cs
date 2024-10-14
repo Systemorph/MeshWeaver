@@ -2,7 +2,6 @@
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using Microsoft.JSInterop;
@@ -48,7 +47,7 @@ public partial class LayoutArea
 
     private bool ShowProgress { get; set; }
 
-    private ISynchronizationStream<JsonElement, LayoutAreaReference> AreaStream { get; set; }
+    private ISynchronizationStream<JsonElement> AreaStream { get; set; }
     public override void Dispose()
     {
         AreaStream?.Dispose();

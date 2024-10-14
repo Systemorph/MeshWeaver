@@ -24,7 +24,7 @@ public static class DomainViews
 
     public static object Details(LayoutAreaHost area, RenderingContext ctx)
     {
-        if (area.Stream.Reference.Id is not string typeAndId)
+        if (area.Reference.Id is not string typeAndId)
             return Error("Url has to be in form of Details/Type/Id");
 
         // Extract type and Id from typeAndId
@@ -57,7 +57,7 @@ public static class DomainViews
 
     public static object Catalog(LayoutAreaHost area, RenderingContext ctx)
     {
-        if (area.Stream.Reference.Id is not string collection)
+        if (area.Reference.Id is not string collection)
             throw new InvalidOperationException("No type specified for catalog.");
         var typeDefinition = area.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetTypeDefinition(collection);
         if (typeDefinition == null)

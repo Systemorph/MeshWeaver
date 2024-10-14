@@ -11,7 +11,6 @@ using MeshWeaver.DataSetReader.Excel;
 using MeshWeaver.Domain;
 using MeshWeaver.Reflection;
 using MeshWeaver.Activities;
-using MeshWeaver.Data.Serialization;
 
 namespace MeshWeaver.Import.Configuration;
 

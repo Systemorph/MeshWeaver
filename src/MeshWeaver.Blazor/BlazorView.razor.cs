@@ -27,7 +27,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
     public TViewModel ViewModel { get; set; }
 
     [Parameter]
-    public ISynchronizationStream<JsonElement, LayoutAreaReference> Stream { get; set; }
+    public ISynchronizationStream<JsonElement> Stream { get; set; }
     [Parameter]
     public string Area { get; set; }
 

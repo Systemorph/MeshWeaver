@@ -69,13 +69,13 @@ public class Workspace : IWorkspace
             x.GetRemoteStream<object, WorkspaceReference<object>>(default, default)
         );
 
-    public ISynchronizationStream<TReduced, TReference> GetRemoteStream<TReduced, TReference>(
+    public ISynchronizationStream<TReduced> GetRemoteStream<TReduced, TReference>(
         TReference reference
     )
         where TReference : WorkspaceReference =>
         GetRemoteStream<TReduced, TReference>(Hub.Address, reference);
 
-    public ISynchronizationStream<TReduced, TReference> GetRemoteStream<TReduced, TReference>(
+    public ISynchronizationStream<TReduced> GetRemoteStream<TReduced, TReference>(
         object owner,
         TReference reference
     )
@@ -84,7 +84,7 @@ public class Workspace : IWorkspace
             ? throw new ArgumentException("Owner cannot be the same as the subscriber.")
             : GetExternalClientSynchronizationStream<TReduced, TReference>(owner, reference);
 
-    public ISynchronizationStream<TReduced, TReference> GetStreamFor<TReduced, TReference>(
+    public ISynchronizationStream<TReduced> GetStreamFor<TReduced, TReference>(
         object subscriber,
         TReference reference
     )
@@ -97,7 +97,7 @@ public class Workspace : IWorkspace
     private static readonly MethodInfo GetInternalSynchronizationStreamMethod =
         ReflectionHelper.GetMethodGeneric<Workspace>(ws =>
             ws.GetInternalSynchronizationStream<object, WorkspaceReference>(null, null));
-    private ISynchronizationStream<TReduced, TReference> GetInternalSynchronizationStream<
+    private ISynchronizationStream<TReduced> GetInternalSynchronizationStream<
         TReduced,
         TReference
     >(TReference reference, object subscriber)
@@ -110,12 +110,12 @@ public class Workspace : IWorkspace
             .MakeGenericMethod(typeof(TReduced), reference.GetType())
             .Invoke(this, [reference, subscriber]);
 
-    private ISynchronizationStream<TReduced, TReference> GetExternalClientSynchronizationStream<
+    private ISynchronizationStream<TReduced> GetExternalClientSynchronizationStream<
         TReduced,
         TReference
     >(object address, TReference reference)
         where TReference : WorkspaceReference =>
-        (ISynchronizationStream<TReduced, TReference>)
+        (ISynchronizationStream<TReduced>)
             remoteStreams.GetOrAdd(
                 (address, reference),
                 _ => CreateExternalClient<TReduced, TReference>(address, reference)
@@ -188,7 +188,7 @@ public class Workspace : IWorkspace
         // link to deserialized world. Will also potentially link to workspace.
         if (owner is JsonObject obj)
             owner = obj.Deserialize<object>(Hub.JsonSerializerOptions);
-        var ret = new SynchronizationStream<TReduced, TReference>(
+        var ret = new SynchronizationStream<TReduced>(
             new(owner,partition),
             owner,
             Hub,
@@ -256,9 +256,15 @@ public class Workspace : IWorkspace
 
     public ISynchronizationStream<TReduced> GetStream<TReduced>(WorkspaceReference<TReduced> reference, object subscriber)
     {
-        return ReduceInternal((dynamic)reference, subscriber);
+        return (ISynchronizationStream<TReduced>)ReduceInternalMethod
+            .MakeGenericMethod(typeof(TReduced), reference.GetType())
+            .InvokeAsFunction(this,reference, subscriber);
     }
 
+
+    private static readonly MethodInfo ReduceInternalMethod =
+        ReflectionHelper.GetMethodGeneric<Workspace>(x =>
+            x.ReduceInternal<object, WorkspaceReference<object>>(null, null));
     private ISynchronizationStream<TReduced> ReduceInternal<TReduced, TReference>(TReference reference, object subscriber)
     where TReference : WorkspaceReference
     {
