@@ -324,6 +324,12 @@ public class Workspace : IWorkspace
         disposables.Add(disposable);
     }
 
+    public ISynchronizationStream<EntityStore> GetStream(StreamIdentity identity)
+    {
+        var ds =  DataContext.GetDataSource(identity.Owner);
+        return ds.GetStream(identity.Partition);
+    }
+
 
     protected IMessageDelivery HandleCommitResponse(IMessageDelivery<DataChangeResponse> response)
     {

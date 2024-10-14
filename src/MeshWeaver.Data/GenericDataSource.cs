@@ -16,8 +16,9 @@ public interface IDataSource : IAsyncDisposable
     CollectionsReference Reference { get; }
     void Initialize();
 
-    IReadOnlyDictionary<StreamIdentity, ISynchronizationStream<EntityStore>> Streams { get; }
     ISynchronizationStream<EntityStore> GetStream(WorkspaceReference<EntityStore> reference);
+
+    ISynchronizationStream<EntityStore> GetStream(object partition);
 }
 
 public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) : IDataSource
@@ -63,9 +64,8 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
     private IReadOnlyCollection<IDisposable> changesSubscriptions;
 
  
-    IReadOnlyDictionary<StreamIdentity,ISynchronizationStream<EntityStore>> IDataSource.Streams => Streams;
 
-    protected readonly ConcurrentDictionary<StreamIdentity, ISynchronizationStream<EntityStore>> Streams = new();
+    protected readonly ConcurrentDictionary<object, ISynchronizationStream<EntityStore>> Streams = new();
 
     public CollectionsReference Reference => GetReference();
 
@@ -84,14 +84,16 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
     }
     public virtual ISynchronizationStream<EntityStore> GetStream(WorkspaceReference<EntityStore> reference)
     {
-        StreamIdentity streamIdentity = reference is PartitionedCollectionsReference partitioned
-            ? new(Id, partitioned.Partition)
-            : new(Id, null);
-
-        var stream = Streams.GetOrAdd(streamIdentity, CreateStream);
+        var stream = GetStream(reference is PartitionedCollectionsReference partitioned ? partitioned.Partition : null);
         if (stream.Reference.Equals(reference))
             return stream;
         return (ISynchronizationStream<EntityStore>)stream.Reduce(reference);
+    }
+
+    public ISynchronizationStream<EntityStore> GetStream(object partition)
+    {
+        var identity = new StreamIdentity(Id, partition);
+        return Streams.GetOrAdd(partition ?? Id, _ => CreateStream(identity));
     }
 
     protected abstract ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity);
@@ -185,7 +187,7 @@ public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorksp
 
     protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity)
     {
-        return Streams.GetOrAdd(identity, _ => SetupDataSourceStream(identity));
+        return SetupDataSourceStream(identity);
     }
 
     protected override ISynchronizationStream<EntityStore> SetupDataSourceStream(StreamIdentity identity)
