@@ -7,7 +7,6 @@ using Json.Path;
 using Json.Pointer;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Composition;
@@ -27,7 +26,7 @@ public static class LayoutExtensions
             .AddData(data =>
                 data.Configure(reduction =>
                     reduction
-                        .AddWorkspaceReferenceStream<LayoutAreaReference>(
+                        .AddWorkspaceReferenceStream<EntityStore, LayoutAreaReference>(
                             (workspace, reference, subscriber) =>
                                 new LayoutAreaHost(workspace, reference, workspace.Hub.GetLayoutDefinition(), subscriber)
                                     .RenderLayoutArea()
