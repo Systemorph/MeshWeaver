@@ -5,6 +5,7 @@ namespace MeshWeaver.Data;
 public abstract record WorkspaceReference;
 
 
+// ReSharper disable once UnusedTypeParameter
 public abstract record WorkspaceReference<TReference> : WorkspaceReference;
 
 public record JsonPointerReference(string Pointer) : WorkspaceReference<JsonElement?>
@@ -32,6 +33,9 @@ public record CollectionReference(string Name) : WorkspaceReference<InstanceColl
 
     public override string ToString() => Pointer;
 }
+
+public record AggregateWorkspaceReference(params WorkspaceReference<EntityStore>[] References)
+    : WorkspaceReference<EntityStore>;
 
 public record CollectionsReference(IReadOnlyCollection<string> Collections)
     : WorkspaceReference<EntityStore>

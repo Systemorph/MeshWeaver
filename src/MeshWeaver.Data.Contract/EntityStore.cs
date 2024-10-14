@@ -14,81 +14,6 @@ public record EntityStore
 
     public Func<Type, string> GetCollectionName { get; init; }
 
-    public EntityStore Merge(EntityStore updated) => Merge(updated, UpdateOptions.Default);
-
-    public EntityStore Merge(EntityStore updated, Func<UpdateOptions, UpdateOptions> options) =>
-        this with
-        {
-            Collections = Collections.SetItems(
-                options.Invoke(new()).Snapshot
-                    ? updated.Collections
-                    : updated.Collections.Select(c => new KeyValuePair<string, InstanceCollection>(
-                        c.Key,
-                        Collections.GetValueOrDefault(c.Key)?.Merge(c.Value) ?? c.Value
-                    ))
-            )
-        };
-
-    public EntityStore Merge(EntityStore updated, UpdateOptions options) =>
-        this with
-        {
-            Collections = Collections.SetItems(
-                options.Snapshot
-                    ? updated.Collections
-                    : updated.Collections.Select(c => new KeyValuePair<string, InstanceCollection>(
-                        c.Key,
-                        Collections.GetValueOrDefault(c.Key)?.Merge(c.Value) ?? c.Value
-                    ))
-            )
-        };
-
-    public EntityStore Update(
-        string collection,
-        Func<InstanceCollection, InstanceCollection> update
-    ) =>
-        this with
-        {
-            Collections = Collections.SetItem(
-                collection,
-                update.Invoke(Collections.GetValueOrDefault(collection) ?? new InstanceCollection())
-            )
-        };
-
-    public EntityStore Update(WorkspaceReference reference, object value) =>
-        Update(reference, value, x => x);
-
-    public EntityStore Update(
-        WorkspaceReference reference,
-        object value,
-        Func<UpdateOptions, UpdateOptions> options
-    )
-    {
-        return reference switch
-        {
-            EntityReference entityReference
-                => Update(entityReference.Collection, c => c.Update(entityReference.Id, value)),
-            CollectionReference collectionReference
-                => Update(collectionReference.Name, _ => (InstanceCollection)value),
-            CollectionsReference
-                => this with { Collections = Collections.SetItems(((EntityStore)value).Collections) },
-            PartitionedCollectionsReference partitioned
-                => Update(partitioned.Reference, value, options),
-            WorkspaceReference<EntityStore>
-                => Merge((EntityStore)value, options),
-
-            _
-                => throw new NotSupportedException(
-                    $"reducer type {reference.GetType().FullName} not supported"
-                )
-        };
-    }
-
-    public IReadOnlyCollection<T> GetData<T>()
-        => GetCollection(GetCollectionName?.Invoke(typeof(T)) ?? typeof(T).FullName).Get<T>().ToArray();
-
-    public T GetData<T>(object id)
-        => (T)GetCollection(GetCollectionName?.Invoke(typeof(T)) ?? typeof(T).FullName)?.Instances
-            .GetValueOrDefault(id);
 
     public object Reduce(WorkspaceReference reference) => ReduceImpl((dynamic)reference);
 
@@ -149,14 +74,8 @@ public record EntityStore
             .Select(x => x.GetHashCode())
             .Aggregate((x, y) => x ^ y);
 
-    public EntityStoreAndUpdates MergeWithUpdates(EntityStore updated, UpdateOptions options = null)
-    {
-        options ??= UpdateOptions.Default;
-        var store = Merge(updated, options);
-        return new EntityStoreAndUpdates(store, store.Collections.SelectMany(u => ComputeChanges(u.Key, u.Value)));
-    }
 
-    private IEnumerable<EntityStoreUpdate> ComputeChanges(string collection, InstanceCollection updated)
+    internal IEnumerable<EntityStoreUpdate> ComputeChanges(string collection, InstanceCollection updated)
     {
         var oldValues = Collections.GetValueOrDefault(collection);
         if (oldValues == null)
@@ -190,6 +109,12 @@ public record EntityStore
                 .Select(x => toBeRemoved.Collections.TryGetValue(x.Key, out var tbr)
                     ? new KeyValuePair<string, InstanceCollection>(x.Key, x.Value.Remove(tbr.Instances.Keys))
                     : x).ToImmutableDictionary()
+        };
+
+    public EntityStore WithCollection(string collection, InstanceCollection instances) =>
+        this with
+        {
+            Collections = Collections.SetItem(collection, instances)
         };
 }
 

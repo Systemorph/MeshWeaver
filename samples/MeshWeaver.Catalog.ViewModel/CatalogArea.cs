@@ -4,6 +4,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Catalog.Domain;
 using MeshWeaver.Catalog.Layout;
+using MeshWeaver.Data;
 using MeshWeaver.Layout.Domain;
 
 namespace MeshWeaver.Catalog.ViewModel;

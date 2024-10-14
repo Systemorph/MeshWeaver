@@ -44,4 +44,5 @@ public interface IWorkspace : IAsyncDisposable
     );
 
     void AddDisposable(IDisposable disposable);
+    ISynchronizationStream<EntityStore> GetStream(StreamIdentity kvpKey);
 }
