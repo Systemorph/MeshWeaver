@@ -6,7 +6,6 @@ using FluentAssertions.Extensions;
 using Json.Patch;
 using Json.Pointer;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain.Layout;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.DataGrid;
@@ -76,7 +75,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         prop.ToString().Should().Be("Universe");
     }
 
-    private static async Task<(ISynchronizationStream<JsonElement, LayoutAreaReference> Stream, JsonElement Element)> GetDataInstance(IWorkspace workspace, LayoutAreaReference reference)
+    private static async Task<(ISynchronizationStream<JsonElement> Stream, JsonElement Element)> GetDataInstance(IWorkspace workspace, LayoutAreaReference reference)
     {
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new HostAddress(),

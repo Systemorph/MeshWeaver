@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Data.Serialization;
-using MeshWeaver.Domain;
+﻿using MeshWeaver.Domain;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Data;

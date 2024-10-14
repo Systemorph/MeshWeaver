@@ -3,7 +3,6 @@ using System.Text.Json;
 using Json.Patch;
 using Json.Pointer;
 using Microsoft.Extensions.DependencyInjection;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;

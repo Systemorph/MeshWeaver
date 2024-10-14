@@ -30,7 +30,7 @@ public interface IWorkspace : IAsyncDisposable
     );
     ISynchronizationStream<TReduced> GetStream<TReduced>(WorkspaceReference<TReduced> reference, object subscriber);
 
-    ISynchronizationStream<TReduced, TReference> GetRemoteStream<TReduced, TReference>(
+    ISynchronizationStream<TReduced> GetRemoteStream<TReduced, TReference>(
         object address,
         TReference reference
     )

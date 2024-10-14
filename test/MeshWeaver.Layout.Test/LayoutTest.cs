@@ -194,7 +194,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     2025
                 )
             );
-            return new Data.Serialization.ChangeItem<JsonElement>(
+            return new ChangeItem<JsonElement>(
                 stream.Owner,
                 stream.Reference,
                 patch.Apply(ci),
@@ -437,7 +437,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             var patch = new JsonPatch(
                 PatchOperation.Replace(JsonPointer.Parse(firstValuePointer), false)
             );
-            return new Data.Serialization.ChangeItem<JsonElement>(
+            return new ChangeItem<JsonElement>(
                 stream.Owner,
                 stream.Reference,
                 patch.Apply(ci),

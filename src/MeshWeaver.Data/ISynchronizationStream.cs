@@ -1,6 +1,6 @@
 ﻿using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Data.Serialization;
+namespace MeshWeaver.Data;
 
 public interface ISynchronizationStream : IDisposable
 {
@@ -18,7 +18,7 @@ public interface ISynchronizationStream : IDisposable
         object subscriber
     );
 
-    ISynchronizationStream<TReduced, TReference2> Reduce<TReduced, TReference2>(
+    ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
         TReference2 reference,
         object subscriber
     )
@@ -45,10 +45,6 @@ public interface ISynchronizationStream<TStream>
     void InvokeAsync(Func<CancellationToken, Task> action);
 }
 
-public interface ISynchronizationStream<TStream, out TReference> : ISynchronizationStream<TStream>
-{
-    new TReference Reference { get; }
-}
 
 public enum InitializationMode
 {

@@ -2,7 +2,7 @@
 using Json.Patch;
 using MeshWeaver.Activities;
 
-namespace MeshWeaver.Data.Serialization;
+namespace MeshWeaver.Data;
 
 public interface IChangeItem
 {
@@ -13,8 +13,8 @@ public interface IChangeItem
     object Reference { get; }
 
     ChangeItem<TReduced> SetValue<TReduced>(
-        TReduced reduced, 
-        ref TReduced currentValue, 
+        TReduced reduced,
+        ref TReduced currentValue,
         object reference,
         JsonSerializerOptions options);
 }

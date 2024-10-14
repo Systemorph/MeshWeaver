@@ -1,10 +1,10 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json;
-using Microsoft.Extensions.DependencyInjection;
+using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
+using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
-using MeshWeaver.Messaging.Serialization;
 
 namespace MeshWeaver.Layout.Client;
 
@@ -12,9 +12,9 @@ public record LayoutClientConfiguration(IMessageHub Hub)
 {
     private readonly ITypeRegistry typeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
 
-    public delegate ViewDescriptor ViewMap(object instance, ISynchronizationStream<JsonElement, LayoutAreaReference> stream, string area);
+    public delegate ViewDescriptor ViewMap(object instance, ISynchronizationStream<JsonElement> stream, string area);
 
-    public delegate ViewDescriptor ViewMap<in T>(T instance, ISynchronizationStream<JsonElement, LayoutAreaReference> stream, string area);
+    public delegate ViewDescriptor ViewMap<in T>(T instance, ISynchronizationStream<JsonElement> stream, string area);
 
     internal ImmutableList<ViewMap> ViewMaps { get; init; } = ImmutableList<ViewMap>.Empty;
 
@@ -31,14 +31,14 @@ public record LayoutClientConfiguration(IMessageHub Hub)
         return WithView((i, s, a) => i is not TViewModel vm ? null : StandardView<TViewModel, TView>(vm, s, a));
     }
 
-    public ViewDescriptor GetViewDescriptor(object instance, ISynchronizationStream<JsonElement, LayoutAreaReference> stream, string area) =>
+    public ViewDescriptor GetViewDescriptor(object instance, ISynchronizationStream<JsonElement> stream, string area) =>
         ViewMaps.Select(m => m.Invoke(instance, stream, area)).FirstOrDefault(d => d is not null);
 
     public const string ViewModel = nameof(ViewModel);
 
     public static ViewDescriptor StandardView<TViewModel, TView>(
         TViewModel instance,
-        ISynchronizationStream<JsonElement, LayoutAreaReference> stream,
+        ISynchronizationStream<JsonElement> stream,
         string area
     ) =>
         new(
@@ -53,7 +53,7 @@ public record LayoutClientConfiguration(IMessageHub Hub)
     public static ViewDescriptor StandardView<TViewModel>(
         TViewModel instance,
         Type viewType,
-        ISynchronizationStream<JsonElement, LayoutAreaReference> stream,
+        ISynchronizationStream<JsonElement> stream,
         string area
     ) =>
         new(
@@ -65,7 +65,7 @@ public record LayoutClientConfiguration(IMessageHub Hub)
                 { nameof(Area), area }
             }
         );
-    public static ViewDescriptor StandardSkinnedView<TView>(Skin skin, ISynchronizationStream<JsonElement, LayoutAreaReference> stream, string area, UiControl control)
+    public static ViewDescriptor StandardSkinnedView<TView>(Skin skin, ISynchronizationStream<JsonElement> stream, string area, UiControl control)
     {
         var ret = StandardView<UiControl, TView>(control, stream, area);
         ret.Parameters.Add(nameof(Skin), skin);

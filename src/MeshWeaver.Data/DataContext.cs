@@ -1,5 +1,4 @@
 ﻿using System.Collections.Immutable;
-using MeshWeaver.Data.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging;

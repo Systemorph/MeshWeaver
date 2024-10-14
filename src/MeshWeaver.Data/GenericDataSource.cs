@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
@@ -100,7 +101,7 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
         var reference = GetReference();
 
 
-        var stream = new SynchronizationStream<EntityStore, WorkspaceReference>(
+        var stream = new SynchronizationStream<EntityStore>(
             identity,
             Hub.Address,
             Hub,
@@ -184,11 +185,14 @@ public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorksp
 
     protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity)
     {
-
-        var stream = Streams.GetOrAdd(identity, _ => SetupDataSourceStream(identity));
-        stream.InitializeAsync(cancellationToken => GetInitialValue(stream, cancellationToken));
-        return stream;
+        return Streams.GetOrAdd(identity, _ => SetupDataSourceStream(identity));
     }
 
-
+    protected override ISynchronizationStream<EntityStore> SetupDataSourceStream(StreamIdentity identity)
+    {
+        var stream =  base.SetupDataSourceStream(identity);
+        stream.InitializeAsync(cancellationToken => GetInitialValue(stream, cancellationToken));
+        stream.AddDisposable(stream.Skip(1).Where(x => x.ChangedBy is not null && !x.ChangedBy.Equals(Id)).Subscribe(Synchronize));
+        return stream;
+    }
 }

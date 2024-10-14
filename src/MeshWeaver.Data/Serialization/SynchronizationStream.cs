@@ -7,8 +7,7 @@ using MeshWeaver.Reflection;
 
 namespace MeshWeaver.Data.Serialization;
 
-public record SynchronizationStream<TStream, TReference> : ISynchronizationStream<TStream, TReference>
-    where TReference : WorkspaceReference
+public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 {
     /// <summary>
     /// The stream reference, i.e. the unique identifier of the stream.
@@ -29,7 +28,7 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
     /// The projected reference of the stream, e.g. a collection (CollectionReference),
     /// a layout area (LayoutAreaReference), etc.
     /// </summary>
-    public TReference Reference { get; init; }
+    public object Reference { get; init; }
 
     /// <summary>
     /// My current state deserialized as snapshot
@@ -63,10 +62,10 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
                 .Invoke(this, [reference, subscriber]);
 
     private static readonly MethodInfo ReduceMethod = ReflectionHelper.GetMethodGeneric<
-        SynchronizationStream<TStream, TReference>
+        SynchronizationStream<TStream>
     >(x => x.Reduce<object, WorkspaceReference<object>>(null, null));
 
-    public ISynchronizationStream<TReduced, TReference2> Reduce<TReduced, TReference2>(
+    public ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
         TReference2 reference,
         object subscriber
     )
@@ -196,7 +195,7 @@ public record SynchronizationStream<TStream, TReference> : ISynchronizationStrea
         StreamIdentity StreamIdentity,
         object Subscriber,
         IMessageHub Hub,
-        TReference Reference,
+        object Reference,
         ReduceManager<TStream> ReduceManager)
     {
         this.Hub = Hub;
