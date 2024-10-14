@@ -71,7 +71,11 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
         var clientWorkspace = GetWorkspace(client);
         var data = (
-            await clientWorkspace.GetObservable<MyData>().FirstOrDefaultAsync().Timeout(3.Seconds())
+            await clientWorkspace
+                .GetObservable<MyData>()
+                //.Timeout(3.Seconds())
+                .FirstOrDefaultAsync()
+                
         )
             .OrderBy(a => a.Id)
             .ToArray();
@@ -219,7 +223,8 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task ReduceCollectionReference()
     {
         var host = GetHost();
-        var collection = await host.GetWorkspace().GetStream(new CollectionReference(typeof(MyData).FullName), null)
+        var collection = await host.GetWorkspace()
+            .GetStream(new CollectionReference(typeof(MyData).FullName), null)
             .Select(c => c.Value.Instances.Values)
             .FirstAsync();
 

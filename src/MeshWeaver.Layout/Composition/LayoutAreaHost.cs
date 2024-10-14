@@ -13,7 +13,8 @@ namespace MeshWeaver.Layout.Composition;
 
 public record LayoutAreaHost : IDisposable
 {
-    public ISynchronizationStream<EntityStore, LayoutAreaReference> Stream { get; }
+    public LayoutAreaReference Reference { get; }
+    public ISynchronizationStream<EntityStore> Stream { get; }
     public IMessageHub Hub => Workspace.Hub;
     public IWorkspace Workspace { get; }
     private readonly Dictionary<object, object> variables = new ();
@@ -42,13 +43,14 @@ public record LayoutAreaHost : IDisposable
     {
         Workspace = workspace;
         LayoutDefinition = layoutDefinition;
-        Stream = new SynchronizationStream<EntityStore, LayoutAreaReference>(
+        Stream = new SynchronizationStream<EntityStore>(
             new(workspace.Hub.Address, reference),
             subscriber,
             workspace.Hub,
             reference,
             workspace.ReduceManager.ReduceTo<EntityStore>()
         );
+        Reference = reference;
         Stream.AddDisposable(this);
         Stream.AddDisposable(
             Stream.Hub.Register<ClickedEvent>(
@@ -301,7 +303,7 @@ public record LayoutAreaHost : IDisposable
         return DisposeExistingAreas(store, context);
     }
 
-    internal ISynchronizationStream<EntityStore, LayoutAreaReference> RenderLayoutArea()
+    internal ISynchronizationStream<EntityStore> RenderLayoutArea()
     {
         logger.LogDebug("Scheduling re-rendering");
 
@@ -309,7 +311,7 @@ public record LayoutAreaHost : IDisposable
         {
             DisposeAllAreas();
             logger.LogDebug("Start re-rendering");
-            var reference = Stream.Reference;
+            var reference = (LayoutAreaReference)Stream.Reference;
             var context = new RenderingContext(reference.Area) { Layout = reference.Layout };
             Stream.OnNext(
                 new(
