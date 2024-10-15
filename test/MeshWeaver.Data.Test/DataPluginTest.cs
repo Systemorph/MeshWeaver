@@ -84,7 +84,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var updateResponse = await client.AwaitResponse(
-            new UpdateDataRequest(updateItems),
+            DataChangeRequest.Update(updateItems),
             o => o.WithTarget(new ClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
         );
@@ -135,7 +135,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var expectedItems = data.Skip(1).ToArray();
         // act
         var deleteResponse = await client.AwaitResponse(
-            new DeleteDataRequest(toBeDeleted),
+            DataChangeRequest.Delete(toBeDeleted),
             o => o.WithTarget(new ClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
         );
@@ -205,7 +205,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var updateResponse = await client.AwaitResponse(
-            new UpdateDataRequest(updateItems),
+            DataChangeRequest.Update(updateItems),
             o => o.WithTarget(new ClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
         );

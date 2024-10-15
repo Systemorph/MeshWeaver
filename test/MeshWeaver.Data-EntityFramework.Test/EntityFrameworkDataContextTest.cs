@@ -65,7 +65,7 @@ public class EntityFrameworkDataContextTest(ITestOutputHelper output) : HubTestB
         var workspace = client.GetWorkspace();
 
         var dataChanged = await client.AwaitResponse(
-            new UpdateDataRequest(new[] { myDataRecord }),
+            new DataChangeRequest{Updates=[myDataRecord ]},
             o => o.WithTarget(new ClientAddress())
         );
 

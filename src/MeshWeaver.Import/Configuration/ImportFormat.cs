@@ -81,7 +81,7 @@ public record ImportFormat(
                         new InstanceCollection(g.ToDictionary(keyFunction)));
                 }).ToDictionary()), importRequest.UpdateOptions);
 
-            storeAndUpdates = new EntityStoreAndUpdates(Store: newStore.Store, Changes: storeAndUpdates.Changes.Concat(newStore.Changes));
+            storeAndUpdates = new EntityStoreAndUpdates(Store: newStore.Store, Updates: storeAndUpdates.Updates.Concat(newStore.Updates));
 
         }
         return storeAndUpdates;
