@@ -52,7 +52,7 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
         var businessUnit = businessUnits.First();
         var oldName = businessUnit.DisplayName;
         businessUnit = businessUnit with { DisplayName = NewName };
-        client.Post(new UpdateDataRequest(new[] { businessUnit }));
+        client.Post(new DataChangeRequest{Updates = [ businessUnit ] });
 
         // get the data from the client again
         var loadedInstance = await workspace

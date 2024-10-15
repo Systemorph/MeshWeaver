@@ -12,6 +12,7 @@ using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
+using Autofac.Diagnostics;
 
 namespace MeshWeaver.Layout;
 
@@ -85,8 +86,8 @@ public static class LayoutExtensions
         return synchronizationItems
             .Where(i =>
                 first
-                || i.Patch?.Value == null
-                || i.Patch.Value.Operations.Any(
+                || i.Patch is null
+                || i.Patch.Operations.Any(
                     p =>
                         p.Path
                             .Segments
@@ -94,7 +95,7 @@ public static class LayoutExtensions
                             (
                                 referencePointer.Segments,
                                 (x, y) => x.Equals(y))
-                            
+
                             .All(x => x)
                         )
                 )
@@ -103,7 +104,7 @@ public static class LayoutExtensions
                     first = false;
                     var evaluated = referencePointer
                         .Evaluate(i.Value);
-                    return  evaluated is null ? default
+                    return evaluated is null ? default
                         : evaluated.Value.Deserialize<T>(synchronizationItems.Hub.JsonSerializerOptions);
                 }
             );

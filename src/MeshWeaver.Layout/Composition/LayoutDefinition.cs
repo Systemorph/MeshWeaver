@@ -25,7 +25,7 @@ public record LayoutDefinition(IMessageHub Hub)
             {
                 var ret = x.Renderer.Invoke(host, context, r.Store);
                 return ret with{
-                    Changes = r.Changes.Concat(ret.Changes)
+                    Updates = r.Updates.Concat(ret.Updates)
                 };
             });
 

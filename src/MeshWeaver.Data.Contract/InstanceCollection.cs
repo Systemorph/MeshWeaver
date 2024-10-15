@@ -29,18 +29,16 @@ public record InstanceCollection
             Instances = Instances.SetItem(key, value)
         };
 
-    public InstanceCollection Change(DataChangedRequest request)
+    public InstanceCollection Change(DataChangeRequest request)
     {
-        switch (request)
-        {
-            case UpdateDataRequest update:
-                return Update(update.Elements.ToImmutableDictionary(GetKey, x => x));
 
-            case DeleteDataRequest delete:
-                return Delete(delete.Elements.Select(GetKey));
-        }
+        var ret = this;
+        if (request.Updates.Any())
+            ret = ret.Update(request.Updates.ToImmutableDictionary(GetKey, x => x));
+        if (request.Deletions.Any())
+            ret = ret.Delete(request.Updates.Select(GetKey));
 
-        throw new ArgumentOutOfRangeException(nameof(request), request, null);
+        return ret;
     }
 
     public IEnumerable<T> Get<T>() => Instances.Values.OfType<T>();
@@ -98,13 +96,13 @@ public record InstanceCollection
 
     public virtual bool Equals(InstanceCollection other)
     {
-        return other is not  null &&
+        return other is not null &&
                (
                    ReferenceEquals(Instances, other.Instances) ||
                    Instances.SequenceEqual(other.Instances)
                );
     }
 
-    public override int GetHashCode() => 
-        Instances.Values.Select(x => x.GetHashCode()).Aggregate((x,y) => x ^ y);
+    public override int GetHashCode() =>
+        Instances.Values.Select(x => x.GetHashCode()).Aggregate((x, y) => x ^ y);
 }

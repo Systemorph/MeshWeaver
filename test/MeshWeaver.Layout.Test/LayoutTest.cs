@@ -94,7 +94,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var areaControls = await areas
             .ToAsyncEnumerable()
-            .SelectAwait(async a => 
+            .SelectAwait(async a =>
                 await stream.GetControlStream(a.Area.ToString())
                 .Timeout(3.Seconds())
                 .FirstAsync(x => x != null))
@@ -164,7 +164,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         );
         var reportArea = $"{reference.Area}/Content";
         var content = await stream.GetControlStream(reportArea)
-           // .Timeout(3.Seconds())
+            // .Timeout(3.Seconds())
             .FirstAsync(x => x is not null);
         content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
 
@@ -200,8 +200,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 patch.Apply(ci),
                 hub.Address,
                 ChangeType.Patch,
-                new(() =>patch),
-                hub.Version
+                hub.Version,
+                patch
             );
         });
 
@@ -280,7 +280,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                         Controls.Html((++counter))
                     )
                 ), "Button")
-            .WithView( Controls.Html(counter.ToString()), nameof(Counter));
+            .WithView(Controls.Html(counter.ToString()), nameof(Counter));
     }
 
     [HubFact]
@@ -317,7 +317,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     private object DataGrid(LayoutAreaHost area, RenderingContext ctx)
     {
         var data = new DataRecord[] { new("1", "1"), new("2", "2") };
-        return area.ToDataGrid(data,grid => grid
+        return area.ToDataGrid(data, grid => grid
             .WithColumn(x => x.SystemName)
             .WithColumn(x => x.DisplayName)
         );
@@ -345,7 +345,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Which.Columns.Should()
             .HaveCount(2)
             .And.Subject;
-;
+        ;
 
         controls.Should().BeEquivalentTo(
                 [
@@ -372,10 +372,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         ]);
 
         return Controls.Stack
-            .WithView(Template.Bind(data, nameof(DataBoundCheckboxes), x => Template.ItemTemplate(x.Data,y => Controls.CheckBox(y.Label, y.Value))), Filter)
+            .WithView(Template.Bind(data, nameof(DataBoundCheckboxes), x => Template.ItemTemplate(x.Data, y => Controls.CheckBox(y.Label, y.Value))), Filter)
             .WithView((a, ctx) => a.GetDataStream<FilterEntity>(nameof(DataBoundCheckboxes))
                 .Select(d => d.Data.All(y => y.Value)
-                ), Results) ;
+                ), Results);
     }
 
     private const string Filter = nameof(Filter);
@@ -443,14 +443,14 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 patch.Apply(ci),
                 hub.Address,
                 ChangeType.Patch,
-                new(()=>patch),
-                hub.Version
+                hub.Version,
+                patch
             );
         });
 
         resultsControl = await stream
             .GetControlStream(resultsArea)
-            .Where(x =>!((string)((HtmlControl)x).Data).Contains("<pre>True</pre>"))
+            .Where(x => !((string)((HtmlControl)x).Data).Contains("<pre>True</pre>"))
             .Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => true);
 
@@ -477,7 +477,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Hub.GetWorkspace()
             .GetStreamForTypes(typeof(DataRecord)).Select(x => x.Value.GetData<DataRecord>())
             .DistinctUntilChanged()
-            .Select(data => 
+            .Select(data =>
                 Template.Bind(data, nameof(CatalogView), x => area.ToDataGrid(x)));
     }
 
@@ -532,7 +532,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 return "Ok";
             }), "subarea");
 
-    
+
     [HubFact]
     public async Task TestAsyncView()
     {

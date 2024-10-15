@@ -114,7 +114,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
     {
         if (value is JsonPointerReference reference)
         {
-            if(Model != null)
+            if (Model != null)
                 return Observable.Return(ConvertSingle(GetValueFromModel(reference), conversion));
             return DataBind(reference, conversion);
         }
@@ -214,7 +214,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
             if (Model != null)
             {
                 var patch = GetPatch(value, reference, Model.Element);
-                if(patch != null)
+                if (patch != null)
                     Model.Update(patch);
             }
 
@@ -229,8 +229,8 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
                         patch?.Apply(ci) ?? ci,
                         Hub.Address,
                         ChangeType.Patch,
-                        new(() => patch),
-                        Hub.Version
+                        Hub.Version,
+                        patch
                     );
                 });
 

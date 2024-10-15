@@ -82,7 +82,7 @@ public sealed record DataContext : IAsyncDisposable
             dataSource.Initialize();
         DataSourcesByType = DataSourcesById.Values
             .SelectMany(ds => ds.MappedTypes.Select(t => new KeyValuePair<Type, IDataSource>(t, ds))).ToDictionary();
-        DataSourcesByCollection = DataSourcesByType.Select(kvp => new KeyValuePair<string,IDataSource>(TypeRegistry.GetCollectionName(kvp.Key), kvp.Value)).ToDictionary();
+        DataSourcesByCollection = DataSourcesByType.Select(kvp => new KeyValuePair<string, IDataSource>(TypeRegistry.GetCollectionName(kvp.Key), kvp.Value)).ToDictionary();
         TypeSources = DataSourcesById
             .Values
             .SelectMany(ds => ds.TypeSources.Values)
@@ -90,7 +90,7 @@ public sealed record DataContext : IAsyncDisposable
         TypeSourcesByType = DataSourcesById.Values.SelectMany(ds => ds.TypeSources).ToDictionary();
 
 
-        
+
     }
 
     public IEnumerable<Type> MappedTypes => DataSourcesByType.Keys;
@@ -107,15 +107,6 @@ public sealed record DataContext : IAsyncDisposable
         => TypeSourcesByType.GetValueOrDefault(type)?.CollectionName;
 
 
-
-
-    private IEnumerable<string> GetCollections(ChangeItem<EntityStore> changeItem)
-    {
-        var patch = changeItem.Patch?.Value;
-        return patch != null
-            ? patch.Operations.Select(p => p.Path.Segments.First().ToString()).Distinct()
-            : changeItem.Value.Collections.Keys;
-    }
 
 
 }

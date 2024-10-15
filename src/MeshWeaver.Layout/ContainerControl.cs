@@ -171,7 +171,7 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
             (acc, r) =>
             {
                 var newRender = r.Invoke(host, context, acc.Store);
-                return new EntityStoreAndUpdates(newRender.Store, acc.Changes.Concat(newRender.Changes));
+                return new EntityStoreAndUpdates(newRender.Store, acc.Updates.Concat(newRender.Updates));
             });
     protected override EntityStoreAndUpdates RenderSelf(LayoutAreaHost host, RenderingContext context, EntityStore store) => 
         store.UpdateControl(context.Area, PrepareRendering(context));
