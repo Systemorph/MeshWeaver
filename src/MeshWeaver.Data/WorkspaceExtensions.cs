@@ -41,60 +41,11 @@ public static class WorkspaceExtensions
             storeAndUpdates.Store, 
             stream.Hub.Address, 
             ChangeType.Patch,
-            new(() => CreatePatch(storeAndUpdates.Changes, stream.Hub.JsonSerializerOptions)),
-            stream.Hub.Version
+            stream.Hub.Version,
+            storeAndUpdates.Updates.ToArray(),
+            stream.Hub.JsonSerializerOptions
             );
 
 
-    private static JsonPatch CreatePatch(IEnumerable<EntityStoreUpdate> updates, JsonSerializerOptions options)
-    {
-        return new JsonPatch(updates
-            .GroupBy(x => new { x.Collection, x.Id })
-            .Aggregate(Enumerable.Empty<PatchOperation>(), (e, g) =>
-            {
-                var first = g.First().OldValue;
-                var last = g.Last().Value;
-
-                PointerSegment[] pointerSegments = g.Key.Id == null
-                    ? [PointerSegment.Create(g.Key.Collection)]
-                    :
-                    [
-                        PointerSegment.Create(g.Key.Collection),
-                        PointerSegment.Create(JsonSerializer.Serialize(g.Key.Id, options))
-                    ];
-                var parentPath = JsonPointer.Create(pointerSegments);
-                if (last == null && first == null)
-                    return e;
-                if (first == null)
-                    return e.Concat([PatchOperation.Add(parentPath, JsonSerializer.SerializeToNode(last, options))]);
-                if(last == null)
-                    return e.Concat([PatchOperation.Remove(parentPath)]);
-
-
-                var patches = first.CreatePatch(last, options).Operations;
-
-                patches = patches.Select(p =>
-                {
-                    var newPath = parentPath.Combine(p.Path);
-                    return CreatePatchOperation(p, newPath);
-                }).ToArray();
-
-                return e.Concat(patches);
-            }).ToArray());
-    }
-
-    private static PatchOperation CreatePatchOperation(PatchOperation original, JsonPointer newPath)
-    {
-        return original.Op switch
-        {
-            OperationType.Add => PatchOperation.Add(newPath, original.Value),
-            OperationType.Remove => PatchOperation.Remove(newPath),
-            OperationType.Replace => PatchOperation.Replace(newPath, original.Value),
-            OperationType.Move => PatchOperation.Move(newPath, original.From),
-            OperationType.Copy => PatchOperation.Copy(newPath, original.From),
-            OperationType.Test => PatchOperation.Test(newPath, original.Value),
-            _ => throw new InvalidOperationException($"Unsupported operation: {original.Op}")
-        };
-    }
 
 }

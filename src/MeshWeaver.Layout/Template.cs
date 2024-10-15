@@ -244,7 +244,7 @@ public record ItemTemplateControl(UiControl View, object Data) :
     {
         var ret = base.Render(host, context, store);
         var renderedView = host.RenderArea(GetContextForArea(context, ItemTemplateControl.ViewArea), View, ret.Store);
-        return renderedView with { Changes = ret.Changes.Concat(renderedView.Changes) };
+        return renderedView with { Updates = ret.Updates.Concat(renderedView.Updates) };
     }
 
     public virtual bool Equals(ItemTemplateControl other)

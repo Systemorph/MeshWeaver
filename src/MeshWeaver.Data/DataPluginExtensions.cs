@@ -54,8 +54,7 @@ public static class DataPluginExtensions
                 typeof(JsonPatch),
                 typeof(JsonElementReference),
                 typeof(DataChangedEvent),
-                typeof(UpdateDataRequest),
-                typeof(DeleteDataRequest),
+                typeof(DataChangeRequest),
                 typeof(DataChangeResponse),
                 typeof(SubscribeRequest),
                 typeof(UnsubscribeDataRequest)
@@ -114,7 +113,7 @@ public static class DataPluginExtensions
         );
     private static MessageHubConfiguration RegisterDataEvents(this MessageHubConfiguration configuration) =>
         configuration
-            .WithHandler<UpdateDataRequest>((hub, request) =>
+            .WithHandler<DataChangeRequest>((hub, request) =>
             {
                 hub.GetWorkspace().RequestChange(request.Message, request);
                 return request.Processed();
@@ -127,11 +126,6 @@ public static class DataPluginExtensions
             .WithHandler<UnsubscribeDataRequest>((hub, request) =>
             {
                 hub.GetWorkspace().Unsubscribe(request.Sender, request.Message.Reference);
-                return request.Processed();
-            })
-            .WithHandler<DataChangedRequest>((hub, request) =>
-            {
-                hub.GetWorkspace().RequestChange(request.Message, request);
                 return request.Processed();
             });
 

@@ -118,7 +118,6 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     await initialize.Invoke(ct),
                     null,
                     ChangeType.Full,
-                    null,
                     Hub.Version
                 )
             )

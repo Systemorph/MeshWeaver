@@ -1,4 +1,7 @@
-﻿using MeshWeaver.Activities;
+﻿using System.Collections.Immutable;
+using System.Text.Json;
+using Json.Pointer;
+using MeshWeaver.Activities;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
@@ -9,19 +12,24 @@ public record WorkspaceMessage
     public virtual object Reference { get; init; }
 }
 
-public abstract record DataChangedRequest(IReadOnlyCollection<object> Elements)
+public record DataChangeRequest
     : IRequest<DataChangeResponse>
 {
     public object ChangedBy { get; init; }
-};
-
-public record UpdateDataRequest(IReadOnlyCollection<object> Elements) : DataChangedRequest(Elements)
-{
+    public ImmutableList<object> Updates { get; init; } = [];
+    public ImmutableList<object> Deletions { get; init; } = [];
     public UpdateOptions Options { get; init; }
-}
 
-public record DeleteDataRequest(IReadOnlyCollection<object> Elements)
-    : DataChangedRequest(Elements);
+    public DataChangeRequest WithUpdates(params object[] updates)
+    => this with { Updates = Updates.AddRange(updates) };
+    public DataChangeRequest WithDeletions(params object[] deletions)
+    => this with { Deletions = Deletions.AddRange(deletions) };
+
+    public static DataChangeRequest Update(IReadOnlyCollection<object> updates) =>
+        new() { Updates = updates.ToImmutableList() };
+    public static DataChangeRequest Delete(IReadOnlyCollection<object> deletes) =>
+        new() { Deletions = deletes.ToImmutableList() };
+};
 
 public record DataChangeResponse(long Version, ActivityLog Log)
 {

@@ -16,7 +16,7 @@ public interface IWorkspace : IAsyncDisposable
     void Delete(object instance) => Delete([instance]);
 
     void Unsubscribe(object address, WorkspaceReference reference);
-    internal void RequestChange(DataChangedRequest change, IMessageDelivery request);
+    internal void RequestChange(DataChangeRequest change, IMessageDelivery request);
 
     ISynchronizationStream<EntityStore> GetStreamForTypes(params Type[] types) =>
         GetStreamForTypes(null, types);
@@ -36,7 +36,7 @@ public interface IWorkspace : IAsyncDisposable
     )
         where TReference : WorkspaceReference;
 
-    
+
 
     internal void SubscribeToClient<TReference>(
         object sender,

@@ -17,7 +17,7 @@ public record LayoutAreaHost : IDisposable
     public ISynchronizationStream<EntityStore> Stream { get; }
     public IMessageHub Hub => Workspace.Hub;
     public IWorkspace Workspace { get; }
-    private readonly Dictionary<object, object> variables = new ();
+    private readonly Dictionary<object, object> variables = new();
 
     public T GetVariable<T>(object key) => (T)variables[key];
     public bool ContainsVariable(object key) => variables.ContainsKey(key);
@@ -69,7 +69,7 @@ public record LayoutAreaHost : IDisposable
     private IMessageDelivery OnClick(IMessageDelivery<ClickedEvent> request)
     {
         if (GetControl(request.Message.Area) is UiControl { ClickAction: not null } control)
-            InvokeAsync(()=>control.ClickAction.Invoke(
+            InvokeAsync(() => control.ClickAction.Invoke(
                 new(request.Message.Area, request.Message.Payload, Hub, this)
             ));
         return request.Processed();
@@ -94,7 +94,7 @@ public record LayoutAreaHost : IDisposable
     }
 
 
-    internal EntityStoreAndUpdates RenderArea(RenderingContext context,  object view, EntityStore store)
+    internal EntityStoreAndUpdates RenderArea(RenderingContext context, object view, EntityStore store)
     {
         if (view == null)
             return new(store, []);
@@ -106,8 +106,8 @@ public record LayoutAreaHost : IDisposable
 
         control = control with { DataContext = dataContext, };
 
-            
-        return ((IUiControl)control).Render(this,context, store);
+
+        return ((IUiControl)control).Render(this, context, store);
     }
 
 
@@ -122,7 +122,7 @@ public record LayoutAreaHost : IDisposable
             var updates = RenderArea(context, view, changes.Store);
             return Stream.ApplyChanges(
                 new(updates.Store,
-                changes.Changes.Concat(updates.Changes))
+                changes.Updates.Concat(updates.Updates))
             );
         });
     }
@@ -224,26 +224,26 @@ public record LayoutAreaHost : IDisposable
             return Task.CompletedTask;
         });
 
-    private EntityStoreAndUpdates DisposeExistingAreas(EntityStore store, RenderingContext  context)
+    private EntityStoreAndUpdates DisposeExistingAreas(EntityStore store, RenderingContext context)
     {
         var contextArea = context.Area;
         foreach (var area in disposablesByArea.Where(x => x.Key.StartsWith(contextArea)).ToArray())
-                if (disposablesByArea.TryRemove(area.Key, out var disposables))
-                    disposables.ForEach(d => d.Dispose());
+            if (disposablesByArea.TryRemove(area.Key, out var disposables))
+                disposables.ForEach(d => d.Dispose());
 
-        var existing = 
+        var existing =
             store.Collections
                 .GetValueOrDefault(LayoutAreaReference.Areas)
             ?.Instances
             .Where(x => ((string)x.Key).StartsWith(contextArea))
                 .ToArray();
 
-            if(existing == null)
-                return new(store, []);
+        if (existing == null)
+            return new(store, []);
 
-            return new(store.Update(LayoutAreaReference.Areas,
-                i => i with { Instances = i.Instances.RemoveRange(existing.Select(x => x.Key)) }), existing.Select(i =>
-                new EntityStoreUpdate(LayoutAreaReference.Areas, contextArea, null) { OldValue = i.Value }));
+        return new(store.Update(LayoutAreaReference.Areas,
+            i => i with { Instances = i.Instances.RemoveRange(existing.Select(x => x.Key)) }), existing.Select(i =>
+            new EntityStoreUpdate(LayoutAreaReference.Areas, contextArea, null) { OldValue = i.Value }));
     }
 
 
@@ -274,8 +274,8 @@ public record LayoutAreaHost : IDisposable
         return DisposeExistingAreas(store, context);
     }
     internal EntityStoreAndUpdates RenderArea(
-        RenderingContext context, 
-        IObservable<ViewDefinition> generator, 
+        RenderingContext context,
+        IObservable<ViewDefinition> generator,
         EntityStore store)
     {
         AddDisposable(context.Area, generator.Subscribe(vd =>
@@ -294,8 +294,8 @@ public record LayoutAreaHost : IDisposable
     internal EntityStoreAndUpdates RenderArea(RenderingContext context, IObservable<object> generator, EntityStore store)
     {
         AddDisposable(
-            context.Area, 
-            generator.Subscribe(view => 
+            context.Area,
+            generator.Subscribe(view =>
                 InvokeAsync(() => UpdateArea(context, view))
             )
         );
@@ -325,7 +325,6 @@ public record LayoutAreaHost : IDisposable
                         .Store,
                     Stream.Hub.Address,
                     ChangeType.Full,
-                    null,
                     Stream.Hub.Version));
             logger.LogDebug("End re-rendering");
         });

@@ -58,7 +58,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
 
 
         var patch = new JsonPatch(PatchOperation.Replace(innerPointer, "Universe"));
-        var response = await client.AwaitResponse(new UpdateDataRequest([patch.Apply(data)]), x => x.WithTarget(new HostAddress()));
+        var response = await client.AwaitResponse(new DataChangeRequest{Updates = [patch.Apply(data)]}, x => x.WithTarget(new HostAddress()));
         response.Message.Status.Should().Be(DataChangeStatus.Committed);
         //stream.Update(c => new ChangeItem<JsonElement>(stream.Owner, stream.Reference, patch.Apply(c), client.Address, new(() => patch), client.Version));
 

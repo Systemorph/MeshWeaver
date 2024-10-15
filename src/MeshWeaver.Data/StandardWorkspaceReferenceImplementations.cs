@@ -38,17 +38,17 @@ namespace MeshWeaver.Data
                         PatchEntityStore(current, change, hub.JsonSerializerOptions)
                 )
 
-                .AddWorkspaceReference<WorkspaceStateReference, EntityStore>((ws, _) => ws, 
-                    (ws,change, _) => ws.Merge(change.Value))
+                .AddWorkspaceReference<WorkspaceStateReference, EntityStore>((ws, _) => ws,
+                    (ws, change, _) => ws.Merge(change.Value))
                 .ForReducedStream<InstanceCollection>(reduced =>
                     reduced.AddWorkspaceReference<EntityReference, object>(
                         (ws, reference) => ws.GetData(reference.Id),
                         (ws, change, reference) => ws.Update(reference.Id, change.Value))
                     )
-                
+
                 .ForReducedStream<JsonElement>(conf =>
                     conf.AddWorkspaceReference<JsonPointerReference, JsonElement?>(
-                        ReduceJsonPointer, 
+                        ReduceJsonPointer,
                         UpdateJsonPointer)
                 );
         }
@@ -57,11 +57,11 @@ namespace MeshWeaver.Data
         {
             var pointer = JsonPointer.Parse(reference.Pointer);
             var patch = new JsonPatch(change.Value.HasValue
-                    ? pointer.Evaluate(element).HasValue 
+                    ? pointer.Evaluate(element).HasValue
                         ? PatchOperation.Replace(pointer, change.Value.Value.AsNode())
                         : PatchOperation.Add(pointer, change.Value.Value.AsNode())
                     : PatchOperation.Remove(pointer));
- 
+
             return patch.Apply(element);
         }
 
@@ -80,8 +80,8 @@ namespace MeshWeaver.Data
             JsonSerializerOptions options
         )
         {
-            if (changeItem.Patch?.Value is not null)
-                foreach (var op in changeItem.Patch.Value.Operations)
+            if (changeItem.Patch is JsonPatch patch)
+                foreach (var op in patch.Operations)
                 {
                     switch (op.Path.Segments.Length)
                     {
@@ -102,7 +102,7 @@ namespace MeshWeaver.Data
                             break;
                     }
                 }
-            else 
+            else
                 current = changeItem.Value.Deserialize<EntityStore>(options);
 
             return current;

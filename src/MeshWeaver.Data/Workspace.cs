@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
@@ -30,7 +31,7 @@ public class Workspace : IWorkspace
     private readonly ILogger<Workspace> logger;
 
     public WorkspaceReference Reference { get; } = new WorkspaceStateReference();
-    
+
 
 
     public IReadOnlyCollection<Type> MappedTypes => DataContext.MappedTypes.ToArray();
@@ -147,7 +148,7 @@ public class Workspace : IWorkspace
                 delivery =>
                 {
                     json.Update(state =>
-                        json.Parse(state, delivery.Message with {ChangedBy = delivery.Sender})
+                        json.Parse(state, delivery.Message with { ChangedBy = delivery.Sender })
                     );
 
                     return delivery.Processed();
@@ -164,6 +165,7 @@ public class Workspace : IWorkspace
                     Hub.Post(e, o => o.WithTarget(json.Subscriber));
                 })
             );
+
         json.AddDisposable(
             new AnonymousDisposable(() => subscriptions.Remove(new(subscriber, reference), out _))
         );
@@ -189,7 +191,7 @@ public class Workspace : IWorkspace
         if (owner is JsonObject obj)
             owner = obj.Deserialize<object>(Hub.JsonSerializerOptions);
         var ret = new SynchronizationStream<TReduced>(
-            new(owner,partition),
+            new(owner, partition),
             owner,
             Hub,
             reference,
@@ -222,26 +224,44 @@ public class Workspace : IWorkspace
             )
         );
 
-        json.AddDisposable(
-            // this is the "client" ==> never needs to submit full state
-            json.ToDataChanged(reference)
-                .Where(x => json.Hub.Address.Equals(x.ChangedBy))
-                .Subscribe(e =>
-                {
-                    logger.LogDebug("Subscriber {subscriber} sending change notification to owner {owner}", json.Subscriber, json.Owner);
+        if (ret is ISynchronizationStream<EntityStore> entityStream)
+            json.AddDisposable(
+                entityStream
+                    .Where(x => json.Hub.Address.Equals(x.ChangedBy))
+                    .ToDataChangeRequest()
 
-                    Hub.Post(e, o => o.WithTarget(json.Owner));
-                })
-        );
+                    .Subscribe(e =>
+                    {
+                        logger.LogDebug("Subscriber {subscriber} sending change notification to owner {owner}",
+                            json.Subscriber, json.Owner);
+
+                        Hub.Post(e, o => o.WithTarget(json.Owner));
+                    })
+            );
+        else
+            json.AddDisposable(
+                json.ToDataChanged(reference)
+                    .Where(x => json.Hub.Address.Equals(x.ChangedBy))
+                    .Subscribe(e =>
+                    {
+                        logger.LogDebug("Subscriber {subscriber} sending change notification to owner {owner}",
+                            json.Subscriber, json.Owner);
+
+                        Hub.Post(e, o => o.WithTarget(json.Owner));
+                    })
+            );
+
         Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(owner));
 
         return ret;
     }
 
+
     public void Update(IEnumerable<object> instances, UpdateOptions updateOptions) =>
         RequestChange(
-            new UpdateDataRequest(instances.ToArray())
+            new DataChangeRequest()
             {
+                Updates = instances.ToImmutableList(),
                 Options = updateOptions,
                 ChangedBy = Hub.Address
             }, null
@@ -251,14 +271,14 @@ public class Workspace : IWorkspace
 
     public void Delete(IEnumerable<object> instances) =>
         RequestChange(
-            new DeleteDataRequest(instances.ToArray()) { ChangedBy = Hub.Address }, null
+            new DataChangeRequest { Deletions = instances.ToImmutableList(), ChangedBy = Hub.Address }, null
         );
 
     public ISynchronizationStream<TReduced> GetStream<TReduced>(WorkspaceReference<TReduced> reference, object subscriber)
     {
         return (ISynchronizationStream<TReduced>)ReduceInternalMethod
             .MakeGenericMethod(typeof(TReduced), reference.GetType())
-            .InvokeAsFunction(this,reference, subscriber);
+            .InvokeAsFunction(this, reference, subscriber);
     }
 
 
@@ -293,7 +313,7 @@ public class Workspace : IWorkspace
 
     public DataContext DataContext { get; }
 
-    public void RequestChange(DataChangedRequest change, IMessageDelivery request)
+    public void RequestChange(DataChangeRequest change, IMessageDelivery request)
     {
         var activity = this.Change(change);
         if (request != null)
@@ -326,7 +346,7 @@ public class Workspace : IWorkspace
 
     public ISynchronizationStream<EntityStore> GetStream(StreamIdentity identity)
     {
-        var ds =  DataContext.GetDataSource(identity.Owner);
+        var ds = DataContext.GetDataSource(identity.Owner);
         return ds.GetStream(identity.Partition);
     }
 

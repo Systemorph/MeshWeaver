@@ -9,40 +9,39 @@ namespace MeshWeaver.Data;
 
 public static class WorkspaceOperations
 {
-    public static Activity Change(this IWorkspace workspace, DataChangedRequest dataChange)
-    {
-        if (dataChange.Elements == null)
-            throw new ArgumentException($"No elements provided in the request");
-
-        if (dataChange is UpdateDataRequest update)
-            return workspace.MergeUpdate(update);
-
-        if (dataChange is DeleteDataRequest delete)
-            return workspace.MergeDelete(delete);
-        throw new InvalidOperationException(
-            $"No implementation for update request of type {dataChange.GetType().FullName}"
-        );
-    }
-
-    public static Activity MergeUpdate(
-        this IWorkspace workspace,
-        UpdateDataRequest update
-    )
+    public static Activity Change(this IWorkspace workspace, DataChangeRequest dataChange)
     {
         var hub = workspace.Hub;
         var activity = GetActivity(hub);
-        var (isValid, results) = workspace.ValidateUpdate(update.Elements);
+
+        if(dataChange.Updates.Any())
+            workspace.MergeUpdate(dataChange, activity);
+        if (dataChange.Deletions.Any())
+            workspace.MergeDelete(dataChange, activity);
+
+        activity.Complete();
+
+        return activity;
+    }
+
+    public static void MergeUpdate(
+        this IWorkspace workspace,
+        DataChangeRequest change,
+        Activity activity
+    )
+    {
+        var (isValid, results) = workspace.ValidateUpdate(change.Updates);
         if (!isValid)
         {
             foreach (var validationResult in results.Where(r => r != ValidationResult.Success))
                 activity.LogError("{members} invalid: {error}", validationResult.MemberNames,
                     validationResult.ErrorMessage);
             activity.ChangeStatus(ActivityStatus.Failed);
-            return activity;
+            return;
         }
 
-        var storesByStream = 
-            workspace.GroupByStream(update.Elements, activity, hub);
+        var storesByStream =
+            workspace.GroupByStream(change.Updates, activity, workspace.Hub);
 
         foreach (var kvp in storesByStream)
         {
@@ -53,7 +52,7 @@ public static class WorkspaceOperations
                 try
                 {
                     activityPart.LogInformation("Updating Data Stream {identity}", stream.StreamIdentity);
-                    var ret = stream.ApplyChanges(s.MergeWithUpdates(kvp.Value, update.Options));
+                    var ret = stream.ApplyChanges(s.MergeWithUpdates(kvp.Value, change.Options));
                     activityPart.LogInformation("Update of Data Stream {identity} succeeded.", stream.StreamIdentity);
                     activityPart.Complete();
                     return ret;
@@ -68,30 +67,27 @@ public static class WorkspaceOperations
             });
         }
 
-        activity.Complete();
-
-        return activity;
 
     }
-    private static Activity MergeDelete(
+    private static void MergeDelete(
         this IWorkspace workspace,
-        DeleteDataRequest deletion
+        DataChangeRequest deletion,
+        Activity activity
     )
     {
         var hub = workspace.Hub;
-        var activity = GetActivity(hub);
-        var (isValid, results) = workspace.ValidateDeletion(deletion.Elements);
+        var (isValid, results) = workspace.ValidateDeletion(deletion.Deletions);
         if (!isValid)
         {
             foreach (var validationResult in results.Where(r => r != ValidationResult.Success))
                 activity.LogError("{members} invalid: {error}", validationResult.MemberNames,
                     validationResult.ErrorMessage);
             activity.ChangeStatus(ActivityStatus.Failed);
-            return activity;
+            return;
         }
 
         var storesByStream =
-            workspace.GroupByStream(deletion.Elements, activity, hub);
+            workspace.GroupByStream(deletion.Deletions, activity, hub);
 
         foreach (var kvp in storesByStream)
         {
@@ -117,9 +113,6 @@ public static class WorkspaceOperations
             });
         }
 
-        activity.Complete();
-
-        return activity;
 
 
     }
@@ -165,7 +158,7 @@ public static class WorkspaceOperations
                         ]
                         : GetPartitioned(g.Instances, g.DataSource, partitionedTypeSource)))
             .GroupBy(x => x.Key)
-            .Select(x => new KeyValuePair<StreamIdentity, EntityStore>(x.Key, x.Aggregate(new EntityStore(), (s,t) => s.Merge(t.Value))))
+            .Select(x => new KeyValuePair<StreamIdentity, EntityStore>(x.Key, x.Aggregate(new EntityStore(), (s, t) => s.Merge(t.Value))))
             .ToImmutableDictionary();
     }
 
@@ -298,7 +291,7 @@ public static class WorkspaceOperations
                 store.ComputeChanges(u.Key, u.Value)));
     }
 
-    private static (bool IsValid, List<ValidationResult> Results) ValidateDeletion(       
+    private static (bool IsValid, List<ValidationResult> Results) ValidateDeletion(
         this IWorkspace workspace,
         IReadOnlyCollection<object> instances)
     {
