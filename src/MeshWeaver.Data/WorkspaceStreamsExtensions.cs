@@ -143,7 +143,7 @@ public static class WorkspaceStreamsExtensions{
     }
 
     internal static ISynchronizationStream CreateReducedStream<TStream, TReference, TReduced>(
-        ISynchronizationStream<TStream> stream,
+        this ISynchronizationStream<TStream> stream,
         TReference reference,
         object subscriber,
         ReduceFunction<TStream, TReference, TReduced> reducer,
@@ -174,7 +174,7 @@ public static class WorkspaceStreamsExtensions{
                 .Take(1)
                 .Concat(selected
                     .Skip(1)
-                    .Where(x => !Equals(x.ChangedBy, subscriber))
+                    //.Where(x => !Equals(x.ChangedBy, subscriber))
                 )
                 .DistinctUntilChanged()
                 .Subscribe(reducedStream)

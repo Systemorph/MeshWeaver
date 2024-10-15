@@ -50,7 +50,7 @@ else
 
     private async void Submit(EditContext context)
     {
-        var response = await Stream.Hub.AwaitResponse(new UpdateDataRequest([Data.Submit()]), o => o.WithTarget(Stream.Owner));
+        var response = await Stream.Hub.AwaitResponse(new DataChangeRequest { Updates = [Data.Submit()] }, o => o.WithTarget(Stream.Owner));
         if (response.Message.Status == DataChangeStatus.Committed)
         {
             Data.Confirm();
