@@ -1,6 +1,7 @@
 ﻿using System.Text.Json;
 using Json.Patch;
 using MeshWeaver.Activities;
+using MeshWeaver.Data.Serialization;
 
 namespace MeshWeaver.Data;
 
@@ -29,7 +30,7 @@ public record ChangeItem<TStream>(
     public ActivityLog Log { get; init; }
 
     private readonly Lazy<JsonPatch> patch;
-    public JsonPatch Patch => patch?.Value;
+    public JsonPatch Patch => patch?.Value ?? default;
 
     public ChangeItem(object Owner,
         object Reference,
@@ -53,7 +54,7 @@ public record ChangeItem<TStream>(
         JsonSerializerOptions options) : this(Owner, Reference, Value, ChangedBy, ChangeType, Version)
     {
         Updates = updates;
-        patch = new(() => updates.CreatePatch(options));
+        patch = new(() => updates.ToJsonPatch(options));
     }
     internal ChangeItem(object Owner,
         object Reference,
