@@ -154,7 +154,7 @@ public static class WorkspaceOperations
                     g.TypeSource is not IPartitionedTypeSource partitionedTypeSource
                         ?
                         [
-                            new KeyValuePair<StreamIdentity, EntityStore>(new(g.DataSource.Id, null), new())
+                            new KeyValuePair<StreamIdentity, EntityStore>(new(g.DataSource.Id, null), new EntityStore().WithCollection(g.TypeSource.CollectionName, g.Instances))
                         ]
                         : GetPartitioned(g.Instances, g.DataSource, partitionedTypeSource)))
             .GroupBy(x => x.Key)
@@ -285,7 +285,7 @@ public static class WorkspaceOperations
     {
         options ??= UpdateOptions.Default;
         var newStore = store.Merge(updated, options);
-        return new EntityStoreAndUpdates(store,
+        return new EntityStoreAndUpdates(newStore,
             newStore
             .Collections.SelectMany(u =>
                 store.ComputeChanges(u.Key, u.Value)));

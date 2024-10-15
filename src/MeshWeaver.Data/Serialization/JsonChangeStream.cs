@@ -136,7 +136,7 @@ public static class JsonSynchronizationStream
             );
     }
 
-    internal static JsonPatch CreatePatch(this IEnumerable<EntityStoreUpdate> updates, JsonSerializerOptions options)
+    internal static JsonPatch ToJsonPatch(this IEnumerable<EntityStoreUpdate> updates, JsonSerializerOptions options)
     {
         return new JsonPatch(updates
             .GroupBy(x => new { x.Collection, x.Id })

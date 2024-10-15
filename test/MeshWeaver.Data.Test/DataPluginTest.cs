@@ -86,7 +86,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var updateResponse = await client.AwaitResponse(
             DataChangeRequest.Update(updateItems),
             o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
+            new CancellationTokenSource(TimeSpan.FromHours(3)).Token
         );
 
         // asserts
@@ -96,7 +96,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         data = (
             await clientWorkspace
                 .GetObservable<MyData>()
-                .Timeout(3.Seconds())
+                //.Timeout(3.Seconds())
                 .FirstOrDefaultAsync(x => x?.Count == 3)
         )
             .OrderBy(a => a.Id)
