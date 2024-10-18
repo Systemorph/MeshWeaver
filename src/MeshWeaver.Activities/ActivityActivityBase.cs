@@ -1,5 +1,4 @@
 ﻿using System.Collections.Immutable;
-using System.Data;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Messaging;
@@ -125,11 +124,6 @@ public abstract record ActivityBase<TActivity> : ActivityBase, ILogger
 
 
 
-    public void OnCompleted(Action<ActivityLog> completedAction)
-    {
-        SyncHub.InvokeAsync(() => Stream.Where(x => x.Log.Status != ActivityStatus.Running)
-            .Subscribe(a => completedAction.Invoke(a.Log)));
-    }
 
 
     public Activity StartSubActivity(string category)
@@ -143,16 +137,16 @@ public abstract record ActivityBase<TActivity> : ActivityBase, ILogger
         );
         return subActivity;
     }
-    public Activity<TResult> StartSubActivity<TResult>(string category)
-    {
-        var subActivity = new Activity<TResult>(category, Hub);
-        subActivity.Stream.Subscribe(sa =>
-            Update(x => x.WithLog(
-                log => log with { SubActivities = log.SubActivities.SetItem(sa.Id, sa.Log), Version = log.Version + 1 })
-            )
-        );
-        return subActivity;
-    }
+    //public Activity<TResult> StartSubActivity<TResult>(string category)
+    //{
+    //    var subActivity = new Activity<TResult>(category, Hub);
+    //    subActivity.Stream.Subscribe(sa =>
+    //        Update(x => x.WithLog(
+    //            log => log with { SubActivities = log.SubActivities.SetItem(sa.Id, sa.Log), Version = log.Version + 1 })
+    //        )
+    //    );
+    //    return subActivity;
+    //}
 
 }
 
@@ -165,49 +159,87 @@ public record Activity : ActivityBase<Activity>
 
 
 
-    private void CompleteMyself()
+    protected void CompleteMyself()
     {
         Update(a =>
-            a.WithLog(log => log with
-            {
-                Status = HasErrors() ? ActivityStatus.Failed : ActivityStatus.Succeeded,
-                End = DateTime.UtcNow,
-                Version = log.Version + 1
-            })
-        );
-    }
-    public void Complete()
-    {
-        Stream.Where(x => x.Log.SubActivities.Count == 0 || x.Log.SubActivities.Values.All(y => y.Status != ActivityStatus.Running))
-            .Subscribe(a =>
-            {
-                if (a.Log.Status == ActivityStatus.Running)
-                {
-                    CompleteMyself();
-                }
-            });
-    }
-
-
-}
-
-public record Activity<TResult> : ActivityBase<Activity<TResult>>
-{
-    public Activity(string category, IMessageHub hub) : base(category, hub)
-    {
-    }
-
-    public void OnCompleted(Action<TResult, ActivityLog> onCompleted)
-    {
-        OnCompleted(log =>
         {
-            onCompleted(default, log);
+            if (a.Log.Status == ActivityStatus.Running)
+            {
+                var ret = a.WithLog(log => log with
+                {
+                    Status = HasErrors() ? ActivityStatus.Failed : ActivityStatus.Succeeded,
+                    End = DateTime.UtcNow,
+                    Version = log.Version + 1
+                });
+                foreach (var completedAction in completedActions)
+                    completedAction.Invoke(ret.Log);
+                return ret;
+            }
+
+            return a;
         });
     }
 
-    public void Complete(TResult result)
+    private readonly List<Action<ActivityLog>> completedActions = new();
+    private bool isSubscribed;
+    private readonly object completionLock = new();
+    public void Complete(Action<ActivityLog> completedAction = null)
     {
-        ChangeStatus(HasErrors() ? ActivityStatus.Failed : ActivityStatus.Succeeded);
+        if(completedAction != null)
+            completedActions.Add(completedAction);
+        lock (completionLock)
+        {
+            if (isSubscribed)
+                return;
+            isSubscribed = true;
+
+            Stream.Where(x => x.Log.SubActivities.Count == 0 || x.Log.SubActivities.Values.All(y => y.Status != ActivityStatus.Running))
+                .Subscribe(a =>
+                {
+                    if(a.Log.Status == ActivityStatus.Running)
+                        CompleteMyself();
+                });
+        }
     }
 
+
 }
+
+//public record Activity<TResult> : ActivityBase<Activity<TResult>>
+//{
+//    public Activity(string category, IMessageHub hub) : base(category, hub)
+//    {
+//    }
+//    protected void CompleteMyself(Action<ActivityLog> completedAction)
+//    {
+//        Update(a =>
+//        {
+//            var ret = a.WithLog(log => log with
+//            {
+//                Status = HasErrors() ? ActivityStatus.Failed : ActivityStatus.Succeeded,
+//                End = DateTime.UtcNow,
+//                Version = log.Version + 1
+//            });
+//            completedAction.Invoke(ret.Log);
+//            return ret;
+//        });
+//    }
+
+//    public void Complete(Action<TResult, ActivityLog> onCompleted)
+//    {
+//        Stream.Where(x => x.Log.SubActivities.Count == 0 || x.Log.SubActivities.Values.All(y => y.Status != ActivityStatus.Running))
+//            .Subscribe(a =>
+//            {
+//                if (a.Log.Status == ActivityStatus.Running)
+//                {
+//                    CompleteMyself(completedAction);
+//                }
+//            });
+//    }
+
+//    public void Complete(TResult result)
+//    {
+//        ChangeStatus(HasErrors() ? ActivityStatus.Failed : ActivityStatus.Succeeded);
+//    }
+
+//}
