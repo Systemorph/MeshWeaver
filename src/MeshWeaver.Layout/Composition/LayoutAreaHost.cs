@@ -48,7 +48,8 @@ public record LayoutAreaHost : IDisposable
             subscriber,
             workspace.Hub,
             reference,
-            workspace.ReduceManager.ReduceTo<EntityStore>()
+            workspace.ReduceManager.ReduceTo<EntityStore>(),
+            x => x
         );
         Reference = reference;
         Stream.AddDisposable(this);
@@ -97,7 +98,7 @@ public record LayoutAreaHost : IDisposable
     internal EntityStoreAndUpdates RenderArea(RenderingContext context, object view, EntityStore store)
     {
         if (view == null)
-            return new(store, []);
+            return new(store, [], Hub.Address);
 
         var control = ConvertToControl(view);
 
@@ -116,13 +117,13 @@ public record LayoutAreaHost : IDisposable
 
     public void UpdateArea(RenderingContext context, object view)
     {
-        Stream.Update(store =>
+        Stream.UpdateAsync(store =>
         {
             var changes = DisposeExistingAreas(store, context);
             var updates = RenderArea(context, view, changes.Store);
             return Stream.ApplyChanges(
                 new(updates.Store,
-                changes.Updates.Concat(updates.Updates))
+                changes.Updates.Concat(updates.Updates), Hub.Address)
             );
         });
     }
@@ -130,8 +131,8 @@ public record LayoutAreaHost : IDisposable
 
     public void Update(string collection, Func<InstanceCollection, InstanceCollection> update)
     {
-        Stream.Update(ws =>
-            Stream.ApplyChanges(ws.MergeWithUpdates((ws ?? new()).Update(collection, update)))
+        Stream.UpdateAsync(ws =>
+            Stream.ApplyChanges(ws.MergeWithUpdates((ws ?? new()).Update(collection, update), Hub.Address))
         );
     }
 
@@ -239,11 +240,11 @@ public record LayoutAreaHost : IDisposable
                 .ToArray();
 
         if (existing == null)
-            return new(store, []);
+            return new(store, [], Hub.Address);
 
         return new(store.Update(LayoutAreaReference.Areas,
             i => i with { Instances = i.Instances.RemoveRange(existing.Select(x => x.Key)) }), existing.Select(i =>
-            new EntityStoreUpdate(LayoutAreaReference.Areas, contextArea, null) { OldValue = i.Value }));
+            new EntityStoreUpdate(LayoutAreaReference.Areas, contextArea, null) { OldValue = i.Value }), Hub.Address);
     }
 
 
@@ -258,7 +259,7 @@ public record LayoutAreaHost : IDisposable
     }
 
     public void UpdateProgress(string area, ProgressControl progress)
-        => Stream.ApplyChanges(new(Stream.Current.Value, [new(LayoutAreaReference.Areas, area, progress)]));
+        => Stream.ApplyChanges(new(Stream.Current.Value, [new(LayoutAreaReference.Areas, area, progress)], Hub.Address));
 
     internal EntityStoreAndUpdates RenderArea(RenderingContext context, ViewDefinition generator, EntityStore store)
     {

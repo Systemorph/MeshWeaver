@@ -1,8 +1,7 @@
 ﻿using System.Collections.Immutable;
-using System.Reflection;
 using System.Text.Json;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
-using MeshWeaver.Reflection;
 
 namespace MeshWeaver.Data;
 
@@ -39,11 +38,14 @@ public record ReduceManager<TStream>
         this.hub = hub;
 
         ReduceStreams = ReduceStreams.Add(
-            (ReduceStream<TStream, JsonElementReference>)(
-                (parent, reference, subscriber) =>
+            (ReduceStream<TStream, JsonElement>)(
+                (parent, reference, subscriber, conf) =>
                     (ISynchronizationStream<JsonElement>)
-                    WorkspaceStreamsExtensions.CreateReducedStream(parent, reference, subscriber, JsonElementReducer, 
-                            (_,change,_) => change.Value.Deserialize<TStream>(hub.JsonSerializerOptions))
+                    parent.CreateReducedStream(
+                        (JsonElementReference)reference, subscriber, JsonElementReducer,
+                        (_, change, _) => change.Value.Deserialize<TStream>(hub.JsonSerializerOptions),
+                        conf
+                    )
             )
         );
 
@@ -76,20 +78,20 @@ public record ReduceManager<TStream>
         where TReference : WorkspaceReference<TReduced>
     {
         object Lambda(TStream ws, WorkspaceReference r, LinkedListNode<ReduceDelegate> node) =>
-            WorkspaceStreamsExtensions.ReduceApplyRules<TStream, TReference, TReduced>(ws, r, reducer, node);
+            WorkspaceStreams.ReduceApplyRules(ws, r, reducer, node);
         Reducers.AddFirst(Lambda);
 
         var ret = AddStreamReducer<TReference, TReduced>(
-                (parent, reference, subscriber) =>
+                (parent, reference, subscriber, config) =>
                     (ISynchronizationStream<TReduced>)
-                    WorkspaceStreamsExtensions.CreateReducedStream(parent, reference, subscriber, reducer, backTransform)
+                    parent.CreateReducedStream(reference, subscriber, reducer, backTransform, config)
 
             )
             .AddWorkspaceReferenceStream<TReduced, TReference>(
                 (workspace, reference, subscriber) =>
                    
                     (ISynchronizationStream<TReduced>)
-                    WorkspaceStreamsExtensions.CreateWorkspaceStream<TStream, TReduced, TReference>(
+                    WorkspaceStreams.CreateWorkspaceStream<TStream, TReduced, TReference>(
                         workspace, 
                         reference, 
                         subscriber,
@@ -111,7 +113,7 @@ public record ReduceManager<TStream>
         {
             ReduceStreams = ReduceStreams.Insert(
                 0,
-                (ReduceStream<TStream, TReference>)(reducer.Invoke)
+                (ReduceStream<TStream, TReduced>)((stream,reference,subscriber,config) => reference is not TReference tReference ? null : reducer.Invoke(stream,tReference,subscriber,config))
             ),
         };
     }
@@ -130,14 +132,6 @@ public record ReduceManager<TStream>
     }
 
 
-
-
-
-
-    private static readonly MethodInfo CreateWorkspaceStreamMethod = ReflectionHelper.GetStaticMethodGeneric(() =>
-        WorkspaceStreamsExtensions.CreateWorkspaceStream<object, object, WorkspaceReference<object>>(null, null, null, null));
-
-
     public object Reduce(TStream workspaceState, WorkspaceReference reference)
     {
         var first = Reducers.First;
@@ -151,22 +145,22 @@ public record ReduceManager<TStream>
     public ISynchronizationStream<TReduced> ReduceStream<TReduced, TReference>(
         ISynchronizationStream<TStream> stream,
         TReference reference,
-        object subscriber
+        object subscriber,
+        Func<SynchronizationStream<TReduced>.StreamConfiguration, SynchronizationStream<TReduced>.StreamConfiguration> configuration
     )
         where TReference : WorkspaceReference
     {
-        var reduced =
-            (ISynchronizationStream<TReduced>)
-            ReduceStreams
-                .OfType<ReduceStream<TStream, TReference>>()
-                .Select(reduceStream =>
-                    reduceStream.Invoke(
-                        stream,
-                        reference,
-                        subscriber
-                    )
+        var reduced = ReduceStreams
+            .OfType<ReduceStream<TStream, TReduced>>()
+            .Select(reduceStream =>
+                reduceStream.Invoke(
+                    stream,
+                    reference,
+                    subscriber,
+                    configuration
                 )
-                .FirstOrDefault(x => x != null);
+            )
+            .FirstOrDefault(x => x != null);
 
         return reduced;
     }
@@ -177,8 +171,7 @@ public record ReduceManager<TStream>
     )
         where TReference : WorkspaceReference
     {
-        var reduced =
-            (ISynchronizationStream<TReduced>)
+        var reduced = (ISynchronizationStream<TReduced>)
             ReduceStreams
                 .OfType<ReduceStream<TReference>>()
                 .Select(reduceStream =>
@@ -218,11 +211,11 @@ public record ReduceManager<TStream>
     );
 }
 
-internal delegate ISynchronizationStream ReduceStream<TStream, in TReference>(
+internal delegate ISynchronizationStream<TReduced> ReduceStream<TStream, TReduced>(
     ISynchronizationStream<TStream> parentStream,
-    TReference reference,
-    object subscriber
-);
+    object reference,
+    object subscriber,
+    Func<SynchronizationStream<TReduced>.StreamConfiguration, SynchronizationStream<TReduced>.StreamConfiguration> configuration);
 internal delegate ISynchronizationStream ReduceStream<in TReference>(
     IWorkspace workspace,
     TReference reference,
@@ -230,10 +223,13 @@ internal delegate ISynchronizationStream ReduceStream<in TReference>(
 );
 
 public delegate ISynchronizationStream<TReduced> ReducedStreamProjection<
-    TStream,
-    TReference,
+    TStream, 
+    in TReference,
     TReduced
->(ISynchronizationStream<TStream> parentStream, TReference reference, object subscriber)
+>(ISynchronizationStream<TStream> parentStream, 
+    TReference reference, 
+    object subscriber, 
+    Func<SynchronizationStream<TReduced>.StreamConfiguration, SynchronizationStream<TReduced>.StreamConfiguration> configuration)
     where TReference : WorkspaceReference<TReduced>;
 
 

@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Data.Serialization;
-using MeshWeaver.Messaging;
+﻿using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
 
@@ -22,7 +21,6 @@ public interface IWorkspace : IAsyncDisposable
         GetStreamForTypes(null, types);
     ISynchronizationStream<EntityStore> GetStreamForTypes(object subscriber, params Type[] types);
     ReduceManager<EntityStore> ReduceManager { get; }
-    WorkspaceReference Reference { get; }
 
     ISynchronizationStream<TReduced> GetRemoteStream<TReduced>(
         object owner,

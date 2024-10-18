@@ -40,13 +40,11 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
     protected override MessageHubConfiguration ConfigureClient(
         MessageHubConfiguration configuration
-    )
-    {
-        return base.ConfigureClient(configuration)
+    ) =>
+        base.ConfigureClient(configuration)
             .AddData(data =>
                 data.FromHub(new HostAddress(), dataSource => dataSource.WithType<MyData>())
             );
-    }
 
     [Fact]
     public async Task InitializeTest()

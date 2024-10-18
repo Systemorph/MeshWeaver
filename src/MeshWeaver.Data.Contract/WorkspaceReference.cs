@@ -56,6 +56,11 @@ public record JsonElementReference : WorkspaceReference<JsonElement>;
 public record CombinedStreamReference(params StreamIdentity[] References) : WorkspaceReference<EntityStore>;
 public record StreamIdentity(object Owner, object Partition) : WorkspaceReference<EntityStore>;
 
-public record PartitionedCollectionsReference(object Partition, CollectionsReference Reference) : WorkspaceReference<EntityStore>;
-public record PartitionedCollectionReference(object Partition, CollectionReference Reference) : WorkspaceReference<InstanceCollection>;
-public record PartitionedEntityReference(object Partition, EntityReference Entity) : WorkspaceReference<object>;
+public record PartitionedCollectionsReference(object Partition, CollectionsReference Reference) : WorkspaceReference<EntityStore>, IPartitionedWorkspaceReference;
+public record PartitionedCollectionReference(object Partition, CollectionReference Reference) : WorkspaceReference<InstanceCollection>, IPartitionedWorkspaceReference;
+public record PartitionedEntityReference(object Partition, EntityReference Entity) : WorkspaceReference<object>, IPartitionedWorkspaceReference;
+
+public interface IPartitionedWorkspaceReference
+{
+    object Partition { get; }
+}

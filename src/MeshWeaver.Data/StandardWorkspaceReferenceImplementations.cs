@@ -38,8 +38,6 @@ namespace MeshWeaver.Data
                         PatchEntityStore(current, change, hub.JsonSerializerOptions)
                 )
 
-                .AddWorkspaceReference<WorkspaceStateReference, EntityStore>((ws, _) => ws,
-                    (ws, change, _) => ws.Merge(change.Value))
                 .ForReducedStream<InstanceCollection>(reduced =>
                     reduced.AddWorkspaceReference<EntityReference, object>(
                         (ws, reference) => ws.GetData(reference.Id),

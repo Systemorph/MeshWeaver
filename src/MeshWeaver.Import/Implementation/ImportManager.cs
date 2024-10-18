@@ -39,7 +39,7 @@ public class ImportManager(ImportConfiguration configuration)
             var (dataSet, format) = await ReadDataSetAsync(importRequest, cancellationToken);
             var reference = format.GetReference(dataSet);
             var stream = Configuration.Workspace.GetStream(reference, Configuration.Workspace.Hub.Address);
-            stream.Update(store =>
+            stream.UpdateAsync(store =>
             {
                 var ret = stream.ApplyChanges(format.Import(importRequest, dataSet, store, activity));
                 activity.Complete(ret);

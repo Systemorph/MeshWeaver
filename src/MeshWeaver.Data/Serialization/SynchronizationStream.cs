@@ -41,36 +41,38 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// </summary>
     protected readonly ReplaySubject<ChangeItem<TStream>> Store = new(1);
 
-    private readonly ImmutableArray<(
-        Func<IMessageDelivery<WorkspaceMessage>, bool> Applies,
-        Func<IMessageDelivery<WorkspaceMessage>, IMessageDelivery> Process
-    )> messageHandlers = ImmutableArray<(
-        Func<IMessageDelivery<WorkspaceMessage>, bool> Applies,
-        Func<IMessageDelivery<WorkspaceMessage>, IMessageDelivery> Process
-    )>.Empty;
-
-
     object ISynchronizationStream.Reference => Reference;
 
     public ISynchronizationStream<TReduced> Reduce<TReduced>(
         WorkspaceReference<TReduced> reference,
-        object subscriber
+        object subscriber, 
+        Func<SynchronizationStream<TReduced>.StreamConfiguration, SynchronizationStream<TReduced>.StreamConfiguration> config
     ) =>
         (ISynchronizationStream<TReduced>)
             ReduceMethod
                 .MakeGenericMethod(typeof(TReduced), reference.GetType())
-                .Invoke(this, [reference, subscriber]);
+                .Invoke(this, [reference, subscriber, config]);
 
     private static readonly MethodInfo ReduceMethod = ReflectionHelper.GetMethodGeneric<
         SynchronizationStream<TStream>
-    >(x => x.Reduce<object, WorkspaceReference<object>>(null, null));
+    >(x => x.Reduce<object, WorkspaceReference<object>>(null, null, null));
 
     public ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
         TReference2 reference,
-        object subscriber
-    )
+        object subscriber)
         where TReference2 : WorkspaceReference =>
-        ReduceManager.ReduceStream<TReduced, TReference2>(this, reference, subscriber);
+        Reduce<TReduced, TReference2>(reference, subscriber, x => x);
+
+
+    public ISynchronizationStream<TReduced> Reduce<TReduced>(WorkspaceReference<TReduced> reference, object subscriber)
+        => Reduce(reference, subscriber, x => x);
+
+    public ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
+        TReference2 reference,
+        object subscriber,
+        Func<SynchronizationStream<TReduced>.StreamConfiguration, SynchronizationStream<TReduced>.StreamConfiguration> config)
+        where TReference2 : WorkspaceReference =>
+        ReduceManager.ReduceStream<TReduced, TReference2>(this, reference, subscriber, config);
 
     public virtual IDisposable Subscribe(IObserver<ChangeItem<TStream>> observer)
     {
@@ -80,7 +82,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         }
         catch (ObjectDisposedException)
         {
-            return new AnonymousDisposable(() => {});
+            return new AnonymousDisposable(() => { });
         }
     }
 
@@ -109,20 +111,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     }
 
     public IMessageHub Hub { get; init; }
-    public void InitializeAsync(Func<CancellationToken, Task<TStream>> initialize)
-    {
-        InvokeAsync(async ct => SetCurrent(
-                new(
-                    Owner,
-                    Reference,
-                    await initialize.Invoke(ct),
-                    null,
-                    ChangeType.Full,
-                    Hub.Version
-                )
-            )
-        );
-    }
+
+
 
     public ReduceManager<TStream> ReduceManager { get; init; }
 
@@ -134,16 +124,22 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         if (!isDisposed)
             Store.OnNext(value);
     }
+    public void UpdateAsync(Func<TStream, ChangeItem<TStream>> update) =>
+        InvokeAsync(() => SetCurrent(update.Invoke(Current is null ? default : Current.Value)));
+    public void Update(Func<TStream, ChangeItem<TStream>> update) =>
+        SetCurrent(update.Invoke(Current is null ? default : Current.Value));
 
-
-    public virtual void Initialize(ChangeItem<TStream> initial)
+    public void Initialize(Func<CancellationToken, Task<TStream>> init)
     {
-        if (Current is not  null)
-           throw new InvalidOperationException("Already initialized");
-
-        current = initial ?? throw new ArgumentNullException(nameof(initial));
-        Store.OnNext(initial);
+        InvokeAsync(async ct => SetCurrent(new ChangeItem<TStream>(Owner, Reference, await init.Invoke(ct), null, ChangeType.Full, Hub.Version)));
     }
+
+    public void Initialize(TStream startWith)
+    {
+        SetCurrent(new ChangeItem<TStream>(Owner, Reference, startWith, null, ChangeType.Full, Hub.Version));
+    }
+
+
 
     public void OnCompleted()
     {
@@ -158,25 +154,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     public void AddDisposable(IDisposable disposable) => Disposables.Add(disposable);
 
     IMessageDelivery ISynchronizationStream.DeliverMessage(
-        IMessageDelivery<WorkspaceMessage> delivery
-    )
-    {
-        try
-        {
-            return messageHandlers
-                .Where(x => x.Applies(delivery))
-                .Select(x => x.Process)
-                .FirstOrDefault()
-                ?.Invoke(delivery) ?? delivery;
-        }
-        catch (Exception e)
-        {
-            return delivery.Failed($"Exception during execution: {e}");
-        }
-    }
+        IMessageDelivery delivery
+    ) =>
+        synchronizationStreamHub.DeliverMessage(delivery.ForwardTo(synchronizationStreamHub.Address));
 
-    public void Update(Func<TStream, ChangeItem<TStream>> update) => 
-        InvokeAsync(() => SetCurrent(update.Invoke(Current is null ? default : Current.Value)));
 
     public void OnNext(ChangeItem<TStream> value)
     {
@@ -186,24 +167,43 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     public virtual void RequestChange(Func<TStream, ChangeItem<TStream>> update)
     {
         // TODO V10: Here we need to inject validations (29.07.2024, Roland Bürgi)
-        Update(update);
+        UpdateAsync(update);
     }
 
+    public record StreamConfiguration(ISynchronizationStream<TStream> Stream)
+    {
+        internal ImmutableList<Func<MessageHubConfiguration, MessageHubConfiguration>> HubConfigurations { get; init; } =
+            [];
+        public StreamConfiguration ConfigureHub(Func<MessageHubConfiguration, MessageHubConfiguration> configuration) =>
+        this with { HubConfigurations = HubConfigurations.Add(configuration) };
+    }
 
     public SynchronizationStream(
         StreamIdentity StreamIdentity,
         object Subscriber,
         IMessageHub Hub,
         object Reference,
-        ReduceManager<TStream> ReduceManager)
+        ReduceManager<TStream> ReduceManager,
+        Func<StreamConfiguration, StreamConfiguration> configuration)
     {
         this.Hub = Hub;
         this.ReduceManager = ReduceManager;
         this.StreamIdentity = StreamIdentity;
         this.Subscriber = Subscriber;
         this.Reference = Reference;
-        synchronizationStreamHub = Hub.GetHostedHub(new SynchronizationStreamAddress(Hub.Address));
+        this.Configuration = configuration?.Invoke(new StreamConfiguration(this)) ?? new StreamConfiguration(this);
+        synchronizationStreamHub = Hub.GetHostedHub(new SynchronizationStreamAddress(Hub.Address), config => Configuration.HubConfigurations.Aggregate(config,(c,cc) => cc.Invoke(c)));
     }
+
+    private StreamConfiguration Configuration { get; }
+
+    private readonly IMessageHub synchronizationStreamHub;
+    public void InvokeAsync(Action action)
+        => synchronizationStreamHub.InvokeAsync(action);
+
+    public void InvokeAsync(Func<CancellationToken, Task> action)
+        => synchronizationStreamHub.InvokeAsync(action);
+
 
 
 
@@ -221,13 +221,6 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         public Guid Id { get; init; } = Guid.NewGuid();
     }
 
-    private readonly IMessageHub synchronizationStreamHub;
 
-    //private void InvokeAsync(Func<CancellationToken, Task> task)
-    //    => synchronizationStreamHub.InvokeAsync(task);
-    public void InvokeAsync(Action action)
-        => synchronizationStreamHub.InvokeAsync(action);
 
-    public void InvokeAsync(Func<CancellationToken, Task> action)
-        => synchronizationStreamHub.InvokeAsync(action);
 }
