@@ -44,7 +44,7 @@ public class ImportPlugin(IMessageHub hub, Func<ImportConfiguration, ImportConfi
         try
         {
 
-            activity.OnCompleted((_, log) =>
+            activity.Complete(log =>
             {
                 Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
             });
@@ -62,7 +62,7 @@ public class ImportPlugin(IMessageHub hub, Func<ImportConfiguration, ImportConfi
 
             activity.LogError(message.ToString());
             activity.Complete(null);
-            activity.OnCompleted(log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
+            activity.Complete(log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
         }
 
         return request.Processed();

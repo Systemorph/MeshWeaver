@@ -140,7 +140,7 @@ public record ImportConfiguration
             Validations = Validations.Add(validation)
         };
 
-    private bool StandardValidations(object instance, ValidationContext validationContext, Activity<ChangeItem<EntityStore>> activity)
+    private bool StandardValidations(object instance, ValidationContext validationContext, Activity activity)
     {
         var ret = true;
         var validationResults = new List<ValidationResult>();
@@ -163,7 +163,7 @@ public record ImportConfiguration
         (Type, string, Func<object, string>)[]
     > TypesWithCategoryAttributes = new();
 
-    private bool CategoriesValidation(object instance, ValidationContext validationContext, Activity<ChangeItem<EntityStore>> activity)
+    private bool CategoriesValidation(object instance, ValidationContext validationContext, Activity activity)
     {
         var type = instance.GetType();
         var dimensions = TypesWithCategoryAttributes.GetOrAdd(

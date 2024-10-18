@@ -13,12 +13,12 @@ public class ImportManager(ImportConfiguration configuration)
 
     public async Task<EntityStore> Initialize(ImportRequest importRequest, WorkspaceReference<EntityStore> reference, CancellationToken cancellationToken)
     {
-        var activity = new Activity<ChangeItem<EntityStore>>(ActivityCategory.Import, Configuration.Workspace.Hub);
+        var activity = new Activity(ActivityCategory.Import, Configuration.Workspace.Hub);
         var (dataSet, format) = await ReadDataSetAsync(importRequest, cancellationToken);
         var ret = format.Import(importRequest, dataSet, new(), activity);
         activity.Complete(null);
         var tcs = new TaskCompletionSource<EntityStore>(cancellationToken);
-        activity.OnCompleted((_, log) =>
+        activity.Complete(log =>
         {
             if(log.Status == ActivityStatus.Succeeded) 
                 tcs.SetResult(ret.Store); 
@@ -28,12 +28,12 @@ public class ImportManager(ImportConfiguration configuration)
         return await tcs.Task;
     }
 
-    public async Task<Activity<ChangeItem<EntityStore>>> ImportAsync(
+    public async Task<Activity> ImportAsync(
         ImportRequest importRequest,
         CancellationToken cancellationToken
     )
     {
-        var activity = new Activity<ChangeItem<EntityStore>>(ActivityCategory.Import, Configuration.Workspace.Hub);
+        var activity = new Activity(ActivityCategory.Import, Configuration.Workspace.Hub);
         try
         {
             var (dataSet, format) = await ReadDataSetAsync(importRequest, cancellationToken);
@@ -42,7 +42,7 @@ public class ImportManager(ImportConfiguration configuration)
             stream.UpdateAsync(store =>
             {
                 var ret = stream.ApplyChanges(format.Import(importRequest, dataSet, store, activity));
-                activity.Complete(ret);
+                activity.Complete();
                 return ret;
             });
 

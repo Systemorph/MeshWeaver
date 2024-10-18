@@ -44,7 +44,7 @@ public record ImportFormat(
         ImportRequest importRequest,
         IDataSet dataSet,
         EntityStore store,
-        Activity<ChangeItem<EntityStore>> activity
+        Activity activity
     )
     {
         var hasError = false;
@@ -111,4 +111,4 @@ public record ImportFormat(
 
 }
 
-public delegate bool ValidationFunction(object instance, ValidationContext context, Activity<ChangeItem<EntityStore>> activity);
+public delegate bool ValidationFunction(object instance, ValidationContext context, Activity activity);
