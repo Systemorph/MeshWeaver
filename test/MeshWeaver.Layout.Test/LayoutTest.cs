@@ -186,7 +186,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstAsync(x => x != null);
         year!.Value.GetInt32().Should().Be(2024);
 
-        stream.Update(ci =>
+        stream.UpdateAsync(ci =>
         {
             var patch = new JsonPatch(
                 PatchOperation.Replace(
@@ -304,7 +304,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Which.Title.ToString()
             .Should()
             .Contain("Count");
-        stream.Post(new ClickedEvent(buttonArea));
+        hub.Post(new ClickedEvent(buttonArea));
         var counterArea = $"{reference.Area}/Counter";
         content = await stream
             .GetControlStream(counterArea)
@@ -432,7 +432,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var firstValuePointer = enumerableReference.Pointer + "/0/value";
 
-        stream.Update(ci =>
+        stream.UpdateAsync(ci =>
         {
             var patch = new JsonPatch(
                 PatchOperation.Replace(JsonPointer.Parse(firstValuePointer), false)

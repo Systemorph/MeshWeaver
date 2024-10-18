@@ -42,7 +42,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
         var count = 0;
         Enumerable.Range(0, 10).AsParallel().Select(_ =>
         {
-            stream.Update(state =>
+            stream.UpdateAsync(state =>
             {
                 var instance = new MyData(Instance, (++count).ToString());
                 var existingInstance = state?.Collections.GetValueOrDefault(collectionName)?.Instances
@@ -51,7 +51,8 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
                 return stream.ApplyChanges(
                     new EntityStoreAndUpdates(
                         (state ?? new()).Update(collectionName, i => i.Update(Instance, instance)),
-                        [new EntityStoreUpdate(collectionName, Instance, instance) { OldValue = existingInstance }])
+                        [new EntityStoreUpdate(collectionName, Instance, instance) { OldValue = existingInstance }],
+                        workspace.Hub.Address)
                 );
             });
             return true;

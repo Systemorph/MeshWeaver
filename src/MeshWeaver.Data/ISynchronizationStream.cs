@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Messaging;
+﻿using MeshWeaver.Data.Serialization;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
 
@@ -8,7 +9,7 @@ public interface ISynchronizationStream : IDisposable
     object Reference { get; }
     object Subscriber { get; }
     StreamIdentity StreamIdentity { get; }
-    internal IMessageDelivery DeliverMessage(IMessageDelivery<WorkspaceMessage> delivery);
+    internal IMessageDelivery DeliverMessage(IMessageDelivery delivery);
     void AddDisposable(IDisposable disposable);
 
     ISynchronizationStream Reduce(WorkspaceReference reference, object subscriber = null) =>
@@ -20,14 +21,13 @@ public interface ISynchronizationStream : IDisposable
 
     ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
         TReference2 reference,
-        object subscriber
+        object subscriber,
+        Func<SynchronizationStream<TReduced>.StreamConfiguration, SynchronizationStream<TReduced>.StreamConfiguration> config
     )
         where TReference2 : WorkspaceReference;
 
     IMessageHub Hub { get; }
 
-    public void Post(WorkspaceMessage message) =>
-        Hub.Post(message with { Owner = Owner, Reference = Reference }, o => o.WithTarget(Owner));
 }
 
 public interface ISynchronizationStream<TStream>
@@ -36,9 +36,10 @@ public interface ISynchronizationStream<TStream>
         IObserver<ChangeItem<TStream>>
 {
     ChangeItem<TStream> Current { get; }
+    void UpdateAsync(Func<TStream, ChangeItem<TStream>> update);
     void Update(Func<TStream, ChangeItem<TStream>> update);
-    void InitializeAsync(Func<CancellationToken,Task<TStream>> update);
-
+    void Initialize(Func<CancellationToken, Task<TStream>> init);
+    void Initialize(TStream init);
     ReduceManager<TStream> ReduceManager { get; }
     void RequestChange(Func<TStream, ChangeItem<TStream>> update);
     void InvokeAsync(Action action);

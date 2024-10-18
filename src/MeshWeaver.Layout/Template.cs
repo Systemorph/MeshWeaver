@@ -1,7 +1,6 @@
 ﻿using System.Linq.Expressions;
 using System.Reflection;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataBinding;
@@ -27,10 +26,10 @@ public static class Template{
             .WithBuildup((host, context, store) =>
             {
                 var forwardSubscription = stream.Subscribe(changeItem =>
-                    host.Stream.SetData(id, changeItem.Value)
+                    host.Stream.SetData(id, changeItem.Value, host.Workspace.Hub.Address)
                 );
                 host.AddDisposable(context.Area, forwardSubscription);
-                return new(store);
+                return new(store, [], null);
             });
 
     }
@@ -87,10 +86,10 @@ public static class Template{
                     if (Equals(val, current))
                         return;
                     current = val;
-                    host.Stream.SetData(id, val);
+                    host.Stream.SetData(id, val, host.Workspace.Hub.Address);
                 });
                 host.AddDisposable(context.Area, forwardSubscription);
-                return new(store);
+                return new(store, [], null);
             });
     }
 

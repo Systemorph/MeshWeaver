@@ -167,13 +167,15 @@ public static class LayoutExtensions
     public static void SetData(
         this ISynchronizationStream<EntityStore> stream,
         string id,
-        object value
-    ) => stream.Update(s =>
+        object value,
+        object changedBy
+    ) => stream.UpdateAsync(s =>
         stream.ApplyChanges(
             s.MergeWithUpdates(
                 s.Update(LayoutAreaReference.Data,
                     c => c.SetItem(id, value)
-                    )
+                ), 
+                changedBy
             )
         )
     );

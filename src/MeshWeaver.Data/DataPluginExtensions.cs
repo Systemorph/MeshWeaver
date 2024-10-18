@@ -115,7 +115,7 @@ public static class DataPluginExtensions
         configuration
             .WithHandler<DataChangeRequest>((hub, request) =>
             {
-                hub.GetWorkspace().RequestChange(request.Message, request);
+                hub.GetWorkspace().RequestChange(request.Message with{ChangedBy = request.Sender}, request);
                 return request.Processed();
             })
             .WithHandler<SubscribeRequest>((hub, request) =>

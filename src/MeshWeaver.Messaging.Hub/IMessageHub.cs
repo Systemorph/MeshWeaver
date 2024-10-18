@@ -21,6 +21,8 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
     Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request) =>
         AwaitResponse(request, new CancellationTokenSource(DefaultTimeout).Token);
 
+    Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IMessageDelivery<IRequest<TResponse>> request, CancellationToken cancellationToken);
+
     Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken);
 
     Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request, Func<PostOptions, PostOptions> options);

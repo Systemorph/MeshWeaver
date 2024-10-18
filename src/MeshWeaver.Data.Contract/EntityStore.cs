@@ -96,10 +96,10 @@ public record EntityStore
         }
     }
 
-    public EntityStoreAndUpdates DeleteWithUpdates(EntityStore entityStore)
+    public EntityStoreAndUpdates DeleteWithUpdates(EntityStore entityStore, object changedBy)
     {
         var store = Remove(entityStore);
-        return new EntityStoreAndUpdates(store, store.Collections.SelectMany(u => ComputeChanges(u.Key, u.Value)));
+        return new EntityStoreAndUpdates(store, store.Collections.SelectMany(u => ComputeChanges(u.Key, u.Value)), changedBy);
     }
 
     private EntityStore Remove(EntityStore toBeRemoved) =>
@@ -118,11 +118,11 @@ public record EntityStore
         };
 }
 
-public record EntityStoreAndUpdates(EntityStore Store, IEnumerable<EntityStoreUpdate> Updates)
+public record EntityStoreAndUpdates(EntityStore Store, IEnumerable<EntityStoreUpdate> Updates, object ChangedBy)
 {
-    public EntityStoreAndUpdates(EntityStore Store) : this(Store, [])
-    {
-    }
+    //public EntityStoreAndUpdates(EntityStore Store) : this(Store, [], ChangedBy)
+    //{
+    //}
 }
 
 public record EntityStoreUpdate(string Collection, object Id, object Value)

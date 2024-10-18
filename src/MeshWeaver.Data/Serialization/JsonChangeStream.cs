@@ -37,13 +37,6 @@ public static class JsonSynchronizationStream
 
 
 
-    public static void NotifyChange(
-        this ISynchronizationStream<JsonElement> json,
-        DataChangedEvent request
-    )
-    {
-        json.Update(state => json.Parse(state, request));
-    }
 
     public static ChangeItem<JsonElement> Parse(
         this ISynchronizationStream<JsonElement> json,

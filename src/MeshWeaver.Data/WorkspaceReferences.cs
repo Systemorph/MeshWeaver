@@ -7,9 +7,3 @@ public record WorkspaceStoreReference : WorkspaceReference<EntityStore>
     public override string ToString() => Path;
 }
 
-public record WorkspaceStateReference : WorkspaceReference<EntityStore>
-{
-    public string Path => "$";
-
-    public override string ToString() => Path;
-}
