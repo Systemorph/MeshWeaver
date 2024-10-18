@@ -63,7 +63,7 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
 
     private IReadOnlyCollection<IDisposable> changesSubscriptions;
 
- 
+
 
     protected readonly ConcurrentDictionary<object, ISynchronizationStream<EntityStore>> Streams = new();
 
@@ -108,7 +108,8 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
             Hub.Address,
             Hub,
             reference,
-            Workspace.ReduceManager.ReduceTo<EntityStore>()
+            Workspace.ReduceManager.ReduceTo<EntityStore>(),
+            conf => conf
         );
 
         return stream;
@@ -150,8 +151,8 @@ public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorksp
             typeSource.Update(item);
     }
 
-    protected virtual async Task<EntityStore> 
-        GetInitialValue(ISynchronizationStream<EntityStore> stream, 
+    protected virtual async Task<EntityStore>
+        GetInitialValue(ISynchronizationStream<EntityStore> stream,
             CancellationToken cancellationToken)
     {
         var initial = await TypeSources
@@ -192,8 +193,8 @@ public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorksp
 
     protected override ISynchronizationStream<EntityStore> SetupDataSourceStream(StreamIdentity identity)
     {
-        var stream =  base.SetupDataSourceStream(identity);
-        stream.InitializeAsync(cancellationToken => GetInitialValue(stream, cancellationToken));
+        var stream = base.SetupDataSourceStream(identity);
+        stream.Initialize(cancellationToken => GetInitialValue(stream, cancellationToken));
         stream.AddDisposable(stream.Skip(1).Where(x => x.ChangedBy is not null && !x.ChangedBy.Equals(Id)).Subscribe(Synchronize));
         return stream;
     }

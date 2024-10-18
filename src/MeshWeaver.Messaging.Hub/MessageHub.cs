@@ -144,6 +144,21 @@ public sealed class MessageHub
     public override bool Filter(IMessageDelivery d) => true;
 
     public Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(
+        IMessageDelivery<IRequest<TResponse>> request, CancellationToken cancellationToken)
+    {
+        var tcs = new TaskCompletionSource<IMessageDelivery<TResponse>>(cancellationToken);
+        var callbackTask = RegisterCallback(
+            request,
+            d =>
+            {
+                tcs.SetResult((IMessageDelivery<TResponse>)d);
+                return d.Processed();
+            },
+            cancellationToken
+        );
+        return callbackTask.ContinueWith(_ => tcs.Task.Result, cancellationToken);
+    }
+    public Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(
         IRequest<TResponse> request,
         CancellationToken cancellationToken
     ) => AwaitResponse(request, x => x, x => x, cancellationToken);
@@ -170,10 +185,20 @@ public sealed class MessageHub
         Func<IMessageDelivery<TResponse>, TResult> selector,
         CancellationToken cancellationToken
     )
+        => AwaitResponse(
+            Post(request, options),
+            selector,
+            cancellationToken
+        );
+    public Task<TResult> AwaitResponse<TResponse, TResult>(
+        IMessageDelivery request,
+        Func<IMessageDelivery<TResponse>, TResult> selector,
+        CancellationToken cancellationToken
+    )
     {
         var tcs = new TaskCompletionSource<TResult>(cancellationToken);
         var callbackTask = RegisterCallback(
-            Post(request, options),
+            request,
             d =>
             {
                 tcs.SetResult(selector((IMessageDelivery<TResponse>)d));

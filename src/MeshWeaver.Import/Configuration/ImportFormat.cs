@@ -49,7 +49,7 @@ public record ImportFormat(
     {
         var hasError = false;
         var validationCache = new Dictionary<object, object>();
-        EntityStoreAndUpdates storeAndUpdates = new(store);
+        EntityStoreAndUpdates storeAndUpdates = new(store, [], Workspace.Hub.Address);
         foreach (var importFunction in ImportFunctions)
         {
 
@@ -81,7 +81,7 @@ public record ImportFormat(
                         new InstanceCollection(g.ToDictionary(keyFunction)));
                 }).ToDictionary()), importRequest.UpdateOptions);
 
-            storeAndUpdates = new EntityStoreAndUpdates(Store: newStore.Store, Updates: storeAndUpdates.Updates.Concat(newStore.Updates));
+            storeAndUpdates = new EntityStoreAndUpdates(Store: newStore.Store, Updates: storeAndUpdates.Updates.Concat(newStore.Updates), Workspace.Hub.Address);
 
         }
         return storeAndUpdates;

@@ -3,7 +3,8 @@ using MeshWeaver.Data.Serialization;
 
 namespace MeshWeaver.Data;
 
-public static class WorkspaceStreamsExtensions{
+public static class WorkspaceStreams
+{
     internal static ISynchronizationStream CreateWorkspaceStream<TStream, TReduced, TReference>(
         IWorkspace workspace,
         TReference reference,
@@ -35,38 +36,52 @@ public static class WorkspaceStreamsExtensions{
             _ => throw new NotSupportedException()
         }).ToArray();
 
+        var workspaceEntityStoreStream = CreateEntityStoreWorkspaceStream<TStream, TReduced, TReference>(workspace, reference, subscriber, mapped);
+
+        if (reference.Equals(workspaceEntityStoreStream.Reference))
+            return workspaceEntityStoreStream;
+        return workspaceEntityStoreStream.Reduce(reference, subscriber);
+    }
+
+    private static SynchronizationStream<EntityStore> CreateEntityStoreWorkspaceStream<TStream, TReduced, TReference>(
+        IWorkspace workspace, TReference reference, object subscriber, ISynchronizationStream<EntityStore>[] mapped)
+        where TReference : WorkspaceReference<TReduced>
+    {
         var workspaceEntityStoreStream = new SynchronizationStream<EntityStore>(
             new(workspace.Hub.Address, reference),
             subscriber,
             workspace.Hub,
-            mapped.Length == 1 
-                ? mapped[0].Reference 
+            mapped.Length == 1
+                ? mapped[0].Reference
                 : new AggregateWorkspaceReference(mapped.Select(s => (WorkspaceReference<EntityStore>)s.Reference).ToArray()),
-            workspace.ReduceManager
+            workspace.ReduceManager,
+            x => x
         );
 
         workspace.AddDisposable(workspaceEntityStoreStream);
 
 
-        var streams = 
+        var streams =
             mapped.Select(x => x)
-            .ToArray();
+                .ToArray();
 
-        workspaceEntityStoreStream.InitializeAsync(async ct => 
-            await streams
-            .ToAsyncEnumerable()
-            .SelectAwait(async s => await s.Select(x => x.Value).FirstAsync())
-            .AggregateAsync(new EntityStore(), (es, m) => es.Merge(m), cancellationToken: ct));
+        workspaceEntityStoreStream.Initialize(async ct =>
+                await streams
+                    .ToAsyncEnumerable()
+                    .SelectAwait(async s => await s.Select(x => x.Value).FirstAsync())
+                    .AggregateAsync(new EntityStore(), (es, m) => es.Merge(m), cancellationToken: ct));
 
 
 
         foreach (var stream in streams)
         {
+            // forward subscription
             workspaceEntityStoreStream.AddDisposable(
                 stream
                     .DistinctUntilChanged()
                     .Subscribe(workspaceEntityStoreStream)
             );
+            // backward subscription
             stream.AddDisposable(
                 workspaceEntityStoreStream.Reduce((WorkspaceReference<EntityStore>)stream.Reference, stream.Owner)
                     .Skip(1)
@@ -76,9 +91,7 @@ public static class WorkspaceStreamsExtensions{
             );
         }
 
-        if (reference.Equals(workspaceEntityStoreStream.Reference))
-            return workspaceEntityStoreStream;
-        return workspaceEntityStoreStream.Reduce(reference, subscriber);
+        return workspaceEntityStoreStream;
     }
 
     private static IEnumerable<ISynchronizationStream<EntityStore>> GetStreamFromDataSource(IWorkspace workspace, EntityReference reference) =>
@@ -126,7 +139,7 @@ public static class WorkspaceStreamsExtensions{
         Func<TStream, ChangeItem<TReduced>, TReference, TStream> backTransform
     ) where TReference : WorkspaceReference
     {
-        parent.Update(state => change.SetValue(backTransform(state, change, reference), ref state, parent.Reference, parent.Hub.JsonSerializerOptions));
+        parent.UpdateAsync(state => change.SetValue(backTransform(state, change, reference), ref state, parent.Reference, parent.Hub.JsonSerializerOptions));
     }
 
     internal static object ReduceApplyRules<TStream, TReference, TReduced>(
@@ -147,7 +160,8 @@ public static class WorkspaceStreamsExtensions{
         TReference reference,
         object subscriber,
         ReduceFunction<TStream, TReference, TReduced> reducer,
-        Func<TStream, ChangeItem<TReduced>, TReference, TStream> backTransform)
+        Func<TStream, ChangeItem<TReduced>, TReference, TStream> backTransform,
+        Func<SynchronizationStream<TReduced>.StreamConfiguration, SynchronizationStream<TReduced>.StreamConfiguration> configuration)
         where TReference : WorkspaceReference<TReduced>
     {
         var reducedStream = new SynchronizationStream<TReduced>(
@@ -155,7 +169,8 @@ public static class WorkspaceStreamsExtensions{
             subscriber,
             stream.Hub,
             reference,
-            stream.ReduceManager.ReduceTo<TReduced>()
+            stream.ReduceManager.ReduceTo<TReduced>(),
+            configuration
         );
 
         stream.AddDisposable(reducedStream);
@@ -174,7 +189,7 @@ public static class WorkspaceStreamsExtensions{
                 .Take(1)
                 .Concat(selected
                     .Skip(1)
-                    //.Where(x => !Equals(x.ChangedBy, subscriber))
+                //.Where(x => !Equals(x.ChangedBy, subscriber))
                 )
                 .DistinctUntilChanged()
                 .Subscribe(reducedStream)

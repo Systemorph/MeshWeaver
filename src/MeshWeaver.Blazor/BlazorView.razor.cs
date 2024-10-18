@@ -219,7 +219,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
             }
 
             else
-                Stream.Update(ci =>
+                Stream.UpdateAsync(ci =>
                 {
                     var patch = GetPatch(value, reference, ci);
 

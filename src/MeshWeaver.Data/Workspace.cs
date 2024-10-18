@@ -30,8 +30,6 @@ public class Workspace : IWorkspace
 
     private readonly ILogger<Workspace> logger;
 
-    public WorkspaceReference Reference { get; } = new WorkspaceStateReference();
-
 
 
     public IReadOnlyCollection<Type> MappedTypes => DataContext.MappedTypes.ToArray();
@@ -142,20 +140,21 @@ public class Workspace : IWorkspace
             ret as ISynchronizationStream<JsonElement>
             ?? ret.Reduce(new JsonElementReference(), subscriber);
 
+        
 
-        json.AddDisposable(
-            json.Hub.Register<DataChangedEvent>(
-                delivery =>
-                {
-                    json.Update(state =>
-                        json.Parse(state, delivery.Message with { ChangedBy = delivery.Sender })
-                    );
-
-                    return delivery.Processed();
-                },
-                x => json.Owner.Equals(x.Message.Owner) && x.Message.Reference.Equals(reference)
-            )
-        );
+        //json.AddDisposable(
+        //    json.Hub.Register<DataChangedEvent>(
+        //        delivery =>
+        //        {
+        //            logger.LogDebug("{address} receiving change notification from {sender}", delivery.Target, delivery.Sender);
+        //            json.UpdateAsync(state =>
+        //                 json.Parse(state, delivery.Message with { ChangedBy = delivery.Sender })
+        //            );
+        //            return delivery.Processed();
+        //        },
+        //        x => json.Owner.Equals(x.Message.Owner) && x.Message.Reference.Equals(reference)
+        //    )
+        //);
         json.AddDisposable(
             json.ToDataChanged(reference)
                 .Where(c => !json.Subscriber.Equals(c.ChangedBy))
@@ -179,37 +178,79 @@ public class Workspace : IWorkspace
         TReference reference
     )
         where TReference : WorkspaceReference
-        => CreateExternalClient<TReduced, TReference>(owner, null, reference);
-    private ISynchronizationStream CreateExternalClient<TReduced, TReference>(
-        object owner,
-        object partition,
-        TReference reference
-    )
-        where TReference : WorkspaceReference
     {
         // link to deserialized world. Will also potentially link to workspace.
         if (owner is JsonObject obj)
             owner = obj.Deserialize<object>(Hub.JsonSerializerOptions);
-        var ret = new SynchronizationStream<TReduced>(
-            new(owner, partition),
-            owner,
-            Hub,
-            reference,
-            ReduceManager.ReduceTo<TReduced>()
+        var partition = reference is IPartitionedWorkspaceReference p ? p.Partition : null;
+         
+        ISynchronizationStream<JsonElement> json;
+        var tcs = new TaskCompletionSource<JsonElement>();
+        ISynchronizationStream ret;
+        TaskCompletionSource<TReduced> tcs2 = null;
+        if (typeof(TReduced) == typeof(JsonElement))
+        {
+            json = GetJsonStream<TReduced, TReference>(owner, reference, partition);
+            json.Initialize(ct => (tcs = new(ct)).Task);
+            ret = json;
+        }
+        else
+        {
+            var reduced = new SynchronizationStream<TReduced>(
+                new(owner, partition),
+                owner,
+                Hub,
+                reference,
+                ReduceManager.ReduceTo<TReduced>(),
+                stream => stream);
+            reduced.Initialize(ct => (tcs2 = new(ct)).Task);
+            json = reduced.Reduce(
+                new JsonElementReference(),
+                owner,
+                stream => stream.ConfigureHub(config =>
+                    config.WithHandler<DataChangedEvent>(
+                        (_, delivery) =>
+                        {
+                            stream.Stream.Update(state =>
+                                stream.Stream.Parse(state, delivery.Message with { ChangedBy = delivery.Sender })
+                            );
+                            return delivery.Processed();
+                        }
+                    )
+                )
+            );
+            json.Initialize(ct =>(tcs = new(ct)).Task);
+            ret = reduced;
+        }
+        json.AddDisposable(
+            json.ToDataChanged(reference)
+                .Where(x => json.Hub.Address.Equals(x.ChangedBy))
+                .Subscribe(e =>
+                {
+                    logger.LogDebug("Subscriber {subscriber} sending change notification to owner {owner}",
+                        json.Subscriber, json.Owner);
+
+                    Hub.Post(e, o => o.WithTarget(json.Owner));
+                })
         );
 
-        var json =
-            ret as ISynchronizationStream<JsonElement>
-            ?? ret.Reduce(new JsonElementReference(), owner);
 
+        var request = Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(owner));
+        var first = true;
         json.AddDisposable(
             json.Hub.Register<DataChangedEvent>(
                 delivery =>
                 {
-                    logger.LogDebug("{address} receiving change notification from {sender}", delivery.Target, delivery.Sender);
-
-                    json.NotifyChange(delivery.Message with { ChangedBy = delivery.Sender });
-                    return delivery.Processed();
+                    if (first)
+                    {
+                        first = false;
+                        var jsonElement = JsonDocument.Parse(delivery.Message.Change.Content).RootElement;
+                        tcs.SetResult(jsonElement);
+                        tcs2?.SetResult(jsonElement.Deserialize<TReduced>(json.Hub.JsonSerializerOptions));
+                        return request.Processed();
+                    }
+                    json.DeliverMessage(delivery); 
+                    return delivery.Forwarded();
                 },
                 d => json.Owner.Equals(d.Message.Owner) && reference.Equals(d.Message.Reference)
             )
@@ -238,23 +279,40 @@ public class Workspace : IWorkspace
                         Hub.Post(e, o => o.WithTarget(json.Owner));
                     })
             );
-        else
-            json.AddDisposable(
-                json.ToDataChanged(reference)
-                    .Where(x => json.Hub.Address.Equals(x.ChangedBy))
-                    .Subscribe(e =>
-                    {
-                        logger.LogDebug("Subscriber {subscriber} sending change notification to owner {owner}",
-                            json.Subscriber, json.Owner);
 
-                        Hub.Post(e, o => o.WithTarget(json.Owner));
-                    })
-            );
 
-        Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(owner));
 
         return ret;
     }
+
+    private ISynchronizationStream<JsonElement> GetJsonStream<TReduced, TReference>(object owner, TReference reference, object partition)
+        where TReference : WorkspaceReference
+    {
+        ISynchronizationStream<JsonElement> json;
+        json = new SynchronizationStream<JsonElement>(
+            new(owner, partition),
+            owner,
+            Hub,
+            reference,
+            ReduceManager.ReduceTo<JsonElement>(),
+            GetJsonConfig
+        );
+        return json;
+    }
+
+    private static  SynchronizationStream<JsonElement>.StreamConfiguration GetJsonConfig(SynchronizationStream<JsonElement>.StreamConfiguration stream) =>
+        stream.ConfigureHub(config =>
+            config.WithHandler<DataChangedEvent>(
+                (_, delivery) =>
+                {
+                    stream.Stream.Update(state =>
+                        stream.Stream.Parse(state,
+                            delivery.Message with { ChangedBy = delivery.Sender })
+                    );
+                    return delivery.Processed();
+                }
+            )
+        );
 
 
     public void Update(IEnumerable<object> instances, UpdateOptions updateOptions) =>

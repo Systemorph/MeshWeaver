@@ -39,7 +39,7 @@ public static class WorkspaceExtensions
         new(stream.Owner, 
             stream.Reference,
             storeAndUpdates.Store, 
-            stream.Hub.Address, 
+            storeAndUpdates.ChangedBy, 
             ChangeType.Patch,
             stream.Hub.Version,
             storeAndUpdates.Updates.ToArray(),

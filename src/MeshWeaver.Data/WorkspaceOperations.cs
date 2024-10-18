@@ -46,13 +46,13 @@ public static class WorkspaceOperations
         foreach (var kvp in storesByStream)
         {
             var stream = workspace.GetStream(kvp.Key);
-            stream.Update(s =>
+            stream.UpdateAsync(s =>
             {
                 var activityPart = activity.StartSubActivity(ActivityCategory.DataUpdate);
                 try
                 {
                     activityPart.LogInformation("Updating Data Stream {identity}", stream.StreamIdentity);
-                    var ret = stream.ApplyChanges(s.MergeWithUpdates(kvp.Value, change.Options));
+                    var ret = stream.ApplyChanges(s.MergeWithUpdates(kvp.Value, change.ChangedBy, change.Options));
                     activityPart.LogInformation("Update of Data Stream {identity} succeeded.", stream.StreamIdentity);
                     activityPart.Complete();
                     return ret;
@@ -92,13 +92,13 @@ public static class WorkspaceOperations
         foreach (var kvp in storesByStream)
         {
             var stream = workspace.GetStream(kvp.Key);
-            stream.Update(s =>
+            var activityPart = activity.StartSubActivity(ActivityCategory.DataUpdate);
+            stream.UpdateAsync(s =>
             {
-                var activityPart = activity.StartSubActivity(ActivityCategory.DataUpdate);
                 try
                 {
                     activityPart.LogInformation("Updating Data Stream {identity}", stream.StreamIdentity);
-                    var ret = stream.ApplyChanges(s.DeleteWithUpdates(kvp.Value));
+                    var ret = stream.ApplyChanges(s.DeleteWithUpdates(kvp.Value, deletion.ChangedBy));
                     activityPart.LogInformation("Update of Data Stream {identity} succeeded.", stream.StreamIdentity);
                     activityPart.Complete();
                     return ret;
@@ -281,14 +281,15 @@ public static class WorkspaceOperations
         return (isValid, validationResults);
     }
 
-    public static EntityStoreAndUpdates MergeWithUpdates(this EntityStore store, EntityStore updated, UpdateOptions options = null)
+    public static EntityStoreAndUpdates MergeWithUpdates(this EntityStore store, EntityStore updated, object changedBy,
+        UpdateOptions options = null )
     {
         options ??= UpdateOptions.Default;
         var newStore = store.Merge(updated, options);
         return new EntityStoreAndUpdates(newStore,
             newStore
             .Collections.SelectMany(u =>
-                store.ComputeChanges(u.Key, u.Value)));
+                store.ComputeChanges(u.Key, u.Value)), changedBy);
     }
 
     private static (bool IsValid, List<ValidationResult> Results) ValidateDeletion(
