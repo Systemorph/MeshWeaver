@@ -375,7 +375,7 @@ public class Workspace : IWorkspace
     {
         var activity = this.Change(change);
         if (request != null)
-            activity.OnCompleted(log => Hub.Post(new DataChangeResponse(Hub.Version, log), o => o.ResponseFor(request)));
+            activity.Complete(log => Hub.Post(new DataChangeResponse(Hub.Version, log), o => o.ResponseFor(request)));
     }
 
     private bool isDisposing;
