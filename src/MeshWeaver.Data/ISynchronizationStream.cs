@@ -3,7 +3,7 @@ using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
 
-public interface ISynchronizationStream : IDisposable
+public interface ISynchronizationStream : IAsyncDisposable
 {
     object Owner { get; }
     object Reference { get; }
@@ -11,6 +11,7 @@ public interface ISynchronizationStream : IDisposable
     StreamIdentity StreamIdentity { get; }
     internal IMessageDelivery DeliverMessage(IMessageDelivery delivery);
     void AddDisposable(IDisposable disposable);
+    void AddDisposable(IAsyncDisposable disposable);
 
     ISynchronizationStream Reduce(WorkspaceReference reference, object subscriber = null) =>
         Reduce((dynamic)reference, subscriber);

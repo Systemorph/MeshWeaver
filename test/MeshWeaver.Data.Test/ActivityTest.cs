@@ -1,5 +1,4 @@
 ﻿using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Activities;
 using MeshWeaver.Fixture;
 using Microsoft.Extensions.Logging;
@@ -19,25 +18,19 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
         activity.LogInformation(nameof(activity));
         subActivity.LogInformation(nameof(subActivity));
 
-        var activityTcs = new TaskCompletionSource(new CancellationTokenSource(1.Seconds()).Token);
-        activity.Complete(log =>
+        var closeTask = activity.Complete(log =>
         {
             log.Should().NotBeNull();
             log.Status.Should().Be(ActivityStatus.Succeeded);
             log.SubActivities.Should().HaveCount(1);
             log.SubActivities.First().Value.Status.Should().Be(ActivityStatus.Succeeded);
-            activityTcs.SetResult();
         });
         //subActivity.Complete();
-        var subActivityTcs = new TaskCompletionSource(new CancellationTokenSource(1.Seconds()).Token);
-        subActivity.Complete(l =>
+        await subActivity.Complete(l =>
         {
             l.Status.Should().Be(ActivityStatus.Succeeded);
-            subActivityTcs.SetResult();
         });
-        activity.Complete();
-        await subActivityTcs.Task;
-        await activityTcs.Task;
+        await closeTask;
     }
 
     [Fact]
@@ -45,20 +38,19 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var activity = new Activity("MyActivity", GetClient());
         var subActivity = activity.StartSubActivity("gugus");
-        activity.Complete();
+        var taskComplete = activity.Complete();
         ActivityLog activityLog = null;
-        activity.Complete(log => activityLog = log);
+        var taskComplete2 = activity.Complete(log => activityLog = log);
         activityLog.Should().BeNull();
-        subActivity.Complete();
+        await subActivity.Complete();
 
-        var tcs = new TaskCompletionSource(new CancellationTokenSource(1.Seconds()).Token);
-        activity.Complete(log =>
+        await activity.Complete(log =>
         {
             log.Status.Should().Be(ActivityStatus.Succeeded);
             log.SubActivities.Should().HaveCount(1);
             activityLog.Should().Be(log);
-            tcs.SetResult();
         });
-        await tcs.Task;
+        taskComplete.Status.Should().Be(TaskStatus.RanToCompletion);
+        taskComplete2.Status.Should().Be(TaskStatus.RanToCompletion);
     }
 }
