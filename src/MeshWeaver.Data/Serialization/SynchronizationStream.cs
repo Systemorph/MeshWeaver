@@ -1,4 +1,5 @@
-﻿using System.Collections.Immutable;
+﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive.Subjects;
 using System.Reflection;
 using MeshWeaver.Disposables;
@@ -72,7 +73,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         object subscriber,
         Func<SynchronizationStream<TReduced>.StreamConfiguration, SynchronizationStream<TReduced>.StreamConfiguration> config)
         where TReference2 : WorkspaceReference =>
-        ReduceManager.ReduceStream<TReduced, TReference2>(this, reference, subscriber, config);
+        ReduceManager.ReduceStream(this, reference, subscriber, config);
 
     public virtual IDisposable Subscribe(IObserver<ChangeItem<TStream>> observer)
     {
@@ -86,12 +87,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         }
     }
 
-    public readonly List<IDisposable> Disposables = new();
+    public readonly ConcurrentBag<IDisposable> Disposables = new();
+    public readonly ConcurrentBag<IAsyncDisposable> AsyncDisposables = new();
 
     private bool isDisposed;
     private readonly object disposeLock = new();
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         lock (disposeLock)
         {
@@ -99,8 +101,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 return;
             isDisposed = true;
         }
+
+        await synchronizationStreamHub.DisposeAsync();
+        foreach (var disposeAction in AsyncDisposables)
+            await disposeAction.DisposeAsync();
+
         foreach (var disposeAction in Disposables)
             disposeAction.Dispose();
+
 
         Store.Dispose();
     }
@@ -152,6 +160,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     }
 
     public void AddDisposable(IDisposable disposable) => Disposables.Add(disposable);
+    public void AddDisposable(IAsyncDisposable disposable) => AsyncDisposables.Add(disposable);
 
     IMessageDelivery ISynchronizationStream.DeliverMessage(
         IMessageDelivery delivery

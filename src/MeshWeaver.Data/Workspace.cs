@@ -37,7 +37,7 @@ public class Workspace : IWorkspace
 
     private readonly ConcurrentDictionary<
         (object Subscriber, object Reference),
-        IDisposable
+        IAsyncDisposable
     > subscriptions = new();
     private readonly ConcurrentDictionary<
         (object Subscriber, object Reference),
@@ -384,21 +384,29 @@ public class Workspace : IWorkspace
         if (isDisposing)
             return;
         isDisposing = true;
+        while (asyncDisposables.TryTake(out var d))
+            await d.DisposeAsync();
 
         while (disposables.TryTake(out var d))
             d.Dispose();
 
         foreach (var subscription in remoteStreams.Values.Concat(subscriptions.Values))
-            subscription.Dispose();
+            await subscription.DisposeAsync();
 
 
         await DataContext.DisposeAsync();
     }
     private readonly ConcurrentBag<IDisposable> disposables = new();
+    private readonly ConcurrentBag<IAsyncDisposable> asyncDisposables = new();
 
     public void AddDisposable(IDisposable disposable)
     {
         disposables.Add(disposable);
+    }
+
+    public void AddDisposable(IAsyncDisposable disposable)
+    {
+        asyncDisposables.Add(disposable);
     }
 
     public ISynchronizationStream<EntityStore> GetStream(StreamIdentity identity)
@@ -439,10 +447,10 @@ public class Workspace : IWorkspace
         );
     }
 
-    public void Unsubscribe(object address, WorkspaceReference reference)
+    public async Task UnsubscribeAsync(object address, WorkspaceReference reference)
     {
         if (subscriptions.TryRemove(new(address, reference), out var existing))
-            existing.Dispose();
+            await existing.DisposeAsync();
     }
 
 }

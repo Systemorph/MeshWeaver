@@ -390,6 +390,7 @@ public sealed class MessageHub
                     await ShutdownAsync();
                     RunLevel = MessageHubRunLevel.Dead;
                     disposingTaskCompletionSource.SetResult();
+                    await ((IAsyncDisposable)ServiceProvider).DisposeAsync();
                     return request.Processed();
             }
 

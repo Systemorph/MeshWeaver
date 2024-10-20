@@ -15,7 +15,7 @@ public interface IWorkspace : IAsyncDisposable
     void Delete(IReadOnlyCollection<object> instances, Activity activity);
     void Delete(object instance, Activity activity) => Delete([instance], activity);
 
-    void Unsubscribe(object address, WorkspaceReference reference);
+    Task UnsubscribeAsync(object address, WorkspaceReference reference);
     public void RequestChange(DataChangeRequest change, Activity activity);
 
     ISynchronizationStream<EntityStore> GetStream(params Type[] types);
@@ -43,5 +43,6 @@ public interface IWorkspace : IAsyncDisposable
     );
 
     void AddDisposable(IDisposable disposable);
+    void AddDisposable(IAsyncDisposable disposable);
     ISynchronizationStream<EntityStore> GetStream(StreamIdentity kvpKey);
 }

@@ -65,7 +65,6 @@ public static class DataPluginExtensions
             .RegisterDataEvents()
             ;
 
-        return ret;
     }
 
     internal static ImmutableList<Func<DataContext, DataContext>> GetListOfLambdas(
@@ -92,7 +91,7 @@ public static class DataPluginExtensions
     ) =>
         dataContext.WithDataSourceBuilder(
             id,
-            hub => configuration.Invoke(new PartitionedHubDataSource(id, dataContext.Workspace))
+            _ => configuration.Invoke(new PartitionedHubDataSource(id, dataContext.Workspace))
         );
 
     public static DataContext FromHub(
@@ -102,7 +101,7 @@ public static class DataPluginExtensions
     ) =>
         dataContext.WithDataSourceBuilder(
             address,
-            hub => configuration.Invoke(new HubDataSource(address, dataContext.Workspace))
+            _ => configuration.Invoke(new HubDataSource(address, dataContext.Workspace))
         );
 
     public static DataContext FromConfigurableDataSource(
@@ -112,7 +111,7 @@ public static class DataPluginExtensions
     ) =>
         dataContext.WithDataSourceBuilder(
             address,
-            hub => configuration.Invoke(new GenericDataSource(address, dataContext.Workspace))
+            _ => configuration.Invoke(new GenericDataSource(address, dataContext.Workspace))
         );
     private static MessageHubConfiguration RegisterDataEvents(this MessageHubConfiguration configuration) =>
         configuration
@@ -130,9 +129,9 @@ public static class DataPluginExtensions
                 hub.GetWorkspace().SubscribeToClient(request.Sender, (dynamic)request.Message.Reference);
                 return request.Processed();
             })
-            .WithHandler<UnsubscribeDataRequest>((hub, request) =>
+            .WithHandler<UnsubscribeDataRequest>(async (hub, request,_) =>
             {
-                hub.GetWorkspace().Unsubscribe(request.Sender, request.Message.Reference);
+                await hub.GetWorkspace().UnsubscribeAsync(request.Sender, request.Message.Reference);
                 return request.Processed();
             });
 

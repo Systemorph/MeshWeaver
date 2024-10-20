@@ -16,7 +16,7 @@ public interface IDataSource : IAsyncDisposable
     CollectionsReference Reference { get; }
     void Initialize();
 
-    ISynchronizationStream<EntityStore> GetStream(WorkspaceReference<EntityStore> reference);
+    ISynchronizationStream<EntityStore> GetStream(WorkspaceReference<EntityStore> reference, object subscriber);
 
     ISynchronizationStream<EntityStore> GetStream(object partition);
 }
@@ -72,22 +72,21 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
     protected virtual CollectionsReference GetReference() =>
         new CollectionsReference(TypeSources.Values.Select(ts => ts.CollectionName).ToArray());
 
-    public virtual ValueTask DisposeAsync()
+    public virtual async ValueTask DisposeAsync()
     {
         foreach (var stream in Streams.Values)
-            stream.Dispose();
+            await stream.DisposeAsync();
 
         if (changesSubscriptions != null)
             foreach (var subscription in changesSubscriptions)
                 subscription.Dispose();
-        return default;
     }
-    public virtual ISynchronizationStream<EntityStore> GetStream(WorkspaceReference<EntityStore> reference)
+    public virtual ISynchronizationStream<EntityStore> GetStream(WorkspaceReference<EntityStore> reference, object subscriber)
     {
         var stream = GetStream(reference is PartitionedCollectionsReference partitioned ? partitioned.Partition : null);
         if (stream.Reference.Equals(reference))
             return stream;
-        return (ISynchronizationStream<EntityStore>)stream.Reduce(reference);
+        return (ISynchronizationStream<EntityStore>)stream.Reduce(reference, subscriber);
     }
 
     public ISynchronizationStream<EntityStore> GetStream(object partition)
@@ -141,7 +140,7 @@ public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorksp
     public override void Initialize()
     {
         base.Initialize();
-        GetStream(GetReference());
+        GetStream(GetReference(), Id);
     }
 
 

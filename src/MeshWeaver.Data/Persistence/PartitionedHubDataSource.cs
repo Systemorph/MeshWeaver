@@ -1,6 +1,4 @@
-﻿using MeshWeaver.Data.Serialization;
-
-namespace MeshWeaver.Data.Persistence
+﻿namespace MeshWeaver.Data.Persistence
 {
     public record PartitionedHubDataSource(object Id, IWorkspace Workspace)
         : HubDataSourceBase<PartitionedHubDataSource>(Id, Workspace)
@@ -56,7 +54,7 @@ namespace MeshWeaver.Data.Persistence
         public override void Initialize()
         {
             foreach (var partition in InitializePartitions)
-                GetStream(new PartitionedCollectionsReference(partition, GetReference()));
+                GetStream(new PartitionedCollectionsReference(partition, GetReference()), partition);
         }
 
     }
