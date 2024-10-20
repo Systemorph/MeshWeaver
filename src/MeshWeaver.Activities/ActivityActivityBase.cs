@@ -114,17 +114,6 @@ public abstract record ActivityBase<TActivity> : ActivityBase, ILogger
         );
     }
 
-    public void ChangeStatus(ActivityStatus status)
-    {
-        Update(x => x.WithLog(log => log with
-                {
-                    Status = status,
-                    Version = x.Log.Version + 1
-                }
-            )
-        );
-    }
-
 
 
 
@@ -164,7 +153,7 @@ public record Activity : ActivityBase<Activity>
 
 
 
-    protected void CompleteMyself()
+    protected void CompleteMyself(ActivityStatus? status)
     {
         Update(a =>
         {
@@ -172,7 +161,7 @@ public record Activity : ActivityBase<Activity>
             {
                 var ret = a.WithLog(log => log with
                 {
-                    Status = HasErrors() ? ActivityStatus.Failed : ActivityStatus.Succeeded,
+                    Status = status ?? (a.HasErrors() ? ActivityStatus.Failed : ActivityStatus.Succeeded),
                     End = DateTime.UtcNow,
                     Version = log.Version + 1
                 });
@@ -189,7 +178,7 @@ public record Activity : ActivityBase<Activity>
     private readonly List<Action<ActivityLog>> completedActions = new();
     private readonly object completionLock = new();
     private TaskCompletionSource taskCompletionSource ;
-    public Task Complete(Action<ActivityLog> completedAction = null, CancellationToken cancellationToken = default)
+    public Task Complete(Action<ActivityLog> completedAction = null, ActivityStatus? status = null, CancellationToken cancellationToken = default)
     {
         if (completedAction != null)
             completedActions.Add(completedAction);
@@ -204,7 +193,7 @@ public record Activity : ActivityBase<Activity>
                 .Subscribe(a =>
                 {
                     if(a.Log.Status == ActivityStatus.Running)
-                        CompleteMyself();
+                        CompleteMyself(null);
                 });
             return taskCompletionSource.Task;
         }

@@ -30,7 +30,7 @@ public static class WorkspaceOperations
             foreach (var validationResult in results.Where(r => r != ValidationResult.Success))
                 activity.LogError("{members} invalid: {error}", validationResult.MemberNames,
                     validationResult.ErrorMessage);
-            activity.ChangeStatus(ActivityStatus.Failed);
+            activity.Complete(status:ActivityStatus.Failed);
             return;
         }
 
@@ -76,7 +76,7 @@ public static class WorkspaceOperations
             foreach (var validationResult in results.Where(r => r != ValidationResult.Success))
                 activity.LogError("{members} invalid: {error}", validationResult.MemberNames,
                     validationResult.ErrorMessage);
-            activity.ChangeStatus(ActivityStatus.Failed);
+            activity.Complete(status:ActivityStatus.Failed);
             return;
         }
 
