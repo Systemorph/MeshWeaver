@@ -49,7 +49,7 @@ public class ImportManager
             await activity.Complete(log =>
             {
                 Workspace.Hub.Post(new ImportResponse(Workspace.Hub.Version, log), o => o.ResponseFor(request));
-            }, cancellationToken);
+            }, cancellationToken: cancellationToken);
 
 
         }
@@ -63,7 +63,7 @@ public class ImportManager
             }
 
             activity.LogError(message.ToString());
-            await activity.Complete(log => Workspace.Hub.Post(new ImportResponse(Workspace.Hub.Version, log), o => o.ResponseFor(request)), cancellationToken);
+            await activity.Complete(log => Workspace.Hub.Post(new ImportResponse(Workspace.Hub.Version, log), o => o.ResponseFor(request)), cancellationToken: cancellationToken);
         }
 
         return request.Processed();
