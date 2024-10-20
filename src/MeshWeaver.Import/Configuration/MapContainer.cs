@@ -44,7 +44,7 @@ public record ImportMapContainer
 
     public ImportMapContainer WithTableMapping(
         string name,
-        Func<IDataSet, IDataTable, IEnumerable<object>> mappingFunction
+        Func<IDataSet, IDataTable, Task<IReadOnlyCollection<object>>> mappingFunction
     )
     {
         var tableMapping = new DirectTableMapping(name, mappingFunction);
@@ -66,12 +66,13 @@ public record ImportMapContainer
         };
     }
 
-    public IEnumerable<object> Import(IDataSet dataSet)
+
+    public async IAsyncEnumerable<object> Import(IDataSet dataSet)
     {
         foreach (var table in dataSet.Tables)
         {
             if (Mappings.TryGetValue(table.TableName, out var mapping))
-                foreach (var instance in mapping.Map(dataSet, table))
+                foreach (var instance in await mapping.Map(dataSet, table))
                     yield return instance;
         }
     }

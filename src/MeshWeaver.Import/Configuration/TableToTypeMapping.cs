@@ -1,9 +1,7 @@
 ﻿using System.Globalization;
 using System.Linq.Expressions;
 using System.Reflection;
-using System.Security.Cryptography;
 using System.Text.RegularExpressions;
-using System.Xml.Serialization;
 using Autofac.Core.Activators.Reflection;
 using MeshWeaver.Collections;
 using MeshWeaver.DataStructures;
@@ -15,15 +13,15 @@ namespace MeshWeaver.Import.Configuration;
 
 public abstract record TableMapping(string Name)
 {
-    public abstract IEnumerable<object> Map(IDataSet dataSet, IDataTable dataSetTable);
+    public abstract Task<IReadOnlyCollection<object>> Map(IDataSet dataSet, IDataTable dataSetTable);
 }
 
 public record DirectTableMapping(
     string Name,
-    Func<IDataSet, IDataTable, IEnumerable<object>> MappingFunction
+    Func<IDataSet, IDataTable, Task<IReadOnlyCollection<object>>> MappingFunction
 ) : TableMapping(Name)
 {
-    public override IEnumerable<object> Map(IDataSet dataSet, IDataTable dataSetTable) =>
+    public override Task<IReadOnlyCollection<object>> Map(IDataSet dataSet, IDataTable dataSetTable) =>
         MappingFunction(dataSet, dataSetTable);
 }
 
@@ -37,8 +35,8 @@ public record TableToTypeMapping : TableMapping
         Type = type;
     }
 
-    public override IEnumerable<object> Map(IDataSet dataSet, IDataTable dataSetTable) =>
-        MapTableToType(dataSet, dataSetTable);
+    public override Task<IReadOnlyCollection<object>> Map(IDataSet dataSet, IDataTable dataSetTable) =>
+        Task.FromResult<IReadOnlyCollection<object>>(MapTableToType(dataSet, dataSetTable).ToArray());
 
     private IEnumerable<object> MapTableToType(IDataSet dataSet, IDataTable table)
     {
@@ -124,9 +122,8 @@ public record TableToTypeMapping : TableMapping
             }
             else
             {
-                var name =
-                    parameter.GetCustomAttribute<MapToAttribute>()?.PropertyName ?? parameter.Name;
-                if (columns.Remove(name.ToLowerInvariant(), out var matchedIndex)) // kick out parameters from columns to be processed in binding expressions
+                var name = parameter.GetCustomAttribute<MapToAttribute>()?.PropertyName ?? parameter.Name;
+                if (columns.Remove(name!.ToLowerInvariant(), out var matchedIndex)) // kick out parameters from columns to be processed in binding expressions
                     yield return new(
                         parameter.Name,
                         GetPropertyExpression(rowParameter, matchedIndex, parameter.ParameterType)

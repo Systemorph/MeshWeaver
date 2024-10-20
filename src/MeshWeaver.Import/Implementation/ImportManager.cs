@@ -1,50 +1,56 @@
 ﻿using System.Text;
 using MeshWeaver.Activities;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.DataStructures;
 using MeshWeaver.Import.Configuration;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Import.Implementation;
 
-public class ImportManager(ImportConfiguration configuration)
+public class ImportManager
 {
-    public ImportConfiguration Configuration { get; } = configuration;
+    private record ImportAddress;
+    public ImportConfiguration Configuration { get; }
 
-    public async Task<EntityStore> Initialize(ImportRequest importRequest, WorkspaceReference<EntityStore> reference, CancellationToken cancellationToken)
+    private readonly IMessageHub importHub; 
+    public IWorkspace Workspace { get; }
+
+    public ImportManager(IWorkspace  workspace)
     {
-        var activity = new Activity(ActivityCategory.Import, Configuration.Workspace.Hub);
-        var (dataSet, format) = await ReadDataSetAsync(importRequest, cancellationToken);
-        var ret = format.Import(importRequest, dataSet, new(), activity);
-        activity.Complete(null);
-        var tcs = new TaskCompletionSource<EntityStore>(cancellationToken);
-        activity.Complete(log =>
-        {
-            if(log.Status == ActivityStatus.Succeeded) 
-                tcs.SetResult(ret.Store); 
-            else tcs.SetException(new ImportException("Import failed"));
-        });
-
-        return await tcs.Task;
+        Workspace = workspace;
+        Configuration = workspace.Hub.Configuration.GetListOfLambdas().Aggregate(new ImportConfiguration(workspace), (c,l) => l.Invoke(c));
+        importHub = workspace.Hub.GetHostedHub(
+            new ImportAddress(), 
+            config => 
+                config.WithHandler<ImportRequest>((_,r,ct) => 
+                    HandleImportRequestAsync(r,ct)));
     }
 
-    public async Task<Activity> ImportAsync(
-        ImportRequest importRequest,
+    public IMessageDelivery DeliverMessage(IMessageDelivery message)
+    {
+        importHub.DeliverMessage(message.ForwardTo(importHub.Address));
+        return message.Forwarded();
+    }
+
+    private async Task<IMessageDelivery> HandleImportRequestAsync(
+        IMessageDelivery<ImportRequest> request,
         CancellationToken cancellationToken
     )
     {
-        var activity = new Activity(ActivityCategory.Import, Configuration.Workspace.Hub);
+
+        var activity = new Activity(ActivityCategory.Import, Workspace.Hub);
+
+
         try
         {
-            var (dataSet, format) = await ReadDataSetAsync(importRequest, cancellationToken);
-            var reference = format.GetReference(dataSet);
-            var stream = Configuration.Workspace.GetStream(reference, Configuration.Workspace.Hub.Address);
-            stream.UpdateAsync(store =>
+            await ImportImpl(request.Message, activity, cancellationToken);
+            await activity.Complete(log =>
             {
-                var ret = stream.ApplyChanges(format.Import(importRequest, dataSet, store, activity));
-                activity.Complete();
-                return ret;
-            });
+                Workspace.Hub.Post(new ImportResponse(Workspace.Hub.Version, log), o => o.ResponseFor(request));
+            }, cancellationToken);
+
 
         }
         catch (Exception e)
@@ -57,9 +63,45 @@ public class ImportManager(ImportConfiguration configuration)
             }
 
             activity.LogError(message.ToString());
-            activity.Complete(null);
+            await activity.Complete(log => Workspace.Hub.Post(new ImportResponse(Workspace.Hub.Version, log), o => o.ResponseFor(request)), cancellationToken);
         }
-        return activity;
+
+        return request.Processed();
+    }
+
+
+    private async Task ImportImpl(ImportRequest request, Activity activity, CancellationToken cancellationToken)
+    {
+        try
+
+        {
+            var imported = await ImportInstancesAsync(request, activity, cancellationToken);
+            if (activity.HasErrors())
+                return;
+
+            Configuration.Workspace.RequestChange(DataChangeRequest.Update(imported, Configuration.Workspace.Hub.Address), activity);
+        }
+        catch (Exception e)
+        {
+            var message = new StringBuilder(e.Message);
+            while (e.InnerException != null)
+            {
+                message.AppendLine(e.InnerException.Message);
+                e = e.InnerException;
+            }
+
+            activity.LogError(message.ToString());
+        }
+    }
+
+    public async Task<IReadOnlyCollection<object>> ImportInstancesAsync(
+        ImportRequest importRequest, 
+        Activity activity,
+        CancellationToken cancellationToken)
+    {
+        var (dataSet, format) = await ReadDataSetAsync(importRequest, cancellationToken);
+        var imported = await format.Import(importRequest, dataSet, activity);
+        return imported;
     }
 
     private async Task<(IDataSet dataSet, ImportFormat format)> ReadDataSetAsync(

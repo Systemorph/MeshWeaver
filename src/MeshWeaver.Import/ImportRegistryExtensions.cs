@@ -1,10 +1,12 @@
-﻿using System.Data;
+﻿using System.Collections.Immutable;
+using System.Data;
 using System.Reflection;
 using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Import.Configuration;
 using MeshWeaver.Import.Implementation;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Import;
 
@@ -16,11 +18,30 @@ public static class ImportExtensions
     public static MessageHubConfiguration AddImport(
         this MessageHubConfiguration configuration,
         Func<ImportConfiguration, ImportConfiguration> importConfiguration
-    ) =>
-        configuration
+    )
+    {
+        var lambdas = configuration.GetListOfLambdas();
+        var ret = configuration.Set(lambdas.Add(importConfiguration));
+        if (lambdas.Any())
+            return ret;
+        return configuration
             .AddActivities()
-            .AddPlugin<ImportPlugin>(hub => new(hub, importConfiguration))
-        ;
+            .WithServices(x => x.AddScoped<ImportManager>())
+            .AddHandlers()
+            ;
+
+    }
+
+    private static MessageHubConfiguration AddHandlers(this MessageHubConfiguration configuration)
+    {
+        return configuration
+            .WithHandler<ImportRequest>(
+                (h,d) =>
+                    h.ServiceProvider
+                        .GetRequiredService<ImportManager>()
+                        .DeliverMessage(d)
+                );
+    }
 
     /// <summary>
     /// Describes an embedded resource.
@@ -61,7 +82,7 @@ public static class ImportExtensions
         EmbeddedResource source
     )
     {
-        var ret = new ImportDataSource(source, workspace);
+        var ret = new ImportDataSource(source, workspace.Hub.ServiceProvider.GetRequiredService<ImportManager>());
         if(configuration != null)
             ret = configuration.Invoke(ret);
 
@@ -76,6 +97,11 @@ public static class ImportExtensions
 
         return ret;
     }
+
+    internal static ImmutableList<Func<ImportConfiguration, ImportConfiguration>> GetListOfLambdas(
+        this MessageHubConfiguration config
+    ) =>
+        config.Get<ImmutableList<Func<ImportConfiguration, ImportConfiguration>>>() ?? [];
 }
 
 public record EmbeddedResource(Assembly Assembly, string Resource) : Source;

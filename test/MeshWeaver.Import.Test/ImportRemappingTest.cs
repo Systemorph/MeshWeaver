@@ -52,7 +52,9 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
                         )
             );
 
-    private IEnumerable<object> MapMyRecord(IDataSet set, IDataTable table)
+    private Task<IReadOnlyCollection<object>> MapMyRecord(IDataSet set, IDataTable table)
+        => Task.FromResult<IReadOnlyCollection<object>>(MapMyRecordInd(set, table).ToArray());
+    private IEnumerable<object> MapMyRecordInd(IDataSet set, IDataTable table)
     {
         const string systemNameColumn = Prefix + nameof(MyRecord.SystemName);
         const string displayNameColumn = nameof(MyRecord.DisplayName);

@@ -37,19 +37,19 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
                             import
                                 .WithFormat(
                                     "Test",
-                                    format => format.WithImportFunction(CustomImportFunction)
+                                    format => format.WithImportFunction(customImportFunction)
                                 )
                                 .WithFormat(
                                     "Test2",
                                     format =>
                                         format
-                                            .WithImportFunction(CustomImportFunction)
+                                            .WithImportFunction(customImportFunction)
                                             .WithAutoMappings()
                                 )
                         )
             );
 
-    private ImportFormat.ImportFunction CustomImportFunction = null;
+    private ImportFormat.ImportFunction customImportFunction = null;
 
     private async Task<IMessageHub> DoImport(string content, string format = ImportFormat.Default)
     {
@@ -126,7 +126,7 @@ Record3SystemName,Record3DisplayName";
     [Fact]
     public async Task SingleTableMappingTest()
     {
-        CustomImportFunction = (request, set, hub, workspace) =>
+        customImportFunction = (_, set, _) =>
         {
             return set.Tables[nameof(MyRecord)]
                 .Rows.Select(dsRow => new MyRecord()
@@ -135,7 +135,7 @@ Record3SystemName,Record3DisplayName";
                         .ToString()
                         ?.Replace("Old", "New"),
                     DisplayName = "test"
-                });
+                }).ToAsyncEnumerable();
         };
 
         _ = await DoImport(ThreeTablesContent, "Test");
@@ -167,7 +167,7 @@ Record3SystemName,Record3DisplayName";
     [Fact]
     public async Task TwoTablesMappingTest()
     {
-        CustomImportFunction = (request, set, hub, workspace) =>
+        customImportFunction = (_, set, _) =>
         {
             return set.Tables[nameof(MyRecord)]
                 .Rows.Select(dsRow => new MyRecord()
@@ -176,7 +176,7 @@ Record3SystemName,Record3DisplayName";
                         .ToString()
                         ?.Replace("Old", "New"),
                     DisplayName = "test"
-                });
+                }).ToAsyncEnumerable();
         };
 
         _ = await DoImport(ThreeTablesContent, "Test2");

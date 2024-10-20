@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Messaging;
+﻿using MeshWeaver.Activities;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
 
@@ -7,26 +8,26 @@ public interface IWorkspace : IAsyncDisposable
     IMessageHub Hub { get; }
     DataContext DataContext { get; }
     IReadOnlyCollection<Type> MappedTypes { get; }
-    void Update(IEnumerable<object> instances) => Update(instances, new());
-    void Update(IEnumerable<object> instances, UpdateOptions updateOptions);
-    void Update(object instance) => Update([instance]);
+    void Update(IReadOnlyCollection<object> instances, Activity activity) => Update(instances, new(), activity);
+    void Update(IReadOnlyCollection<object> instances, UpdateOptions updateOptions, Activity activity);
+    void Update(object instance, Activity activity) => Update([instance], activity);
 
-    void Delete(IEnumerable<object> instances);
-    void Delete(object instance) => Delete([instance]);
+    void Delete(IReadOnlyCollection<object> instances, Activity activity);
+    void Delete(object instance, Activity activity) => Delete([instance], activity);
 
     void Unsubscribe(object address, WorkspaceReference reference);
-    internal void RequestChange(DataChangeRequest change, IMessageDelivery request);
+    public void RequestChange(DataChangeRequest change, Activity activity);
 
-    ISynchronizationStream<EntityStore> GetStreamForTypes(params Type[] types) =>
-        GetStreamForTypes(null, types);
-    ISynchronizationStream<EntityStore> GetStreamForTypes(object subscriber, params Type[] types);
+    ISynchronizationStream<EntityStore> GetStream(params Type[] types);
     ReduceManager<EntityStore> ReduceManager { get; }
 
     ISynchronizationStream<TReduced> GetRemoteStream<TReduced>(
         object owner,
         WorkspaceReference<TReduced> reference
     );
-    ISynchronizationStream<TReduced> GetStream<TReduced>(WorkspaceReference<TReduced> reference, object subscriber);
+    ISynchronizationStream<TReduced> GetStream<TReduced>(WorkspaceReference<TReduced> reference, object subscriber = null);
+
+    IObservable<IReadOnlyCollection<T>> GetStream<T>();
 
     ISynchronizationStream<TReduced> GetRemoteStream<TReduced, TReference>(
         object address,

@@ -11,12 +11,17 @@ public abstract record ActivityBase: IDisposable
 {
 
     protected readonly ILogger Logger;
+
+    private record ActivityAddress(object Host) : IHostedAddress
+    {
+        public Guid Id { get; } = Guid.NewGuid();
+    }
     protected ActivityBase(string category, IMessageHub hub)
     {
         this.Hub = hub;
         this.Logger = hub.ServiceProvider.GetRequiredService<ILogger<Activity>>();
         Log = new(category);
-        SyncHub = hub.GetHostedHub(new object(), x => x);
+        SyncHub = hub.GetHostedHub(new ActivityAddress(hub.Address), x => x);
     }
 
     protected readonly IMessageHub SyncHub;
@@ -173,6 +178,7 @@ public record Activity : ActivityBase<Activity>
                 });
                 foreach (var completedAction in completedActions)
                     completedAction.Invoke(ret.Log);
+                taskCompletionSource.SetResult();
                 return ret;
             }
 
@@ -181,17 +187,18 @@ public record Activity : ActivityBase<Activity>
     }
 
     private readonly List<Action<ActivityLog>> completedActions = new();
-    private bool isSubscribed;
     private readonly object completionLock = new();
-    public void Complete(Action<ActivityLog> completedAction = null)
+    private TaskCompletionSource taskCompletionSource ;
+    public Task Complete(Action<ActivityLog> completedAction = null, CancellationToken cancellationToken = default)
     {
-        if(completedAction != null)
+        if (completedAction != null)
             completedActions.Add(completedAction);
         lock (completionLock)
         {
-            if (isSubscribed)
-                return;
-            isSubscribed = true;
+            if (taskCompletionSource != null)
+                return taskCompletionSource.Task;
+
+            taskCompletionSource = new(cancellationToken);
 
             Stream.Where(x => x.Log.SubActivities.Count == 0 || x.Log.SubActivities.Values.All(y => y.Status != ActivityStatus.Running))
                 .Subscribe(a =>
@@ -199,47 +206,9 @@ public record Activity : ActivityBase<Activity>
                     if(a.Log.Status == ActivityStatus.Running)
                         CompleteMyself();
                 });
+            return taskCompletionSource.Task;
         }
     }
 
-
 }
 
-//public record Activity<TResult> : ActivityBase<Activity<TResult>>
-//{
-//    public Activity(string category, IMessageHub hub) : base(category, hub)
-//    {
-//    }
-//    protected void CompleteMyself(Action<ActivityLog> completedAction)
-//    {
-//        Update(a =>
-//        {
-//            var ret = a.WithLog(log => log with
-//            {
-//                Status = HasErrors() ? ActivityStatus.Failed : ActivityStatus.Succeeded,
-//                End = DateTime.UtcNow,
-//                Version = log.Version + 1
-//            });
-//            completedAction.Invoke(ret.Log);
-//            return ret;
-//        });
-//    }
-
-//    public void Complete(Action<TResult, ActivityLog> onCompleted)
-//    {
-//        Stream.Where(x => x.Log.SubActivities.Count == 0 || x.Log.SubActivities.Values.All(y => y.Status != ActivityStatus.Running))
-//            .Subscribe(a =>
-//            {
-//                if (a.Log.Status == ActivityStatus.Running)
-//                {
-//                    CompleteMyself(completedAction);
-//                }
-//            });
-//    }
-
-//    public void Complete(TResult result)
-//    {
-//        ChangeStatus(HasErrors() ? ActivityStatus.Failed : ActivityStatus.Succeeded);
-//    }
-
-//}

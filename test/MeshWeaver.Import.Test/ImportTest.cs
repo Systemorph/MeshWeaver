@@ -17,14 +17,20 @@ namespace MeshWeaver.Import.Test;
 
 public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+    protected override MessageHubConfiguration ConfigureRouter(
+        MessageHubConfiguration configuration
+    )
     {
-        return base.ConfigureHost(configuration)
-            .ConfigureReferenceDataModel()
-            .ConfigureTransactionalModel(2024, "1", "2")
-            .ConfigureComputedModel(2024, "1", "2")
-            .ConfigureImportHub(2024, "1", "2");
+        return base.ConfigureRouter(configuration)
+            .WithRoutes(forward =>
+                forward
+                    .RouteAddressToHostedHub<ReferenceDataAddress>(c => c.ConfigureReferenceDataModel())
+                    .RouteAddressToHostedHub<TransactionalDataAddress>(c => c.ConfigureTransactionalModel((TransactionalDataAddress)c.Address))
+                    .RouteAddressToHostedHub<ComputedDataAddress>(c => c.ConfigureComputedModel((ComputedDataAddress)c.Address))
+                    .RouteAddressToHostedHub<ImportAddress>(c => c.ConfigureImportHub((ImportAddress)c.Address))
+            );
     }
+
 
     [Fact]
     public void SerializeTransactionalData()
@@ -54,21 +60,21 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new ImportAddress(2024, new HostAddress()))
+            o => o.WithTarget(new ImportAddress(2024))
         );
 
         // assert
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var host = GetHost();
         var transactionalItems1 = await GetWorkspace(
-                host.GetHostedHub(new TransactionalDataAddress(2024, "1", new HostAddress()))
+                host.GetHostedHub(new TransactionalDataAddress(2024, "1"))
             )
             .GetObservable<TransactionalData>()
             .Timeout(timeout)
             .FirstAsync(x => x.Count > 1);
 
         var computedItems1 = await GetWorkspace(
-                host.GetHostedHub(new ComputedDataAddress(2024, "1", new HostAddress()))
+                host.GetHostedHub(new ComputedDataAddress(2024, "1"))
             )
             .GetObservable<ComputedData>()
             .Timeout(timeout)
@@ -109,14 +115,16 @@ Id,Year,LoB,BusinessUnit,Value
         var importRequest = new ImportRequest(VanillaCsv);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new ImportAddress(2024, new HostAddress()))
+            o => o.WithTarget(new ImportAddress(2024)),
+            new CancellationTokenSource(3.Seconds()).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var workspace = GetWorkspace(
-            GetHost().GetHostedHub(new ReferenceDataAddress(new HostAddress()), null)
+            Router.GetHostedHub(new ReferenceDataAddress(), null)
         );
         var items = await workspace
             .GetObservable<LineOfBusiness>()
+            .Timeout(3.Seconds())
             .FirstAsync(x => x.FirstOrDefault()?.DisplayName.StartsWith("LoB") ?? false);
         var expectedLoBs = new[]
         {
@@ -141,12 +149,12 @@ SystemName,DisplayName
         var importRequest = new ImportRequest(MultipleTypesCsv);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new ImportAddress(2024, new HostAddress()))
+            o => o.WithTarget(new ImportAddress(2024))
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         await Task.Delay(100);
         var workspace = GetWorkspace(
-            GetHost().GetHostedHub(new ReferenceDataAddress(new HostAddress()), null)
+            GetHost().GetHostedHub(new ReferenceDataAddress(), null)
         );
         var actualLoBs = await workspace.GetObservable<LineOfBusiness>().FirstAsync();
         var actualBUs = await workspace.GetObservable<BusinessUnit>().FirstAsync();

@@ -199,7 +199,7 @@ public static class WorkspaceStreams
         {
             reducedStream.AddDisposable(
                 reducedStream.Where(value =>
-                    reducedStream.Subscriber != null && reducedStream.Subscriber.Equals(value.ChangedBy)
+                    reducedStream.Subscriber == null || reducedStream.Subscriber.Equals(value.ChangedBy)
                 ).Subscribe(x => UpdateParent(stream, reference, x, backTransform))
             );
         }

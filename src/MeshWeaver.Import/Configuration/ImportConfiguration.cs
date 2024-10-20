@@ -9,7 +9,6 @@ using MeshWeaver.DataSetReader;
 using MeshWeaver.DataSetReader.Csv;
 using MeshWeaver.DataSetReader.Excel;
 using MeshWeaver.Domain;
-using MeshWeaver.Reflection;
 using MeshWeaver.Activities;
 
 namespace MeshWeaver.Import.Configuration;
@@ -17,25 +16,20 @@ namespace MeshWeaver.Import.Configuration;
 public record ImportConfiguration
 {
     public IWorkspace Workspace { get; }
-    public IReadOnlyCollection<Type> MappedTypes { get; init; }
 
     public ImportConfiguration(
-        IWorkspace workspace,
-        IReadOnlyCollection<Type> mappedTypes,
-        ILogger logger
+        IWorkspace workspace
     )
     {
         this.Workspace = workspace;
-        MappedTypes = mappedTypes;
         Validations = ImmutableList<ValidationFunction>
             .Empty.Add(StandardValidations)
             .Add(CategoriesValidation);
-        if (mappedTypes.Any())
+        if (workspace.MappedTypes.Any())
             ImportFormatBuilders = ImportFormatBuilders.Add(
                 ImportFormat.Default,
-                [f => f.WithMappings(m => m.WithAutoMappingsForTypes(mappedTypes))]
+                [f => f.WithMappings(m => m.WithAutoMappingsForTypes(workspace.MappedTypes))]
             );
-        Logger = logger;
     }
 
 
@@ -74,7 +68,7 @@ public record ImportConfiguration
         return ImportFormats.GetOrAdd(
             format,
             builders.Aggregate(
-                new ImportFormat(format, Workspace, MappedTypes, Validations),
+                new ImportFormat(format, Workspace, Validations),
                 (a, b) => b.Invoke(a)
             )
         );
@@ -132,7 +126,6 @@ public record ImportConfiguration
     ) => this with { StreamProviders = StreamProviders.SetItem(sourceType, reader) };
 
     internal ImmutableList<ValidationFunction> Validations { get; init; }
-    public ILogger Logger { get; }
 
     public ImportConfiguration WithValidation(ValidationFunction validation) =>
         this with
@@ -197,14 +190,7 @@ public record ImportConfiguration
                 continue;
             }
             var value = propGetter(instance);
-            // TODO V10: Use category cache (22.03.2024, Yury Pekishev)
-            if (
-                !string.IsNullOrEmpty(value)
-                && !(bool)
-                    ExistsElementMethod
-                        .MakeGenericMethod(dimensionType)
-                        .InvokeAsFunction(this, Workspace, value)
-            )
+            if (!string.IsNullOrEmpty(value))
             {
                 activity.LogError(
                     string.Format(UnknownValueErrorMessage, propertyName, type.FullName, value)
@@ -223,16 +209,5 @@ public record ImportConfiguration
         return Expression.Lambda<Func<object, string>>(propertyExpression, prm).Compile();
     }
 
-    private readonly MethodInfo ExistsElementMethod =
-        ReflectionHelper.GetMethodGeneric<ImportConfiguration>(x =>
-            x.ExistsElement<object>(null, null)
-        );
 
-    private bool ExistsElement<T>(IWorkspace workspace, string value)
-        where T : class
-    {
-        // TODO V10: Understand how to route state here. Factor out validations from configuration. (08.07.2024, Roland Bürgi)
-        return true;
-        //return state.GetDataById<T>().ContainsKey(value);
-    }
 }

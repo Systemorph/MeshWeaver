@@ -5,6 +5,7 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Activities;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
@@ -82,7 +83,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var updateResponse = await client.AwaitResponse(
-            DataChangeRequest.Update(updateItems),
+            DataChangeRequest.Update(updateItems, client.Address),
             o => o.WithTarget(new ClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
         );
@@ -133,7 +134,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var expectedItems = data.Skip(1).ToArray();
         // act
         var deleteResponse = await client.AwaitResponse(
-            DataChangeRequest.Delete(toBeDeleted),
+            DataChangeRequest.Delete(toBeDeleted, client.Address),
             o => o.WithTarget(new ClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
         );
@@ -169,7 +170,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         {
             Text = TextChange
         };
-        workspace.Update(myInstance);
+        workspace.Update(myInstance, new(ActivityCategory.DataUpdate, client));
 
         var hostWorkspace = GetWorkspace(GetHost());
 
@@ -203,9 +204,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var updateResponse = await client.AwaitResponse(
-            DataChangeRequest.Update(updateItems),
-            o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
+            DataChangeRequest.Update(updateItems, client.Address),
+            o => o.WithTarget(new ClientAddress())//,
+            //new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
         );
 
         // asserts
@@ -221,8 +222,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task ReduceCollectionReference()
     {
         var host = GetHost();
-        var collection = await host.GetWorkspace()
-            .GetStream(new CollectionReference(typeof(MyData).FullName), null)
+        var collection = await host.GetWorkspace().GetStream<InstanceCollection>(new CollectionReference(typeof(MyData).FullName), null)
             .Select(c => c.Value.Instances.Values)
             .FirstAsync();
 
