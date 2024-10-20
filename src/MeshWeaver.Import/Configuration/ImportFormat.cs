@@ -1,17 +1,14 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
-using System.Reflection;
-using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.DataStructures;
-using MeshWeaver.Domain;
+using Activity = MeshWeaver.Activities.Activity;
 
 namespace MeshWeaver.Import.Configuration;
 
 public record ImportFormat(
     string Format,
     IWorkspace Workspace,
-    IReadOnlyCollection<Type> MappedTypes,
     ImmutableList<ValidationFunction> Validations)
 {
     public const string Default = nameof(Default);
@@ -26,78 +23,55 @@ public record ImportFormat(
         };
 
 
-    public WorkspaceReference<EntityStore> GetReference(IDataSet dataSet)
-        => WorkspaceReferenceMapping.Invoke(dataSet);
 
-    private Func<IDataSet, WorkspaceReference<EntityStore>> WorkspaceReferenceMapping { get; init; }
-        = dataSet => new CollectionsReference(dataSet.Tables
-            .Select(t => MappedTypes.FirstOrDefault(x => x.Name == t.TableName))
-            .Where(x => x != null)
-            .SelectMany(t => new Type[]{t}.Concat(t.GetProperties().Select(p => p.GetCustomAttribute<DimensionAttribute>()?.Type).Where(t => t != null)))
-            .Select(x => Workspace.DataContext.TypeRegistry.GetCollectionName(x))
-            .Where(x => x != null)
-            .ToArray());
-
-    public ImportFormat WithWorkspaceReference(Func<IDataSet, WorkspaceReference<EntityStore>> mapping)
-    => this with { WorkspaceReferenceMapping = mapping };
-    public EntityStoreAndUpdates Import(
+    public async Task<IReadOnlyCollection<object>> Import(
         ImportRequest importRequest,
         IDataSet dataSet,
-        EntityStore store,
         Activity activity
     )
     {
-        var hasError = false;
-        var validationCache = new Dictionary<object, object>();
-        EntityStoreAndUpdates storeAndUpdates = new(store, [], Workspace.Hub.Address);
-        foreach (var importFunction in ImportFunctions)
-        {
+        var imported = await ImportFunctions
+            .Select(i => i.Invoke(importRequest, dataSet, Workspace))
+            .Aggregate(AsyncEnumerable.Empty<object>(), (e, r) => e.Concat(r))
+            .ToArrayAsync();
 
-            var importedInstances = importFunction(importRequest, dataSet, Workspace, storeAndUpdates.Store).ToArray();
-            foreach (var item in importedInstances)
-            {
-                if (item == null)
-                    continue;
-                foreach (var validation in Validations)
-                    hasError =
-                        !validation(
-                            item,
-                            new ValidationContext(item, Workspace.Hub.ServiceProvider, validationCache),
-                            activity
-                        ) || hasError;
-            }
-
-
-
-            var newStore = storeAndUpdates.Store.MergeWithUpdates(new EntityStore(importedInstances
-                .GroupBy(g => g.GetType()).Select(g =>
-                {
-                    var type = g.Key;
-                    var keyFunction = Workspace.DataContext.TypeRegistry.GetKeyFunction(type)?.Function;
-                    var collection = Workspace.DataContext.TypeRegistry.GetCollectionName(g.Key);
-                    if (keyFunction == null || collection == null)
-                        return default;
-                    return new KeyValuePair<string, InstanceCollection>(collection,
-                        new InstanceCollection(g.ToDictionary(keyFunction)));
-                }).ToDictionary()), importRequest.UpdateOptions);
-
-            storeAndUpdates = new EntityStoreAndUpdates(Store: newStore.Store, Updates: storeAndUpdates.Updates.Concat(newStore.Updates), Workspace.Hub.Address);
-
-        }
-        return storeAndUpdates;
+        Validate(imported, activity);
+        if (activity.HasErrors())
+            return null;
+        return imported;
     }
 
-    public delegate IEnumerable<object> ImportFunction(
+    private void Validate(IReadOnlyCollection<object> importedInstances, Activity activity)
+    {
+        var hasError = false;
+        var validationCache = new Dictionary<object, object>();
+        foreach (var item in importedInstances)
+        {
+            if (item == null)
+                continue;
+            foreach (var validation in Validations)
+                hasError =
+                    !validation(
+                        item,
+                        new ValidationContext(item, Workspace.Hub.ServiceProvider, validationCache),
+                        activity
+                    ) || hasError;
+        }
+
+    }
+
+    public delegate IAsyncEnumerable<object> ImportFunction(
         ImportRequest importRequest,
         IDataSet dataSet,
-        IWorkspace workspace,
-        EntityStore state
+        IWorkspace workspace
     );
 
     public ImportFormat WithMappings(Func<ImportMapContainer, ImportMapContainer> config) =>
-        WithImportFunction((_, dataSet, _, _) => config(new()).Import(dataSet));
+        WithImportFunction((_, dataSet, _) =>
+            config(new()).Import(dataSet)
+        );
 
-    public ImportFormat WithAutoMappings() => WithAutoMappingsForTypes(MappedTypes);
+    public ImportFormat WithAutoMappings() => WithAutoMappingsForTypes(Workspace.MappedTypes);
 
     public ImportFormat WithValidation(ValidationFunction validationRule)
     {

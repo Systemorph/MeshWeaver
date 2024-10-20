@@ -2,13 +2,12 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Import.Configuration;
 
 namespace MeshWeaver.Import.Implementation;
 
-public record ImportDataSource(Source Source, IWorkspace Workspace)
-    : GenericDataSource<ImportDataSource>(Source, Workspace)
+public record ImportDataSource(Source Source, ImportManager importManager)
+    : GenericDataSource<ImportDataSource>(Source, importManager.Workspace)
 {
     private ImportRequest ImportRequest { get; init; } = new(Source);
 
@@ -19,21 +18,26 @@ public record ImportDataSource(Source Source, IWorkspace Workspace)
         };
 
 
-    protected override Task<EntityStore> GetInitialValue(ISynchronizationStream<EntityStore> stream, CancellationToken cancellationToken)
+    protected override async Task<EntityStore> GetInitialValue(ISynchronizationStream<EntityStore> stream, CancellationToken cancellationToken)
     {
-        var config = new ImportConfiguration(
-            Workspace,
-            MappedTypes,
-            Hub.ServiceProvider.GetRequiredService<ILogger<ImportDataSource>>()
-        );
-        config = Configurations.Aggregate(config, (c, f) => f.Invoke(c));
-        ImportManager importManager = new(config);
 
-        return importManager.Initialize(
+        var instances = await importManager.ImportInstancesAsync(
             ImportRequest,
-            GetReference(),
+            new(Data.Serialization.ActivityCategory.Import, Workspace.Hub),
             cancellationToken
         );
+        return new(instances.GroupBy(i => i.GetType())
+            .Select(t =>
+            {
+                var typeSource = Workspace.DataContext.GetTypeSource(t.Key);
+                if (typeSource == null)
+                    return default;
+                return new KeyValuePair<string, InstanceCollection>(
+                    typeSource.CollectionName, new(t.ToDictionary(typeSource.TypeDefinition.GetKey)));
+            })
+            .Where(x => x.Key is not null)
+            .ToDictionary());
+
     }
 
     private ImmutableList<

@@ -23,10 +23,10 @@ public record DataChangeRequest
     public DataChangeRequest WithDeletions(params object[] deletions)
     => this with { Deletions = Deletions.AddRange(deletions) };
 
-    public static DataChangeRequest Update(IReadOnlyCollection<object> updates) =>
-        new() { Updates = updates.ToImmutableList() };
-    public static DataChangeRequest Delete(IReadOnlyCollection<object> deletes) =>
-        new() { Deletions = deletes.ToImmutableList() };
+    public static DataChangeRequest Update(IReadOnlyCollection<object> updates, object changedBy) =>
+        new() { Updates = updates.ToImmutableList(), ChangedBy = changedBy };
+    public static DataChangeRequest Delete(IReadOnlyCollection<object> deletes, object changedBy) =>
+        new() { Deletions = deletes.ToImmutableList(), ChangedBy = changedBy};
 };
 
 public record DataChangeResponse(long Version, ActivityLog Log)
