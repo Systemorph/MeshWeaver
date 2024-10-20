@@ -69,7 +69,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         loadedInstance["displayName"]!.ToString().Should().Be("Universe");
 
 
-        stream.Dispose();
+        await stream.DisposeAsync();
         (_,data) = await GetDataInstance(workspace, reference);
         prop = innerPointer.Evaluate(data);
         prop.ToString().Should().Be("Universe");

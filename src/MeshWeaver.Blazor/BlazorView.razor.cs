@@ -7,15 +7,13 @@ using Json.Patch;
 using Json.Pointer;
 using Microsoft.AspNetCore.Components;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
-using System.Runtime.InteropServices.JavaScript;
 
 namespace MeshWeaver.Blazor;
 
-public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
+public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     where TViewModel : IUiControl
     where TView : BlazorView<TViewModel, TView>
 {
@@ -59,13 +57,14 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IDisposable
 
     protected List<IDisposable> Disposables { get; } = new();
 
-    public virtual void Dispose()
+    public virtual ValueTask DisposeAsync()
     {
         Logger.LogDebug("Disposing area {Area}", Area);
         DisposeBindings();
         foreach (var d in Disposables)
             d.Dispose();
         Disposables.Clear();
+        return default;
     }
 
 

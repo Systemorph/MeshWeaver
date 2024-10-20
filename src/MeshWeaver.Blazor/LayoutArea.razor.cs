@@ -28,10 +28,11 @@ public partial class LayoutArea
         await base.SetParametersAsync(parameters);
         BindViewModel();
         if (IsNotPreRender)
-            BindStream();
+            await BindStream();
         else
         {
-            AreaStream?.Dispose();
+            if(AreaStream != null)
+               await AreaStream.DisposeAsync();
             AreaStream = null;
         }
     }
@@ -48,19 +49,20 @@ public partial class LayoutArea
     private bool ShowProgress { get; set; }
 
     private ISynchronizationStream<JsonElement> AreaStream { get; set; }
-    public override void Dispose()
+    public override async ValueTask DisposeAsync()
     {
-        AreaStream?.Dispose();
+        if(AreaStream != null)
+            await AreaStream.DisposeAsync();
         AreaStream = null;
-        base.Dispose();
+        await base.DisposeAsync();
     }
     private string RenderingArea { get; set; }
-    private void BindStream()
+    private async Task BindStream()
     {
         if (AreaStream != null)
         {
             Logger.LogDebug("Disposing old stream for {Owner} and {Reference}", AreaStream.Owner, AreaStream.Reference);
-            AreaStream.Dispose();
+            await AreaStream.DisposeAsync();
         }
         Logger.LogDebug("Acquiring stream for {Owner} and {Reference}", ViewModel.Address, ViewModel.Reference);
         AreaStream = Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(ViewModel.Address, ViewModel.Reference);

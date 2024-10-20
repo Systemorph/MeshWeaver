@@ -26,13 +26,13 @@ public static class WorkspaceStreams
 
         var mapped = (reference switch
         {
-            CollectionsReference collections => GetStreamFromDataSource(workspace, collections),
+            CollectionsReference collections => GetStreamFromDataSource(workspace, collections, subscriber),
             PartitionedCollectionsReference partitionedCollections =>
-                GetStreamFromDataSource(workspace, partitionedCollections),
-            CollectionReference collection => GetStreamFromDataSource(workspace, collection),
-            PartitionedCollectionReference partitionedCollection => GetStreamFromDataSource(workspace, partitionedCollection),
-            EntityReference entity => GetStreamFromDataSource(workspace, entity),
-            PartitionedEntityReference partitionedEntity => GetStreamFromDataSource(workspace, partitionedEntity),
+                GetStreamFromDataSource(workspace, partitionedCollections, subscriber),
+            CollectionReference collection => GetStreamFromDataSource(workspace, collection, subscriber),
+            PartitionedCollectionReference partitionedCollection => GetStreamFromDataSource(workspace, partitionedCollection, subscriber),
+            EntityReference entity => GetStreamFromDataSource(workspace, entity, subscriber),
+            PartitionedEntityReference partitionedEntity => GetStreamFromDataSource(workspace, partitionedEntity, subscriber),
             _ => throw new NotSupportedException()
         }).ToArray();
 
@@ -94,41 +94,44 @@ public static class WorkspaceStreams
         return workspaceEntityStoreStream;
     }
 
-    private static IEnumerable<ISynchronizationStream<EntityStore>> GetStreamFromDataSource(IWorkspace workspace, EntityReference reference) =>
-        GetStreamFromDataSource(workspace, new CollectionReference(reference.Collection));
-    private static IEnumerable<ISynchronizationStream<EntityStore>> GetStreamFromDataSource(IWorkspace workspace, PartitionedEntityReference reference) =>
-        GetStreamFromDataSource(workspace, new PartitionedCollectionReference(reference.Partition, new(reference.Entity.Collection)));
+    private static IEnumerable<ISynchronizationStream<EntityStore>> GetStreamFromDataSource(IWorkspace workspace, EntityReference reference, object subscriber) =>
+        GetStreamFromDataSource(workspace, new CollectionReference(reference.Collection), subscriber);
+    private static IEnumerable<ISynchronizationStream<EntityStore>> GetStreamFromDataSource(IWorkspace workspace, PartitionedEntityReference reference, object subscriber) =>
+        GetStreamFromDataSource(workspace, new PartitionedCollectionReference(reference.Partition, new(reference.Entity.Collection)), subscriber);
 
-    private static IEnumerable<ISynchronizationStream<EntityStore>> GetStreamFromDataSource(IWorkspace workspace, CollectionsReference collections) =>
+    private static IEnumerable<ISynchronizationStream<EntityStore>> GetStreamFromDataSource(IWorkspace workspace, CollectionsReference collections, object subscriber) =>
         collections.Collections.Select(c => (Collection: c,
                 DataSource: workspace.DataContext.DataSourcesByCollection.GetValueOrDefault(c)))
             .GroupBy(x => x.DataSource)
             .Where(x => x.Key != null)
-            .Select(x => x.Key.GetStream(new CollectionsReference(x.Select(y => y.Collection).ToArray())));
+            .Select(x => x.Key.GetStream(new CollectionsReference(x.Select(y => y.Collection).ToArray()), subscriber));
 
-    private static IEnumerable<ISynchronizationStream<EntityStore>> GetStreamFromDataSource(IWorkspace workspace, PartitionedCollectionsReference partitionedCollections) =>
+    private static IEnumerable<ISynchronizationStream<EntityStore>> GetStreamFromDataSource(IWorkspace workspace, PartitionedCollectionsReference partitionedCollections, object subscriber) =>
         partitionedCollections.Reference.Collections
             .Select(c => (Collection: c, DataSource:
                 workspace.DataContext.DataSourcesByCollection.GetValueOrDefault(c)))
             .GroupBy(x => x.DataSource)
             .Where(x => x.Key != null)
             .Select(x => x.Key.GetStream(new PartitionedCollectionsReference(partitionedCollections.Partition,
-                new CollectionsReference(x.Select(y => y.Collection).ToArray()))));
+                new CollectionsReference(x.Select(y => y.Collection).ToArray())), subscriber));
 
-    private static ISynchronizationStream<EntityStore>[] GetStreamFromDataSource(IWorkspace workspace, PartitionedCollectionReference partitionedCollection) =>
+    private static ISynchronizationStream<EntityStore>[] GetStreamFromDataSource(IWorkspace workspace, PartitionedCollectionReference partitionedCollection, object subscriber) =>
     [
         workspace.DataContext
             .DataSourcesByCollection
             .GetValueOrDefault(partitionedCollection.Reference.Name)
-            .GetStream(new PartitionedCollectionsReference(partitionedCollection.Partition, new CollectionsReference(partitionedCollection.Reference.Name)))
+            .GetStream(new PartitionedCollectionsReference(partitionedCollection.Partition, new CollectionsReference(partitionedCollection.Reference.Name)), subscriber)
     ];
 
-    private static ISynchronizationStream<EntityStore>[] GetStreamFromDataSource(IWorkspace workspace, CollectionReference collection) =>
+    private static ISynchronizationStream<EntityStore>[] GetStreamFromDataSource(
+        IWorkspace workspace, 
+        CollectionReference collection,
+        object subscriber) =>
     [
         workspace.DataContext
             .DataSourcesByCollection
             .GetValueOrDefault(collection.Name)
-            .GetStream(new CollectionsReference(collection.Name))
+            .GetStream(new CollectionsReference(collection.Name), subscriber)
     ];
 
 
@@ -199,7 +202,7 @@ public static class WorkspaceStreams
         {
             reducedStream.AddDisposable(
                 reducedStream.Where(value =>
-                    reducedStream.Subscriber == null || reducedStream.Subscriber.Equals(value.ChangedBy)
+                    reducedStream.Subscriber != null && reducedStream.Subscriber.Equals(value.ChangedBy)
                 ).Subscribe(x => UpdateParent(stream, reference, x, backTransform))
             );
         }

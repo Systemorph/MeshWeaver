@@ -90,11 +90,11 @@ else
         ToastService.ShowToast(ToastIntent.Error, message);
     }
 
-    public override void Dispose()
+    public override ValueTask DisposeAsync()
     {
         if(Data != null)
             Data.ElementChanged -= OnModelChanged;
-        base.Dispose();
+        return base.DisposeAsync();
     }
 
     private void OnModelChanged(object sender, JsonElement e)
