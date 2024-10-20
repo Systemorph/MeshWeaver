@@ -21,7 +21,11 @@ public static class DataPluginExtensions
     {
         var existingLambdas = config.GetListOfLambdas();
         var ret = config
-            .AddActivities()
+                .Set(existingLambdas.Add(dataPluginConfiguration));
+
+            if(existingLambdas.Any())
+                return ret;
+            return ret.AddActivities()
             .WithServices(sc => sc.AddScoped<IWorkspace, Workspace>())
             .WithSerialization(serialization =>
                 serialization.WithOptions(options =>
@@ -42,7 +46,6 @@ public static class DataPluginExtensions
                         );
                 })
             )
-            .Set(existingLambdas.Add(dataPluginConfiguration))
             .WithTypes(
                 typeof(EntityStore),
                 typeof(InstanceCollection),
@@ -115,7 +118,11 @@ public static class DataPluginExtensions
         configuration
             .WithHandler<DataChangeRequest>((hub, request) =>
             {
-                hub.GetWorkspace().RequestChange(request.Message with{ChangedBy = request.Sender}, request);
+                var activity = new Activity(ActivityCategory.DataUpdate, hub);
+                hub.GetWorkspace().RequestChange(request.Message with{ChangedBy = request.Sender}, activity);
+                activity.Complete(log =>
+                    hub.Post(new DataChangeResponse(hub.Version, log), o => o.ResponseFor(request))
+                );
                 return request.Processed();
             })
             .WithHandler<SubscribeRequest>((hub, request) =>

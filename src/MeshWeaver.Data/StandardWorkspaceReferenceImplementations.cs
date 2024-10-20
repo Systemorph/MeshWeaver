@@ -32,6 +32,10 @@ namespace MeshWeaver.Data
                     (ws, reference) => ws.ReduceImpl(reference),
                     (ws, change, _) => ws with { Collections = change.Value.Collections.SetItems(change.Value.Collections) }
                 )
+                .AddWorkspaceReference<PartitionedCollectionReference, InstanceCollection>(
+                    (ws, reference) => ws.ReduceImpl(reference),
+                    (ws, change, reference) => ws.Update(reference.Reference.Name, c => c.Merge(change.Value))
+                )
                 .AddWorkspaceReference<JsonElementReference, JsonElement>(
                     (ws, _) => JsonSerializer.SerializeToElement(ws, hub.JsonSerializerOptions),
                     (current, change, _) =>

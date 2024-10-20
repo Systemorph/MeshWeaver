@@ -50,7 +50,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                         (area, _) =>
                             layout
                                 .Hub.GetWorkspace()
-                                .GetStreamForTypes(typeof(DataRecord)).Select(x => x.Value.GetData<DataRecord>())
+                                .GetStream(typeof(DataRecord)).Select(x => x.Value.GetData<DataRecord>())
                                 .DistinctUntilChanged()
                                 .Select(data => ItemTemplate(area, data))
                     )
@@ -475,7 +475,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return area
             .Hub.GetWorkspace()
-            .GetStreamForTypes(typeof(DataRecord)).Select(x => x.Value.GetData<DataRecord>())
+            .GetStream(typeof(DataRecord)).Select(x => x.Value.GetData<DataRecord>())
             .DistinctUntilChanged()
             .Select(data =>
                 Template.Bind(data, nameof(CatalogView), x => area.ToDataGrid(x)));

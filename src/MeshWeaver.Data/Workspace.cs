@@ -4,6 +4,7 @@ using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using MeshWeaver.Activities;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Disposables;
@@ -44,13 +45,13 @@ public class Workspace : IWorkspace
     > remoteStreams = new();
 
 
-    public IObservable<IEnumerable<TCollection>> GetStream<TCollection>()
+    public IObservable<IReadOnlyCollection<T>> GetStream<T>()
     {
-        var collection = DataContext.GetTypeSource(typeof(TCollection));
+        var collection = DataContext.GetTypeSource(typeof(T));
         if (collection == null)
             return null;
-        return GetRemoteStream(Hub.Address, new CollectionReference(collection.CollectionName))
-            .Select(x => x.Value.Instances.Values.Cast<TCollection>());
+        return GetStream(typeof(T))
+            .Select(x => x.Value.Collections.SingleOrDefault().Value?.Instances.Values.Cast<T>().ToArray());
     }
 
     public ISynchronizationStream<TReduced> GetRemoteStream<TReduced>(
@@ -190,7 +191,7 @@ public class Workspace : IWorkspace
         TaskCompletionSource<TReduced> tcs2 = null;
         if (typeof(TReduced) == typeof(JsonElement))
         {
-            json = GetJsonStream<TReduced, TReference>(owner, reference, partition);
+            json = GetJsonStream<TReduced, TReference>(Hub.Address, reference, partition);
             json.Initialize(ct => (tcs = new(ct)).Task);
             ret = json;
         }
@@ -198,7 +199,7 @@ public class Workspace : IWorkspace
         {
             var reduced = new SynchronizationStream<TReduced>(
                 new(owner, partition),
-                owner,
+                Hub.Address,
                 Hub,
                 reference,
                 ReduceManager.ReduceTo<TReduced>(),
@@ -206,7 +207,7 @@ public class Workspace : IWorkspace
             reduced.Initialize(ct => (tcs2 = new(ct)).Task);
             json = reduced.Reduce(
                 new JsonElementReference(),
-                owner,
+                Hub.Address,
                 stream => stream.ConfigureHub(config =>
                     config.WithHandler<DataChangedEvent>(
                         (_, delivery) =>
@@ -285,13 +286,13 @@ public class Workspace : IWorkspace
         return ret;
     }
 
-    private ISynchronizationStream<JsonElement> GetJsonStream<TReduced, TReference>(object owner, TReference reference, object partition)
+    private ISynchronizationStream<JsonElement> GetJsonStream<TReduced, TReference>(object subscriber, TReference reference, object partition)
         where TReference : WorkspaceReference
     {
         ISynchronizationStream<JsonElement> json;
         json = new SynchronizationStream<JsonElement>(
-            new(owner, partition),
-            owner,
+            new(subscriber, partition),
+            subscriber,
             Hub,
             reference,
             ReduceManager.ReduceTo<JsonElement>(),
@@ -315,21 +316,21 @@ public class Workspace : IWorkspace
         );
 
 
-    public void Update(IEnumerable<object> instances, UpdateOptions updateOptions) =>
+    public void Update(IReadOnlyCollection<object> instances, UpdateOptions updateOptions, Activity activity) =>
         RequestChange(
             new DataChangeRequest()
             {
                 Updates = instances.ToImmutableList(),
                 Options = updateOptions,
                 ChangedBy = Hub.Address
-            }, null
+            }, activity
         );
 
 
 
-    public void Delete(IEnumerable<object> instances) =>
+    public void Delete(IReadOnlyCollection<object> instances, Activity activity) =>
         RequestChange(
-            new DataChangeRequest { Deletions = instances.ToImmutableList(), ChangedBy = Hub.Address }, null
+            new DataChangeRequest { Deletions = instances.ToImmutableList(), ChangedBy = Hub.Address }, activity
         );
 
     public ISynchronizationStream<TReduced> GetStream<TReduced>(WorkspaceReference<TReduced> reference, object subscriber)
@@ -353,7 +354,7 @@ public class Workspace : IWorkspace
         );
     }
 
-    public ISynchronizationStream<EntityStore> GetStreamForTypes(object subscriber, params Type[] types)
+    public ISynchronizationStream<EntityStore> GetStream(params Type[] types)
         => ReduceInternal<EntityStore, CollectionsReference>(new CollectionsReference(types
             .Select(t =>
                 DataContext.TypeRegistry.TryGetCollectionName(t, out var name)
@@ -361,7 +362,7 @@ public class Workspace : IWorkspace
                     : throw new ArgumentException($"Type {t.FullName} is unknown.")
             )
             .ToArray()
-        ), subscriber);
+        ), null);
 
     public ReduceManager<EntityStore> ReduceManager => DataContext.ReduceManager;
 
@@ -371,11 +372,9 @@ public class Workspace : IWorkspace
 
     public DataContext DataContext { get; }
 
-    public void RequestChange(DataChangeRequest change, IMessageDelivery request)
+    public void RequestChange(DataChangeRequest change, Activity activity)
     {
-        var activity = this.Change(change);
-        if (request != null)
-            activity.Complete(log => Hub.Post(new DataChangeResponse(Hub.Version, log), o => o.ResponseFor(request)));
+        this.Change(change, activity);
     }
 
     private bool isDisposing;
@@ -445,6 +444,5 @@ public class Workspace : IWorkspace
         if (subscriptions.TryRemove(new(address, reference), out var existing))
             existing.Dispose();
     }
-
 
 }

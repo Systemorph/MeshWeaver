@@ -30,6 +30,8 @@ public record EntityStore
 
     internal InstanceCollection ReduceImpl(CollectionReference reference) =>
         GetCollection(reference.Name);
+    internal InstanceCollection ReduceImpl(PartitionedCollectionReference reference) =>
+        ReduceImpl(reference.Reference);
 
 
     internal EntityStore ReduceImpl(CollectionsReference reference) =>

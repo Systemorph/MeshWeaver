@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Activities;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Activities;
 using MeshWeaver.DataStructures;
 using MeshWeaver.Import;
 using MeshWeaver.Messaging;
@@ -8,151 +9,116 @@ namespace MeshWeaver.Data.TestDomain;
 public static class TestHubSetup
 {
     public static MessageHubConfiguration ConfigureReferenceDataModel(
-        this MessageHubConfiguration parent
+        this MessageHubConfiguration configuration
     ) =>
-        parent.WithHostedHub(
-            new ReferenceDataAddress(parent.Address),
-            configuration =>
-                configuration.AddData(data =>
-                    data.FromConfigurableDataSource(
-                        "reference",
-                        dataSource =>
-                            dataSource
-                                .WithType<LineOfBusiness>(t =>
-                                    t.WithInitialData(TestData.LinesOfBusiness)
-                                )
-                                .WithType<BusinessUnit>(t =>
-                                    t.WithInitialData(TestData.BusinessUnits)
-                                )
-                    )
-                )
+        configuration.AddData(data =>
+            data.FromConfigurableDataSource(
+                "reference",
+                dataSource =>
+                    dataSource
+                        .WithType<LineOfBusiness>(t =>
+                            t.WithInitialData(TestData.LinesOfBusiness)
+                        )
+                        .WithType<BusinessUnit>(t =>
+                            t.WithInitialData(TestData.BusinessUnits)
+                        )
+            )
         );
 
     public static MessageHubConfiguration ConfigureTransactionalModel(
-        this MessageHubConfiguration parent,
-        int year,
-        params string[] businessUnits
+        this MessageHubConfiguration configuration,
+        TransactionalDataAddress address
     ) =>
-        businessUnits.Aggregate(
-            parent,
-            (c, businessUnit) =>
-                c.WithHostedHub(
-                    new TransactionalDataAddress(year, businessUnit, parent.Address),
-                    configuration =>
-                        configuration.AddData(data =>
-                            data.FromConfigurableDataSource(
-                                "transactional",
-                                dataSource =>
-                                    dataSource.WithType<TransactionalData>(t =>
-                                        t.WithInitialData(
-                                            TestData.TransactionalData.Where(v =>
-                                                v.BusinessUnit == businessUnit && v.Year == year
-                                            )
-                                        )
-                                    )
+        configuration.AddData(data =>
+            data.FromConfigurableDataSource(
+                "transactional",
+                dataSource =>
+                    dataSource.WithType<TransactionalData>(t =>
+                        t.WithInitialData(
+                            TestData.TransactionalData.Where(v =>
+                                v.BusinessUnit == address.BusinessUnit && v.Year == address.Year
                             )
                         )
-                )
+                    )
+            )
         );
 
     public static MessageHubConfiguration ConfigureComputedModel(
-        this MessageHubConfiguration parent,
-        int year,
-        params string[] businessUnits
+        this MessageHubConfiguration configuration,
+        ComputedDataAddress address
     ) =>
-        businessUnits.Aggregate(
-            parent,
-            (c, businessUnit) =>
-                c.WithHostedHub(
-                    new ComputedDataAddress(year, businessUnit, parent.Address),
-                    configuration =>
-                        configuration.AddData(data =>
-                            data.FromConfigurableDataSource(
-                                "computed",
-                                dataSource => dataSource.WithType<ComputedData>(t => t)
-                            )
-                        )
-                )
+        configuration.AddData(data =>
+            data.FromConfigurableDataSource(
+                "computed",
+                dataSource => dataSource.WithType<ComputedData>(t => t)
+            )
         );
 
     public const string CashflowImportFormat = nameof(CashflowImportFormat);
 
     public static MessageHubConfiguration ConfigureImportHub(
-        this MessageHubConfiguration parent,
-        int year,
-        params string[] businessUnits
+        this MessageHubConfiguration config,
+        ImportAddress address
     ) =>
-        parent.WithHostedHub(
-            new ImportAddress(year, parent.Address),
-            config =>
-                config
-                    .AddData(data =>
-                        data.FromPartitionedHubs(
-                                nameof(TransactionalData),
-                                c =>
-                                    c.InitializingPartitions(
-                                            businessUnits.Select(bu => new TransactionalDataAddress(
-                                                year,
-                                                bu,
-                                                parent.Address
-                                            ))
-                                        )
-                                        .WithType<TransactionalData>(
-                                            i => new TransactionalDataAddress(
-                                                i.Year,
-                                                i.BusinessUnit,
-                                                parent.Address
-                                            )
-                                        )
-                            )
-                            .FromPartitionedHubs(
-                                nameof(ComputedData),
-                                c =>
-                                    c.InitializingPartitions(
-                                            businessUnits.Select(bu => new ComputedDataAddress(
-                                                year,
-                                                bu,
-                                                parent.Address
-                                            ))
-                                        )
-                                        .WithType<ComputedData>(i => new ComputedDataAddress(
-                                            i.Year,
-                                            i.BusinessUnit,
-                                            parent.Address
-                                        ))
-                            )
-                            .FromHub(
-                                new ReferenceDataAddress(parent.Address),
-                                dataSource =>
-                                    dataSource.WithType<BusinessUnit>().WithType<LineOfBusiness>()
-                            )
-                            .FromConfigurableDataSource(
-                                nameof(ActivityLog),
-                                dataSource => dataSource.WithType<ActivityLog>(t => t)
-                            )
+        config
+            .AddData(data =>
+                data.FromPartitionedHubs(
+                        nameof(TransactionalData),
+                        c =>
+                            c
                     )
-                    .AddImport(import =>
-                        import.WithFormat(
-                            CashflowImportFormat,
-                            format => format.WithAutoMappings().WithImportFunction(ImportFunction)
-                        )
+                    .FromPartitionedHubs(
+                        nameof(ComputedData),
+                        c => c
                     )
-        );
+                    .FromHub(
+                        new ReferenceDataAddress(),
+                        dataSource =>
+                            dataSource.WithType<BusinessUnit>().WithType<LineOfBusiness>()
+                    )
+                    .FromConfigurableDataSource(
+                        nameof(ActivityLog),
+                        dataSource => dataSource.WithType<ActivityLog>(t => t)
+                    )
+            )
+            .AddImport(import =>
+                import.WithFormat(
+                    CashflowImportFormat,
+                    format => format.WithAutoMappings().WithImportFunction(ImportFunction)
+                )
+            );
+        
 
-    private static IEnumerable<object> ImportFunction(
+    private static async IAsyncEnumerable<object> ImportFunction(
         ImportRequest request,
         IDataSet dataSet,
-        IWorkspace workspace,
-        EntityStore state
+        IWorkspace workspace
     )
     {
-        var transactionalData = state.GetData<TransactionalData>();
-        return transactionalData.Select(t => new ComputedData(
-            t.Id,
-            2024,
-            t.LoB,
-            t.BusinessUnit,
-            t.Value * 2
-        ));
+        var businessUnits = await workspace.GetStream<BusinessUnit>().FirstAsync();
+        var partitions = businessUnits.Select(bu => new TransactionalDataAddress(2024, bu.SystemName)).ToArray();
+
+        var transactionalData = await partitions
+            .ToAsyncEnumerable()
+            .SelectAwait(async p =>
+                await workspace.GetStream(
+                    new PartitionedCollectionReference(p, new(typeof(TransactionalData).FullName))).FirstAsync())
+            .ToArrayAsync();
+
+        foreach (var x in transactionalData.SelectMany(x =>
+                     x.Value
+                         .Instances
+                         .Values
+                         .Cast<TransactionalData>()
+                         .Select(t => new ComputedData(
+                             t.Id,
+                             2024,
+                             t.LoB,
+                             t.BusinessUnit,
+                             t.Value * 2
+                         ))))
+        {
+            yield return x;
+        }
     }
 }

@@ -65,7 +65,7 @@ public static class OrdersSummaryArea
             .WithView(ToolbarArea.Toolbar(years))
             .WithView(
                 (area, _) =>
-                    area.Workspace.GetStreamForTypes(typeof(Order), typeof(Customer), typeof(OrderDetails))
+                    area.Workspace.GetStream(typeof(Order), typeof(Customer), typeof(OrderDetails))
                         .CombineLatest(
                             area.GetDataStream<Toolbar>(nameof(Toolbar)),
                             (changeItem, tb) => (changeItem, tb))

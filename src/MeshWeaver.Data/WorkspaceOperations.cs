@@ -9,19 +9,13 @@ namespace MeshWeaver.Data;
 
 public static class WorkspaceOperations
 {
-    public static Activity Change(this IWorkspace workspace, DataChangeRequest dataChange)
+    public static void Change(this IWorkspace workspace, DataChangeRequest dataChange, Activity activity)
     {
-        var hub = workspace.Hub;
-        var activity = GetActivity(hub);
 
         if(dataChange.Updates.Any())
             workspace.MergeUpdate(dataChange, activity);
         if (dataChange.Deletions.Any())
             workspace.MergeDelete(dataChange, activity);
-
-        activity.Complete();
-
-        return activity;
     }
 
     public static void MergeUpdate(
@@ -244,6 +238,8 @@ public static class WorkspaceOperations
             CollectionsReference
                 => store with { Collections = store.Collections.SetItems(((EntityStore)value).Collections) },
             PartitionedCollectionsReference partitioned
+                => store.Update(partitioned.Reference, value, options),
+            PartitionedCollectionReference partitioned
                 => store.Update(partitioned.Reference, value, options),
             WorkspaceReference<EntityStore>
                 => store.Merge((EntityStore)value, options),

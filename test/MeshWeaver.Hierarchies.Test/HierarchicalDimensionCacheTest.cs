@@ -33,7 +33,7 @@ public class HierarchicalDimensionCacheTest(ITestOutputHelper output) : HubTestB
     private async Task<HierarchicalDimensionCache> GetDimensionCacheAsync()
     {
         var workspace = GetHost().GetWorkspace();
-        var stream = workspace.GetStreamForTypes(
+        var stream = workspace.GetStream(
             typeof(TestHierarchicalDimensionA),
             typeof(TestHierarchicalDimensionB)
         );

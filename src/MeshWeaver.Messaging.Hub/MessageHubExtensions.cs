@@ -6,6 +6,7 @@ public static class MessageHubExtensions
     {
         var hubSetup = new MessageHubConfiguration(serviceProvider, address)
             .WithTypes(address.GetType());
+        configuration ??= x => x;
         return configuration(hubSetup).Build(serviceProvider, address);
     }
 

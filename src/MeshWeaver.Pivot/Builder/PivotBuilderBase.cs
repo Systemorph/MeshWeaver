@@ -44,7 +44,7 @@ namespace MeshWeaver.Pivot.Builder
                 .ToArray();
             var reference = dimensions.Select(Workspace.DataContext.TypeRegistry.GetCollectionName).Where(x => x != null).ToArray();
             var stream = reference.Any()
-                ? Workspace.GetStream(new CollectionsReference(reference), null).Select(x => x.Value)
+                ? Workspace.GetStream<EntityStore>(new CollectionsReference(reference), null).Select(x => x.Value)
                 : Observable.Return<EntityStore>(new());
         }
 

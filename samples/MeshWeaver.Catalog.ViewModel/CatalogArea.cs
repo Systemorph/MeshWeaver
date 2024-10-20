@@ -60,7 +60,7 @@ public static class CatalogArea
 
     private static IObservable<IEnumerable<CatalogItemData>> MeshDocuments(this LayoutAreaHost layoutArea) =>
         layoutArea.GetOrAddVariable(nameof(MeshDocuments), () => layoutArea.Workspace
-            .GetStreamForTypes(typeof(MeshDocument), typeof(MeshNode), typeof(User))
+            .GetStream(typeof(MeshDocument), typeof(MeshNode), typeof(User))
             .DistinctUntilChanged()
             .Select(x =>
                 x.Value.GetData<MeshDocument>()

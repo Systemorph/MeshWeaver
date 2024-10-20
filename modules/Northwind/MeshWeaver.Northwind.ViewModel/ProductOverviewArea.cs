@@ -46,7 +46,7 @@ public static class ProductOverviewArea
 
     private static IObservable<IEnumerable<ProductOverviewItem>> ProductOverviewData(this LayoutAreaHost layoutArea)
         => layoutArea.YearlyDataBySelectedCategory()
-            .CombineLatest(layoutArea.Workspace.GetStreamForTypes(typeof(Category)),
+            .CombineLatest(layoutArea.Workspace.GetStream(typeof(Category)),
                 (data, changeItem) => (data, changeItem))
             .Select(tuple =>
                 tuple.data.GroupBy(data => data.Product)
