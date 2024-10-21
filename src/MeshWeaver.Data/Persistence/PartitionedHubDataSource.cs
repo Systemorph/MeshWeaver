@@ -43,7 +43,7 @@
         {
             var partition = identity.Partition;
             var reference = GetReference();
-            var partitionedReference = new PartitionedCollectionsReference(
+            var partitionedReference = new PartitionedWorkspaceReference<EntityStore>(
                 partition,
                 reference
             );
@@ -54,7 +54,7 @@
         public override void Initialize()
         {
             foreach (var partition in InitializePartitions)
-                GetStream(new PartitionedCollectionsReference(partition, GetReference()), partition);
+                GetStream(new PartitionedWorkspaceReference<EntityStore>(partition, GetReference()), partition);
         }
 
     }
