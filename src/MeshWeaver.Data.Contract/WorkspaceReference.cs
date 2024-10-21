@@ -51,16 +51,18 @@ public record CollectionsReference(IReadOnlyCollection<string> Collections)
     public override int GetHashCode() => Collections.Aggregate(17, (a, b) => a ^ b.GetHashCode());
 }
 
-public record JsonElementReference : WorkspaceReference<JsonElement>;
-
 public record CombinedStreamReference(params StreamIdentity[] References) : WorkspaceReference<EntityStore>;
 public record StreamIdentity(object Owner, object Partition) : WorkspaceReference<EntityStore>;
-
-public record PartitionedCollectionsReference(object Partition, CollectionsReference Reference) : WorkspaceReference<EntityStore>, IPartitionedWorkspaceReference;
-public record PartitionedCollectionReference(object Partition, CollectionReference Reference) : WorkspaceReference<InstanceCollection>, IPartitionedWorkspaceReference;
-public record PartitionedEntityReference(object Partition, EntityReference Entity) : WorkspaceReference<object>, IPartitionedWorkspaceReference;
 
 public interface IPartitionedWorkspaceReference
 {
     object Partition { get; }
+    WorkspaceReference Reference { get; }
 }
+
+public record PartitionedWorkspaceReference<TReduced>(object Partition, WorkspaceReference<TReduced> Reference)
+    : WorkspaceReference<TReduced>, IPartitionedWorkspaceReference
+{
+    WorkspaceReference IPartitionedWorkspaceReference.Reference => Reference;
+}
+

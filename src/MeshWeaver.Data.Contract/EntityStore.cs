@@ -26,12 +26,16 @@ public record EntityStore
         );
 
     internal object ReduceImpl(EntityReference reference) =>
-        GetCollection(reference.Collection)?.GetData(reference.Id);
+        GetCollection(reference.Collection)?.GetInstance(reference.Id);
 
     internal InstanceCollection ReduceImpl(CollectionReference reference) =>
         GetCollection(reference.Name);
-    internal InstanceCollection ReduceImpl(PartitionedCollectionReference reference) =>
-        ReduceImpl(reference.Reference);
+    internal EntityStore ReduceImpl(PartitionedWorkspaceReference<EntityStore> reference) =>
+        ReduceImpl((dynamic)reference.Reference);
+    internal InstanceCollection ReduceImpl(PartitionedWorkspaceReference<InstanceCollection> reference) =>
+        ReduceImpl((dynamic)reference.Reference);
+    internal object ReduceImpl(PartitionedWorkspaceReference<object> reference) =>
+        ReduceImpl((dynamic)reference.Reference);
 
 
     internal EntityStore ReduceImpl(CollectionsReference reference) =>
@@ -45,9 +49,6 @@ public record EntityStore
                 .Where(x => x.Value != null)
                 .ToImmutableDictionary()
         };
-
-    internal EntityStore ReduceImpl(PartitionedCollectionsReference reference) =>
-        ReduceImpl(reference.Reference);
 
 
     public InstanceCollection GetCollection(string collection) =>
@@ -77,23 +78,23 @@ public record EntityStore
             .Aggregate((x, y) => x ^ y);
 
 
-    internal IEnumerable<EntityStoreUpdate> ComputeChanges(string collection, InstanceCollection updated)
+    internal IEnumerable<EntityUpdate> ComputeChanges(string collection, InstanceCollection updated)
     {
         var oldValues = Collections.GetValueOrDefault(collection);
         if (oldValues == null)
-            yield return new EntityStoreUpdate(collection, null, updated);
+            yield return new EntityUpdate(collection, null, updated);
         else
         {
             foreach (var u in updated.Instances)
             {
-                var existing = oldValues.GetData(u.Key);
+                var existing = oldValues.GetInstance(u.Key);
                 if (!u.Value.Equals(existing))
-                    yield return new EntityStoreUpdate(collection, u.Key, u.Value) { OldValue = existing };
+                    yield return new EntityUpdate(collection, u.Key, u.Value) { OldValue = existing };
             }
 
             foreach (var kvp in oldValues.Instances.Where(i => !updated.Instances.ContainsKey(i.Key)))
             {
-                yield return new EntityStoreUpdate(collection, kvp.Key, null) { OldValue = kvp.Value };
+                yield return new EntityUpdate(collection, kvp.Key, null) { OldValue = kvp.Value };
             }
         }
     }
@@ -120,14 +121,14 @@ public record EntityStore
         };
 }
 
-public record EntityStoreAndUpdates(EntityStore Store, IEnumerable<EntityStoreUpdate> Updates, object ChangedBy)
+public record EntityStoreAndUpdates(EntityStore Store, IEnumerable<EntityUpdate> Updates, object ChangedBy)
 {
     //public EntityStoreAndUpdates(EntityStore Store) : this(Store, [], ChangedBy)
     //{
     //}
 }
 
-public record EntityStoreUpdate(string Collection, object Id, object Value)
+public record EntityUpdate(string Collection, object Id, object Value)
 {
     public object OldValue { get; init; }
 }

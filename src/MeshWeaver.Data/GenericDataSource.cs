@@ -5,6 +5,7 @@ using System.Reflection;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
+using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Data;
 
@@ -83,9 +84,7 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
     }
     public virtual ISynchronizationStream<EntityStore> GetStream(WorkspaceReference<EntityStore> reference, object subscriber)
     {
-        var stream = GetStream(reference is PartitionedCollectionsReference partitioned ? partitioned.Partition : null);
-        if (stream.Reference.Equals(reference))
-            return stream;
+        var stream = GetStream(reference is IPartitionedWorkspaceReference partitioned ? partitioned.Partition : null);
         return (ISynchronizationStream<EntityStore>)stream.Reduce(reference, subscriber);
     }
 
@@ -104,7 +103,7 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
 
         var stream = new SynchronizationStream<EntityStore>(
             identity,
-            Hub.Address,
+            Guid.NewGuid().AsString(),
             Hub,
             reference,
             Workspace.ReduceManager.ReduceTo<EntityStore>(),
@@ -161,9 +160,9 @@ public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorksp
                 WorkspaceReference<InstanceCollection> reference =
                     stream.StreamIdentity.Partition == null
                         ? new CollectionReference(ts.CollectionName)
-                        : new PartitionedCollectionReference(
+                        : new PartitionedWorkspaceReference<InstanceCollection>(
                             stream.StreamIdentity.Partition,
-                            new(ts.CollectionName)
+                            new CollectionReference(ts.CollectionName)
                         );
                 return new
                 {
