@@ -42,9 +42,12 @@ public interface ISynchronizationStream<TStream>
     void Initialize(Func<CancellationToken, Task<TStream>> init);
     void Initialize(TStream init);
     ReduceManager<TStream> ReduceManager { get; }
+    string StreamId { get; }
     void RequestChange(Func<TStream, ChangeItem<TStream>> update);
     void InvokeAsync(Action action);
     void InvokeAsync(Func<CancellationToken, Task> action);
+    internal IMessageHub SynchronizationHub { get; }
+
 }
 
 

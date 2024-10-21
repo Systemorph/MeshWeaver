@@ -102,7 +102,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             isDisposed = true;
         }
 
-        await synchronizationStreamHub.DisposeAsync();
+        await synchronizationHub.DisposeAsync();
         foreach (var disposeAction in AsyncDisposables)
             await disposeAction.DisposeAsync();
 
@@ -128,6 +128,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         if (isDisposed || value == null)
             return;
+        if (current is not null  && Equals(current.Value,value.Value))
+            return;
         current = value;
         if (!isDisposed)
             Store.OnNext(value);
@@ -139,12 +141,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public void Initialize(Func<CancellationToken, Task<TStream>> init)
     {
-        InvokeAsync(async ct => SetCurrent(new ChangeItem<TStream>(Owner, Reference, await init.Invoke(ct), null, ChangeType.Full, Hub.Version)));
+        InvokeAsync(async ct => SetCurrent(new ChangeItem<TStream>(await init.Invoke(ct), Hub.Version)));
     }
 
     public void Initialize(TStream startWith)
     {
-        SetCurrent(new ChangeItem<TStream>(Owner, Reference, startWith, null, ChangeType.Full, Hub.Version));
+        SetCurrent(new ChangeItem<TStream>(startWith, Hub.Version));
     }
 
 
@@ -162,10 +164,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     public void AddDisposable(IDisposable disposable) => Disposables.Add(disposable);
     public void AddDisposable(IAsyncDisposable disposable) => AsyncDisposables.Add(disposable);
 
-    IMessageDelivery ISynchronizationStream.DeliverMessage(
+    public IMessageDelivery DeliverMessage(
         IMessageDelivery delivery
     ) =>
-        synchronizationStreamHub.DeliverMessage(delivery.ForwardTo(synchronizationStreamHub.Address));
+        synchronizationHub.DeliverMessage(delivery.ForwardTo(synchronizationHub.Address));
 
 
     public void OnNext(ChangeItem<TStream> value)
@@ -185,11 +187,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             [];
         public StreamConfiguration ConfigureHub(Func<MessageHubConfiguration, MessageHubConfiguration> configuration) =>
         this with { HubConfigurations = HubConfigurations.Add(configuration) };
+
     }
 
     public SynchronizationStream(
         StreamIdentity StreamIdentity,
-        object Subscriber,
+        string StreamId,
         IMessageHub Hub,
         object Reference,
         ReduceManager<TStream> ReduceManager,
@@ -198,26 +201,25 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.Hub = Hub;
         this.ReduceManager = ReduceManager;
         this.StreamIdentity = StreamIdentity;
-        this.Subscriber = Subscriber;
+        this.StreamId = StreamId;
         this.Reference = Reference;
         this.Configuration = configuration?.Invoke(new StreamConfiguration(this)) ?? new StreamConfiguration(this);
-        synchronizationStreamHub = Hub.GetHostedHub(new SynchronizationStreamAddress(Hub.Address), config => Configuration.HubConfigurations.Aggregate(config,(c,cc) => cc.Invoke(c)));
+        synchronizationHub = Hub.GetHostedHub(new SynchronizationStreamAddress(Hub.Address), config => Configuration.HubConfigurations.Aggregate(config,(c,cc) => cc.Invoke(c)));
     }
+
+    public string StreamId { get; }
+
 
     private StreamConfiguration Configuration { get; }
 
-    private readonly IMessageHub synchronizationStreamHub;
+    private readonly IMessageHub synchronizationHub;
     public void InvokeAsync(Action action)
-        => synchronizationStreamHub.InvokeAsync(action);
+        => synchronizationHub.InvokeAsync(action);
 
     public void InvokeAsync(Func<CancellationToken, Task> action)
-        => synchronizationStreamHub.InvokeAsync(action);
+        => synchronizationHub.InvokeAsync(action);
 
-
-
-
-
-
+    IMessageHub ISynchronizationStream<TStream>.SynchronizationHub => synchronizationHub;
 
 
     private record SynchronizationStreamAddress(object Host) : IHostedAddress
@@ -231,5 +233,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     }
 
 
-
+    public void Revert<TReduced>(ChangeItem<TReduced> change)
+    {
+        // TODO V10: Implement revert mechanism (20.10.2024, Roland Bürgi)
+    }
 }

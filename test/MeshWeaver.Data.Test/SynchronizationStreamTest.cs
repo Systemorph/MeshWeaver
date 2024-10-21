@@ -1,5 +1,6 @@
 ﻿using System.Reactive.Linq;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
@@ -33,14 +34,14 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
         var collectionName = workspace.DataContext.GetTypeSource(typeof(MyData)).CollectionName;
         var stream = workspace.GetStream(new CollectionsReference(collectionName), new ClientAddress());
         stream.Should().NotBeNull();
-        stream.Reduce(new EntityReference(collectionName, Instance), new ClientAddress())
+        stream.Reduce(new EntityReference(collectionName, Instance), new HostAddress())
             .Select(i => i.Value)
             .Cast<MyData>()
             .Where(i => i != null)
             .Subscribe(tracker.Add);
 
         var count = 0;
-        Enumerable.Range(0, 10).AsParallel().Select(_ =>
+        var array = Enumerable.Range(0, 10).AsParallel().Select(_ =>
         {
             stream.UpdateAsync(state =>
             {
@@ -51,12 +52,14 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
                 return stream.ApplyChanges(
                     new EntityStoreAndUpdates(
                         (state ?? new()).Update(collectionName, i => i.Update(Instance, instance)),
-                        [new EntityStoreUpdate(collectionName, Instance, instance) { OldValue = existingInstance }],
+                        [new EntityUpdate(collectionName, Instance, instance) { OldValue = existingInstance }],
                         workspace.Hub.Address)
                 );
             });
             return true;
         }).ToArray();
+        await Task.Delay(1000.Seconds());
+        await stream.DisposeAsync();
         await DisposeAsync();
 
         tracker.Should().HaveCount(10)

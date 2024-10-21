@@ -237,9 +237,7 @@ public static class WorkspaceOperations
                 => store.Update(collectionReference.Name, _ => (InstanceCollection)value),
             CollectionsReference
                 => store with { Collections = store.Collections.SetItems(((EntityStore)value).Collections) },
-            PartitionedCollectionsReference partitioned
-                => store.Update(partitioned.Reference, value, options),
-            PartitionedCollectionReference partitioned
+            IPartitionedWorkspaceReference partitioned
                 => store.Update(partitioned.Reference, value, options),
             WorkspaceReference<EntityStore>
                 => store.Merge((EntityStore)value, options),

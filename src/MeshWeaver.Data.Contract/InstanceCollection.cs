@@ -45,7 +45,7 @@ public record InstanceCollection
 
     public T Get<T>(object id) => (T)Instances.GetValueOrDefault(id);
 
-    public object GetData(object id)
+    public object GetInstance(object id)
     {
         return Instances.GetValueOrDefault(id);
     }
@@ -92,6 +92,10 @@ public record InstanceCollection
     public InstanceCollection Remove(IEnumerable<object> ids)
     {
         return this with { Instances = Instances.RemoveRange(ids) };
+    }
+    public InstanceCollection Remove(object id)
+    {
+        return this with { Instances = Instances.Remove(id) };
     }
 
     public virtual bool Equals(InstanceCollection other)

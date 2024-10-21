@@ -102,7 +102,7 @@ public static class TestHubSetup
             .ToAsyncEnumerable()
             .SelectAwait(async p =>
                 await workspace.GetStream(
-                    new PartitionedCollectionReference(p, new(typeof(TransactionalData).FullName))).FirstAsync())
+                    new PartitionedWorkspaceReference<InstanceCollection>(p, new CollectionReference(typeof(TransactionalData).FullName))).FirstAsync())
             .ToArrayAsync();
 
         foreach (var x in transactionalData.SelectMany(x =>

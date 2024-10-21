@@ -1,7 +1,4 @@
 ﻿using System.Reactive.Linq;
-using System.Text.Json;
-using Json.Patch;
-using Json.Pointer;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Messaging;
 
@@ -36,14 +33,11 @@ public static class WorkspaceExtensions
     public static ChangeItem<EntityStore> ApplyChanges(
         this ISynchronizationStream<EntityStore> stream,
         EntityStoreAndUpdates storeAndUpdates) =>
-        new(stream.Owner, 
-            stream.Reference,
-            storeAndUpdates.Store, 
-            storeAndUpdates.ChangedBy, 
+        new(storeAndUpdates.Store, 
+            stream.StreamId, 
             ChangeType.Patch,
             stream.Hub.Version,
-            storeAndUpdates.Updates.ToArray(),
-            stream.Hub.JsonSerializerOptions
+            storeAndUpdates.Updates.ToArray()
             );
 
 

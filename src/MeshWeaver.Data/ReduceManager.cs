@@ -1,12 +1,13 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json;
+using Json.Patch;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
 
-public delegate TReduced ReduceFunction<in TStream, in TReference, out TReduced>(
-    TStream current,
+public delegate ChangeItem<TReduced> ReduceFunction<TStream, in TReference, TReduced>(
+    ChangeItem<TStream> current,
     TReference reference
 )
     where TReference : WorkspaceReference;
@@ -27,38 +28,12 @@ public record ReduceManager<TStream>
     private ImmutableDictionary<Type, object> ReduceManagers { get; init; } =
         ImmutableDictionary<Type, object>.Empty;
 
-    private ImmutableDictionary<
-        Type,
-        ImmutableList<(Delegate Filter, Delegate Function)>
-    > PatchFunctions { get; init; } =
-        ImmutableDictionary<Type, ImmutableList<(Delegate Filter, Delegate Function)>>.Empty;
 
     public ReduceManager(IMessageHub hub)
     {
         this.hub = hub;
-
-        ReduceStreams = ReduceStreams.Add(
-            (ReduceStream<TStream, JsonElement>)(
-                (parent, reference, subscriber, conf) =>
-                    (ISynchronizationStream<JsonElement>)
-                    parent.CreateReducedStream(
-                        (JsonElementReference)reference, subscriber, JsonElementReducer,
-                        (_, change, _) => change.Value.Deserialize<TStream>(hub.JsonSerializerOptions),
-                        conf
-                    )
-            )
-        );
-
-        AddWorkspaceReference<JsonElementReference, JsonElement>(
-            (x, _) => JsonSerializer.SerializeToElement(x, hub.JsonSerializerOptions),
-            (_, change, _) => change.Value.Deserialize<TStream>(hub.JsonSerializerOptions)
-        );
     }
 
-    private JsonElement JsonElementReducer(TStream current, JsonElementReference reference)
-    {
-        return JsonSerializer.SerializeToElement(current, hub.JsonSerializerOptions);
-    }
 
     public ReduceManager<TStream> ForReducedStream<TReducedStream>(
         Func<ReduceManager<TReducedStream>, ReduceManager<TReducedStream>> configuration
@@ -71,20 +46,25 @@ public record ReduceManager<TStream>
             )
         };
 
+    public ReduceManager<TStream> AddPatchFunction(
+        Func<ISynchronizationStream<TStream>, TStream, JsonElement, JsonPatch, ChangeItem<TStream>> patchFunction)
+        => this with { PatchFunction = patchFunction };
+
+    public Func<ISynchronizationStream<TStream>, TStream, JsonElement, JsonPatch, ChangeItem<TStream>> PatchFunction { get; init; }
+
     public ReduceManager<TStream> AddWorkspaceReference<TReference, TReduced>(
-        ReduceFunction<TStream, TReference, TReduced> reducer,
-        Func<TStream, ChangeItem<TReduced>, TReference, TStream> backTransform
+        ReduceFunction<TStream, TReference, TReduced> reducer
     )
         where TReference : WorkspaceReference<TReduced>
     {
-        object Lambda(TStream ws, WorkspaceReference r, LinkedListNode<ReduceDelegate> node) =>
+        object Lambda(ChangeItem<TStream> ws, WorkspaceReference r, LinkedListNode<ReduceDelegate> node) =>
             WorkspaceStreams.ReduceApplyRules(ws, r, reducer, node);
         Reducers.AddFirst(Lambda);
 
         var ret = AddStreamReducer<TReference, TReduced>(
                 (parent, reference, subscriber, config) =>
                     (ISynchronizationStream<TReduced>)
-                    parent.CreateReducedStream(reference, subscriber, reducer, backTransform, config)
+                    parent.CreateReducedStream(reference, subscriber, reducer, config)
 
             )
             .AddWorkspaceReferenceStream<TReduced, TReference>(
@@ -101,7 +81,7 @@ public record ReduceManager<TStream>
         return ret;
     }
 
-    public TReduced Reduce<TReduced>(TStream value, WorkspaceReference<TReduced> reference) => 
+    public TReduced Reduce<TReduced>(ChangeItem<TStream> value, WorkspaceReference<TReduced> reference) => 
         (TReduced)Reduce(value, (WorkspaceReference)reference);
 
     public ReduceManager<TStream> AddStreamReducer<TReference, TReduced>(
@@ -113,7 +93,9 @@ public record ReduceManager<TStream>
         {
             ReduceStreams = ReduceStreams.Insert(
                 0,
-                (ReduceStream<TStream, TReduced>)((stream,reference,subscriber,config) => reference is not TReference tReference ? null : reducer.Invoke(stream,tReference,subscriber,config))
+                (ReduceStream<TStream, TReduced>)((stream,reference,subscriber,config)
+                    => reference is not TReference tReference ? null 
+                        : reducer.Invoke(stream,tReference,subscriber,config))
             ),
         };
     }
@@ -132,7 +114,7 @@ public record ReduceManager<TStream>
     }
 
 
-    public object Reduce(TStream workspaceState, WorkspaceReference reference)
+    public object Reduce(ChangeItem<TStream> workspaceState, WorkspaceReference reference)
     {
         var first = Reducers.First;
         if (first == null)
@@ -193,22 +175,15 @@ public record ReduceManager<TStream>
                 ReduceManagers = ReduceManagers
             };
 
-    public PatchFunction<TStream, TReduced> GetPatchFunction<TReduced>(
-        ISynchronizationStream<TStream> parent,
-        object reference
-    ) =>
-        (PatchFunction<TStream, TReduced>)(
-            PatchFunctions
-                .GetValueOrDefault(typeof(TReduced))
-                ?.FirstOrDefault(x => ((PatchFunctionFilter)x.Filter).Invoke(parent, reference))
-                .Function
-        );
 
     internal delegate object ReduceDelegate(
-        TStream state,
+        ChangeItem<TStream> state,
         WorkspaceReference reference,
         LinkedListNode<ReduceDelegate> node
     );
+
+    public ChangeItem<TStream> ApplyPatch(ISynchronizationStream<TStream> stream, TStream current, JsonElement updatedJson, JsonPatch patch) => 
+        PatchFunction.Invoke(stream, current, updatedJson, patch);
 }
 
 internal delegate ISynchronizationStream<TReduced> ReduceStream<TStream, TReduced>(

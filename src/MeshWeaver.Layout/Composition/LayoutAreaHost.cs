@@ -6,6 +6,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using System.Collections.Immutable;
+using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -37,15 +38,14 @@ public record LayoutAreaHost : IDisposable
     public LayoutAreaHost(
         IWorkspace workspace,
         LayoutAreaReference reference,
-        LayoutDefinition layoutDefinition,
-        object subscriber
+        LayoutDefinition layoutDefinition
     )
     {
         Workspace = workspace;
         LayoutDefinition = layoutDefinition;
         Stream = new SynchronizationStream<EntityStore>(
             new(workspace.Hub.Address, reference),
-            subscriber,
+            Guid.NewGuid().AsString(),
             workspace.Hub,
             reference,
             workspace.ReduceManager.ReduceTo<EntityStore>(),
@@ -244,7 +244,7 @@ public record LayoutAreaHost : IDisposable
 
         return new(store.Update(LayoutAreaReference.Areas,
             i => i with { Instances = i.Instances.RemoveRange(existing.Select(x => x.Key)) }), existing.Select(i =>
-            new EntityStoreUpdate(LayoutAreaReference.Areas, contextArea, null) { OldValue = i.Value }), Hub.Address);
+            new EntityUpdate(LayoutAreaReference.Areas, contextArea, null) { OldValue = i.Value }), Hub.Address);
     }
 
 
@@ -316,16 +316,12 @@ public record LayoutAreaHost : IDisposable
             var context = new RenderingContext(reference.Area) { Layout = reference.Layout };
             Stream.OnNext(
                 new(
-                    Stream.Owner,
-                    Stream.Reference,
                     LayoutDefinition
                         .Render(this, context, new EntityStore()
                             .Update(LayoutAreaReference.Areas, x => x)
                             .Update(LayoutAreaReference.Data, x => x)
                         )
                         .Store,
-                    Stream.Hub.Address,
-                    ChangeType.Full,
                     Stream.Hub.Version));
             logger.LogDebug("End re-rendering");
         });

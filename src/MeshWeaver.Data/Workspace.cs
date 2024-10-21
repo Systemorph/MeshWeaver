@@ -10,6 +10,7 @@ using MeshWeaver.Data.Serialization;
 using MeshWeaver.Disposables;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
+using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Data;
 
@@ -129,48 +130,39 @@ public class Workspace : IWorkspace
     {
         // link to deserialized world. Will also potentially link to workspace.
 
-
         var fromWorkspace = this.ReduceInternal<TReduced, TReference>(reference, subscriber);
-        var ret =
+        var reduced =
             fromWorkspace
             ?? throw new DataSourceConfigurationException(
                 $"No reducer defined for {typeof(TReference).Name} from  {typeof(TReference).Name}"
             );
 
-        var json =
-            ret as ISynchronizationStream<JsonElement>
-            ?? ret.Reduce(new JsonElementReference(), subscriber);
 
-        
-
-        //json.AddDisposable(
-        //    json.Hub.Register<DataChangedEvent>(
-        //        delivery =>
-        //        {
-        //            logger.LogDebug("{address} receiving change notification from {sender}", delivery.Target, delivery.Sender);
-        //            json.UpdateAsync(state =>
-        //                 json.Parse(state, delivery.Message with { ChangedBy = delivery.Sender })
-        //            );
-        //            return delivery.Processed();
-        //        },
-        //        x => json.Owner.Equals(x.Message.Owner) && x.Message.Reference.Equals(reference)
-        //    )
-        //);
-        json.AddDisposable(
-            json.ToDataChanged(reference)
-                .Where(c => !json.Subscriber.Equals(c.ChangedBy))
+        reduced.AddDisposable(
+            reduced.Hub.Register<DataChangedEvent>(
+                delivery =>
+                {
+                    reduced.DeliverMessage(delivery);
+                    return delivery.Forwarded();
+                },
+                x => reduced.StreamId.Equals(x.Message.StreamId)
+            )
+        );
+        reduced.AddDisposable(
+            reduced.ToDataChanged()
+                .Where(c => !reduced.StreamId.Equals(c.ChangedBy))
                 .Subscribe(e =>
                 {
-                    logger.LogDebug("Owner {owner} sending change notification to subscriber {subscriber}", json.Owner, json.Subscriber);
-                    Hub.Post(e, o => o.WithTarget(json.Subscriber));
+                    logger.LogDebug("Owner {owner} sending change notification to subscriber {subscriber}", reduced.Owner, reduced.Subscriber);
+                    Hub.Post(e, o => o.WithTarget(reduced.Subscriber));
                 })
             );
 
-        json.AddDisposable(
+        reduced.AddDisposable(
             new AnonymousDisposable(() => subscriptions.Remove(new(subscriber, reference), out _))
         );
 
-        return ret;
+        return reduced;
     }
 
 
@@ -184,106 +176,77 @@ public class Workspace : IWorkspace
         if (owner is JsonObject obj)
             owner = obj.Deserialize<object>(Hub.JsonSerializerOptions);
         var partition = reference is IPartitionedWorkspaceReference p ? p.Partition : null;
-         
-        ISynchronizationStream<JsonElement> json;
-        var tcs = new TaskCompletionSource<JsonElement>();
-        ISynchronizationStream ret;
+
         TaskCompletionSource<TReduced> tcs2 = null;
-        if (typeof(TReduced) == typeof(JsonElement))
-        {
-            json = GetJsonStream<TReduced, TReference>(Hub.Address, reference, partition);
-            json.Initialize(ct => (tcs = new(ct)).Task);
-            ret = json;
-        }
-        else
-        {
-            var reduced = new SynchronizationStream<TReduced>(
+        var reduced = new SynchronizationStream<TReduced>(
                 new(owner, partition),
-                Hub.Address,
+                Guid.NewGuid().AsString(),
                 Hub,
                 reference,
                 ReduceManager.ReduceTo<TReduced>(),
-                stream => stream);
-            reduced.Initialize(ct => (tcs2 = new(ct)).Task);
-            json = reduced.Reduce(
-                new JsonElementReference(),
-                Hub.Address,
-                stream => stream.ConfigureHub(config =>
-                    config.WithHandler<DataChangedEvent>(
-                        (_, delivery) =>
-                        {
-                            stream.Stream.Update(state =>
-                                stream.Stream.Parse(state, delivery.Message with { ChangedBy = delivery.Sender })
-                            );
-                            return delivery.Processed();
-                        }
-                    )
-                )
+                GetJsonConfig<TReduced>
             );
-            json.Initialize(ct =>(tcs = new(ct)).Task);
-            ret = reduced;
-        }
-        json.AddDisposable(
-            json.ToDataChanged(reference)
-                .Where(x => json.Hub.Address.Equals(x.ChangedBy))
+        reduced.Initialize(ct => (tcs2 = new(ct)).Task);
+        reduced.AddDisposable(
+            reduced.ToDataChanged()
+                .Where(x => !reduced.Hub.Address.Equals(x.ChangedBy))
                 .Subscribe(e =>
                 {
                     logger.LogDebug("Subscriber {subscriber} sending change notification to owner {owner}",
-                        json.Subscriber, json.Owner);
+                        reduced.Subscriber, reduced.Owner);
 
-                    Hub.Post(e, o => o.WithTarget(json.Owner));
+                    Hub.Post(e, o => o.WithTarget(reduced.Owner));
                 })
         );
 
 
         var request = Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(owner));
         var first = true;
-        json.AddDisposable(
-            json.Hub.Register<DataChangedEvent>(
+        reduced.AddDisposable(
+            reduced.Hub.Register<DataChangedEvent>(
                 delivery =>
                 {
                     if (first)
                     {
                         first = false;
                         var jsonElement = JsonDocument.Parse(delivery.Message.Change.Content).RootElement;
-                        tcs.SetResult(jsonElement);
-                        tcs2?.SetResult(jsonElement.Deserialize<TReduced>(json.Hub.JsonSerializerOptions));
+                        tcs2?.SetResult(jsonElement.Deserialize<TReduced>(reduced.Hub.JsonSerializerOptions));
                         return request.Processed();
                     }
-                    json.DeliverMessage(delivery); 
+                    reduced.DeliverMessage(delivery); 
                     return delivery.Forwarded();
                 },
-                d => json.Owner.Equals(d.Message.Owner) && reference.Equals(d.Message.Reference)
+                d => reduced.StreamId.Equals(d.Message.StreamId)
             )
         );
 
-        json.AddDisposable(
-            new AnonymousDisposable(() => remoteStreams.Remove((json.Owner, reference), out _))
+        reduced.AddDisposable(
+            new AnonymousDisposable(() => remoteStreams.Remove((reduced.Owner, reference), out _))
         );
-        json.AddDisposable(
+        reduced.AddDisposable(
             new AnonymousDisposable(
                 () => Hub.Post(new UnsubscribeDataRequest(reference), o => o.WithTarget(owner))
             )
         );
 
-        if (ret is ISynchronizationStream<EntityStore> entityStream)
-            json.AddDisposable(
-                entityStream
-                    .Where(x => json.Hub.Address.Equals(x.ChangedBy))
-                    .ToDataChangeRequest()
+        //if (ret is ISynchronizationStream<EntityStore> entityStream)
+        //    reduced.AddDisposable(
+        //        entityStream
+        //            .Where(x => reduced.Hub.Address.Equals(x.ChangedBy))
+        //            .ToDataChangeRequest()
 
-                    .Subscribe(e =>
-                    {
-                        logger.LogDebug("Subscriber {subscriber} sending change notification to owner {owner}",
-                            json.Subscriber, json.Owner);
+        //            .Subscribe(e =>
+        //            {
+        //                logger.LogDebug("Subscriber {subscriber} sending change notification to owner {owner}",
+        //                    reduced.Subscriber, reduced.Owner);
 
-                        Hub.Post(e, o => o.WithTarget(json.Owner));
-                    })
-            );
+        //                Hub.Post(e, o => o.WithTarget(reduced.Owner));
+        //            })
+        //    );
 
 
 
-        return ret;
+        return reduced;
     }
 
     private ISynchronizationStream<JsonElement> GetJsonStream<TReduced, TReference>(object subscriber, TReference reference, object partition)
@@ -292,7 +255,7 @@ public class Workspace : IWorkspace
         ISynchronizationStream<JsonElement> json;
         json = new SynchronizationStream<JsonElement>(
             new(subscriber, partition),
-            subscriber,
+            Guid.NewGuid().AsString(),
             Hub,
             reference,
             ReduceManager.ReduceTo<JsonElement>(),
@@ -301,20 +264,25 @@ public class Workspace : IWorkspace
         return json;
     }
 
-    private static  SynchronizationStream<JsonElement>.StreamConfiguration GetJsonConfig(SynchronizationStream<JsonElement>.StreamConfiguration stream) =>
+    private static  SynchronizationStream<TStream>.StreamConfiguration GetJsonConfig<TStream>(
+        SynchronizationStream<TStream>.StreamConfiguration stream) =>
         stream.ConfigureHub(config =>
             config.WithHandler<DataChangedEvent>(
-                (_, delivery) =>
+                (hub, delivery) =>
                 {
-                    stream.Stream.Update(state =>
-                        stream.Stream.Parse(state,
-                            delivery.Message with { ChangedBy = delivery.Sender })
+                    var currentJson = hub.Configuration.Get<JsonElement?>();
+                    (currentJson, var patch) = delivery.Message.UpdateJsonElement(currentJson, hub.JsonSerializerOptions);
+                    hub.Configuration.Set(currentJson);
+                    stream.Stream.Update(
+                        state =>
+                        stream.Stream.ToChangeItem(state,
+                            currentJson.Value,
+                            patch)
                     );
                     return delivery.Processed();
                 }
             )
-        );
-
+    );
 
     public void Update(IReadOnlyCollection<object> instances, UpdateOptions updateOptions, Activity activity) =>
         RequestChange(

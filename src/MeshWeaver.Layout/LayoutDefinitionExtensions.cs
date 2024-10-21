@@ -146,9 +146,9 @@ public static class LayoutDefinitionExtensions
     ) => layout.WithView(c => c.Area == area, view);
 
     public static EntityStoreAndUpdates UpdateControl(this EntityStore store, string id, UiControl control)
-        => new (store.Update(LayoutAreaReference.Areas, i => i.Update(id, control)), [new EntityStoreUpdate(LayoutAreaReference.Areas, id, control)], null);
+        => new (store.Update(LayoutAreaReference.Areas, i => i.Update(id, control)), [new EntityUpdate(LayoutAreaReference.Areas, id, control)], null);
     public static EntityStoreAndUpdates UpdateData(this EntityStore store, string id, object control)
-        => new(store.Update(LayoutAreaReference.Data, i => i.Update(id, control)), [new EntityStoreUpdate(LayoutAreaReference.Data, id, control)], null);
+        => new(store.Update(LayoutAreaReference.Data, i => i.Update(id, control)), [new EntityUpdate(LayoutAreaReference.Data, id, control)], null);
 
     public static LayoutDefinition WithRenderer(
         this LayoutDefinition layout,
