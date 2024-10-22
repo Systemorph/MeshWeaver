@@ -60,7 +60,7 @@ public record DomainViewConfiguration
         return ret
                 .WithView((a, _) => a
                     .Workspace
-                    .GetStream(new CollectionsReference(typeDefinition.CollectionName), context.Host.Stream.Subscriber)
+                    .GetStream(new CollectionsReference(typeDefinition.CollectionName))
                     .Select(changeItem =>
                         typeDefinition.ToDataGrid(changeItem.Value.Collections.Values.First().Instances.Values.Select(o => typeDefinition.SerializeEntityAndId(o, context.Host.Hub.JsonSerializerOptions)))
                             .WithColumn(new TemplateColumnControl(new InfoButtonControl(typeDefinition.CollectionName, new JsonPointerReference(EntitySerializationExtensions.IdProperty))))
@@ -99,7 +99,7 @@ public record DomainViewConfiguration
 
 
         var stream = host.Workspace
-            .GetStream(new EntityReference(context.TypeDefinition.CollectionName, context.Id), host.Stream.Subscriber);
+            .GetStream(new EntityReference(context.TypeDefinition.CollectionName, context.Id));
         var ret = 
             
             stream.Bind(context.IdString,
@@ -130,8 +130,7 @@ public record DomainViewConfiguration
             return grid.WithView((host,_) => host.Workspace
                         .GetStream(
                             new CollectionReference(
-                                host.Workspace.DataContext.GetCollectionName(dimensionAttribute.Type)),
-                            host.Stream.Subscriber)
+                                host.Workspace.DataContext.GetCollectionName(dimensionAttribute.Type)))
                         .Select(changeItem =>
                             Controls.Select(jsonPointerReference)
                                 .WithOptions(ConvertToOptions(changeItem.Value, host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttribute.Type)))), skinConfiguration)

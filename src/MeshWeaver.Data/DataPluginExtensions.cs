@@ -125,7 +125,7 @@ public static class DataPluginExtensions
             })
             .WithHandler<SubscribeRequest>((hub, request) =>
             {
-                hub.GetWorkspace().SubscribeToClient(request.Sender, request.Message);
+                hub.GetWorkspace().SubscribeToClient(request.Message with{Subscriber = request.Sender});
                 return request.Processed();
             });
 
