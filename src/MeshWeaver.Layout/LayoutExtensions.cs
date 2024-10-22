@@ -12,7 +12,6 @@ using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
-using Autofac.Diagnostics;
 
 namespace MeshWeaver.Layout;
 
@@ -28,8 +27,8 @@ public static class LayoutExtensions
                 data.Configure(reduction =>
                     reduction
                         .AddWorkspaceReferenceStream<EntityStore, LayoutAreaReference>(
-                            (workspace, reference, subscriber) =>
-                                new LayoutAreaHost(workspace, reference, workspace.Hub.GetLayoutDefinition(), subscriber)
+                            (workspace, reference, _, _) =>
+                                new LayoutAreaHost(workspace, (LayoutAreaReference)reference, workspace.Hub.GetLayoutDefinition())
                                     .RenderLayoutArea()
                         )
                 )
@@ -86,15 +85,14 @@ public static class LayoutExtensions
         return synchronizationItems
             .Where(i =>
                 first
-                || i.Patch is null
-                || i.Patch.Operations.Any(
+                || i.Updates is null
+                || i.Updates.Any(
                     p =>
-                        p.Path
-                            .Segments
+                        new[]{ p.Collection, p.Id.ToString() }
                             .Zip
                             (
                                 referencePointer.Segments,
-                                (x, y) => x.Equals(y))
+                                (x, y) => x.Equals(y.Value))
 
                             .All(x => x)
                         )

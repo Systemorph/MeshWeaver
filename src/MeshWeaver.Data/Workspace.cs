@@ -36,16 +36,6 @@ public class Workspace : IWorkspace
 
     public IReadOnlyCollection<Type> MappedTypes => DataContext.MappedTypes.ToArray();
 
-    private readonly ConcurrentDictionary<
-        (object Subscriber, object Reference),
-        IAsyncDisposable
-    > subscriptions = new();
-    private readonly ConcurrentDictionary<
-        (object Subscriber, object Reference),
-        ISynchronizationStream
-    > remoteStreams = new();
-
-
     public IObservable<IReadOnlyCollection<T>> GetStream<T>()
     {
         var collection = DataContext.GetTypeSource(typeof(T));
@@ -85,52 +75,29 @@ public class Workspace : IWorkspace
             ? throw new ArgumentException("Owner cannot be the same as the subscriber.")
             : GetExternalClientSynchronizationStream<TReduced, TReference>(owner, reference);
 
-    public ISynchronizationStream<TReduced> GetStreamFor<TReduced, TReference>(
-        object subscriber,
-        TReference reference
-    )
-        where TReference : WorkspaceReference =>
-        Hub.Address.Equals(subscriber)
-            ? throw new ArgumentException("Owner cannot be the same as the subscriber.")
-            : GetInternalSynchronizationStream<TReduced, TReference>(reference, subscriber);
 
-
-    private static readonly MethodInfo GetInternalSynchronizationStreamMethod =
-        ReflectionHelper.GetMethodGeneric<Workspace>(ws =>
-            ws.GetInternalSynchronizationStream<object, WorkspaceReference>(null, null));
-    private ISynchronizationStream<TReduced> GetInternalSynchronizationStream<
-        TReduced,
-        TReference
-    >(TReference reference, object subscriber)
-        where TReference : WorkspaceReference =>
-        ReduceManager.ReduceStream<TReduced, TReference>(this, reference, subscriber);
-
-    public ISynchronizationStream<TReduced> GetStreamFor<TReduced>(WorkspaceReference<TReduced> reference,
-        object subscriber) =>
-        (ISynchronizationStream<TReduced>)GetInternalSynchronizationStreamMethod
-            .MakeGenericMethod(typeof(TReduced), reference.GetType())
-            .Invoke(this, [reference, subscriber]);
 
     private ISynchronizationStream<TReduced> GetExternalClientSynchronizationStream<
         TReduced,
         TReference
     >(object address, TReference reference)
         where TReference : WorkspaceReference =>
-        (ISynchronizationStream<TReduced>)
-            remoteStreams.GetOrAdd(
-                (address, reference),
-                _ => CreateExternalClient<TReduced, TReference>(address, reference)
-            );
+        (ISynchronizationStream<TReduced>)CreateExternalClient<TReduced, TReference>(address, reference);
 
     private ISynchronizationStream CreateSynchronizationStream<TReduced, TReference>(
         object subscriber,
-        TReference reference
+        SubscribeRequest request
     )
         where TReference : WorkspaceReference
     {
         // link to deserialized world. Will also potentially link to workspace.
 
-        var fromWorkspace = this.ReduceInternal<TReduced, TReference>(reference, subscriber);
+        var fromWorkspace = 
+            this.ReduceInternal<TReduced>(
+                request.Reference, 
+                subscriber,
+                GetJsonConfig<TReduced>
+                );
         var reduced =
             fromWorkspace
             ?? throw new DataSourceConfigurationException(
@@ -149,6 +116,16 @@ public class Workspace : IWorkspace
             )
         );
         reduced.AddDisposable(
+            reduced.Hub.Register<UnsubscribeDataRequest>(
+                delivery =>
+                {
+                    reduced.DeliverMessage(delivery);
+                    return delivery.Forwarded();
+                },
+                x => reduced.StreamId.Equals(x.Message.StreamId)
+            )
+        );
+        reduced.AddDisposable(
             reduced.ToDataChanged()
                 .Where(c => !reduced.StreamId.Equals(c.ChangedBy))
                 .Subscribe(e =>
@@ -157,10 +134,6 @@ public class Workspace : IWorkspace
                     Hub.Post(e, o => o.WithTarget(reduced.Subscriber));
                 })
             );
-
-        reduced.AddDisposable(
-            new AnonymousDisposable(() => subscriptions.Remove(new(subscriber, reference), out _))
-        );
 
         return reduced;
     }
@@ -200,7 +173,7 @@ public class Workspace : IWorkspace
         );
 
 
-        var request = Hub.Post(new SubscribeRequest(reference), o => o.WithTarget(owner));
+        var request = Hub.Post(new SubscribeRequest(reduced.StreamId, reference), o => o.WithTarget(owner));
         var first = true;
         reduced.AddDisposable(
             reduced.Hub.Register<DataChangedEvent>(
@@ -213,7 +186,17 @@ public class Workspace : IWorkspace
                         tcs2?.SetResult(jsonElement.Deserialize<TReduced>(reduced.Hub.JsonSerializerOptions));
                         return request.Processed();
                     }
-                    reduced.DeliverMessage(delivery); 
+                    reduced.DeliverMessage(delivery);
+                    return delivery.Forwarded();
+                },
+                d => reduced.StreamId.Equals(d.Message.StreamId)
+            )
+        ); 
+        reduced.AddDisposable(
+            reduced.Hub.Register<UnsubscribeDataRequest>(
+                delivery =>
+                {
+                    reduced.DeliverMessage(delivery);
                     return delivery.Forwarded();
                 },
                 d => reduced.StreamId.Equals(d.Message.StreamId)
@@ -221,11 +204,8 @@ public class Workspace : IWorkspace
         );
 
         reduced.AddDisposable(
-            new AnonymousDisposable(() => remoteStreams.Remove((reduced.Owner, reference), out _))
-        );
-        reduced.AddDisposable(
             new AnonymousDisposable(
-                () => Hub.Post(new UnsubscribeDataRequest(reference), o => o.WithTarget(owner))
+                () => Hub.Post(new UnsubscribeDataRequest(reduced.StreamId), o => o.WithTarget(owner))
             )
         );
 
@@ -264,8 +244,8 @@ public class Workspace : IWorkspace
         return json;
     }
 
-    private static  SynchronizationStream<TStream>.StreamConfiguration GetJsonConfig<TStream>(
-        SynchronizationStream<TStream>.StreamConfiguration stream) =>
+    private static StreamConfiguration<TStream> GetJsonConfig<TStream>(
+        StreamConfiguration<TStream> stream) =>
         stream.ConfigureHub(config =>
             config.WithHandler<DataChangedEvent>(
                 (hub, delivery) =>
@@ -281,7 +261,12 @@ public class Workspace : IWorkspace
                     );
                     return delivery.Processed();
                 }
-            )
+            ).WithHandler<UnsubscribeDataRequest>(
+                (hub, delivery) =>
+                {
+                    hub.Dispose();
+                    return delivery.Processed();
+                })
     );
 
     public void Update(IReadOnlyCollection<object> instances, UpdateOptions updateOptions, Activity activity) =>
@@ -301,36 +286,45 @@ public class Workspace : IWorkspace
             new DataChangeRequest { Deletions = instances.ToImmutableList(), ChangedBy = Hub.Address }, activity
         );
 
-    public ISynchronizationStream<TReduced> GetStream<TReduced>(WorkspaceReference<TReduced> reference, object subscriber)
+    public ISynchronizationStream<TReduced> GetStream<TReduced>(
+        WorkspaceReference<TReduced> reference, 
+        object subscriber,
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration
+        )
     {
         return (ISynchronizationStream<TReduced>)ReduceInternalMethod
             .MakeGenericMethod(typeof(TReduced), reference.GetType())
-            .InvokeAsFunction(this, reference, subscriber);
+            .InvokeAsFunction(this, reference, subscriber, configuration);
     }
 
 
     private static readonly MethodInfo ReduceInternalMethod =
         ReflectionHelper.GetMethodGeneric<Workspace>(x =>
-            x.ReduceInternal<object, WorkspaceReference<object>>(null, null));
-    private ISynchronizationStream<TReduced> ReduceInternal<TReduced, TReference>(TReference reference, object subscriber)
-    where TReference : WorkspaceReference
+            x.ReduceInternal<object>(null, null, null));
+    private ISynchronizationStream<TReduced> ReduceInternal<TReduced>(
+        object reference, 
+        object subscriber,
+    Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration
+        )
     {
-        return ReduceManager.ReduceStream<TReduced, TReference>(
+        return ReduceManager.ReduceStream(
             this,
             reference,
-            subscriber
+            subscriber,
+            configuration
         );
     }
 
     public ISynchronizationStream<EntityStore> GetStream(params Type[] types)
-        => ReduceInternal<EntityStore, CollectionsReference>(new CollectionsReference(types
+        => ReduceInternal<EntityStore>(new CollectionsReference(types
             .Select(t =>
                 DataContext.TypeRegistry.TryGetCollectionName(t, out var name)
                     ? name
                     : throw new ArgumentException($"Type {t.FullName} is unknown.")
             )
             .ToArray()
-        ), null);
+        ), null,
+            null);
 
     public ReduceManager<EntityStore> ReduceManager => DataContext.ReduceManager;
 
@@ -358,8 +352,6 @@ public class Workspace : IWorkspace
         while (disposables.TryTake(out var d))
             d.Dispose();
 
-        foreach (var subscription in remoteStreams.Values.Concat(subscriptions.Values))
-            await subscription.DisposeAsync();
 
 
         await DataContext.DisposeAsync();
@@ -392,33 +384,35 @@ public class Workspace : IWorkspace
         return response.Ignored();
     }
 
-    void IWorkspace.SubscribeToClient<TReduced>(
+    void IWorkspace.SubscribeToClient(
         object address,
-        WorkspaceReference<TReduced> reference
-    ) =>
-        s_subscribeToClientMethod
-            .MakeGenericMethod(typeof(TReduced), reference.GetType())
-            .Invoke(this, [address, reference]);
+        SubscribeRequest request
+    )
+    {
+        var referenceType = request.Reference.GetType();
+        var genericWorkspaceType = referenceType;
+        while (!genericWorkspaceType.IsGenericType || genericWorkspaceType.GetGenericTypeDefinition() != typeof(WorkspaceReference<>))
+        {
+            genericWorkspaceType = genericWorkspaceType.BaseType;
+        }
+
+        var reducedType = genericWorkspaceType.GetGenericArguments().First();
+        SubscribeToClientMethod
+            .MakeGenericMethod(reducedType, referenceType)
+            .Invoke(this, [address, request]);
+    }
 
 
-    private static readonly MethodInfo s_subscribeToClientMethod =
+    private static readonly MethodInfo SubscribeToClientMethod =
         ReflectionHelper.GetMethodGeneric<Workspace>(x =>
             x.SubscribeToClient<object, WorkspaceReference<object>>(default, default)
         );
 
-    private void SubscribeToClient<TReduced, TReference>(object address, TReference reference)
+    private void SubscribeToClient<TReduced, TReference>(object address, SubscribeRequest request)
         where TReference : WorkspaceReference<TReduced>
     {
-        subscriptions.GetOrAdd(
-            new(address, reference),
-            _ => CreateSynchronizationStream<TReduced, TReference>(address, reference)
-        );
+        CreateSynchronizationStream<TReduced, TReference>(address, request );
     }
 
-    public async Task UnsubscribeAsync(object address, WorkspaceReference reference)
-    {
-        if (subscriptions.TryRemove(new(address, reference), out var existing))
-            await existing.DisposeAsync();
-    }
 
 }

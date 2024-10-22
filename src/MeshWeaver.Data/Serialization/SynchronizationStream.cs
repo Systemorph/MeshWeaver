@@ -1,5 +1,4 @@
-﻿using System.Collections.Concurrent;
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Reactive.Subjects;
 using System.Reflection;
 using MeshWeaver.Disposables;
@@ -47,7 +46,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     public ISynchronizationStream<TReduced> Reduce<TReduced>(
         WorkspaceReference<TReduced> reference,
         object subscriber, 
-        Func<SynchronizationStream<TReduced>.StreamConfiguration, SynchronizationStream<TReduced>.StreamConfiguration> config
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> config
     ) =>
         (ISynchronizationStream<TReduced>)
             ReduceMethod
@@ -71,7 +70,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     public ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
         TReference2 reference,
         object subscriber,
-        Func<SynchronizationStream<TReduced>.StreamConfiguration, SynchronizationStream<TReduced>.StreamConfiguration> config)
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> config)
         where TReference2 : WorkspaceReference =>
         ReduceManager.ReduceStream(this, reference, subscriber, config);
 
@@ -87,31 +86,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         }
     }
 
-    public readonly ConcurrentBag<IDisposable> Disposables = new();
-    public readonly ConcurrentBag<IAsyncDisposable> AsyncDisposables = new();
+    //public readonly ConcurrentBag<IDisposable> Disposables = new();
+    //public readonly ConcurrentBag<IAsyncDisposable> AsyncDisposables = new();
 
     private bool isDisposed;
     private readonly object disposeLock = new();
 
-    public async ValueTask DisposeAsync()
-    {
-        lock (disposeLock)
-        {
-            if (isDisposed)
-                return;
-            isDisposed = true;
-        }
-
-        await synchronizationHub.DisposeAsync();
-        foreach (var disposeAction in AsyncDisposables)
-            await disposeAction.DisposeAsync();
-
-        foreach (var disposeAction in Disposables)
-            disposeAction.Dispose();
-
-
-        Store.Dispose();
-    }
 
     public ChangeItem<TStream> Current
     {
@@ -161,8 +141,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         Store.OnError(error);
     }
 
-    public void AddDisposable(IDisposable disposable) => Disposables.Add(disposable);
-    public void AddDisposable(IAsyncDisposable disposable) => AsyncDisposables.Add(disposable);
+    public void AddDisposable(IDisposable disposable) => Hub.WithDisposeAction(_ => disposable.Dispose());
+    public void AddDisposable(IAsyncDisposable disposable) => Hub.WithDisposeAction(_ => disposable.DisposeAsync());
 
     public IMessageDelivery DeliverMessage(
         IMessageDelivery delivery
@@ -181,36 +161,28 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         UpdateAsync(update);
     }
 
-    public record StreamConfiguration(ISynchronizationStream<TStream> Stream)
-    {
-        internal ImmutableList<Func<MessageHubConfiguration, MessageHubConfiguration>> HubConfigurations { get; init; } =
-            [];
-        public StreamConfiguration ConfigureHub(Func<MessageHubConfiguration, MessageHubConfiguration> configuration) =>
-        this with { HubConfigurations = HubConfigurations.Add(configuration) };
-
-    }
-
     public SynchronizationStream(
         StreamIdentity StreamIdentity,
         string StreamId,
         IMessageHub Hub,
         object Reference,
         ReduceManager<TStream> ReduceManager,
-        Func<StreamConfiguration, StreamConfiguration> configuration)
+        Func<StreamConfiguration<TStream>, StreamConfiguration<TStream>> configuration)
     {
         this.Hub = Hub;
         this.ReduceManager = ReduceManager;
         this.StreamIdentity = StreamIdentity;
         this.StreamId = StreamId;
         this.Reference = Reference;
-        this.Configuration = configuration?.Invoke(new StreamConfiguration(this)) ?? new StreamConfiguration(this);
+        this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
         synchronizationHub = Hub.GetHostedHub(new SynchronizationStreamAddress(Hub.Address), config => Configuration.HubConfigurations.Aggregate(config,(c,cc) => cc.Invoke(c)));
+        synchronizationHub.WithDisposeAction(_ => Store.Dispose());
     }
 
     public string StreamId { get; }
 
 
-    private StreamConfiguration Configuration { get; }
+    private StreamConfiguration<TStream> Configuration { get; }
 
     private readonly IMessageHub synchronizationHub;
     public void InvokeAsync(Action action)
@@ -237,4 +209,18 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         // TODO V10: Implement revert mechanism (20.10.2024, Roland Bürgi)
     }
+
+    public ValueTask DisposeAsync()
+    {
+        return synchronizationHub.DisposeAsync();
+    }
 }
+public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Stream)
+{
+    internal ImmutableList<Func<MessageHubConfiguration, MessageHubConfiguration>> HubConfigurations { get; init; } =
+        [];
+    public StreamConfiguration<TStream> ConfigureHub(Func<MessageHubConfiguration, MessageHubConfiguration> configuration) =>
+        this with { HubConfigurations = HubConfigurations.Add(configuration) };
+
+}
+
